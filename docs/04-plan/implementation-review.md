@@ -18619,3 +18619,45 @@ either pending GUI acceptance run.
 **Risk.** The test still requires access to a logged-in, isolated macOS GUI
 session and a pinned guest image. #024 and #103 remain open until their required
 GUI evidence is recorded.
+
+## IR-1321: Sign the #099 development vbmeta with its matching AOSP test key
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6; [M02-graphics.md](issues/M02-graphics.md) #099; [legal-and-licensing.md](../05-development/legal-and-licensing.md) §§3.3, 4.4, 5 |
+
+**Choice.** Keep the stock vbmeta algorithm `SHA256_RSA4096` and refresh its
+vendor descriptor using the private test key from the pinned AOSP
+`platform/external/avb` revision. Accept the key only when the stock image and
+the supplied key both have AVB public-key SHA-1
+`2597c218aae470a130f61162feaae70afd97f011`. Record the test-key fixture and
+its SHA-256 in `ThirdParty/ThirdParty.lock.json`. Require the signing key as an
+explicit `vendor-reseal --key` argument, and let `bundle-variant` accept only
+this signer. The resulting stock-derived image remains development-only.
+
+**Reason.** The recorded stock `vbmeta_a` uses this AOSP test key, and extracting
+the AVB public-key blob from the private key at the exact pinned revision gives
+the same SHA-1. Signing with it preserves the existing trust anchor and
+`SHA256_RSA4096` verification while allowing dm-verity to check the changed
+vendor tree. The key is deliberately public test material, so it cannot
+authenticate an image against someone who also has that key. APKRun's stock
+image flow is development-only; introducing a new trust anchor, accepting
+unsigned vbmeta, or disabling verification would not solve this safely for a
+release image.
+
+**Verification.** T0 creates a signed synthetic `vbmeta`, checks the key and
+algorithm, verifies the authentication block and partition descriptors with
+vendored `avbtool`, and rejects a mismatched signing key or stock algorithm.
+Tampered stock signatures are rejected before re-signing, and tampered output
+signatures are rejected by the bundle reader even when the record hash is
+updated. Unknown algorithms and truncated public-key fields produce typed
+errors. The reader also checks the actual vbmeta key identity, and refreshed
+vbmeta is restricted to `kind: stock` bundles. No VM boot or image release was
+performed by this decision.
+
+**Risk.** The test key is public and must never be treated as a release
+credential. This decision does not close #099's corrected-image identity,
+provenance, or guest-boot criteria; those still require the remaining task
+steps and T2 evidence.

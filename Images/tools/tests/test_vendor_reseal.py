@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import struct
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,9 @@ from apkrun_image.vendor_inject import (
     verify_avbtool,
 )
 from apkrun_image.vendor_reseal import (
+    VBMETA_ALGORITHM,
+    VBMETA_PUBLIC_KEY_SHA1,
+    VBMETA_SIGNER,
     ResealError,
     descriptor_blocks,
     main,
@@ -30,11 +34,14 @@ from apkrun_image.vendor_reseal import (
     refresh_vbmeta,
     reseal,
     reseal_vendor,
+    verify_vbmeta_signature,
 )
 
 SALT = "16b6a5f2fb07bc9ff4d92dc782d830af4eb572c1213156e732d0bcf67fbc162e"
 PARTITION_SIZE = 2 * 1024 * 1024
 FS_SIZE = 1024 * 1024
+TEST_KEY = _repository_root() / "Tests/Fixtures/signing/aosp-avb-testkey-rsa4096.pem"
+OTHER_TEST_KEY = _repository_root() / "Tests/Fixtures/signing/test-apkrun-image-fixture-rsa.pem"
 
 
 def _avbtool() -> Path:
@@ -60,7 +67,52 @@ def _info(avbtool: Path, image: Path) -> str:
     return run_avbtool(avbtool, ["info_image", "--image", str(image)])
 
 
-def _stock_vbmeta(avbtool: Path, tmp: Path, name: str, vendor: Path) -> Path:
+def _corrupt_vbmeta_signature(image: Path) -> None:
+    data = bytearray(image.read_bytes())
+    signature_offset, signature_size = struct.unpack_from(">QQ", data, 48)
+    assert signature_size > 0
+    data[256 + signature_offset] ^= 0x01
+    image.write_bytes(data)
+
+
+def test_unknown_vbmeta_algorithm_is_a_typed_reseal_error(tmp_path: Path) -> None:
+    avbtool = _avbtool()
+    malformed = tmp_path / "unknown-algorithm.img"
+    header = bytearray(256)
+    header[:4] = b"AVB0"
+    struct.pack_into(">I", header, 28, 999)
+    malformed.write_bytes(header)
+
+    with pytest.raises(ResealError, match="could not verify the vbmeta signature"):
+        verify_vbmeta_signature(avbtool, malformed)
+
+
+def test_short_avb_public_key_blob_is_a_typed_reseal_error(tmp_path: Path) -> None:
+    avbtool = _avbtool()
+    vendor = _seal(avbtool, tmp_path, "vendor", _content("vendor"))
+    malformed = _stock_vbmeta(avbtool, tmp_path, "stock", vendor)
+    data = bytearray(malformed.read_bytes())
+    authentication_size, auxiliary_size = struct.unpack_from(">QQ", data, 12)
+    hash_offset, hash_size = struct.unpack_from(">QQ", data, 32)
+    struct.pack_into(">Q", data, 72, 1)
+    auxiliary_offset = 256 + authentication_size
+    digest = hashlib.sha256(data[:256] + data[auxiliary_offset : auxiliary_offset + auxiliary_size])
+    assert hash_size == digest.digest_size
+    data[256 + hash_offset : 256 + hash_offset + hash_size] = digest.digest()
+    malformed.write_bytes(data)
+
+    with pytest.raises(ResealError, match="could not verify the vbmeta signature"):
+        verify_vbmeta_signature(avbtool, malformed)
+
+
+def _stock_vbmeta(
+    avbtool: Path,
+    tmp: Path,
+    name: str,
+    vendor: Path,
+    key: Path = TEST_KEY,
+    algorithm: str = VBMETA_ALGORITHM,
+) -> Path:
     """A vbmeta_a-like image with a vendor hashtree, a hash descriptor, and a property."""
     boot = tmp / f"{name}-boot.img"
     boot.write_bytes(_content(f"{name}-boot", 32 * 1024))
@@ -86,7 +138,9 @@ def _stock_vbmeta(avbtool: Path, tmp: Path, name: str, vendor: Path) -> Path:
             "--output",
             str(output),
             "--algorithm",
-            "NONE",
+            algorithm,
+            "--key",
+            str(key),
             "--rollback_index",
             "7",
             "--prop",
@@ -213,14 +267,19 @@ def test_the_refreshed_vbmeta_changes_only_the_vendor_descriptor(tmp_path: Path)
     refreshed_scratch.mkdir()
     output = tmp_path / "vbmeta_a.img"
 
-    record = refresh_vbmeta(avbtool, stock_vbmeta, vendor, output, refreshed_scratch)
+    record = refresh_vbmeta(
+        avbtool, stock_vbmeta, vendor, TEST_KEY, output, refreshed_scratch
+    )
 
     assert output.stat().st_size == stock_vbmeta.stat().st_size
     assert record["rollbackIndex"] == 7
     new_info = _info(avbtool, output)
     old_info = _info(avbtool, stock_vbmeta)
-    assert parse_top(new_info)["Algorithm"] == "NONE"
+    assert parse_top(new_info)["Algorithm"] == VBMETA_ALGORITHM
+    assert parse_top(new_info)["Public key (sha1)"] == VBMETA_PUBLIC_KEY_SHA1
     assert parse_top(new_info)["Rollback Index"] == "7"
+    assert record["signer"] == VBMETA_SIGNER
+    assert record["publicKeySha1"] == VBMETA_PUBLIC_KEY_SHA1
     assert parse_hashtrees(new_info)["vendor"] == parse_hashtrees(_info(avbtool, vendor))["vendor"]
     assert (
         parse_hashtrees(old_info)["vendor"]["rootDigest"]
@@ -235,6 +294,70 @@ def test_the_refreshed_vbmeta_changes_only_the_vendor_descriptor(tmp_path: Path)
         == parse_hashtrees(old_info)["vendor"]["rootDigest"]
     )
 
+    verify_dir = tmp_path / "verify"
+    verify_dir.mkdir()
+    (verify_dir / "vbmeta_a.img").symlink_to(output)
+    (verify_dir / "vendor.img").symlink_to(vendor)
+    (verify_dir / "boot.img").symlink_to(tmp_path / "stock-boot.img")
+    verified = run_avbtool(
+        avbtool,
+        [
+            "verify_image",
+            "--image",
+            str(verify_dir / "vbmeta_a.img"),
+            "--key",
+            str(TEST_KEY),
+        ],
+    )
+    assert "Successfully verified SHA256_RSA4096 vbmeta struct" in verified
+
+
+def test_a_signing_key_with_another_avb_identity_is_refused(tmp_path: Path) -> None:
+    avbtool = _avbtool()
+    stock = _seal(avbtool, tmp_path, "stock", _content("stock"))
+    stock_vbmeta = _stock_vbmeta(avbtool, tmp_path, "stock", stock)
+    scratch = tmp_path / "refresh"
+    scratch.mkdir()
+    output = tmp_path / "vbmeta_a.img"
+
+    with pytest.raises(ResealError, match="does not match the pinned AOSP AVB test key"):
+        refresh_vbmeta(avbtool, stock_vbmeta, stock, OTHER_TEST_KEY, output, scratch)
+    assert not output.exists()
+
+
+def test_a_stock_vbmeta_with_another_algorithm_is_refused(tmp_path: Path) -> None:
+    avbtool = _avbtool()
+    stock = _seal(avbtool, tmp_path, "stock", _content("stock"))
+    stock_vbmeta = _stock_vbmeta(
+        avbtool,
+        tmp_path,
+        "stock",
+        stock,
+        key=OTHER_TEST_KEY,
+        algorithm="SHA256_RSA2048",
+    )
+    scratch = tmp_path / "refresh"
+    scratch.mkdir()
+    output = tmp_path / "vbmeta_a.img"
+
+    with pytest.raises(ResealError, match="stock vbmeta_a is not signed with SHA256_RSA4096"):
+        refresh_vbmeta(avbtool, stock_vbmeta, stock, TEST_KEY, output, scratch)
+    assert not output.exists()
+
+
+def test_a_stock_vbmeta_with_an_invalid_signature_is_refused(tmp_path: Path) -> None:
+    avbtool = _avbtool()
+    stock = _seal(avbtool, tmp_path, "stock", _content("stock"))
+    stock_vbmeta = _stock_vbmeta(avbtool, tmp_path, "stock", stock)
+    _corrupt_vbmeta_signature(stock_vbmeta)
+    scratch = tmp_path / "refresh"
+    scratch.mkdir()
+    output = tmp_path / "vbmeta_a.img"
+
+    with pytest.raises(ResealError, match="vbmeta signature does not verify"):
+        refresh_vbmeta(avbtool, stock_vbmeta, stock, TEST_KEY, output, scratch)
+    assert not output.exists()
+
 
 def test_a_vbmeta_whose_vendor_root_is_another_is_refused_by_the_driver(tmp_path: Path) -> None:
     avbtool = _avbtool()
@@ -248,6 +371,7 @@ def test_a_vbmeta_whose_vendor_root_is_another_is_refused_by_the_driver(tmp_path
             injected=injected,
             stock_vendor=stock,
             stock_vbmeta=other_vbmeta,
+            signing_key=TEST_KEY,
             output_directory=tmp_path / "out",
         )
     assert not (tmp_path / "out").exists() or not any((tmp_path / "out").iterdir())
@@ -266,6 +390,7 @@ def test_the_driver_writes_the_two_images_and_a_record_and_refuses_an_existing_o
         injected=injected,
         stock_vendor=stock,
         stock_vbmeta=stock_vbmeta,
+        signing_key=TEST_KEY,
         output_directory=output,
     )
 
@@ -280,12 +405,14 @@ def test_the_driver_writes_the_two_images_and_a_record_and_refuses_an_existing_o
         record["vendor"]["sha256"]
         == hashlib.sha256((output / "vendor_a.img").read_bytes()).hexdigest()
     )
-    assert record["vbmeta"]["algorithm"] == "NONE"
+    assert record["vbmeta"]["algorithm"] == VBMETA_ALGORITHM
+    assert record["vbmeta"]["signer"] == VBMETA_SIGNER
     with pytest.raises(ValueError, match="must not exist or must be empty"):
         reseal(
             injected=injected,
             stock_vendor=stock,
             stock_vbmeta=stock_vbmeta,
+            signing_key=TEST_KEY,
             output_directory=output,
         )
 
@@ -301,6 +428,7 @@ def test_the_output_must_be_outside_the_repository(tmp_path: Path) -> None:
             injected=injected,
             stock_vendor=stock,
             stock_vbmeta=stock_vbmeta,
+            signing_key=TEST_KEY,
             output_directory=_repository_root() / "reseal-test-output",
         )
     assert not (_repository_root() / "reseal-test-output").exists()
@@ -323,6 +451,8 @@ def test_the_command_reports_an_unreadable_input_and_exits_1(
             str(stock),
             "--stock-vbmeta",
             str(stock_vbmeta),
+            "--key",
+            str(TEST_KEY),
             "--out",
             str(tmp_path / "out"),
         ]

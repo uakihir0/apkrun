@@ -521,3 +521,32 @@ def test_a_symbolic_link_in_the_stock_bundle_is_refused_before_anything_is_read(
             tmp_path / "variant",
             stock_super=stock_bundle.parent / STOCK_SUPER,
         )
+
+
+def test_a_refreshed_vbmeta_is_restricted_to_stock_development_images(
+    tmp_path: Path,
+    stock_bundle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = json.loads((stock_bundle / "manifest.json").read_text(encoding="utf-8"))
+    manifest["kind"] = "apkrun"
+    monkeypatch.setattr(bundle_variant, "_verify_stock", lambda _bundle, _key: (b"{}", manifest))
+    refresh = bundle_variant._Refresh(
+        vendor=tmp_path / "vendor_a.img",
+        vbmeta=tmp_path / "vbmeta_a.img",
+        record={},
+        record_path=tmp_path / "reseal.json",
+    )
+
+    with pytest.raises(BundleVariantError, match="only in a kind: stock development bundle"):
+        build_variant(
+            stock_bundle=stock_bundle,
+            stock_super=stock_bundle.parent / STOCK_SUPER,
+            partition=VENDOR,
+            replacement=_payload(tmp_path),
+            output=tmp_path / "variant",
+            sign_key=TEST_KEY,
+            refresh=refresh,
+        )
+    assert not (tmp_path / "variant").exists()
+    assert not (tmp_path / "variant.variant.json").exists()

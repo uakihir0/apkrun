@@ -553,6 +553,8 @@ Out of scope:
   - The output of the final build, with the NDK r28c, has the SHA-256 values `libEGL_mesa.so` `73cb1755…`, `libGLESv2_mesa.so` `7da942f6…`, `libGLESv1_CM_mesa.so` `2a082937…`, and `libgallium_dri.so` `a261e62b…`. Two builds with the same flags gave the same values. The output is outside the repository (IR-495).
   - Open for the VM and the image (IR-487 to IR-489): the symbol contract of 37 imports from the stub libraries and libdrm (`GUEST_SYMBOL_CONTRACT`), the `libz.so` entry, and the placement of the libraries in `vendor/lib64/egl/`.
 
+- **Status (2026-10-16, offline AVB signing implementation; no VM boot).** The `vendor-reseal` path now verifies the stock vbmeta authentication block, refreshes the vendor descriptor, and signs with the pinned AOSP development test key that matches the stock AVB public key. `bundle-variant` verifies the signature before embedding the refreshed blob and allows this test signer only for `kind: stock`. IR-1321 records the choice and its public-key fingerprint for maintainer review. Focused T0 coverage passes (51 tests across `test_vendor_reseal.py`, `test_bundle_variant_refresh.py`, and `test_bundle_variant.py`), including malformed algorithm and short public-key inputs. This is host-side verification only: no variant was built from the live stock bundle or booted, and #099's image identity and guest acceptance criteria remain open.
+
 ---
 
 ## #022 Android VirGL

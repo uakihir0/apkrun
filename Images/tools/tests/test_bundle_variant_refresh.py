@@ -28,6 +28,7 @@ from apkrun_image.vendor_inject import (
 )
 
 FIXTURE_RSA_KEY = _repository_root() / "Tests/Fixtures/signing/test-apkrun-image-fixture-rsa.pem"
+AOSP_TEST_KEY = _repository_root() / "Tests/Fixtures/signing/aosp-avb-testkey-rsa4096.pem"
 FIXTURE_BUILD = "16373615"
 
 
@@ -43,6 +44,14 @@ def _blob(data: bytes) -> bytes:
 
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _corrupt_vbmeta_signature(image: Path) -> None:
+    data = bytearray(image.read_bytes())
+    signature_offset, signature_size = struct.unpack_from(">QQ", data, 48)
+    assert signature_size > 0
+    data[256 + signature_offset] ^= 0x01
+    image.write_bytes(data)
 
 
 def test_the_chain_digest_is_the_top_blob_then_each_chained_blob(tmp_path: Path) -> None:
@@ -210,7 +219,15 @@ def _sealed(avbtool: Path, tmp: Path, name: str, seed: str) -> Path:
     return output
 
 
-def _vbmeta_for(avbtool: Path, tmp: Path, name: str, vendor: Path) -> Path:
+def _vbmeta_for(
+    avbtool: Path,
+    tmp: Path,
+    name: str,
+    vendor: Path,
+    *,
+    key: Path = AOSP_TEST_KEY,
+    algorithm: str = vendor_reseal.VBMETA_ALGORITHM,
+) -> Path:
     output = tmp / f"{name}-vbmeta.img"
     run_avbtool(
         avbtool,
@@ -219,7 +236,9 @@ def _vbmeta_for(avbtool: Path, tmp: Path, name: str, vendor: Path) -> Path:
             "--output",
             str(output),
             "--algorithm",
-            "NONE",
+            algorithm,
+            "--key",
+            str(key),
             "--include_descriptors_from_image",
             str(vendor),
             "--padding_size",
@@ -253,7 +272,7 @@ def _reseal_fixture(tmp_path: Path, **changes: object) -> tuple[Path, Path, Path
     )
     record = {
         "task": "#099",
-        "schemaVersion": 1,
+        "schemaVersion": vendor_reseal.SCHEMA_VERSION,
         "partition": {"name": "vendor_a", "verityName": "vendor", "size": injected.stat().st_size},
         "injected": {"sha256": _sha(injected.read_bytes()), "size": injected.stat().st_size},
         "stock": {"vendorSha256": _sha(stock_vendor.read_bytes()), "vbmetaSha256": "00"},
@@ -265,7 +284,9 @@ def _reseal_fixture(tmp_path: Path, **changes: object) -> tuple[Path, Path, Path
         "vbmeta": {
             "file": "vbmeta_a.img",
             "sha256": _sha((reseal / "vbmeta_a.img").read_bytes()),
-            "algorithm": "NONE",
+            "algorithm": vendor_reseal.VBMETA_ALGORITHM,
+            "signer": vendor_reseal.VBMETA_SIGNER,
+            "publicKeySha1": vendor_reseal.VBMETA_PUBLIC_KEY_SHA1,
             "rollbackIndex": 1780617600,
             "vendorDescriptor": descriptor,
         },
@@ -306,7 +327,8 @@ def test_a_reseal_output_for_the_same_inject_is_read(tmp_path: Path) -> None:
     [
         ({"injected.sha256": "00"}, "was not made from this inject-vendor output"),
         ({"stock.vendorSha256": "00"}, "names another stock vendor_a"),
-        ({"vbmeta.algorithm": "SHA256_RSA4096"}, "names a signed vbmeta"),
+        ({"vbmeta.algorithm": "NONE"}, "does not name a vbmeta signed with"),
+        ({"vbmeta.publicKeySha1": "00"}, "does not record the pinned AOSP AVB development"),
         (
             {"vbmeta.vendorDescriptor": {"rootDigest": "other"}},
             "does not describe the vendor descriptor of its vbmeta_a",
@@ -335,6 +357,43 @@ def test_a_refreshed_vbmeta_of_another_vendor_is_refused(tmp_path: Path) -> None
     record["vbmeta"]["sha256"] = _sha(other_vbmeta.read_bytes())
     record_path.write_text(json.dumps(record), encoding="utf-8")
     with pytest.raises(BundleVariantError, match="does not carry the descriptor of the resealed"):
+        variant._read_reseal_output(
+            reseal, inject_directory=inject, partition="vendor_a", build_id=FIXTURE_BUILD
+        )
+
+
+def test_a_reseal_record_cannot_hide_a_vbmeta_signed_by_another_key(tmp_path: Path) -> None:
+    inject, reseal, record_path, record = _reseal_fixture(tmp_path)
+    avbtool = _avbtool()
+    wrong_key_vbmeta = _vbmeta_for(
+        avbtool,
+        tmp_path,
+        "wrong-key",
+        reseal / "vendor_a.img",
+        key=FIXTURE_RSA_KEY,
+        algorithm="SHA256_RSA2048",
+    )
+    (reseal / "vbmeta_a.img").write_bytes(wrong_key_vbmeta.read_bytes())
+    record["vbmeta"]["sha256"] = _sha(wrong_key_vbmeta.read_bytes())
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    with pytest.raises(BundleVariantError, match="not signed with the pinned AOSP AVB"):
+        variant._read_reseal_output(
+            reseal, inject_directory=inject, partition="vendor_a", build_id=FIXTURE_BUILD
+        )
+
+
+def test_a_reseal_record_cannot_hide_an_invalid_vbmeta_signature(tmp_path: Path) -> None:
+    inject, reseal, record_path, record = _reseal_fixture(tmp_path)
+    vbmeta = reseal / "vbmeta_a.img"
+    _corrupt_vbmeta_signature(vbmeta)
+    record["vbmeta"]["sha256"] = _sha(vbmeta.read_bytes())
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    with pytest.raises(
+        BundleVariantError,
+        match="signature verification failed.*signature does not verify",
+    ):
         variant._read_reseal_output(
             reseal, inject_directory=inject, partition="vendor_a", build_id=FIXTURE_BUILD
         )

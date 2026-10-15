@@ -9,9 +9,10 @@ both, with the vendored avbtool (IR-624):
    the partition name are the stock footer's. The footer is `NONE`, and no FEC is made, because the
    `fec` tool is not pinned (IR-740). The size is the size of the stock partition in `super`.
 2. `vbmeta_a.img`: the stock top-level vbmeta with its vendor hashtree descriptor replaced by the
-   descriptor of the new footer (`avbtool update_partition_descriptor`). The vbmeta is unsigned
-   (`NONE`, IR-744). It keeps the stock rollback index, and every other descriptor is kept. The
-   blob is padded with zeros to the size of the stock file.
+   descriptor of the new footer (`avbtool update_partition_descriptor`). The vbmeta is signed with
+   the pinned AOSP AVB test key that already matches the stock public key (IR-1321). This output is
+   for development only. It keeps the stock rollback index, and every other descriptor is kept.
+   The blob is padded with zeros to the size of the stock file.
 
 Both images are checked with `info_image`, and the new footer is checked with `verify_image`. The
 outputs are moved into the output directory only after every check passes. The tool never boots.
@@ -20,14 +21,19 @@ outputs are moved into the output directory only after every check passes. The t
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import runpy
 import shutil
+import struct
 import sys
 import tempfile
 from collections.abc import Sequence
+from functools import cache
 from pathlib import Path
 from typing import Any
 
+from apkrun_image.avb import AvbError, _read_vbmeta
 from apkrun_image.erofs import load_component, sha256_file
 from apkrun_image.manifest import _repository_root
 from apkrun_image.vendor_inject import (
@@ -43,9 +49,12 @@ from apkrun_image.vendor_inject import (
 )
 
 TASK = "#099"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PARTITION = VERITY_PARTITION
 ALGORITHM = "NONE"
+VBMETA_ALGORITHM = "SHA256_RSA4096"
+VBMETA_PUBLIC_KEY_SHA1 = "2597c218aae470a130f61162feaae70afd97f011"
+VBMETA_SIGNER = "aosp-avb-testkey-rsa4096"
 OUTPUT_VBMETA = "vbmeta_a.img"
 OUTPUT_RECORD = "reseal.json"
 COPY_CHUNK = 64 * 1024 * 1024
@@ -167,6 +176,46 @@ def _info(avbtool: Path, image: Path) -> str:
     return run_avbtool(avbtool, ["info_image", "--image", str(image)])
 
 
+@cache
+def _vendored_avb_api(avbtool: Path) -> dict[str, Any]:
+    """Load the pinned avbtool signature verifier without invoking its CLI entry point."""
+    return runpy.run_path(str(avbtool))
+
+
+def verify_vbmeta_signature(avbtool: Path, image: Path) -> None:
+    """Verify the vbmeta authentication block using the pinned avbtool implementation."""
+    try:
+        with image.open("rb") as stream:
+            header, offset = _read_vbmeta(
+                stream,
+                artifact_size=image.stat().st_size,
+                artifact_name=str(image),
+            )
+            stream.seek(offset)
+            blob = stream.read(header.blob_size)
+    except (AvbError, OSError) as error:
+        raise ResealError(
+            f"{image}: could not read vbmeta for signature verification: {error}"
+        ) from None
+    if len(blob) != header.blob_size:
+        raise ResealError(f"{image}: vbmeta is truncated before its signature can be verified.")
+
+    tool = _vendored_avb_api(avbtool)
+    avbtool_error = tool["AvbError"]
+    try:
+        avb_header = tool["AvbVBMetaHeader"](blob[:256])
+    except (avbtool_error, OSError, ValueError, struct.error) as error:
+        raise ResealError(f"{image}: invalid vbmeta header: {error}") from None
+    if avb_header.algorithm_type == 0:
+        raise ResealError(f"{image}: unsigned vbmeta is not accepted.")
+    try:
+        verified = tool["verify_vbmeta_signature"](avb_header, blob)
+    except (avbtool_error, OSError, ValueError, struct.error) as error:
+        raise ResealError(f"{image}: could not verify the vbmeta signature: {error}") from None
+    if not verified:
+        raise ResealError(f"{image}: vbmeta signature does not verify.")
+
+
 def _copy_prefix(source: Path, destination: Path, size: int) -> None:
     with source.open("rb") as reader, destination.open("wb") as writer:
         remaining = size
@@ -245,12 +294,33 @@ def reseal_vendor(
 
 
 def refresh_vbmeta(
-    avbtool: Path, stock_vbmeta: Path, vendor: Path, output: Path, scratch: Path
+    avbtool: Path,
+    stock_vbmeta: Path,
+    vendor: Path,
+    signing_key: Path,
+    output: Path,
+    scratch: Path,
 ) -> dict[str, Any]:
-    """Write the stock vbmeta with the descriptor of `vendor` to `output`; return the record."""
+    """Write signed stock vbmeta with the descriptor of `vendor` to `output`; return the record."""
+    verify_vbmeta_signature(avbtool, stock_vbmeta)
     stock_info = _info(avbtool, stock_vbmeta)
     stock_top = parse_top(stock_info)
     stock_tree = vendor_tree(stock_info, "the stock vbmeta_a")
+    if stock_top.get("Algorithm") != VBMETA_ALGORITHM:
+        raise ResealError(f"the stock vbmeta_a is not signed with {VBMETA_ALGORITHM}.")
+    if stock_top.get("Public key (sha1)", "").lower() != VBMETA_PUBLIC_KEY_SHA1:
+        raise ResealError("the stock vbmeta_a is not signed with the pinned AOSP AVB test key.")
+
+    if signing_key.is_symlink() or not signing_key.is_file():
+        raise ResealError(f"{signing_key}: the signing key must be a regular file.")
+    public_key = scratch / "signing-key.avbpubkey"
+    run_avbtool(
+        avbtool,
+        ["extract_public_key", "--key", str(signing_key), "--output", str(public_key)],
+    )
+    if hashlib.sha1(public_key.read_bytes()).hexdigest() != VBMETA_PUBLIC_KEY_SHA1:
+        raise ResealError("the signing key does not match the pinned AOSP AVB test key.")
+
     rollback = stock_top.get("Rollback Index")
     if rollback is None:
         raise ResealError("the stock vbmeta_a has no rollback index.")
@@ -268,7 +338,9 @@ def refresh_vbmeta(
             "--output",
             str(raw),
             "--algorithm",
-            ALGORITHM,
+            VBMETA_ALGORITHM,
+            "--key",
+            str(signing_key),
             "--rollback_index",
             rollback.split()[0],
         ],
@@ -279,10 +351,13 @@ def refresh_vbmeta(
     padded = scratch / "vbmeta-padded.bin"
     padded.write_bytes(blob + bytes(partition_size - len(blob)))
 
+    verify_vbmeta_signature(avbtool, padded)
     new_info = _info(avbtool, padded)
     new_top = parse_top(new_info)
-    if new_top.get("Algorithm") != ALGORITHM:
-        raise ResealError("the refreshed vbmeta is not NONE.")
+    if new_top.get("Algorithm") != VBMETA_ALGORITHM:
+        raise ResealError(f"the refreshed vbmeta is not signed with {VBMETA_ALGORITHM}.")
+    if new_top.get("Public key (sha1)", "").lower() != VBMETA_PUBLIC_KEY_SHA1:
+        raise ResealError("the refreshed vbmeta does not carry the pinned AOSP AVB test key.")
     for key in ("Rollback Index", "Rollback Index Location", "Flags", "Minimum libavb version"):
         if new_top.get(key) != stock_top.get(key):
             raise ResealError(f"the refreshed vbmeta changed its {key}.")
@@ -298,6 +373,8 @@ def refresh_vbmeta(
     return {
         "rollbackIndex": int(rollback.split()[0]),
         "blobSize": len(blob),
+        "signer": VBMETA_SIGNER,
+        "publicKeySha1": VBMETA_PUBLIC_KEY_SHA1,
         "previousVendorDescriptor": stock_tree,
         "vendorDescriptor": new_tree,
     }
@@ -308,6 +385,7 @@ def reseal(
     injected: Path,
     stock_vendor: Path,
     stock_vbmeta: Path,
+    signing_key: Path,
     output_directory: Path,
     repository: Path | None = None,
 ) -> dict[str, Any]:
@@ -329,7 +407,9 @@ def reseal(
         vendor_out = scratch / OUTPUT_IMAGE
         vbmeta_out = scratch / OUTPUT_VBMETA
         vendor = reseal_vendor(avbtool, injected, stock_vendor, vendor_out, scratch)
-        vbmeta = refresh_vbmeta(avbtool, stock_vbmeta, vendor_out, vbmeta_out, scratch)
+        vbmeta = refresh_vbmeta(
+            avbtool, stock_vbmeta, vendor_out, signing_key, vbmeta_out, scratch
+        )
         record: dict[str, Any] = {
             "schemaVersion": SCHEMA_VERSION,
             "task": TASK,
@@ -362,12 +442,14 @@ def reseal(
                 "file": OUTPUT_VBMETA,
                 "sha256": sha256_file(vbmeta_out),
                 "size": vbmeta_out.stat().st_size,
-                "algorithm": ALGORITHM,
+                "algorithm": VBMETA_ALGORITHM,
                 **vbmeta,
             },
             "decisions": {
                 "fec": "not generated, because the fec tool is not pinned (IR-740)",
-                "topLevelSignature": "NONE, the vbmeta is not signed again (IR-744)",
+                "topLevelSignature": (
+                    f"{VBMETA_ALGORITHM} with {VBMETA_SIGNER}; development image only (IR-1321)"
+                ),
                 "rollbackIndex": "kept from the stock vbmeta_a (IR-743)",
             },
             "verifiedByAvbtool": True,
@@ -409,6 +491,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stock-vendor", type=Path, required=True, help="the stock vendor_a")
     parser.add_argument("--stock-vbmeta", type=Path, required=True, help="the stock vbmeta_a")
     parser.add_argument(
+        "--key",
+        type=Path,
+        required=True,
+        help="the pinned AOSP AVB test key; output is for development only",
+    )
+    parser.add_argument(
         "--out", type=Path, required=True, help="a new or empty directory outside the repository"
     )
     return parser
@@ -422,6 +510,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             injected=arguments.injected,
             stock_vendor=arguments.stock_vendor,
             stock_vbmeta=arguments.stock_vbmeta,
+            signing_key=arguments.key,
             output_directory=arguments.out,
         )
     except (ValueError, OSError) as error:

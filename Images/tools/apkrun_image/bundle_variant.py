@@ -17,11 +17,12 @@ The stock bundle is read and never changed:
    bundle module's own functions. The manifest is validated (runtime-image-manifest.md §5, §6).
 
 The variant keeps the stock `imageVersion` and `kind`, because the schema has no field for a
-variant and the rules fix `kind` to the origin (IR-700). Its top-level vbmeta is unsigned (IR-744)
-when it is refreshed, and the stock vbmeta otherwise (IR-650). No partition changes size (IR-682).
-`manifest.sig` is made with the developer image key, which Debug builds trust. The record next to
-the bundle names every input and output, and it is outside the bundle, because the bundle lists its
-own files.
+variant and the rules fix `kind` to the origin (IR-700). Its top-level vbmeta is signed with the
+stock-matching AOSP test key (IR-1321) when it is refreshed, and remains the stock vbmeta otherwise
+(IR-650). The AOSP key is accepted only for `kind: stock` development bundles. No partition changes
+size (IR-682). `manifest.sig` is made with the developer image key, which Debug builds trust. The
+record next to the bundle names every input and output, and it is outside the bundle, because the
+bundle lists its own files.
 """
 
 from __future__ import annotations
@@ -76,7 +77,7 @@ from apkrun_image.vendor_inject import (
     verify_avbtool,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 TASK = "#099"
 SUPER_LABEL = "super"
 BOOT_FILES = ("bootconfig", "cmdline", "kernel", "ramdisk")
@@ -437,22 +438,45 @@ def _read_reseal_output(
             raise BundleVariantError(f"{path} does not match the SHA-256 in {record_path}")
         files[role] = path
         entries[role] = entry
-    if entries["vbmeta"].get("algorithm") != "NONE":
+    if entries["vbmeta"].get("algorithm") != vendor_reseal.VBMETA_ALGORITHM:
         raise BundleVariantError(
-            f"{record_path} names a signed vbmeta, which this tool does not make (IR-744)"
+            f"{record_path} does not name a vbmeta signed with "
+            f"{vendor_reseal.VBMETA_ALGORITHM}"
+        )
+    if (
+        entries["vbmeta"].get("signer") != vendor_reseal.VBMETA_SIGNER
+        or entries["vbmeta"].get("publicKeySha1") != vendor_reseal.VBMETA_PUBLIC_KEY_SHA1
+    ):
+        raise BundleVariantError(
+            f"{record_path} does not record the pinned AOSP AVB development signing key"
         )
     avbtool = verify_avbtool(_repository_root(), load_component(AVBTOOL_COMPONENT))
+    try:
+        vendor_reseal.verify_vbmeta_signature(avbtool, files["vbmeta"])
+    except (ValueError, OSError) as error:
+        raise BundleVariantError(
+            f"{files['vbmeta']}: signature verification failed: {error}"
+        ) from None
     try:
         vendor_descriptor = vendor_reseal.vendor_tree(
             run_avbtool(avbtool, ["info_image", "--image", str(files["vendor"])]),
             "the resealed vendor_a",
         )
+        vbmeta_info = run_avbtool(avbtool, ["info_image", "--image", str(files["vbmeta"])])
         vbmeta_descriptor = vendor_reseal.vendor_tree(
-            run_avbtool(avbtool, ["info_image", "--image", str(files["vbmeta"])]),
-            "the refreshed vbmeta_a",
+            vbmeta_info, "the refreshed vbmeta_a"
         )
+        vbmeta_top = vendor_reseal.parse_top(vbmeta_info)
     except (ValueError, OSError) as error:
         raise BundleVariantError(f"{record_path}: the descriptors do not read: {error}") from None
+    if (
+        vbmeta_top.get("Algorithm") != vendor_reseal.VBMETA_ALGORITHM
+        or vbmeta_top.get("Public key (sha1)", "").lower()
+        != vendor_reseal.VBMETA_PUBLIC_KEY_SHA1
+    ):
+        raise BundleVariantError(
+            f"{files['vbmeta']} is not signed with the pinned AOSP AVB development key"
+        )
     if vbmeta_descriptor != vendor_descriptor:
         raise BundleVariantError(
             "the refreshed vbmeta_a does not carry the descriptor of the resealed vendor_a"
@@ -635,6 +659,10 @@ def build_variant(
         raise BundleVariantError(f"{replacement} is not a file")
 
     manifest_bytes, manifest = _verify_stock(stock_bundle, public_key)
+    if refresh is not None and manifest.get("kind") != "stock":
+        raise BundleVariantError(
+            "the AOSP AVB test key can refresh vbmeta only in a kind: stock development bundle"
+        )
     disk, record = _super_record(manifest)
     disk_path = str(disk["path"])
     stock_disk = stock_bundle / disk_path
@@ -749,7 +777,8 @@ def build_variant(
         verify_signature(new_bytes, signature, {key_id_of(public_key): public_key})
 
         top_level_decision = (
-            "replaced by the refreshed vbmeta_a, unsigned (IR-744)"
+            f"replaced by {vendor_reseal.VBMETA_ALGORITHM} signed with "
+            f"{vendor_reseal.VBMETA_SIGNER}; development-only (IR-1321)"
             if refresh is not None
             else "not signed again (IR-650)"
         )
@@ -792,7 +821,9 @@ def build_variant(
                 "stockSHA256": _disk_partition(manifest, VBMETA_LABEL)["sha256"],
                 "variantSHA256": vbmeta_sha,
                 "size": vbmeta_size,
-                "algorithm": "NONE",
+                "algorithm": vendor_reseal.VBMETA_ALGORITHM,
+                "signer": vendor_reseal.VBMETA_SIGNER,
+                "publicKeySha1": vendor_reseal.VBMETA_PUBLIC_KEY_SHA1,
                 "rollbackIndex": refresh.record["vbmeta"]["rollbackIndex"],
                 "resealRecordSHA256": _sha256(refresh.record_path),
             }

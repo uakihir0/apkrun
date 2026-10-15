@@ -18,10 +18,14 @@ private struct AndroidImageVariantReceipt: Decodable {
 /// window by `CoordinateMapper`. The targets are the centres of their `uiautomator` bounds, except the drag, which uses
 /// fixed points inside HelloCompose's list.
 ///
+/// Showing the development window activates it. The edge-clamping and #103 cases therefore run only on a dedicated lab
+/// GUI session. The edge-clamping case additionally requires `APKRUN_INPUT_EDGE_T2=1`.
+///
 /// The suite runs in the Xcode test host (IR-438). Its boot needs a working guest renderer, which the odm7 overlay gives
 /// (IR-1278), and the host dismisses the keyguard before it launches the app (IR-1285). The device checks of the
 /// coordinator's scripted runs post the same gestures with the CGEvent helper in /tmp (decision D14). The suite runs only
-/// with APKRUN_INPUT_T2=1, which the AndroidInput configuration of IntegrationTests.xctestplan sets. It also needs
+/// with APKRUN_INPUT_T2=1, which the AndroidInput configuration of IntegrationTests.xctestplan sets. The edge-clamping
+/// case also needs APKRUN_INPUT_EDGE_T2=1. The suite needs
 /// APKRUN_GUEST_DIR (the Guest Agent bundle), APKRUN_FIXTURE_APK (HelloText, a debug build: its `TEXT` and `DETAILS`
 /// broadcasts exist only there), and APKRUN_FIXTURE_COMPOSE_APK (HelloCompose). A missing input skips its test and names
 /// the variable.
@@ -100,6 +104,131 @@ final class AndroidInputTests: XCTestCase {
             XCTAssertEqual(shellInput, [], "adb shell input processes ran during the sequence")
             let lines = try await run.fixtureLog { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 }
             XCTAssertEqual(AndroidInputRun.numbers(in: lines, after: Self.clickPrefix), Array(1...100))
+        }
+    }
+
+    /// Drags beyond the left and top edges clamp in the host and release the guest touch before a later click.
+    func testDragsBeyondTopAndLeftEdgesCloseTheGuestTouch() async throws {
+        guard ProcessInfo.processInfo.environment["APKRUN_INPUT_EDGE_T2"] == "1" else {
+            throw XCTSkip("Run only on a dedicated lab GUI session with APKRUN_INPUT_EDGE_T2=1.")
+        }
+        let apk = try Self.fixture("APKRUN_FIXTURE_APK")
+        try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
+            let target = try await run.centre(of: Self.buttonID)
+            let pointer = try run.pointer()
+            let start = pointer.viewPoint(for: target)
+            let leftEdge = NSPoint(x: pointer.view.bounds.minX - 24, y: start.y)
+            let topEdge = NSPoint(x: start.x, y: pointer.view.bounds.maxY + 24)
+
+            guard let initialCount = try await Self.persistedClickCount(run) else {
+                throw AndroidInputRunFailure.timedOut("the fixture's initial persisted click counter")
+            }
+            XCTAssertEqual(initialCount, 0)
+
+            let captureStart = try await run.startTouchEventCapture()
+            try await pointer.drag(from: target, toViewPoint: leftEdge, steps: 4)
+            let afterLeftDragCapture = try await run.touchEventCaptureSnapshot()
+            guard let leftDragThrough = afterLeftDragCapture.sentEvents.records.last?.batchSequence else {
+                throw AndroidInputRunFailure.timedOut("the routed left-edge drag")
+            }
+            Self.assertClampedEdgeDrag(
+                afterLeftDragCapture, afterSequence: UInt64(captureStart.batchesSent),
+                throughSequence: leftDragThrough, startingAt: target, edge: .left)
+            let leftDragAcknowledgement = try await run.acknowledgeLatestInput(with: pointer, at: target)
+            XCTAssertEqual(leftDragAcknowledgement.rejectedEvents, 0, "the guest rejected left-edge drag input")
+            let afterLeftDrag = try await Self.waitForStablePersistedClickCount(run, exactly: 0)
+            XCTAssertEqual(afterLeftDrag, 0, "the drag outside the left edge must not click the button")
+
+            try await pointer.click(at: target)
+            let leftRecoveryAcknowledgement = try await run.acknowledgeLatestInput(with: pointer, at: target)
+            XCTAssertEqual(leftRecoveryAcknowledgement.rejectedEvents, 0, "the guest rejected the post-left-edge click")
+            let afterLeftRecovery = try await Self.waitForStablePersistedClickCount(run, exactly: 1)
+            XCTAssertEqual(afterLeftRecovery, 1, "the left-edge release must leave the guest ready for a new touch")
+
+            let topDragStartSequence = try await run.inputCounters().batchesSent
+            try await pointer.drag(from: target, toViewPoint: topEdge, steps: 4)
+            let afterTopDragCapture = try await run.touchEventCaptureSnapshot()
+            guard let topDragThrough = afterTopDragCapture.sentEvents.records.last?.batchSequence else {
+                throw AndroidInputRunFailure.timedOut("the routed top-edge drag")
+            }
+            Self.assertClampedEdgeDrag(
+                afterTopDragCapture, afterSequence: UInt64(topDragStartSequence),
+                throughSequence: topDragThrough, startingAt: target, edge: .top)
+            let topDragAcknowledgement = try await run.acknowledgeLatestInput(with: pointer, at: target)
+            XCTAssertEqual(topDragAcknowledgement.rejectedEvents, 0, "the guest rejected top-edge drag input")
+            let afterTopDrag = try await Self.waitForStablePersistedClickCount(run, exactly: 1)
+            XCTAssertEqual(afterTopDrag, 1, "the drag outside the top edge must not click the button")
+
+            try await pointer.click(at: target)
+            let topRecoveryAcknowledgement = try await run.acknowledgeLatestInput(with: pointer, at: target)
+            XCTAssertEqual(topRecoveryAcknowledgement.rejectedEvents, 0, "the guest rejected the post-top-edge click")
+            let afterTopRecovery = try await Self.waitForStablePersistedClickCount(run, exactly: 2)
+            XCTAssertEqual(afterTopRecovery, 2, "the top-edge release must leave the guest ready for a new touch")
+
+            let capture = try await run.stopTouchEventCapture()
+            XCTAssertEqual(capture.touches.discardedRecords, 0)
+            XCTAssertEqual(capture.sentEvents.discardedRecords, 0)
+            XCTAssertEqual(capture.acknowledgements?.discardedRecords, 0)
+            let counters = capture.counters
+            XCTAssertEqual(counters.droppedRate, 0)
+            XCTAssertEqual(counters.droppedNotRunning, 0)
+            XCTAssertEqual(counters.droppedInvalid, 0)
+            XCTAssertEqual(counters.droppedChannel, 0)
+            XCTAssertEqual(counters.coalesced, 0)
+        }
+    }
+
+    private enum ClampedEdge {
+        case left
+        case top
+    }
+
+    private static func assertClampedEdgeDrag(
+        _ capture: InputTouchCaptureSnapshot,
+        afterSequence: UInt64,
+        throughSequence: UInt64,
+        startingAt start: InputPixel,
+        edge: ClampedEdge,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let sentTouches = capture.sentEvents.records.filter {
+            $0.batchSequence > afterSequence && $0.batchSequence <= throughSequence
+                && $0.kindAndPhase.hasPrefix("touch.")
+        }
+        let sentTimes = Set(sentTouches.map(\.hostTimeNanos))
+        let touches = capture.touches.records.filter { sentTimes.contains($0.time.hostNanos) }
+        let sentPhases = sentTouches.map(\.kindAndPhase)
+        let touchPhases = touches.map { touch -> String in
+            switch touch.phase {
+            case .down: "touch.down"
+            case .move: "touch.move"
+            case .up: "touch.up"
+            case .cancel: "touch.cancel"
+            }
+        }
+        let expectedPhases = ["touch.down", "touch.move", "touch.move", "touch.move", "touch.move", "touch.up"]
+        XCTAssertEqual(
+            sentPhases, expectedPhases, "the complete drag must be sent to the guest", file: file, line: line)
+        XCTAssertEqual(
+            touchPhases, expectedPhases, "the translated drag must match the sent phases", file: file, line: line)
+        XCTAssertEqual(
+            touches.map(\.time.hostNanos), sentTouches.map(\.hostTimeNanos),
+            "each sent drag event must match one translated touch", file: file, line: line)
+        guard touches.count == expectedPhases.count else {
+            return
+        }
+        XCTAssertEqual(touches[0].position.x, start.x, accuracy: 1, file: file, line: line)
+        XCTAssertEqual(touches[0].position.y, start.y, accuracy: 1, file: file, line: line)
+        for touch in touches {
+            XCTAssertTrue((0..<1024).contains(touch.position.x), file: file, line: line)
+            XCTAssertTrue((0..<768).contains(touch.position.y), file: file, line: line)
+        }
+        switch edge {
+        case .left:
+            XCTAssertEqual(touches.suffix(2).map(\.position.x), [0, 0], file: file, line: line)
+        case .top:
+            XCTAssertEqual(touches.suffix(2).map(\.position.y), [0, 0], file: file, line: line)
         }
     }
 
@@ -777,6 +906,44 @@ final class AndroidInputTests: XCTestCase {
         }
         throw AndroidInputRunFailure.timedOut(
             "the fixture's persisted click count to reach \(expected); last value was \(lastCount)")
+    }
+
+    /// Requires the fixture's click counter to stay at one exact value through the Android dispatch settling window.
+    private static func waitForStablePersistedClickCount(
+        _ run: AndroidInputRun,
+        exactly expected: Int,
+        stableFor: Duration = .seconds(1),
+        timeout: Duration = .seconds(15)
+    ) async throws -> Int {
+        let deadline = ContinuousClock.now + timeout
+        var stableSince: ContinuousClock.Instant?
+        var lastCount: Int?
+        while ContinuousClock.now < deadline {
+            let remaining = deadline - .now
+            if let count = try await persistedClickCount(run, timeout: remaining) {
+                lastCount = count
+                guard count <= expected else {
+                    throw AndroidInputRunFailure.timedOut(
+                        "the fixture's persisted click count to stay at \(expected); it reached \(count)")
+                }
+                if count == expected {
+                    if let stableSince, stableSince.duration(to: .now) >= stableFor {
+                        return count
+                    }
+                    stableSince = stableSince ?? .now
+                } else {
+                    stableSince = nil
+                }
+            } else {
+                stableSince = nil
+            }
+            if ContinuousClock.now < deadline {
+                try await Task.sleep(for: min(.milliseconds(100), deadline - .now))
+            }
+        }
+        throw AndroidInputRunFailure.timedOut(
+            "the fixture's persisted click count to stay at \(expected) for \(stableFor); last value was \(lastCount.map(String.init) ?? "unavailable")"
+        )
     }
 
     private static func assertNoShellInputDuring(_ operation: () async throws -> Void) async throws {

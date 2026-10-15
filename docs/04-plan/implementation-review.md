@@ -18447,7 +18447,7 @@ is preferable to recording incomplete image identity.
 
 **Verification (2026-10-16).** `swift test --filter aDragThatLeaves` passes all three focused tests: right/bottom, left, and top. `git diff --check` passes. No VM or GUI input was used.
 
-**Risk.** The #024 edge-clamping device verification still needs evidence for top and left edge delivery and gesture closure; these unit tests do not close that review item or unblock #025.
+**Risk.** The #024 acceptance item for host-side clamping is checked by T0. Device verification still needs evidence for top and left edge delivery and gesture closure; these unit tests do not provide it or unblock #025.
 
 ## IR-1315: Keep pointer coordinates stable during layout changes
 
@@ -18464,3 +18464,19 @@ is preferable to recording incomplete image identity.
 **Verification (2026-10-16).** `swift test --filter InputCoreTests` passes all 95 InputCore T0 tests. The new touch case checks that MOVE and UP use the starting mapper and the following DOWN uses the updated mapper. The new secondary-mouse case checks that release uses the starting mapper. The existing generation-change test still checks cancellation. The adversarial review found no state-lifecycle issue. No VM or GUI input was run.
 
 **Risk.** This verifies only host-side translation. It does not establish that the resulting events reach Android during live resize, and it does not close #024's outstanding device edge-clamping or click reliability checks.
+
+## IR-1316: Check top and left edge gesture closure on the Android guest
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024; [test-strategy.md](test-strategy.md) §6.4; `AndroidInputTests`; `AndroidInputRun.InputPointer` |
+
+**Choice.** Add one AndroidInput T2 case that drags from the HelloText button beyond the left edge and then beyond the top edge in the same guest session. Capture translated touch coordinates and successfully sent route events in bounded test memory, and assert that each gesture sends DOWN, four MOVEs, and UP with the final MOVE and UP clamped to the relevant display edge. After each gesture, send harmless pointer moves until the next normal periodic ACK covers it, then require the fixture's persisted click count to remain unchanged for one second. Send a new button click, wait for its periodic ACK, and require the persisted count to advance by exactly one and remain stable for one second. Assert the observable host drop and coalescing counters remain zero.
+
+**Reason.** The T0 tests establish that the host clamps translated coordinates, but they cannot establish that the corresponding events were sent to the guest or that the Guest Agent accepted them. `WireSink.drain()` orders the host route before the separate ADB counter read, and the normal periodic ACK confirms guest injection acceptance without enabling the timing-perturbing per-event trace or changing the 32-batch ACK cadence. Requiring a stable fixture counter for one second after each ACK reduces the race with Android's asynchronous UI dispatch. The acknowledged following click then verifies that the guest can start and complete another touch.
+
+**Verification.** The targeted `build-for-testing` passed, and `swift test --package-path Packages/RuntimeCore --filter InputRouterTests` passed all 28 tests. The AndroidInput T2 run is pending. It uses direct AppKit view dispatch on a real guest, but `DisplayWindow.show()` activates its window. The test is skipped unless `APKRUN_INPUT_EDGE_T2=1` is set and must run in a dedicated lab GUI session. Its bounded coordinate capture stays in test memory.
+
+**Risk.** The one-second stable-counter window is a bounded settling check, not a protocol fence for Android's main-thread callback. The new case checks top and left gesture closure only. It does not satisfy #024's 100-of-100 click criterion or #103's dedicated WindowServer acceptance.

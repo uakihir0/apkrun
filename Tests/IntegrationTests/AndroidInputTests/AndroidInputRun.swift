@@ -24,11 +24,53 @@ enum AndroidInputRunFailure: Error, Equatable {
     case windowNotActive
     case ambiguousDisplay
     case cannotCreateSystemEvent
+    case periodicAcknowledgementRequiresDirectView
 }
 
 enum InputPointerDelivery: Sendable, Equatable {
     case directView
     case windowServer
+}
+
+struct InputTouchCaptureSnapshot {
+    let touches: InputTouchEventHistory
+    let sentEvents: InputSentEventHistory
+    let acknowledgements: InputAcknowledgementHistory?
+    let counters: InputCounters
+}
+
+struct InputTouchEventHistory: Sendable, Equatable {
+    let records: [TouchEvent]
+    let discardedRecords: Int
+}
+
+private final class InputTouchEventRecorder: @unchecked Sendable {
+    private static let recordLimit = 256
+
+    private let lock = NSLock()
+    private var records: [TouchEvent] = []
+    private var discardedRecords = 0
+
+    func record(_ events: [InputCore.InputEvent]) {
+        lock.lock()
+        defer { lock.unlock() }
+        for event in events {
+            guard case .touch(let touch) = event else {
+                continue
+            }
+            if records.count == Self.recordLimit {
+                records.removeFirst()
+                discardedRecords += 1
+            }
+            records.append(touch)
+        }
+    }
+
+    func snapshot() -> InputTouchEventHistory {
+        lock.lock()
+        defer { lock.unlock() }
+        return InputTouchEventHistory(records: records, discardedRecords: discardedRecords)
+    }
 }
 
 /// One development boot with the window and input, as `apkrun dev launch` runs it (#024, decision D13).
@@ -54,6 +96,7 @@ final class AndroidInputRun {
     private var window: DisplayWindow?
     private var inputSink: WireSink?
     private var inputTraceRecorder: InputTraceRecorder?
+    private var inputTouchEventRecorder: InputTouchEventRecorder?
     private var boot: Task<Void, Never>?
 
     private init(home: URL, adb: AdbClient, pointerDelivery: InputPointerDelivery) {
@@ -162,6 +205,94 @@ final class AndroidInputRun {
             throw AndroidInputRunFailure.inputRouteUnbound
         }
         return counters
+    }
+
+    /// Captures translated touch coordinates and sent events without changing normal batching or ACK cadence.
+    func startTouchEventCapture() async throws -> InputCounters {
+        guard let inputSink, inputTouchEventRecorder == nil else {
+            throw AndroidInputRunFailure.inputRouteUnbound
+        }
+        try await drainInput()
+        guard
+            let counters = await route.startAcknowledgementHistoryCapture(
+                captureSentEventHistory: true
+            )
+        else {
+            throw AndroidInputRunFailure.inputRouteUnbound
+        }
+        let recorder = InputTouchEventRecorder()
+        inputTouchEventRecorder = recorder
+        inputSink.setTouchEventRecorder(recorder)
+        return counters
+    }
+
+    /// A drained snapshot of touch translations, successfully sent events, and route counters.
+    func touchEventCaptureSnapshot() async throws -> InputTouchCaptureSnapshot {
+        guard let recorder = inputTouchEventRecorder else {
+            throw AndroidInputRunFailure.inputRouteUnbound
+        }
+        try await drainInput()
+        return InputTouchCaptureSnapshot(
+            touches: recorder.snapshot(),
+            sentEvents: await route.sentEventHistory(),
+            acknowledgements: nil,
+            counters: await route.counters()
+        )
+    }
+
+    /// Sends harmless hover events until a normal periodic ACK covers all input sent so far.
+    func acknowledgeLatestInput(
+        with pointer: InputPointer,
+        at pixel: InputPixel
+    ) async throws -> InputAcknowledgementHistory.Record {
+        guard inputTouchEventRecorder != nil else {
+            throw AndroidInputRunFailure.inputRouteUnbound
+        }
+        var snapshot = try await touchEventCaptureSnapshot()
+        guard let lastSentSequence = snapshot.sentEvents.records.last?.batchSequence else {
+            throw AndroidInputRunFailure.timedOut("a routed input batch to acknowledge")
+        }
+        let acknowledgementSequence = ((lastSentSequence - 1) / 32 + 1) * 32
+        let deadline = ContinuousClock.now + .seconds(10)
+        var latestSentSequence = lastSentSequence
+        while latestSentSequence < acknowledgementSequence {
+            guard ContinuousClock.now < deadline else {
+                throw AndroidInputRunFailure.timedOut(
+                    "normal periodic input ACK \(acknowledgementSequence); latest sent sequence \(latestSentSequence)")
+            }
+            try await pointer.advancePeriodicAcknowledgement(at: pixel)
+            snapshot = try await touchEventCaptureSnapshot()
+            guard snapshot.sentEvents.discardedRecords == 0 else {
+                throw AndroidInputRunFailure.timedOut("bounded input event history overflowed")
+            }
+            guard let sentSequence = snapshot.sentEvents.records.last?.batchSequence else {
+                throw AndroidInputRunFailure.timedOut("a routed input batch to acknowledge")
+            }
+            latestSentSequence = sentSequence
+        }
+        let history = try await waitForAcknowledgement(through: acknowledgementSequence)
+        guard let acknowledgement = history.records.first(where: { $0.batchSequence == acknowledgementSequence }) else {
+            throw AndroidInputRunFailure.timedOut("input ACK \(acknowledgementSequence)")
+        }
+        return acknowledgement
+    }
+
+    /// Stops touch capture after draining and returns the final guest ACK and route evidence.
+    func stopTouchEventCapture() async throws -> InputTouchCaptureSnapshot {
+        guard let recorder = inputTouchEventRecorder else {
+            throw AndroidInputRunFailure.inputRouteUnbound
+        }
+        try await drainInput()
+        let acknowledgements = await route.stopAcknowledgementHistoryCapture()
+        let snapshot = InputTouchCaptureSnapshot(
+            touches: recorder.snapshot(),
+            sentEvents: await route.sentEventHistory(),
+            acknowledgements: acknowledgements,
+            counters: await route.counters()
+        )
+        inputSink?.setTouchEventRecorder(nil)
+        inputTouchEventRecorder = nil
+        return snapshot
     }
 
     /// The bounded history of guest ACKs after all previously received view events have been routed.
@@ -378,7 +509,9 @@ final class AndroidInputRun {
             view.inputEventReceiptObserver = nil
         }
         inputSink?.setTraceRecorder(nil)
+        inputSink?.setTouchEventRecorder(nil)
         inputTraceRecorder = nil
+        inputTouchEventRecorder = nil
     }
 
     private func startBoot(guestAgentDirectory: URL) {
@@ -537,6 +670,39 @@ struct InputPointer {
         released = true
     }
 
+    /// Drags to a point outside the view, using direct view dispatch to check clamping on the Android guest.
+    func drag(from start: InputPixel, toViewPoint end: NSPoint, steps: Int) async throws {
+        let startPoint = windowPoint(start)
+        try deliver(.leftMouseDown, atViewPoint: startPoint)
+        var released = false
+        defer {
+            if !released {
+                try? deliver(.leftMouseUp, atViewPoint: end)
+            }
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        for step in 1...steps {
+            let progress = Double(step) / Double(steps)
+            let point = NSPoint(
+                x: startPoint.x + (end.x - startPoint.x) * progress,
+                y: startPoint.y + (end.y - startPoint.y) * progress
+            )
+            try deliver(.leftMouseDragged, atViewPoint: point)
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try deliver(.leftMouseUp, atViewPoint: end)
+        released = true
+    }
+
+    /// Adds one normal pointer move so tests can reach the protocol's periodic ACK without changing its cadence.
+    func advancePeriodicAcknowledgement(at pixel: InputPixel) async throws {
+        guard delivery == .directView else {
+            throw AndroidInputRunFailure.periodicAcknowledgementRequiresDirectView
+        }
+        try deliver(.mouseMoved, at: windowPoint(pixel))
+        try await Task.sleep(for: .milliseconds(20))
+    }
+
     /// A scroll of `deltaY` at `pixel`: points for a trackpad (`precise`), lines for a wheel. The CGEvent is made as the
     /// event tap delivers it, and AppKit makes the NSEvent that the view reads.
     func scroll(at pixel: InputPixel, deltaY: Int32, precise: Bool) {
@@ -561,7 +727,11 @@ struct InputPointer {
     }
 
     private func deliver(_ type: NSEvent.EventType, at pixel: InputPixel) throws {
-        let location = view.convert(windowPoint(pixel), to: nil)
+        try deliver(type, atViewPoint: windowPoint(pixel))
+    }
+
+    private func deliver(_ type: NSEvent.EventType, atViewPoint point: NSPoint) throws {
+        let location = view.convert(point, to: nil)
         if delivery == .windowServer {
             try postThroughWindowServer(type, at: window.convertPoint(toScreen: location))
             return
@@ -577,6 +747,7 @@ struct InputPointer {
         case .leftMouseDown: view.mouseDown(with: event)
         case .leftMouseDragged: view.mouseDragged(with: event)
         case .leftMouseUp: view.mouseUp(with: event)
+        case .mouseMoved: view.mouseMoved(with: event)
         case .rightMouseDown: view.rightMouseDown(with: event)
         case .rightMouseUp: view.rightMouseUp(with: event)
         default: break
@@ -644,6 +815,11 @@ struct InputPointer {
         let point = mapper.windowPoint(forPixel: InputCore.DisplayPoint(x: pixel.x, y: pixel.y))
         return NSPoint(x: point.x, y: point.y)
     }
+
+    /// The view point of a display pixel, for tests that deliberately leave the content rectangle.
+    func viewPoint(for pixel: InputPixel) -> NSPoint {
+        windowPoint(pixel)
+    }
 }
 
 /// The window's frames, from the developer display (the CLI's `SurfacePoolFrameSource`, #023).
@@ -687,6 +863,7 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
     private let queue: AsyncStream<Command>.Continuation
     // `IOSurfaceLayerView` calls `deliver` on the main thread, and the test changes this only on MainActor before input.
     private var traceRecorder: InputTraceRecorder?
+    private var touchEventRecorder: InputTouchEventRecorder?
 
     init(route: DevInputRoute) {
         // Unbounded: a dropped press or release would leave a gesture open on the guest.
@@ -710,11 +887,16 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
 
     func deliver(_ events: [InputCore.InputEvent]) {
         traceRecorder?.recordTranslated(events)
+        touchEventRecorder?.record(events)
         queue.yield(.events(events))
     }
 
     func setTraceRecorder(_ recorder: InputTraceRecorder?) {
         traceRecorder = recorder
+    }
+
+    func setTouchEventRecorder(_ recorder: InputTouchEventRecorder?) {
+        touchEventRecorder = recorder
     }
 
     /// Completes after every earlier event list has finished routing.

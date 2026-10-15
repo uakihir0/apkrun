@@ -18649,10 +18649,10 @@ do not prove app dispatch.
 
 **Choice.** Leave #024 acceptance box 7 unchecked and update the §5 current-progress table from 6 of 8 to 5 of 8. Keep the box open until device evidence covers drags leaving the content on all relevant edges.
 
-**Evidence.** T0 translator coverage verifies that presses in the letterbox are dropped, and T0 mapper coverage verifies that coordinates are clamped. Device runs after the far-edge fix (`1796f23`) cover the right and bottom edges. The earlier top-left drag left a touch open, and the top and left edges were not rerun after that fix; the closeout did not run them either (IR-1250).
+**Evidence.** T0 translator coverage verifies that presses in the letterbox are dropped. The mapper clamping tests and the translator gesture regression cover clamped touch moves and releases on all four edges. Device runs after the far-edge fix (`1796f23`) cover only the right and bottom edges. The earlier top-left drag left a touch open, and the top and left edges were not rerun after that fix; the closeout did not run them either (IR-1250).
 
 **Reason.** The acceptance item combines letterbox dropping with clamping drags that leave the content. T0 coverage and two device edges do not establish the full behavior when the prior top-left run left a gesture open. Keeping the item open records the evidence limit without changing product behavior or the requirement.
 
 **Risk.** #024 remains open, and tasks with a hard dependency on #024 remain gated. This status change does not claim that the implementation is incorrect; it records that the documented device evidence is incomplete.
 
-**Verification.** Documentation-only update. `git diff --check` and repository documentation consistency checks are run before commit; no product tests are applicable.
+**Verification.** The focused T0 test `aDragThatLeavesTheContentIsClampedAndTheUpIsAtTheEdge` passed (1 test) in an isolated SwiftPM package built from copies of the repository `DiagnosticsCore` and `InputCore` sources and tests. The monorepo `swift test --filter` attempt stopped before running tests because this worktree lacks the local VirGL headers (`EGL/egl.h`). `git diff --check` and the #024 status consistency check pass. The isolated run verifies the test logic but does not verify monorepo integration or device delivery.

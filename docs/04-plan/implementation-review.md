@@ -18757,3 +18757,37 @@ the existing API 37 guest tests exercise the production factories, and that
 the Robolectric addition is not needed to close a test gap. The earlier review
 also corrected a stale note about the #025 keyboard T2 cases; they were added
 and passed after IR-1271 (IR-1287, IR-1294).
+
+## IR-1318: Keep edge-endpoint guest scrolling supplementary
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [input.md](../02-design/input.md) §15; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 |
+
+**Choice.** Keep Box 7 open after adding a focused API 37 guest test whose
+direct-view drags end beyond the top and left display edges. Treat its
+additional settled HelloCompose rows as supplementary guest-visible evidence,
+not proof that every out-of-bounds move or the clamped release reached Android.
+
+**Reason.** The fixture logs a debounced list index, not `MotionEvent` phases or
+coordinates. Most of each scripted path is still inside the display and can
+scroll the list before crossing its edge; therefore the row change cannot
+isolate delivery after the boundary. The test window also has no letterbox, so
+it cannot exercise the letterbox press-drop clause. The existing T0 mapper and
+translator tests remain the exact evidence for clamping, while the device-level
+gesture closure remains unverified.
+
+**Verification.** On 2026-10-15, the focused
+`AndroidInputTests.testDragAndScrollMoveTheHelloComposeList` passed once on the
+odm7 API 37 bundle (1 passed, 0 failed or skipped); the result is
+`/tmp/apkrun-024-edge-20261015.xcresult`. The run logged a live-VM VirGL
+`COPY_TRANSFER3D` illegal-resource failure and `rendererOperationFailed`; the
+input assertions do not validate rendering.
+
+**Adversarial review.** The reviewer confirmed the top-left coordinate
+orientation and that the final row assertions do not prove that out-of-bounds
+events or `ACTION_UP` were delivered: substantial in-bounds motion can account
+for the scroll. The code and result records therefore keep that limitation
+explicit and leave Box 7 open.

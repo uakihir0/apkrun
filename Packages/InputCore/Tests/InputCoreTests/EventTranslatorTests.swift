@@ -431,6 +431,13 @@ private let hoverTable: [(kind: PointerSample.Kind, x: Double, control: Bool)] =
     #expect(translator.translate(sample(.leftDragged, x: 600, y: 100, ms: 1)) == [touch(.move, 1023, 568, ms: 1)])
     #expect(translator.translate(sample(.leftUp, x: 600, y: -50, ms: 2)) == [touch(.up, 1023, 767, ms: 2)])
     #expect(translator.translate(sample(.leftDown, ms: 3)) == [touch(.down, 200, 168, ms: 3)])
+
+    // Exercise the two edges that the old device run did not retest after the far-edge fix.
+    #expect(translator.translate(sample(.leftDragged, x: -50, y: 300, ms: 4)) == [touch(.move, 0, 168, ms: 4)])
+    #expect(translator.translate(sample(.leftUp, x: -50, y: 300, ms: 5)) == [touch(.up, 0, 168, ms: 5)])
+    #expect(translator.translate(sample(.leftDown, ms: 6)) == [touch(.down, 200, 168, ms: 6)])
+    #expect(translator.translate(sample(.leftDragged, x: 250, y: 450, ms: 7)) == [touch(.move, 500, 0, ms: 7)])
+    #expect(translator.translate(sample(.leftUp, x: 250, y: 450, ms: 8)) == [touch(.up, 500, 0, ms: 8)])
 }
 
 @Test func aGenerationChangeDuringAGestureCancelsIt() {

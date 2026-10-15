@@ -48,10 +48,10 @@ class TouchTrace(private val capacity: Int = DEFAULT_CAPACITY) {
         }
 
     /**
-     * Records a DOWN, UP, or CANCEL before normal View handling.
+     * Records a DOWN, MOVE, UP, or CANCEL before normal View handling.
      *
      * @return the record sequence to attach a later post-dispatch sample to, or null when capture
-     *   is off or the action is not one of the three traced actions.
+     *   is off or the action is not traced.
      */
     fun recordTouch(
         eventTimeMillis: Long,
@@ -226,10 +226,14 @@ class TouchTrace(private val capacity: Int = DEFAULT_CAPACITY) {
  * MotionEvent action values needed by the debug trace; numeric values match Android's masked
  * constants.
  */
-enum class TouchTraceAction(val maskedValue: Int) {
-    DOWN(0),
-    UP(1),
-    CANCEL(3);
+enum class TouchTraceAction(
+    val maskedValue: Int,
+    val capturesPostDispatchPressedState: Boolean,
+) {
+    DOWN(0, capturesPostDispatchPressedState = true),
+    MOVE(2, capturesPostDispatchPressedState = false),
+    UP(1, capturesPostDispatchPressedState = true),
+    CANCEL(3, capturesPostDispatchPressedState = false);
 
     companion object {
         fun fromMaskedValue(value: Int): TouchTraceAction? = entries.firstOrNull {

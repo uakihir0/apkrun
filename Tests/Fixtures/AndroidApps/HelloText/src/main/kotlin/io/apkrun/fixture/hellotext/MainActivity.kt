@@ -31,7 +31,8 @@ class MainActivity : Activity() {
     private var touchTraceObserver: TouchTraceObserverToken? = null
 
     private val touchTraceListener = View.OnTouchListener { view, event ->
-        if (TouchTraceAction.fromMaskedValue(event.actionMasked) == null) {
+        val action = TouchTraceAction.fromMaskedValue(event.actionMasked)
+        if (action == null) {
             return@OnTouchListener false
         }
         val inside =
@@ -50,7 +51,7 @@ class MainActivity : Activity() {
                 inside = inside,
                 shown = view.isShown,
             )
-        if (inputSequence != null) {
+        if (inputSequence != null && action.capturesPostDispatchPressedState) {
             view.postOnAnimation {
                 DebugTouchTraceSession.recordPostDispatchPressed(
                     inputSequence,

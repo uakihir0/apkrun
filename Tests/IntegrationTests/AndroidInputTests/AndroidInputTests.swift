@@ -135,13 +135,21 @@ final class AndroidInputTests: XCTestCase {
                 afterLeftDragCapture, afterSequence: UInt64(captureStart.batchesSent),
                 throughSequence: leftDragThrough, startingAt: target, edge: .left)
             let leftDragAcknowledgement = try await run.acknowledgeLatestInput(with: pointer, at: target)
-            XCTAssertEqual(leftDragAcknowledgement.rejectedEvents, 0, "the guest rejected left-edge drag input")
+            XCTAssertEqual(
+                leftDragAcknowledgement.rejectedEvents,
+                0,
+                "periodic ACK batch \(leftDragAcknowledgement.batchSequence) reported rejected input"
+            )
             let afterLeftDrag = try await Self.waitForStablePersistedClickCount(run, exactly: 0)
             XCTAssertEqual(afterLeftDrag, 0, "the drag outside the left edge must not click the button")
 
             try await pointer.click(at: target)
             let leftRecoveryAcknowledgement = try await run.acknowledgeLatestInput(with: pointer, at: target)
-            XCTAssertEqual(leftRecoveryAcknowledgement.rejectedEvents, 0, "the guest rejected the post-left-edge click")
+            XCTAssertEqual(
+                leftRecoveryAcknowledgement.rejectedEvents,
+                0,
+                "periodic ACK batch \(leftRecoveryAcknowledgement.batchSequence) reported rejected input"
+            )
             let afterLeftRecovery = try await Self.waitForStablePersistedClickCount(run, exactly: 1)
             XCTAssertEqual(afterLeftRecovery, 1, "the left-edge release must leave the guest ready for a new touch")
 
@@ -155,13 +163,21 @@ final class AndroidInputTests: XCTestCase {
                 afterTopDragCapture, afterSequence: UInt64(topDragStartSequence),
                 throughSequence: topDragThrough, startingAt: target, edge: .top)
             let topDragAcknowledgement = try await run.acknowledgeLatestInput(with: pointer, at: target)
-            XCTAssertEqual(topDragAcknowledgement.rejectedEvents, 0, "the guest rejected top-edge drag input")
+            XCTAssertEqual(
+                topDragAcknowledgement.rejectedEvents,
+                0,
+                "periodic ACK batch \(topDragAcknowledgement.batchSequence) reported rejected input"
+            )
             let afterTopDrag = try await Self.waitForStablePersistedClickCount(run, exactly: 1)
             XCTAssertEqual(afterTopDrag, 1, "the drag outside the top edge must not click the button")
 
             try await pointer.click(at: target)
             let topRecoveryAcknowledgement = try await run.acknowledgeLatestInput(with: pointer, at: target)
-            XCTAssertEqual(topRecoveryAcknowledgement.rejectedEvents, 0, "the guest rejected the post-top-edge click")
+            XCTAssertEqual(
+                topRecoveryAcknowledgement.rejectedEvents,
+                0,
+                "periodic ACK batch \(topRecoveryAcknowledgement.batchSequence) reported rejected input"
+            )
             let afterTopRecovery = try await Self.waitForStablePersistedClickCount(run, exactly: 2)
             XCTAssertEqual(afterTopRecovery, 2, "the top-edge release must leave the guest ready for a new touch")
 
@@ -747,7 +763,7 @@ final class AndroidInputTests: XCTestCase {
         touchTraceSummary(in: lines)?.records
     }
 
-    private static func joinTrace(
+    fileprivate static func joinTrace(
         host: InputTraceHostSnapshot,
         routedEvents: [InputSentEventHistory.Record],
         acknowledgements: [InputAcknowledgementHistory.Record],
@@ -756,7 +772,9 @@ final class AndroidInputTests: XCTestCase {
         let traceLines = fixtureLines.filter { $0.contains("touch-trace ") }
         let touchLines = traceLines.filter { keyValues(in: $0)["kind"] == "touch" }
         let clickLines = traceLines.filter { keyValues(in: $0)["kind"] == "click" }
-        let acksBySequence = Dictionary(uniqueKeysWithValues: acknowledgements.map { ($0.batchSequence, $0) })
+        let acksBySequence = Dictionary(
+            uniqueKeysWithValues: acknowledgements.map { ($0.batchSequence, $0) }
+        )
 
         return routedEvents.map { routed in
             let eventType: Int?
@@ -765,9 +783,18 @@ final class AndroidInputTests: XCTestCase {
             case "touch.down":
                 eventType = Int(NSEvent.EventType.leftMouseDown.rawValue)
                 fixtureAction = "DOWN"
+            case "touch.move":
+                eventType = Int(NSEvent.EventType.leftMouseDragged.rawValue)
+                fixtureAction = "MOVE"
             case "touch.up":
                 eventType = Int(NSEvent.EventType.leftMouseUp.rawValue)
                 fixtureAction = "UP"
+            case "touch.cancel":
+                eventType = nil
+                fixtureAction = "CANCEL"
+            case "cancelAll":
+                eventType = nil
+                fixtureAction = "CANCEL"
             default:
                 eventType = nil
                 fixtureAction = nil
@@ -1165,5 +1192,99 @@ private final class ShellInputSampler: @unchecked Sendable {
         process.waitUntilExit()
         return String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
             .filter { $0.contains("adb") && $0.contains("shell input") }
+    }
+}
+
+@MainActor
+final class AndroidInputTraceJoinTests: XCTestCase {
+    func testTouchMoveJoinsHostGuestAndFixtureWithoutBeingCountedAsAClick() {
+        let hostTime: UInt64 = 987_654_321
+        let host = InputTraceHostSnapshot(
+            rawReceipts: [
+                InputTraceRawReceipt(
+                    ordinal: 1,
+                    eventType: Int(NSEvent.EventType.leftMouseDragged.rawValue),
+                    hostTimeNanos: hostTime
+                )
+            ],
+            discardedRawReceipts: 0,
+            translatedEvents: [
+                InputTraceTranslatedEvent(
+                    ordinal: 2,
+                    hostTimeNanos: hostTime,
+                    kindAndPhase: "touch.move"
+                ),
+                InputTraceTranslatedEvent(
+                    ordinal: 3,
+                    hostTimeNanos: hostTime + 1,
+                    kindAndPhase: "cancelAll"
+                ),
+            ],
+            discardedTranslatedEvents: 0
+        )
+        let routed = [
+            InputSentEventHistory.Record(
+                batchSequence: 14,
+                eventIndex: 0,
+                hostTimeNanos: hostTime,
+                kindAndPhase: "touch.move"
+            ),
+            InputSentEventHistory.Record(
+                batchSequence: 15,
+                eventIndex: 0,
+                hostTimeNanos: hostTime + 1,
+                kindAndPhase: "cancelAll"
+            ),
+        ]
+        let acknowledgements = [
+            InputAcknowledgementHistory.Record(
+                batchSequence: 14,
+                rejectedEvents: 0,
+                receiveToInjectMicros: 90,
+                lastEventTimeMillis: 420
+            ),
+            InputAcknowledgementHistory.Record(
+                batchSequence: 15,
+                rejectedEvents: 0,
+                receiveToInjectMicros: 95,
+                lastEventTimeMillis: 421
+            ),
+        ]
+        let moveLine =
+            "I APKRUN-FIXTURE: touch-trace kind=touch sequence=3 eventTimeMs=420 "
+            + "downTimeMs=400 action=MOVE pressedBefore=true enabled=true focused=true inside=true shown=true"
+        let cancelLine =
+            "I APKRUN-FIXTURE: touch-trace kind=touch sequence=4 eventTimeMs=421 "
+            + "downTimeMs=400 action=CANCEL pressedBefore=true enabled=true focused=true inside=true shown=true"
+        let fixtureLines = [
+            moveLine,
+            cancelLine,
+            "I APKRUN-FIXTURE: touch-trace kind=touch sequence=5 eventTimeMs=430 "
+                + "downTimeMs=400 action=UP pressedBefore=true enabled=true focused=true inside=true shown=true",
+            "I APKRUN-FIXTURE: touch-trace kind=click sequence=6 clickOrdinal=1 "
+                + "storedCounter=1 saveSucceeded=true correlation=unique_up pendingUpCount=1 "
+                + "correlatedUpSequence=5",
+        ]
+
+        let joins = AndroidInputTests.joinTrace(
+            host: host,
+            routedEvents: routed,
+            acknowledgements: acknowledgements,
+            fixtureLines: fixtureLines
+        )
+
+        XCTAssertEqual(joins.count, 2)
+        XCTAssertEqual(joins[0].rawReceiptOrdinals, [1])
+        XCTAssertEqual(joins[0].translatedEventOrdinals, [2])
+        XCTAssertEqual(joins[0].acknowledgement?.lastEventTimeMillis, 420)
+        XCTAssertEqual(joins[0].fixtureTouchRecords, [moveLine])
+        XCTAssertEqual(joins[0].fixtureDispatch, "matched-view-touch")
+        XCTAssertTrue(joins[0].fixtureClickRecords.isEmpty)
+        XCTAssertEqual(joins[0].clickOutcome, "not-an-up")
+        XCTAssertTrue(joins[1].rawReceiptOrdinals.isEmpty)
+        XCTAssertEqual(joins[1].translatedEventOrdinals, [3])
+        XCTAssertEqual(joins[1].fixtureTouchRecords, [cancelLine])
+        XCTAssertEqual(joins[1].fixtureDispatch, "matched-view-touch")
+        XCTAssertEqual(joins[1].clickOutcome, "not-an-up")
     }
 }

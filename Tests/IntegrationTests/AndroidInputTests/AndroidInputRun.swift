@@ -240,7 +240,9 @@ final class AndroidInputRun {
         )
     }
 
-    /// Sends harmless hover events until a normal periodic ACK covers all input sent so far.
+    /// Returns the periodic ACK at the next 32-batch boundary at or after the latest sent batch.
+    ///
+    /// The ACK is a route-progress marker. Its rejection count applies only to its own batch.
     func acknowledgeLatestInput(
         with pointer: InputPointer,
         at pixel: InputPixel
@@ -699,7 +701,7 @@ struct InputPointer {
         guard delivery == .directView else {
             throw AndroidInputRunFailure.periodicAcknowledgementRequiresDirectView
         }
-        try deliver(.mouseMoved, at: windowPoint(pixel))
+        try deliver(.mouseMoved, at: pixel)
         try await Task.sleep(for: .milliseconds(20))
     }
 

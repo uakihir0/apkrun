@@ -195,6 +195,40 @@ class TouchTraceTest {
     }
 
     @Test
+    fun moveDispatchIsRecordedWithoutConsumingPendingUpCorrelation() {
+        val trace = TouchTrace(capacity = 8)
+        trace.start()
+        trace.recordTouch(100, 90, TouchTraceAction.DOWN.maskedValue, false, true, true, true, true)
+        trace.recordTouch(110, 90, TouchTraceAction.MOVE.maskedValue, true, true, true, true, true)
+        val up = trace.recordTouch(120, 90, TouchTraceAction.UP.maskedValue, true, true, true, true, true)
+        trace.recordClick(storedCounter = 1, saveSucceeded = true)
+
+        val drain = trace.stopAndDrain()
+
+        val touches = drain.records.filterIsInstance<TouchTraceRecord.Touch>()
+        assertEquals(
+            listOf(TouchTraceAction.DOWN, TouchTraceAction.MOVE, TouchTraceAction.UP),
+            touches.map(TouchTraceRecord.Touch::action),
+        )
+        assertEquals(
+            "kind=touch sequence=2 eventTimeMs=110 downTimeMs=90 action=MOVE " +
+                "pressedBefore=true enabled=true focused=true inside=true shown=true",
+            touches[1].toLogcatLine(),
+        )
+        val click = drain.records.filterIsInstance<TouchTraceRecord.Click>().single()
+        assertEquals(up?.sequence, click.correlatedUpSequence)
+        assertEquals(1L, click.pendingUpCount)
+    }
+
+    @Test
+    fun postDispatchPressedSamplesAreLimitedToGestureEdges() {
+        assertTrue(TouchTraceAction.DOWN.capturesPostDispatchPressedState)
+        assertFalse(TouchTraceAction.MOVE.capturesPostDispatchPressedState)
+        assertTrue(TouchTraceAction.UP.capturesPostDispatchPressedState)
+        assertFalse(TouchTraceAction.CANCEL.capturesPostDispatchPressedState)
+    }
+
+    @Test
     fun ringIsBoundedAndReportsOverwrittenRecords() {
         val trace = TouchTrace(capacity = 2)
         trace.start()

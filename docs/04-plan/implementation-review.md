@@ -18475,13 +18475,13 @@ is preferable to recording incomplete image identity.
 | Task | #024 |
 | Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024; [test-strategy.md](test-strategy.md) §6.4; `AndroidInputTests`; `AndroidInputRun.InputPointer` |
 
-**Choice.** Add one AndroidInput T2 case that drags from the HelloText button beyond the left edge and then beyond the top edge in the same guest session. Capture translated touch coordinates and successfully sent route events in bounded test memory, and assert that each gesture sends DOWN, four MOVEs, and UP with the final MOVE and UP clamped to the relevant display edge. After each gesture, send harmless pointer moves until the next normal periodic ACK covers it, then require the fixture's persisted click count to remain unchanged for one second. Send a new button click, wait for its periodic ACK, and require the persisted count to advance by exactly one and remain stable for one second. Assert the observable host drop and coalescing counters remain zero.
+**Choice.** Add one AndroidInput T2 case that drags from the HelloText button beyond the left edge and then beyond the top edge in the same guest session. Capture translated touch coordinates and successfully sent route events in bounded test memory, and assert that each gesture sends DOWN, four MOVEs, and UP with the final MOVE and UP clamped to the relevant display edge. After each gesture, use the periodic ACK at the next 32-batch boundary at or after the gesture's last sent sequence; send harmless pointer moves only when needed to reach that boundary. Treat the ACK only as a route-progress marker, and treat its `rejectedEvents` count as applying to that ACK's batch alone. Then require the fixture's persisted click count to remain unchanged for one second. Send a new button click, wait for its periodic ACK, and require the persisted count to advance by exactly one and remain stable for one second. Assert the observable host drop and coalescing counters remain zero.
 
-**Reason.** The T0 tests establish that the host clamps translated coordinates, but they cannot establish that the corresponding events were sent to the guest or that the Guest Agent accepted them. `WireSink.drain()` orders the host route before the separate ADB counter read, and the normal periodic ACK confirms guest injection acceptance without enabling the timing-perturbing per-event trace or changing the 32-batch ACK cadence. Requiring a stable fixture counter for one second after each ACK reduces the race with Android's asynchronous UI dispatch. The acknowledged following click then verifies that the guest can start and complete another touch.
+**Reason.** The T0 tests establish that the host clamps translated coordinates, but they cannot establish that the corresponding events were sent to the guest or that the Guest Agent accepted them. `WireSink.drain()` orders the host route before the separate ADB counter read. `acknowledgeLatestInput` selects the 32-batch ACK boundary at or after the latest sent sequence. If the sequence is already on that boundary, it returns that ACK; otherwise it sends harmless pointer moves until the boundary is reached. The guest's ACK reports `rejectedEvents` for the ACK's batch, not for other batches in the gesture. This keeps the existing cadence without enabling timing-perturbing per-event tracing. The stable fixture counter and successful following click are the guest-side observations of gesture closure and recovery; the ACK is only a route-progress marker. Requiring a stable fixture counter for one second after each ACK reduces the race with Android's asynchronous UI dispatch.
 
 **Verification.** The targeted `build-for-testing` passed, and `swift test --package-path Packages/RuntimeCore --filter InputRouterTests` passed all 28 tests. The AndroidInput T2 run is pending. It uses direct AppKit view dispatch on a real guest, but `DisplayWindow.show()` activates its window. The test is skipped unless `APKRUN_INPUT_EDGE_T2=1` is set and must run in a dedicated lab GUI session. Its bounded coordinate capture stays in test memory.
 
-**Risk.** The one-second stable-counter window is a bounded settling check, not a protocol fence for Android's main-thread callback. The new case checks top and left gesture closure only. It does not satisfy #024's 100-of-100 click criterion or #103's dedicated WindowServer acceptance.
+**Risk.** The one-second stable-counter window is a bounded settling check, not a protocol fence for Android's main-thread callback. Because the test does not request a per-event ACK for each drag batch, it does not record a guest rejection count for every gesture MOVE. The new case checks top and left gesture closure only. It does not satisfy #024's 100-of-100 click criterion or #103's dedicated WindowServer acceptance.
 
 ## IR-1317: Reconcile the #099 progress index with its recorded acceptance checks
 
@@ -18512,3 +18512,73 @@ was run; the record change does not provide new image or renderer evidence.
 variant. A maintainer may require direct renderer output or a rerun on the
 corrected image before accepting that criterion; the index now preserves both
 the existing checkbox state and the limitation.
+
+## IR-1318: Scope the edge-gesture periodic ACK to its own batch
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3), #103 diagnostic follow-up |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 and #103; `AndroidInputRun.acknowledgeLatestInput`; `InputService` |
+
+**Choice.** Describe the ACK returned after a top or left edge gesture as a
+route-progress marker at the 32-batch boundary at or after the gesture's last
+sent sequence. The helper sends harmless pointer moves only when needed to
+reach that boundary. Its
+`rejectedEvents` value applies only to that acknowledged batch; it does not
+report rejection outcomes for the earlier gesture MOVE batches. Keep the
+fixture counter stability check and the successful following click as the
+guest-side observations of non-click and recovery.
+
+**Reason.** `acknowledgeLatestInput` selects the 32-batch boundary at or after
+the last sent sequence. If the last sequence is already on that boundary, the
+ACK can be for the gesture's final batch; otherwise the helper sends harmless
+pointer moves to reach the boundary. `InputService` sets that ACK's
+`rejectedEvents` from the boundary batch's invalid and dropped events alone.
+Calling it proof that the whole gesture was accepted conflated route progress
+with a complete per-gesture result. The corrected wording preserves the test's
+existing cadence and evidence while making that limit explicit.
+
+**Verification.** Compared `AndroidInputRun.acknowledgeLatestInput` with the
+ACK construction in `InputService`. `git diff --check` passes. The dedicated
+edge-gesture T2 remains pending in its isolated GUI lab.
+
+**Risk.** This correction does not provide per-gesture rejection counts. If
+future evidence must attribute a rejected event to each drag batch, the
+dedicated trace must request per-event ACKs; the current T2 checks only
+fixture-level closure and later input recovery.
+
+## IR-1319: Include MOVE and cancellation in the bounded click trace
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [input.md](../02-design/input.md) §11; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [test-strategy.md](test-strategy.md) §6.4 |
+
+**Choice.** Extend the opt-in HelloText trace and host/fixture join to include
+Android `ACTION_MOVE` and the host `cancelAll` route. Keep touch records in the
+existing 4,096-entry ring. Record pre-dispatch state for every traced action,
+but schedule next-frame pressed-state samples only for `DOWN` and `UP`. Keep
+the synthetic Swift join outside the T2-gated test class and verify that a
+fixture `UP`/click is not attributed to a routed MOVE.
+
+**Reason.** The existing diagnostic could link host down/up events to Android
+view dispatch but omitted intermediate touch movement and the normal
+focus-loss cancellation route. Recording MOVE fields gives the diagnostic a
+bounded view of the missing interval. Posting one view callback for every
+MOVE would create an unbounded pending callback queue outside the fixed trace
+ring and further perturb timing, so post-dispatch samples remain at gesture
+edges. `cancelAll` has no raw pointer receipt; it can still join to the guest
+ACK and fixture `CANCEL` by guest event time.
+
+**Verification.** Both focused HelloText unit tests and the standalone
+synthetic Swift test pass. The Swift test ran alone under `LinuxGuest` after
+regenerating the ignored Xcode project; it executed one test without starting
+a VM. Strict Swift formatting and `git diff --check` pass. The dedicated
+WindowServer T2 runs remain pending.
+
+**Risk.** The listener and per-event ACK cadence can perturb the timing under
+investigation. This change improves trace coverage but does not establish
+device-level delivery or the intermittent-click cause. The product-cadence
+acceptance run must keep trace capture disabled.

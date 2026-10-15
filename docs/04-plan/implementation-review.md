@@ -18344,14 +18344,21 @@ Kept, and why:
 |---|---|
 | Status | Needs maintainer review |
 | Task | #103 |
-| Affected documents | [ci.yml](../../.github/workflows/ci.yml); [run-checks.sh](../../scripts/ci/run-checks.sh) |
+| Affected documents | [ci.yml](../../.github/workflows/ci.yml); [integration.yml](../../.github/workflows/integration.yml); [nightly.yml](../../.github/workflows/nightly.yml); [run-checks.sh](../../scripts/ci/run-checks.sh); [resolve-test-deferral.sh](../../scripts/ci/resolve-test-deferral.sh) |
 
 **Choice.** Skip the repository test harness in the lint job and the Swift,
 graphics, and image test steps on exact pushes to `refs/heads/main`, and on
 same-repository pull requests whose head branch is `task/103-click-loss`.
 Keep the required jobs, image manifest validation, other CI checks, and build
 jobs enabled. Other pull request branches and branch pushes keep the normal
-test path.
+test path. The manual Integration and Nightly workflows default their
+`enable_test_runs` input to false and skip their test jobs unless explicitly
+enabled on the exact `main` ref. A case-sensitive Bash resolver is the final
+gate before checkout for those manual jobs because GitHub expression string
+equality is case-insensitive. The inline resolver requires both the exact
+`refs/heads/main` value and the opt-in. Checkout, all repository commands, and
+artifact uploads are guarded by its result, so a case-variant ref does not run
+repository code on a self-hosted runner.
 
 **Reason.** The user asked to defer the current GitHub Actions tests while
 continuing the implementation and authorized direct commits to `main`.
@@ -18367,17 +18374,22 @@ an unrelated fork branch with the same name from receiving the exception.
 (`ruby scripts/tests/test_workflow_runners.rb "$PWD"`) passes, including
 scenario checks for exact `main` pushes, a case-variant main ref, another
 branch push, the same-repository #103 PR, its case variant, a fork PR, and a
-`main` PR. The check runner also passes with
+`main` PR. It also executes the inline resolver from both manual workflows for
+the default-disabled, exact-main opt-in, case-variant, and other-branch cases,
+and verifies that checkout, repository commands, and artifact uploads are
+guarded. The check runner also passes with
 `APKRUN_SKIP_CI_TESTS=true scripts/ci/run-checks.sh`, confirming the
 repository test harness is skipped while all six remaining checks pass.
 `git diff --check` passes. The dedicated GUI T2 runs required by #103 are
 separate and remain outstanding; this CI exception does not satisfy them.
 
 **Risk.** The main-push exception remains active until removed from the
-workflow. Test steps show as skipped while their jobs can still succeed, so
-reviewers must inspect step results rather than treat a green job as proof
-that its suite ran. A maintainer should restore mainline test execution after
-the current implementation work reaches a suitable validation point.
+workflow, and manual Integration/Nightly suites remain disabled unless a
+dispatch explicitly opts in. Test steps show as skipped while their jobs can
+still succeed, so reviewers must inspect step results rather than treat a
+green job as proof that its suite ran. A maintainer should restore test
+execution after the current implementation work reaches a suitable validation
+point.
 
 ## IR-1313: Keep click-loss ACK capture lean and attach the exact image variant
 

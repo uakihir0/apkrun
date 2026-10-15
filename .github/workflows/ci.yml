@@ -157,7 +157,7 @@ jobs:
       - name: Verify graphics libraries and public headers
         run: scripts/build-third-party.sh virgl-runtime
       - name: Run Swift T0 tests
-        if: steps.test-deferral.outputs.skip != 'true'
+        if: steps.test-deferral.outputs.skip == 'false'
         run: >-
           swift test --skip 'SystemTests' -j 2
           --experimental-maximum-parallelization-width 2
@@ -203,13 +203,13 @@ jobs:
           swift -e 'import Metal; guard MTLCreateSystemDefaultDevice() != nil
           else { fatalError("runnerMissingMetal") }'
       - name: Run Metal and VirGL T1 tests
-        if: steps.test-deferral.outputs.skip != 'true'
+        if: steps.test-deferral.outputs.skip == 'false'
         run: swift test --filter GraphicsCoreSystemTests -j 2
       - name: Run Metal and VirGL T1 tests with Address Sanitizer
-        if: steps.test-deferral.outputs.skip != 'true'
+        if: steps.test-deferral.outputs.skip == 'false'
         run: swift test --sanitize=address --filter GraphicsCoreSystemTests -j 2
       - name: Run Metal and VirGL T1 tests with Undefined Behavior Sanitizer
-        if: steps.test-deferral.outputs.skip != 'true'
+        if: steps.test-deferral.outputs.skip == 'false'
         run: swift test --sanitize=undefined --filter GraphicsCoreSystemTests -j 2
 
   test-images:
@@ -237,7 +237,7 @@ jobs:
             fi
           done
       - name: Run image tooling tests
-        if: steps.test-deferral.outputs.skip != 'true'
+        if: steps.test-deferral.outputs.skip == 'false'
         run: Images/tools/.venv/bin/python -m pytest Images/tools/tests
       - name: Check image tooling style
         run: |

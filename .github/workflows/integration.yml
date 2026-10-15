@@ -1,10 +1,17 @@
 name: Integration tests
 
 # Manual dispatch only: no apkrun-lab runner is registered (IR-295), and a push
-# trigger left every run queued (IR-313). Restore the push trigger with the path
+# trigger left every run queued (IR-313). Tests default to disabled while the
+# current validation deferral is active. Restore the push trigger with the path
 # filter of build-system.md §15.1 once a lab runner exists.
 on:
   workflow_dispatch:
+    inputs:
+      enable_test_runs:
+        description: Enable test execution while the test suites are temporarily deferred
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -16,7 +23,7 @@ concurrency:
 jobs:
   linux-guest:
     name: linux-guest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && inputs.enable_test_runs
     runs-on:
       - self-hosted
       - macOS
@@ -27,25 +34,42 @@ jobs:
       APKRUN_TEST_DEVELOPMENT_TEAM: ${{ vars.APKRUN_TEST_DEVELOPMENT_TEAM }}
       APKRUN_TEST_CODE_SIGN_IDENTITY: ${{ vars.APKRUN_TEST_CODE_SIGN_IDENTITY }}
     steps:
+      - name: Resolve exact test deferral scope
+        id: test-deferral
+        env:
+          APKRUN_ENABLE_TEST_RUNS: ${{ inputs.enable_test_runs }}
+        run: |
+          skip=false
+          if [[ "$GITHUB_REF" != "refs/heads/main" || "$APKRUN_ENABLE_TEST_RUNS" != "true" ]]; then
+            skip=true
+          fi
+          printf 'skip=%s\n' "$skip" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        if: steps.test-deferral.outputs.skip == 'false'
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Check test signing configuration
+        if: steps.test-deferral.outputs.skip == 'false'
         run: |
           if [[ -z "$APKRUN_TEST_DEVELOPMENT_TEAM" || -z "$APKRUN_TEST_CODE_SIGN_IDENTITY" ]]; then
             printf 'Set APKRUN_TEST_DEVELOPMENT_TEAM and APKRUN_TEST_CODE_SIGN_IDENTITY repository variables for the lab Apple Development certificate.\n' >&2
             exit 1
           fi
       - name: Install pinned repository tools
+        if: steps.test-deferral.outputs.skip == 'false'
         run: scripts/bootstrap
       - name: Set temporary guest artifact directory
+        if: steps.test-deferral.outputs.skip == 'false'
         run: echo "APKRUN_TEST_LINUX_DIR=$RUNNER_TEMP/apkrun-test-linux" >> "$GITHUB_ENV"
       - name: Build pinned Linux guest artifacts
+        if: steps.test-deferral.outputs.skip == 'false'
         run: scripts/build-test-initramfs.sh
       - name: Generate Xcode project
+        if: steps.test-deferral.outputs.skip == 'false'
         run: scripts/generate-project.sh
       - name: Run LinuxGuest T2 suite
+        if: steps.test-deferral.outputs.skip == 'false'
         run: >-
           xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests
           -testPlan IntegrationTests -configuration Debug
@@ -56,7 +80,7 @@ jobs:
           DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM"
           CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY"
       - name: Upload LinuxGuest result
-        if: always()
+        if: always() && steps.test-deferral.outcome == 'success' && steps.test-deferral.outputs.skip == 'false'
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: linux-guest-${{ github.sha }}

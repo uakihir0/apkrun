@@ -15,7 +15,7 @@ concurrency:
 
 env:
   APKRUN_CI: "1"
-  # TODO(#024): Remove after the deferred click-loss lab validation.
+  # TODO(#024): Remove after the deferred local guest T2 verification.
   APKRUN_SKIP_CI_TESTS: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'task/024-click-input-reliability' }}
 
 jobs:
@@ -136,7 +136,7 @@ jobs:
           persist-credentials: false
       - name: Report deferred Swift T0 suite
         if: env.APKRUN_SKIP_CI_TESTS == 'true'
-        run: echo "Swift T0 suite deferred for the click-loss lab validation window"
+        run: echo "Swift T0 suite deferred for local #024 guest verification"
       - name: Prepare result directory
         if: env.APKRUN_SKIP_CI_TESTS != 'true'
         run: mkdir -p build/ci
@@ -182,7 +182,7 @@ jobs:
           persist-credentials: false
       - name: Report deferred graphics T1 suite
         if: env.APKRUN_SKIP_CI_TESTS == 'true'
-        run: echo "Graphics T1 suite deferred for the click-loss lab validation window"
+        run: echo "Graphics T1 suite deferred for local #024 guest verification"
       - name: Install pinned repository tools
         if: env.APKRUN_SKIP_CI_TESTS != 'true'
         run: scripts/bootstrap

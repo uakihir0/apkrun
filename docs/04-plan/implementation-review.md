@@ -18657,7 +18657,7 @@ do not prove app dispatch.
 
 **Verification.** The focused T0 test `aDragThatLeavesTheContentIsClampedAndTheUpIsAtTheEdge` first passed (1 test) in an isolated SwiftPM package built from copies of the repository `DiagnosticsCore` and `InputCore` sources and tests. Its first monorepo attempt stopped before running because this worktree lacked the local VirGL headers (`EGL/egl.h`). On 2026-10-15 UTC, the same filtered `swift test` then passed in the monorepo after temporarily symlinking `ThirdParty/out` to the existing main-worktree cache. The 12 GB cache was not copied or modified, and the temporary symlink was removed after the run. The monorepo run verifies package integration; device delivery remains unverified at the top and left edges.
 
-## IR-1316: Defer Actions suites while #024 click-loss lab checks are pending
+## IR-1316: Defer Actions suites during local #024 guest verification
 
 | Field | Value |
 |---|---|
@@ -18695,7 +18695,7 @@ acceptance criteria.
 
 **Risk.** Required test job conclusions can be successful even though their
 suite steps are skipped, so review must check the step-level conclusions. The
-temporary branch exception needs removal after the deferred click-loss lab
+temporary branch exception needs removal after the deferred local guest
 validation is complete. These protected CI paths will require a non-author
 maintainer review and the `ci-policy-approved` label on the eventual PR.
 

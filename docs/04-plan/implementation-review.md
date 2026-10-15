@@ -18582,3 +18582,40 @@ WindowServer T2 runs remain pending.
 investigation. This change improves trace coverage but does not establish
 device-level delivery or the intermittent-click cause. The product-cadence
 acceptance run must keep trace capture disabled.
+
+## IR-1320: Define the isolated GUI environment for pointer integration tests
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024, #103 |
+| Affected documents | [build-system.md](../05-development/build-system.md) §12.4; `AndroidInputRun.prepareForWindowServerPointerDispatch`; `AndroidInputRun.postThroughWindowServer`; `IOSurfaceLayerView.acceptsFirstMouse(for:)` |
+
+**Choice.** Clarify that a dedicated lab GUI session is a logged-in macOS
+desktop reserved for the pointer integration tests, separate from a desktop
+used for ordinary work. Require one detected display for the tests and keep
+these runs out of unattended CI. Keep posting real pointer events through
+WindowServer for the GUI acceptance runs. Do not replace that path with direct
+calls to view event handlers or PID-targeted event posting to avoid the
+isolated GUI requirement.
+
+**Reason.** The test activates and key-orders its window, then posts mouse
+events at the system event tap. The production view rejects the first mouse
+event while its window is not key, so the acceptance run needs normal AppKit
+window selection and activation. Both GUI cases enforce a single detected
+display before preparing the window. Direct view calls skip that path. No test
+evidence establishes that PID-targeted event posting preserves equivalent
+WindowServer hit testing and window activation. Running the current path in a
+shared desktop can foreground APKRun and move or click that session's pointer,
+so a test-only GUI session is the faithful and non-disruptive environment.
+
+**Verification.** Compared the test delivery path with
+`IOSurfaceLayerView.acceptsFirstMouse(for:)` and the #103 test requirements.
+A read-only adversarial review identified ambiguity in the CI exclusion and
+the display requirement; both are now explicit. Its follow-up found no
+remaining issues. `git diff --check` passes. This documentation does not replace
+either pending GUI acceptance run.
+
+**Risk.** The test still requires access to a logged-in, isolated macOS GUI
+session and a pinned guest image. #024 and #103 remain open until their required
+GUI evidence is recorded.

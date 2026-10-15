@@ -107,7 +107,7 @@ y_px = (contentRect.maxY − p.y) × pixelHeight / contentRect.height      // Ap
 ```
 
 - Events outside `contentRect` (the letterbox bars during live resize) are dropped when they would start a gesture. During a gesture they are **clamped** to the display edge, so a drag that leaves the window still ends with `UP` at the edge.
-- The mapper is replaced atomically on `surfacesReplaced` (new pixel size). A gesture in progress keeps the mapper it started with, and the host sends `CANCEL` for it if the generation changes during the gesture.
+- The mapper is replaced atomically on `surfacesReplaced` (new pixel size) and updated on layout changes. A gesture snapshots the mapper used by its `DOWN` and keeps it through `UP` or cancellation, even if the content rect changes while the surface generation stays the same. A new gesture uses the latest mapper. If the generation changes during an open gesture, the host sends `CANCEL` for it.
 - Coordinates are sent as floating point. The agent passes them to `MotionEvent` unchanged (sub-pixel precision matters for scroll and drag velocity).
 
 ---

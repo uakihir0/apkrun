@@ -18448,3 +18448,19 @@ is preferable to recording incomplete image identity.
 **Verification (2026-10-16).** `swift test --filter aDragThatLeaves` passes all three focused tests: right/bottom, left, and top. `git diff --check` passes. No VM or GUI input was used.
 
 **Risk.** The #024 edge-clamping device verification still needs evidence for top and left edge delivery and gesture closure; these unit tests do not close that review item or unblock #025.
+
+## IR-1315: Keep pointer coordinates stable during layout changes
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [input.md](../02-design/input.md) §3; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024; `EventTranslator`; `CoordinateMapper`; `EventTranslatorTests` |
+
+**Choice.** Capture the active `CoordinateMapper` when a touch or secondary mouse gesture starts. Continue using it for drag and release coordinates until the gesture ends. A layout update while the surface generation stays the same replaces the mapper for future gestures; a generation change still cancels the active gesture.
+
+**Reason.** `IOSurfaceLayerView.layout()` can replace the content rectangle without changing the surface generation. The old translator replaced its only mapper unconditionally, so a gesture could start under one transform and finish under another. Keeping an immutable per-gesture mapper makes every event in a gesture use one coordinate space while allowing the next gesture to use the latest layout.
+
+**Verification (2026-10-16).** `swift test --filter InputCoreTests` passes all 95 InputCore T0 tests. The new touch case checks that MOVE and UP use the starting mapper and the following DOWN uses the updated mapper. The new secondary-mouse case checks that release uses the starting mapper. The existing generation-change test still checks cancellation. The adversarial review found no state-lifecycle issue. No VM or GUI input was run.
+
+**Risk.** This verifies only host-side translation. It does not establish that the resulting events reach Android during live resize, and it does not close #024's outstanding device edge-clamping or click reliability checks.

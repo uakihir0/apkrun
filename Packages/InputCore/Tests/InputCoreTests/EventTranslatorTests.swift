@@ -459,11 +459,29 @@ private let hoverTable: [(kind: PointerSample.Kind, x: Double, control: Bool)] =
     #expect(translator.translate(sample(.leftDown, x: 100, y: 300, ms: 5)) == [touch(.down, 400, 336, ms: 5)])
 }
 
-@Test func aSameGenerationKeepsTheGesture() {
+@Test func aLayoutChangeWithinTheSameGenerationKeepsTheStartingMapperUntilTouchEnds() {
     var translator = EventTranslator(mapper: contentMapper)
     _ = translator.translate(sample(.leftDown))
-    #expect(translator.replaceMapper(contentMapper, at: at(1)) == [])
+    let laidOut = CoordinateMapper(
+        contentRect: DisplayRect(x: 128, y: 0, width: 256, height: 384), pixelWidth: 1024, pixelHeight: 768,
+        generation: 1)
+    #expect(translator.replaceMapper(laidOut, at: at(1)) == [])
     #expect(translator.translate(sample(.leftDragged, x: 200, ms: 2)) == [touch(.move, 400, 168, ms: 2)])
+    #expect(translator.translate(sample(.leftUp, x: 200, ms: 3)) == [touch(.up, 400, 168, ms: 3)])
+    // The latest layout becomes active for the next gesture: (200 - 128) × 1024 / 256 = 288.
+    #expect(translator.translate(sample(.leftDown, x: 200, ms: 4)) == [touch(.down, 288, 168, ms: 4)])
+}
+
+@Test func aLayoutChangeWithinTheSameGenerationKeepsTheStartingMapperUntilMouseGestureEnds() {
+    var translator = EventTranslator(mapper: contentMapper)
+    _ = translator.translate(sample(.rightDown))
+    let laidOut = CoordinateMapper(
+        contentRect: DisplayRect(x: 128, y: 0, width: 256, height: 384), pixelWidth: 1024, pixelHeight: 768,
+        generation: 1)
+    #expect(translator.replaceMapper(laidOut, at: at(1)) == [])
+    #expect(
+        translator.translate(sample(.rightUp, x: 200, ms: 2))
+            == [mouse(.release(.secondary), 400, 168, ms: 2)])
 }
 
 @Test func replacingTheMapperWithoutAGestureOnlyStoresIt() {

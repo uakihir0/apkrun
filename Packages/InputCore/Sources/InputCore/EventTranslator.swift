@@ -49,6 +49,8 @@ public struct EventTranslator: Sendable {
     private let zoom: Double
     private let hoverEnabled: Bool
     private var gesture: Gesture?
+    /// The mapper captured when `gesture` opened, retained across same-generation layout changes.
+    private var gestureMapper: CoordinateMapper?
     private var pressed: MouseButtons = []
     private var pendingHover: PendingHover?
     private var pendingScroll: PendingScroll?
@@ -136,7 +138,8 @@ public struct EventTranslator: Sendable {
         cancelAll(at: time)
     }
 
-    /// Stores `mapper` for the following samples. A gesture that is open when the generation changes is cancelled.
+    /// Stores `mapper` for the following gestures. An open gesture keeps its starting mapper; a generation change
+    /// cancels it.
     public mutating func replaceMapper(_ mapper: CoordinateMapper, at time: InputTimestamp) -> [InputEvent] {
         let now = clock(time)
         var events = dueEvents(at: now)
@@ -159,6 +162,7 @@ public struct EventTranslator: Sendable {
 
     private mutating func reset() {
         gesture = nil
+        gestureMapper = nil
         pressed = []
         pendingHover = nil
         pendingScroll = nil
@@ -233,9 +237,11 @@ public struct EventTranslator: Sendable {
         }
         if trigger == .left, !sample.controlDown {
             gesture = .touch
+            gestureMapper = mapper
             events.append(.touch(TouchEvent(phase: .down, pointerID: 0, position: point, time: time)))
         } else {
             gesture = .mouse(button: .secondary, trigger: trigger)
+            gestureMapper = mapper
             pressed = MouseButtons(.secondary)
             let event = MouseEvent(action: .press(.secondary), position: point, buttons: pressed, time: time)
             events.append(.mouse(event))
@@ -247,6 +253,7 @@ public struct EventTranslator: Sendable {
     private mutating func abandonGesture(at time: InputTimestamp) -> [InputEvent] {
         guard gesture != nil else { return [] }
         gesture = nil
+        gestureMapper = nil
         pressed = []
         return [.cancelAll(time)]
     }
@@ -259,11 +266,15 @@ public struct EventTranslator: Sendable {
         switch gesture {
         case .touch? where trigger == .left:
             gesture = nil
+            let mapper = gestureMapper ?? self.mapper
+            gestureMapper = nil
             let point = mapper.clamped(windowX: sample.windowX, windowY: sample.windowY)
             return [.touch(TouchEvent(phase: .up, pointerID: 0, position: point, time: time))]
         case .mouse(let button, let owner)? where owner == trigger:
             gesture = nil
             pressed = []
+            let mapper = gestureMapper ?? self.mapper
+            gestureMapper = nil
             let point = mapper.clamped(windowX: sample.windowX, windowY: sample.windowY)
             let event = MouseEvent(action: .release(button), position: point, buttons: pressed, time: time)
             return [.mouse(event)]
@@ -274,6 +285,7 @@ public struct EventTranslator: Sendable {
 
     /// A drag during a touch gesture is a touch move, clamped to the content (D2). Only `leftDragged` reaches this.
     private func touchMove(_ sample: PointerSample, at time: InputTimestamp) -> [InputEvent] {
+        let mapper = gestureMapper ?? self.mapper
         guard mapper.isUsable else { return [] }
         let point = mapper.clamped(windowX: sample.windowX, windowY: sample.windowY)
         return [.touch(TouchEvent(phase: .move, pointerID: 0, position: point, time: time))]

@@ -30,7 +30,7 @@ public struct CoordinateMapper: Sendable, Equatable {
     public let pixelWidth: Int
     /// The height of the display in pixels.
     public let pixelHeight: Int
-    /// Identifies the surface geometry. A change during a gesture cancels the gesture (input.md §3).
+    /// Identifies the surface generation. A change during a gesture cancels it (input.md §3).
     public let generation: UInt64
 
     /// Creates a mapper for a content rectangle and a display pixel size.

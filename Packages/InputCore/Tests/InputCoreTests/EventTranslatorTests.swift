@@ -424,13 +424,27 @@ private let hoverTable: [(kind: PointerSample.Kind, x: Double, control: Bool)] =
     #expect(translator.translate(sample(.leftUp, x: 200, y: 300, ms: 2)) == [])
 }
 
-@Test func aDragThatLeavesTheContentIsClampedAndTheUpIsAtTheEdge() {
+@Test func aDragThatLeavesTheRightAndBottomEdgesIsClampedAndReleasedAtTheEdge() {
     var translator = EventTranslator(mapper: contentMapper)
     _ = translator.translate(sample(.leftDown))
     // The guest rejects x >= 1024 and y >= 768, so the clamped drag and its UP end on the last pixel (1023, 767).
     #expect(translator.translate(sample(.leftDragged, x: 600, y: 100, ms: 1)) == [touch(.move, 1023, 568, ms: 1)])
     #expect(translator.translate(sample(.leftUp, x: 600, y: -50, ms: 2)) == [touch(.up, 1023, 767, ms: 2)])
     #expect(translator.translate(sample(.leftDown, ms: 3)) == [touch(.down, 200, 168, ms: 3)])
+}
+
+@Test func aDragThatLeavesTheLeftEdgeIsClampedAndReleasedAtTheEdge() {
+    var translator = EventTranslator(mapper: contentMapper)
+    _ = translator.translate(sample(.leftDown))
+    #expect(translator.translate(sample(.leftDragged, x: -50, y: 300, ms: 1)) == [touch(.move, 0, 168, ms: 1)])
+    #expect(translator.translate(sample(.leftUp, x: -50, y: 300, ms: 2)) == [touch(.up, 0, 168, ms: 2)])
+}
+
+@Test func aDragThatLeavesTheTopEdgeIsClampedAndReleasedAtTheEdge() {
+    var translator = EventTranslator(mapper: contentMapper)
+    _ = translator.translate(sample(.leftDown))
+    #expect(translator.translate(sample(.leftDragged, x: 250, y: 450, ms: 1)) == [touch(.move, 500, 0, ms: 1)])
+    #expect(translator.translate(sample(.leftUp, x: 250, y: 450, ms: 2)) == [touch(.up, 500, 0, ms: 2)])
 }
 
 @Test func aGenerationChangeDuringAGestureCancelsIt() {

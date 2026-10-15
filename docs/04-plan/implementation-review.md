@@ -18420,3 +18420,19 @@ test harness observations if a caller assumes ACK capture also records
 events. Existing trace callers opt in explicitly. Variant receipt parsing
 fails the diagnostic attachment when a present receipt is malformed, which
 is preferable to recording incomplete image identity.
+
+## IR-1314: Verify host-side drag clamping without overstating guest delivery
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [input.md](../02-design/input.md) §15; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024; `EventTranslatorTests` |
+
+**Choice.** Add separate T0 translator cases for drags that leave the left and top edges, alongside the existing right and bottom cases. Keep the outstanding #024 edge-clamping device verification under review.
+
+**Reason.** The regression proves that the host emits in-range touch moves and releases for every edge, which covers deterministic `CoordinateMapper`/`EventTranslator` behavior. It does not prove those moves and releases reached the Guest Agent or that Android closed the gesture. The prior device run left a touch open at the top-left, and no device run after the far-edge fix retested those edges.
+
+**Verification (2026-10-16).** `swift test --filter aDragThatLeaves` passes all three focused tests: right/bottom, left, and top. `git diff --check` passes. No VM or GUI input was used.
+
+**Risk.** The #024 edge-clamping device verification still needs evidence for top and left edge delivery and gesture closure; these unit tests do not close that review item or unblock #025.

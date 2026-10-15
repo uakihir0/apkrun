@@ -387,7 +387,7 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 - [ ] Dragging scrolls HelloCompose's list, and trackpad and wheel scrolling move it in the direction macOS uses.
 - [x] A right-click opens HelloText's context menu.
 - [x] No shell command runs per event (FR-IN-06): the `adb shell` counter does not change, and no `input` process runs during the sequence.
-- [x] Clicks in the letterbox are dropped, and drags that leave the content are clamped.
+- [ ] Clicks in the letterbox are dropped, and drags that leave the content are clamped.
 - [x] OQ-31 has an answer for display 0.
 
 ### Notes
@@ -399,7 +399,7 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
   - Box 4 stays open (IR-1250). On the diagnosis copy of `f67de4b` (the same code plus trace lines), a drag up and both synthetic scrolls moved HelloCompose's list in the expected direction (the first index rises). The trackpad and the wheel clause needs the physical check C01-2 (T3), which needs a person.
   - Box 6 is ticked (IR-1248). `apkrun dev boot` prints the agent's adb shell count when the input binds and when it stops. It read 13 and 13 in the final-build session, and 15 and 15 in the diagnosis session, so no shell command ran while input was routed. A sampler found no `shell input` process in 405 one-second samples from 17:35:28 to 17:42:31 UTC.
   - Box 7: the device evidence covers the right and bottom edges only. The top-left drag of run 2 failed, and the top and left edges were not re-run after `1796f23`. The letterbox part is T0 only, because the device window has no letterbox.
-  - Box 7 is not decided by the closeout, and it is flagged (IR-1250). The top-left drag of run 2 left a touch open, and the top and left edges were not run after the far-edge fix (`1796f23`).
+  - Box 7 remains open after the conservative review in IR-1315. The closeout flagged it without deciding whether to keep it checked (IR-1250): the top-left drag of run 2 left a touch open, and the top and left edges were not run after the far-edge fix (`1796f23`).
   - The route does not rebind after the guest agent is lost (IR-1241). The follow-up is #101.
   - The counters of §11 are printed when the boot stops (`input counters: …`). They are not yet in a diagnostics snapshot (IR-1238, IR-1248). `input.ime.unmappedCommand` waits for #071, and the health warning `agent.input.disconnected` is not in #024 (IR-1249).
   - `AndroidInputTests` runs in the Xcode test host (IR-438, IR-1253 to IR-1256), and its three tests fail on the odm4 bundle: HelloText does not start, and the home app aborts in RenderThread (IR-1257). Its click test checks only the process list for `shell input` (IR-1248, IR-1252). The #024 device checks are not met by the suite.

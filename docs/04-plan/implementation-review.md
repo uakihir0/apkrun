@@ -18637,3 +18637,22 @@ other tests retain the default. A follow-up read-only review confirmed these
 fixes with no remaining findings. Earlier reviewers confirmed that the
 same-process counter read is not a force-stop persistence check and that ACKs
 do not prove app dispatch.
+
+
+## IR-1315: Keep #024's edge-clamping acceptance item open pending full edge coverage
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 7) |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024; [issues/README.md](issues/README.md) §5 current-progress table; [input.md](../02-design/input.md) §15; IR-1250 |
+
+**Choice.** Leave #024 acceptance box 7 unchecked and update the §5 current-progress table from 6 of 8 to 5 of 8. Keep the box open until device evidence covers drags leaving the content on all relevant edges.
+
+**Evidence.** T0 translator coverage verifies that presses in the letterbox are dropped, and T0 mapper coverage verifies that coordinates are clamped. Device runs after the far-edge fix (`1796f23`) cover the right and bottom edges. The earlier top-left drag left a touch open, and the top and left edges were not rerun after that fix; the closeout did not run them either (IR-1250).
+
+**Reason.** The acceptance item combines letterbox dropping with clamping drags that leave the content. T0 coverage and two device edges do not establish the full behavior when the prior top-left run left a gesture open. Keeping the item open records the evidence limit without changing product behavior or the requirement.
+
+**Risk.** #024 remains open, and tasks with a hard dependency on #024 remain gated. This status change does not claim that the implementation is incorrect; it records that the documented device evidence is incomplete.
+
+**Verification.** Documentation-only update. `git diff --check` and repository documentation consistency checks are run before commit; no product tests are applicable.

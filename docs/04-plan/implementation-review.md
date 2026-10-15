@@ -18337,3 +18337,40 @@ Kept, and why:
 **Verification (2026-10-15).** The pinned Xcode 27 SwiftPM accepted and ran `swift test --skip SystemTests -j 2 --experimental-maximum-parallelization-width 2 --xunit-output /tmp/apkrun-t0-width2.xml`. The full local T0 run passed all 939 tests, including RuntimeCore (191) and DiagnosticsCore (92), with no failures. Hosted [`test-swift`](https://github.com/uakihir0/apkrun/actions/runs/38687526504) passed for commit `494ffb5` (17m58s total job duration; 4m38s for `Run Swift T0 tests`).
 
 **Risk.** The experimental SwiftPM option may change in a later toolchain; the workflow runner is Xcode 27 and the option was verified there. If a later capped run starves tests, collect its timings before changing the width or test deadlines.
+
+## IR-1312: Defer Actions test suites on the #103 pull request branch
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [ci.yml](../../.github/workflows/ci.yml); [run-checks.sh](../../scripts/ci/run-checks.sh) |
+
+**Choice.** On same-repository pull requests whose head branch is
+`task/103-click-loss`, skip the repository test harness in the lint job and
+the Swift, graphics, and image test steps. Keep the required jobs, image
+manifest validation, other CI checks, and build jobs enabled. The normal
+Actions test suites continue to run for other pull request branches and
+pushes to `main`.
+
+**Reason.** The user asked to defer the current GitHub Actions tests while
+continuing the implementation. Keeping the exception scoped to this branch
+avoids weakening CI for unrelated changes. `run-checks.sh` receives an
+explicit workflow environment flag so its repository test harness and test
+steps can all use the same narrow branch and repository condition. The head
+repository check prevents an unrelated fork branch with the same name from
+receiving the exception.
+
+**Verification (2026-10-15).** The workflow runner check
+(`ruby scripts/tests/test_workflow_runners.rb "$PWD"`) passes, including the
+required job-unconditional policy. The check runner also passes with
+`APKRUN_SKIP_CI_TESTS=true scripts/ci/run-checks.sh`, confirming the
+repository test harness is skipped while all six remaining checks pass.
+`git diff --check` passes. The dedicated GUI T2 runs required by #103 are
+separate and remain outstanding; this CI exception does not satisfy them.
+
+**Risk.** The branch-scoped exception remains active until removed from the
+workflow. The test steps show as skipped while their jobs can still succeed,
+so reviewers must inspect step results rather than treat a green job as proof
+that its suite ran. A maintainer should remove this exception after the
+deferred validation window.

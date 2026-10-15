@@ -18698,3 +18698,48 @@ suite steps are skipped, so review must check the step-level conclusions. The
 temporary branch exception needs removal after the deferred click-loss lab
 validation is complete. These protected CI paths will require a non-author
 maintainer review and the `ci-policy-approved` label on the eventual PR.
+
+## IR-1317: Separate Guest Agent planner JVM coverage from framework event construction
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024, #025 |
+| Affected documents | [input.md](../02-design/input.md) §13 and §15; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 and #025 |
+
+**Choice.** Define the Guest Agent T1 JVM tests as checks of `MotionSpec` and
+`KeySpec` planning and field mapping through fake factories and sinks. Keep
+construction of real Android framework events, hidden display/action-button
+setters, and system injection in the T2 Android acceptance path. This clarifies
+the existing test boundary without changing task completion: #024 remains open,
+and #025 remains complete.
+
+**Evidence.** `InputInjectorTest` uses fake `MotionEventFactory`,
+`KeyEventFactory`, and `InjectionSink` implementations. The production
+`AndroidMotionEventFactory` and `AndroidInjectionSink` call framework and
+system APIs unavailable to a plain JVM test. The installed Android 37 SDK
+contains compile-time stubs, not an Android 37 runtime; the connected emulator
+is API 35. The current Gradle test dependency set uses JUnit and has no Android
+runtime/shadow framework. The reference-guest T2 tests exercise the real
+factory and injection path.
+
+**Reason.** The existing seam deliberately keeps planning testable in a
+fast JVM suite while framework calls require Android runtime behavior. A
+host-only test cannot verify the hidden APIs or `MotionEvent.obtain` behavior;
+adding a shadow runtime or a test-only framework adapter would expand the
+dependency or production seam without replacing the required reference-guest
+acceptance. Existing odm7 T2 runs exercised the real factory and injection
+path for pointer and keyboard events. The task plan now names the coverage the
+T1 tests actually provide, while preserving each task's existing T2 result.
+
+**Verification.** On 2026-10-15 UTC, the focused `InputInjectorTest` run
+passed 34 tests with zero skips or failures and exercises `MotionSpec`
+planning. IR-1294 records the combined Guest Agent T1 run with 46 passing
+tests, including `KeySpec` planning, and the #025 keyboard T2 run with 7 of 7
+cases passing. The #024 real-guest T2 acceptance remains open for its existing
+reliability, edge, and trackpad criteria.
+
+**Adversarial review.** The read-only review confirmed the test boundaries,
+counts, and task status. It found a stale present-tense note saying the #025
+keyboard T2 cases were absent; the note now records that they were added and
+passed after IR-1271 (IR-1287, IR-1294).

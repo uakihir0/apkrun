@@ -18655,7 +18655,7 @@ do not prove app dispatch.
 
 **Risk.** #024 remains open, and tasks with a hard dependency on #024 remain gated. This status change does not claim that the implementation is incorrect; it records that the documented device evidence is incomplete.
 
-**Verification.** The focused T0 test `aDragThatLeavesTheContentIsClampedAndTheUpIsAtTheEdge` passed (1 test) in an isolated SwiftPM package built from copies of the repository `DiagnosticsCore` and `InputCore` sources and tests. The monorepo `swift test --filter` attempt stopped before running tests because this worktree lacks the local VirGL headers (`EGL/egl.h`). `git diff --check` and the #024 status consistency check pass. The isolated run verifies the test logic but does not verify monorepo integration or device delivery.
+**Verification.** The focused T0 test `aDragThatLeavesTheContentIsClampedAndTheUpIsAtTheEdge` first passed (1 test) in an isolated SwiftPM package built from copies of the repository `DiagnosticsCore` and `InputCore` sources and tests. Its first monorepo attempt stopped before running because this worktree lacked the local VirGL headers (`EGL/egl.h`). On 2026-10-15 UTC, the same filtered `swift test` then passed in the monorepo after temporarily symlinking `ThirdParty/out` to the existing main-worktree cache. The 12 GB cache was not copied or modified, and the temporary symlink was removed after the run. The monorepo run verifies package integration; device delivery remains unverified at the top and left edges.
 
 ## IR-1316: Defer Actions suites while #024 click-loss lab checks are pending
 
@@ -18699,7 +18699,7 @@ temporary branch exception needs removal after the deferred click-loss lab
 validation is complete. These protected CI paths will require a non-author
 maintainer review and the `ci-policy-approved` label on the eventual PR.
 
-## IR-1317: Separate Guest Agent planner JVM coverage from framework event construction
+## IR-1317: Keep Guest Agent framework event construction in the Android guest tests
 
 | Field | Value |
 |---|---|
@@ -18719,27 +18719,41 @@ and #025 remains complete.
 `AndroidMotionEventFactory` and `AndroidInjectionSink` call framework and
 system APIs unavailable to a plain JVM test. The installed Android 37 SDK
 contains compile-time stubs, not an Android 37 runtime; the connected emulator
-is API 35. The current Gradle test dependency set uses JUnit and has no Android
-runtime/shadow framework. The reference-guest T2 tests exercise the real
-factory and injection path.
+is API 35. An exploratory Robolectric 4.17 prototype did construct real
+framework `MotionEvent` and `KeyEvent` objects at API 37, but it was removed
+after testing because its resolved Gradle dependency closure had not been
+added to the repository's required third-party inventory and license copies.
+The reference-guest T2 tests exercise the real factory and injection path.
 
-**Reason.** The existing seam deliberately keeps planning testable in a
-fast JVM suite while framework calls require Android runtime behavior. A
-host-only test cannot verify the hidden APIs or `MotionEvent.obtain` behavior;
-adding a shadow runtime or a test-only framework adapter would expand the
-dependency or production seam without replacing the required reference-guest
-acceptance. Existing odm7 T2 runs exercised the real factory and injection
-path for pointer and keyboard events. The task plan now names the coverage the
-T1 tests actually provide, while preserving each task's existing T2 result.
+**Reason.** #024 and #025 explicitly define T1 as planning and field-mapping
+checks through fake factories and sinks, and reserve framework construction,
+hidden setters, and injection for their Android acceptance tests. Robolectric
+would add useful but optional API 37 coverage; under AGENTS.md §6.6 and
+[legal-and-licensing.md](../05-development/legal-and-licensing.md) §§4–6, its
+resolved Gradle packages also need pinned inventory entries and committed
+license copies. That dependency audit is a larger legal-inventory change than
+these tasks call for, so keep the planned fast T1 boundary and continue with
+the real guest T2 checks. This does not treat the exploratory Robolectric
+results as retained tests or as task acceptance evidence.
 
 **Verification.** On 2026-10-15 UTC, the focused `InputInjectorTest` run
 passed 34 tests with zero skips or failures and exercises `MotionSpec`
-planning. IR-1294 records the combined Guest Agent T1 run with 46 passing
-tests, including `KeySpec` planning, and the #025 keyboard T2 run with 7 of 7
-cases passing. The #024 real-guest T2 acceptance remains open for its existing
+planning. After removing the Robolectric prototype, the existing Guest Agent
+T1 suite and `ktfmtCheck` passed again: 70 tests, zero skips, failures, or
+errors. IR-1294 records the combined Guest Agent T1 run with 46 passing tests,
+including `KeySpec` planning, and the #025 keyboard T2 run with 7 of 7 cases
+passing. The #024 real-guest T2 acceptance remains open for its existing
 reliability, edge, and trackpad criteria.
 
-**Adversarial review.** The read-only review confirmed the test boundaries,
-counts, and task status. It found a stale present-tense note saying the #025
-keyboard T2 cases were absent; the note now records that they were added and
-passed after IR-1271 (IR-1287, IR-1294).
+**Adversarial review.** An initial review found a useful coverage improvement:
+Robolectric can exercise the production factories at API 37, and its test
+properly checks the fixed `MotionEvent` constructor fields. A subsequent
+dependency-policy audit found that a Gradle lockfile alone does not satisfy
+the repository's license inventory rules; the resolved packages and committed
+license copies would also be required. Reverting the prototype preserves the
+documented T1 scope and avoids adding an unreviewed dependency closure. A
+second adversarial review confirmed that fake-only T1 matches #024/#025, that
+the existing API 37 guest tests exercise the production factories, and that
+the Robolectric addition is not needed to close a test gap. The earlier review
+also corrected a stale note about the #025 keyboard T2 cases; they were added
+and passed after IR-1271 (IR-1287, IR-1294).

@@ -211,9 +211,19 @@ final class AndroidInputTests: XCTestCase {
                 XCTFail("the drag did not scroll the list: \(try await Self.diagnosis(run))")
                 return
             }
+            // These direct-view drags end outside the content rectangle. The fixture logs settled list rows rather
+            // than raw MotionEvents, so the row changes cannot prove which out-of-bounds samples or releases arrived.
+            try await pointer.drag(from: (x: 512, y: 400), to: (x: 512, y: -100), steps: 20)
+            let topEdge = try await Self.lastRow(run, above: dragged)
+            XCTAssertGreaterThan(topEdge, dragged, "the drag that left the top display edge did not scroll the list")
+
+            try await pointer.drag(from: (x: 512, y: 600), to: (x: -100, y: 250), steps: 20)
+            let leftEdge = try await Self.lastRow(run, above: topEdge)
+            XCTAssertGreaterThan(leftEdge, topEdge, "the drag that left the left display edge did not scroll the list")
+
             pointer.scroll(at: (x: 512, y: 400), deltaY: -120, precise: true)
-            let trackpad = try await Self.lastRow(run, above: dragged)
-            XCTAssertGreaterThan(trackpad, dragged, "the trackpad scroll did not move the list")
+            let trackpad = try await Self.lastRow(run, above: leftEdge)
+            XCTAssertGreaterThan(trackpad, leftEdge, "the trackpad scroll did not move the list")
             pointer.scroll(at: (x: 512, y: 400), deltaY: -3, precise: false)
             let wheel = try await Self.lastRow(run, above: trackpad)
             XCTAssertGreaterThan(wheel, trackpad, "the wheel scroll did not move the list")

@@ -1,7 +1,8 @@
 """Build a development bundle whose super carries a replaced logical partition (#099).
 
 The variant is the stock bundle with one logical partition of its `super` replaced and, when a
-reseal output is given, the GPT partition `vbmeta_a` replaced by the refreshed vbmeta (IR-744).
+reseal output is given, the GPT partition `vbmeta_a` replaced by the refreshed vbmeta signed with
+the stock-matching AOSP test key (IR-1321).
 The stock bundle is read and never changed:
 
 1. The stock bundle is checked first: its manifest validates, every file matches its entry,

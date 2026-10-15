@@ -18321,3 +18321,19 @@ Kept, and why:
 **Verification (2026-10-15).** The HelloText fixture JVM test covers two simultaneous observers and confirms removing the older Activity's subscription leaves the surviving observer notified through capture stop. `:HelloText:testReleaseUnitTest`, `:HelloText:assembleDebug`, the pinned ktfmt dry run, and `git diff --check` pass. The exact xcodebuild test-plan parsing and method-level filters were verified in the preceding revision and are unchanged. Dedicated GUI execution remains subject to the #103 lab requirement.
 
 **Risk.** The fixture still contains debug trace code in the APK, but no touch listener is attached during the untraced product-cadence run. Observer callbacks run synchronously with capture transitions and remain limited to toggling each Activity's listener. Results remain scoped to M3's embedded `DevBoot`/`DevInputRoute` path.
+
+## IR-1311: Cap Swift Testing task-group width after deadline-test starvation
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [ci.yml](../../.github/workflows/ci.yml) `test-swift`; [build-system.md](../05-development/build-system.md) §15.1 |
+
+**Choice.** Run Swift T0 tests with the Xcode 27 SwiftPM option `--experimental-maximum-parallelization-width 2`, while keeping the existing wall-clock assertions unchanged. Do not enable SwiftPM's separate process-level `--parallel` mode.
+
+**Reason.** Two Actions attempts failed multiple RuntimeCore connection/deadline assertions and DiagnosticsCore time-bounded checks while the same cases passed when run individually. In the failed reports, RuntimeCore cases took roughly 8–11 seconds despite assertions requiring work to finish within 3–5 seconds; a DiagnosticsCore host-probe case exceeded 32 seconds. The failures appeared across unrelated timing-sensitive tests, consistent with excessive in-process Swift Testing concurrency for the hosted machine. SwiftPM's `--num-workers` controls its separate process-level runner and does not bound Swift Testing's task group; the experimental width option is the dedicated control. The width cap reduces in-process contention without weakening product or test assertions.
+
+**Verification (2026-10-15).** The pinned Xcode 27 SwiftPM accepted and ran `swift test --skip SystemTests -j 2 --experimental-maximum-parallelization-width 2 --xunit-output /tmp/apkrun-t0-width2.xml`. The full local T0 run passed all 939 tests, including RuntimeCore (191) and DiagnosticsCore (92), with no failures. The updated hosted `test-swift` job must also pass before this is considered validated in CI.
+
+**Risk.** The experimental SwiftPM option may change in a later toolchain; the workflow runner is Xcode 27 and the option was verified there. If the capped hosted run still starves tests, collect its timings before changing the width or test deadlines.

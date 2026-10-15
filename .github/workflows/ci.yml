@@ -147,7 +147,10 @@ jobs:
       - name: Verify graphics libraries and public headers
         run: scripts/build-third-party.sh virgl-runtime
       - name: Run Swift T0 tests
-        run: swift test --skip 'SystemTests' -j 2 --xunit-output build/ci/swift-tests.xml
+        run: >-
+          swift test --skip 'SystemTests' -j 2
+          --experimental-maximum-parallelization-width 2
+          --xunit-output build/ci/swift-tests.xml
       - name: Upload test results on failure
         if: failure()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0

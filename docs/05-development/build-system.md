@@ -684,7 +684,7 @@ The table describes the planned workflow as its inputs arrive. #062 creates the 
 | `ci.yml` | every pull request, push to `main` | `lint` | — | `xcode-27` | §3 checks, `buf lint`, `buf breaking` |
 | | | `codegen` | — | `xcode-27` | §4 regeneration, `git diff --exit-code` |
 | | | `build` | — | `xcode-27` | needs `third-party`, restores and verifies the same graphics cache, then runs `swift build`; `xcodebuild` Debug and Release (unsigned); `scripts/check-launcher.sh`; the release checks of §3.1 on the Release build |
-| | | `test-swift` | T0 | `xcode-27` | needs `third-party`, restores and verifies the graphics runtime cache so GraphicsBridge can compile against pinned public headers; SwiftPM tests excluding `<Module>SystemTests` |
+| | | `test-swift` | T0 | `xcode-27` | needs `third-party`, restores and verifies the graphics runtime cache so GraphicsBridge can compile against pinned public headers; SwiftPM tests excluding `<Module>SystemTests`, with Swift Testing task-group width capped at two by `--experimental-maximum-parallelization-width` |
 | | | `test-graphics` | T1 | `xcode-27` | needs `third-party`, restores and verifies the graphics runtime cache; requires a Metal device, then runs `GraphicsCoreSystemTests` normally, with Address Sanitizer, and with Undefined Behavior Sanitizer |
 | | | `test-guest` | T0, T1 | `xcode-27` for T0; disposable T1 runner for PRs; `apkrun-ci` on `main` | `scripts/build-guest.sh`, Gradle `test` for every Guest module, golden frames, `scripts/build-fixtures.sh` |
 | | | `test-images` | T0, T1 | `xcode-27` for T0; disposable T1 runner for PRs; `apkrun-ci` on `main` | `pytest Images/tools/tests`, fixture bundle double build (§10.1) |

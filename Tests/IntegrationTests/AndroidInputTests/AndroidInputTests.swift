@@ -4,6 +4,11 @@ import Foundation
 import RuntimeCore
 import XCTest
 
+private struct AndroidImageVariantReceipt: Decodable {
+    let variantDiskSHA256: String
+    let variantManifestSHA256: String
+}
+
 /// The pointer checks of #024 on a real Android guest (T2, test-strategy §6.4), through the path of `apkrun dev launch`.
 ///
 /// Each test boots the test image with the embedded runtime (`DevBoot` and `DevInputRoute`), shows the development
@@ -42,6 +47,39 @@ final class AndroidInputTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["APKRUN_INPUT_T2"] == "1" else {
             throw XCTSkip("The input checks run with APKRUN_INPUT_T2=1, in the AndroidInput test-plan configuration.")
         }
+    }
+
+    func testImageVariantIdentityIncludesReceiptAndDigests() throws {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("apkrun-image-variant-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let bundle = parent.appendingPathComponent("android-bundle", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        let receipt = parent.appendingPathComponent("android-bundle.variant.json")
+        let receiptData = Data(
+            #"{"variantDiskSHA256":"disk-digest","variantManifestSHA256":"manifest-digest"}"#.utf8)
+        try receiptData.write(to: receipt)
+
+        let identity = try Self.imageVariantIdentity(for: bundle)
+
+        XCTAssertEqual(identity["receipt_path"] as? String, receipt.path)
+        XCTAssertEqual(identity["receipt_sha256"] as? String, try Self.sha256(of: receipt))
+        XCTAssertEqual(identity["variant_disk_sha256"] as? String, "disk-digest")
+        XCTAssertEqual(identity["variant_manifest_sha256"] as? String, "manifest-digest")
+    }
+
+    func testImageVariantIdentityMarksMissingReceiptExplicitly() throws {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("apkrun-image-variant-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let bundle = parent.appendingPathComponent("android-bundle", isDirectory: true)
+
+        let identity = try Self.imageVariantIdentity(for: bundle)
+
+        XCTAssertTrue(identity["receipt_path"] is NSNull)
+        XCTAssertTrue(identity["receipt_sha256"] is NSNull)
+        XCTAssertTrue(identity["variant_disk_sha256"] is NSNull)
+        XCTAssertTrue(identity["variant_manifest_sha256"] is NSNull)
     }
 
     /// 100 of 100 clicks on HelloText's button are logged as `APKRUN-FIXTURE: click <n>` (#024 acceptance). Each click is
@@ -768,6 +806,7 @@ final class AndroidInputTests: XCTestCase {
             "image_bundle": bundle.path,
             "image_manifest_sha256": try sha256(of: imageManifest),
             "image_manifest": try JSONSerialization.jsonObject(with: Data(contentsOf: imageManifest)),
+            "image_variant": try imageVariantIdentity(for: bundle),
             "guest_bundle": guestBundle.path,
             "guest_manifest_sha256": try sha256(of: guestManifest),
             "guest_manifest": try JSONSerialization.jsonObject(with: Data(contentsOf: guestManifest)),
@@ -782,6 +821,27 @@ final class AndroidInputTests: XCTestCase {
             attachment.lifetime = .keepAlways
             activity.add(attachment)
         }
+    }
+
+    private static func imageVariantIdentity(for bundle: URL) throws -> [String: Any] {
+        let receipt = bundle.deletingLastPathComponent()
+            .appendingPathComponent("\(bundle.lastPathComponent).variant.json")
+        guard FileManager.default.fileExists(atPath: receipt.path) else {
+            return [
+                "receipt_path": NSNull(),
+                "receipt_sha256": NSNull(),
+                "variant_disk_sha256": NSNull(),
+                "variant_manifest_sha256": NSNull(),
+            ]
+        }
+        let receiptData = try Data(contentsOf: receipt)
+        let variant = try JSONDecoder().decode(AndroidImageVariantReceipt.self, from: receiptData)
+        return [
+            "receipt_path": receipt.path,
+            "receipt_sha256": SHA256.hash(data: receiptData).map { String(format: "%02x", $0) }.joined(),
+            "variant_disk_sha256": variant.variantDiskSHA256,
+            "variant_manifest_sha256": variant.variantManifestSHA256,
+        ]
     }
 
     private static func sha256(of file: URL) throws -> String {

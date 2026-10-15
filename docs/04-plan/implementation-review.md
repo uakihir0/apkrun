@@ -18193,3 +18193,184 @@ Kept, and why:
 **Reason.** The disk was near its limit, and the removed items can be rebuilt from the scripts or are superseded. The removed image copies are clones of bundles that stay, so their space is returned only when the source is removed too. The logs and the experiment bundles that the records name stay, so that the review can follow the evidence.
 
 **Risk.** An IR entry that names a removed path cannot be reproduced from that path. The entry text still records the outcome. A rebuild from the scripts takes time and needs the stock zip.
+
+## IR-1304: #103 can start before #024 acceptance and must distinguish queue acceptance from app delivery
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 (follow-up of #024) |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [README.md](issues/README.md) §1, §3; [roadmap.md](roadmap.md) §1.2–§1.4; [test-strategy.md](test-strategy.md) §6.4; [traceability.md](traceability.md) §2.4, §2.12 |
+
+**Choice.**
+1. #103 depends on #023 and #072, not on #024. The issue index defines dependencies as hard acceptance gates. Since #103 is needed to resolve #024's open click criterion, a hard dependency on #024 would make the work circular. The window and Guest Agent provide the prerequisites for the existing input path.
+2. The plan no longer states the pressed-state explanation as a confirmed cause or uses it in the task title. The prior trace runs used a debug listener that can alter timing, did not trace the product-mode losses directly, and did not verify the exact `View` source revision for the tested image (IR-1295 to IR-1298). The latest ACK diagnostic shows queue acceptance followed by only 98 app-side clicks; it does not locate the loss inside Android.
+3. #103's test plan uses one guest for three consecutive 100-click batches, checks the fixture's persisted counter and all observable host counters, and posts real `CGEvent`s through the WindowServer on a dedicated lab Mac GUI session. It records guest rejection counts from normal periodic ACKs and the batch sequences those ACKs cover; full guest counters are not exposed until #059. ACKs and fixture log lines alone are not accepted as proof of a click. The shared desktop is not used for a test that brings the APKRun window to the front.
+4. A product change is conditional on evidence locating a guest-controlled cause. If the trace and exact image implementation show no safe product correction, #103 records that limit and #024 box 3 stays open for maintainer review. The box is checked only after the three T2 batches pass.
+5. #103 retains NFR-PERF-03 as a constraint. If a product correction changes event timing, its test plan also requires the existing #070 `input-latency` scenario and the p95 limit; click-count T2 results alone do not claim to verify the latency requirement.
+
+**Reason.** The older task entry required #024 as a hard dependency even though its own acceptance depended on #103. It also treated a diagnostic-run hypothesis as stronger than the evidence allowed, and its 100/100 requirement had no no-fix outcome despite the scope explicitly allowing that outcome. These updates make the task executable without weakening the product acceptance bar.
+
+**Risk.** No root cause or product fix is established yet. The T2 harness needs a dedicated GUI session because its window must become key; the local shared desktop is not a safe place to run it. The odm7 bundle manifest (`/tmp/apkrun-odmr/odm7/bundle/android-bundle/manifest.json`, SHA-256 `113e3d9868c6d5073d9fd6c572c8b91c2e2ba7e5eb5c31ee81b33912fd844c3d`) records the Android 17 build ID, target, source archive hash, and branch, but does not itself identify an AOSP source commit. The source manifest and exact framework commits have since been mapped and checked against this image (IR-1307); that establishes provenance, not the cause.
+
+## IR-1305: #103 records normal ACK coverage instead of adding the future guest health API
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [test-strategy.md](test-strategy.md) §6.4; IR-1304 |
+
+**Choice.**
+1. The guest `InputService` has an internal `counters()` method, but the current daemon has no control request that returns it. The protocol defines `GetHealth` and `Health.input`, while the implementation plan assigns the live health operation to #059. Normal input ACKs are requested every 32 batches (`GuestInputEncoding.ackInterval`) and return the rejection count for that acknowledged batch only. `InputCounters.droppedInvalid` aggregates host-side invalid-session drops with guest rejections received in ACKs.
+2. #103 will not implement a new health request or pull #059 forward. ACK-history capture is disabled by default and explicitly enabled only for the T2 diagnostic run. T2 reports the persisted counter delta for each 100-click batch, all host routing counters after the awaited ACK, and zero guest rejection counts in every normal ACK it receives, together with the ACK sequence coverage. It will not present these observations as a complete guest counter snapshot.
+
+**Reason.** A persisted counter delta is the end-to-end click result. Adding live guest health here would expand #103 into the diagnostics API and duplicate the later task. The existing periodic ACK data and host counters provide the rejection evidence currently available without changing the normal ACK cadence. Keeping history capture opt-in avoids retaining diagnostic data on the normal input path.
+
+**Risk.** A guest rejection in a batch without a requested ACK is not directly included in the host's `droppedInvalid` count. The per-batch persisted click deltas still detect missing app actions; a complete guest rejection total remains deferred to #059. A maintainer may choose to move the narrow health query earlier if this limitation is unacceptable. The implemented ACK-coverage harness does not yet provide the task's joined per-event trace, establish the cause, inspect the exact framework implementation, or pass a dedicated lab GUI T2 run; #103 and #024 box 3 remain open.
+
+## IR-1306: The M3 WindowServer test stages input coverage before the wrapper XPC path exists
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [test-strategy.md](test-strategy.md) §6.4; [build-system.md](../05-development/build-system.md) §12.4 |
+
+**Choice.** Keep the interactive M3 test on the existing `DevBoot`/`DevInputRoute` path and label its scope explicitly. It posts real WindowServer events through AppKit, the current input sink, `InputRouter`, and the Guest Agent. It does not claim to cover the later wrapper-to-apkrund XPC route.
+
+**Reason.** M3's G4 is defined by `apkrun dev launch` ([roadmap.md](roadmap.md) §2), while the wrapper-owned window over XPC arrives in #068. Adding #068 as a hard dependency to #103 would create a cycle: #068 follows #030, and #030 requires #024's click criterion that #103 investigates. The staging test still gives useful end-to-end evidence for the M3 path without moving later architecture into this task.
+
+**Risk.** The future wrapper and daemon route may differ from the embedded development route. #103 and #024 acceptance remain open until the bounded per-event diagnosis is complete and the applicable product path is verified; when #068 provides the wrapper XPC route, repeat the click scenario there before treating it as covered.
+
+## IR-1307: Pin the Android framework used by the odm7 click-loss runs
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; IR-1304 |
+
+**Choice.** Record the exact AOSP project revisions for the stock system image used by the odm7 click-loss runs, and inspect the relevant `View` source at that revision rather than infer behavior from a different Android tag.
+
+**Evidence.**
+- The retained image manifest at `/tmp/apkrun-odmr/odm7/bundle/android-bundle/manifest.json` has SHA-256 `113e3d9868c6d5073d9fd6c572c8b91c2e2ba7e5eb5c31ee81b33912fd844c3d`. It identifies build 16373615, target `aosp_cf_arm64_only_phone-userdebug`, Android 17/API 37, branch `aosp-android-latest-release`, and source archive `aosp_cf_arm64_only_phone-img-16373615.zip` with SHA-256 `051caf8072ba9fb417e05999de2984752e44e13ce70b6c49c669f0a73db85c18`.
+- The CI build manifest at [manifest_16373615.xml](https://ci.android.com/builds/submitted/16373615/aosp_cf_arm64_only_phone-userdebug/latest/raw/manifest_16373615.xml) has SHA-256 `c9eaff434f26ee3769e1c47dbf92c157759c70e0d8bae12fd581e6cd575845f0`. It pins `platform/frameworks/base` to `94b4c163b7dfe5ce3607f7bb8456f9573f7de57d` and `platform/frameworks/native` to `ae266dcb706d083868578cfedce381ef44488a07`.
+- The retained odm7 variant receipt has SHA-256 `31ca03cb4ad3b8676d3c29ee40c7698bb73f10b02204b5d5b7ec65e4e35f6335`; it replaces only `odm_a` (replacement SHA-256 `6ea24cf7d1d3aaf7a80449afe4343b5fc31e759e72cd94ffff49e2ac671fa3d5`). The system framework therefore remains from the pinned stock build.
+- In [`View.java` at the pinned revision](https://android.googlesource.com/platform/frameworks/base/+/94b4c163b7dfe5ce3607f7bb8456f9573f7de57/core/java/android/view/View.java), `onTouchEvent(ACTION_UP)` posts `mPerformClick`, then posts or runs `mUnsetPressedState` (lines 18523–18533); `UnsetPressedState.run()` clears the pressed state with `setPressed(false)` (line 32515 onward).
+
+**Reason.** The previous work had only the build ID, branch, and source archive hash, which were insufficient to select `View` source conclusively. The raw source manifest supplies the exact project revisions, and the variant receipt confirms that odm7 did not replace the system partition.
+
+**Risk.** The source explains the framework's scheduling operations but does not reveal why the product run lost a click. The prior listeners did not join a product-mode failure across the host, guest, view, and callback; no cause or safe correction is established. The per-event trace and dedicated lab test remain necessary.
+
+## IR-1308: Add a capability-gated guest event-time bridge to the opt-in click trace
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [input.md](../02-design/input.md) §11; [guest-protocol.md](../02-design/guest-protocol.md) §§5.3, 9; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [test-strategy.md](test-strategy.md) §6.4 |
+
+**Choice.**
+1. Bump the guest protocol minor version from 1.0 to 1.1 and add optional `InputAck.last_event_time_millis` behind the negotiated `input.ack_trace.v1` capability. Add the explicit per-batch `InputBatch.trace_event_time` opt-in, so the guest sets the field only when the capability was negotiated, that batch requests an ACK and timestamp, and it contains an accepted `MotionEvent`. Ordinary periodic ACKs remain unchanged; an ACK continues to mean queue injection acceptance, not view dispatch or app action.
+2. Keep tracing disabled by default. The `AndroidInputTrace` test-plan configuration opts into one-event batches and an ACK for each batch. It records bounded raw AppKit receipts (2,048), translated host events (2,048), successfully sent route events (256), ACKs (256), and debug-fixture records (4,096), each with overflow reporting.
+3. Join guest uptime only to Android `MotionEvent.eventTime`; retain host monotonic time in its own clock domain. The trace does not subtract the two clocks.
+4. Keep the product-cadence three-batch check in the separate `AndroidInputInteractive` configuration, with its normal batch and ACK cadence.
+
+**Reason.** The prior host and fixture traces had no stable cross-clock bridge. The ACK field lets the diagnostic match one accepted guest motion event to the fixture's `MotionEvent` without claiming delivery from the ACK. A dedicated capability, optional field, and explicit per-batch request follow the protocol evolution rules; the two opt-ins avoid adding guest timestamp work or changing ordinary ACK payloads.
+
+**Verification.** Swift `GuestProtocolTests`, the filtered `RuntimeCore` per-event capture test, and the selected Kotlin protocol/input tests pass. The Swift and Kotlin protocol suites both decode and re-encode the shared `trace_event_time: true` golden frame. Host tests cover both negotiated and absent capabilities; guest tests cover accepted timestamps and their omission when the capability, batch request, ACK request, or accepted motion event is absent. The dedicated WindowServer run is still pending; this entry does not claim a click-loss cause.
+
+**Risk.** Per-event ACKs and the fixture's debug touch listener perturb timing. The trace is evidence from a diagnostic run and cannot replace the uninstrumented product-cadence test or establish a product fix.
+
+## IR-1309: Make the cross-layer click trace reject incomplete or ambiguous joins
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [input.md](../02-design/input.md) §11; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [test-strategy.md](test-strategy.md) §6.4 |
+
+**Choice.**
+1. ACK capture records only sequences at or after the capture-start sequence, so a delayed ACK from an earlier batch cannot consume trace capacity.
+2. Before stopping capture, the diagnostic waits up to 10 seconds for ACKs covering the sent trace batches. If coverage is still incomplete, it preserves the partial evidence and lists missing sequences.
+3. The diagnostic asserts a unique raw receipt, translated event, ACK with a nonzero guest event time, and fixture touch record for each routed touch. Every UP must also match one unique click callback. Incomplete joins fail the test after the JSON evidence has been attached.
+4. Ambiguous click callbacks remain in a separate global evidence list and are never copied onto unrelated UP records as though they were correlated.
+
+**Reason.** An attached trace that can pass while its event-time bridge or fixture matching is absent would not satisfy #103's join requirement. The bounded ACK wait also distinguishes a missing ACK from a sender-queue drain, and the ambiguous callback rule preserves uncertainty instead of manufacturing an event association.
+
+**Verification.** Adversarial review identified the missing join assertions, ambiguous callback attribution, fixed-delay ACK race, and a host request that could set the guest timestamp bit without the capability. The implementation now asserts all joins, leaves ambiguous clicks unattached, waits up to 10 seconds for ACK coverage, and gates the timestamp request on the negotiated capability. Targeted Swift and Kotlin tests, format and protocol checks, and `xcodebuild build-for-testing` for the diagnostic test pass. The dedicated GUI T2 remains required before #103 or #024 box 3 can close.
+
+**Risk.** A genuine missing or ambiguous event association now makes the diagnostic test fail, while retaining the evidence needed to locate the gap. The timeout bounds the wait and does not change normal product input.
+
+## IR-1310: Keep the product-cadence click test free of the fixture trace listener
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [input.md](../02-design/input.md) §11; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [test-strategy.md](test-strategy.md) §6.4; [build-system.md](../05-development/build-system.md) §12.4; HelloText fixture |
+
+**Choice.**
+1. Attach HelloText's debug `OnTouchListener` only while `DebugTouchTraceSession` is actively capturing. Each Activity registers with an identity token, receives the current state immediately, and removes only its own subscription when destroyed. This supports overlapping Activity lifetimes without leaving another Activity's listener attached.
+2. Give the product-cadence `AndroidInputInteractive` run the exact test-method filter. Give the trace run its own method-level command too; the shared test plan config selects the full test target.
+3. Clarify that M3's “10 tasks” refers to the original milestone tasks; follow-ups #101–#103 are tracked separately.
+
+**Reason.** The earlier fixture installed the listener for every debug APK launch and paid a synchronous callback on every touch even with capture off. That undermined the product-cadence comparison because the diagnostic listener can affect event timing. An initial single-observer callback could also be cleared by a different Activity's destruction, so each Activity now owns an independent subscription. Method-level filters keep the lab-only interactive run from accidentally running the rest of `AndroidInputTests`, and the explicit task count prevents the follow-ups from silently expanding M3's exit criteria.
+
+**Verification (2026-10-15).** The HelloText fixture JVM test covers two simultaneous observers and confirms removing the older Activity's subscription leaves the surviving observer notified through capture stop. `:HelloText:testReleaseUnitTest`, `:HelloText:assembleDebug`, the pinned ktfmt dry run, and `git diff --check` pass. The exact xcodebuild test-plan parsing and method-level filters were verified in the preceding revision and are unchanged. Dedicated GUI execution remains subject to the #103 lab requirement.
+
+**Risk.** The fixture still contains debug trace code in the APK, but no touch listener is attached during the untraced product-cadence run. Observer callbacks run synchronously with capture transitions and remain limited to toggling each Activity's listener. Results remain scoped to M3's embedded `DevBoot`/`DevInputRoute` path.
+
+## IR-1311: Cap Swift Testing task-group width after deadline-test starvation
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [ci.yml](../../.github/workflows/ci.yml) `test-swift`; [build-system.md](../05-development/build-system.md) §15.1 |
+
+**Choice.** Run Swift T0 tests with the Xcode 27 SwiftPM option `--experimental-maximum-parallelization-width 2`, while keeping the existing wall-clock assertions unchanged. Do not enable SwiftPM's separate process-level `--parallel` mode.
+
+**Reason.** Two Actions attempts failed multiple RuntimeCore connection/deadline assertions and DiagnosticsCore time-bounded checks while the same cases passed when run individually. In the failed reports, RuntimeCore cases took roughly 8–11 seconds despite assertions requiring work to finish within 3–5 seconds; a DiagnosticsCore host-probe case exceeded 32 seconds. The failures appeared across unrelated timing-sensitive tests, consistent with excessive in-process Swift Testing concurrency for the hosted machine. SwiftPM's `--num-workers` controls its separate process-level runner and does not bound Swift Testing's task group; the experimental width option is the dedicated control. The width cap reduces in-process contention without weakening product or test assertions.
+
+**Verification (2026-10-15).** The pinned Xcode 27 SwiftPM accepted and ran `swift test --skip SystemTests -j 2 --experimental-maximum-parallelization-width 2 --xunit-output /tmp/apkrun-t0-width2.xml`. The full local T0 run passed all 939 tests, including RuntimeCore (191) and DiagnosticsCore (92), with no failures. Hosted [`test-swift`](https://github.com/uakihir0/apkrun/actions/runs/38687526504) passed for commit `494ffb5` (17m58s total job duration; 4m38s for `Run Swift T0 tests`).
+
+**Risk.** The experimental SwiftPM option may change in a later toolchain; the workflow runner is Xcode 27 and the option was verified there. If a later capped run starves tests, collect its timings before changing the width or test deadlines.
+
+## IR-1312: Defer Actions test suites on the #103 pull request branch
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [ci.yml](../../.github/workflows/ci.yml); [run-checks.sh](../../scripts/ci/run-checks.sh) |
+
+**Choice.** On same-repository pull requests whose head branch is
+`task/103-click-loss`, skip the repository test harness in the lint job and
+the Swift, graphics, and image test steps. Keep the required jobs, image
+manifest validation, other CI checks, and build jobs enabled. The normal
+Actions test suites continue to run for other pull request branches and
+pushes to `main`.
+
+**Reason.** The user asked to defer the current GitHub Actions tests while
+continuing the implementation. Keeping the exception scoped to this branch
+avoids weakening CI for unrelated changes. `run-checks.sh` receives an
+explicit workflow environment flag so its repository test harness and test
+steps can all use the same narrow branch and repository condition. The head
+repository check prevents an unrelated fork branch with the same name from
+receiving the exception.
+
+**Verification (2026-10-15).** The workflow runner check
+(`ruby scripts/tests/test_workflow_runners.rb "$PWD"`) passes, including the
+required job-unconditional policy. The check runner also passes with
+`APKRUN_SKIP_CI_TESTS=true scripts/ci/run-checks.sh`, confirming the
+repository test harness is skipped while all six remaining checks pass.
+`git diff --check` passes. The dedicated GUI T2 runs required by #103 are
+separate and remain outstanding; this CI exception does not satisfy them.
+
+**Risk.** The branch-scoped exception remains active until removed from the
+workflow. The test steps show as skipped while their jobs can still succeed,
+so reviewers must inspect step results rather than treat a green job as proof
+that its suite ran. A maintainer should remove this exception after the
+deferred validation window.

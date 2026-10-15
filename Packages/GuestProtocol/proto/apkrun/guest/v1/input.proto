@@ -21,6 +21,8 @@ message InputBatch {
   // Set on every 32nd batch (input.md §8).
   bool ack_requested = 4;
   repeated InputEvent events = 5;
+  // Requests last_event_time_millis in this batch's acknowledgement; requires input.ack_trace.v1.
+  bool trace_event_time = 6;
 }
 
 message InputEvent {
@@ -107,6 +109,9 @@ message InputAck {
   uint32 receive_to_inject_micros = 2;
   // Events in the batch that failed validation and were dropped.
   uint32 rejected_events = 3;
+  // Android uptime eventTime of the last accepted MotionEvent; present only when negotiated,
+  // requested by the batch, and when the batch injected a MotionEvent.
+  optional uint64 last_event_time_millis = 4;
 }
 
 // ImeCommand is sent from the host to the development IME (guest-protocol.md §9).

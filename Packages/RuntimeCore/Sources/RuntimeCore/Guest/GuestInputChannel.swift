@@ -26,6 +26,16 @@ public struct GuestInputChannel: InputChannel {
         }
     }
 
+    /// The negotiated capabilities of the guest input connection.
+    public var negotiatedCapabilities: Set<String>? {
+        get async {
+            guard let session = await connection.sessionInfo else {
+                return nil
+            }
+            return Set(session.enabledCapabilities)
+        }
+    }
+
     /// The acks of the connection. The stream finishes when the connection closes.
     public var acks: AsyncStream<GPInputAck> {
         connection.inputAcks

@@ -572,6 +572,22 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
 - The team and certificate fingerprint come from `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY`; CI reads them from repository variables. Xcode's generic `Apple Development` identity name does not reliably select the lab certificate for a manually signed test host, so the fingerprint is explicit.
 - `APKRunTestHost` and the hosted test bundles disable hardened runtime to allow XCTest to load the test bundle into the entitled host. This setting is limited to test targets; product targets retain the common hardened-runtime setting of §2.5.
 - The test plan `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per suite of [../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2.4 (`LinuxGuest`, `AndroidStock`, `AndroidCustom`, `Maintenance`), each with the test classes and the environment it needs. It sets the automatic retry to one attempt for T2 ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
+- `AndroidInputInteractive` and `AndroidInputTrace` are dedicated GUI configurations for #103. The plan selects the whole `IntegrationTests` target, so always pass the method-level filter as well as the matching configuration:
+
+  ```bash
+  xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+    -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-103-derived" \
+    -resultBundlePath "${TMPDIR:-/tmp}/apkrun-103-interactive.xcresult" \
+    -only-test-configuration AndroidInputInteractive \
+    -only-testing:IntegrationTests/AndroidInputTests/testThreeConsecutiveHundredClickBatchesThroughWindowServer test
+  xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+    -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-103-derived" \
+    -resultBundlePath "${TMPDIR:-/tmp}/apkrun-103-trace.xcresult" \
+    -only-test-configuration AndroidInputTrace \
+    -only-testing:IntegrationTests/AndroidInputTests/testOneHundredClickDiagnosticTraceJoinsHostGuestAndFixture test
+  ```
+
+  Run each command separately on a dedicated lab GUI session with its pinned image and saved `.xcresult`; choose a new result-bundle path for every retry. The interactive case activates a window and posts system pointer events; trace capture is off so the fixture touch listener stays detached. The trace case enables the timing-perturbing listener and per-event ACK capture. Both currently exercise the embedded `DevBoot`/`DevInputRoute` path, not the future wrapper-to-apkrund XPC route. Keep these configurations out of shared desktop sessions and unattended CI.
 - The test plan `Tests/AcceptanceTests/AcceptanceTests.xctestplan` has one configuration per gate (`G1`–`G9`, each added by its gate task), plus `ReleaseSmoke` and `Network`. Automatic retry is off, except one retry for `Network` ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2.7).
 - Tests that go through apkrund use the installed Debug identities (§13). The Maintenance suite builds and installs `ReleaseUpdateTest` bundles instead.
 
@@ -668,7 +684,7 @@ The table describes the planned workflow as its inputs arrive. #062 creates the 
 | `ci.yml` | every pull request, push to `main` | `lint` | — | `xcode-27` | §3 checks, `buf lint`, `buf breaking` |
 | | | `codegen` | — | `xcode-27` | §4 regeneration, `git diff --exit-code` |
 | | | `build` | — | `xcode-27` | needs `third-party`, restores and verifies the same graphics cache, then runs `swift build`; `xcodebuild` Debug and Release (unsigned); `scripts/check-launcher.sh`; the release checks of §3.1 on the Release build |
-| | | `test-swift` | T0 | `xcode-27` | needs `third-party`, restores and verifies the graphics runtime cache so GraphicsBridge can compile against pinned public headers; SwiftPM tests excluding `<Module>SystemTests` |
+| | | `test-swift` | T0 | `xcode-27` | needs `third-party`, restores and verifies the graphics runtime cache so GraphicsBridge can compile against pinned public headers; SwiftPM tests excluding `<Module>SystemTests`, with Swift Testing task-group width capped at two by `--experimental-maximum-parallelization-width` |
 | | | `test-graphics` | T1 | `xcode-27` | needs `third-party`, restores and verifies the graphics runtime cache; requires a Metal device, then runs `GraphicsCoreSystemTests` normally, with Address Sanitizer, and with Undefined Behavior Sanitizer |
 | | | `test-guest` | T0, T1 | `xcode-27` for T0; disposable T1 runner for PRs; `apkrun-ci` on `main` | `scripts/build-guest.sh`, Gradle `test` for every Guest module, golden frames, `scripts/build-fixtures.sh` |
 | | | `test-images` | T0, T1 | `xcode-27` for T0; disposable T1 runner for PRs; `apkrun-ci` on `main` | `pytest Images/tools/tests`, fixture bundle double build (§10.1) |

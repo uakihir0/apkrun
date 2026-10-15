@@ -1,6 +1,6 @@
 id: 1
 hello {
-  protocol_version { major: 1 minor: 0 }
+  protocol_version { major: 1 minor: 1 }
   agent {
     kind: AGENT_KIND_GUEST_AGENT
     version_name: "1.0.0"

@@ -13,10 +13,12 @@ actor RecordingInputChannel: InputChannel {
     private(set) var batches: [GPInputBatch] = []
     private var backlog = 0
     private var sendLimit: Int?
+    nonisolated let negotiatedCapabilities: Set<String>?
     nonisolated let acks: AsyncStream<GPInputAck>
     private nonisolated let ackContinuation: AsyncStream<GPInputAck>.Continuation
 
-    init() {
+    init(negotiatedCapabilities: Set<String>? = nil) {
+        self.negotiatedCapabilities = negotiatedCapabilities
         let stream = AsyncStream.makeStream(of: GPInputAck.self, bufferingPolicy: .unbounded)
         acks = stream.stream
         ackContinuation = stream.continuation
@@ -44,10 +46,17 @@ actor RecordingInputChannel: InputChannel {
         sendLimit = count
     }
 
-    nonisolated func deliverAck(batchSeq: UInt64, rejected: UInt32) {
+    nonisolated func deliverAck(
+        batchSeq: UInt64,
+        rejected: UInt32,
+        receiveToInjectMicros: UInt32 = 0,
+        lastEventTimeMillis: UInt64 = 0
+    ) {
         var ack = GPInputAck()
         ack.batchSeq = batchSeq
         ack.rejectedEvents = rejected
+        ack.receiveToInjectMicros = receiveToInjectMicros
+        ack.lastEventTimeMillis = lastEventTimeMillis
         ackContinuation.yield(ack)
     }
 }
@@ -454,4 +463,201 @@ func rejectedEventsInAnAckAreCountedAsInvalid() async throws {
     channel.deliverAck(batchSeq: 32, rejected: 3)
     try await eventually { await router.counters.droppedInvalid == 3 }
     #expect(await router.counters.droppedInvalid == 3)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func acknowledgementHistoryRetainsSequenceAndRejectionCounts() async throws {
+    let channel = RecordingInputChannel()
+    let router = InputRouter(channel: channel, clock: { 0 })
+    _ = await router.startAcknowledgementHistoryCapture()
+    channel.deliverAck(
+        batchSeq: 32,
+        rejected: 0,
+        receiveToInjectMicros: 350,
+        lastEventTimeMillis: 12_345
+    )
+    channel.deliverAck(
+        batchSeq: 64,
+        rejected: 2,
+        receiveToInjectMicros: 900,
+        lastEventTimeMillis: 12_678
+    )
+    try await eventually { await router.acknowledgementHistory.records.count == 2 }
+    let records = await router.acknowledgementHistory.records
+    #expect(
+        records == [
+            InputAcknowledgementHistory.Record(
+                batchSequence: 32,
+                rejectedEvents: 0,
+                receiveToInjectMicros: 350,
+                lastEventTimeMillis: 12_345
+            ),
+            InputAcknowledgementHistory.Record(
+                batchSequence: 64,
+                rejectedEvents: 2,
+                receiveToInjectMicros: 900,
+                lastEventTimeMillis: 12_678
+            ),
+        ])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func acknowledgementHistoryCaptureIsOptInAndCanBeStopped() async throws {
+    let channel = RecordingInputChannel()
+    let router = InputRouter(channel: channel, clock: { 0 })
+    channel.deliverAck(batchSeq: 31, rejected: 1)
+    try await eventually { await router.counters.droppedInvalid == 1 }
+    #expect(await router.acknowledgementHistory.records.isEmpty)
+    #expect(await router.sentEventHistory.records.isEmpty)
+
+    _ = await router.startAcknowledgementHistoryCapture()
+    channel.deliverAck(batchSeq: 32, rejected: 0)
+    try await eventually { await router.acknowledgementHistory.records.count == 1 }
+    let captured = await router.stopAcknowledgementHistoryCapture()
+    channel.deliverAck(batchSeq: 33, rejected: 1)
+    try await eventually { await router.counters.droppedInvalid == 2 }
+
+    #expect(captured.records.map(\.batchSequence) == [32])
+    #expect(captured.records[0].receiveToInjectMicros == 0)
+    #expect(captured.records[0].lastEventTimeMillis == 0)
+    #expect(await router.acknowledgementHistory.records.map(\.batchSequence) == [32])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func acknowledgementHistoryExcludesAnEarlierBatchWhoseAckArrivesLate() async throws {
+    let channel = RecordingInputChannel()
+    let session = SessionID.app(UUID())
+    let router = await makeRouter(channel, clock: TestClock(), session: session)
+    await router.route([touch(.down)], from: session)
+
+    _ = await router.startAcknowledgementHistoryCapture()
+    channel.deliverAck(batchSeq: 1, rejected: 1)
+    try await eventually { await router.counters.droppedInvalid == 1 }
+    #expect(await router.acknowledgementHistory.records.isEmpty)
+
+    await router.route([touch(.up)], from: session)
+    channel.deliverAck(batchSeq: 2, rejected: 0)
+    try await eventually { await router.acknowledgementHistory.records.count == 1 }
+    #expect(await router.acknowledgementHistory.records.map(\.batchSequence) == [2])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func sentEventHistoryCapturesBatchSequenceIndexTimeAndPhase() async {
+    let channel = RecordingInputChannel()
+    let session = SessionID.app(UUID())
+    let router = await makeRouter(channel, clock: TestClock(), session: session)
+    _ = await router.startAcknowledgementHistoryCapture()
+    await router.route(
+        [
+            .touch(TouchEvent(phase: .down, pointerID: 7, position: point(10), time: InputTimestamp(hostNanos: 123))),
+            .touch(TouchEvent(phase: .up, pointerID: 7, position: point(10), time: InputTimestamp(hostNanos: 456))),
+        ],
+        from: session
+    )
+
+    let batches = await channel.batches
+    let history = await router.sentEventHistory
+    #expect(batches.count == 1)
+    #expect(batches.first?.events.count == 2)
+    #expect(history.records.map(\.batchSequence) == [1, 1])
+    #expect(history.records.map(\.eventIndex) == [0, 1])
+    #expect(history.records.map(\.hostTimeNanos) == [123, 456])
+    #expect(history.records.map(\.kindAndPhase) == ["touch.down", "touch.up"])
+    #expect(history.discardedRecords == 0)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func sentEventHistoryIsOptInAndStopsCapturing() async {
+    let channel = RecordingInputChannel()
+    let session = SessionID.app(UUID())
+    let router = await makeRouter(channel, clock: TestClock(), session: session)
+    await router.route([touch(.down, 1)], from: session)
+    #expect(await router.sentEventHistory.records.isEmpty)
+
+    _ = await router.startAcknowledgementHistoryCapture()
+    await router.route([touch(.move, 2)], from: session)
+    let captured = await router.sentEventHistory
+    #expect(captured.records.map(\.kindAndPhase) == ["touch.move"])
+
+    _ = await router.stopAcknowledgementHistoryCapture()
+    await router.route([touch(.up, 3)], from: session)
+    #expect(await router.sentEventHistory.records == captured.records)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func perEventCaptureUsesSingleEventBatchesAndRequestsEachAck() async {
+    let channel = RecordingInputChannel()
+    let session = SessionID.app(UUID())
+    let router = await makeRouter(channel, clock: TestClock(), session: session)
+    _ = await router.startAcknowledgementHistoryCapture(everyBatch: true)
+    await router.route([touch(.down, 1), touch(.move, 2), touch(.up, 3)], from: session)
+
+    let batches = await channel.batches
+    let history = await router.sentEventHistory
+    #expect(batches.map(\.batchSeq) == [1, 2, 3])
+    #expect(batches.map { $0.events.count } == [1, 1, 1])
+    #expect(batches.allSatisfy { $0.ackRequested })
+    #expect(batches.allSatisfy { !$0.traceEventTime })
+    #expect(history.records.map(\.batchSequence) == [1, 2, 3])
+    #expect(history.records.map(\.eventIndex) == [0, 0, 0])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func perEventCaptureRequestsGuestEventTimeOnlyWhenCapabilityWasNegotiated() async {
+    let channel = RecordingInputChannel(
+        negotiatedCapabilities: [GuestCapability.inputAckTrace.rawValue]
+    )
+    let session = SessionID.app(UUID())
+    let router = await makeRouter(channel, clock: TestClock(), session: session)
+    _ = await router.startAcknowledgementHistoryCapture(everyBatch: true)
+    await router.route([touch(.down)], from: session)
+
+    let batches = await channel.batches
+    #expect(batches.count == 1)
+    #expect(batches[0].ackRequested)
+    #expect(batches[0].traceEventTime)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func sentEventHistoryMakesOverflowExplicit() async {
+    let channel = RecordingInputChannel()
+    let session = SessionID.app(UUID())
+    let router = await makeRouter(channel, clock: TestClock(), session: session)
+    _ = await router.startAcknowledgementHistoryCapture()
+    let events = (0..<300).map { index in
+        InputEvent.touch(
+            TouchEvent(
+                phase: .down,
+                pointerID: index,
+                position: point(Double(index)),
+                time: InputTimestamp(hostNanos: UInt64(index))
+            )
+        )
+    }
+    await router.route(events, from: session)
+
+    let history = await router.sentEventHistory
+    #expect(history.records.count == InputRouter.sentEventHistoryLimit)
+    #expect(history.discardedRecords == 300 - InputRouter.sentEventHistoryLimit)
+    #expect(history.records.first?.hostTimeNanos == UInt64(300 - InputRouter.sentEventHistoryLimit))
+    #expect(history.records.last?.hostTimeNanos == 299)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func acknowledgementHistoryDiscardsOldRecordsAtItsBound() async throws {
+    let channel = RecordingInputChannel()
+    let router = InputRouter(channel: channel, clock: { 0 })
+    _ = await router.startAcknowledgementHistoryCapture()
+    for sequence in 1...300 {
+        channel.deliverAck(batchSeq: UInt64(sequence), rejected: 0)
+    }
+    try await eventually {
+        let history = await router.acknowledgementHistory
+        return history.records.count == InputRouter.acknowledgementHistoryLimit
+            && history.discardedRecords == 300 - InputRouter.acknowledgementHistoryLimit
+    }
+    let history = await router.acknowledgementHistory
+    #expect(history.records.map(\.batchSequence) == Array(45...300).map(UInt64.init))
+    #expect(history.records.allSatisfy { $0.rejectedEvents == 0 })
+    #expect(history.discardedRecords == 44)
 }

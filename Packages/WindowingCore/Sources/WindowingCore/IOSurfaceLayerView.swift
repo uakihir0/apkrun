@@ -32,6 +32,9 @@ public final class IOSurfaceLayerView: NSView {
     /// Receives the pointer and key events, in order. The owner sets it before the window shows.
     public var inputSink: PointerInputSink?
 
+    /// Observes raw pointer receipt for explicitly enabled diagnostics. The default input path does not call an observer.
+    public var inputEventReceiptObserver: ((Int, UInt64) -> Void)?
+
     /// Creates a view whose content is `contentSize` points, shown at `contentScale` pixels per point.
     public init(frame: NSRect, contentSize: CGSize, contentScale: CGFloat) {
         self.contentSize = contentSize
@@ -199,6 +202,10 @@ public final class IOSurfaceLayerView: NSView {
     /// Converts one event to a sample, translates it, and sends the events that come out. A held hover or scroll starts
     /// the flush timer.
     private func forward(_ event: NSEvent) {
+        if let inputEventReceiptObserver {
+            let timestampNanos = PointerEventAdapter.timestamp(seconds: event.timestamp).hostNanos
+            inputEventReceiptObserver(Int(event.type.rawValue), timestampNanos)
+        }
         let location = convert(event.locationInWindow, from: nil)
         guard let sample = PointerEventAdapter.sample(for: event, locationInContent: location) else {
             return

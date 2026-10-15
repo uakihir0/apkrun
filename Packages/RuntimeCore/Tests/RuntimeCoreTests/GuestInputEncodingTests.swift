@@ -124,8 +124,24 @@ private let stamp = InputTimestamp(hostNanos: 42_000)
     let thirtyTwo = GuestInputEncoding.batches(events, displayID: 0, firstSequence: 32, hostSendNanos: 0)
     #expect(thirtyTwo.map(\.batchSeq) == [32])
     #expect(thirtyTwo.map(\.ackRequested) == [true])
+    #expect(thirtyTwo.map(\.traceEventTime) == [false])
     let thirtyThree = GuestInputEncoding.batches(events, displayID: 0, firstSequence: 33, hostSendNanos: 0)
     #expect(thirtyThree.map(\.ackRequested) == [false])
+}
+
+@Test func perEventDiagnosticRequestsGuestEventTimeOnlyOnAcknowledgedBatches() {
+    let events = [InputEvent.cancelAll(stamp)]
+    let diagnostic = GuestInputEncoding.batches(
+        events,
+        displayID: 0,
+        firstSequence: 1,
+        hostSendNanos: 0,
+        oneEventPerBatch: true,
+        acknowledgeEveryBatch: true,
+        traceEventTime: true
+    )
+    #expect(diagnostic.map(\.ackRequested) == [true])
+    #expect(diagnostic.map(\.traceEventTime) == [true])
 }
 
 @Test func noEventsMeansNoBatches() {

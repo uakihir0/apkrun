@@ -9,6 +9,7 @@ enum class GuestCapability(val wireName: String) {
     DISPLAY("display.v1"),
     LAUNCH("launch.v1"),
     INPUT("input.v1"),
+    INPUT_ACK_TRACE("input.ack_trace.v1"),
     IME("ime.v1"),
     PACKAGES("packages.v1"),
     HEALTH("health.v1"),

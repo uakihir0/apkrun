@@ -12,6 +12,15 @@ public protocol InputChannel: Sendable {
     var pendingBytes: Int { get async }
     /// The acks of the stream. The stream finishes when the stream closes.
     var acks: AsyncStream<GPInputAck> { get }
+    /// Capabilities negotiated on this stream, or `nil` when this channel does not expose a handshake.
+    var negotiatedCapabilities: Set<String>? { get async }
+}
+
+extension InputChannel {
+    /// Test and local channels may not have a protocol handshake.
+    public var negotiatedCapabilities: Set<String>? {
+        get async { nil }
+    }
 }
 
 /// What the router dropped, merged, and sent (input.md §11). The diagnostics snapshot reads a copy of it.
@@ -46,6 +55,79 @@ public struct InputCounters: Equatable, Sendable {
     }
 }
 
+/// The bounded history of guest input acknowledgements (input.md §8).
+public struct InputAcknowledgementHistory: Equatable, Sendable {
+    /// The most recent acknowledgements, in receive order.
+    public let records: [Record]
+    /// Records evicted because the bounded history reached its limit.
+    public let discardedRecords: Int
+
+    /// One guest acknowledgement received by the router.
+    public struct Record: Equatable, Sendable {
+        /// The sequence of the guest input batch.
+        public let batchSequence: UInt64
+        /// Events the guest rejected in that batch.
+        public let rejectedEvents: UInt32
+        /// Guest-measured time from receiving the batch to injecting its events.
+        public let receiveToInjectMicros: UInt32
+        /// Guest uptime in milliseconds of the batch's last event, or zero when the guest did not set it.
+        public let lastEventTimeMillis: UInt64
+
+        /// Creates an acknowledgement record.
+        public init(
+            batchSequence: UInt64,
+            rejectedEvents: UInt32,
+            receiveToInjectMicros: UInt32 = 0,
+            lastEventTimeMillis: UInt64 = 0
+        ) {
+            self.batchSequence = batchSequence
+            self.rejectedEvents = rejectedEvents
+            self.receiveToInjectMicros = receiveToInjectMicros
+            self.lastEventTimeMillis = lastEventTimeMillis
+        }
+    }
+
+    /// Creates a history snapshot.
+    public init(records: [Record], discardedRecords: Int) {
+        self.records = records
+        self.discardedRecords = discardedRecords
+    }
+}
+
+/// The bounded history of input events the host successfully sent to the guest.
+public struct InputSentEventHistory: Equatable, Sendable {
+    /// The most recent sent events, in send order.
+    public let records: [Record]
+    /// Events evicted because the bounded history reached its limit.
+    public let discardedRecords: Int
+
+    /// One event in a successfully sent input batch.
+    public struct Record: Equatable, Sendable {
+        /// The sequence of the batch that carried the event.
+        public let batchSequence: UInt64
+        /// The zero-based event position inside the batch.
+        public let eventIndex: Int
+        /// The event's host monotonic timestamp in nanoseconds.
+        public let hostTimeNanos: UInt64
+        /// Stable event kind and phase, such as `touch.down` or `key.up`.
+        public let kindAndPhase: String
+
+        /// Creates a sent-event record.
+        public init(batchSequence: UInt64, eventIndex: Int, hostTimeNanos: UInt64, kindAndPhase: String) {
+            self.batchSequence = batchSequence
+            self.eventIndex = eventIndex
+            self.hostTimeNanos = hostTimeNanos
+            self.kindAndPhase = kindAndPhase
+        }
+    }
+
+    /// Creates a history snapshot.
+    public init(records: [Record], discardedRecords: Int) {
+        self.records = records
+        self.discardedRecords = discardedRecords
+    }
+}
+
 extension InputCounters: CustomStringConvertible {
     /// The counts on one line for the development command's output: the sends first, then the drop and merge counts of
     /// input.md §11 under their names.
@@ -68,6 +150,10 @@ public actor InputRouter {
     public static let coalescingBacklogBytes = 64 * 1024
     /// The length of the rate window.
     private static let windowNanoseconds: UInt64 = 1_000_000_000
+    /// The most recent guest acknowledgements retained for diagnostics.
+    public static let acknowledgementHistoryLimit = 256
+    /// The most recent host input events retained during an explicitly enabled trace.
+    public static let sentEventHistoryLimit = 256
 
     /// Returns the time in nanoseconds of a monotonic clock. The rate window and the cancel timestamps use it.
     public typealias Clock = @Sendable () -> UInt64
@@ -127,6 +213,69 @@ public actor InputRouter {
 
     /// What the router dropped, merged, and sent so far.
     public private(set) var counters = InputCounters()
+    private var acknowledgementRecords: [InputAcknowledgementHistory.Record] = []
+    private var discardedAcknowledgementRecords = 0
+    private var acknowledgementCaptureStartSequence: UInt64?
+    private var sentEventRecords: [InputSentEventHistory.Record] = []
+    private var discardedSentEventRecords = 0
+    private var capturesAcknowledgementHistory = false
+    private var capturesSentEventHistory = false
+    private var capturesOneEventPerBatch = false
+    private var capturesAcknowledgementEventTime = false
+
+    /// A bounded record of ACKs captured from the current input channel.
+    public var acknowledgementHistory: InputAcknowledgementHistory {
+        InputAcknowledgementHistory(
+            records: acknowledgementRecords,
+            discardedRecords: discardedAcknowledgementRecords
+        )
+    }
+
+    /// A bounded history snapshot of the events successfully sent during the current diagnostic capture.
+    public var sentEventHistory: InputSentEventHistory {
+        InputSentEventHistory(records: sentEventRecords, discardedRecords: discardedSentEventRecords)
+    }
+
+    /// Whether the input peer negotiated the capability needed to join ACKs to guest event timestamps.
+    public var supportsAcknowledgementEventTimeTrace: Bool {
+        get async {
+            await channel.negotiatedCapabilities?.contains(GuestCapability.inputAckTrace.rawValue) == true
+        }
+    }
+
+    /// Starts bounded ACK capture for an explicitly enabled diagnostic run.
+    ///
+    /// When `everyBatch` is true, the router places each accepted event in its own batch and requests an ACK for every
+    /// batch. It requests guest event times only when the peer negotiated `input.ack_trace.v1`. The default preserves
+    /// the normal batching and every-32nd-batch ACK cadence.
+    public func startAcknowledgementHistoryCapture(everyBatch: Bool = false) async -> InputCounters {
+        await takeTurn()
+        defer { releaseTurn() }
+        acknowledgementRecords.removeAll(keepingCapacity: true)
+        discardedAcknowledgementRecords = 0
+        acknowledgementCaptureStartSequence = nextBatchSequence
+        sentEventRecords.removeAll(keepingCapacity: true)
+        discardedSentEventRecords = 0
+        capturesAcknowledgementHistory = true
+        capturesSentEventHistory = true
+        capturesOneEventPerBatch = everyBatch
+        let capabilityWasNegotiated =
+            await channel.negotiatedCapabilities?.contains(GuestCapability.inputAckTrace.rawValue) == true
+        capturesAcknowledgementEventTime = everyBatch && capabilityWasNegotiated
+        return counters
+    }
+
+    /// Stops bounded ACK capture and returns its final snapshot.
+    public func stopAcknowledgementHistoryCapture() async -> InputAcknowledgementHistory {
+        await takeTurn()
+        defer { releaseTurn() }
+        capturesAcknowledgementHistory = false
+        capturesSentEventHistory = false
+        capturesOneEventPerBatch = false
+        capturesAcknowledgementEventTime = false
+        acknowledgementCaptureStartSequence = nil
+        return acknowledgementHistory
+    }
 
     /// Creates a router over `channel`. The acks of the channel are read for the rejected counts (input.md §8).
     public init(
@@ -233,9 +382,13 @@ public actor InputRouter {
             events,
             displayID: displayID,
             firstSequence: nextBatchSequence,
-            hostSendNanos: now
+            hostSendNanos: now,
+            oneEventPerBatch: capturesOneEventPerBatch,
+            acknowledgeEveryBatch: capturesOneEventPerBatch,
+            traceEventTime: capturesAcknowledgementEventTime
         )
         nextBatchSequence += UInt64(batches.count)
+        var eventOffset = 0
         for (index, batch) in batches.enumerated() {
             do {
                 try await channel.send(batch)
@@ -248,6 +401,63 @@ public actor InputRouter {
             }
             counters.batchesSent += 1
             counters.eventsSent += batch.events.count
+            if capturesSentEventHistory {
+                let eventEnd = eventOffset + batch.events.count
+                recordSentEvents(events[eventOffset..<eventEnd], batchSequence: batch.batchSeq)
+            }
+            eventOffset += batch.events.count
+        }
+    }
+
+    /// Appends events from a successfully sent batch to the bounded trace.
+    private func recordSentEvents(_ events: ArraySlice<InputEvent>, batchSequence: UInt64) {
+        for (eventIndex, event) in events.enumerated() {
+            if sentEventRecords.count == Self.sentEventHistoryLimit {
+                sentEventRecords.removeFirst()
+                discardedSentEventRecords += 1
+            }
+            let (hostTimeNanos, kindAndPhase) = Self.traceDescription(of: event)
+            sentEventRecords.append(
+                InputSentEventHistory.Record(
+                    batchSequence: batchSequence,
+                    eventIndex: eventIndex,
+                    hostTimeNanos: hostTimeNanos,
+                    kindAndPhase: kindAndPhase
+                )
+            )
+        }
+    }
+
+    /// Returns the timestamp and stable kind/phase tag used by the input trace.
+    private static func traceDescription(of event: InputEvent) -> (UInt64, String) {
+        switch event {
+        case .touch(let touch):
+            let phase: String
+            switch touch.phase {
+            case .down: phase = "down"
+            case .move: phase = "move"
+            case .up: phase = "up"
+            case .cancel: phase = "cancel"
+            }
+            return (touch.time.hostNanos, "touch.\(phase)")
+        case .mouse(let mouse):
+            let action: String
+            switch mouse.action {
+            case .hoverEnter: action = "hoverEnter"
+            case .hoverMove: action = "hoverMove"
+            case .hoverExit: action = "hoverExit"
+            case .press: action = "press"
+            case .release: action = "release"
+            }
+            return (mouse.time.hostNanos, "mouse.\(action)")
+        case .scroll(let scroll):
+            return (scroll.time.hostNanos, "scroll")
+        case .key(let key):
+            return (key.time.hostNanos, key.action == .down ? "key.down" : "key.up")
+        case .longPress(_, let time):
+            return (time.hostNanos, "longPress")
+        case .cancelAll(let time):
+            return (time.hostNanos, "cancelAll")
         }
     }
 
@@ -329,6 +539,23 @@ public actor InputRouter {
 
     /// Adds the events that the guest rejected to the invalid count.
     private func recordAck(_ ack: GPInputAck) {
+        if capturesAcknowledgementHistory,
+            let acknowledgementCaptureStartSequence,
+            ack.batchSeq >= acknowledgementCaptureStartSequence
+        {
+            acknowledgementRecords.append(
+                InputAcknowledgementHistory.Record(
+                    batchSequence: ack.batchSeq,
+                    rejectedEvents: ack.rejectedEvents,
+                    receiveToInjectMicros: ack.receiveToInjectMicros,
+                    lastEventTimeMillis: ack.lastEventTimeMillis
+                )
+            )
+            if acknowledgementRecords.count > Self.acknowledgementHistoryLimit {
+                acknowledgementRecords.removeFirst()
+                discardedAcknowledgementRecords += 1
+            }
+        }
         guard ack.rejectedEvents > 0 else {
             return
         }

@@ -6,6 +6,11 @@ import org.junit.Test
 
 class ProtocolVersionTest {
     @Test
+    fun `guest protocol implementation speaks version 1 point 1`() {
+        assertEquals(ProtocolVersion(1L, 1L), ProtocolVersion.HOST)
+    }
+
+    @Test
     fun `a major version of 2^31 is read as unsigned and is newer than supported`() {
         val version = ProtocolVersion.fromWire(Int.MIN_VALUE, 0)
         assertEquals(2_147_483_648L, version.major)

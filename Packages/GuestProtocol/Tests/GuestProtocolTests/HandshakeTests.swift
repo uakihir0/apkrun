@@ -5,7 +5,7 @@ import Testing
 /// A Hello as a fake Guest Agent sends it (guest-protocol.md §5.1).
 private func fakeAgentHello(
     major: UInt32 = 1,
-    minor: UInt32 = 0,
+    minor: UInt32 = 1,
     channel: GPChannelKind = .guestControl,
     capabilities: [String] = ["core.v1", "display.v1"]
 ) -> GPHello {
@@ -27,7 +27,7 @@ private let expectedChannel = GPChannelKind.guestControl
         decision
             == .accepted(
                 enabledCapabilities: ["core.v1", "display.v1"],
-                agentVersion: ProtocolVersion(major: 1, minor: 0)))
+                agentVersion: ProtocolVersion(major: 1, minor: 1)))
 }
 
 @Test func handshakeAcceptsAHigherMinorAndNegotiatesCapabilities() {
@@ -49,8 +49,8 @@ private let expectedChannel = GPChannelKind.guestControl
             == .rejected(
                 reason: .incompatibleVersion,
                 failure: .incompatibleVersion(
-                    host: ProtocolVersion(major: 1, minor: 0),
-                    guest: ProtocolVersion(major: 2, minor: 0))))
+                    host: ProtocolVersion(major: 1, minor: 1),
+                    guest: ProtocolVersion(major: 2, minor: 1))))
 }
 
 @Test func handshakeRejectsAnOlderMajorAsIncompatibleToo() {
@@ -61,7 +61,7 @@ private let expectedChannel = GPChannelKind.guestControl
             == .rejected(
                 reason: .incompatibleVersion,
                 failure: .incompatibleVersion(
-                    host: ProtocolVersion(major: 1, minor: 0),
+                    host: ProtocolVersion(major: 1, minor: 1),
                     guest: ProtocolVersion(major: 0, minor: 9))))
 }
 
@@ -95,6 +95,6 @@ private let expectedChannel = GPChannelKind.guestControl
             == .rejected(
                 reason: .incompatibleVersion,
                 failure: .incompatibleVersion(
-                    host: ProtocolVersion(major: 1, minor: 0),
-                    guest: ProtocolVersion(major: 2, minor: 0))))
+                    host: ProtocolVersion(major: 1, minor: 1),
+                    guest: ProtocolVersion(major: 2, minor: 1))))
 }

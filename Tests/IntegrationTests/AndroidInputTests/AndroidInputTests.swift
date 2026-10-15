@@ -1,13 +1,17 @@
 import AppKit
+import CryptoKit
 import Foundation
+import RuntimeCore
 import XCTest
 
 /// The pointer checks of #024 on a real Android guest (T2, test-strategy §6.4), through the path of `apkrun dev launch`.
 ///
 /// Each test boots the test image with the embedded runtime (`DevBoot` and `DevInputRoute`), shows the development
-/// window, and posts the pointer events into the window's content view as `NSEvent`s. The suite needs no Accessibility
-/// permission. Points are display pixels of display 0, mapped to the window by `CoordinateMapper`. The targets are the
-/// centres of their `uiautomator` bounds, except the drag, which uses fixed points inside HelloCompose's list.
+/// window, and posts the pointer events into the window's content view. The existing tests synthesize `NSEvent`s
+/// directly and need no Accessibility permission. The #103 interactive test opts into WindowServer `CGEvent`s and
+/// requires permission only on its dedicated lab GUI session. Points are display pixels of display 0, mapped to the
+/// window by `CoordinateMapper`. The targets are the centres of their `uiautomator` bounds, except the drag, which uses
+/// fixed points inside HelloCompose's list.
 ///
 /// The suite runs in the Xcode test host (IR-438). Its boot needs a working guest renderer, which the odm7 overlay gives
 /// (IR-1278), and the host dismisses the keyguard before it launches the app (IR-1285). The device checks of the
@@ -58,6 +62,293 @@ final class AndroidInputTests: XCTestCase {
             XCTAssertEqual(shellInput, [], "adb shell input processes ran during the sequence")
             let lines = try await run.fixtureLog { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 }
             XCTAssertEqual(AndroidInputRun.numbers(in: lines, after: Self.clickPrefix), Array(1...100))
+        }
+    }
+
+    /// Three product-cadence click batches through WindowServer must each change the persisted counter by 100.
+    ///
+    /// This test activates the APKRun window and moves the system pointer. Run it only in a dedicated lab GUI session
+    /// with `APKRUN_INPUT_INTERACTIVE_T2=1`; it is skipped by default and never requests Accessibility permission.
+    func testThreeConsecutiveHundredClickBatchesThroughWindowServer() async throws {
+        guard ProcessInfo.processInfo.environment["APKRUN_INPUT_INTERACTIVE_T2"] == "1" else {
+            throw XCTSkip("Run only on a dedicated lab GUI session with APKRUN_INPUT_INTERACTIVE_T2=1.")
+        }
+        let apk = try Self.fixture("APKRUN_FIXTURE_APK")
+        try Self.attachEnvironmentIdentity(fixture: apk)
+        try await AndroidInputRun.with(
+            apk: apk, package: Self.helloText, pointerDelivery: .windowServer
+        ) { run in
+            let target = try await run.centre(of: Self.buttonID)
+            try await run.prepareForWindowServerPointerDispatch()
+            let captureStartCounters = try await run.startAcknowledgementHistoryCapture()
+            let firstAcknowledgedSequenceAfterCaptureStart =
+                UInt64(captureStartCounters.batchesSent / 32 + 1) * 32
+            try await Self.assertNoShellInputDuring {
+                guard var previousCount = try await Self.persistedClickCount(run) else {
+                    throw AndroidInputRunFailure.timedOut("the fixture's initial persisted click counter")
+                }
+                XCTAssertEqual(previousCount, 0, "a new guest should start with an empty HelloText counter")
+                var previousCounters = captureStartCounters
+                let clickDeltas = [100, 100, 100]
+                for (index, clickDelta) in clickDeltas.enumerated() {
+                    var persistedCount: Int?
+                    var counters: InputCounters?
+                    var acknowledgements: InputAcknowledgementHistory?
+                    do {
+                        _ = try await run.adb.shell("logcat -c")
+                        let pointer = try run.pointer()
+                        for _ in 0..<clickDelta {
+                            try await pointer.click(at: target, interClickGap: .milliseconds(50))
+                        }
+
+                        let expectedCount = previousCount + clickDelta
+                        let reachedCount = try await Self.waitForPersistedClickCount(
+                            run, atLeast: expectedCount)
+                        persistedCount = reachedCount
+                        XCTAssertEqual(
+                            reachedCount, expectedCount,
+                            "batch \(index + 1) persisted \(reachedCount - previousCount) of \(clickDelta) clicks")
+
+                        let sentCounters = try await run.inputCounters()
+                        let lastAcknowledgedSequence = UInt64(sentCounters.batchesSent / 32 * 32)
+                        if lastAcknowledgedSequence == 0 {
+                            acknowledgements = try await run.acknowledgementHistory()
+                        } else {
+                            acknowledgements = try await run.waitForAcknowledgement(
+                                through: lastAcknowledgedSequence)
+                        }
+                        let finalCounters = try await run.inputCounters()
+                        counters = finalCounters
+                        XCTAssertGreaterThanOrEqual(
+                            finalCounters.eventsSent - previousCounters.eventsSent,
+                            clickDelta * 2,
+                            "batch \(index + 1) did not send both touch edges for every click")
+                        XCTAssertEqual(finalCounters.droppedRate, 0, "batch \(index + 1)")
+                        XCTAssertEqual(finalCounters.droppedNotRunning, 0, "batch \(index + 1)")
+                        XCTAssertEqual(
+                            finalCounters.droppedInvalid, 0,
+                            "batch \(index + 1); this aggregate includes invalid host input and guest rejections in received ACKs"
+                        )
+                        XCTAssertEqual(finalCounters.droppedChannel, 0, "batch \(index + 1)")
+                        XCTAssertEqual(finalCounters.coalesced, 0, "batch \(index + 1)")
+
+                        let expectedSequences: [UInt64]
+                        if firstAcknowledgedSequenceAfterCaptureStart <= lastAcknowledgedSequence {
+                            expectedSequences = stride(
+                                from: Int(firstAcknowledgedSequenceAfterCaptureStart),
+                                through: Int(lastAcknowledgedSequence),
+                                by: 32
+                            ).map(UInt64.init)
+                        } else {
+                            expectedSequences = []
+                        }
+                        let capturedSequences = acknowledgements?.records
+                            .map(\.batchSequence)
+                            .filter {
+                                $0 >= firstAcknowledgedSequenceAfterCaptureStart
+                                    && $0 <= lastAcknowledgedSequence
+                            }
+                        XCTAssertEqual(acknowledgements?.discardedRecords, 0, "the bounded ACK history overflowed")
+                        XCTAssertEqual(
+                            capturedSequences, expectedSequences,
+                            "the normal ACK coverage did not match the 32-batch cadence")
+                        XCTAssertTrue(
+                            acknowledgements?.records.allSatisfy { $0.rejectedEvents == 0 } == true,
+                            "a normal periodic ACK reported rejected guest input")
+                        Self.attachBatchEvidence(
+                            batch: index + 1,
+                            before: previousCount,
+                            after: reachedCount,
+                            counters: finalCounters,
+                            acknowledgements: acknowledgements,
+                            failure: nil
+                        )
+                        previousCount = reachedCount
+                        previousCounters = finalCounters
+                    } catch {
+                        if let currentCount = try? await Self.persistedClickCount(
+                            run, timeout: .seconds(1))
+                        {
+                            persistedCount = currentCount
+                        }
+                        if let currentCounters = try? await run.inputCounters() {
+                            counters = currentCounters
+                        }
+                        if let currentAcknowledgements = try? await run.acknowledgementHistory() {
+                            acknowledgements = currentAcknowledgements
+                        }
+                        Self.attachBatchEvidence(
+                            batch: index + 1,
+                            before: previousCount,
+                            after: persistedCount,
+                            counters: counters,
+                            acknowledgements: acknowledgements,
+                            failure: String(describing: error)
+                        )
+                        throw error
+                    }
+                }
+            }
+        }
+    }
+
+    /// Captures one diagnostic batch across AppKit, the route, guest injection, View dispatch, and the click callback.
+    ///
+    /// The per-event ACK mode and debug touch listener perturb timing, so this is separate from the product-cadence test.
+    /// Run only on a dedicated lab GUI session with `APKRUN_INPUT_TRACE_T2=1`.
+    func testOneHundredClickDiagnosticTraceJoinsHostGuestAndFixture() async throws {
+        guard ProcessInfo.processInfo.environment["APKRUN_INPUT_TRACE_T2"] == "1" else {
+            throw XCTSkip("Run only on a dedicated lab GUI session with APKRUN_INPUT_TRACE_T2=1.")
+        }
+        let apk = try Self.fixture("APKRUN_FIXTURE_APK")
+        try Self.attachEnvironmentIdentity(fixture: apk)
+        try await AndroidInputRun.with(
+            apk: apk, package: Self.helloText, pointerDelivery: .windowServer
+        ) { run in
+            let target = try await run.centre(of: Self.buttonID)
+            try await run.prepareForWindowServerPointerDispatch()
+            guard let before = try await Self.persistedClickCount(run) else {
+                throw AndroidInputRunFailure.timedOut("the fixture's initial persisted click counter")
+            }
+            XCTAssertEqual(before, 0, "a new guest should start with an empty HelloText counter")
+            _ = try await run.adb.shell("logcat -c")
+            let captureStart = try await run.startPerEventInputTraceCapture()
+            _ = try await run.adb.shell(
+                "am broadcast -n \(Self.helloText)/.DebugCounterReceiver -a \(Self.touchTraceStartAction)")
+
+            var clickFailure: String?
+            do {
+                let pointer = try run.pointer()
+                for _ in 0..<100 {
+                    try await pointer.click(at: target, interClickGap: .milliseconds(50))
+                }
+                try await run.drainInput()
+            } catch {
+                clickFailure = String(describing: error)
+            }
+
+            let expectedCount = before + 100
+            let after = try? await Self.waitForPersistedClickCountPreservingTrace(
+                run, atLeast: expectedCount, timeout: .seconds(30))
+            try await Task.sleep(for: .milliseconds(60))
+            let trace = try await run.stopPerEventInputTraceCapture()
+            _ = try await run.adb.shell(
+                "am broadcast -n \(Self.helloText)/.DebugCounterReceiver -a \(Self.touchTraceDrainAction)")
+            let fixtureLines = try await run.fixtureLog { lines in
+                guard let recordCount = Self.touchTraceRecordCount(in: lines) else {
+                    return false
+                }
+                return lines.filter { $0.contains("touch-trace ") }.count >= recordCount
+            }
+            let summary = Self.touchTraceSummary(in: fixtureLines)
+            let unattributedFixtureClickRecords = fixtureLines.filter {
+                $0.contains("touch-trace kind=click ") && Self.keyValues(in: $0)["correlation"] == "ambiguous"
+            }
+            let routed = trace.routed.records.map(InputTraceRoutedEvent.init)
+            let acknowledgements = trace.acknowledgements.records.map(InputTraceAcknowledgement.init)
+            let joins = Self.joinTrace(
+                host: trace.host,
+                routedEvents: trace.routed.records,
+                acknowledgements: trace.acknowledgements.records,
+                fixtureLines: fixtureLines
+            )
+            let evidence = InputTraceEvidence(
+                schemaVersion: 1,
+                path: "WindowServer → AppKit → IOSurfaceLayerView → InputRouter → Guest Agent → HelloText",
+                captureMode: "one event per input batch; ACK requested for every batch",
+                clockDomains: [
+                    "hostTimeNanos": "NSEvent.timestamp and InputCore use Mac mach continuous time",
+                    "lastEventTimeMillis": "Guest MotionEvent.eventTime in Android uptime milliseconds",
+                    "fixtureEventTimeMs": "HelloText MotionEvent.eventTime; match only to the guest ACK timestamp",
+                    "receiveToInjectMicros":
+                        "Guest monotonic interval from batch receipt to input injection completion",
+                ],
+                limitations: [
+                    "The debug touch listener and per-event ACK cadence can change timing; compare with the separate product-cadence test.",
+                    "Host and guest clock values have different epochs and are never subtracted.",
+                    "The route is M3 DevBoot/DevInputRoute and does not exercise the future wrapper-to-apkrund XPC path.",
+                    "A click is linked to an UP only when the fixture reports a unique UP; ambiguous callbacks remain unattached in the global evidence.",
+                ],
+                captureStartCounters: String(describing: captureStart),
+                finalCounters: String(describing: trace.counters),
+                host: trace.host,
+                routedEvents: routed,
+                discardedRoutedEvents: trace.routed.discardedRecords,
+                acknowledgements: acknowledgements,
+                discardedAcknowledgements: trace.acknowledgements.discardedRecords,
+                missingAcknowledgementSequences: trace.missingAcknowledgementSequences,
+                joins: joins,
+                unattributedFixtureClickRecords: unattributedFixtureClickRecords,
+                fixtureTraceLines: fixtureLines.filter {
+                    $0.contains("touch-trace ") || $0.contains("debug touch trace drain")
+                },
+                fixtureTraceRecords: summary?.records,
+                fixtureTraceDiscarded: summary?.discarded,
+                persistedCounterBefore: before,
+                persistedCounterAfter: after,
+                persistedCounterDelta: after.map { $0 - before }
+            )
+            try Self.attachTraceEvidence(evidence, failure: clickFailure)
+
+            XCTAssertNil(clickFailure, "the WindowServer click batch failed")
+            XCTAssertEqual(after, expectedCount, "persisted counter after the diagnostic click batch")
+            XCTAssertEqual(after.map { $0 - before }, 100)
+            XCTAssertEqual(trace.host.discardedRawReceipts, 0)
+            XCTAssertEqual(trace.host.discardedTranslatedEvents, 0)
+            XCTAssertEqual(trace.routed.discardedRecords, 0)
+            XCTAssertEqual(trace.acknowledgements.discardedRecords, 0)
+            XCTAssertEqual(summary?.discarded, 0, "the fixture touch trace overflowed")
+
+            let hostTouchEvents = trace.host.translatedEvents.filter { $0.kindAndPhase.hasPrefix("touch.") }
+            let routeTouchEvents = trace.routed.records.filter { $0.kindAndPhase.hasPrefix("touch.") }
+            let touchJoins = joins.filter { $0.kindAndPhase.hasPrefix("touch.") }
+            let touchUpJoins = touchJoins.filter { $0.kindAndPhase == "touch.up" }
+            let incompleteTouchJoins = touchJoins.filter {
+                $0.rawReceiptOrdinals.count != 1
+                    || $0.translatedEventOrdinals.count != 1
+                    || $0.acknowledgement == nil
+                    || ($0.acknowledgement?.lastEventTimeMillis ?? 0) == 0
+                    || $0.fixtureTouchRecords.count != 1
+                    || $0.fixtureDispatch != "matched-view-touch"
+            }
+            XCTAssertEqual(hostTouchEvents.count, 200, "each click should produce a translated DOWN and UP")
+            XCTAssertEqual(
+                hostTouchEvents.map { "\($0.hostTimeNanos):\($0.kindAndPhase)" },
+                routeTouchEvents.map { "\($0.hostTimeNanos):\($0.kindAndPhase)" },
+                "the routed touch sequence should preserve the translated host events")
+            XCTAssertEqual(
+                trace.acknowledgements.records.map(\.batchSequence),
+                trace.routed.records.map(\.batchSequence),
+                "every per-event input batch should have a guest ACK")
+            XCTAssertTrue(
+                trace.missingAcknowledgementSequences.isEmpty,
+                "ACK capture timed out for routed batches \(trace.missingAcknowledgementSequences)")
+            XCTAssertTrue(trace.acknowledgements.records.allSatisfy { $0.rejectedEvents == 0 })
+            XCTAssertEqual(touchJoins.count, 200, "all routed touch events should have a join record")
+            XCTAssertTrue(
+                incompleteTouchJoins.isEmpty,
+                "touch events missing a unique host, guest ACK, or fixture match: "
+                    + incompleteTouchJoins.map {
+                        "\($0.batchSequence):\($0.kindAndPhase) ack=\($0.acknowledgement?.lastEventTimeMillis ?? 0) "
+                            + "raw=\($0.rawReceiptOrdinals.count) translated=\($0.translatedEventOrdinals.count) "
+                            + "fixture=\($0.fixtureTouchRecords.count) dispatch=\($0.fixtureDispatch)"
+                    }.joined(separator: ", "))
+            XCTAssertEqual(touchUpJoins.count, 100, "each click should produce one traced fixture UP")
+            XCTAssertTrue(
+                touchUpJoins.allSatisfy {
+                    $0.clickOutcome == "unique-up" && $0.fixtureClickRecords.count == 1
+                },
+                "each fixture UP should have one unique click callback; ambiguous callbacks remain unattached "
+                    + "and are recorded separately")
+            let uniqueClickRecords = touchUpJoins.flatMap(\.fixtureClickRecords)
+            XCTAssertEqual(uniqueClickRecords.count, 100)
+            XCTAssertEqual(Set(uniqueClickRecords).count, 100, "a click callback must not be linked to two UP events")
+            XCTAssertEqual(trace.counters.droppedRate - captureStart.droppedRate, 0)
+            XCTAssertEqual(trace.counters.droppedNotRunning - captureStart.droppedNotRunning, 0)
+            XCTAssertEqual(trace.counters.droppedInvalid - captureStart.droppedInvalid, 0)
+            XCTAssertEqual(trace.counters.droppedChannel - captureStart.droppedChannel, 0)
+            XCTAssertEqual(trace.counters.coalesced - captureStart.coalesced, 0)
+            XCTAssertEqual(summary?.records, fixtureLines.filter { $0.contains("touch-trace ") }.count)
         }
     }
 
@@ -203,9 +494,327 @@ final class AndroidInputTests: XCTestCase {
     private static let detailsID = "io.apkrun.fixture.hellotext:id/details_button"
     private static let textAction = "io.apkrun.fixture.hellotext.debug.TEXT"
     private static let textPrefix = "APKRUN-FIXTURE: text "
+    private static let persistedCounterPrefix = "APKRUN-FIXTURE: debug read "
+    private static let counterReadAction = "io.apkrun.fixture.hellotext.debug.READ"
+    private static let touchTraceStartAction = "io.apkrun.fixture.hellotext.debug.TOUCH_TRACE_START"
+    private static let touchTraceDrainAction = "io.apkrun.fixture.hellotext.debug.TOUCH_TRACE_DRAIN"
     private static let editorActionLine = "APKRUN-FIXTURE: editor action 6"
     private static let mainScreenLine = "APKRUN-FIXTURE: screen main"
     private static let detailsScreenLine = "APKRUN-FIXTURE: screen details"
+
+    private static func persistedClickCount(
+        _ run: AndroidInputRun,
+        timeout: Duration = .seconds(30)
+    ) async throws -> Int? {
+        let deadline = ContinuousClock.now + timeout
+        guard try await boundedShell(run, command: "logcat -c", until: deadline) != nil,
+            try await boundedShell(
+                run,
+                command: "am broadcast -a \(counterReadAction) -p \(helloText)",
+                until: deadline
+            ) != nil
+        else {
+            return nil
+        }
+        while ContinuousClock.now < deadline {
+            guard
+                let reply = try await boundedShell(
+                    run, command: "logcat -d -s APKRUN-FIXTURE", until: deadline)
+            else {
+                return nil
+            }
+            if let count = AndroidInputRun.numbers(
+                in: reply.output.components(separatedBy: "\n"), after: persistedCounterPrefix
+            ).last {
+                return count
+            }
+            if ContinuousClock.now < deadline {
+                try await Task.sleep(for: min(.milliseconds(100), deadline - .now))
+            }
+        }
+        return nil
+    }
+
+    /// Reads the fixture's persisted counter without clearing the diagnostic touch records from logcat.
+    private static func waitForPersistedClickCountPreservingTrace(
+        _ run: AndroidInputRun,
+        atLeast expected: Int,
+        timeout: Duration
+    ) async throws -> Int? {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            _ = try await run.adb.shell("am broadcast -a \(counterReadAction) -p \(helloText)")
+            let lines = try await run.fixtureLog { lines in
+                lines.contains { $0.contains(persistedCounterPrefix) }
+            }
+            if let count = AndroidInputRun.numbers(in: lines, after: persistedCounterPrefix).last,
+                count >= expected
+            {
+                return count
+            }
+            try await Task.sleep(for: min(.milliseconds(100), deadline - .now))
+        }
+        let lines = try await run.fixtureLog { $0.contains { $0.contains(persistedCounterPrefix) } }
+        return AndroidInputRun.numbers(in: lines, after: persistedCounterPrefix).last
+    }
+
+    private struct TouchTraceSummary {
+        let records: Int
+        let discarded: Int
+    }
+
+    private static func touchTraceSummary(in lines: [String]) -> TouchTraceSummary? {
+        guard let line = lines.first(where: { $0.contains("debug touch trace drain ") }) else {
+            return nil
+        }
+        let values = keyValues(in: line)
+        guard let records = values["records"].flatMap(Int.init),
+            let discarded = values["dropped"].flatMap(Int.init)
+        else {
+            return nil
+        }
+        return TouchTraceSummary(records: records, discarded: discarded)
+    }
+
+    private static func touchTraceRecordCount(in lines: [String]) -> Int? {
+        touchTraceSummary(in: lines)?.records
+    }
+
+    private static func joinTrace(
+        host: InputTraceHostSnapshot,
+        routedEvents: [InputSentEventHistory.Record],
+        acknowledgements: [InputAcknowledgementHistory.Record],
+        fixtureLines: [String]
+    ) -> [InputTraceLink] {
+        let traceLines = fixtureLines.filter { $0.contains("touch-trace ") }
+        let touchLines = traceLines.filter { keyValues(in: $0)["kind"] == "touch" }
+        let clickLines = traceLines.filter { keyValues(in: $0)["kind"] == "click" }
+        let acksBySequence = Dictionary(uniqueKeysWithValues: acknowledgements.map { ($0.batchSequence, $0) })
+
+        return routedEvents.map { routed in
+            let eventType: Int?
+            let fixtureAction: String?
+            switch routed.kindAndPhase {
+            case "touch.down":
+                eventType = Int(NSEvent.EventType.leftMouseDown.rawValue)
+                fixtureAction = "DOWN"
+            case "touch.up":
+                eventType = Int(NSEvent.EventType.leftMouseUp.rawValue)
+                fixtureAction = "UP"
+            default:
+                eventType = nil
+                fixtureAction = nil
+            }
+            let rawReceipts = host.rawReceipts.filter {
+                $0.hostTimeNanos == routed.hostTimeNanos && $0.eventType == eventType
+            }
+            let translated = host.translatedEvents.filter {
+                $0.hostTimeNanos == routed.hostTimeNanos && $0.kindAndPhase == routed.kindAndPhase
+            }
+            let acknowledgement = acksBySequence[routed.batchSequence]
+            let guestTime = acknowledgement?.lastEventTimeMillis ?? 0
+            let fixtureTouches = touchLines.filter { line in
+                let fields = keyValues(in: line)
+                return fields["action"] == fixtureAction
+                    && fields["eventTimeMs"].flatMap(UInt64.init) == (guestTime == 0 ? nil : guestTime)
+            }
+            let guestSequences = Set(fixtureTouches.compactMap { keyValues(in: $0)["sequence"] })
+            let uniquelyCorrelatedClicks = clickLines.filter {
+                guard let sequence = keyValues(in: $0)["correlatedUpSequence"] else {
+                    return false
+                }
+                return guestSequences.contains(sequence)
+            }
+            let clickRecords: [String]
+            let clickOutcome: String
+            if routed.kindAndPhase != "touch.up" {
+                clickRecords = []
+                clickOutcome = "not-an-up"
+            } else if !uniquelyCorrelatedClicks.isEmpty {
+                clickRecords = uniquelyCorrelatedClicks
+                clickOutcome = "unique-up"
+            } else if fixtureTouches.isEmpty {
+                clickRecords = []
+                clickOutcome = "no-matching-up"
+            } else {
+                clickRecords = []
+                clickOutcome = "no-unique-up-correlation"
+            }
+            let dispatchOutcome: String
+            if acknowledgement == nil {
+                dispatchOutcome = "no-ack"
+            } else if guestTime == 0 {
+                dispatchOutcome = "ack-without-accepted-motion-event"
+            } else if fixtureTouches.isEmpty {
+                dispatchOutcome = "no-matching-view-touch"
+            } else if fixtureTouches.count == 1 {
+                dispatchOutcome = "matched-view-touch"
+            } else {
+                dispatchOutcome = "multiple-view-touch-matches"
+            }
+            return InputTraceLink(
+                batchSequence: routed.batchSequence,
+                eventIndex: routed.eventIndex,
+                kindAndPhase: routed.kindAndPhase,
+                hostTimeNanos: routed.hostTimeNanos,
+                rawReceiptOrdinals: rawReceipts.map(\.ordinal),
+                translatedEventOrdinals: translated.map(\.ordinal),
+                acknowledgement: acknowledgement.map(InputTraceAcknowledgement.init),
+                fixtureTouchRecords: fixtureTouches,
+                fixtureClickRecords: clickRecords,
+                fixtureDispatch: dispatchOutcome,
+                clickOutcome: clickOutcome
+            )
+        }
+    }
+
+    private static func keyValues(in line: String) -> [String: String] {
+        let content: Substring
+        if let marker = line.range(of: "touch-trace ") {
+            content = line[marker.upperBound...]
+        } else if let marker = line.range(of: "debug touch trace drain ") {
+            content = line[marker.upperBound...]
+        } else {
+            content = line[...]
+        }
+        return Dictionary(
+            content.split(whereSeparator: \.isWhitespace).compactMap { field in
+                let pair = field.split(separator: "=", maxSplits: 1)
+                guard pair.count == 2 else {
+                    return nil
+                }
+                return (String(pair[0]), String(pair[1]))
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
+    private static func attachTraceEvidence(_ evidence: InputTraceEvidence, failure: String?) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        var object = try JSONSerialization.jsonObject(with: encoder.encode(evidence)) as? [String: Any] ?? [:]
+        object["captureFailure"] = failure
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        XCTContext.runActivity(named: "Joined input trace evidence") { activity in
+            let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+            attachment.name = "input-trace-evidence.json"
+            attachment.lifetime = .keepAlways
+            activity.add(attachment)
+        }
+    }
+
+    private static func boundedShell(
+        _ run: AndroidInputRun,
+        command: String,
+        until deadline: ContinuousClock.Instant
+    ) async throws -> AdbShellReply? {
+        let remaining = deadline - .now
+        guard remaining > .zero else {
+            return nil
+        }
+        do {
+            return try await run.adb.shell(command, timeout: min(.seconds(10), remaining))
+        } catch let failure {
+            if case .commandTimedOut = failure {
+                return nil
+            }
+            throw failure
+        }
+    }
+
+    private static func waitForPersistedClickCount(_ run: AndroidInputRun, atLeast expected: Int) async throws -> Int {
+        let deadline = ContinuousClock.now + .seconds(10)
+        var lastCount = 0
+        while ContinuousClock.now < deadline {
+            let remaining = deadline - .now
+            if let count = try await persistedClickCount(run, timeout: remaining) {
+                lastCount = count
+                if count >= expected {
+                    return count
+                }
+            }
+            if ContinuousClock.now < deadline {
+                try await Task.sleep(for: min(.milliseconds(100), deadline - .now))
+            }
+        }
+        throw AndroidInputRunFailure.timedOut(
+            "the fixture's persisted click count to reach \(expected); last value was \(lastCount)")
+    }
+
+    private static func assertNoShellInputDuring(_ operation: () async throws -> Void) async throws {
+        let sampler = ShellInputSampler()
+        sampler.start()
+        do {
+            try await operation()
+        } catch {
+            _ = await sampler.stop()
+            throw error
+        }
+        let shellInput = await sampler.stop()
+        XCTAssertEqual(shellInput, [], "adb shell input processes ran during the sequence")
+    }
+
+    private static func attachEnvironmentIdentity(fixture: URL) throws {
+        let bundle = try AndroidBootSession.bundleDirectory()
+        guard let guestPath = ProcessInfo.processInfo.environment["APKRUN_GUEST_DIR"], !guestPath.isEmpty else {
+            throw XCTSkip("APKRUN_GUEST_DIR is not set.")
+        }
+        let guestBundle = URL(fileURLWithPath: guestPath, isDirectory: true)
+        let imageManifest = bundle.appendingPathComponent("manifest.json")
+        let guestManifest = guestBundle.appendingPathComponent("apkrun-guest.json")
+        let guestAPK = guestBundle.appendingPathComponent("apkrun-guest.apk")
+        let identity: [String: Any] = [
+            "delivery": "CGEvent.post(tap: .cghidEventTap)",
+            "image_bundle": bundle.path,
+            "image_manifest_sha256": try sha256(of: imageManifest),
+            "image_manifest": try JSONSerialization.jsonObject(with: Data(contentsOf: imageManifest)),
+            "guest_bundle": guestBundle.path,
+            "guest_manifest_sha256": try sha256(of: guestManifest),
+            "guest_manifest": try JSONSerialization.jsonObject(with: Data(contentsOf: guestManifest)),
+            "guest_apk_sha256": try sha256(of: guestAPK),
+            "fixture_apk": fixture.path,
+            "fixture_apk_sha256": try sha256(of: fixture),
+        ]
+        let data = try JSONSerialization.data(withJSONObject: identity, options: [.prettyPrinted, .sortedKeys])
+        XCTContext.runActivity(named: "Input test environment identity") { activity in
+            let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+            attachment.name = "input-test-environment.json"
+            attachment.lifetime = .keepAlways
+            activity.add(attachment)
+        }
+    }
+
+    private static func sha256(of file: URL) throws -> String {
+        let hash = SHA256.hash(data: try Data(contentsOf: file))
+        return hash.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func attachBatchEvidence(
+        batch: Int,
+        before: Int,
+        after: Int?,
+        counters: InputCounters?,
+        acknowledgements: InputAcknowledgementHistory?,
+        failure: String?
+    ) {
+        let ackRows = acknowledgements?.records.map { "\($0.batchSequence):\($0.rejectedEvents)" } ?? []
+        let text = """
+            batch=\(batch)
+            persisted_before=\(before)
+            persisted_after=\(after.map(String.init) ?? "unavailable")
+            persisted_delta=\(after.map { String($0 - before) } ?? "unavailable")
+            host_input_counters=\(counters.map { String(describing: $0) } ?? "unavailable")
+            normal_ack_sequence_and_rejections=\(ackRows)
+            ack_history_discarded=\(acknowledgements.map { String($0.discardedRecords) } ?? "unavailable")
+            failure=\(failure ?? "none")
+            """
+        XCTContext.runActivity(named: "Input batch \(batch) evidence") { activity in
+            let attachment = XCTAttachment(data: Data(text.utf8), uniformTypeIdentifier: "public.utf8-plain-text")
+            attachment.name = "input-batch-\(batch).txt"
+            attachment.lifetime = .keepAlways
+            activity.add(attachment)
+        }
+    }
 
     /// Moves the focus to HelloText's field with Tab, and reads the focus from a uiautomator dump before each Tab. A dump
     /// that fails is retried without a Tab, so a Tab never moves the focus twice.

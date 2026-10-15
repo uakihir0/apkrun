@@ -140,8 +140,14 @@ private func makeReadOnlyHome(root: URL) throws -> (home: URL, outside: URL) {
     try manager.createDirectory(at: outside, withIntermediateDirectories: true)
     try Data("kernel".utf8).write(to: image.appendingPathComponent("kernel"))
     try Data("keep".utf8).write(to: outside.appendingPathComponent("keep.txt"))
-    try manager.createSymbolicLink(atPath: images.appendingPathComponent("current").path, withDestinationPath: "2026.10.0")
-    try manager.createSymbolicLink(atPath: runtime.appendingPathComponent("escape").path, withDestinationPath: outside.path)
+    try manager.createSymbolicLink(
+        atPath: images.appendingPathComponent("current").path,
+        withDestinationPath: "2026.10.0"
+    )
+    try manager.createSymbolicLink(
+        atPath: runtime.appendingPathComponent("escape").path,
+        withDestinationPath: outside.path
+    )
     // Files are read-only and directories are r-x, as in an installed image. Symbolic links are not changed.
     try setPosixMode(0o444, image.appendingPathComponent("kernel").path)
     try setPosixMode(0o444, outside.appendingPathComponent("keep.txt").path)
@@ -178,7 +184,10 @@ private func makeReadOnlyHome(root: URL) throws -> (home: URL, outside: URL) {
         try? setPosixMode(0o755, parent.path)
         try? VMRunResources.removeHome(root)
     }
-    try FileManager.default.createDirectory(at: home.appendingPathComponent("Images", isDirectory: true), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+        at: home.appendingPathComponent("Images", isDirectory: true),
+        withIntermediateDirectories: true
+    )
     // Removing the home needs write access to its parent, which this makes impossible.
     try setPosixMode(0o555, parent.path)
 

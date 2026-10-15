@@ -18409,8 +18409,9 @@ present and absent variant receipts. The workflow runner check passes its
 exact-ref, case-variant, fork, and `main`-push cases. With
 `APKRUN_SKIP_CI_TESTS=true`, `run-checks.sh` skips the repository test harness
 and passes all six remaining checks. Neither dedicated GUI T2 run has been
-completed; this evidence does not establish the click-loss cause or close
-#103 or #024 box 3.
+completed. The final read-only adversarial review found no remaining issues.
+This evidence does not establish the click-loss cause or close #103 or #024
+box 3.
 
 **Risk.** The event-history toggle is diagnostic-only and can change future
 test harness observations if a caller assumes ACK capture also records

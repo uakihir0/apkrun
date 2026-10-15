@@ -18482,3 +18482,33 @@ is preferable to recording incomplete image identity.
 **Verification.** The targeted `build-for-testing` passed, and `swift test --package-path Packages/RuntimeCore --filter InputRouterTests` passed all 28 tests. The AndroidInput T2 run is pending. It uses direct AppKit view dispatch on a real guest, but `DisplayWindow.show()` activates its window. The test is skipped unless `APKRUN_INPUT_EDGE_T2=1` is set and must run in a dedicated lab GUI session. Its bounded coordinate capture stays in test memory.
 
 **Risk.** The one-second stable-counter window is a bounded settling check, not a protocol fence for Android's main-thread callback. The new case checks top and left gesture closure only. It does not satisfy #024's 100-of-100 click criterion or #103's dedicated WindowServer acceptance.
+
+## IR-1317: Reconcile the #099 progress index with its recorded acceptance checks
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 |
+| Affected documents | [issues/README.md](issues/README.md) #099; [M02-graphics.md](issues/M02-graphics.md) #099; IR-997, IR-999 |
+
+**Choice.** Change the issue index from 1 of 4 to 2 of 4 to match the two
+checked acceptance criteria in the #099 task entry. Keep the task open. Describe
+that the EGL check succeeded on the ODM-overlay test variant and has not been
+reproduced on a checked-in corrected image.
+
+**Reason.** The task entry records the 2026-10-12 `eglInitialize` result from
+the ODM-overlay variant (IR-997), while its other checked criterion confirms
+that #064 is unchanged. The issue index was stale both in its count and in
+presenting the EGL check as wholly open. The EGL fixture itself does not print
+the renderer; the VirGL identification comes from other output in the same
+boot, and no corrected image with its own identity and provenance is checked
+in (IR-999).
+
+**Verification (2026-10-16).** Counted the four #099 acceptance criteria and
+confirmed two are checked. `git diff --check` passes. No build or guest boot
+was run; the record change does not provide new image or renderer evidence.
+
+**Risk.** The task's existing EGL check is based on an ODM-overlay development
+variant. A maintainer may require direct renderer output or a rerun on the
+corrected image before accepting that criterion; the index now preserves both
+the existing checkbox state and the limitation.

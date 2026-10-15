@@ -18355,15 +18355,17 @@ pushes to `main`.
 
 **Reason.** The user asked to defer the current GitHub Actions tests while
 continuing the implementation. Keeping the exception scoped to this branch
-avoids weakening CI for unrelated changes. `run-checks.sh` receives an
-explicit workflow environment flag so its repository test harness and test
-steps can all use the same narrow branch and repository condition. The head
-repository check prevents an unrelated fork branch with the same name from
-receiving the exception.
+avoids weakening CI for unrelated changes. GitHub Actions string comparisons
+are case-insensitive, so the workflow passes the pull request context to a
+small Bash resolver that compares the literal branch and repository names
+case-sensitively. The same result controls the repository harness and the
+Swift, graphics, and image test steps. The head repository check prevents an
+unrelated fork branch with the same name from receiving the exception.
 
-**Verification (2026-10-15).** The workflow runner check
-(`ruby scripts/tests/test_workflow_runners.rb "$PWD"`) passes, including the
-required job-unconditional policy. The check runner also passes with
+**Verification (2026-10-16).** The workflow runner check
+(`ruby scripts/tests/test_workflow_runners.rb "$PWD"`) passes, including
+scenario checks for the exact same-repository PR, a case-variant branch, a
+fork PR, and a `main` push. The check runner also passes with
 `APKRUN_SKIP_CI_TESTS=true scripts/ci/run-checks.sh`, confirming the
 repository test harness is skipped while all six remaining checks pass.
 `git diff --check` passes. The dedicated GUI T2 runs required by #103 are
@@ -18374,3 +18376,44 @@ workflow. The test steps show as skipped while their jobs can still succeed,
 so reviewers must inspect step results rather than treat a green job as proof
 that its suite ran. A maintainer should remove this exception after the
 deferred validation window.
+
+## IR-1313: Keep click-loss ACK capture lean and attach the exact image variant
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [input.md](../02-design/input.md) §11; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; `InputRouter`; `DevInputRoute`; `AndroidInputTests` |
+
+**Choice.**
+1. ACK-history capture no longer enables per-event sent-event history. The
+   product-cadence diagnostic explicitly opts into both histories only when
+   it needs a cross-layer trace.
+2. Attach the adjacent `android-bundle.variant.json` path, SHA-256, and its
+   `variantDiskSHA256` and `variantManifestSHA256` fields to the test
+   environment identity. If the receipt is absent, serialize null for each
+   receipt field rather than assuming the tested bundle has a variant.
+
+**Reason.** The ordinary three-batch run needs ACK coverage, but not a
+formatted record for each of its 600 routed touch events. Combining those
+captures added work to the exact cadence under investigation. The image
+bundle manifest alone also did not identify the variant overlay used for the
+run, so a saved result could not be tied to the overlay's disk and manifest
+digests. Explicit nulls preserve identity evidence for stock images without
+inventing a variant receipt.
+
+**Verification (2026-10-16).** Nine focused `RuntimeCore` tests and two
+`RuntimeHost` tests pass for ACK-only capture, sent-event opt-in, per-event
+tracing, and the route API. Both `AndroidInputTests` helper tests pass for
+present and absent variant receipts. The workflow runner check passes its
+exact-ref, case-variant, fork, and `main`-push cases. With
+`APKRUN_SKIP_CI_TESTS=true`, `run-checks.sh` skips the repository test harness
+and passes all six remaining checks. Neither dedicated GUI T2 run has been
+completed; this evidence does not establish the click-loss cause or close
+#103 or #024 box 3.
+
+**Risk.** The event-history toggle is diagnostic-only and can change future
+test harness observations if a caller assumes ACK capture also records
+events. Existing trace callers opt in explicitly. Variant receipt parsing
+fails the diagnostic attachment when a present receipt is malformed, which
+is preferable to recording incomplete image identity.

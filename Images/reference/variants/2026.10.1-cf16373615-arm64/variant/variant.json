@@ -6,6 +6,12 @@
     "variantDigest": "1e1289f7b186d6a3d60ace79d19c7c537301278eb9d4074a2add8c7d1e860d35",
     "variantSize": "22912"
   },
+  "builder": {
+    "gitRevision": "14279a01a0b2edda25800d6344823791e3b47139",
+    "repository": "Images/tools",
+    "sourceSHA256": "8c995c1489fc33955e53b3dad71ba41f4bf82445a134f9fe3d5883263b48729f",
+    "workingTreeClean": true
+  },
   "decisions": {
     "identity": "short version 2026.10.1; source build identity, stock kind, and provenance kept (IR-1322)",
     "manifestSignature": "developer image key, trusted by Debug builds",
@@ -24,7 +30,7 @@
     "sha256": "2cc0857c71a67072639d3ebd7c7f07a582c10f5000e44d5e945a843ee697375f",
     "size": 291229696
   },
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "signingKeyID": "55ab0dd032d0ce0e",
   "stockManifestSHA256": "7c285ff0f550b87129efeec90249cfd38e376be3ebac2f5bad51c945058d3ce3",
   "task": "#099",

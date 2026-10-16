@@ -19450,7 +19450,10 @@ summary. The available records do not establish timestamp alignment. An
 adversarial review confirmed the evidence boundary and caught the mismatch
 between the requested and actual recording durations; the record now states
 that video offsets cannot be aligned to the window list. Temporary extracted
-frames were deleted. `git diff --check` passed. No GUI or Actions test was run.
+frames were deleted. A fresh G3 run was not started: this shell lacks the
+required `APKRUN_TEST_DEVELOPMENT_TEAM`, `APKRUN_TEST_CODE_SIGN_IDENTITY`,
+and `APKRUN_G3_ANDROID_BUNDLE` settings. `git diff --check` passed. No GUI or
+Actions test was run.
 
 **Risk.** The full-screen recording may contain unrelated desktop content and
 is a local artifact. Keep it local unless it is reviewed and sanitized for

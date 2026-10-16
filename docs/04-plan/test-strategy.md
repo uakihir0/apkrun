@@ -113,6 +113,10 @@ The CI workflows and jobs that run each tier are in [../05-development/build-sys
 | Manual checklists (§8) | the release issue | every release candidate | not applicable |
 
 - **Current state.** No lab runner is registered (IR-295), so `nightly.yml` has no schedule and runs only on manual dispatch (IR-314). Until the runners exist, the gate checks run locally with `scripts/run-gate.sh G<n>`.
+- A gate may run a lower-tier VM test as a building block, but its gate check lives in
+  `AcceptanceTests`. G3 follows this rule: `scripts/run-gate.sh G3` first runs the
+  `LinuxGuest` IntegrationTests configuration, then runs the gate check from
+  `Tests/AcceptanceTests/G3GraphicsTests/` with the `G3` AcceptanceTests configuration.
 - **Budget.** The nightly T3 run finishes in 8 hours per machine.
 - **Required.** T3 does not gate pull requests. A gate check closes its gate. Release checks gate the release (§9).
 

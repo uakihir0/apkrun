@@ -16608,17 +16608,37 @@ The boot was `apkrun dev boot --gpu virgl --window --stats --console` (started 0
 
 **Consequence.** The gate's 60 s counter and fps numbers come from a TestReadback build, not from the production build. The design excludes the readback from the counters, but a maintainer should decide whether the counter evidence of G3 is acceptable from that build.
 
-## IR-1211: G3GraphicsTests is in the IntegrationTests target, as the task asked; the design places gate checks in AcceptanceTests
+## IR-1211: The G3 gate check now follows the AcceptanceTests target convention
 
 | Field | Value |
 |---|---|
 | Status | Needs maintainer review |
 | Task | #023 |
-| Affected documents | [roadmap.md](../04-plan/roadmap.md) §2; [test-strategy.md](../04-plan/test-strategy.md) §5 and §3 (table of locations); [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (Modules, T3) |
+| Affected documents | [roadmap.md](../04-plan/roadmap.md) §2; [test-strategy.md](../04-plan/test-strategy.md) §2.5, §5 and §3 (table of locations); [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (Modules, T3); `Tests/AcceptanceTests/AcceptanceTests.xctestplan`; `Tests/IntegrationTests/IntegrationTests.xctestplan`; `project.yml` |
 
-**Choice.** `Tests/IntegrationTests/G3GraphicsTests/` holds the check. It has a `G3` configuration in `IntegrationTests.xctestplan` (`APKRUN_INTEGRATION_SUITE=g3`), and the gate runs `-scheme IntegrationTests -only-test-configuration G3 -only-testing:IntegrationTests/G3GraphicsTests -test-timeouts-enabled NO` under `lockf -k /tmp/apkrun-vm.lock`.
+**Choice.** Move `G3GraphicsTests.swift` and `G3Session.swift` to
+`Tests/AcceptanceTests/G3GraphicsTests/`. The `G3` configuration now uses
+`APKRUN_ACCEPTANCE_SUITE=g3` in `AcceptanceTests.xctestplan`, and
+`scripts/run-gate.sh G3` runs `-scheme AcceptanceTests
+-only-test-configuration G3 -only-testing:AcceptanceTests/G3GraphicsTests
+-test-timeouts-enabled NO` under `lockf -k /tmp/apkrun-vm.lock`. The separate
+`LinuxGuest` precheck remains in IntegrationTests. `G3Evidence.swift` and its
+pure tests remain in the IntegrationTests source group; AcceptanceTests compiles
+the parser source as a shared file.
 
-**Reason and conflict.** The task asked for the IntegrationTests target. The design documents put gate checks in `Tests/AcceptanceTests/`, and G1 and G2 run there. The task also said G2 is wired with `APKRUN_INTEGRATION_SUITE`, but G2 uses `APKRUN_ACCEPTANCE_SUITE`. A maintainer should decide whether G3 moves to AcceptanceTests. That would make `run-gate.sh` use the same scheme as G1 and G2.
+**Reason.** The roadmap and test strategy place gate checks in
+`Tests/AcceptanceTests/`, and G1 and G2 already use that target and
+`APKRUN_ACCEPTANCE_SUITE`. G3's test code uses only system frameworks and its
+own staged CLI process, so moving it needs no product-module dependency. This
+resolves the target mismatch while keeping the VM-bound LinuxGuest precheck at
+T2 and preserving the gate's evidence requirements.
+
+**Verification (2026-10-16).** Regenerated the project and built the
+AcceptanceTests G3 configuration with `xcodebuild build-for-testing` and
+`CODE_SIGNING_ALLOWED=NO`. The IntegrationTests `G3EvidenceTests` selection
+passed 22/22 tests, and `scripts/tests/test_check_g3_evidence.py` passed 11/11.
+`bash -n scripts/run-gate.sh`, test-plan JSON parsing, and `git diff --check`
+passed. No full G3 gate, GUI interaction test, or Actions workflow was run.
 
 ## IR-1212: The G3 screen recording runs for 30 minutes and is converted; screencapture cannot be stopped early
 
@@ -19459,3 +19479,34 @@ Actions test was run.
 is a local artifact. Keep it local unless it is reviewed and sanitized for
 sharing. A new recording method must still observe actual window presentation;
 capturing only the app surface could hide compositor or display stutter.
+
+## IR-1342: The #023 path list and G3 test target match the implementation plan
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02 #023](issues/M02-graphics.md#023-render-surfaceflinger-to-metal); [test-strategy.md](test-strategy.md) §2.5; [README.md](issues/README.md) §5; `project.yml`; both AcceptanceTests and IntegrationTests plans; `scripts/run-gate.sh` |
+
+**Choice.** Correct #023's module/path list and deliverable to include the
+AcceptanceTests G3 gate test, its shared evidence parser, gate runner, evidence
+checker, and checker tests.
+
+**Evidence.** The roadmap and test strategy require gate checks in
+`Tests/AcceptanceTests/`. The G3 gate test now lives in
+`Tests/AcceptanceTests/G3GraphicsTests/`; `G3Evidence.swift` and
+`G3EvidenceTests.swift` remain in the IntegrationTests source group.
+`scripts/run-gate.sh G3` runs the AcceptanceTests test plan and calls
+`scripts/tools/check-g3-evidence.py`; its fixture tests are in
+`scripts/tests/test_check_g3_evidence.py`.
+
+**Reason.** A task's path list defines reviewable implementation scope and
+must agree with the normative test strategy. Keeping the long guest gate run
+in AcceptanceTests makes that boundary explicit without changing its
+acceptance criteria or graphics architecture.
+
+**Verification (2026-10-16).** Confirmed each listed path exists and traced
+the G3 branch in `scripts/run-gate.sh` to the AcceptanceTests plan and evidence
+checker. The focused build and test results above cover the moved target and
+evidence code. No full G3 gate, GUI interaction test, or Actions workflow was
+run.

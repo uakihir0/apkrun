@@ -214,11 +214,11 @@ if [[ "$gate" == G3 ]]; then
     g3_status=0
     lockf -k /tmp/apkrun-vm.lock xcodebuild test \
         -project APKRun.xcodeproj \
-        -scheme IntegrationTests \
-        -testPlan IntegrationTests \
+        -scheme AcceptanceTests \
+        -testPlan AcceptanceTests \
         -configuration Debug \
         -only-test-configuration G3 \
-        -only-testing:IntegrationTests/G3GraphicsTests \
+        -only-testing:AcceptanceTests/G3GraphicsTests \
         -test-timeouts-enabled NO \
         -jobs 1 \
         -derivedDataPath "$gate_dir/DerivedData" \

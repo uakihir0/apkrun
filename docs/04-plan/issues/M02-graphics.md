@@ -952,7 +952,7 @@ See [../test-strategy.md](../test-strategy.md) §6.3.
 | Gate | G3 |
 | Requirements | FR-GFX-04, FR-GFX-05, NFR-PERF-04, NFR-PERF-05 ([../traceability.md](../traceability.md) §2.3, §2.12) |
 | Design | [../../02-design/graphics.md](../../02-design/graphics.md) §1.1, §6.1–§6.3, §7, §8, §12 (#023), §13, §16; [../../02-design/display-and-windowing.md](../../02-design/display-and-windowing.md) §5.3; [../../03-reference/runtime-api.md](../../03-reference/runtime-api.md) §3.8, §15; [../../01-architecture/decisions/0006-wrapper-owned-window-iosurface.md](../../01-architecture/decisions/0006-wrapper-owned-window-iosurface.md) |
-| Modules / paths | GraphicsCore `ScanoutController`, `SurfacePool`, the present path, the completion waiter, and the statistics; WindowingCore `IOSurfaceLayerView`, `FrameSource`; RuntimeHost `EmbeddedRuntimeService` (`DeveloperService`); `CLI/apkrun/Dev/SurfacePoolFrameSource.swift`; `Tests/IntegrationTests/AndroidGraphicsTests/`; `Tests/AcceptanceTests/` |
+| Modules / paths | GraphicsCore `ScanoutController`, `SurfacePool`, the present path, the completion waiter, and the statistics; WindowingCore `IOSurfaceLayerView`, `FrameSource`; RuntimeHost `EmbeddedRuntimeService` (`DeveloperService`); `CLI/apkrun/Dev/SurfacePoolFrameSource.swift`; `Tests/IntegrationTests/AndroidGraphicsTests/`; `Tests/AcceptanceTests/G3GraphicsTests/`; `Tests/IntegrationTests/G3GraphicsTests/G3Evidence.swift` and `G3EvidenceTests.swift`; `Tests/AcceptanceTests/AcceptanceTests.xctestplan`; `Tests/IntegrationTests/IntegrationTests.xctestplan`; `project.yml`; `scripts/run-gate.sh`; `scripts/tools/check-g3-evidence.py`; `scripts/tests/test_check_g3_evidence.py` |
 | Risks / questions | R-02, R-03 |
 
 ### Goal
@@ -986,7 +986,11 @@ Android's display 0 is visible in a macOS window. Rendering is GPU accelerated. 
 - `CLI/apkrun/Dev/SurfacePoolFrameSource.swift`. It adapts the `DeveloperService` frame events to `FrameSource`. It lives in the embedded CLI because neither WindowingCore nor the CLI may import GraphicsCore ([../../01-architecture/modules.md](../../01-architecture/modules.md) §3).
 - The `--window` and `--stats` options of `apkrun dev boot` and `apkrun dev linux`.
 - Pool-buffer sampling in the test-only readback mode of #022 (`APKRUN_TEST_READBACK`), for the tearing check.
-- The G3 check in `Tests/AcceptanceTests/`, run by `scripts/run-gate.sh G3`.
+- The G3 gate check in `Tests/AcceptanceTests/G3GraphicsTests/`, with evidence
+  collection by `scripts/run-gate.sh` and validation by
+  `scripts/tools/check-g3-evidence.py`. Its pure evidence parser remains shared
+  with the IntegrationTests unit tests. The validator's fixture tests live in
+  `scripts/tests/test_check_g3_evidence.py`.
 - The fixed-size behavior written into §12 (#023) and [../../02-design/display-and-windowing.md](../../02-design/display-and-windowing.md) §5.3.
 
 ### Implementation steps
@@ -1021,9 +1025,12 @@ Android's display 0 is visible in a macOS window. Rendering is GPU accelerated. 
 
 See [../test-strategy.md](../test-strategy.md) §6.3.
 
-- **T0** (`Packages/GraphicsCore/Tests/GraphicsCoreTests/`): the frame scheduler and the `SurfacePool` state machine.
+- **T0** (`Packages/GraphicsCore/Tests/GraphicsCoreTests/`): the frame scheduler and the `SurfacePool` state machine. The G3 evidence-checker's fixture tests are in `scripts/tests/test_check_g3_evidence.py`.
 - **T2** (`AndroidGraphicsTests`): HelloGL in a window. The counters stay 0 over 60 s.
-- **T3:** the G3 check ([../test-strategy.md](../test-strategy.md) §5, `G3Graphics`), and the v0.1 manual check C01-6: a screen recording of G3 with no tearing or stutter.
+- **T3:** `scripts/run-gate.sh G3` runs the G3 check in
+  `Tests/AcceptanceTests/G3GraphicsTests/` ([../test-strategy.md](../test-strategy.md)
+  §2.5, §5), and the v0.1 manual check C01-6 reviews a screen recording of G3
+  for visible tearing or stutter.
 
 ### Acceptance criteria
 
@@ -1048,3 +1055,4 @@ See [../test-strategy.md](../test-strategy.md) §6.3.
 - **Status, 2026-10-12 (IR-1200 to IR-1208).** HelloGL on the odm4 bundle, one `drmVirgl` boot with `--window`: the renderer event is `virgl`, the 60 s and 10-minute runs show every counter at 0, HelloGL averages 59.96 fps over 10 minutes, and HelloGL's process ran the 10 minutes without a fault. Criteria 2, 3, the fps half of 6, and the 10-minute criterion are ticked. The tearing half of 6 stays open: 40 alternating-colour window captures show no mixed frame, but the pool-buffer check was not run (IR-1205). Gate G3 stays open. The launcher and Settings processes abort in HWUI on this bundle (IR-1208); that is not the renderer.
 - **Status, 2026-10-12 (IR-1225): Gate G3 passed.** `scripts/run-gate.sh G3` on main at `7dfa317` (report and evidence in [../evidence/G3/](../evidence/G3/)): the window is found, the renderer event is `virgl`, `hostReadbacks` and `cpuPixelCopies` stay at 0 over the 60 s run, HelloGL averages 59.98 fps over 61 events in the 10-minute run, the pid stays 7171 at every minute, there are no renderer crash lines, and the alternating phase has 0 mixed frames in 320 sampled. The 432 launcher and Settings crash lines are recorded and not counted (IR-1213). The stock image is the odm4 overlay bundle (IR-1209). Still open: the C01-6 manual check of the screen recording (test-strategy §8).
 - **C01-6 pre-screen (2026-10-16, IR-1341).** The available local recording is a full-screen capture at 480×312 and about 29.49 fps. The gate requested 1800 seconds, but the MP4 is 1293.15 seconds; the available artifacts do not reliably align video offsets with the minute-level window list. A spot-check frame at video offset 00:07:15 does not show the APKRun display window. The independent window-list entries report on-screen state at several times but do not establish what was visible at this video offset. The pool-buffer tearing sampler and average fps are separate checks; neither substitutes for the C01-6 visual review. C01-6 remains open.
+- **G3 test target alignment (2026-10-16, IR-1211, IR-1342).** The G3 gate test is in `Tests/AcceptanceTests/G3GraphicsTests/` and runs with the `G3` AcceptanceTests configuration. The lower-tier Linux guest precheck remains in IntegrationTests. The pure evidence parser and its unit tests remain in `Tests/IntegrationTests/G3GraphicsTests/`. C01-6 remains open pending a valid screen recording and manual review.

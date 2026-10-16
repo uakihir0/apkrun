@@ -62,7 +62,7 @@ struct G3StatisticsLine: Equatable {
     }
 }
 
-/// How the boot ended at the gate's stop (IntegrationTests G3Session.stopBoot).
+/// How the boot ended at the gate's stop (AcceptanceTests G3Session.stopBoot).
 enum G3BootStop: String, Equatable {
     /// No boot was started.
     case notStarted

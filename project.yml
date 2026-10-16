@@ -291,6 +291,7 @@ targets:
     platform: macOS
     sources:
       - path: Tests/AcceptanceTests
+      - path: Tests/IntegrationTests/G3GraphicsTests/G3Evidence.swift
       - path: Tests/IntegrationTests/LinuxGuestTests/LinuxGuestHarness.swift
       - path: Tests/IntegrationTests/LinuxGuestTests/LinuxGuestHTTPServer.swift
       - path: Tests/IntegrationTests/RunResources

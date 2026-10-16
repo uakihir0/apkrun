@@ -62,7 +62,7 @@ enum G3Failure: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .notSelected:
-            "The G3 configuration did not set APKRUN_INTEGRATION_SUITE=g3, so the G3 check did not run."
+            "The G3 configuration did not set APKRUN_ACCEPTANCE_SUITE=g3, so the G3 check did not run."
         case .missingInput(let key):
             "\(key) is not set to an absolute path. scripts/run-gate.sh G3 sets it."
         case .commandFailed(let command, let status, let output):

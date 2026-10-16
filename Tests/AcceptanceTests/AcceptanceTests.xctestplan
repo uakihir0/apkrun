@@ -39,6 +39,25 @@
         ],
         "maximumTestExecutionTimeAllowance" : 5400
       }
+    },
+    {
+      "id" : "00300001-0000-4000-8000-000000000003",
+      "name" : "G3",
+      "options" : {
+        "environmentVariableEntries" : [
+          {
+            "key" : "APKRUN_ACCEPTANCE_SUITE",
+            "value" : "g3",
+            "enabled" : true
+          },
+          {
+            "key" : "APKRUN_G3_REQUIRED",
+            "value" : "1",
+            "enabled" : true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance" : 3600
+      }
     }
   ],
   "defaultOptions" : {

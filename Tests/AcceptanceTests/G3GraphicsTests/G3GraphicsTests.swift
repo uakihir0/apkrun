@@ -11,13 +11,13 @@ import XCTest
 /// frame with both colours, by the test-only readback sampler of the CLI (graphics.md §12 #023, step 5); HelloGL
 /// averages at least 55 fps and runs 10 minutes with the same pid and no renderer crash. The run stops with SIGINT.
 ///
-/// It runs in the `G3` configuration of IntegrationTests.xctestplan, with the inputs that scripts/run-gate.sh sets. The
+/// It runs in the `G3` configuration of AcceptanceTests.xctestplan, with the inputs that scripts/run-gate.sh sets. The
 /// artifacts go to APKRUN_G3_ARTIFACTS, outside the repository, and the gate copies them under build/gates/G3.
 final class G3GraphicsTests: XCTestCase {
     override func setUpWithError() throws {
         try super.setUpWithError()
         let environment = ProcessInfo.processInfo.environment
-        let selected = environment["APKRUN_INTEGRATION_SUITE"] == "g3"
+        let selected = environment["APKRUN_ACCEPTANCE_SUITE"] == "g3"
         // The G3 configuration sets APKRUN_G3_REQUIRED. There the check must run, so a suite that does not match
         // fails instead of skipping. Other configurations skip the check, as the other suites do.
         if environment["APKRUN_G3_REQUIRED"] == "1" {

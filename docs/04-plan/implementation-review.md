@@ -18694,3 +18694,107 @@ steps and T2 evidence.
 **Verification.** Focused T0 coverage checks that the required CLI argument is enforced, malformed and stock-equal values are rejected without output, and the resulting version retains the source build ID, provenance, and stock kind. It validates the manifest, recomputed file hashes and `SHA256SUMS`, and the developer signature over the new manifest. These host checks do not produce or boot a live corrected image.
 
 **Risk.** A caller can select a version triple already used by another local image. The command refuses only the exact stock version because it has no inventory of all install directories; callers must choose an unused monthly sequence. #099's real-image identity and guest acceptance criteria remain open until the corrected image is built and tested in the guest.
+
+## IR-1323: Record the #099 variant without attributing an incomplete reference capture
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #099; [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md); `Images/reference/variants/2026.10.1-cf16373615-arm64/` |
+
+**Choice.** Build the signed stock control and Mesa variant from the pinned
+16373615 archive, inventory, manifest, and current layout, and omit
+`--reference`. The only 16373615 captures available here are explicitly
+incomplete, so keep `provenance.reference` null. Record the Mesa payload
+comparison, the signed manifests, injection and reseal records, and the
+variant record under `Images/reference/variants/2026.10.1-cf16373615-arm64/`.
+Do not change `Images/reference/16373615/` or
+`Images/manifests/16373615/`. Keep the large bundle disk files out of the
+repository and retain their manifest and digest evidence.
+
+**Reason.** The bundle schema allows a missing reference. Naming an incomplete
+capture as the source of this corrected image would claim evidence it does not
+contain. The pinned archive and current layout are the actual inputs used by
+the offline builder. Keeping the corrected variant under a separate identity
+preserves the #064 source capture and its checks.
+
+**Verification.** The stock manifest and variant manifest are independently
+verified, including `SHA256SUMS` and the developer signature. The variant
+record ties the new disk and super hashes to the original source build and
+refreshed AVB descriptor. The Mesa, inject, reseal, and variant record hashes
+are retained with the files. On 2026-10-16, the variant boot reached the
+virtio-gpu driver and mounted `/vendor`; SurfaceFlinger then reported
+`eglInitialize` as `EGL_NOT_INITIALIZED` and failed its EGL config query. The
+guest log recorded a SELinux denial for SurfaceFlinger's read of a sysfs
+`uevent` file while labeled `sysfs`. `sys.boot_completed` was not reached and the EGL
+acceptance command was not run. This is a failed T2 result, not a passing
+graphics result.
+
+**Risk.** The complete reference capture and the large variant disk bytes are
+not committed. The current T2 run does not prove whether the sysfs `uevent` denial
+caused the EGL initialization failure; a narrow product policy must be built
+and checked against the loaded ODM policy before that conclusion or a policy
+change is accepted.
+
+## IR-1324: Keep the Mesa Soong component separate from the unvalidated product policy
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1; [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) §9; [M02-graphics.md](issues/M02-graphics.md) #099 |
+
+**Choice.** Add only a Mesa component under `Guest/product/mesa/`: four
+64-bit vendor prebuilt modules at `lib64/egl`, a product fragment that adds
+those modules, and a staging script that verifies the build manifest and
+current lock before copying the files. Keep the generated binaries ignored.
+Do not add a broad `surfaceflinger` permission on generic `sysfs` or ship a
+candidate `genfscon` mapping until the rule compiles against the pinned AOSP
+policy and passes guest checks.
+
+**Reason.** The Mesa source output, ELF dependency list, and `/vendor/lib64/egl`
+placement are already established by the pinned build and offline image tests.
+The missing `Guest/product/` tree is otherwise the larger #035 product, whose
+Soong and split-policy build requires Linux x86-64. The current boot's generic
+`sysfs` AVC provides evidence to investigate but does not validate a product
+label or its neverallow compatibility. The successful `apkrun.test=egl` record
+uses a separate ODM-overlay variant and does not validate this product policy.
+
+**Verification.** The NDK manifest verifier passes before staging, and all four
+staged files have the same SHA-256 as the build output. The staging script runs
+the verifier again on the copied tree before atomically installing it. T0 checks
+the module set, arm64 vendor/`egl` installation, dependency declarations,
+product package list, and both verifier targets. These host checks do not
+compile Soong or SELinux policy. Those checks and the guest EGL run remain
+outstanding on the Linux AOSP builder.
+
+**Risk.** Soong may reject a dependency name, prebuilt property, or vendor
+linkage that the static T0 check cannot detect. The Mesa license and NDK
+redistribution findings in IR-483 and IR-486 remain release blockers.
+
+## IR-1325: Retain minimal sanitized excerpts for the #099 T2 result
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #099; `Images/reference/variants/2026.10.1-cf16373615-arm64/boot-evidence.md` |
+
+**Choice.** Keep only the relevant virtio-gpu, `/vendor`, sysfs AVC, and EGL
+failure lines in the repository. Omit process IDs from these excerpts and keep
+the complete boot and logcat files outside the repository, with their byte
+counts and SHA-256 values recorded alongside the excerpt.
+
+**Reason.** The excerpts let reviewers verify the documented T2 outcome
+without checking out multi-megabyte logs or committing unrelated guest output.
+The full-log digests preserve a check against the original records; omitting
+process IDs keeps the retained evidence focused on the behavior being reviewed.
+
+**Verification.** The two full-log digests and byte counts match the captured
+files under `/tmp/apkrun-099-boot-evidence-20261016/`. Each excerpt maps to the
+original line numbers recorded in `boot-evidence.md`.
+
+**Risk.** The full logs are local evidence and are not preserved by this
+commit. The excerpts intentionally omit surrounding events, so they do not
+establish a causal link between the AVC and the EGL failure.

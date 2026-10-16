@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 1,
+  "component": "mesa-android",
+  "adr": "0018",
+  "mesa": {
+    "repository": "https://gitlab.freedesktop.org/mesa/mesa.git",
+    "commit": "0fadfea4f394211946f308458f614839ef253ee8",
+    "version": "26.1.8",
+    "license": "MIT AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND HPND AND (CC0-1.0 OR Apache-2.0) AND GPL-3.0-or-later WITH Bison-exception-2.2 AND Apache-2.0 WITH LLVM-exception"
+  },
+  "lock": {
+    "path": "ThirdParty/ThirdParty.lock.json",
+    "sha256": "b34a818a492fff4b6f6e743501c28e56354622fb094a32f6d57d76211a6b06fb",
+    "group": "guest-mesa"
+  },
+  "tools": {
+    "ndk": "28.2.13676358 (r28c)",
+    "ndkClang": "Android (13624864, +pgo, -bolt, +lto, -mlgo, based on r530567e) clang version 19.0.1 (https://android.googlesource.com/toolchain/llvm-project 97a699bf4812a18fb657c2779f5296a4ab2694d2)",
+    "ndkApi": "35",
+    "platformSdkVersion": "37",
+    "ndkArchiveSha256": "0d4599e8bbf1a1668a0d51a541729b2246360f350018a2081d0b302dbb594f2a",
+    "mako": "1.4.3",
+    "markupsafe": "3.0.4",
+    "packaging": "26.3",
+    "meson": "1.12.1",
+    "ninja": "1.13.2",
+    "bison": "3.8.2",
+    "flex": "2.6.4",
+    "m4": "GNU M4 1.4.6",
+    "python": "3.12.13",
+    "pyyaml": "6.0.3 (49790e73684bebad1df05ef8d828fa12f685bffb)",
+    "libdrm": "2.4.123",
+    "host": "Darwin arm64 27.0.1"
+  },
+  "buildFlags": [
+    "--buildtype=release",
+    "--wrap-mode=nodownload",
+    "--prefix=/vendor",
+    "--libdir=lib64",
+    "-Dplatforms=android",
+    "-Dplatform-sdk-version=37",
+    "-Dandroid-stub=true",
+    "-Dandroid-libbacktrace=disabled",
+    "-Degl=enabled",
+    "-Degl-lib-suffix=_mesa",
+    "-Dgles-lib-suffix=_mesa",
+    "-Dglvnd=disabled",
+    "-Dglx=disabled",
+    "-Dgbm=disabled",
+    "-Dopengl=true",
+    "-Dgles1=enabled",
+    "-Dgles2=enabled",
+    "-Dgallium-drivers=virgl",
+    "-Dvulkan-drivers=",
+    "-Dzstd=disabled",
+    "-Dxmlconfig=disabled",
+    "-Dllvm=disabled",
+    "-Dvalgrind=disabled",
+    "-Dlibunwind=disabled",
+    "-Dlmsensors=disabled",
+    "-Dgallium-va=disabled",
+    "-Dperfetto=false",
+    "-Dbuild-tests=false",
+    "-Ddri-drivers-path=/vendor/lib64/egl",
+    "-Dallow-fallback-for=libdrm"
+  ],
+  "files": [
+    {
+      "path": "vendor/lib64/libEGL_mesa.so",
+      "sha256": "73cb17559b2e1b69dab147043dae21467067162113ec9f89380f90122c53adad",
+      "size": 382608,
+      "class": "ELF64",
+      "machine": "AArch64",
+      "needed": [
+        "libgallium_dri.so",
+        "libdrm.so",
+        "libcutils.so",
+        "libhardware.so",
+        "liblog.so",
+        "libnativewindow.so",
+        "libsync.so",
+        "libm.so",
+        "libdl.so",
+        "libc.so"
+      ],
+      "soname": "libEGL_mesa.so",
+      "runpath": [],
+      "loadAlign": 16384,
+      "definedFunctions": 47
+    },
+    {
+      "path": "vendor/lib64/libGLESv2_mesa.so",
+      "sha256": "7da942f62becc85a6ec3ec6bbb2fedf23eceb04952bc2478d12935e7d0fa863a",
+      "size": 76440,
+      "class": "ELF64",
+      "machine": "AArch64",
+      "needed": [
+        "libgallium_dri.so",
+        "libc.so"
+      ],
+      "soname": "libGLESv2_mesa.so",
+      "runpath": [],
+      "loadAlign": 16384,
+      "definedFunctions": 358
+    },
+    {
+      "path": "vendor/lib64/libGLESv1_CM_mesa.so",
+      "sha256": "2a0829379fbf9e0fccacc32e872445af6c2fffe24e2b1b4d8864058636b99ce6",
+      "size": 31680,
+      "class": "ELF64",
+      "machine": "AArch64",
+      "needed": [
+        "libgallium_dri.so",
+        "libc.so"
+      ],
+      "soname": "libGLESv1_CM_mesa.so",
+      "runpath": [],
+      "loadAlign": 16384,
+      "definedFunctions": 145
+    },
+    {
+      "path": "vendor/lib64/libgallium_dri.so",
+      "sha256": "a261e62b894d306ef0b650a1b4acb66cb0c0bf0d0b7b4444ce97d4054e737a9f",
+      "size": 18190768,
+      "class": "ELF64",
+      "machine": "AArch64",
+      "needed": [
+        "libdrm.so",
+        "libcutils.so",
+        "liblog.so",
+        "libsync.so",
+        "libz.so",
+        "libm.so",
+        "libdl.so",
+        "libc.so"
+      ],
+      "soname": "libgallium_dri.so",
+      "runpath": [],
+      "loadAlign": 16384,
+      "definedFunctions": 81
+    }
+  ]
+}

@@ -476,13 +476,44 @@ Out of scope:
 
 ### Acceptance criteria
 
-- [ ] The corrected image has its own build identity, manifest, and hashes, and
-      build `16373615` is unchanged.
-- [x] In the guest, `eglInitialize` succeeds on the VirGL display (`apkrun.test=egl`). Met on 2026-10-12 on the ODM-overlay variant (IR-960): the guest's logcat holds `egl ok: eglInitialize 1.5` (IR-997).
+- [x] The corrected image has its own build identity, manifest, and hashes, and
+      build `16373615` is unchanged (IR-1323).
+- [ ] In the guest, `eglInitialize` succeeds on the VirGL display (`apkrun.test=egl`). The 2026-10-12 pass was on a separate ODM-overlay variant (IR-960, IR-997); the corrected no-overlay variant failed `eglInitialize` on 2026-10-16 (IR-1323).
 - [ ] Every new artifact has recorded provenance, and every third-party component is pinned in the lock.
 - [x] #064 is unaffected: its acceptance uses build `16373615`. Checked on 2026-10-10: `git diff main...HEAD` changes no path under `Images/reference/16373615/`, `Images/manifests/16373615/`, or the M01 #064 entry.
 
 ### Notes
+
+- **Status (2026-10-16, corrected development variant built and booted to the graphics failure).**
+  The source-to-image comparison receipt that ADR-0018 cites is now recorded at
+  `Images/reference/variants/2026.10.1-cf16373615-arm64/mesa-payload-receipt.txt`,
+  outside the protected `16373615` source-build paths. The Mesa-only Soong
+  fragment is in `Guest/product/mesa/`; its staging script verifies the pinned
+  Mesa manifest before copying the four libraries and manifest into the ignored
+  prebuilt directory. The host T0 suite passes 32 tests. The product fragment
+  has not been compiled by Soong because this host is macOS. The variant tool's
+  focused T0 suite passes 50 tests; independent bundle validation confirms its
+  manifest, signature, file hashes, and recorded input hashes.
+
+  A signed stock-derived development bundle and a variant with
+  `imageVersion` `2026.10.1-cf16373615-arm64` were rebuilt from the pinned
+  source archive and current layout. The incomplete reference captures were
+  omitted rather than attributed as a complete reference; IR-1323 records this
+  choice. The variant manifest, build, inject, and reseal records are retained
+  under `Images/reference/variants/2026.10.1-cf16373615-arm64/`. The image
+  partition bytes are not committed. `boot-evidence.md` records the exact
+  T2 result and the hashes of its local logs.
+
+  The exact variant boot reached `virtio-gpu` and mounted `/vendor` after AVB
+  resealing. SurfaceFlinger then failed `eglInitialize` with
+  `EGL_NOT_INITIALIZED`; SELinux denied SurfaceFlinger's read of a sysfs
+  `uevent` file while it had the generic `sysfs` label. `sys.boot_completed` was not
+  reached, and `apkrun.test=egl` was not run on this boot. The prior EGL
+  success in IR-997 remains evidence for the separate ODM-overlay variant; it
+  does not establish success for this no-overlay boot. The product-policy
+  route and its compiled guest check remain open. Flex and m4 are still
+  unpinned (IR-485), so the provenance-and-lock acceptance criterion remains
+  open along with the release-license reviews in IR-483 and IR-486.
 
 - Placement and the reasons for it are in IR-240. This task sits between #021 and
   #022, because #022 needs a working Mesa guest.

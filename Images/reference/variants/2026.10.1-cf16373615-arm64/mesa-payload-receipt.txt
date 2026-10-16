@@ -1,0 +1,125 @@
+Mesa guest payload receipt for build 16373615 (task #099)
+
+Recorded: 2026-10-10. Scope: a read-only comparison of the Mesa source
+pinned in ThirdParty/ThirdParty.lock.json (entry aosp-mesa3d) with the
+Mesa-related libraries of build 16373615. The receipt records what the pinned
+source would install and what the reference image contains. It does not build
+Mesa, change build 16373615, or boot a guest. The decisions that follow from it
+are IR-440 to IR-446 in docs/04-plan/implementation-review.md.
+
+1. Inputs
+
+- Reference archive: Images/work/16373615/download/aosp_cf_arm64_only_phone-img-16373615.zip,
+  SHA-256 051caf8072ba9fb417e05999de2984752e44e13ce70b6c49c669f0a73db85c18,
+  1101175103 bytes. The archive has no manifest, so the external/mesa3d revision
+  used for this build is not recorded in it.
+- super.img from the archive: SHA-256 54052b9f2d0f463e995c90b9eecc4b3a8aad29d110044aac9c2170108feb5a05,
+  1746554644 bytes. It matches the super entry of Images/manifests/16373615/android-image.json.
+- Logical partitions were read with Images/tools/apkrun_image/lp.py
+  (read_dynamic_partitions and read_partition_range, sparse=True). Partitions
+  with a non-zero size in slot A: system_a 959066112, vendor_a 291229696,
+  product_a 232157184, system_ext_a 258179072, odm_a 520192, system_dlkm_a
+  8568832, vendor_dlkm_a 1695744, odm_dlkm_a 348160. Slot B: system_b 4747264.
+  The other _b partitions are empty.
+- Entries were listed with dump.erofs 1.9.4 (erofs-utils; Homebrew bottle
+  SHA-256 52f5839126989be9551bfd9c74c9b1ca3ad3fae118a63b627d38111403fd83c0,
+  used from a scratch directory and not installed into Homebrew). The listing
+  walks every directory with `dump.erofs --path=DIR --ls`. It has 521 entries
+  in vendor_a, 2921 in system_a, 365 in product_a, 172 in system_ext_a, 21 in
+  odm_a, 114 in system_dlkm_a, 57 in vendor_dlkm_a, 5 in odm_dlkm_a, and 456 in
+  system_b.
+- ELF headers and DT_NEEDED entries were read from the extracted objects.
+
+2. Pinned source
+
+- Repository https://android.googlesource.com/platform/external/mesa3d, tag
+  android-17.0.0_r1, commit 875160ed32cc5bc32777fa04870a0a57ed38c987. The same
+  commit is the head of branch android17-release (checked with git ls-remote).
+  VERSION is 26.1.0-devel.
+- The tree has 90 Android.bp files, with 8 cc_library_shared, 44
+  cc_library_static, and 3 rust_library modules. The shared modules are cutils,
+  hardware, log, nativewindow, and sync (src/android_stub, for non-Bionic
+  builds), vulkan.ranchu and vulkan.lvp (Vulkan ICDs), and gpudataproducer
+  (src/tool/pps).
+- No module is an EGL, GLES, gallium DRI, virgl, or gbm library. The Soong module
+  names that match egl, gles, gbm, virgl, dri, glapi, or mapi are only
+  driconf_static_py_binary, driconf_static.h, u_driconf_c_impl,
+  u_driconf_h_headers, hud_driver_query_c_impl, inc_gallium_drivers, and
+  inc_src_gallium_drivers_zink (headers and helpers).
+- src/egl/, src/gallium/drivers/virgl/, src/gallium/targets/dri/, and
+  src/gbm/ have meson.build files but no Android.bp.
+
+3. Loader paths: pinned source against build 16373615
+
+| Library or path (egl=mesa needs one of the first three) | Pinned source | Build 16373615 |
+|---|---|---|
+| /vendor/lib64/egl/libEGL_mesa.so, or libGLES_mesa.so | no module | absent |
+| /vendor/lib64/egl/libGLESv1_CM_mesa.so | no module | absent |
+| /vendor/lib64/egl/libGLESv2_mesa.so | no module | absent |
+| /vendor/lib64/egl/ (vendor_a) | none | libEGL_emulation.so, libGLESv1_CM_emulation.so, libGLESv2_emulation.so |
+| /system/lib64/egl/ (system_a) | none | directory absent; /system/lib64 has libEGL.so, libEGL_angle.so, libGLESv1_CM.so, libGLESv1_CM_angle.so, libGLESv2.so, libGLESv2_angle.so, libGLESv3.so |
+| gallium DRI driver directory (virgl) | no module | no dri directory in any non-empty partition |
+| gbm or gralloc (minigbm) | src/gbm has no module | /lib64/libminigbm_gralloc.so and /lib64/hw/mapper.minigbm.so (vendor_a) |
+
+Searching all eight non-empty slot-A partitions and system_b for "mesa",
+"gallium", "virgl", "virtio_gpu", "/dri/", "libEGL", "libGLES", "egl/", and
+"libgbm" finds no Mesa library. Besides the loader, ANGLE, and emulation
+libraries in the table, the names that match libEGL, libGLES, or egl are
+vendor_a:/lib64/libGLESv1_enc.so and libGLESv2_enc.so (gfxstream encoders),
+system_a:/system/lib64/libegl_flags.so, and product_a:/lib64/libjni_eglfence.so
+(also in product_a:/app/Gallery2/lib/arm64/). None of them is a Mesa library.
+The only "Gallium" name is the audio file
+product_a:/media/audio/notifications/Gallium.ogg.
+
+4. ABI
+
+- The vendor EGL and GLES modules of the image (libEGL_emulation.so,
+  libGLESv2_emulation.so) and vendor libdrm.so are ELF64 shared objects for
+  AArch64 (e_machine 183). Any Mesa module must match this ABI.
+
+5. Dependencies
+
+- The image's EGL module (libEGL_emulation.so) has DT_NEEDED entries libcutils.so,
+  libdrm.so, libOpenglCodecCommon.so, libOpenglSystemCommon.so, liblog.so,
+  libnativewindow.so, libsync.so, libc++.so, libc.so, libm.so, and libdl.so.
+  libcutils.so, libdrm.so, libOpenglCodecCommon.so, and libOpenglSystemCommon.so
+  are in vendor_a /lib64. liblog.so, libnativewindow.so, libsync.so, and libc++.so
+  are in system_a /system/lib64. libc.so, libm.so, and libdl.so there are symbolic
+  links, which dump.erofs lists as type 7.
+- The pinned root Android.bp defines mesa_platform_virtgpu, which whole-links
+  platform_virtgpu_drm (src/gfxstream/guest/platform/drm/Android.bp). That module
+  declares the shared libraries libdrm and libzstd, and on Android also libcutils,
+  libhardware, liblog, libnativewindow, and libsync. mesa_platform_virtgpu itself
+  declares libdrm, and on Android libsync. mesa_gfxstream_guest_iostream declares
+  liblog. The tree also names libzstd in its util and loader modules
+  (src/util/Android.bp, src/loader/Android.bp).
+- Present in the image: libdrm.so, libcutils.so, and libhardware.so (vendor_a
+  /lib64); liblog.so, libnativewindow.so, and libsync.so (system_a).
+- Missing from the image: libzstd. No partition contains a zstd library; the
+  listings have no entry that matches "zstd".
+- Result: the mesa_platform_virtgpu closure of this tree needs libzstd, which the
+  image does not contain. That closure is the gfxstream and virtgpu platform path,
+  not the virgl gallium driver, which has no Android.bp in this tree (IR-440). So
+  whether a virgl EGL build needs libzstd is not established. The other
+  whole-static members of mesa_platform_virtgpu (for example platform_virtgpu,
+  vulkan_util, and libvirtgpu_kumquat_ffi) were not traced, so the dependency list
+  is incomplete.
+
+6. Result
+
+- Build 16373615 contains no Mesa EGL, GLES, gallium, or Mesa gbm library. Its
+  system EGL and GLES set includes the ANGLE builds libEGL_angle.so and
+  libGLESv2_angle.so (libEGL_angle.so needs libGLESv2_angle.so). The vendor set
+  has the emulation libraries. This agrees with IR-185 and IR-244 for the loader
+  paths.
+- The pinned source defines no module that would install a Mesa EGL, GLES, or
+  virgl library. Pinning it therefore does not supply the libraries that
+  ro.hardware.egl=mesa loads.
+
+7. Not established by this receipt
+
+- The external/mesa3d revision of build 16373615. The candidate pin is
+  875160ed; it is unverified for this build.
+- Any library load, EGL initialization, rendering, or Android boot. No guest was
+  started.
+- How the Mesa libraries should be built (IR-442 and IR-443).

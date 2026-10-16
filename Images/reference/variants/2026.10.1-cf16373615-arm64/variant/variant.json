@@ -1,0 +1,52 @@
+{
+  "bootconfig": {
+    "path": "boot/bootconfig.txt",
+    "stockDigest": "0db3571720daf0bda012722eed14cfe195f4d986e8521c3c0ad2c49ee7351633",
+    "stockSize": "22912",
+    "variantDigest": "1e1289f7b186d6a3d60ace79d19c7c537301278eb9d4074a2add8c7d1e860d35",
+    "variantSize": "22912"
+  },
+  "decisions": {
+    "identity": "short version 2026.10.1; source build identity, stock kind, and provenance kept (IR-1322)",
+    "manifestSignature": "developer image key, trusted by Debug builds",
+    "partitionSize": "unchanged, the writer does not grow a partition (IR-682)",
+    "topLevelVbmeta": "replaced by SHA256_RSA4096 signed with aosp-avb-testkey-rsa4096; development-only (IR-1321)"
+  },
+  "imageVersion": "2026.10.1-cf16373615-arm64",
+  "kind": "stock",
+  "partition": {
+    "name": "vendor_a",
+    "size": 291229696,
+    "stockSuperSHA256": "7dd80d27241c6b96de9cc3d732ffd8749a67cf080fb488c7d49d23278985e3b5",
+    "variantSuperSHA256": "66fb79eee7b6d538ebc74c2e2c6366bb2b5e38cc5110cb12876b8c00caca0617"
+  },
+  "replacement": {
+    "sha256": "2cc0857c71a67072639d3ebd7c7f07a582c10f5000e44d5e945a843ee697375f",
+    "size": 291229696
+  },
+  "schemaVersion": 2,
+  "signingKeyID": "55ab0dd032d0ce0e",
+  "stockManifestSHA256": "7c285ff0f550b87129efeec90249cfd38e376be3ebac2f5bad51c945058d3ce3",
+  "task": "#099",
+  "variantDiskSHA256": "1d9b887b33c905ab916507b5c30489e7f9ebee7ec6bed4d17cedee6a4a36c049",
+  "variantManifestSHA256": "c648d01caf6c96c5b50890277007adbc4d511d7f65e560d049a1f757c3cad2df",
+  "vbmeta": {
+    "algorithm": "SHA256_RSA4096",
+    "injectRecordSHA256": "9d12474e864d1099a9c9f9231b63c15ebd3779cf0c059092d5f084cf76e693ac",
+    "partition": "vbmeta_a",
+    "publicKeySha1": "2597c218aae470a130f61162feaae70afd97f011",
+    "resealRecordSHA256": "34c0ccc0998e0541257aa105756ff6a1684770ce5501f6398ad6e076f67a2677",
+    "rollbackIndex": 1780617600,
+    "signer": "aosp-avb-testkey-rsa4096",
+    "size": 12288,
+    "stockSHA256": "f2b8f369dd85659180b6bb10abf23845ac0d61de0cd6c17d883fc342e23867d8",
+    "variantSHA256": "98bd563e5352ab05e30174f1f4f2cb40fc3d188eb4e0e9c0997957c627d3b236"
+  },
+  "writer": {
+    "imageSize": 291229696,
+    "metadataCopiesChecked": 8,
+    "outputChunks": 350,
+    "partitionsCompared": 8,
+    "physicalRanges": 1
+  }
+}

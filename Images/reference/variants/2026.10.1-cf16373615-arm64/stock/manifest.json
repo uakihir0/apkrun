@@ -1,0 +1,383 @@
+{
+  "boot": {
+    "bootconfig": {
+      "path": "boot/bootconfig.txt",
+      "sha256": "35402a0233725b1bbf65decad917e0b355ec494793cd173baf3d35061874bf43",
+      "size": 1719
+    },
+    "bootconfigOverrides": [],
+    "cmdline": {
+      "path": "boot/cmdline.txt",
+      "sha256": "750a2e601c17d863c49064764281daa8ed01916724ea705fd1fe69c67243fb58",
+      "size": 172
+    },
+    "kernel": {
+      "path": "boot/kernel",
+      "sha256": "f722bdd809bfd3485917a564b053b8a6d4938408734091f420c3297a8e3b20c8",
+      "size": 42031616
+    },
+    "kernelPageSize": 4096,
+    "ramdisk": {
+      "path": "boot/ramdisk.img",
+      "sha256": "3abc7297d33964283261891ad429c814e1f238157cca056094b9adf4d2ba86c7",
+      "size": 21808479
+    }
+  },
+  "compatibility": {
+    "upgradeFrom": {
+      "minimumImageVersion": "2026.10.0"
+    }
+  },
+  "consolePorts": [
+    {
+      "index": 0,
+      "name": "console",
+      "role": "systemConsole"
+    },
+    {
+      "index": 1,
+      "name": "serial",
+      "role": "silent"
+    },
+    {
+      "index": 2,
+      "name": "logcat",
+      "role": "silent"
+    },
+    {
+      "index": 3,
+      "name": "keymaster",
+      "role": "silent"
+    },
+    {
+      "index": 4,
+      "name": "gatekeeper",
+      "role": "silent"
+    },
+    {
+      "index": 5,
+      "name": "bluetooth",
+      "role": "silent"
+    },
+    {
+      "index": 6,
+      "name": "gnss",
+      "role": "silent"
+    },
+    {
+      "index": 7,
+      "name": "location",
+      "role": "silent"
+    },
+    {
+      "index": 8,
+      "name": "confirmationui",
+      "role": "silent"
+    },
+    {
+      "index": 9,
+      "name": "uwb",
+      "role": "silent"
+    },
+    {
+      "index": 10,
+      "name": "oemlock",
+      "role": "silent"
+    },
+    {
+      "index": 11,
+      "name": "keymint",
+      "role": "silent"
+    },
+    {
+      "index": 12,
+      "name": "nfc",
+      "role": "silent"
+    },
+    {
+      "index": 13,
+      "name": "weaver",
+      "role": "silent"
+    },
+    {
+      "index": 14,
+      "name": "mcu_control",
+      "role": "silent"
+    },
+    {
+      "index": 15,
+      "name": "mcu_uart",
+      "role": "silent"
+    },
+    {
+      "index": 16,
+      "name": "ti50_tpm",
+      "role": "silent"
+    },
+    {
+      "index": 17,
+      "name": "jcardsim",
+      "role": "silent"
+    },
+    {
+      "index": 18,
+      "name": "sensors_control",
+      "role": "service"
+    },
+    {
+      "index": 19,
+      "name": "sensors_data",
+      "role": "silent"
+    }
+  ],
+  "disks": [
+    {
+      "identifier": "apkrun-os",
+      "logicalSize": 8739880960,
+      "partitions": [
+        {
+          "firstLBA": 2048,
+          "label": "boot_a",
+          "sha256": "a8fb0875277c99d40154e03416010c496c22395bb4dd6b399ddeef69f5a833ac",
+          "size": 67108864
+        },
+        {
+          "firstLBA": 133120,
+          "label": "init_boot_a",
+          "sha256": "df1a2fc8aa21b5df13a2dcea50cdf90ac2ad222f19fb5a70877a16130e374e54",
+          "size": 8388608
+        },
+        {
+          "firstLBA": 149504,
+          "label": "vendor_boot_a",
+          "sha256": "02b2af631eb4868ea2163b9de0773ab3b17bf1f5ddca5ab4e2a0258777f46f3f",
+          "size": 67108864
+        },
+        {
+          "firstLBA": 280576,
+          "label": "vbmeta_a",
+          "sha256": "f2b8f369dd85659180b6bb10abf23845ac0d61de0cd6c17d883fc342e23867d8",
+          "size": 12288
+        },
+        {
+          "firstLBA": 282624,
+          "label": "vbmeta_system_a",
+          "sha256": "8cd7110a0a15dbde66c91789e227bfe6a67b8381466815185a9bb5a0b161173d",
+          "size": 4096
+        },
+        {
+          "firstLBA": 284672,
+          "label": "vbmeta_system_dlkm_a",
+          "sha256": "1c86b6c6b979860ee5e9f67387f0f152c4db39274520de812858ce3b6fec989a",
+          "size": 4096
+        },
+        {
+          "firstLBA": 286720,
+          "label": "vbmeta_vendor_dlkm_a",
+          "sha256": "beeda4df61c649a7c74a5a296d910b310b9abb26bd2d81ff9b634008148dbc11",
+          "size": 4096
+        },
+        {
+          "firstLBA": 288768,
+          "label": "super",
+          "sha256": "7dd80d27241c6b96de9cc3d732ffd8749a67cf080fb488c7d49d23278985e3b5",
+          "size": 8589934592
+        },
+        {
+          "firstLBA": 17065984,
+          "label": "custom",
+          "sha256": "3d17578db83de489aafbd421d98d2596cf4d486639c2802f4df7e9ac9e231847",
+          "size": 1048576
+        }
+      ],
+      "path": "disks/os.img",
+      "readOnly": true,
+      "role": "os"
+    }
+  ],
+  "files": [
+    {
+      "path": "boot/bootconfig.txt",
+      "sha256": "35402a0233725b1bbf65decad917e0b355ec494793cd173baf3d35061874bf43",
+      "size": 1719
+    },
+    {
+      "path": "boot/cmdline.txt",
+      "sha256": "750a2e601c17d863c49064764281daa8ed01916724ea705fd1fe69c67243fb58",
+      "size": 172
+    },
+    {
+      "path": "boot/kernel",
+      "sha256": "f722bdd809bfd3485917a564b053b8a6d4938408734091f420c3297a8e3b20c8",
+      "size": 42031616
+    },
+    {
+      "path": "boot/ramdisk.img",
+      "sha256": "3abc7297d33964283261891ad429c814e1f238157cca056094b9adf4d2ba86c7",
+      "size": 21808479
+    },
+    {
+      "path": "disks/os.img",
+      "sha256": "116b94b7cb207ed8055b6b48ee04a267f839b3d099a4c067bfb368116adc5476",
+      "size": 8739880960
+    },
+    {
+      "path": "templates/userdata.img",
+      "sha256": "abca004c424feb4022d8e9aa979611fbdb494181089a05f8935fb1f246863ea1",
+      "size": 85983232
+    }
+  ],
+  "gpuProfiles": {
+    "drmVirgl": {
+      "bootconfig": {
+        "androidboot.cpuvulkan.version": "0",
+        "androidboot.hardware.egl": "mesa",
+        "androidboot.hardware.gralloc": "minigbm",
+        "androidboot.hardware.hwcomposer": "ranchu",
+        "androidboot.hardware.hwcomposer.display_finder_mode": "drm",
+        "androidboot.hardware.hwcomposer.mode": "client",
+        "androidboot.opengles.version": "196608",
+        "androidboot.vendor.apex.com.android.hardware.graphics.composer": "com.android.hardware.graphics.composer.ranchu"
+      },
+      "overrides": [],
+      "requiredHostCapabilities": [
+        "virgl",
+        "edid"
+      ]
+    },
+    "guestSwiftshader": {
+      "bootconfig": {
+        "androidboot.cpuvulkan.version": "4206592",
+        "androidboot.hardware.angle_feature_overrides_disabled": "exposeES32ForTesting",
+        "androidboot.hardware.angle_feature_overrides_enabled": "mapUnspecifiedColorSpaceToPassThrough",
+        "androidboot.hardware.egl": "angle",
+        "androidboot.hardware.gralloc": "minigbm",
+        "androidboot.hardware.hwcomposer": "ranchu",
+        "androidboot.hardware.hwcomposer.display_finder_mode": "drm",
+        "androidboot.hardware.hwcomposer.display_framebuffer_format": "rgba",
+        "androidboot.hardware.vulkan": "pastel",
+        "androidboot.opengles.version": "196609",
+        "androidboot.vendor.apex.com.android.hardware.graphics.composer": "com.android.hardware.graphics.composer.ranchu"
+      },
+      "overrides": [],
+      "requiredHostCapabilities": [
+        "edid"
+      ]
+    },
+    "headless": {
+      "bootconfig": {
+        "androidboot.cpuvulkan.version": "4206592",
+        "androidboot.hardware.angle_feature_overrides_disabled": "exposeES32ForTesting",
+        "androidboot.hardware.angle_feature_overrides_enabled": "mapUnspecifiedColorSpaceToPassThrough",
+        "androidboot.hardware.egl": "angle",
+        "androidboot.hardware.gralloc": "minigbm",
+        "androidboot.hardware.hwcomposer": "ranchu",
+        "androidboot.hardware.hwcomposer.display_finder_mode": "drm",
+        "androidboot.hardware.hwcomposer.display_framebuffer_format": "rgba",
+        "androidboot.hardware.vulkan": "pastel",
+        "androidboot.opengles.version": "196609",
+        "androidboot.vendor.apex.com.android.hardware.graphics.composer": "com.android.hardware.graphics.composer.ranchu"
+      },
+      "overrides": [],
+      "requiredHostCapabilities": []
+    }
+  },
+  "guest": {
+    "abis": [
+      "arm64-v8a"
+    ],
+    "sdk": 37,
+    "targetSdkFloor": 24
+  },
+  "imageVersion": "2026.10.0-cf16373615-arm64",
+  "kind": "stock",
+  "provenance": {
+    "android": {
+      "release": "17",
+      "sdk": 37,
+      "securityPatch": "2026-06",
+      "variant": "userdebug"
+    },
+    "builderImageDigest": null,
+    "deviceFamily": "cuttlefish-phone-arm64",
+    "layout": {
+      "path": "Images/tools/layouts/cuttlefish-phone-arm64.json",
+      "sha256": "e731b4f7f1fc5bb6c1528b5069d63064d4506b0e400b4f5f71cafa4c5d9da9b9"
+    },
+    "pinnedManifestSHA256": null,
+    "reference": null,
+    "revisions": {
+      "guest": null,
+      "imagesTools": "6ca4d64172a4626ad7b60cdd744b920c632135db"
+    },
+    "source": {
+      "archives": [
+        {
+          "name": "aosp_cf_arm64_only_phone-img-16373615.zip",
+          "sha256": "051caf8072ba9fb417e05999de2984752e44e13ce70b6c49c669f0a73db85c18",
+          "size": 1101175103
+        }
+      ],
+      "branch": "aosp-android-latest-release",
+      "buildId": "16373615",
+      "origin": "ci.android.com",
+      "target": "aosp_cf_arm64_only_phone-userdebug"
+    },
+    "tools": {
+      "apkrunImage": "0.1.0",
+      "avbtool": "ba2dec4b035b0a3b61c5f8f8a74d86bcd450b1ee",
+      "mkbootimg": "4a27dd13adf9846e12d585d6fe99a375ebb58396"
+    }
+  },
+  "requirements": {
+    "agents": [],
+    "guestProtocol": {
+      "max": 1,
+      "min": 1
+    },
+    "minimumRuntimeVersion": "0.1.0"
+  },
+  "schemaVersion": 1,
+  "templates": [
+    {
+      "identifier": "apkrun-data",
+      "logicalSize": 85983232,
+      "partitions": [
+        {
+          "firstLBA": 2048,
+          "label": "misc",
+          "sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+          "size": 1048576
+        },
+        {
+          "firstLBA": 4096,
+          "label": "metadata",
+          "sha256": "3b6a07d0d404fab4e23b6d34bc6696a6a312dd92821332385e5af7c01c421351",
+          "size": 67108864
+        },
+        {
+          "firstLBA": 135168,
+          "label": "frp",
+          "sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+          "size": 1048576
+        },
+        {
+          "firstLBA": 137216,
+          "label": "userdata",
+          "sha256": "e86bae8c0598c4ff83c695f467daa4a1e8fa01d57f9140372993366204022a4d",
+          "size": 14680064
+        }
+      ],
+      "path": "templates/userdata.img",
+      "readOnly": false,
+      "role": "userdata",
+      "userdataStrategy": "blankFormattable"
+    }
+  ],
+  "userdata": {
+    "schemaVersion": 1,
+    "upgradableFrom": [
+      1
+    ]
+  }
+}

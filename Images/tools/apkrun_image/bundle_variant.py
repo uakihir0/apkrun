@@ -437,23 +437,38 @@ def _read_inject_output(directory: Path, partition: str, build_id: str) -> Path:
 
 @dataclass(frozen=True)
 class _Refresh:
-    """The checked injection, resealed vendor, refreshed vbmeta, and reseal record."""
+    """The checked injection, resealed vendor, refreshed vbmeta, and input records."""
 
     injected: Path
     vendor: Path
     vbmeta: Path
     record: dict[str, Any]
+    inject_record_sha256: str
+    record_sha256: str
     record_path: Path
 
 
-def _load_record(path: Path) -> dict[str, Any]:
+def _load_record_snapshot(path: Path) -> tuple[dict[str, Any], str]:
     try:
-        record = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
+        data = path.read_bytes()
+        record = json.loads(data.decode("utf-8"))
+    except (OSError, UnicodeError, ValueError) as error:
         raise BundleVariantError(f"{path} is not a JSON record: {error}") from None
     if not isinstance(record, dict):
         raise BundleVariantError(f"{path} is not a JSON object")
-    return record
+    return record, hashlib.sha256(data).hexdigest()
+
+
+def _load_record(path: Path) -> dict[str, Any]:
+    return _load_record_snapshot(path)[0]
+
+
+def _refresh_record_hashes(refresh: _Refresh) -> dict[str, str]:
+    """Return the hashes captured while the input records were validated."""
+    return {
+        "injectRecordSHA256": refresh.inject_record_sha256,
+        "resealRecordSHA256": refresh.record_sha256,
+    }
 
 
 def _section(document: Mapping[str, Any], key: str, path: Path) -> dict[str, Any]:
@@ -484,13 +499,13 @@ def _read_reseal_output(
     vbmeta must be the one of the resealed vendor image, read with the vendored avbtool (IR-746).
     """
     record_path = directory / vendor_reseal.OUTPUT_RECORD
-    record = _load_record(record_path)
+    record, record_sha256 = _load_record_snapshot(record_path)
     if record.get("task") != TASK or record.get("schemaVersion") != vendor_reseal.SCHEMA_VERSION:
         raise BundleVariantError(f"{record_path} is not a #099 vendor-reseal record")
     if _section(record, "partition", record_path).get("name") != partition:
         raise BundleVariantError(f"{record_path} does not record the partition {partition}")
     inject_path = inject_directory / OUTPUT_RECORD
-    inject_record = _load_record(inject_path)
+    inject_record, inject_record_sha256 = _load_record_snapshot(inject_path)
     if inject_record.get("buildId") != build_id:
         raise BundleVariantError(f"{inject_directory} was not made for build {build_id}")
     if injected_image is None:
@@ -503,6 +518,10 @@ def _read_reseal_output(
         injected.get("sha256") != inject_output.get("sha256")
     ):
         raise BundleVariantError(f"{record_path} was not made from this inject-vendor output")
+    if _text(inject_output.get("sha256")) is None or (
+        _sha256(injected_image) != inject_output["sha256"]
+    ):
+        raise BundleVariantError(f"{inject_path} no longer matches its checked injection output")
     if _text(stock.get("vendorSha256")) is None or (
         stock.get("vendorSha256") != inject_stock.get("sha256")
     ):
@@ -578,6 +597,8 @@ def _read_reseal_output(
         vendor=files["vendor"],
         vbmeta=files["vbmeta"],
         record=record,
+        inject_record_sha256=inject_record_sha256,
+        record_sha256=record_sha256,
         record_path=record_path,
     )
 
@@ -1258,7 +1279,7 @@ def build_variant(
                 "signer": vendor_reseal.VBMETA_SIGNER,
                 "publicKeySha1": vendor_reseal.VBMETA_PUBLIC_KEY_SHA1,
                 "rollbackIndex": refresh.record["vbmeta"]["rollbackIndex"],
-                "resealRecordSHA256": _sha256(refresh.record_path),
+                **_refresh_record_hashes(refresh),
             }
             record_out["bootconfig"] = {
                 "path": bootconfig_path,

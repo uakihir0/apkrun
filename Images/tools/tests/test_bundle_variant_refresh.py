@@ -356,6 +356,20 @@ def test_a_reseal_output_for_the_same_inject_is_read(tmp_path: Path) -> None:
     assert refresh.vendor == reseal / "vendor_a.img"
     assert refresh.vbmeta == reseal / "vbmeta_a.img"
     assert refresh.record_path == record_path
+    inject_record = inject / "inject.json"
+    inject_digest = _sha(inject_record.read_bytes())
+    record_digest = _sha(record_path.read_bytes())
+    assert refresh.inject_record_sha256 == inject_digest
+    assert refresh.record_sha256 == record_digest
+    assert variant._refresh_record_hashes(refresh) == {
+        "injectRecordSHA256": inject_digest,
+        "resealRecordSHA256": record_digest,
+    }
+
+    inject_record.write_text("{}", encoding="utf-8")
+    record_path.write_text("{}", encoding="utf-8")
+    assert refresh.inject_record_sha256 == inject_digest
+    assert refresh.record_sha256 == record_digest
 
 
 def test_a_refreshed_vbmeta_that_only_changes_the_vendor_descriptor_is_accepted(

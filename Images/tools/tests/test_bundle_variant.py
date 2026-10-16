@@ -620,12 +620,28 @@ def test_a_refreshed_vbmeta_is_restricted_to_stock_development_images(
 ) -> None:
     manifest = json.loads((stock_bundle / "manifest.json").read_text(encoding="utf-8"))
     manifest["kind"] = "apkrun"
-    monkeypatch.setattr(bundle_variant, "_verify_stock", lambda _bundle, _key: (b"{}", manifest))
+    manifest["provenance"]["source"]["origin"] = "apkrun-builder"
+    manifest["provenance"]["source"]["buildId"] = "ar123456"
+    manifest["requirements"]["agents"] = [
+        {"package": "io.apkrun.guest", "versionCode": 12},
+        {"package": "io.apkrun.store", "versionCode": 12},
+    ]
+    manifest["provenance"]["revisions"]["guest"] = "f" * 40
+    manifest["provenance"]["pinnedManifestSHA256"] = "2" * 64
+    manifest["provenance"]["builderImageDigest"] = "sha256:" + "3" * 64
+    manifest["imageVersion"] = "2026.10.0-ar123456-arm64"
+    monkeypatch.setattr(
+        bundle_variant,
+        "_verify_stock",
+        lambda _bundle, _key: (json.dumps(manifest).encode("utf-8"), manifest),
+    )
     refresh = bundle_variant._Refresh(
         injected=tmp_path / "injected-vendor_a.img",
         vendor=tmp_path / "vendor_a.img",
         vbmeta=tmp_path / "vbmeta_a.img",
         record={},
+        inject_record_sha256="0" * 64,
+        record_sha256="1" * 64,
         record_path=tmp_path / "reseal.json",
     )
 

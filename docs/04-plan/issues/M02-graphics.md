@@ -537,13 +537,11 @@ Out of scope:
   and its manifest hash is
   `c61d182eb93dc980ceb4dae2cd4d8b840aea060835b45507197b0fccbe507978`.
 
-  Its T2 run loaded `virtio_gpu`, mounted `/vendor`, reported
-  `ro.hardware.egl=mesa`, and showed all four Mesa files under
-  `/vendor/lib64/egl` with the `same_process_hal_file` label. SurfaceFlinger
+  Its T2 run loaded `virtio_gpu` and mounted `/vendor`. SurfaceFlinger
   repeatedly received the sysfs `uevent` denial, failed to open a DRM device,
   and aborted after `eglInitialize` returned `EGL_NOT_INITIALIZED`. A second
-  no-overlay run confirmed `card0` and `renderD128` existed with mode `0666`,
-  and confirmed the selected Mesa property and vendor-file labels. Both runs
+  no-overlay run confirmed `ro.hardware.egl=mesa`, all four vendor-file labels,
+  and that `card0` and `renderD128` existed with mode `0666`. Both runs
   remained without `sys.boot_completed` at 150 seconds; `apkrun.test=egl` did
   not run. The earlier controlled results in IR-1277 and IR-1279 link the same
   SurfaceFlinger `uevent` denial to a failed DRM probe and show the experimental

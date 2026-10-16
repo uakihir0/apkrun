@@ -13,11 +13,9 @@
 
 ## Result
 
-The guest initialized `virtio_gpu` and mounted `/vendor`. The run reported
-`ro.hardware.egl=mesa`; all four Mesa libraries appeared under
-`/vendor/lib64/egl` with the `same_process_hal_file` SELinux label. SurfaceFlinger
-then received a denial reading a sysfs `uevent` file, Mesa failed to open any
-DRM device, `eglInitialize` returned `EGL_NOT_INITIALIZED`, and SurfaceFlinger
+The guest initialized `virtio_gpu` and mounted `/vendor`. SurfaceFlinger then
+received a denial reading a sysfs `uevent` file, Mesa failed to open any DRM
+device, `eglInitialize` returned `EGL_NOT_INITIALIZED`, and SurfaceFlinger
 aborted after finding no suitable `EGLConfig`.
 
 After 150 seconds, `sys.boot_completed` was still empty. The run was stopped
@@ -88,11 +86,13 @@ $ adb -s 127.0.0.1:6520 shell getprop sys.boot_completed
 <empty after 150 seconds>
 ```
 
-Both DRM nodes existed with mode `0666`; this does not establish that
-SurfaceFlinger successfully opened or used them. The rerun reproduced the
-sysfs denial and EGL failure. The VM was stopped after the completion property
-remained empty at 150 seconds. The exact image still needs an overlay control
-to confirm whether the previously observed policy fix also resolves this build.
+The rerun reported `ro.hardware.egl=mesa` and showed all four Mesa libraries
+under `/vendor/lib64/egl` with the `same_process_hal_file` SELinux label. Both
+DRM nodes existed with mode `0666`; this does not establish that SurfaceFlinger
+successfully opened or used them. The rerun reproduced the sysfs denial and EGL
+failure. The VM was stopped after the completion property remained empty at
+150 seconds. The exact image still needs an overlay control to confirm whether
+the previously observed policy fix also resolves this build.
 
 The rerun log records the denied `uevent` read at lines 5233–5235, including a
 failed syscall with `exit=-13`; the pathname is absent from that audit record,

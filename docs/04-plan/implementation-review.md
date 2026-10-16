@@ -18962,3 +18962,56 @@ bundle as a product image. A passing control cannot identify which permissions
 are required, confirm Soong compilation of the production policy, show
 application-domain rendering, or close #099 criterion 2. The prepared-source
 re-binding helper was reviewed adversarially; no actionable findings remained.
+
+## IR-1330: Keep the exact-image two-rule control diagnostic
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099, #022 diagnostic control |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #099; [issues/README.md](issues/README.md); `Experiments/sepolicy-022/odm_variant.py`; `/tmp/apkrun-022-odm-2026102-sf-control-final2/bundle/android-bundle.odm-control.json`; T2 evidence under `/tmp/apkrun-099-20261016-sf-control-evidence/` |
+
+**Choice.** Add a `surfaceflinger-egl` profile containing exactly
+`surfaceflinger sysfs:file open` and
+`surfaceflinger sysfs:file read`. Keep the 18-rule `full-control` profile as
+the default diagnostic experiment. Record that the exact-image 2026.10.4
+two-rule control reaches `sys.boot_completed`, SurfaceFlinger reports Mesa and
+virgl, and the injected EGL probe succeeds. Leave #099 criterion 2 unchecked
+and do not ship either diagnostic bundle.
+
+**Reason.** The 2026.10.3 control applied 18 candidate rules together and did
+not show whether the known SurfaceFlinger sysfs denial alone blocked
+initialization. The two-rule profile tests that narrower hypothesis. Its
+probe is still an injected service running in the `surfaceflinger` domain;
+it only calls `eglGetDisplay` and `eglInitialize`. It does not exercise the
+product policy, an `untrusted_app` APK, EGL context creation, or rendering.
+Boot success alone does not validate those paths.
+
+**Verification.** The profile explicitly lists only the two permissions.
+`prepare`, `build`, and `check` passed for
+`2026.10.4-cf16373615-arm64`; `check` confirmed the signed bundle, pinned
+source binding, exact policy diff, updated ODM hashtree descriptor, and output
+hashes. The output manifest SHA-256 is
+`74af335c9db649715d705a85f497d8c00c1096d03e7f515b39de4817fe1bb5fb`; the disk
+SHA-256 is
+`93457778bcfedc000dc4da2d56d0d2a69e962d65897bdf683356bb5d0d0af5b1`; and the
+precompiled-policy SHA-256 is
+`cbcad7113c3acf70d5993f962d6c680fc5a7ca62faaae3753ab63f6922054b43`. T2
+reached `sys.boot_completed=1`, `ro.hardware.egl=mesa`, and SELinux
+`Enforcing`; SurfaceFlinger logged Mesa, virgl, and OpenGL ES 3.0 Mesa 26.1.8.
+The probe logged `APKRUN-TEST: egl ok` with EGL 1.5. Its performance record
+reports `outcome=ready`. The complete guest log is gzip-retained outside the
+repository; the compressed and original-file digests and the VM/performance
+log digests are recorded in the #099 Notes. The adversarial review caught and
+prompted fixes for dynamic profile leakage, profile-neutral prepare wording,
+and profile-inaccurate module documentation. The final source and acceptance
+summary were re-reviewed; no remaining profile or provenance gap was found.
+
+**Risk.** The boot still logs SurfaceFlinger's generic `sysfs` `getattr`
+denials. A `platform_app` RenderThread in `com.android.provision` is denied
+`read` on the generic `sysfs` `uevent` file; the same process then logs
+`EGL_NOT_INITIALIZED` and an HWUI context-creation failure. This timing does
+not prove the AVC caused that failure. No `untrusted_app` Hello APK or
+successful application render was tested, so successful application-domain
+rendering is not established. The host also cannot compile the product Soong
+policy; the working production policy remains for the product-image task.

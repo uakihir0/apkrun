@@ -215,8 +215,8 @@ line below the table.
 
 **Counts on `main`:** 96 tasks have a milestone entry (#001 to #095 and #099; #096 and
 #097 are post-v1 tracks). 22 have every box ticked, 9 are in progress
-(some boxes ticked and some open), and 65 have no ticked box. The IR log has 648
-entries: 635 are marked exactly "Needs maintainer review", 6 add a qualifier to that status, and 7
+(some boxes ticked and some open), and 65 have no ticked box. The IR log has 649
+entries: 636 are marked exactly "Needs maintainer review", 6 add a qualifier to that status, and 7
 carry another status. Two entries carry the number IR-901 (see the note below the table).
 
 **Project position:** The task issues #001 to #097 are mirrored as issues #2 to #98 (IR-293).
@@ -237,17 +237,18 @@ The stock Android image boots directly on Virtualization.framework (IR-306).
 | [#072 Guest Agent bootstrap](M03-input-and-basic-runtime.md#072-guest-agent-bootstrap) | 7 of 7 | The T2 suite `GuestAgentTests` passed 8 of 8 in the Xcode test host on 2026-10-13 (IR-438). The CLI does not print `runtime.requiredAgentUnavailable`, and whether it should is open; the code is asserted at T0 (IR-1229). Closure is for the maintainer (IR-1259). The device checks of 2026-10-12 are in the Notes. | IR-1226 to IR-1231, IR-435, IR-438, IR-1253 to IR-1255, IR-425, IR-431 (method variants) |
 | [#024 Pointer input](M03-input-and-basic-runtime.md#024-pointer-input) | 6 of 8 | Open: the 100-of-100 box (box 3); the click-loss investigation is follow-up #103. Six consecutive CLI batches of 100 clicks logged 590 of 600 (IR-1290), and the batch verdicts cannot show three consecutive 100-of-100 batches. The trackpad and wheel box (box 4) is the manual check C01-2 (T3). The T2 case passes the drag, trackpad, and wheel moves (IR-1288). Box 7 is flagged, not re-decided (IR-1250). The route does not rebind after an agent loss; the follow-up is #101. The T2 suite `AndroidInputTests` passes 7 of 7 on the odm7 bundle in its final run (IR-1294), and its click case logged 99 of 100 in one of six full runs (IR-1294). | IR-1233 to IR-1257, IR-1275 to IR-1294 |
 | [#095 Cuttlefish host-service substitution](M01-android-bring-up.md#095-cuttlefish-host-service-substitution) | 6 of 7 | Criterion 1 (all 20 console ports attached and numbered by `APKRUN-PORT` markers) stays open. The pinned test kernel exposes 8 `hvc` nodes (IR-372), and the 2026-10-11 boot received markers on `hvc0` and `hvc1` only (IR-877). IR-901 (second entry) records 13 ports that receive their full marker in two boots, and four ports (`hvc5`, `hvc8`, `hvc9`, `hvc12`) that product HALs read. The criterion text does not yet reflect IR-901. | IR-372, IR-873, IR-877, IR-901 (second entry) |
-| [#099 Mesa-enabled VirGL guest image](M02-graphics.md#099-mesa-enabled-virgl-guest-image) | 3 of 4 | EGL acceptance criterion 2 remains open: the exact 2026.10.2 no-overlay image fails EGL, while a 2026.10.3 control with a broad 18-rule test-only policy and an injected probe boots and passes the probe (IR-1329). The control does not validate production policy or isolate the required rule. The image identity and artifact provenance criteria are now checked. | IR-650, IR-727, IR-751, IR-800, IR-837, IR-997, IR-999, IR-1323, IR-1326, IR-1327, IR-1328, IR-1329 |
+| [#099 Mesa-enabled VirGL guest image](M02-graphics.md#099-mesa-enabled-virgl-guest-image) | 3 of 4 | EGL acceptance criterion 2 remains open: the exact 2026.10.2 no-overlay image fails EGL. The 2026.10.3 broad 18-rule control and 2026.10.4 two-rule SurfaceFlinger control both boot and pass the injected probe, but neither validates successful application-domain access/rendering or product policy. The narrow run still logs a `platform_app` `sysfs` read denial and an HWUI EGL context failure; causality is unproven (IR-1329, IR-1330). | IR-650, IR-727, IR-751, IR-800, IR-837, IR-997, IR-999, IR-1323, IR-1326, IR-1327, IR-1328, IR-1329, IR-1330 |
 | [#035 APKRun AOSP product](M05-custom-android-image.md#035-apkrun-aosp-product) | 0 of 10 | All 10 boxes are open. They cover the custom image's boot, the product contents, the remote build with provenance, the priv-app domains, the Hello capability list, the `untrusted_app` socket test, the sepolicy and `avc` checks, ADB in both developer modes, the reference diff, and the release AVB state (OQ-36). IR-900 to IR-906 record only the sepolicy route for the SurfaceFlinger sysfs label, which #022 criterion 4 needs. | IR-900, IR-903, IR-905, IR-906 |
 | #098 Parallel VM runs (follow-up, GitHub issue #100) | not in §3 or a milestone file | The T2 behavior is unverified (IR-539). The one-VM rule (test-strategy §3.6) needs a maintainer decision (IR-525). | IR-525, IR-528, IR-539 |
 
 Complete on the boxes: #001, #002, #004, #005, #006, #007, #008, #009, #011, #012, #013, #014, #015, #017, #018, #019, #020, #021, #033, #062, #063, #065. Their boxes are all ticked, and
 the IR entries that record their decisions are still open for maintainer review.
 
-**Recent work on `main`** (git log, 2026-10-09 to 2026-10-11): #022 kmscube on the VM and the
+**Recent work on `main`** (git log, 2026-10-09 to 2026-10-16): #022 kmscube on the VM and the
 drain before invalidation (`537731c`, `efc4fef`); the #099 offline Mesa injection and the verity
 steps (`10f921e` to `ce7a21e`); the #095 port and marker results (`bfd0860`, `c217fc8`,
-`4c6b7c0`); and the #016 PackageInstaller tick (`3d0031e`).
+`4c6b7c0`); #016 PackageInstaller (`3d0031e`); and the exact-image ODM control builder and broad
+control evidence (`ad78532`, `d9bc980`).
 
 **Note on IR-901.** The number IR-901 is used by the SELinux compiler entry only. The HAL-port entry was renumbered to IR-907 to remove the duplicate.
 offline", is the entry that IR-904 cites. The second, "Four of the marked ports are read by product

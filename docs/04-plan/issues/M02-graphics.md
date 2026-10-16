@@ -478,7 +478,7 @@ Out of scope:
 
 - [x] The corrected image has its own build identity, manifest, and hashes, and
       build `16373615` is unchanged (IR-1323).
-- [ ] In the guest, `eglInitialize` succeeds on the VirGL display (`apkrun.test=egl`). The 2026-10-12 pass was on a separate ODM-overlay variant (IR-960, IR-997); the corrected no-overlay variant failed `eglInitialize` on 2026-10-16 (IR-1323). A later 2026.10.3 diagnostic overlay control passed the probe but does not validate production policy (IR-1329).
+- [ ] In the guest, `eglInitialize` succeeds on the VirGL display (`apkrun.test=egl`). The 2026-10-12 pass was on a separate ODM-overlay variant (IR-960, IR-997); the corrected no-overlay variant failed `eglInitialize` on 2026-10-16 (IR-1323). A 2026.10.3 diagnostic overlay control passed with 18 broad rules (IR-1329), and a 2026.10.4 diagnostic profile passed the SurfaceFlinger-domain probe with two rules. Neither control validates application-domain access or product policy (IR-1330).
 - [x] Every new artifact has recorded provenance, and every third-party component is pinned in the lock (IR-1326, IR-1327, IR-1328).
 - [x] #064 is unaffected: its acceptance uses build `16373615`. Checked on 2026-10-10: `git diff main...HEAD` changes no path under `Images/reference/16373615/`, `Images/manifests/16373615/`, or the M01 #064 entry.
 
@@ -600,6 +600,10 @@ Out of scope:
   `43cb412d7d3e284149db9e220532193562d02a9abdd3dc4ff701b7ffb13e97ec`); the VM
   log is 755,568 bytes (SHA-256
   `b7db85a3f9d32d65dbab3aa91989532d0df53f9aa6f28e15abd9c0fd663c2b40`).
+  To reduce scratch-disk use, the exact guest log is gzip-retained at
+  `/tmp/apkrun-099-20261016-broad-control-evidence/logcat-20261016T040950Z.log.gz`;
+  decompressing it reproduces the recorded digest. The VM log and performance
+  record are retained beside it.
   After the final builder-source edits, the bundle was rebuilt and `check`
   passed again. Its manifest and disk hashes are identical to the image used
   for this T2 run, so the boot evidence remains bound to the final checked
@@ -614,9 +618,67 @@ Out of scope:
   successful boot: SurfaceFlinger and the probe were denied generic `sysfs`
   `getattr`, and the probe was denied reading the `/odm/bin` parent directory.
   Thus success does not mean every denial was removed. The exact 2026.10.2
-  no-overlay image still fails EGL initialization. Therefore acceptance
-  criterion 2 remains unchecked; IR-1329 records this conservative choice for
+  no-overlay image still fails EGL initialization. The later 2026.10.4
+  two-rule control below also passes only the diagnostic probe. Therefore
+  acceptance criterion 2 remains unchecked; IR-1330 records this choice for
   maintainer review.
+
+- **Status (2026-10-16, exact-image two-rule SurfaceFlinger control; diagnostic only).**
+  The profile `surfaceflinger-egl` in
+  `Experiments/sepolicy-022/odm_variant.py` adds exactly two precompiled-policy
+  rules to the pinned 2026.10.2 image:
+  `surfaceflinger sysfs:file open` and `surfaceflinger sysfs:file read`.
+  Unlike `full-control`, it adds no `platform_app`, `untrusted_app`,
+  `priv_app`, or `system_app` rules. `prepare`, `build`, and `check` passed
+  with this profile. The image `2026.10.4-cf16373615-arm64` has manifest
+  SHA-256
+  `74af335c9db649715d705a85f497d8c00c1096d03e7f515b39de4817fe1bb5fb`,
+  disk SHA-256
+  `93457778bcfedc000dc4da2d56d0d2a69e962d65897bdf683356bb5d0d0af5b1`,
+  and precompiled-policy SHA-256
+  `cbcad7113c3acf70d5993f962d6c680fc5a7ca62faaae3753ab63f6922054b43`.
+  The final-source control receipt is
+  `/tmp/apkrun-022-odm-2026102-sf-control-final2/bundle/android-bundle.odm-control.json`
+  (SHA-256
+  `e8b28716cc73e758b5364feea224d00aec3b8e477c4c6961bf6c7e6693e44967`).
+
+  T2 installed the corresponding bundle, whose manifest and disk hashes match
+  the final-source bundle retained at
+  `/tmp/apkrun-022-odm-2026102-sf-control-final2/bundle/android-bundle`, then
+  booted with `--gpu virgl --console` in scratch home
+  `/tmp/apkrun-099-home-2026102-sf-control-final-20261016`. The guest reached
+  `sys.boot_completed=1`, reported `ro.hardware.egl=mesa` and SELinux
+  `Enforcing`, and SurfaceFlinger logged Mesa, renderer `virgl`, and
+  `OpenGL ES 3.0 Mesa 26.1.8`. The init-run test service logged
+  `APKRUN-TEST: egl ok: eglInitialize 1.5, EGL_VENDOR Android, EGL_VERSION
+  1.5 Android META-EGL`. Its `outcome=ready` performance record has operation
+  `2466E74E-3C19-4D7E-9C69-E56F6EF18A5A`.
+  The final-source rebuild under `...sf-control-final2` passed `check` with
+  the same manifest and disk hashes as the tested bundle, so the T2 result is
+  bound to those exact image bytes.
+
+  The narrowed result still does not demonstrate app rendering. SurfaceFlinger
+  continued to receive `sysfs` `getattr` denials. A `platform_app`
+  `RenderThread` for `com.android.provision` was denied `read` on the generic
+  `sysfs` `uevent` file; the same process then logged `EGL_NOT_INITIALIZED`
+  and failed to create an HWUI context. The temporal association does not
+  establish that this AVC caused the EGL failure. No `untrusted_app` Hello APK
+  or successful application render was tested. The probe remains an injected,
+  automatically started test service in the `surfaceflinger` domain; it only
+  calls `eglGetDisplay` and `eglInitialize`, and it does not create a context
+  or render. Keep criterion 2 open until the guest check passes under the
+  eventual product policy. Do not ship this diagnostic bundle.
+
+  Evidence was retained outside the repository. The compressed guest log at
+  `/tmp/apkrun-099-20261016-sf-control-evidence/logcat-20261016T042958Z.log.gz`
+  decompresses to 51,220,816 bytes with SHA-256
+  `483fe39923d79a6b58bc58a71561d9f911e17538964fa6655499f512e8bcad25`;
+  the gzip file SHA-256 is
+  `13f3a33b57940e7c1ba6818c066cd86efd139fbc0f387d4b2c3f61ee73af12a0`.
+  The 1,152,096-byte VM log has SHA-256
+  `666ab4bfdeb162078ed71be5d1a1120bf7e998659fe5ffb45eaa55fdeaa9c391`;
+  the performance record has SHA-256
+  `651bb10ec20903f31265af2e0bfdb07955740207d18b36bf12ec948f40054368`.
 
 - Placement and the reasons for it are in IR-240. This task sits between #021 and
   #022, because #022 needs a working Mesa guest.

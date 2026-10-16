@@ -307,9 +307,7 @@ def _splice(
                 f"the replaced super expands to {header.logical_size} bytes, not {size}"
             )
         if disk_digest.hexdigest() != expected_disk_sha256:
-            raise BundleVariantError(
-                f"{stock_disk} changed after its stock manifest was checked"
-            )
+            raise BundleVariantError(f"{stock_disk} changed after its stock manifest was checked")
         if super_digest.hexdigest() != expected_super_sha256:
             raise BundleVariantError(
                 f"the super partition of {stock_disk} changed after its manifest was checked"
@@ -378,9 +376,7 @@ def _verify_variant(
                 raise BundleVariantError(f"the variant disk does not hold the bytes at {start}")
 
         image_size = replacement.stat().st_size
-        embedded_digest = (
-            hashlib.sha256() if expected_replacement_sha256 is not None else None
-        )
+        embedded_digest = hashlib.sha256() if expected_replacement_sha256 is not None else None
         with replacement.open("rb") as image:
             for start in range(0, target.size, COMPARE_SIZE):
                 length = min(COMPARE_SIZE, target.size - start)
@@ -499,9 +495,9 @@ def _builder_provenance(repository_root: Path | None = None) -> dict[str, Any]:
 
     revision = git("rev-parse", "HEAD").decode("ascii", errors="strict").strip()
     tracked_diff = git("diff", "--binary", "--no-ext-diff", "HEAD", "--", "Images/tools")
-    untracked = git(
-        "ls-files", "--others", "--exclude-standard", "-z", "--", "Images/tools"
-    ).split(b"\0")
+    untracked = git("ls-files", "--others", "--exclude-standard", "-z", "--", "Images/tools").split(
+        b"\0"
+    )
 
     digest = hashlib.sha256()
     digest.update(b"APKRun Images/tools builder source v1\0")
@@ -605,8 +601,7 @@ def _read_reseal_output(
         entries[role] = entry
     if entries["vbmeta"].get("algorithm") != vendor_reseal.VBMETA_ALGORITHM:
         raise BundleVariantError(
-            f"{record_path} does not name a vbmeta signed with "
-            f"{vendor_reseal.VBMETA_ALGORITHM}"
+            f"{record_path} does not name a vbmeta signed with {vendor_reseal.VBMETA_ALGORITHM}"
         )
     if (
         entries["vbmeta"].get("signer") != vendor_reseal.VBMETA_SIGNER
@@ -628,16 +623,13 @@ def _read_reseal_output(
             "the resealed vendor_a",
         )
         vbmeta_info = run_avbtool(avbtool, ["info_image", "--image", str(files["vbmeta"])])
-        vbmeta_descriptor = vendor_reseal.vendor_tree(
-            vbmeta_info, "the refreshed vbmeta_a"
-        )
+        vbmeta_descriptor = vendor_reseal.vendor_tree(vbmeta_info, "the refreshed vbmeta_a")
         vbmeta_top = vendor_reseal.parse_top(vbmeta_info)
     except (ValueError, OSError) as error:
         raise BundleVariantError(f"{record_path}: the descriptors do not read: {error}") from None
     if (
         vbmeta_top.get("Algorithm") != vendor_reseal.VBMETA_ALGORITHM
-        or vbmeta_top.get("Public key (sha1)", "").lower()
-        != vendor_reseal.VBMETA_PUBLIC_KEY_SHA1
+        or vbmeta_top.get("Public key (sha1)", "").lower() != vendor_reseal.VBMETA_PUBLIC_KEY_SHA1
     ):
         raise BundleVariantError(
             f"{files['vbmeta']} is not signed with the pinned AOSP AVB development key"
@@ -850,13 +842,11 @@ def _verify_refreshed_vbmeta_matches_stock(
         stock_metadata = vendor_reseal.verify_vbmeta_signature(avbtool, stock_vbmeta)
         refreshed_metadata = vendor_reseal.verify_vbmeta_signature(avbtool, refreshed_vbmeta)
         stock_info = run_avbtool(avbtool, ["info_image", "--image", str(stock_vbmeta)])
-        refreshed_info = run_avbtool(
-            avbtool, ["info_image", "--image", str(refreshed_vbmeta)]
-        )
+        refreshed_info = run_avbtool(avbtool, ["info_image", "--image", str(refreshed_vbmeta)])
         stock_top = vendor_reseal.parse_top(stock_info)
         refreshed_top = vendor_reseal.parse_top(refreshed_info)
-        stock_header, stock_descriptors, _stock_offset, _stock_blob_size = (
-            _raw_vbmeta_descriptors(stock_vbmeta)
+        stock_header, stock_descriptors, _stock_offset, _stock_blob_size = _raw_vbmeta_descriptors(
+            stock_vbmeta
         )
         (
             refreshed_header,
@@ -919,8 +909,7 @@ def _verify_refreshed_vbmeta_matches_stock(
 
     if (
         stock_top.get("Algorithm") != vendor_reseal.VBMETA_ALGORITHM
-        or stock_top.get("Public key (sha1)", "").lower()
-        != vendor_reseal.VBMETA_PUBLIC_KEY_SHA1
+        or stock_top.get("Public key (sha1)", "").lower() != vendor_reseal.VBMETA_PUBLIC_KEY_SHA1
     ):
         raise BundleVariantError(
             f"stock {VBMETA_LABEL} is not signed with the pinned AOSP AVB development key"
@@ -945,11 +934,13 @@ def _verify_refreshed_vbmeta_matches_stock(
         )
 
     stock_vendor_indexes = [
-        index for index, (tag, name, _descriptor) in enumerate(stock_descriptors)
+        index
+        for index, (tag, name, _descriptor) in enumerate(stock_descriptors)
         if tag == 1 and name == vendor_reseal.PARTITION
     ]
     refreshed_vendor_indexes = [
-        index for index, (tag, name, _descriptor) in enumerate(refreshed_descriptors)
+        index
+        for index, (tag, name, _descriptor) in enumerate(refreshed_descriptors)
         if tag == 1 and name == vendor_reseal.PARTITION
     ]
     stock_vendor = [
@@ -957,17 +948,12 @@ def _verify_refreshed_vbmeta_matches_stock(
         for tag, name, descriptor in stock_descriptors
         if tag == 1 and name == vendor_reseal.PARTITION
     ]
-    if (
-        len(stock_vendor) != 1
-        or len(refreshed_vendor_descriptors) != 1
-    ):
+    if len(stock_vendor) != 1 or len(refreshed_vendor_descriptors) != 1:
         raise BundleVariantError(
             "stock and refreshed vbmeta images must carry exactly one vendor descriptor"
         )
     if stock_vendor_indexes != refreshed_vendor_indexes:
-        raise BundleVariantError(
-            f"the refreshed {VBMETA_LABEL} moved the vendor descriptor"
-        )
+        raise BundleVariantError(f"the refreshed {VBMETA_LABEL} moved the vendor descriptor")
     if refreshed_original_size != injected_original_size:
         raise BundleVariantError(
             "the resealed and injected vendor images have different original image sizes"
@@ -1100,11 +1086,7 @@ def build_variant(
     manifest_bytes, manifest = _verify_stock(stock_bundle, public_key)
     variant_manifest: dict[str, Any] = json.loads(manifest_bytes)
     source = variant_manifest["provenance"]["source"]
-    base = (
-        f"cf{source['buildId']}"
-        if source["origin"] == "ci.android.com"
-        else source["buildId"]
-    )
+    base = f"cf{source['buildId']}" if source["origin"] == "ci.android.com" else source["buildId"]
     variant_manifest["imageVersion"] = f"{image_version}-{base}-arm64"
     if variant_manifest["imageVersion"] == manifest["imageVersion"]:
         raise BundleVariantError(
@@ -1147,9 +1129,7 @@ def build_variant(
                 raise BundleVariantError(
                     f"{VBMETA_LABEL} of {stock_disk} differs from the manifest"
                 )
-            stock_values = _bootconfig_values(
-                stream, layout, stock_vbmeta_bytes
-            )
+            stock_values = _bootconfig_values(stream, layout, stock_vbmeta_bytes)
         if refresh.record["stock"].get("vbmetaSha256") != stock_vbmeta_sha:
             raise BundleVariantError("the reseal record names another stock vbmeta_a")
         stock_text = _read_text(stock_bundle / bootconfig_path)
@@ -1422,9 +1402,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not isinstance(build_id, str):
             raise BundleVariantError("manifest source.buildId is missing.")
         # The injected image is checked against its record. The vendor is the reseal (IR-746).
-        injected_image = _read_inject_output(
-            arguments.inject_output, arguments.partition, build_id
-        )
+        injected_image = _read_inject_output(arguments.inject_output, arguments.partition, build_id)
         if arguments.reseal_output is None:
             raise BundleVariantError(
                 "--reseal-output is required: the variant must carry the refreshed vbmeta_a "

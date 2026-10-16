@@ -193,10 +193,7 @@ def _raw_vbmeta_descriptors(
             if len(header_bytes) != 256:
                 raise ResealError(f"{image} has a truncated vbmeta header.")
             descriptor_offset = (
-                vbmeta_offset
-                + 256
-                + header.authentication_size
-                + header.descriptors_offset
+                vbmeta_offset + 256 + header.authentication_size + header.descriptors_offset
             )
             stream.seek(descriptor_offset)
             table = stream.read(header.descriptors_size)
@@ -480,18 +477,12 @@ def refresh_vbmeta_partition(
 
     partition_info = _info(avbtool, partition_image)
     original_size = _original_size(partition_info, f"the {partition_name} image")
-    partition_tree = _partition_tree(
-        partition_info, partition_name, f"the {partition_name} image"
-    )
+    partition_tree = _partition_tree(partition_info, partition_name, f"the {partition_name} image")
     if partition_tree["imageSize"] != original_size:
-        raise ResealError(
-            f"the {partition_name} hashtree does not cover the original image size."
-        )
+        raise ResealError(f"the {partition_name} hashtree does not cover the original image size.")
     _partition_header, image_descriptors = _raw_vbmeta_descriptors(partition_image)
     target_image_descriptors = [
-        encoded
-        for tag, name, encoded in image_descriptors
-        if tag == 1 and name == partition_name
+        encoded for tag, name, encoded in image_descriptors if tag == 1 and name == partition_name
     ]
     if len(target_image_descriptors) != 1:
         raise ResealError(
@@ -503,9 +494,7 @@ def refresh_vbmeta_partition(
         verify_image = Path(verify_name) / f"{partition_name}.part"
         verify_image.symlink_to(partition_image.resolve())
         try:
-            verified_footer = run_avbtool(
-                avbtool, ["verify_image", "--image", str(verify_image)]
-            )
+            verified_footer = run_avbtool(avbtool, ["verify_image", "--image", str(verify_image)])
         except ValueError as error:
             raise ResealError(
                 f"avbtool could not verify the hashtree footer of the {partition_name} partition: "
@@ -654,9 +643,7 @@ def reseal(
         vendor_out = scratch / OUTPUT_IMAGE
         vbmeta_out = scratch / OUTPUT_VBMETA
         vendor = reseal_vendor(avbtool, injected, stock_vendor, vendor_out, scratch)
-        vbmeta = refresh_vbmeta(
-            avbtool, stock_vbmeta, vendor_out, signing_key, vbmeta_out, scratch
-        )
+        vbmeta = refresh_vbmeta(avbtool, stock_vbmeta, vendor_out, signing_key, vbmeta_out, scratch)
         record: dict[str, Any] = {
             "schemaVersion": SCHEMA_VERSION,
             "task": TASK,

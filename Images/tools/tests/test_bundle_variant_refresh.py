@@ -62,10 +62,7 @@ def _change_vendor_hashtree_u32(image: Path, field_offset: int, value: int) -> P
         io.BytesIO(data), artifact_size=len(data), artifact_name=str(image)
     )
     table_start = (
-        vbmeta_offset
-        + VBMETA_HEADER_SIZE
-        + header.authentication_size
-        + header.descriptors_offset
+        vbmeta_offset + VBMETA_HEADER_SIZE + header.authentication_size + header.descriptors_offset
     )
     table_end = table_start + header.descriptors_size
     cursor = table_start
@@ -438,9 +435,7 @@ def test_a_validly_resealed_vendor_cannot_replace_the_checked_injected_payload(
         run_avbtool(avbtool, ["info_image", "--image", str(refresh.vendor)]),
         "the changed test vendor",
     )
-    assert not variant._same_file_prefix(
-        refresh.vendor, refresh.injected, tree["imageSize"]
-    )
+    assert not variant._same_file_prefix(refresh.vendor, refresh.injected, tree["imageSize"])
     with pytest.raises(
         BundleVariantError,
         match="does not carry the exact descriptor of the checked inject-vendor output",
@@ -546,7 +541,10 @@ def test_a_resigned_long_non_vendor_property_change_is_refused_even_with_updated
     inject, reseal, record_path, record = _reseal_fixture(tmp_path)
     avbtool = _avbtool()
     stock_vbmeta = _vbmeta_for(
-        avbtool, tmp_path, "stock", reseal / "vendor_a.img",
+        avbtool,
+        tmp_path,
+        "stock",
+        reseal / "vendor_a.img",
         properties=("apkrun:" + "a" * 300,),
     )
     altered_vbmeta = _vbmeta_for(
@@ -576,9 +574,7 @@ def test_a_resigned_vendor_descriptor_version_or_flags_change_is_refused(
     inject, reseal, record_path, record = _reseal_fixture(tmp_path)
     avbtool = _avbtool()
     stock_vbmeta = _vbmeta_for(avbtool, tmp_path, "stock-vendor", reseal / "vendor_a.img")
-    changed_vendor = _change_vendor_hashtree_u32(
-        reseal / "vendor_a.img", field_offset, value
-    )
+    changed_vendor = _change_vendor_hashtree_u32(reseal / "vendor_a.img", field_offset, value)
     altered_vbmeta = _vbmeta_for(avbtool, tmp_path, "altered-vendor", changed_vendor)
     (reseal / "vbmeta_a.img").write_bytes(altered_vbmeta.read_bytes())
     record["vbmeta"]["sha256"] = _sha(altered_vbmeta.read_bytes())

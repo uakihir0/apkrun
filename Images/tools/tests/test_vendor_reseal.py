@@ -371,9 +371,7 @@ def test_the_refreshed_vbmeta_changes_only_the_vendor_descriptor(tmp_path: Path)
     refreshed_scratch.mkdir()
     output = tmp_path / "vbmeta_a.img"
 
-    record = refresh_vbmeta(
-        avbtool, stock_vbmeta, vendor, TEST_KEY, output, refreshed_scratch
-    )
+    record = refresh_vbmeta(avbtool, stock_vbmeta, vendor, TEST_KEY, output, refreshed_scratch)
 
     assert output.stat().st_size == stock_vbmeta.stat().st_size
     assert record["rollbackIndex"] == 7
@@ -453,12 +451,8 @@ def test_refresh_vbmeta_partition_preserves_everything_except_the_target_descrip
     tmp_path: Path,
 ) -> None:
     avbtool = _avbtool()
-    old_partition = _seal_named(
-        avbtool, tmp_path, "odm-stock", "odm", _content("odm-stock")
-    )
-    new_partition = _seal_named(
-        avbtool, tmp_path, "odm-new", "odm", _content("odm-new")
-    )
+    old_partition = _seal_named(avbtool, tmp_path, "odm-stock", "odm", _content("odm-stock"))
+    new_partition = _seal_named(avbtool, tmp_path, "odm-new", "odm", _content("odm-new"))
     metadata = tmp_path / "public-key-metadata.bin"
     metadata.write_bytes(b"APKRun generic partition metadata")
     stock_vbmeta = _stock_vbmeta(
@@ -566,9 +560,7 @@ def test_refresh_vbmeta_partition_rejects_a_vbmeta_signed_by_another_key(
     output = tmp_path / "refreshed.img"
 
     with pytest.raises(ResealError, match="pinned AOSP AVB test key"):
-        refresh_vbmeta_partition(
-            avbtool, stock_vbmeta, partition, "odm", TEST_KEY, output, scratch
-        )
+        refresh_vbmeta_partition(avbtool, stock_vbmeta, partition, "odm", TEST_KEY, output, scratch)
     assert not output.exists()
 
 
@@ -600,9 +592,7 @@ def test_refresh_vbmeta_partition_requires_one_stock_target_descriptor(
     monkeypatch.setattr(vendor_reseal, "_raw_vbmeta_descriptors", report_duplicate_target)
 
     with pytest.raises(ResealError, match="exactly one odm hashtree descriptor"):
-        refresh_vbmeta_partition(
-            avbtool, stock_vbmeta, partition, "odm", TEST_KEY, output, scratch
-        )
+        refresh_vbmeta_partition(avbtool, stock_vbmeta, partition, "odm", TEST_KEY, output, scratch)
     assert not output.exists()
 
 
@@ -610,12 +600,8 @@ def test_refresh_vbmeta_partition_rejects_an_invalid_replacement_footer(
     tmp_path: Path,
 ) -> None:
     avbtool = _avbtool()
-    stock_partition = _seal_named(
-        avbtool, tmp_path, "odm-stock", "odm", _content("odm-stock")
-    )
-    replacement = _seal_named(
-        avbtool, tmp_path, "odm-new", "odm", _content("odm-new")
-    )
+    stock_partition = _seal_named(avbtool, tmp_path, "odm-stock", "odm", _content("odm-stock"))
+    replacement = _seal_named(avbtool, tmp_path, "odm-new", "odm", _content("odm-new"))
     stock_vbmeta = _stock_vbmeta(avbtool, tmp_path, "odm-stock", stock_partition)
     data = bytearray(replacement.read_bytes())
     data[8192] ^= 0xFF

@@ -36,6 +36,7 @@ from apkrun_image.bundle import build_bundle
 from apkrun_image.bundle_variant import (
     BundleVariantError,
     _read_inject_output,
+    build_parser,
     build_variant,
     main,
 )
@@ -52,6 +53,7 @@ from apkrun_image.sign import (
 )
 
 VENDOR = "vendor_a"
+VARIANT_IMAGE_VERSION = "2026.10.1"
 STOCK_SUPER = "stock-super.sparse"
 PLAIN_FILES = (
     "boot/bootconfig.txt",
@@ -170,13 +172,19 @@ def _vendor_extents(region: bytes) -> tuple[lp.LogicalPartition, list[tuple[int,
 
 
 def _variant(
-    stock: Path, replacement: Path, output: Path, *, stock_super: Path | None = None
+    stock: Path,
+    replacement: Path,
+    output: Path,
+    *,
+    stock_super: Path | None = None,
+    image_version: str = VARIANT_IMAGE_VERSION,
 ) -> dict[str, Any]:
     return build_variant(
         stock_bundle=stock,
         stock_super=stock_super or stock.parent / STOCK_SUPER,
         partition=VENDOR,
         replacement=replacement,
+        image_version=image_version,
         output=output,
         sign_key=TEST_KEY,
     )
@@ -214,16 +222,19 @@ def test_only_the_replaced_extents_differ_from_the_stock_disk(
         assert (tmp_path / "variant" / name).read_bytes() == (stock_bundle / name).read_bytes()
 
 
-def test_the_manifest_changes_only_the_two_hashes_it_must(
+def test_the_manifest_changes_identity_and_hashes_and_is_resigned(
     tmp_path: Path, stock_bundle: Path
 ) -> None:
-    _variant(stock_bundle, _payload(tmp_path), tmp_path / "variant")
+    record = _variant(stock_bundle, _payload(tmp_path), tmp_path / "variant")
     variant = tmp_path / "variant"
     manifest_bytes = (variant / "manifest.json").read_bytes()
     manifest = json.loads(manifest_bytes)
 
     _, region = _super_region(variant)
     expected = json.loads((stock_bundle / "manifest.json").read_text(encoding="utf-8"))
+    expected["imageVersion"] = (
+        f"{VARIANT_IMAGE_VERSION}-cf{expected['provenance']['source']['buildId']}-arm64"
+    )
     for partition in expected["disks"][0]["partitions"]:
         if partition["label"] == "super":
             partition["sha256"] = _sha256(region)
@@ -233,6 +244,11 @@ def test_the_manifest_changes_only_the_two_hashes_it_must(
     assert manifest == expected
     assert validate(manifest) == []
     assert manifest["kind"] == "stock"
+    stock_manifest = json.loads((stock_bundle / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["provenance"] == stock_manifest["provenance"]
+    assert manifest["provenance"]["source"]["buildId"] == "16373615"
+    assert record["imageVersion"] == manifest["imageVersion"]
+    assert "IR-1322" in record["decisions"]["identity"]  # type: ignore[index]
     for entry in manifest["files"]:
         data = (variant / entry["path"]).read_bytes()
         assert entry == {"path": entry["path"], "size": len(data), "sha256": _sha256(data)}
@@ -245,6 +261,52 @@ def test_the_manifest_changes_only_the_two_hashes_it_must(
         (variant / "manifest.sig").read_bytes(),
         {key_id_of(public_key): public_key},
     )
+
+
+def test_the_variant_version_must_be_distinct_from_the_stock_version(
+    tmp_path: Path, stock_bundle: Path
+) -> None:
+    with pytest.raises(BundleVariantError, match="distinct from the stock bundle"):
+        _variant(
+            stock_bundle,
+            _payload(tmp_path),
+            tmp_path / "variant",
+            image_version="2026.10.0",
+        )
+    assert not (tmp_path / "variant").exists()
+    assert not (tmp_path / "variant.variant.json").exists()
+
+
+def test_the_variant_version_uses_the_short_image_version_form(
+    tmp_path: Path, stock_bundle: Path
+) -> None:
+    with pytest.raises(BundleVariantError, match="short form YYYY.MM.N"):
+        _variant(
+            stock_bundle,
+            _payload(tmp_path),
+            tmp_path / "variant",
+            image_version="2026.10.2-cf16373615-arm64",
+        )
+    assert not (tmp_path / "variant").exists()
+    assert not (tmp_path / "variant.variant.json").exists()
+
+
+def test_the_command_requires_an_explicit_variant_version() -> None:
+    with pytest.raises(SystemExit, match="2"):
+        build_parser().parse_args(
+            [
+                "--bundle",
+                "bundle",
+                "--manifest",
+                "manifest.json",
+                "--inject-output",
+                "inject",
+                "--sign-key",
+                "key",
+                "--out",
+                "variant",
+            ]
+        )
 
 
 def test_a_damaged_stock_bundle_is_refused_and_nothing_is_written(
@@ -346,6 +408,8 @@ def test_the_command_reports_a_bad_inject_record_and_exits_2(
             str(FIXTURE_MANIFEST),
             "--inject-output",
             str(directory),
+            "--image-version",
+            VARIANT_IMAGE_VERSION,
             "--sign-key",
             str(TEST_KEY),
             "--out",
@@ -571,6 +635,7 @@ def test_a_refreshed_vbmeta_is_restricted_to_stock_development_images(
             stock_super=stock_bundle.parent / STOCK_SUPER,
             partition=VENDOR,
             replacement=_payload(tmp_path),
+            image_version=VARIANT_IMAGE_VERSION,
             output=tmp_path / "variant",
             sign_key=TEST_KEY,
             refresh=refresh,

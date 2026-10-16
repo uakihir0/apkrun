@@ -499,6 +499,7 @@ def build(args: argparse.Namespace) -> None:
         stock_super=WORK / "super-src.sparse",
         partition=PARTITION,
         replacement=WORK / "odm_new.img",
+        image_version="2026.10.1",
         output=out,
         sign_key=KEY,
         refresh=refresh,

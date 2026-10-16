@@ -20,13 +20,14 @@ The stock bundle is read and never changed:
 6. The file entries, the super partition hash, `SHA256SUMS`, and `manifest.sig` are made by the
    bundle module's own functions. The manifest is validated (runtime-image-manifest.md §5, §6).
 
-The variant keeps the stock `imageVersion` and `kind`, because the schema has no field for a
-variant and the rules fix `kind` to the origin (IR-700). Its top-level vbmeta is signed with the
-stock-matching AOSP test key (IR-1321) when it is refreshed, and remains the stock vbmeta otherwise
-(IR-650). The AOSP key is accepted only for `kind: stock` development bundles. No partition changes
-size (IR-682). `manifest.sig` is made with the developer image key, which Debug builds trust. The
-record next to the bundle names every input and output, and it is outside the bundle, because the
-bundle lists its own files.
+The caller supplies a distinct short image version. The builder combines it with the unchanged
+source build identity to give the variant its own `imageVersion`, while preserving the stock
+`kind` and signed provenance (IR-1322). Its top-level vbmeta is signed with the stock-matching AOSP
+test key (IR-1321) when it is refreshed, and remains the stock vbmeta otherwise (IR-650). The AOSP
+key is accepted only for `kind: stock` development bundles. No partition changes size (IR-682).
+`manifest.sig` is made with the developer image key, which Debug builds trust. The record next to
+the bundle names every input and output, and it is outside the bundle, because the bundle lists
+its own files.
 """
 
 from __future__ import annotations
@@ -59,6 +60,7 @@ from apkrun_image.avb import (
     calculate_vbmeta_bootconfig,
 )
 from apkrun_image.bundle import (
+    SHORT_VERSION_PATTERN,
     BundleError,
     _checksums,
     _file_entry,
@@ -987,6 +989,7 @@ def build_variant(
     stock_super: Path,
     partition: str,
     replacement: Path,
+    image_version: str,
     output: Path,
     sign_key: Path,
     refresh: _Refresh | None = None,
@@ -996,9 +999,12 @@ def build_variant(
     `stock_super` is the sparse super artifact that the stock bundle was built from. With `refresh`
     the variant also replaces `vbmeta_a` with the refreshed top-level vbmeta, and it recomputes the
     bootconfig's vbmeta values (IR-746, IR-747). Without it the vbmeta is the stock one, so the
-    replaced vendor partition does not verify (IR-650). Nothing is written when a check fails, and
-    an existing `output` or record is never replaced.
+    replaced vendor partition does not verify (IR-650). `image_version` is the short `YYYY.MM.N`
+    sequence used to make a distinct full identity while retaining source provenance (IR-1322).
+    Nothing is written when a check fails, and an existing `output` or record is never replaced.
     """
+    if not SHORT_VERSION_PATTERN.fullmatch(image_version):
+        raise BundleVariantError("--image-version must be the short form YYYY.MM.N")
     key = _load_signing_key(sign_key)
     public_key = key.public_key().public_bytes(encoding=Encoding.Raw, format=PublicFormat.Raw)
     output = output.expanduser()
@@ -1010,6 +1016,24 @@ def build_variant(
         raise BundleVariantError(f"{replacement} is not a file")
 
     manifest_bytes, manifest = _verify_stock(stock_bundle, public_key)
+    variant_manifest: dict[str, Any] = json.loads(manifest_bytes)
+    source = variant_manifest["provenance"]["source"]
+    base = (
+        f"cf{source['buildId']}"
+        if source["origin"] == "ci.android.com"
+        else source["buildId"]
+    )
+    variant_manifest["imageVersion"] = f"{image_version}-{base}-arm64"
+    if variant_manifest["imageVersion"] == manifest["imageVersion"]:
+        raise BundleVariantError(
+            "--image-version must produce an imageVersion distinct from the stock bundle"
+        )
+    identity_violations = validate(variant_manifest)
+    if identity_violations:
+        first = identity_violations[0]
+        raise BundleVariantError(
+            f"the variant identity fails {first.rule} at {first.path}: {first.reason}"
+        )
     if refresh is not None and manifest.get("kind") != "stock":
         raise BundleVariantError(
             "the AOSP AVB test key can refresh vbmeta only in a kind: stock development bundle"
@@ -1163,7 +1187,6 @@ def build_variant(
 
         files = [_file_entry(bundle, entry["path"]) for entry in manifest["files"]]
         by_path = {entry["path"]: entry for entry in files}
-        variant_manifest: dict[str, Any] = json.loads(manifest_bytes)
         _super_record(variant_manifest)[1]["sha256"] = super_sha
         if vbmeta_sha is not None:
             _disk_partition(variant_manifest, VBMETA_LABEL)["sha256"] = vbmeta_sha
@@ -1218,7 +1241,10 @@ def build_variant(
             "decisions": {
                 "topLevelVbmeta": top_level_decision,
                 "partitionSize": "unchanged, the writer does not grow a partition (IR-682)",
-                "identity": "stock imageVersion and kind kept (IR-700)",
+                "identity": (
+                    f"short version {image_version}; source build identity, stock kind, and "
+                    "provenance kept (IR-1322)"
+                ),
                 "manifestSignature": "developer image key, trusted by Debug builds",
             },
         }
@@ -1287,6 +1313,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--partition", default="vendor_a", help="logical partition to replace")
     parser.add_argument(
+        "--image-version",
+        required=True,
+        help="short YYYY.MM.N version for a distinct variant identity",
+    )
+    parser.add_argument(
         "--sign-key",
         required=True,
         type=Path,
@@ -1342,6 +1373,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 stock_super=stock_super,
                 partition=arguments.partition,
                 replacement=refresh.vendor,
+                image_version=arguments.image_version,
                 output=output,
                 sign_key=arguments.sign_key,
                 refresh=refresh,

@@ -14460,6 +14460,8 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Reason.** The manifest has `additionalProperties: false`, S1 requires the base of `imageVersion` to equal `cf<buildId>`, and S2 fixes `kind` to the origin, so there is no slot for a variant. The consequence is concrete: `apkrun dev image install <dir>` renames the install to `Images/<imageVersion>/` and sets `current` (§10.3), so installing the variant that way would take the stock entry's name, and `apkrun dev boot` boots `current`. The VM step cannot boot the variant until this decision is made.
 
+**Resolution (2026-10-16).** IR-1322 gives the variant a distinct `imageVersion` from an explicit short version while retaining the source build ID, `kind: stock`, and complete provenance. The bundle can now be installed under its own `Images/<imageVersion>/` path. The decision does not establish that a live corrected image boots; #099 still needs its remaining guest and image acceptance evidence.
+
 ## IR-701: The variant copies `os.img` and writes the expanded super into it, and `build_disks` is not changed
 
 | Field | Value |
@@ -18676,3 +18678,19 @@ release was performed by this decision.
 credential. This decision does not close #099's corrected-image identity,
 provenance, or guest-boot criteria; those still require the remaining task
 steps and T2 evidence.
+
+## IR-1322: Give a #099 variant a distinct imageVersion without changing its Android source identity
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6; [M02-graphics.md](issues/M02-graphics.md) #099; IR-700 |
+
+**Choice.** Require `bundle-variant --image-version YYYY.MM.N` and a corresponding required `image_version` argument in `build_variant`. The builder appends the base and architecture from the input manifest's Android source identity to form the full version, such as `2026.10.1-cf16373615-arm64`. It rejects the stock's own full version and validates the candidate manifest before building. The candidate is the stock manifest with only `imageVersion` changed at this stage: `provenance.source.buildId`, the full source and Android provenance, and `kind: stock` are retained. After the disk and bootconfig changes, the bundle code regenerates file entries, `SHA256SUMS`, and the developer-key `manifest.sig` and validates the final manifest. The caller chooses a sequence that does not collide with another image it installs.
+
+**Reason.** `imageVersion` is the install directory identity, and IR-700 records that reusing the stock value would make an install collide with the stock image. The schema does not allow a variant marker, S1 ties the version base to the original Android build ID, and S2 fixes `kind` to the source origin. A distinct monthly sequence uses the existing identity format and satisfies both semantic rules without weakening provenance or extending the manifest schema. Requiring the sequence makes the identity decision reviewable and prevents the tool from silently assigning an arbitrary value. There is no global allocator in the local bundle tool, so the caller must select a collision-free sequence.
+
+**Verification.** Focused T0 coverage checks that the required CLI argument is enforced, malformed and stock-equal values are rejected without output, and the resulting version retains the source build ID, provenance, and stock kind. It validates the manifest, recomputed file hashes and `SHA256SUMS`, and the developer signature over the new manifest. These host checks do not produce or boot a live corrected image.
+
+**Risk.** A caller can select a version triple already used by another local image. The command refuses only the exact stock version because it has no inventory of all install directories; callers must choose an unused monthly sequence. #099's real-image identity and guest acceptance criteria remain open until the corrected image is built and tested in the guest.

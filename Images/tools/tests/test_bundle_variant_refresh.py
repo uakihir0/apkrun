@@ -713,6 +713,8 @@ def test_the_command_needs_the_reseal_output_after_the_inject_record_is_checked(
             str(FIXTURE_MANIFEST),
             "--inject-output",
             str(inject),
+            "--image-version",
+            "2026.10.1",
             "--sign-key",
             str(tmp_path / "missing-key"),
             "--out",

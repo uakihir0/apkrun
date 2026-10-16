@@ -102,10 +102,19 @@ enum LinuxGuestHarness {
         case guestPowerOff
         case requestPowerButton
         case forced
-        case observeGuestReboot
+        case observeGuestReboot(afterCheck: String)
         case observeGuestPanic
         case forcedAfterConsoleLine(String)
         case forcedAfterConsoleLineDelay(String, Duration)
+
+        var rebootCheckName: String? {
+            switch self {
+            case .observeGuestReboot(afterCheck: let name):
+                name
+            default:
+                nil
+            }
+        }
     }
 
     enum RebootObservation: Equatable {
@@ -394,10 +403,11 @@ enum LinuxGuestHarness {
                     stateStream.stream,
                     timeout: .seconds(60)
                 )
-            } else if stopBehavior == .observeGuestReboot {
+            } else if let rebootCheckName = stopBehavior.rebootCheckName {
                 let observation = try await observeGuestReboot(
                     events: events.stream,
-                    continuation: events.continuation
+                    continuation: events.continuation,
+                    checkName: rebootCheckName
                 )
                 observedRecords = observation.records
                 rebootObservation = observation.outcome
@@ -428,7 +438,7 @@ enum LinuxGuestHarness {
                     try await controller.requestGuestStop()
                 case .forced:
                     try await controller.stop()
-                case .observeGuestReboot:
+                case .observeGuestReboot(afterCheck: _):
                     preconditionFailure("Reboot observation is handled above.")
                 case .observeGuestPanic, .forcedAfterConsoleLine,
                     .forcedAfterConsoleLineDelay:
@@ -1008,7 +1018,8 @@ enum LinuxGuestHarness {
 
     static func observeGuestReboot(
         events: AsyncStream<HarnessEvent>,
-        continuation: AsyncStream<HarnessEvent>.Continuation
+        continuation: AsyncStream<HarnessEvent>.Continuation,
+        checkName: String = "rng-reboot"
     ) async throws -> (records: [TestGuestRecord], outcome: RebootObservation) {
         var records: [TestGuestRecord] = []
         var iterator = events.makeAsyncIterator()
@@ -1025,7 +1036,9 @@ enum LinuxGuestHarness {
             switch event {
             case .record(let record):
                 records.append(record)
-                if case .check(name: "rng-reboot", result: .ok, detail: _) = record {
+                if case .check(name: let name, result: .ok, detail: _) = record,
+                    name == checkName
+                {
                     didSeeRebootMarker = true
                     timeoutTask.cancel()
                     timeoutTask = Task {

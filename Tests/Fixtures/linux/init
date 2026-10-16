@@ -35,6 +35,7 @@ done < /etc/apkrun/modules.list
 requested_tests=
 poweroff_after_tests=0
 reboot_after_rng=0
+virgl_lifecycle_gate=0
 flood_line_count=0
 panic_after_tests=0
 network_port=
@@ -49,6 +50,7 @@ for argument in $(cat /proc/cmdline); do
         apkrun.test=*) requested_tests="${argument#apkrun.test=}" ;;
         apkrun.test.poweroff=*) poweroff_after_tests="${argument#apkrun.test.poweroff=}" ;;
         apkrun.test.rng.reboot=*) reboot_after_rng="${argument#apkrun.test.rng.reboot=}" ;;
+        apkrun.test.virgl.lifecycle_gate=*) virgl_lifecycle_gate="${argument#apkrun.test.virgl.lifecycle_gate=}" ;;
         apkrun.test.flood=*) flood_line_count="${argument#apkrun.test.flood=}" ;;
         apkrun.test.panic=*) panic_after_tests="${argument#apkrun.test.panic=}" ;;
         apkrun.test.net.port=*) network_port="${argument#apkrun.test.net.port=}" ;;
@@ -743,7 +745,19 @@ if [ "$poweroff_after_tests" != 1 ]; then
     fi
 fi
 
+if [ "$virgl_lifecycle_gate" = 1 ]; then
+    if ! stty raw -echo; then
+        fail virgl-lifecycle-console-configuration-failed
+    fi
+fi
+
 printf 'APKRUN-TEST: boot ok\n'
+if [ "$virgl_lifecycle_gate" = 1 ]; then
+    IFS= read -r lifecycle_gate_command || fail virgl-lifecycle-run-token-not-received
+    if [ "$lifecycle_gate_command" != APKRUN-VIRGL-RUN ]; then
+        fail "virgl-lifecycle-unexpected-gate-token-$lifecycle_gate_command"
+    fi
+fi
 if [ -n "$power_monitor_pid" ]; then
     printf 'APKRUN-TEST: powerinput ok PL061 offset 6 line request confirmed\n'
 fi
@@ -864,6 +878,135 @@ run_virgl_test() {
     printf 'APKRUN-TEST: virgl ok renderer=%s requested=60 reported=%s\n' "$virgl_renderer" "$virgl_frames"
 }
 
+run_virgl_lifecycle_test() {
+    if ! wait_for_drm_path /sys/class/drm/card0-Virtual-1/status; then
+        printf 'APKRUN-TEST: virgl-lifecycle fail card0-Virtual-1 was not created\n'
+        return 1
+    fi
+    virgl_status=$(cat /sys/class/drm/card0-Virtual-1/status)
+    if [ "$virgl_status" != connected ]; then
+        printf 'APKRUN-TEST: virgl-lifecycle fail card0-Virtual-1 status is %s\n' "$virgl_status"
+        return 1
+    fi
+
+    # kmscube polls stdin with select() and treats EOF as an interrupt. Keep it
+    # open on an idle FIFO instead of /dev/null or the host-control console.
+    virgl_lifecycle_stdin=/tmp/apkrun-kmscube-lifecycle.stdin
+    if ! mkfifo "$virgl_lifecycle_stdin"; then
+        fail virgl-lifecycle-stdin-fifo-create-failed
+    fi
+    if ! exec 3<>"$virgl_lifecycle_stdin"; then
+        fail virgl-lifecycle-stdin-fifo-open-failed
+    fi
+    rm -f "$virgl_lifecycle_stdin"
+    # Keep kmscube's resources attached while the host exercises reset or stop.
+    /usr/bin/kmscube -D /dev/dri/card0 -c 100000000 \
+        >/tmp/apkrun-kmscube-lifecycle.log 2>&1 <&3 &
+    virgl_lifecycle_kmscube_pid=$!
+    if ! virgl_lifecycle_kmscube_is_running; then
+        sed 's/^/kmscube: /' /tmp/apkrun-kmscube-lifecycle.log
+        fail virgl-lifecycle-kmscube-exited-before-ready
+    fi
+    printf 'APKRUN-TEST: virgl-lifecycle-ready ok kmscube process is running\n'
+
+    IFS= read -r virgl_lifecycle_action || fail virgl-lifecycle-action-not-received
+    if [ "$virgl_lifecycle_action" != pause ]; then
+        fail "virgl-lifecycle-unexpected-action-$virgl_lifecycle_action"
+    fi
+    if ! virgl_lifecycle_kmscube_is_running; then
+        sed 's/^/kmscube: /' /tmp/apkrun-kmscube-lifecycle.log
+        fail virgl-lifecycle-kmscube-exited-before-host-pause
+    fi
+    if ! kill -s STOP "$virgl_lifecycle_kmscube_pid"; then
+        fail virgl-lifecycle-kmscube-could-not-pause
+    fi
+    if ! virgl_lifecycle_wait_until_kmscube_is_paused; then
+        sed 's/^/kmscube: /' /tmp/apkrun-kmscube-lifecycle.log
+        fail virgl-lifecycle-kmscube-pause-not-observed
+    fi
+    printf 'APKRUN-TEST: virgl-lifecycle-paused ok kmscube paused\n'
+
+    IFS= read -r virgl_lifecycle_action || fail virgl-lifecycle-operation-not-received
+    if ! virgl_lifecycle_kmscube_is_paused; then
+        sed 's/^/kmscube: /' /tmp/apkrun-kmscube-lifecycle.log
+        fail virgl-lifecycle-kmscube-not-paused-at-host-operation
+    fi
+    case "$virgl_lifecycle_action" in
+        reset)
+            printf 'APKRUN-TEST: virgl-lifecycle-operation-ready ok reset requested; kmscube paused\n'
+            IFS= read -r virgl_lifecycle_action || fail virgl-lifecycle-reset-commit-not-received
+            if [ "$virgl_lifecycle_action" != commit-reset ]; then
+                fail "virgl-lifecycle-unexpected-reset-commit-$virgl_lifecycle_action"
+            fi
+            if ! virgl_lifecycle_kmscube_is_paused; then
+                fail virgl-lifecycle-kmscube-not-paused-at-reset
+            fi
+            printf 'APKRUN-TEST: virgl-reset ok reset committed with kmscube paused\n'
+            /sbin/reboot -f
+            while :; do sleep 1; done
+            ;;
+        stop)
+            printf 'APKRUN-TEST: virgl-lifecycle-operation-ready ok stop requested; kmscube paused\n'
+            IFS= read -r virgl_lifecycle_action || fail virgl-lifecycle-stop-commit-not-received
+            if [ "$virgl_lifecycle_action" != commit-stop ]; then
+                fail "virgl-lifecycle-unexpected-stop-commit-$virgl_lifecycle_action"
+            fi
+            if ! virgl_lifecycle_kmscube_is_paused; then
+                fail virgl-lifecycle-kmscube-not-paused-at-stop
+            fi
+            printf 'APKRUN-TEST: virgl-stop-ready ok kmscube paused\n'
+            while :; do sleep 1; done
+            ;;
+        *)
+            fail "virgl-lifecycle-unexpected-operation-$virgl_lifecycle_action"
+            ;;
+    esac
+}
+
+virgl_lifecycle_kmscube_is_running() {
+    if ! kill -0 "$virgl_lifecycle_kmscube_pid" 2>/dev/null; then
+        return 1
+    fi
+    virgl_lifecycle_process_state=$(
+        sed -n 's/^State:[[:space:]]*//p' "/proc/$virgl_lifecycle_kmscube_pid/status" 2>/dev/null
+    )
+    case "$virgl_lifecycle_process_state" in
+        ""|Z*|T*|t*) return 1 ;;
+    esac
+}
+
+virgl_lifecycle_kmscube_is_paused() {
+    if ! kill -0 "$virgl_lifecycle_kmscube_pid" 2>/dev/null; then
+        return 1
+    fi
+    virgl_lifecycle_process_state=$(
+        sed -n 's/^State:[[:space:]]*//p' "/proc/$virgl_lifecycle_kmscube_pid/status" 2>/dev/null
+    )
+    case "$virgl_lifecycle_process_state" in
+        T*|t*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+virgl_lifecycle_wait_until_kmscube_is_paused() {
+    virgl_lifecycle_pause_attempt=0
+    while [ "$virgl_lifecycle_pause_attempt" -lt 100 ]; do
+        if virgl_lifecycle_kmscube_is_paused; then
+            return 0
+        fi
+        if ! kill -0 "$virgl_lifecycle_kmscube_pid" 2>/dev/null; then
+            return 1
+        fi
+        virgl_lifecycle_pause_attempt=$((virgl_lifecycle_pause_attempt + 1))
+        sleep 0.1
+    done
+    virgl_lifecycle_process_state=$(
+        sed -n 's/^State:[[:space:]]*//p' "/proc/$virgl_lifecycle_kmscube_pid/status" 2>/dev/null
+    )
+    printf 'APKRUN-TEST: virgl-lifecycle fail kmscube pause state=%s\n' "$virgl_lifecycle_process_state"
+    return 1
+}
+
 if [ -n "$requested_tests" ]; then
     previous_ifs=$IFS
     IFS=,
@@ -883,6 +1026,9 @@ if [ -n "$requested_tests" ]; then
                 ;;
             virgl)
                 run_virgl_test
+                ;;
+            virgl-lifecycle)
+                run_virgl_lifecycle_test
                 ;;
             blk)
                 run_block_test

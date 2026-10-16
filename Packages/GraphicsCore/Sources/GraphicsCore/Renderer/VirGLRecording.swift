@@ -78,6 +78,7 @@ public final class VirGLRecorder: @unchecked Sendable {
     private let recordsOperations: Bool
     private var operations: [VirGLOperation] = []
     private var guestBackingObservations: [UInt32: VirGLGuestBackingObservation] = [:]
+    private var attachedGuestBackingResourceIDs = Set<UInt32>()
 
     /// Creates a recorder.
     ///
@@ -106,6 +107,17 @@ public final class VirGLRecorder: @unchecked Sendable {
         }
     }
 
+    /// The latest observation for a configured resource ID if it belongs to the backing currently attached to the
+    /// renderer.
+    public func guestBackingObservationIfAttachedForTest(
+        resourceID: UInt32
+    ) -> VirGLGuestBackingObservation? {
+        lock.withLock {
+            guard attachedGuestBackingResourceIDs.contains(resourceID) else { return nil }
+            return guestBackingObservations[resourceID]
+        }
+    }
+
     /// Writes the operations recorded so far to `url`, in the replay format of `VirGLRecording` (version 1).
     public func writeRecording(to url: URL) throws(VirGLRecordingFailure) {
         do {
@@ -122,6 +134,25 @@ public final class VirGLRecorder: @unchecked Sendable {
 
     func observesGuestResource(_ resourceID: UInt32) -> Bool {
         observedGuestResourceIDs.contains(resourceID)
+    }
+
+    func guestBackingDidAttach(resourceID: UInt32) {
+        lock.withLock {
+            _ = guestBackingObservations.removeValue(forKey: resourceID)
+            _ = attachedGuestBackingResourceIDs.insert(resourceID)
+        }
+    }
+
+    func guestBackingDidDetach(resourceID: UInt32) {
+        lock.withLock {
+            _ = attachedGuestBackingResourceIDs.remove(resourceID)
+        }
+    }
+
+    func guestBackingsDidReset() {
+        lock.withLock {
+            attachedGuestBackingResourceIDs.removeAll()
+        }
     }
 
     /// Samples up to 4096 bytes from the live ranges that the renderer receives for an observed resource. This runs
@@ -224,6 +255,7 @@ final class RecordingVirGLEngine: VirGLEngine {
         recorder.record(.unrefResource(id: id))
         attachedGuestBackings.removeValue(forKey: id)
         sampledGuestResources.remove(id)
+        recorder.guestBackingDidDetach(resourceID: id)
         inner.unrefResource(id: id)
     }
 
@@ -233,12 +265,14 @@ final class RecordingVirGLEngine: VirGLEngine {
         try inner.attachBacking(resource: resource, ranges: ranges)
         if recorder.observesGuestResource(resource) {
             attachedGuestBackings[resource] = ranges
+            recorder.guestBackingDidAttach(resourceID: resource)
         }
     }
 
     func detachBacking(resource: UInt32) {
         attachedGuestBackings.removeValue(forKey: resource)
         sampledGuestResources.remove(resource)
+        recorder.guestBackingDidDetach(resourceID: resource)
         inner.detachBacking(resource: resource)
     }
 
@@ -287,12 +321,14 @@ final class RecordingVirGLEngine: VirGLEngine {
         try inner.reset()
         attachedGuestBackings.removeAll()
         sampledGuestResources.removeAll()
+        recorder.guestBackingsDidReset()
     }
 
     func destroy() throws(GraphicsFailure) {
         try inner.destroy()
         attachedGuestBackings.removeAll()
         sampledGuestResources.removeAll()
+        recorder.guestBackingsDidReset()
     }
 }
 

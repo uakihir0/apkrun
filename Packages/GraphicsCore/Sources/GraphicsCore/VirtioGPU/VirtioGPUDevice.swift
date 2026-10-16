@@ -258,6 +258,12 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
         )
     }
 
+    /// Drains renderer work on the serialized device queue before the guest is paused.
+    public func deviceWillPause() {
+        backend?.drain()
+        logger.info("virtio-gpu pause: renderer work drained")
+    }
+
     /// Drains the notified queue. Each request is answered, and each element is completed once.
     public func queueNotified(index: Int, context: VirtioDeviceContext) {
         let queue: any VirtioQueue

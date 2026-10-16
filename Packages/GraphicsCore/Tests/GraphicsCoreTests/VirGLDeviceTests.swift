@@ -352,6 +352,22 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     #expect(backingCalls(harness.engineRef.engine) == ["attach 5"])
 }
 
+@Test func pauseDrainsTheRendererWorkQueuedBeforeIt() throws {
+    let harness = try VirGLHarness()
+    harness.guest.seed(address: 0x1000, bytes: [UInt8](repeating: 0, count: 64))
+    _ = harness.send([
+        gpuRequest(.resourceCreate3D, body: .resourceCreate3D(resource3D(id: 5))),
+        gpuRequest(
+            .resourceAttachBacking,
+            body: .resourceAttachBacking(resourceID: 5, entries: [VirtioGPUMemoryEntry(address: 0x1000, length: 64)])
+        ),
+    ])
+    // The VZ adapter calls this on the serialized device queue, so earlier queue notifications have already handed
+    // their work to the renderer. Pausing waits for that work to finish before the guest is suspended.
+    harness.device.deviceWillPause()
+    #expect(backingCalls(harness.engineRef.engine) == ["attach 5"])
+}
+
 @Test func aReplaySuppliesZeroedBackingForEachCreatedResourceAndReleasesIt() throws {
     func resource(_ id: UInt32) -> VirGLResourceArguments {
         VirGLResourceArguments(
@@ -653,6 +669,15 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     #expect(observations[0].sampledByteCount == 8)
     #expect(observations[0].nonzeroByteCount == 2)
     #expect(recorder.recording.operations.isEmpty)
+    #expect(recorder.guestBackingObservationIfAttachedForTest(resourceID: 4) == observations[0])
+
+    recordingEngine.detachBacking(resource: 4)
+    #expect(recorder.guestBackingObservationIfAttachedForTest(resourceID: 4) == nil)
+
+    try recordingEngine.attachBacking(resource: 4, ranges: [range])
+    #expect(recorder.guestBackingObservationIfAttachedForTest(resourceID: 4) == nil)
+    try recordingEngine.reset()
+    #expect(recorder.guestBackingObservationIfAttachedForTest(resourceID: 4) == nil)
 }
 
 @Test func recorderBoundsSamplesAndReobservesAfterDetach() throws {
@@ -684,6 +709,9 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     let reattachedObservation = try #require(recorder.guestBackingObservationsForTest().first)
     #expect(reattachedObservation.sampledByteCount == 4096)
     #expect(reattachedObservation.nonzeroByteCount == 1)
+    #expect(
+        recorder.guestBackingObservationIfAttachedForTest(resourceID: 4) == reattachedObservation
+    )
     #expect(recorder.recording.operations.isEmpty)
 }
 

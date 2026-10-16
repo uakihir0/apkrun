@@ -93,7 +93,7 @@ final class EntropyDeviceTests: XCTestCase {
         let rebootTimeline = VirtioDeviceEventTimeline()
         let result = try await LinuxGuestHarness.run(
             testCase: self,
-            stopBehavior: .observeGuestReboot,
+            stopBehavior: .observeGuestReboot(afterCheck: "rng-reboot"),
             powerOff: false,
             tests: ["rng"],
             entropyTestDevice: EntropyTestDevice(

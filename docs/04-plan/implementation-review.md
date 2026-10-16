@@ -19159,3 +19159,59 @@ decision to keep both controls diagnostic remain unchanged.
 **Verification.** Six focused T0 tests passed: both new observer tests and four existing recorder/replay tests, selected with `swift test --package-path Packages/GraphicsCore --filter 'aRecordedSessionReplaysToTheSameEngineCalls|aRecorderDoesNotChangeTheResponsesOrTheEngineCalls|aWrittenRecordingIsTheReplayFormat|aRecordingFromAnotherVersionIsRejected|recorderCountsNonzeroBytesWithoutRecordingGuestData|recorderBoundsSamplesAndReobservesAfterDetach'`. The focused signed `LinuxGuest` run passed `VirglTests.testKmscubeHasNonzeroResource4BackingWithoutRendererFailures` (1 test, 1.205 s) on arm64 macOS 27.0.1 build 26A434 / Xcode 27.0 build 27A266a. It asserted `renderer=virgl`, `requested=60 reported=59`, `rendererFailures == 0` after shutdown, and the bounded nonzero resource 4 sample. The result bundle is `/tmp/apkrun-022-backing-observer-20261016.xcresult`. A hostile review found no remaining pointer lifetime or concurrency defect in this change after the sampling cap and attachment lifecycle test were added.
 
 **Risk.** This does not confirm a known guest-written canary, that the first submission references resource 4, that an exact `TRANSFER3D` reads the sampled bytes, or that VirGL rendered pixels. It does not check pointer writes or reset/stop ordering, so IR-849 remains open. `hostReadbacks == 0` remains uninstrumented (IR-816).
+
+## IR-1335: Observe attached VirGL backing across paused reset and stop
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2; partial evidence for IR-849) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §§12, 16; [M02-graphics.md](issues/M02-graphics.md) #022 step 2, Tests, and Notes; [issues/README.md](issues/README.md) §5; [IR-849](#ir-849-the-vm-run-must-confirm-the-pointer-and-the-reset-ordering-which-this-task-could-not-check) |
+
+**Choice.** Add opt-in LinuxGuest T2 cases for guest reset and forced VM stop
+while `kmscube` has resource 4 attached. Each case starts a long-running
+`kmscube`, waits for the bounded resource 4 backing sample, asks the guest to
+send `SIGSTOP` to `kmscube`, and checks its `/proc` state is stopped. The guest
+then announces its reset or stop intent and waits for a commit token. The host
+calls `VMController.pause()`, verifies `.paused` and the renderer-drained log
+from `deviceWillPause()` on the serialized device queue, confirms the backing
+is still attached, records only the sample counts, resumes the VM, and sends
+the commit token. The reset case observes a second guest boot; the stop case
+waits for the guest marker before the harness stops the VM. Give `kmscube` an
+idle FIFO as stdin because `/dev/null` is immediately readable and makes its
+input `select()` path exit as “user interrupted.” This scope and its evidence
+remain pending maintainer review.
+
+**Reason.** The test needs a lifecycle barrier ordered after queue notifications
+already published by the guest. Calling `drain()` from the host test thread does
+not establish that ordering. Pausing through the custom virtio device callback
+serializes the renderer drain after those notifications and before the VM
+reports `.paused`; the guest handshake prevents reset or stop from invalidating
+the backing until after the host takes its attached-state sample. The FIFO
+keeps `kmscube` alive without sharing the host-control console. The test does
+not force a renderer operation to remain in flight at invalidation, so it
+does not prove that specific race was exercised.
+
+**Verification.** The focused T0 tests
+`pauseDrainsTheRendererWorkQueuedBeforeIt` and
+`theInvalidationDrainRunsTheRendererWorkQueuedBeforeIt` passed. The signed
+`LinuxGuest` build completed with `xcodebuild build-for-testing`; the two
+focused T2 cases passed on arm64 macOS 27.0.1 build 26A434 / Xcode 27.0 build
+27A266a: `testForcedStopCompletesWithPausedKmscubeAndAttachedVirGLBacking`
+(1.081 s) and
+`testGuestResetCompletesWithPausedKmscubeAndAttachedVirGLBacking` (1.506 s),
+2.587 s total. Both assert the attached resource 4 sample, `.paused` state,
+no failed VM state, and `rendererFailures == 0`; reset also observes the second
+guest boot, and forced stop observes its stop marker. Result bundle:
+`/tmp/apkrun-022-lifecycle/VirGL-lifecycle-fifo-renamed-final.xcresult`. The rebuilt
+Linux initramfs has SHA-256
+`6e77e146b25bfed2d90fa5cd8ab0091c6a36721d6deb99cc7edda217e7fdd20f`.
+A hostile final review of the implementation and documentation found no
+concrete blocker or overstatement of the evidence.
+
+**Risk.** This confirms that resource 4's attached backing remained observable
+through reset and stop intent while `kmscube` was paused. It does not identify
+a known guest-written canary, prove a particular transfer consumed the sampled
+bytes, confirm host writes are visible to the guest, compare pixels, or prove
+a renderer operation was pending at invalidation. IR-849 remains open.
+`hostReadbacks == 0` remains uninstrumented (IR-816).

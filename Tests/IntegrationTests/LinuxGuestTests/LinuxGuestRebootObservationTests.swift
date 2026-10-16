@@ -80,8 +80,30 @@ func rebootObserverRecognizesASecondBoot() async throws {
     #expect(result.records.last == .bootOK)
 }
 
+@Test
+func rebootObserverRecognizesAConfiguredCheckName() async throws {
+    let result = try await observeGuestRebootEvents(
+        [
+            .record(.bootOK),
+            .record(
+                .check(
+                    name: "virgl-reset",
+                    result: .ok,
+                    detail: "reset requested while kmscube was active"
+                )
+            ),
+            .record(.bootOK),
+        ],
+        checkName: "virgl-reset"
+    )
+
+    #expect(result.outcome == .guestRestarted)
+    #expect(result.records.last == .bootOK)
+}
+
 private func observeGuestRebootEvents(
-    _ events: [LinuxGuestHarness.HarnessEvent]
+    _ events: [LinuxGuestHarness.HarnessEvent],
+    checkName: String = "rng-reboot"
 ) async throws -> (records: [TestGuestRecord], outcome: LinuxGuestHarness.RebootObservation) {
     let (stream, continuation) = AsyncStream<LinuxGuestHarness.HarnessEvent>.makeStream(
         bufferingPolicy: .unbounded
@@ -89,7 +111,8 @@ private func observeGuestRebootEvents(
     let observer = Task {
         try await LinuxGuestHarness.observeGuestReboot(
             events: stream,
-            continuation: continuation
+            continuation: continuation,
+            checkName: checkName
         )
     }
     for event in events {

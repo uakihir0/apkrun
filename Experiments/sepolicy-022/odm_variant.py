@@ -4,19 +4,21 @@ The source bundle is the installed 2026.10.2-cf16373615-arm64 Mesa variant. The 
 new imageVersion and changes only the `odm_a` logical partition, its signed top-level `vbmeta_a`,
 bootconfig's vbmeta digest, and the corresponding bundle hashes/signature:
 
-- the precompiled policy applies all candidate rules in RULES together: the SurfaceFlinger rule of
-  #022, candidate uevent and DRM-device rules for `untrusted_app` (IR-991), and candidate sysfs
-  rules explored for privileged and system app DRM probes (IR-1278); no individual rule is isolated;
+- in `full-control`, the precompiled policy applies all 18 candidate rules together: the
+  SurfaceFlinger rule of #022, candidate uevent and DRM-device rules for `untrusted_app` (IR-991),
+  and candidate sysfs rules explored for privileged and system app DRM probes (IR-1278); no
+  individual rule is isolated. `surfaceflinger-egl` applies only SurfaceFlinger's `sysfs` open/read
+  pair, without isolating those two permissions from each other;
 - the test binary `/bin/apkrun_egl_test` and its init rc `/etc/init/apkrun_egl_test.rc`, which runs
   the binary once on sys.boot_completed (test variant only; no command-line gate, IR-993);
 - the top-level `vbmeta_a` carries the new `odm` hashtree descriptor.
 
-This bundle is diagnostic only and must not be shipped or distributed as a product image. Its
-policy grants broad type-wide access, and its EGL service starts automatically at boot without an
-opt-in gate. Its manifest and checksums use the
-bundle module's validators and signers; its AOSP-key vbmeta is checked to differ from the source
-only in the ODM descriptor. The record beside the bundle binds the exact policy, tools, source,
-signatures, and output hashes.
+These test-only bundles are diagnostic and must not be shipped or distributed as product images.
+`full-control` grants broad type-wide access; `surfaceflinger-egl` limits its policy edit to the
+two SurfaceFlinger rules but still adds the test binary and a service that starts automatically at
+boot without an opt-in gate. Manifests and checksums use the bundle module's validators and signers;
+the AOSP-key vbmeta is checked to differ from the source only in the ODM descriptor. The record
+beside each bundle binds its exact policy, tools, source, signatures, and output hashes.
 
 Stages (each one is checked, and the script stops at the first failed check):
 
@@ -25,6 +27,11 @@ Stages (each one is checked, and the script stops at the first failed check):
             replace both partitions, update bootconfig, and sign a new bundle manifest
   check     read the bundle back and verify signatures, hashes, unchanged AVB descriptors,
             ODM hashtree, exact policy edit, diagnostic payloads, and provenance receipt
+
+The default `full-control` profile applies all 18 candidate rules. The
+`surfaceflinger-egl` profile applies only SurfaceFlinger's `sysfs` open/read
+rules, to test the narrow EGL-initialization hypothesis. `prepare` is
+profile-neutral; select the same profile for `build` and `check`.
 
 No VM is started by this script. The ramdisk and the kernel are the #099 ones, unchanged.
 """
@@ -122,6 +129,15 @@ RULES = (
     ("system_app", "sysfs", "file", "getattr"),
     ("system_app", "graphics_device", "chr_file", "getattr"),
 )
+SURFACEFLINGER_EGL_RULES = (
+    ("surfaceflinger", "sysfs", "file", "open"),
+    ("surfaceflinger", "sysfs", "file", "read"),
+)
+RULE_PROFILES = {
+    "full-control": RULES,
+    "surfaceflinger-egl": SURFACEFLINGER_EGL_RULES,
+}
+ACTIVE_PROFILE = "full-control"
 EGL_DIR = REPO / "Experiments" / "sepolicy-022" / "egl_check"
 EGL_BINARY = Path(os.environ.get("APKRUN_022_EGL_BIN", "/tmp/apkrun-odmc/egl/apkrun_egl_test"))
 EGL_BIN_PATH = "/bin/apkrun_egl_test"
@@ -715,6 +731,7 @@ def build_odm_bundle(
             "vbmetaSHA256": stock_vbmeta_sha,
         },
         "policy": {
+            "profile": ACTIVE_PROFILE,
             "path": PRECOMPILED,
             "stockSHA256": sha256(WORK / "precompiled.orig"),
             "overlaySHA256": sha256(WORK / "precompiled.new"),
@@ -914,6 +931,8 @@ def check(args: argparse.Namespace) -> None:
          "the builder source changed after the receipt was written")
     need(receipt["policy"]["rules"] == [list(rule) for rule in RULES],
          "the receipt policy rules differ from this experiment")
+    need(receipt["policy"]["profile"] == ACTIVE_PROFILE,
+         "the receipt names another policy profile")
     disk, record = bv._super_record(manifest)
     need(receipt["output"]["diskSHA256"] == sha256(out / disk["path"]),
          "the receipt names a different output disk")
@@ -1098,9 +1117,13 @@ def read_super_partition(os_img: Path, super_offset: int, super_size: int, name:
 
 
 def main(argv: list[str]) -> int:
+    global ACTIVE_PROFILE, RULES
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("stage", choices=("prepare", "build", "check"))
+    parser.add_argument("--profile", choices=tuple(RULE_PROFILES), default="full-control")
     args = parser.parse_args(argv)
+    ACTIVE_PROFILE = args.profile
+    RULES = RULE_PROFILES[ACTIVE_PROFILE]
     {"prepare": prepare, "build": build, "check": check}[args.stage](args)
     return 0
 

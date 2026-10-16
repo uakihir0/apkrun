@@ -1,0 +1,58 @@
+{
+  "bootconfig": {
+    "path": "boot/bootconfig.txt",
+    "stockDigest": "0db3571720daf0bda012722eed14cfe195f4d986e8521c3c0ad2c49ee7351633",
+    "stockSize": "22912",
+    "variantDigest": "1cbd9e33391b78b343b2b5b2315486ac85e253482d8a193a76e606d3b743d67e",
+    "variantSize": "22912"
+  },
+  "builder": {
+    "gitRevision": "2c79b08fdff4ac98ccb19691ba6e647bc547bf68",
+    "repository": "Images/tools",
+    "sourceSHA256": "bfbe4fbdf2d0a1cc57d8b844ea5d57dc6f3c6e361faade4b31eda961adcde0ec",
+    "workingTreeClean": true
+  },
+  "decisions": {
+    "identity": "short version 2026.10.2; source build identity, stock kind, and provenance kept (IR-1322)",
+    "manifestSignature": "developer image key, trusted by Debug builds",
+    "partitionSize": "unchanged, the writer does not grow a partition (IR-682)",
+    "topLevelVbmeta": "replaced by SHA256_RSA4096 signed with aosp-avb-testkey-rsa4096; development-only (IR-1321)"
+  },
+  "imageVersion": "2026.10.2-cf16373615-arm64",
+  "kind": "stock",
+  "partition": {
+    "name": "vendor_a",
+    "size": 291229696,
+    "stockSuperSHA256": "7dd80d27241c6b96de9cc3d732ffd8749a67cf080fb488c7d49d23278985e3b5",
+    "variantSuperSHA256": "350fc916d9d2d90900e7033ff9b9d9cc8bb7076d32068889b3b9fe9046ded4c3"
+  },
+  "replacement": {
+    "sha256": "a1bd16c656ab882ad6ae5a0999e6a23cfcd1f5469d5b405f11c9207afd61da44",
+    "size": 291229696
+  },
+  "schemaVersion": 3,
+  "signingKeyID": "55ab0dd032d0ce0e",
+  "stockManifestSHA256": "7c285ff0f550b87129efeec90249cfd38e376be3ebac2f5bad51c945058d3ce3",
+  "task": "#099",
+  "variantDiskSHA256": "2b0fe6ddbe6031eeb60f309f0a4998db38d634d869d18b6715b63282333e3d3a",
+  "variantManifestSHA256": "c61d182eb93dc980ceb4dae2cd4d8b840aea060835b45507197b0fccbe507978",
+  "vbmeta": {
+    "algorithm": "SHA256_RSA4096",
+    "injectRecordSHA256": "d2c3ed58f2038953d87e6aa753d466632925bc29dfb98b7db0d81364f8c3a463",
+    "partition": "vbmeta_a",
+    "publicKeySha1": "2597c218aae470a130f61162feaae70afd97f011",
+    "resealRecordSHA256": "ddf4bfea65a193013a82a851324980e060f65c7076e44d1fde38be5c1a6687cc",
+    "rollbackIndex": 1780617600,
+    "signer": "aosp-avb-testkey-rsa4096",
+    "size": 12288,
+    "stockSHA256": "f2b8f369dd85659180b6bb10abf23845ac0d61de0cd6c17d883fc342e23867d8",
+    "variantSHA256": "c1d0e33c30a14998e84aa2ec2ac98fe031b0428edbd37ce8cec8710de87fbb1e"
+  },
+  "writer": {
+    "imageSize": 291229696,
+    "metadataCopiesChecked": 8,
+    "outputChunks": 350,
+    "partitionsCompared": 8,
+    "physicalRanges": 1
+  }
+}

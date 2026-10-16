@@ -1,0 +1,144 @@
+{
+  "buildId": "16373615",
+  "erofs": {
+    "blockSize": 4096,
+    "compression": "lz4hc,9",
+    "exportedEntries": 526,
+    "fsBlocks": 45404,
+    "timestamp": 1230768000,
+    "tools": "erofs-utils 1.9.4",
+    "uuid": "0b1b4351-59de-59c5-8e84-9964a73ead0b"
+  },
+  "mesa": {
+    "buildFlags": [
+      "--buildtype=release",
+      "--wrap-mode=nodownload",
+      "--prefix=/vendor",
+      "--libdir=lib64",
+      "-Dplatforms=android",
+      "-Dplatform-sdk-version=37",
+      "-Dandroid-stub=true",
+      "-Dandroid-libbacktrace=disabled",
+      "-Degl=enabled",
+      "-Degl-lib-suffix=_mesa",
+      "-Dgles-lib-suffix=_mesa",
+      "-Dglvnd=disabled",
+      "-Dglx=disabled",
+      "-Dgbm=disabled",
+      "-Dopengl=true",
+      "-Dgles1=enabled",
+      "-Dgles2=enabled",
+      "-Dgallium-drivers=virgl",
+      "-Dvulkan-drivers=",
+      "-Dzstd=disabled",
+      "-Dxmlconfig=disabled",
+      "-Dllvm=disabled",
+      "-Dvalgrind=disabled",
+      "-Dlibunwind=disabled",
+      "-Dlmsensors=disabled",
+      "-Dgallium-va=disabled",
+      "-Dperfetto=false",
+      "-Dbuild-tests=false",
+      "-Ddri-drivers-path=/vendor/lib64/egl",
+      "-Dallow-fallback-for=libdrm"
+    ],
+    "commit": "0fadfea4f394211946f308458f614839ef253ee8",
+    "libraries": [
+      {
+        "label": "u:object_r:same_process_hal_file:s0",
+        "name": "libEGL_mesa.so",
+        "sha256": "73cb17559b2e1b69dab147043dae21467067162113ec9f89380f90122c53adad",
+        "size": 382608,
+        "source": "vendor/lib64/libEGL_mesa.so",
+        "target": "/lib64/egl/libEGL_mesa.so"
+      },
+      {
+        "label": "u:object_r:same_process_hal_file:s0",
+        "name": "libGLESv2_mesa.so",
+        "sha256": "7da942f62becc85a6ec3ec6bbb2fedf23eceb04952bc2478d12935e7d0fa863a",
+        "size": 76440,
+        "source": "vendor/lib64/libGLESv2_mesa.so",
+        "target": "/lib64/egl/libGLESv2_mesa.so"
+      },
+      {
+        "label": "u:object_r:same_process_hal_file:s0",
+        "name": "libGLESv1_CM_mesa.so",
+        "sha256": "2a0829379fbf9e0fccacc32e872445af6c2fffe24e2b1b4d8864058636b99ce6",
+        "size": 31680,
+        "source": "vendor/lib64/libGLESv1_CM_mesa.so",
+        "target": "/lib64/egl/libGLESv1_CM_mesa.so"
+      },
+      {
+        "label": "u:object_r:same_process_hal_file:s0",
+        "name": "libgallium_dri.so",
+        "sha256": "185a00dc816e33a366f758c0a3b6caf28fc3b226f3393e5656328506e4f671bc",
+        "size": 18192416,
+        "source": "vendor/lib64/libgallium_dri.so",
+        "target": "/lib64/egl/libgallium_dri.so"
+      }
+    ],
+    "manifestSha256": "587a933b94ab11fcaf494920c17b97b8df001f20a8d777acb6a2abd40e0d248d",
+    "ndk": "28.2.13676358 (r28c)",
+    "version": "26.1.8"
+  },
+  "output": {
+    "file": "vendor_a.img",
+    "sha256": "a1bd16c656ab882ad6ae5a0999e6a23cfcd1f5469d5b405f11c9207afd61da44",
+    "size": 291229696
+  },
+  "partition": {
+    "filesystem": "erofs",
+    "name": "vendor_a",
+    "size": 291229696
+  },
+  "placement": {
+    "decision": "IR-622",
+    "sourceDirectory": "vendor/lib64",
+    "targetDirectory": "/lib64/egl"
+  },
+  "schemaVersion": 1,
+  "selinux": {
+    "precedence": "longest literal stem, a tie goes to the later rule (IR-623)",
+    "rules": 1093,
+    "rulesPerSource": {
+      "system_a:/system/etc/selinux/plat_file_contexts": 768,
+      "vendor_a:/etc/selinux/vendor_file_contexts": 325
+    },
+    "sources": [
+      {
+        "name": "system_a:/system/etc/selinux/plat_file_contexts",
+        "sha256": "bc6f2ee366442c84221049130b8052578f1d9873cfac8d40f90efacd76521d96"
+      },
+      {
+        "name": "vendor_a:/etc/selinux/vendor_file_contexts",
+        "sha256": "edd6ac68ca739ca2601b78a274e026426e8d906e9597f2d6190f0c01941821b2"
+      }
+    ],
+    "stockEntriesReproduced": 522
+  },
+  "status": "vendor partition built offline; not booted; top-level vbmeta not re-signed",
+  "stock": {
+    "entries": 522,
+    "erofsBlocks": 69747,
+    "sha256": "a3ff3fb1f1be102ab08a653826df2b7ea0f86225258b0099ecabee3bf5632ced",
+    "systemPartitionSha256": "969adda9723a629b706c385116589c57cf8cace191c7620eba83db4518182496",
+    "vbmetaVendorRootDigest": "d8895f6a3dc07758a60bddc6de96b416d02a3e93da4e2a8cf63d0ea6bd783a5a",
+    "verityRootDigest": "d8895f6a3dc07758a60bddc6de96b416d02a3e93da4e2a8cf63d0ea6bd783a5a"
+  },
+  "task": "#099",
+  "vbmeta": {
+    "decision": "IR-625",
+    "matchesOutput": false,
+    "updated": false,
+    "vendorRootDigestInVbmeta": "d8895f6a3dc07758a60bddc6de96b416d02a3e93da4e2a8cf63d0ea6bd783a5a"
+  },
+  "verity": {
+    "algorithm": "NONE",
+    "fec": false,
+    "hashAlgorithm": "sha256",
+    "newRootDigest": "805adbf8520c7ffa2a521b6e4c78bc074f2441dec7b789439b56af686b5d8081",
+    "salt": "16b6a5f2fb07bc9ff4d92dc782d830af4eb572c1213156e732d0bcf67fbc162e",
+    "tool": "vendored avbtool (aosp-avbtool, lock)",
+    "verifiedByAvbtool": true
+  }
+}

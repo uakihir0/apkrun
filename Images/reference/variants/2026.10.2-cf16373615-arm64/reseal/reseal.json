@@ -1,0 +1,86 @@
+{
+  "decisions": {
+    "fec": "not generated, because the fec tool is not pinned (IR-740)",
+    "rollbackIndex": "kept from the stock vbmeta_a (IR-743)",
+    "topLevelSignature": "SHA256_RSA4096 with aosp-avb-testkey-rsa4096; development image only (IR-1321)"
+  },
+  "injected": {
+    "originalImageSize": 185974784,
+    "rootDigest": "805adbf8520c7ffa2a521b6e4c78bc074f2441dec7b789439b56af686b5d8081",
+    "sha256": "a1bd16c656ab882ad6ae5a0999e6a23cfcd1f5469d5b405f11c9207afd61da44",
+    "size": 291229696
+  },
+  "partition": {
+    "name": "vendor_a",
+    "size": 291229696,
+    "verityName": "vendor"
+  },
+  "schemaVersion": 2,
+  "stock": {
+    "vbmetaSha256": "f2b8f369dd85659180b6bb10abf23845ac0d61de0cd6c17d883fc342e23867d8",
+    "vbmetaSize": 12288,
+    "vendorRootDigest": "d8895f6a3dc07758a60bddc6de96b416d02a3e93da4e2a8cf63d0ea6bd783a5a",
+    "vendorSha256": "a3ff3fb1f1be102ab08a653826df2b7ea0f86225258b0099ecabee3bf5632ced"
+  },
+  "task": "#099",
+  "vbmeta": {
+    "algorithm": "SHA256_RSA4096",
+    "blobSize": 9536,
+    "file": "vbmeta_a.img",
+    "previousVendorDescriptor": {
+      "dataBlockSize": 4096,
+      "fecOffset": 287940608,
+      "fecRoots": 2,
+      "fecSize": 2277376,
+      "hashAlgorithm": "sha256",
+      "hashBlockSize": 4096,
+      "imageSize": 285683712,
+      "partition": "vendor",
+      "rootDigest": "d8895f6a3dc07758a60bddc6de96b416d02a3e93da4e2a8cf63d0ea6bd783a5a",
+      "salt": "16b6a5f2fb07bc9ff4d92dc782d830af4eb572c1213156e732d0bcf67fbc162e",
+      "treeOffset": 285683712,
+      "treeSize": 2256896
+    },
+    "publicKeySha1": "2597c218aae470a130f61162feaae70afd97f011",
+    "rollbackIndex": 1780617600,
+    "sha256": "c1d0e33c30a14998e84aa2ec2ac98fe031b0428edbd37ce8cec8710de87fbb1e",
+    "signer": "aosp-avb-testkey-rsa4096",
+    "size": 12288,
+    "vendorDescriptor": {
+      "dataBlockSize": 4096,
+      "fecOffset": 0,
+      "fecRoots": 0,
+      "fecSize": 0,
+      "hashAlgorithm": "sha256",
+      "hashBlockSize": 4096,
+      "imageSize": 185974784,
+      "partition": "vendor",
+      "rootDigest": "805adbf8520c7ffa2a521b6e4c78bc074f2441dec7b789439b56af686b5d8081",
+      "salt": "16b6a5f2fb07bc9ff4d92dc782d830af4eb572c1213156e732d0bcf67fbc162e",
+      "treeOffset": 185974784,
+      "treeSize": 1470464
+    }
+  },
+  "vendor": {
+    "descriptor": {
+      "dataBlockSize": 4096,
+      "fecOffset": 0,
+      "fecRoots": 0,
+      "fecSize": 0,
+      "hashAlgorithm": "sha256",
+      "hashBlockSize": 4096,
+      "imageSize": 185974784,
+      "partition": "vendor",
+      "rootDigest": "805adbf8520c7ffa2a521b6e4c78bc074f2441dec7b789439b56af686b5d8081",
+      "salt": "16b6a5f2fb07bc9ff4d92dc782d830af4eb572c1213156e732d0bcf67fbc162e",
+      "treeOffset": 185974784,
+      "treeSize": 1470464
+    },
+    "file": "vendor_a.img",
+    "identicalToInjected": true,
+    "originalImageSize": 185974784,
+    "sha256": "a1bd16c656ab882ad6ae5a0999e6a23cfcd1f5469d5b405f11c9207afd61da44",
+    "size": 291229696
+  },
+  "verifiedByAvbtool": true
+}

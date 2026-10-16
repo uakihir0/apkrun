@@ -19374,3 +19374,40 @@ WindowServer test remains the acceptance path for OS-dispatched input.
 **Risk.** This test still sends events directly to the view and does not
 verify normal AppKit or WindowServer delivery. #024 box 3 remains open, and
 the opt-in WindowServer test remains unselected by GitHub workflows.
+
+## IR-1340: Separate host clamping acceptance from guest edge T2
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [M03 #024](issues/M03-input-and-basic-runtime.md#024-pointer-input); [README.md](issues/README.md) §5; [input.md](../02-design/input.md) §15; IR-1250, IR-1314, IR-1316, IR-1318, IR-1338 |
+
+**Choice.** Keep acceptance box 7 checked for its host-side criterion:
+letterbox presses are dropped and drags leaving the content are clamped by
+`CoordinateMapper` and `EventTranslator`. Keep the separate top/left guest
+gesture T2 result pending and report #024 as 6 of 8 acceptance boxes complete.
+
+**Reason.** IR-1250 flagged the checked state after an earlier top-left guest
+drag left a touch open. IR-1314 later clarified that the acceptance box names
+host-side clamping, which current all-edge T0 tests cover, while guest
+delivery and recovery remain a separate T2 evidence requirement. IR-1338
+adds host-side fresh-touch coverage but does not prove guest delivery. The
+focused top/left T2 case checks host-sent coordinates, stable fixture state,
+and a following click; per IR-1318, its periodic ACK is only a route-progress
+marker and does not report rejection outcomes for every gesture event.
+Separating the checked host criterion from the pending guest test preserves
+both the criterion's scope and the test-tier definition of done.
+
+**Verification (2026-10-16).** Reviewed the task acceptance, current T0/T2
+test descriptions, IR-1250, IR-1314, IR-1316, IR-1318, IR-1338, and the issue
+index. The issue index now describes the T2 scroll cases as synthetic, fixed
+sign inputs and keeps the physical natural-trackpad check open. The design
+verification log distinguishes the checked host-side box from pending guest
+T2. The #024 count remains 6 of 8. `git diff --check` passes. No GUI or
+Actions test was run.
+
+**Risk.** #024 remains open: boxes 3 and 4 are unchecked, and the guest-side
+top/left T2 has not run. A maintainer may interpret box 7 as requiring
+guest-side edge delivery and choose to clear it, but the current checked box
+claims only the host-side clamping criterion; it does not claim T2 completion.

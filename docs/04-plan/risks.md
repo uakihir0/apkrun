@@ -69,7 +69,7 @@ A risk is something that could make a planned design fail or cost much more than
 - **Mitigation.** Pinned revisions and patches in `ThirdParty/ThirdParty.lock.json` ([../02-design/graphics.md](../02-design/graphics.md) §5); HelloGL, HelloCompose, and HelloWebView fixtures; the renderer runs isolated so that a crash is reported, not hidden.
 - **Fallback.** The `guestSwiftshader` GPU profile ([../02-design/graphics.md](../02-design/graphics.md) §9), turned on by Graphics Safe Mode (`graphics.safeMode`, [../03-reference/configuration.md](../03-reference/configuration.md)), with a warning. The profile is chosen at boot, so it applies to the whole VM, never to one app. Upstream fixes are carried as patches.
 - **Settled by.** #020 (build and host tests), #022 (Android VirGL), #023 (gate G3), then the compatibility runs of #090.
-- **Result.** Not yet run.
+- **Result.** Partial (2026-10-16): the ODM-overlay development variant booted with SELinux enforcing, and SurfaceFlinger reported Mesa VirGL GLES (IR-961). Separately, the G3 test bundle passed the one-display HelloGL gate at 59.99 fps average, with no renderer crash and no mixed frame in 408 alternating-phase samples (IR-1344). Together these results validate the tested Mesa/VirGL path and one app on one display; product-policy validation remains in #035, and broader app compatibility remains in #090.
 
 ### R-03 Graphics performance
 
@@ -77,7 +77,7 @@ A risk is something that could make a planned design fail or cost much more than
 - **Mitigation.** No CPU readback on the normal path (FR-GFX-05), IOSurface pools shared with the wrapper ([ADR-0006](../01-architecture/decisions/0006-wrapper-owned-window-iosurface.md)), frame statistics and readback counters ([../02-design/graphics.md](../02-design/graphics.md) §7), the perf harness ([../02-design/diagnostics.md](../02-design/diagnostics.md) §9).
 - **Fallback.** Lower the frame rate of background windows; one renderer context thread per display if virglrenderer allows it; revise the provisional targets with an ADR ([../00-product/requirements.md](../00-product/requirements.md) §2).
 - **Settled by.** #023 (one display), #030 (two displays, embedded runtime), #068 and #070 (through the XPC path in apkrund, measured by the perf harness).
-- **Result.** RiftVM reports about 60 fps and 0.4–0.8 ms per present for one display (research); not yet measured in APKRun.
+- **Result.** Partial (2026-10-16): the one-display G3 run averaged 59.99 fps across 61 HelloGL events over ten minutes, with 0 mixed frames in 408 alternating-phase samples and no renderer crash (IR-1344). APKRun present-time p95 and multi-display performance remain unmeasured and are owned by #030, #068, and #070.
 
 ### R-04 Multi-display
 

@@ -14949,6 +14949,8 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Consequence.** A fresh checkout runs the replay test only after the file is produced again, and the test skips without it. The hash pins one run. A maintainer who wants the stream in the repository needs a smaller encoding, which is a format change, or a decision to accept the size.
 
+**Current status (2026-10-16; IR-1343).** The historical recording is no longer present at `/tmp/apkrun-022-kms/kmscube-recording.json`. The T2 reruns on 2026-10-16 did not record a replacement. Recreate it with the command above before rerunning the optional KMSCube replay.
+
 ## IR-813: The host renderer rejects all 61 SUBMIT_3D of the kmscube context, so the Linux `virgl` check does not show host rendering
 
 | Field | Value |
@@ -14965,7 +14967,7 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Follow-up.** IR-1333 adds a T2 assertion for zero recorded renderer failures and resolves both open questions above: the assertion is added, and criterion 5 stays checked under a narrowed definition limited to the guest report and the renderer failure counter. Keeping the checkbox under that revised scope is a judgment pending maintainer review. The original rejected submits and their unknown cause remain historical findings; the assertion does not prove pixel output, which remains outside this criterion.
 
-## IR-814: The step 3 check is met for the replay with zero readbacks, and the kmscube pixels are not compared
+## IR-814: The 2026-10-11 step 3 decision narrowed the check to replay and left kmscube pixels open
 
 | Field | Value |
 |---|---|
@@ -14978,6 +14980,8 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 **Reason.** There is no reference image for the `kmscube` output, and the renderer draws nothing for the rejected submits, so a pixel hash would pin an output that the device did not make. Pinning the hash of an unverified image would be a false check.
 
 **Consequence.** Step 3 is met for replay and counters only. The rendering part of the step needs the fix of IR-813 and a reference, and is left open.
+
+**Current status (2026-10-16; IR-1343).** The optional KMSCube replay now traverses all recorded operations without renderer failures, but it still supplies zero-filled backing and has no scanout identity or expected image. Only the synthetic fixture has an exact scanout comparison. This entry's older statement that step 3 is met for replay and counters is historical; the original KMSCube pixel/hash expectation remains open pending maintainer review.
 
 ## IR-815: The T2 run passes, and its guest lines are not printed, so the record uses the assertions
 
@@ -15254,11 +15258,11 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 | Task | #022 (criterion 5) |
 | Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #022; [graphics.md](../02-design/graphics.md) §14 |
 
-**Choice.** The next step is the kmscube run on the VM with this build. The run must check three things that the offline tests cannot: (1) the host pointer of an attached range reads and writes the guest's bytes, so a buffer the guest writes reaches the transfer; (2) a reset and a stop after an attach complete without a fault, which exercises the drain before the invalidation (IR-850); (3) the attach of resource 4 receives the guest's own entries, so the replay's zeroed pages are no longer needed.
+**Choice.** The planned Linux `kmscube` VM run must check three things that offline tests cannot: (1) a known guest-written value is visible through an attached host mapping and reaches an identified transfer; (2) a reset and stop after attach complete without a fault and validate drain-before-invalidation ordering (IR-850); and (3) resource 4's attached backing corresponds to the guest's bytes, rather than the zero-filled pages used by replay.
 
-**Reason.** No VM runs in this task. The pointer is checked only against the SDK header and the code (IR-841). The T1 replay uses zeroed pages, so it proves the renderer accepts the calls, not the guest's bytes.
+**Reason.** The 2026-10-16 runs (IR-1334, IR-1335) add a bounded observation of nonzero mapped bytes and exercise reset/stop while `kmscube` is paused, but they do not use a known canary, correlate bytes with a transfer, or prove a renderer operation was in flight at invalidation. The T1 replay uses zero-filled pages, so it proves renderer-call traversal, not that guest-written bytes produced pixels.
 
-**Consequence.** Criterion 5 stays unmet until the VM run. This entry is the checklist for that run.
+**Consequence.** The bounded observation and paused lifecycle checks satisfy only part of this checklist. Guest-write/transfer correlation and invalidation ordering remain open under IR-849. Criterion 5 is checked under the narrower guest-report/renderer-failure scope of IR-1333, pending maintainer review; it does not close the KMSCube pixel/hash expectation in step 3 (IR-1343).
 
 ## IR-850: The renderer drains before the guest mappings are invalidated, through a new model callback
 
@@ -19432,7 +19436,7 @@ top/left T2 has not run. A maintainer may interpret box 7 as requiring
 guest-side edge delivery and choose to clear it, but the current checked box
 claims only the host-side clamping criterion; it does not claim T2 completion.
 
-## IR-1341: The G3 recording does not yet establish the C01-6 visual check
+## IR-1341: The earlier G3 recording did not establish the C01-6 visual check
 
 | Field | Value |
 |---|---|
@@ -19480,6 +19484,12 @@ is a local artifact. Keep it local unless it is reviewed and sanitized for
 sharing. A new recording method must still observe actual window presentation;
 capturing only the app surface could hide compositor or display stutter.
 
+**Status update (2026-10-16; superseded by IR-1344).** A fresh G3 run now has
+a 1797.512-second recording. Sampled video offsets are tied to the active
+window intervals; the APKRun window is visible at 2, 5, 7, 10, and 11 minutes.
+The new recording's C01-6 review is recorded in IR-1344. The earlier
+1293.15-second recording and its limitations above remain historical evidence.
+
 ## IR-1342: The #023 path list and G3 test target match the implementation plan
 
 | Field | Value |
@@ -19505,8 +19515,114 @@ must agree with the normative test strategy. Keeping the long guest gate run
 in AcceptanceTests makes that boundary explicit without changing its
 acceptance criteria or graphics architecture.
 
-**Verification (2026-10-16).** Confirmed each listed path exists and traced
-the G3 branch in `scripts/run-gate.sh` to the AcceptanceTests plan and evidence
-checker. The focused build and test results above cover the moved target and
-evidence code. No full G3 gate, GUI interaction test, or Actions workflow was
-run.
+**Initial verification (2026-10-16, before the final gate run).** Confirmed
+each listed path exists and traced the G3 branch in `scripts/run-gate.sh` to
+the AcceptanceTests plan and evidence checker. The focused build and test
+results cover the moved target and evidence code. At that point no full G3
+gate or GUI interaction test had run.
+
+**Follow-up verification (2026-10-16; IR-1344).** The full G3 gate then passed
+from `7241003`: one AcceptanceTests case passed, the evidence checker exited 0,
+and the manual C01-6 sampled video review is recorded in IR-1344. The
+dedicated Android input GUI test and GitHub Actions were not run.
+
+## IR-1343: Keep KMSCube replay evidence separate from pixel equivalence
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 3; criterion 5 scope) |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #022 step 3 and criterion 5; [graphics.md](../02-design/graphics.md) §§14, 16; [issues/README.md](issues/README.md) §5; IR-814; IR-849 |
+
+**Choice.** State separately that the synthetic fixture is compared against an
+exact expected scanout, while the optional Linux `kmscube` recording is
+replayed through all renderer operations and checked for zero renderer
+failures. Do not claim that the `kmscube` replay compares pixels or scanout.
+Keep IR-849 open and leave this scope decision for maintainer review.
+
+**Evidence.** The historical recording contains renderer calls and explicit
+transfer payloads, but not attached guest-backing bytes or a scanout identity.
+The replayer allocates zero-filled backing for each resource. It has no
+expected image for the KMSCube stream. The recorded T1 result after the
+`attach_iov` correction passed all operations with no rejected submit; the
+synthetic fixture independently passed its exact hash comparison. The
+historical 25,763,085-byte recording is no longer present at the `/tmp` path
+in IR-812, and the 2026-10-16 T2 runs did not create a replacement.
+
+**Reason.** A hash of zero-filled replay output would not validate what the
+guest rendered and would give false confidence. A faithful pixel check needs a
+bounded guest workload that captures known backing contents, identifies which
+resource is scanned out, and provides a reference image. Recreating those
+inputs requires a new guest run. The current T2 backing sample and paused
+reset/stop checks provide partial live evidence but do not correlate a known
+guest-written canary with a transfer.
+
+**Verification.** The T1 synthetic pixel/hash test and historical KMSCube
+operation replay passed in their recorded runs. The KMSCube recording lacks
+attached guest-backing contents, scanout identity, and an expected reference
+image; its explicit transfer payloads do not supply those missing facts. The
+expected pixel comparison was not run. The recording is currently absent and
+the optional replay was not rerun. No new VM run was needed for this
+documentation correction.
+
+**Risk.** If maintainers retain the original KMSCube scanout-hash requirement,
+#022 step 3 remains open until a bounded capture and reference image are
+available. Criterion 5's narrowed status from IR-1333 is a separate judgment
+and does not imply pixel equivalence.
+
+## IR-1344: Record the completed G3 gate and bounded C01-6 review
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 (G3; manual check C01-6) |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #023; [issues/README.md](issues/README.md) §5; [graphics.md](../02-design/graphics.md) §14 and §16; [risks.md](risks.md) R-02 and R-03; [G3 evidence](evidence/G3/) |
+
+**Choice.** Record the successful G3 rerun and check C01-6 based on sampled
+visual review of the APKRun-window crop. Commit the privacy-safe crop as
+permanent gate evidence. Keep the full-screen source recording local because
+it contains unrelated desktop content. This is an explicit exception to
+attaching the unredacted screen recording to the gate issue: the sanitized
+crop is committed with the gate evidence instead.
+
+**Reason.** The test and evidence checker passed, and the recording visibly
+shows the APKRun window during active HelloGL output. The sampled color
+transitions showed no visible full-window tearing or stutter. The recording
+is low resolution and was sampled rather than reviewed frame-by-frame, so
+this is a bounded manual check and its limit stays explicit.
+
+**Verification.** `scripts/run-gate.sh G3` passed from clean local `main` at
+`7241003a8714975c20b897ce251b0302124ae65b` on an Apple M5 Pro (arm64),
+macOS 27.0.1 / Xcode 27.0. The `G3` AcceptanceTests configuration reported
+one test, one passed, zero failed or skipped; both XCTest and recorder process
+exits were 0, and `check-g3-evidence.py` exited 0. `sys.boot_completed=1`,
+SurfaceFlinger GLES `Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8`, and the
+HelloGL `renderer virgl` event were observed. Over 685 statistics lines,
+`hostReadbacks` and `cpuPixelCopies` remained 0. HelloGL averaged 59.99 fps
+over 61 ten-minute events; the same PID was observed at start and each
+minute. The alternating phase sampled 408 frames with 0 mixed frames, and
+there were 0 renderer crash lines. The separate G3 crash-line evidence has
+432 lines attributed to `com.android.launcher3`; it contains no Settings
+crash entries.
+
+The full-screen source recording at `build/gates/G3/screen-recording.mp4` is
+480×312 and 1797.512 seconds. Its variable-rate stream has a whole-file
+average of about 21.86 fps. Five sampled active-window segments had a median
+frame interval of 60 fps and no gap over 50 ms. Samples at offsets 2, 5, 7,
+10, and 11 minutes show the APKRun display window. A 30 fps sample showed
+the full-window color transition without visible tearing or stutter. The
+capture ends about 2.5 seconds short of the requested 1800 seconds; this does
+not affect the ten-minute gate interval. This was a bounded visual review,
+not a frame-by-frame review.
+
+To avoid preserving or sharing unrelated desktop content, the committed
+[`apkrun-window-samples.mp4`](evidence/G3/apkrun-window-samples.mp4) contains
+five 5-second crops of the actual screen capture, from offsets 120, 300, 420,
+600, and 660 seconds. It was made with `crop=138:118:172:58`, contains 1397
+frames, and is 25.069 seconds long. These intervals show the APKRun window;
+the full-screen capture has unrelated desktop content in other intervals.
+The low resolution and sampled review cannot rule out smaller defects or
+tears between sampled frames. The original full-screen source remains in
+ignored local build output; no issue attachment was made. The G3 gate still
+validates only the tested single HelloGL workload and current development
+image.

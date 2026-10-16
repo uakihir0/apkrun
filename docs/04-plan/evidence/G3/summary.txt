@@ -1,14 +1,14 @@
 gate: G3
 step failure: none
-window found: true, distinct colours in the first capture: 141
+window found: true, distinct colours in the first capture: 150
 renderer event: APKRUN-FIXTURE: renderer virgl
 GLES lines: mesa | Enforcing |  ------------RE GLES (Ganesh)------------ | GLES: Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8 | 
-statistics during the run: 682 lines, hostReadbacks max 0, cpuPixelCopies max 0
+statistics during the run: 685 lines, hostReadbacks max 0, cpuPixelCopies max 0
 statistics in the first 60 s: 59 lines
-fps events in the 10 minute run: 61, average 59.98
-alternating phase: sampled 320, red 225, blue 38, mixed 0
-HelloGL pid at start: 7171, at minutes: 7171,7171,7171,7171,7171,7171,7171,7171,7171,7171
-renderer crash lines: 0, other crash lines: 432
+fps events in the 10 minute run: 61, average 59.99
+alternating phase: sampled 408, red 148, blue 177, mixed 0
+HelloGL pid at start: 7181, at minutes: 7181,7181,7181,7181,7181,7181,7181,7181,7181,7181
+renderer crash lines: 0, launcher3 crash lines: 432
 boot stop: endedAfterInterrupt
 unreadable buffers in the tearing sampler: 0
 result: passed

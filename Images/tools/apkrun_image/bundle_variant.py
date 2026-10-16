@@ -40,6 +40,7 @@ import os
 import re
 import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 from collections.abc import Iterator, Mapping, Sequence
@@ -91,7 +92,7 @@ from apkrun_image.vendor_inject import (
     verify_avbtool,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 TASK = "#099"
 SUPER_LABEL = "super"
 BOOT_FILES = ("bootconfig", "cmdline", "kernel", "ramdisk")
@@ -468,6 +469,65 @@ def _refresh_record_hashes(refresh: _Refresh) -> dict[str, str]:
     return {
         "injectRecordSHA256": refresh.inject_record_sha256,
         "resealRecordSHA256": refresh.record_sha256,
+    }
+
+
+def _builder_provenance(repository_root: Path | None = None) -> dict[str, Any]:
+    """Identify the committed and local Images/tools source used to write a variant."""
+    repository = repository_root or Path(__file__).resolve().parents[3]
+
+    def git(*arguments: str) -> bytes:
+        try:
+            return subprocess.run(
+                ["git", "-C", str(repository), *arguments],
+                check=True,
+                capture_output=True,
+            ).stdout
+        except subprocess.CalledProcessError as error:
+            detail = (
+                error.stderr.decode("utf-8", errors="replace").strip()
+                if error.stderr
+                else str(error)
+            )
+            raise BundleVariantError(
+                f"cannot record Images/tools builder provenance: {detail}"
+            ) from None
+        except OSError as error:
+            raise BundleVariantError(
+                f"cannot record Images/tools builder provenance: {error}"
+            ) from None
+
+    revision = git("rev-parse", "HEAD").decode("ascii", errors="strict").strip()
+    tracked_diff = git("diff", "--binary", "--no-ext-diff", "HEAD", "--", "Images/tools")
+    untracked = git(
+        "ls-files", "--others", "--exclude-standard", "-z", "--", "Images/tools"
+    ).split(b"\0")
+
+    digest = hashlib.sha256()
+    digest.update(b"APKRun Images/tools builder source v1\0")
+    digest.update(revision.encode("ascii"))
+    digest.update(b"\0")
+    digest.update(tracked_diff)
+    for relative in sorted(value for value in untracked if value):
+        path = repository / os.fsdecode(relative)
+        if path.is_symlink() or not path.is_file():
+            raise BundleVariantError(f"cannot record Images/tools builder source file: {path}")
+        try:
+            content = path.read_bytes()
+        except OSError as error:
+            raise BundleVariantError(
+                f"cannot read Images/tools builder source file {path}: {error}"
+            ) from None
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+
+    return {
+        "repository": "Images/tools",
+        "gitRevision": revision,
+        "sourceSHA256": digest.hexdigest(),
+        "workingTreeClean": not tracked_diff and not any(untracked),
     }
 
 
@@ -1035,6 +1095,7 @@ def build_variant(
             raise BundleVariantError(f"{path}: the output already exists")
     if not replacement.is_file():
         raise BundleVariantError(f"{replacement} is not a file")
+    builder = _builder_provenance()
 
     manifest_bytes, manifest = _verify_stock(stock_bundle, public_key)
     variant_manifest: dict[str, Any] = json.loads(manifest_bytes)
@@ -1238,6 +1299,7 @@ def build_variant(
             "task": TASK,
             "imageVersion": variant_manifest["imageVersion"],
             "kind": variant_manifest["kind"],
+            "builder": builder,
             "stockManifestSHA256": hashlib.sha256(manifest_bytes).hexdigest(),
             "variantManifestSHA256": hashlib.sha256(new_bytes).hexdigest(),
             "signingKeyID": key_id_of(public_key),

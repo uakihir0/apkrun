@@ -12690,19 +12690,19 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Consequence.** The maintainer confirms that the GNU keyring is trusted for this check.
 
-## IR-485: flex and m4 come from macOS and are not pinned
+## IR-485: Flex and m4 were ambient host tools
 
 | Field | Value |
 |---|---|
 | Status | Needs maintainer review |
 | Task | #099 (step 2) |
-| Affected documents | [build-system.md](../05-development/build-system.md) §6.5; [environment-setup.md](../05-development/environment-setup.md) §2.3 |
+| Affected documents | [build-system.md](../05-development/build-system.md) §6.5; [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) §6; IR-1326 |
 
-**Choice.** The build uses the macOS flex 2.6.4 and GNU m4 1.4.6. The manifest records both versions. The lock does not pin them.
+**Choice.** Replace the macOS-provided Flex 2.6.4 and GNU m4 1.4.6 with locked release sources: Flex 2.6.4 (`e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995`) and GNU m4 1.4.20 (`e236ea3a1ccf5f6c270b1c4bb60726f371fa49459a8eaaebc90b216b328daf2b`). Build both into the Mesa work area and put their `bin` directories first on the Mesa build `PATH`.
 
-**Reason.** Mesa needs flex for its GLSL lexers, and Bison runs m4 when it generates code. Both come with the macOS installation. Mesa's install notes (`docs/install.rst`) name flex 2.5.35 and bison 2.4.1, and they say that some versions, such as 2.6.2, can be buggy. The macOS flex is 2.6.4. Pinning either tool means a source build with more tools.
+**Reason.** Flex generates the Mesa GLSL lexers and invokes m4 when it expands its scanner skeleton. Leaving either executable on the ambient `PATH` means identical lock files can generate different parser sources on different Macs. Flex 2.6.4 meets Mesa's documented Flex requirement; GNU m4 1.4.20 uses a current GNU release archive rather than the older 1.4.6 host version.
 
-**Consequence.** The maintainer decides whether flex and m4 go into the lock or into `scripts/Brewfile`.
+**Consequence.** Both tools are `ships: tooling`, have retained license texts, and are built under the task work directory. Their release-source pins and the choice of versions remain for maintainer review; neither tool is copied into the Android image.
 
 ## IR-486: The NDK's licence is not an SPDX identifier, and the lock records its text
 
@@ -18798,3 +18798,64 @@ original line numbers recorded in `boot-evidence.md`.
 **Risk.** The full logs are local evidence and are not preserved by this
 commit. The excerpts intentionally omit surrounding events, so they do not
 establish a causal link between the AVC and the EGL failure.
+
+## IR-1326: Pin Flex and GNU m4 for the guest Mesa build
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 |
+| Affected documents | [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) §6; [build-system.md](../05-development/build-system.md) §6.5; [M02-graphics.md](issues/M02-graphics.md) #099 |
+
+**Choice.** Pin Flex 2.6.4 from the upstream release archive and GNU m4 1.4.20
+from the GNU release archive in the `guest-mesa` lock group. Build each from
+its hash-checked source archive into the Mesa work directory, and put both
+`bin` directories before host paths while configuring Flex and building Mesa.
+Record the exact tool versions in the Mesa manifest. Keep both as
+`ships: tooling`; do not copy them into the guest image.
+
+**Reason.** The prior build resolved Flex at `/usr/bin/flex` and m4 from the
+ambient `PATH`, so the lock did not identify two executable inputs that can
+affect generated lexer sources. The selected releases are source archives with
+verified SHA-256 values, and GNU m4 1.4.20 avoids requiring an old host version
+or adding a Homebrew dependency.
+
+**Verification.** T0 checks assert both exact URL, version, digest, license,
+and license file pins, and verify the build script uses the work-area binaries
+and no system Flex. The pinned tools and full Mesa output are rebuilt and
+verified before the lock acceptance criterion is closed. The focused host
+suite does not establish Soong or guest EGL success.
+
+**Risk.** Flex's BSD-3-Clause and m4's GPL-3.0-or-later license records are
+reviewable tooling inputs; release app-list findings for the shipped Mesa
+libraries and Android NDK remain open in IR-483 and IR-486.
+
+## IR-1327: Bind each #099 variant record to its transformation tools
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6; [M02-graphics.md](issues/M02-graphics.md) #099 |
+
+**Choice.** Raise the adjacent variant record to schema version 3 and add a
+`builder` object with the `Images/tools` Git commit, a source SHA-256, and a
+`workingTreeClean` flag. The source digest includes the commit, tracked
+`Images/tools` changes relative to `HEAD`, and the content of non-ignored
+untracked files in that tree.
+
+**Reason.** The Android source manifest's
+`provenance.revisions.imagesTools` describes how the source image was built;
+the bundle transformation can run at a different tools revision. Keeping both
+identities avoids implying that the source image's tool revision also built
+the variant. The source digest makes a dirty worktree's contribution visible
+without rejecting useful local development builds.
+
+**Verification.** T0 uses a temporary Git repository to check that the record
+binds the commit and that a local source edit changes the digest and clears
+`workingTreeClean`. Variant-building tests assert the serialized record has
+all four builder fields and schema version 3.
+
+**Risk.** A local build whose `workingTreeClean` is false needs the recorded
+source digest to identify the exact uncommitted transformation inputs; the
+commit alone is not a reproducible source reference.

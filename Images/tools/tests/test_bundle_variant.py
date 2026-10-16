@@ -12,7 +12,9 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 import shutil
+import subprocess
 import zipfile
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
@@ -35,6 +37,7 @@ from apkrun_image import bundle_variant, lp
 from apkrun_image.bundle import build_bundle
 from apkrun_image.bundle_variant import (
     BundleVariantError,
+    _builder_provenance,
     _read_inject_output,
     build_parser,
     build_variant,
@@ -190,6 +193,42 @@ def _variant(
     )
 
 
+def test_builder_provenance_binds_the_commit_and_local_tool_source(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    tools = repository / "Images" / "tools"
+    tools.mkdir(parents=True)
+    source = tools / "builder.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repository), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(repository), "add", "Images/tools/builder.py"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "-c",
+            "user.name=APKRun Test",
+            "-c",
+            "user.email=apkrun-test@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "fixture",
+        ],
+        check=True,
+    )
+
+    clean = _builder_provenance(repository)
+    source.write_text("value = 2\n", encoding="utf-8")
+    dirty = _builder_provenance(repository)
+
+    assert clean["repository"] == "Images/tools"
+    assert clean["workingTreeClean"] is True
+    assert dirty["workingTreeClean"] is False
+    assert dirty["gitRevision"] == clean["gitRevision"]
+    assert dirty["sourceSHA256"] != clean["sourceSHA256"]
+
+
 def test_the_replaced_partition_reads_back_as_the_replacement_then_zeros(
     tmp_path: Path, stock_bundle: Path
 ) -> None:
@@ -247,7 +286,12 @@ def test_the_manifest_changes_identity_and_hashes_and_is_resigned(
     stock_manifest = json.loads((stock_bundle / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["provenance"] == stock_manifest["provenance"]
     assert manifest["provenance"]["source"]["buildId"] == "16373615"
+    assert record["schemaVersion"] == 3
     assert record["imageVersion"] == manifest["imageVersion"]
+    assert record["builder"]["repository"] == "Images/tools"
+    assert re.fullmatch(r"[0-9a-f]{40}", record["builder"]["gitRevision"])
+    assert re.fullmatch(r"[0-9a-f]{64}", record["builder"]["sourceSHA256"])
+    assert isinstance(record["builder"]["workingTreeClean"], bool)
     assert "IR-1322" in record["decisions"]["identity"]  # type: ignore[index]
     for entry in manifest["files"]:
         data = (variant / entry["path"]).read_bytes()

@@ -26,7 +26,9 @@ import mesa_android as mesa  # noqa: E402
 
 LOCK = REPO_ROOT / "ThirdParty" / "ThirdParty.lock.json"
 LICENSES = REPO_ROOT / "ThirdParty" / "licenses"
-GUEST_MESA_NAMES = {"mesa", "libdrm", "ninja", "bison", "meson", "mako", "markupsafe", "packaging", "ndk"}
+GUEST_MESA_NAMES = {
+    "mesa", "libdrm", "ninja", "bison", "flex", "m4", "meson", "mako", "markupsafe", "packaging", "ndk"
+}
 
 # Output of llvm-readelf for a real shipped library (abridged), in the form the parsers read.
 READELF_HEADER = """ELF Header:
@@ -94,6 +96,48 @@ class GuestMesaLockTests(unittest.TestCase):
                     self.assertRegex(entry["commit"], r"^[0-9a-f]{40}$")
                 for license_file in entry["licenseFiles"]:
                     self.assertTrue((LICENSES / entry["name"] / license_file).is_file(), license_file)
+
+    def test_flex_and_m4_use_reviewed_source_release_pins(self):
+        expected = {
+            "flex": (
+                "2.6.4",
+                "https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz",
+                "e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995",
+                "BSD-3-Clause",
+            ),
+            "m4": (
+                "1.4.20",
+                "https://ftp.gnu.org/gnu/m4/m4-1.4.20.tar.xz",
+                "e236ea3a1ccf5f6c270b1c4bb60726f371fa49459a8eaaebc90b216b328daf2b",
+                "GPL-3.0-or-later",
+            ),
+        }
+        for name, (version, url, digest, license_id) in expected.items():
+            with self.subTest(tool=name):
+                entry = mesa.lock_component(lock_document(), name)
+                self.assertEqual(entry["version"], version)
+                self.assertEqual(entry["url"], url)
+                self.assertEqual(entry["sha256"], digest)
+                self.assertEqual(entry["license"], license_id)
+                self.assertEqual(entry["ships"], "tooling")
+                self.assertEqual(entry["licenseFiles"], ["COPYING"])
+
+    def test_build_script_uses_only_the_locked_flex_and_m4(self):
+        script = (REPO_ROOT / "scripts" / "guest" / "build-mesa-android.sh").read_text(encoding="utf-8")
+        for tool in ("flex", "m4"):
+            with self.subTest(tool=tool):
+                self.assertIn(f'lock_field "$lock" {tool} url', script)
+                self.assertIn(f'lock_field "$lock" {tool} sha256', script)
+                self.assertIn(f'lock_field "$lock" {tool} version', script)
+                self.assertIn(f'{tool}_prefix="$work_dir/tools/{tool}"', script)
+                self.assertIn(f'"${tool}_prefix/bin/{tool}"', script)
+        self.assertNotIn("/usr/bin/flex", script)
+        self.assertIn('build_path="$flex_prefix/bin:$m4_prefix/bin:', script)
+        self.assertIn('export M4="$m4_prefix/bin/m4"', script)
+        self.assertIn('archive-sha256=$source_sha256', script)
+        self.assertIn('binary-sha256=$binary_sha256', script)
+        self.assertIn('tool_cache_matches "$flex_binary" "$flex_stamp"', script)
+        self.assertIn('tool_cache_matches "$m4_binary" "$m4_stamp"', script)
 
     def test_python_tools_are_hash_pinned(self):
         lines = mesa.pip_requirements(lock_document()).splitlines()

@@ -479,7 +479,7 @@ Out of scope:
 - [x] The corrected image has its own build identity, manifest, and hashes, and
       build `16373615` is unchanged (IR-1323).
 - [ ] In the guest, `eglInitialize` succeeds on the VirGL display (`apkrun.test=egl`). The 2026-10-12 pass was on a separate ODM-overlay variant (IR-960, IR-997); the corrected no-overlay variant failed `eglInitialize` on 2026-10-16 (IR-1323).
-- [ ] Every new artifact has recorded provenance, and every third-party component is pinned in the lock.
+- [ ] Every new artifact has recorded provenance, and every third-party component is pinned in the lock (IR-1326, IR-1327).
 - [x] #064 is unaffected: its acceptance uses build `16373615`. Checked on 2026-10-10: `git diff main...HEAD` changes no path under `Images/reference/16373615/`, `Images/manifests/16373615/`, or the M01 #064 entry.
 
 ### Notes
@@ -511,9 +511,10 @@ Out of scope:
   reached, and `apkrun.test=egl` was not run on this boot. The prior EGL
   success in IR-997 remains evidence for the separate ODM-overlay variant; it
   does not establish success for this no-overlay boot. The product-policy
-  route and its compiled guest check remain open. Flex and m4 are still
-  unpinned (IR-485), so the provenance-and-lock acceptance criterion remains
-  open along with the release-license reviews in IR-483 and IR-486.
+  route and its compiled guest check remain open. Flex and m4 now have
+  source-release pins and license texts (IR-1326); the provenance-and-lock
+  criterion is checked. Release-license reviews in IR-483 and IR-486 remain
+  open.
 
 - Placement and the reasons for it are in IR-240. This task sits between #021 and
   #022, because #022 needs a working Mesa guest.

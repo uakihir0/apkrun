@@ -18,7 +18,6 @@ lock="$repo_root/ThirdParty/ThirdParty.lock.json"
 helper="$script_dir/mesa_android.py"
 
 ndk_api="35"
-flex_minimum="2.5.35"
 
 out_dir="$repo_root/ThirdParty/out/mesa-android"
 work_dir=""
@@ -84,14 +83,6 @@ python_bin="$(command -v python3.12 || true)"
 for tool in curl shasum git tar make cc; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is not on PATH"
 done
-m4_path="$(command -v m4 || true)"
-[[ -n "$m4_path" ]] || die "m4 is not on PATH"
-flex_path="/usr/bin/flex"
-[[ -x "$flex_path" ]] || die "$flex_path is missing (the Xcode command line tools provide it)"
-flex_version="$("$flex_path" --version | awk '{print $2}')"
-[[ "$(printf '%s\n%s\n' "$flex_minimum" "$flex_version" | sort -V | head -1)" == "$flex_minimum" ]] \
-    || die "flex $flex_version is older than $flex_minimum"
-
 # The pins. Each value is read from the lock, so the lock is the single source.
 [[ -f "$lock" ]] || die "missing $lock"
 mesa_commit="$(lock_field "$lock" mesa commit)"
@@ -105,6 +96,12 @@ ninja_commit="$(lock_field "$lock" ninja commit)"
 ninja_repository="$(lock_field "$lock" ninja repository)"
 bison_url="$(lock_field "$lock" bison url)"
 bison_sha256="$(lock_field "$lock" bison sha256)"
+flex_url="$(lock_field "$lock" flex url)"
+flex_sha256="$(lock_field "$lock" flex sha256)"
+flex_version="$(lock_field "$lock" flex version)"
+m4_url="$(lock_field "$lock" m4 url)"
+m4_sha256="$(lock_field "$lock" m4 sha256)"
+m4_version="$(lock_field "$lock" m4 version)"
 libdrm_url="$(lock_field "$lock" libdrm url)"
 libdrm_sha256="$(lock_field "$lock" libdrm sha256)"
 pyyaml_repository="$(lock_field "$lock" pyyaml repository)"
@@ -146,7 +143,7 @@ ndk_clang="$("$ndk_bin/aarch64-linux-android$ndk_api-clang" --version | head -1)
 if ((check_only)); then
     printf 'check: NDK %s (%s) at %s\n' "$ndk_revision" "$ndk_name" "$ndk"
     printf 'check: %s\n' "$ndk_clang"
-    printf 'check: python3.12 %s, flex %s, m4 %s\n' "$python_bin" "$flex_version" "$m4_path"
+    printf 'check: python3.12 %s, pinned flex %s, pinned m4 %s\n' "$python_bin" "$flex_version" "$m4_version"
     printf 'check: mesa %s commit %s (%d Meson flags)\n' "$mesa_version" "$mesa_commit" "${#mesa_flags[@]}"
     printf 'check: ninja %s, bison %s, libdrm %s, pyyaml %s\n' "$ninja_version" "$bison_version" \
         "$(lock_field "$lock" libdrm version)" "$(lock_field "$lock" pyyaml version)"
@@ -195,14 +192,74 @@ fetch_tarball() {
     [[ "$actual" == "$sha256" ]] || die "SHA-256 of $(basename "$dest") differs from the lock"
 }
 
+tool_cache_matches() {
+    local binary="$1" stamp="$2" source_sha256="$3" expected_version="$4"
+    local version binary_sha256
+    [[ -x "$binary" && -f "$stamp" ]] || return 1
+    version="$("$binary" --version 2>/dev/null | head -n 1)" || return 1
+    binary_sha256="$(shasum -a 256 "$binary" | awk '{print $1}')" || return 1
+    [[ "$version" == "$expected_version" ]] || return 1
+    [[ "$(sed -n '1p' "$stamp")" == "archive-sha256=$source_sha256" ]] || return 1
+    [[ "$(sed -n '2p' "$stamp")" == "binary-sha256=$binary_sha256" ]] || return 1
+    [[ "$(sed -n '3p' "$stamp")" == "version=$expected_version" ]]
+}
+
+write_tool_cache_stamp() {
+    local binary="$1" stamp="$2" source_sha256="$3" version="$4"
+    local binary_sha256 temporary_stamp
+    binary_sha256="$(shasum -a 256 "$binary" | awk '{print $1}')"
+    temporary_stamp="$stamp.tmp.$$"
+    printf 'archive-sha256=%s\nbinary-sha256=%s\nversion=%s\n' \
+        "$source_sha256" "$binary_sha256" "$version" >"$temporary_stamp"
+    mv "$temporary_stamp" "$stamp"
+}
+
 # 1. Sources. Each pinned checkout stays clean; builds use archive copies.
 fetch_commit mesa "$mesa_repository" "$mesa_commit" "$work_dir/src/mesa"
 fetch_commit ninja "$ninja_repository" "$ninja_commit" "$work_dir/src/ninja"
 fetch_commit pyyaml "$pyyaml_repository" "$pyyaml_commit" "$work_dir/src/pyyaml"
 fetch_tarball "$bison_url" "$bison_sha256" "$work_dir/downloads/bison-$bison_version.tar.xz"
+fetch_tarball "$flex_url" "$flex_sha256" "$work_dir/downloads/flex-$flex_version.tar.gz"
+fetch_tarball "$m4_url" "$m4_sha256" "$work_dir/downloads/m4-$m4_version.tar.xz"
 fetch_tarball "$libdrm_url" "$libdrm_sha256" "$work_dir/downloads/libdrm-$(lock_field "$lock" libdrm version).tar.xz"
 
-# 2. Ninja, from the pinned source, bootstrapped by its own script.
+# 2. GNU m4 and Flex, from the hash-checked release archives.
+m4_prefix="$work_dir/tools/m4"
+m4_binary="$m4_prefix/bin/m4"
+m4_stamp="$m4_prefix/.apkrun-source-pin"
+m4_expected_version="m4 (GNU M4) $m4_version"
+if ! tool_cache_matches "$m4_binary" "$m4_stamp" "$m4_sha256" "$m4_expected_version"; then
+    rm -rf "$work_dir/build/m4-src" "$m4_prefix"
+    mkdir -p "$work_dir/build/m4-src"
+    tar -xJf "$work_dir/downloads/m4-$m4_version.tar.xz" -C "$work_dir/build/m4-src"
+    (cd "$work_dir/build/m4-src/m4-$m4_version" && ./configure --prefix="$m4_prefix" \
+        && make -j"$jobs" && make install) >"$logs/m4.log" 2>&1 || die "m4 build failed (see $logs/m4.log)"
+    [[ "$("$m4_binary" --version | head -1)" == "$m4_expected_version" ]] || die "m4 version differs from the lock"
+    write_tool_cache_stamp "$m4_binary" "$m4_stamp" "$m4_sha256" "$m4_expected_version"
+fi
+tool_cache_matches "$m4_binary" "$m4_stamp" "$m4_sha256" "$m4_expected_version" \
+    || die "m4 cache does not match its locked source and executable hash"
+
+export M4="$m4_prefix/bin/m4"
+flex_prefix="$work_dir/tools/flex"
+flex_binary="$flex_prefix/bin/flex"
+flex_stamp="$flex_prefix/.apkrun-source-pin"
+flex_expected_version="flex $flex_version"
+if ! tool_cache_matches "$flex_binary" "$flex_stamp" "$flex_sha256" "$flex_expected_version"; then
+    rm -rf "$work_dir/build/flex-src" "$flex_prefix"
+    mkdir -p "$work_dir/build/flex-src"
+    tar -xzf "$work_dir/downloads/flex-$flex_version.tar.gz" -C "$work_dir/build/flex-src"
+    (cd "$work_dir/build/flex-src/flex-$flex_version" \
+        && export PATH="$m4_prefix/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+        && ./configure --prefix="$flex_prefix" && make -j"$jobs" && make install) \
+        >"$logs/flex.log" 2>&1 || die "flex build failed (see $logs/flex.log)"
+    [[ "$("$flex_binary" --version)" == "$flex_expected_version" ]] || die "flex version differs from the lock"
+    write_tool_cache_stamp "$flex_binary" "$flex_stamp" "$flex_sha256" "$flex_expected_version"
+fi
+tool_cache_matches "$flex_binary" "$flex_stamp" "$flex_sha256" "$flex_expected_version" \
+    || die "flex cache does not match its locked source and executable hash"
+
+# 3. Ninja, from the pinned source, bootstrapped by its own script.
 ninja_bin="$work_dir/tools/ninja/bin/ninja"
 if [[ ! -x "$ninja_bin" ]] || [[ "$("$ninja_bin" --version)" != "$ninja_version" ]]; then
     rm -rf "$work_dir/build/ninja-src" "$work_dir/tools/ninja"
@@ -214,7 +271,7 @@ if [[ ! -x "$ninja_bin" ]] || [[ "$("$ninja_bin" --version)" != "$ninja_version"
     [[ "$("$ninja_bin" --version)" == "$ninja_version" ]] || die "ninja version differs from the lock"
 fi
 
-# 3. Bison, from the pinned tarball. Mesa needs a Bison newer than 2.3 (meson.build).
+# 4. Bison, from the pinned tarball. Mesa needs a Bison newer than 2.3 (meson.build).
 bison_prefix="$work_dir/tools/bison"
 if [[ ! -x "$bison_prefix/bin/bison" ]] || ! "$bison_prefix/bin/bison" --version | head -1 | grep -q "$bison_version"; then
     rm -rf "$work_dir/build/bison-src" "$bison_prefix"
@@ -224,7 +281,7 @@ if [[ ! -x "$bison_prefix/bin/bison" ]] || ! "$bison_prefix/bin/bison" --version
         && make -j"$jobs" && make install) >"$logs/bison.log" 2>&1 || die "bison build failed (see $logs/bison.log)"
 fi
 
-# 4. Python tools: meson, mako, MarkupSafe, and packaging, from hash-checked wheels (no dependency resolution).
+# 5. Python tools: meson, mako, MarkupSafe, and packaging, from hash-checked wheels (no dependency resolution).
 venv="$work_dir/venv"
 "$python_bin" "$helper" requirements "$lock" >"$work_dir/requirements.txt"
 requirements_stamp="$(shasum -a 256 "$work_dir/requirements.txt" | awk '{print $1}')"
@@ -237,7 +294,7 @@ if [[ ! -x "$venv/bin/meson" || "$(cat "$venv/.requirements-sha256" 2>/dev/null 
 fi
 [[ "$("$venv/bin/meson" --version)" == "$meson_version" ]] || die "meson version differs from the lock"
 
-# 5. The Mesa tree: a clean archive of the pinned commit, with the pinned libdrm tarball in the wrap cache.
+# 6. The Mesa tree: a clean archive of the pinned commit, with the pinned libdrm tarball in the wrap cache.
 mesa_src="$work_dir/mesa-src"
 rm -rf "$mesa_src"
 mkdir -p "$mesa_src"
@@ -245,7 +302,7 @@ git -C "$work_dir/src/mesa" archive --format=tar HEAD | tar -x -C "$mesa_src"
 mkdir -p "$mesa_src/subprojects/packagecache"
 cp "$work_dir/downloads/libdrm-$(lock_field "$lock" libdrm version).tar.xz" "$mesa_src/subprojects/packagecache/libdrm-$(lock_field "$lock" libdrm version).tar.xz"
 
-# 6. The cross file. Clang is the NDK's API $ndk_api clang; lld links; the C++ runtime is static.
+# 7. The cross file. Clang is the NDK's API $ndk_api clang; lld links; the C++ runtime is static.
 cross="$work_dir/cross/android-aarch64.ini"
 cat >"$cross" <<EOF
 [constants]
@@ -274,19 +331,19 @@ needs_exe_wrapper = true
 EOF
 
 # The build PATH holds the pinned tools and the host's own Xcode tools, and nothing from Homebrew.
-build_path="$work_dir/tools/ninja/bin:$venv/bin:$bison_prefix/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+build_path="$flex_prefix/bin:$m4_prefix/bin:$work_dir/tools/ninja/bin:$venv/bin:$bison_prefix/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 build_dir="$work_dir/build-mesa"
 rm -rf "$build_dir"
 env PATH="$build_path" PYTHONPATH="$work_dir/src/pyyaml/lib" \
     meson setup "$build_dir" "$mesa_src" --cross-file "$cross" "${mesa_flags[@]}" \
     >"$logs/meson-setup.log" 2>&1 || die "meson setup failed (see $logs/meson-setup.log)"
 
-# 7. Build the four shipped libraries (and only what they need).
+# 8. Build the four shipped libraries (and only what they need).
 env PATH="$build_path" PYTHONPATH="$work_dir/src/pyyaml/lib" \
     ninja -C "$build_dir" -j "$jobs" "${ninja_targets[@]}" >"$logs/ninja-build.log" 2>&1 \
     || die "ninja failed (see $logs/ninja-build.log)"
 
-# 8. Install into a stage dir. Meson removes the build-tree RUNPATH on install, and --skip-subprojects keeps the
+# 9. Install into a stage dir. Meson removes the build-tree RUNPATH on install, and --skip-subprojects keeps the
 #    libdrm libraries of the wrap out of the stage.
 stage="$work_dir/stage"
 rm -rf "$stage"
@@ -294,7 +351,7 @@ env PATH="$build_path" PYTHONPATH="$work_dir/src/pyyaml/lib" \
     meson install -C "$build_dir" --destdir "$stage" --skip-subprojects --no-rebuild --strip \
     >"$logs/meson-install.log" 2>&1 || die "meson install failed (see $logs/meson-install.log)"
 
-# 9. The output: the four libraries and the manifest, verified before they replace the previous output.
+# 10. The output: the four libraries and the manifest, verified before they replace the previous output.
 tmp_out="$out_dir.tmp.$$"
 rm -rf "$tmp_out"
 mkdir -p "$tmp_out/vendor/lib64"
@@ -315,8 +372,8 @@ pyyaml_version="$(lock_field "$lock" pyyaml version)"
     --tool "meson=$("$venv/bin/meson" --version)" \
     --tool "ninja=$("$ninja_bin" --version)" \
     --tool "bison=$bison_version" \
-    --tool "flex=$flex_version" \
-    --tool "m4=$(m4 --version | head -1)" \
+    --tool "flex=$("$flex_prefix/bin/flex" --version | awk '{print $2}')" \
+    --tool "m4=$("$m4_prefix/bin/m4" --version | head -1)" \
     --tool "python=$("$python_bin" --version 2>&1 | awk '{print $2}')" \
     --tool "pyyaml=$pyyaml_version ($pyyaml_commit)" \
     --tool "libdrm=$libdrm_version" \

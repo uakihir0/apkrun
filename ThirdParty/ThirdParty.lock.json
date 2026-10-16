@@ -1087,6 +1087,20 @@
       "ships": "tooling"
     },
     {
+      "name": "flex",
+      "group": "guest-mesa",
+      "kind": "prebuilt",
+      "url": "https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz",
+      "version": "2.6.4",
+      "sha256": "e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995",
+      "repository": "https://github.com/westes/flex",
+      "license": "BSD-3-Clause",
+      "licenseFiles": ["COPYING"],
+      "buildFlags": [],
+      "patches": [],
+      "ships": "tooling"
+    },
+    {
       "name": "meson",
       "group": "guest-mesa",
       "kind": "prebuilt",
@@ -1121,6 +1135,20 @@
       "sha256": "0930db9bdc62d22944e10b066448bb65dc9abe9112880c7cab8da54db4284d5f",
       "license": "BSD-3-Clause",
       "licenseFiles": ["LICENSE.txt"],
+      "buildFlags": [],
+      "patches": [],
+      "ships": "tooling"
+    },
+    {
+      "name": "m4",
+      "group": "guest-mesa",
+      "kind": "prebuilt",
+      "url": "https://ftp.gnu.org/gnu/m4/m4-1.4.20.tar.xz",
+      "version": "1.4.20",
+      "sha256": "e236ea3a1ccf5f6c270b1c4bb60726f371fa49459a8eaaebc90b216b328daf2b",
+      "repository": "https://www.gnu.org/software/m4/",
+      "license": "GPL-3.0-or-later",
+      "licenseFiles": ["COPYING"],
       "buildFlags": [],
       "patches": [],
       "ships": "tooling"

@@ -177,6 +177,73 @@ def _info(avbtool: Path, image: Path) -> str:
     return run_avbtool(avbtool, ["info_image", "--image", str(image)])
 
 
+def _raw_vbmeta_descriptors(
+    image: Path,
+) -> tuple[bytes, list[tuple[int, str | None, bytes]]]:
+    """Return a bounded vbmeta header and its exact ordered descriptor bytes."""
+    try:
+        with image.open("rb") as stream:
+            header, vbmeta_offset = _read_vbmeta(
+                stream,
+                artifact_size=image.stat().st_size,
+                artifact_name=str(image),
+            )
+            stream.seek(vbmeta_offset)
+            header_bytes = stream.read(256)
+            if len(header_bytes) != 256:
+                raise ResealError(f"{image} has a truncated vbmeta header.")
+            descriptor_offset = (
+                vbmeta_offset
+                + 256
+                + header.authentication_size
+                + header.descriptors_offset
+            )
+            stream.seek(descriptor_offset)
+            table = stream.read(header.descriptors_size)
+    except (AvbError, OSError, struct.error) as error:
+        raise ResealError(f"{image} has invalid vbmeta descriptors: {error}") from None
+    if len(table) != header.descriptors_size:
+        raise ResealError(f"{image} has a truncated vbmeta descriptor table.")
+
+    descriptors: list[tuple[int, str | None, bytes]] = []
+    offset = 0
+    while offset < len(table):
+        if len(table) - offset < 16:
+            raise ResealError(f"{image} has a truncated AVB descriptor header.")
+        tag, following_size = struct.unpack_from(">QQ", table, offset)
+        end = offset + 16 + following_size
+        if following_size % 8 or end > len(table):
+            raise ResealError(f"{image} has an invalid AVB descriptor size.")
+        encoded = table[offset:end]
+        partition_name: str | None = None
+        if tag == 1:
+            # AvbHashtreeDescriptor has a 180-byte fixed part including its generic header.
+            if len(encoded) < 180:
+                raise ResealError(f"{image} has a truncated hashtree descriptor.")
+            name_size = struct.unpack_from(">I", encoded, 104)[0]
+            salt_size, root_digest_size = struct.unpack_from(">II", encoded, 108)
+            used_size = 180 + name_size + salt_size + root_digest_size
+            if (used_size + 7) & ~7 != len(encoded) or any(encoded[used_size:]):
+                raise ResealError(f"{image} has an invalid hashtree partition name.")
+            try:
+                partition_name = encoded[180 : 180 + name_size].decode("utf-8")
+            except UnicodeDecodeError:
+                raise ResealError(f"{image} has a non-UTF-8 hashtree partition name.") from None
+            if not partition_name or "/" in partition_name or "\\" in partition_name:
+                raise ResealError(f"{image} has an invalid hashtree partition name.")
+        descriptors.append((tag, partition_name, encoded))
+        offset = end
+    return header_bytes, descriptors
+
+
+def _partition_tree(info_text: str, partition_name: str, what: str) -> dict[str, Any]:
+    """Return one complete hashtree descriptor for `partition_name`, or refuse it."""
+    tree = parse_hashtrees(info_text).get(partition_name)
+    if tree is None or any(field not in tree for field in DESCRIPTOR_FIELDS):
+        raise ResealError(f"{what} has no complete {partition_name} hashtree descriptor.")
+    return {field: tree[field] for field in DESCRIPTOR_FIELDS}
+
+
 @cache
 def _vendored_avb_api(avbtool: Path) -> dict[str, Any]:
     """Load the pinned avbtool signature verifier without invoking its CLI entry point."""
@@ -338,10 +405,58 @@ def refresh_vbmeta(
     scratch: Path,
 ) -> dict[str, Any]:
     """Write signed stock vbmeta with the descriptor of `vendor` to `output`; return the record."""
+    stock_vendor_descriptor = vendor_tree(_info(avbtool, stock_vbmeta), "the stock vbmeta_a")
+    new_vendor_descriptor = vendor_tree(_info(avbtool, vendor), "the resealed vendor_a")
+    record = refresh_vbmeta_partition(
+        avbtool,
+        stock_vbmeta,
+        vendor,
+        PARTITION,
+        signing_key,
+        output,
+        scratch,
+    )
+    if (
+        record["previousDescriptor"] != stock_vendor_descriptor
+        or record["descriptor"] != new_vendor_descriptor
+    ):
+        raise ResealError(
+            "the refreshed vbmeta does not preserve the validated vendor descriptors."
+        )
+    return {
+        "rollbackIndex": record["rollbackIndex"],
+        "blobSize": record["blobSize"],
+        "signer": record["signer"],
+        "publicKeySha1": record["publicKeySha1"],
+        "previousVendorDescriptor": record["previousDescriptor"],
+        "vendorDescriptor": record["descriptor"],
+    }
+
+
+def refresh_vbmeta_partition(
+    avbtool: Path,
+    stock_vbmeta: Path,
+    partition_image: Path,
+    partition_name: str,
+    signing_key: Path,
+    output: Path,
+    scratch: Path,
+) -> dict[str, Any]:
+    """Replace exactly one named hashtree descriptor and write padded, signed vbmeta."""
+    if (
+        not partition_name
+        or "/" in partition_name
+        or "\\" in partition_name
+        or "\0" in partition_name
+    ):
+        raise ResealError("the partition name must be a non-empty AVB partition name.")
+    if output.exists() or output.is_symlink():
+        raise ResealError(f"{output}: the output must not already exist.")
+
     public_key_metadata = verify_vbmeta_signature(avbtool, stock_vbmeta)
     stock_info = _info(avbtool, stock_vbmeta)
     stock_top = parse_top(stock_info)
-    stock_tree = vendor_tree(stock_info, "the stock vbmeta_a")
+    stock_tree = _partition_tree(stock_info, partition_name, "the stock vbmeta_a")
     if stock_top.get("Algorithm") != VBMETA_ALGORITHM:
         raise ResealError(f"the stock vbmeta_a is not signed with {VBMETA_ALGORITHM}.")
     if stock_top.get("Public key (sha1)", "").lower() != VBMETA_PUBLIC_KEY_SHA1:
@@ -349,7 +464,7 @@ def refresh_vbmeta(
 
     if signing_key.is_symlink() or not signing_key.is_file():
         raise ResealError(f"{signing_key}: the signing key must be a regular file.")
-    public_key = scratch / "signing-key.avbpubkey"
+    public_key = scratch / f"{partition_name}-signing-key.avbpubkey"
     run_avbtool(
         avbtool,
         ["extract_public_key", "--key", str(signing_key), "--output", str(public_key)],
@@ -363,13 +478,67 @@ def refresh_vbmeta(
     release_string = vbmeta_release_string(avbtool, stock_vbmeta)
     partition_size = stock_vbmeta.stat().st_size
 
-    raw = scratch / "vbmeta-raw.bin"
+    partition_info = _info(avbtool, partition_image)
+    original_size = _original_size(partition_info, f"the {partition_name} image")
+    partition_tree = _partition_tree(
+        partition_info, partition_name, f"the {partition_name} image"
+    )
+    if partition_tree["imageSize"] != original_size:
+        raise ResealError(
+            f"the {partition_name} hashtree does not cover the original image size."
+        )
+    _partition_header, image_descriptors = _raw_vbmeta_descriptors(partition_image)
+    target_image_descriptors = [
+        encoded
+        for tag, name, encoded in image_descriptors
+        if tag == 1 and name == partition_name
+    ]
+    if len(target_image_descriptors) != 1:
+        raise ResealError(
+            f"the {partition_name} image must have exactly one matching hashtree descriptor."
+        )
+    with tempfile.TemporaryDirectory(
+        prefix=f"verify-{partition_name}-", dir=scratch
+    ) as verify_name:
+        verify_image = Path(verify_name) / f"{partition_name}.part"
+        verify_image.symlink_to(partition_image.resolve())
+        try:
+            verified_footer = run_avbtool(
+                avbtool, ["verify_image", "--image", str(verify_image)]
+            )
+        except ValueError as error:
+            raise ResealError(
+                f"avbtool could not verify the hashtree footer of the {partition_name} partition: "
+                f"{error}"
+            ) from None
+    verified_footer_lower = verified_footer.lower()
+    if (
+        "successfully verified" not in verified_footer_lower
+        or "hashtree" not in verified_footer_lower
+    ):
+        raise ResealError(
+            f"avbtool did not verify the new hashtree footer of the {partition_name} partition."
+        )
+
+    stock_header, stock_descriptors = _raw_vbmeta_descriptors(stock_vbmeta)
+    stock_target_descriptors = [
+        (index, encoded)
+        for index, (tag, name, encoded) in enumerate(stock_descriptors)
+        if tag == 1 and name == partition_name
+    ]
+    if len(stock_target_descriptors) != 1:
+        raise ResealError(
+            f"the stock vbmeta_a must have exactly one {partition_name} hashtree descriptor."
+        )
+    target_index, _old_target_descriptor = stock_target_descriptors[0]
+
+    raw = scratch / f"{partition_name}-vbmeta-raw.bin"
     update_args = [
         "update_partition_descriptor",
         "--image",
         str(stock_vbmeta),
         "--partition_image",
-        str(vendor),
+        str(partition_image),
         "--output",
         str(raw),
         "--algorithm",
@@ -395,9 +564,9 @@ def refresh_vbmeta(
     blob = raw.read_bytes()
     if len(blob) > partition_size:
         raise ResealError("the refreshed vbmeta is larger than the stock partition.")
-    padded = scratch / "vbmeta-padded.bin"
-    padded.write_bytes(blob + bytes(partition_size - len(blob)))
 
+    padded = scratch / f"{partition_name}-vbmeta-padded.bin"
+    padded.write_bytes(blob + bytes(partition_size - len(blob)))
     refreshed_metadata = verify_vbmeta_signature(avbtool, padded)
     if refreshed_metadata != public_key_metadata:
         raise ResealError("the refreshed vbmeta changed the public-key metadata.")
@@ -410,22 +579,51 @@ def refresh_vbmeta(
     for key in ("Rollback Index", "Rollback Index Location", "Flags", "Minimum libavb version"):
         if new_top.get(key) != stock_top.get(key):
             raise ResealError(f"the refreshed vbmeta changed its {key}.")
-    vendor_expected = vendor_tree(_info(avbtool, vendor), "the resealed vendor_a")
-    new_tree = vendor_tree(new_info, "the refreshed vbmeta_a")
-    if new_tree != vendor_expected:
-        raise ResealError("the refreshed vbmeta does not carry the descriptor of the new footer.")
-    stock_others = [b for b in descriptor_blocks(stock_info) if not _is_vendor_block(b)]
-    new_others = [b for b in descriptor_blocks(new_info) if not _is_vendor_block(b)]
-    if stock_others != new_others:
-        raise ResealError("the refreshed vbmeta changed a descriptor other than the vendor one.")
+    new_header, new_descriptors = _raw_vbmeta_descriptors(padded)
+    if new_header != stock_header:
+        raise ResealError("the refreshed vbmeta changed the stock vbmeta header.")
+    target_descriptors = [
+        (index, encoded)
+        for index, (tag, name, encoded) in enumerate(new_descriptors)
+        if tag == 1 and name == partition_name
+    ]
+    if len(target_descriptors) != 1:
+        raise ResealError(
+            f"the refreshed vbmeta must have exactly one {partition_name} hashtree descriptor."
+        )
+    new_target_index, new_target_descriptor = target_descriptors[0]
+    if new_target_index != target_index:
+        raise ResealError("the refreshed vbmeta moved the target hashtree descriptor.")
+    if new_target_descriptor != target_image_descriptors[0]:
+        raise ResealError(
+            "the refreshed vbmeta does not carry the descriptor of the new "
+            f"{partition_name} footer."
+        )
+    if len(new_descriptors) != len(stock_descriptors):
+        raise ResealError("the refreshed vbmeta changed the descriptor count.")
+    for index, (old, new) in enumerate(zip(stock_descriptors, new_descriptors, strict=True)):
+        if index == target_index:
+            continue
+        if old != new:
+            raise ResealError("the refreshed vbmeta changed a descriptor other than the target.")
+
+    new_tree = _partition_tree(new_info, partition_name, "the refreshed vbmeta_a")
+    if new_tree != partition_tree:
+        raise ResealError(
+            "the refreshed vbmeta does not carry the descriptor of the new "
+            f"{partition_name} footer."
+        )
+    if padded.stat().st_size != partition_size:
+        raise ResealError("the refreshed vbmeta is not padded to the stock partition size.")
     shutil.move(str(padded), output)
     return {
         "rollbackIndex": int(rollback.split()[0]),
         "blobSize": len(blob),
         "signer": VBMETA_SIGNER,
         "publicKeySha1": VBMETA_PUBLIC_KEY_SHA1,
-        "previousVendorDescriptor": stock_tree,
-        "vendorDescriptor": new_tree,
+        "partitionName": partition_name,
+        "previousDescriptor": stock_tree,
+        "descriptor": new_tree,
     }
 
 

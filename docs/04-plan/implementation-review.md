@@ -18653,9 +18653,24 @@ vendored `avbtool`, and rejects a mismatched signing key or stock algorithm.
 Tampered stock signatures are rejected before re-signing, and tampered output
 signatures are rejected by the bundle reader even when the record hash is
 updated. Unknown algorithms and truncated public-key fields produce typed
-errors. The reader also checks the actual vbmeta key identity, and refreshed
-vbmeta is restricted to `kind: stock` bundles. No VM boot or image release was
-performed by this decision.
+errors. Public-key metadata is copied byte-for-byte and checked after signing.
+The bundle builder independently checks the captured stock `vbmeta_a` bytes
+against the signed manifest before embedding a refreshed blob. It compares the
+complete AVB header and bounded raw descriptor encodings, preserving large
+property values and unknown descriptors that `info_image` abbreviates. It
+requires the refreshed vendor descriptor to equal both the resealed footer
+and the checked inject-vendor footer, including dm-verity version and flags.
+It independently runs `avbtool verify_image` on the staged vendor and inject
+snapshots, compares their original data bytes, and checks the candidate key
+inside the builder. It rejects nonzero bytes after the vbmeta blob and a vendor
+descriptor moved from its stock ordinal. The stock disk and super hashes are
+computed over the exact bytes consumed by the splice, and copied non-disk
+files are checked again against their signed manifest entries. The variant's
+embedded vendor partition is hashed and must match the AVB-verified snapshot.
+Validly re-signed candidates that change non-vendor descriptors, the AVB header,
+or public-key metadata are rejected even when the record hash is updated.
+Refreshed vbmeta is restricted to `kind: stock` bundles. No VM boot or image
+release was performed by this decision.
 
 **Risk.** The test key is public and must never be treated as a release
 credential. This decision does not close #099's corrected-image identity,

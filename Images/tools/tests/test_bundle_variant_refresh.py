@@ -17,6 +17,7 @@ import pytest
 
 from apkrun_image import bundle_variant as variant
 from apkrun_image import vendor_reseal
+from apkrun_image.avb import VBMETA_HEADER_SIZE, _read_vbmeta
 from apkrun_image.bundle_variant import BundleVariantError
 from apkrun_image.erofs import load_component
 from apkrun_image.manifest import _repository_root
@@ -52,6 +53,35 @@ def _corrupt_vbmeta_signature(image: Path) -> None:
     assert signature_size > 0
     data[256 + signature_offset] ^= 0x01
     image.write_bytes(data)
+
+
+def _change_vendor_hashtree_u32(image: Path, field_offset: int, value: int) -> Path:
+    """Change a uint32 field in the footer's vendor descriptor of an unsigned fixture image."""
+    data = bytearray(image.read_bytes())
+    header, vbmeta_offset = _read_vbmeta(
+        io.BytesIO(data), artifact_size=len(data), artifact_name=str(image)
+    )
+    table_start = (
+        vbmeta_offset
+        + VBMETA_HEADER_SIZE
+        + header.authentication_size
+        + header.descriptors_offset
+    )
+    table_end = table_start + header.descriptors_size
+    cursor = table_start
+    while cursor < table_end:
+        tag, following_size = struct.unpack_from(">QQ", data, cursor)
+        descriptor_end = cursor + 16 + following_size
+        if tag == 1:
+            name_size = struct.unpack_from(">I", data, cursor + 104)[0]
+            name = data[cursor + 180 : cursor + 180 + name_size].decode("utf-8")
+            if name == "vendor":
+                struct.pack_into(">I", data, cursor + field_offset, value)
+                output = image.with_name(f"{image.stem}-modified.img")
+                output.write_bytes(data)
+                return output
+        cursor = descriptor_end
+    raise AssertionError("fixture vbmeta has no vendor hashtree descriptor")
 
 
 def test_the_chain_digest_is_the_top_blob_then_each_chained_blob(tmp_path: Path) -> None:
@@ -227,24 +257,30 @@ def _vbmeta_for(
     *,
     key: Path = AOSP_TEST_KEY,
     algorithm: str = vendor_reseal.VBMETA_ALGORITHM,
+    properties: tuple[str, ...] = (),
+    public_key_metadata: Path | None = None,
+    release_string: str | None = None,
 ) -> Path:
     output = tmp / f"{name}-vbmeta.img"
-    run_avbtool(
-        avbtool,
-        [
-            "make_vbmeta_image",
-            "--output",
-            str(output),
-            "--algorithm",
-            algorithm,
-            "--key",
-            str(key),
-            "--include_descriptors_from_image",
-            str(vendor),
-            "--padding_size",
-            "4096",
-        ],
-    )
+    arguments = [
+        "make_vbmeta_image",
+        "--output",
+        str(output),
+        "--algorithm",
+        algorithm,
+        "--key",
+        str(key),
+        "--include_descriptors_from_image",
+        str(vendor),
+    ]
+    for property_value in properties:
+        arguments.extend(["--prop", property_value])
+    if public_key_metadata is not None:
+        arguments.extend(["--public_key_metadata", str(public_key_metadata)])
+    if release_string is not None:
+        arguments.extend(["--internal_release_string", release_string])
+    arguments.extend(["--padding_size", "4096"])
+    run_avbtool(avbtool, arguments)
     return output
 
 
@@ -322,6 +358,134 @@ def test_a_reseal_output_for_the_same_inject_is_read(tmp_path: Path) -> None:
     assert refresh.record_path == record_path
 
 
+def test_a_refreshed_vbmeta_that_only_changes_the_vendor_descriptor_is_accepted(
+    tmp_path: Path,
+) -> None:
+    inject, reseal, _record_path, _record = _reseal_fixture(tmp_path)
+    avbtool = _avbtool()
+    stock_vendor = _sealed(avbtool, tmp_path, "baseline-vendor", "baseline")
+    stock_vbmeta = _vbmeta_for(avbtool, tmp_path, "baseline-vbmeta", stock_vendor)
+    refresh = variant._read_reseal_output(
+        reseal, inject_directory=inject, partition="vendor_a", build_id=FIXTURE_BUILD
+    )
+
+    variant._verify_refreshed_vbmeta_matches_stock(
+        avbtool, stock_vbmeta, refresh.vbmeta, refresh.vendor, refresh.injected
+    )
+
+
+def test_a_corrupt_resealed_vendor_payload_is_refused_even_with_updated_record(
+    tmp_path: Path,
+) -> None:
+    inject, reseal, record_path, record = _reseal_fixture(tmp_path)
+    avbtool = _avbtool()
+    vendor = reseal / "vendor_a.img"
+    corrupted = bytearray(vendor.read_bytes())
+    corrupted[0] ^= 0x01
+    vendor.write_bytes(corrupted)
+    record["vendor"]["sha256"] = _sha(corrupted)
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    stock_vbmeta = _vbmeta_for(avbtool, tmp_path, "stock-corrupt", vendor)
+
+    refresh = variant._read_reseal_output(
+        reseal, inject_directory=inject, partition="vendor_a", build_id=FIXTURE_BUILD
+    )
+    with pytest.raises(BundleVariantError, match="AVB hashtree verification failed"):
+        variant._verify_refreshed_vbmeta_matches_stock(
+            avbtool, stock_vbmeta, refresh.vbmeta, refresh.vendor, refresh.injected
+        )
+
+
+def test_a_validly_resealed_vendor_cannot_replace_the_checked_injected_payload(
+    tmp_path: Path,
+) -> None:
+    inject, reseal, record_path, record = _reseal_fixture(tmp_path)
+    avbtool = _avbtool()
+    vendor = reseal / "vendor_a.img"
+    stock_vbmeta = _vbmeta_for(avbtool, tmp_path, "stock-original", vendor)
+    changed_vendor = _sealed(avbtool, tmp_path, "changed-vendor", "changed-vendor")
+    vendor.write_bytes(changed_vendor.read_bytes())
+    descriptor = vendor_reseal.vendor_tree(
+        run_avbtool(avbtool, ["info_image", "--image", str(vendor)]),
+        "the changed test vendor",
+    )
+    changed_vbmeta = _vbmeta_for(avbtool, tmp_path, "changed-vendor", vendor)
+    (reseal / "vbmeta_a.img").write_bytes(changed_vbmeta.read_bytes())
+    record["vendor"]["sha256"] = _sha(vendor.read_bytes())
+    record["vendor"]["descriptor"] = descriptor
+    record["vbmeta"]["sha256"] = _sha(changed_vbmeta.read_bytes())
+    record["vbmeta"]["vendorDescriptor"] = descriptor
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    refresh = variant._read_reseal_output(
+        reseal, inject_directory=inject, partition="vendor_a", build_id=FIXTURE_BUILD
+    )
+    tree = vendor_reseal.vendor_tree(
+        run_avbtool(avbtool, ["info_image", "--image", str(refresh.vendor)]),
+        "the changed test vendor",
+    )
+    assert not variant._same_file_prefix(
+        refresh.vendor, refresh.injected, tree["imageSize"]
+    )
+    with pytest.raises(
+        BundleVariantError,
+        match="does not carry the exact descriptor of the checked inject-vendor output",
+    ):
+        variant._verify_refreshed_vbmeta_matches_stock(
+            avbtool, stock_vbmeta, refresh.vbmeta, refresh.vendor, refresh.injected
+        )
+
+
+def test_the_builder_helper_rejects_a_refreshed_vbmeta_signed_by_another_key(
+    tmp_path: Path,
+) -> None:
+    inject, reseal, _record_path, _record = _reseal_fixture(tmp_path)
+    avbtool = _avbtool()
+    vendor = reseal / "vendor_a.img"
+    stock_vbmeta = _vbmeta_for(avbtool, tmp_path, "stock-key", vendor)
+    wrong_key_vbmeta = _vbmeta_for(
+        avbtool,
+        tmp_path,
+        "wrong-key-helper",
+        vendor,
+        key=FIXTURE_RSA_KEY,
+        algorithm="SHA256_RSA2048",
+    )
+
+    with pytest.raises(
+        BundleVariantError,
+        match="refreshed vbmeta_a is not signed with the pinned",
+    ):
+        variant._verify_refreshed_vbmeta_matches_stock(
+            avbtool, stock_vbmeta, wrong_key_vbmeta, vendor, inject / "vendor_a.img"
+        )
+
+
+def test_the_builder_helper_rejects_nonzero_vbmeta_partition_padding(tmp_path: Path) -> None:
+    inject, reseal, record_path, record = _reseal_fixture(tmp_path)
+    avbtool = _avbtool()
+    vendor = reseal / "vendor_a.img"
+    stock_vbmeta = _vbmeta_for(avbtool, tmp_path, "stock-padding", vendor)
+    refreshed_vbmeta = reseal / "vbmeta_a.img"
+    data = bytearray(refreshed_vbmeta.read_bytes())
+    header, _offset = _read_vbmeta(
+        io.BytesIO(data), artifact_size=len(data), artifact_name=str(refreshed_vbmeta)
+    )
+    assert header.blob_size < len(data)
+    data[-1] = 0x01
+    refreshed_vbmeta.write_bytes(data)
+    record["vbmeta"]["sha256"] = _sha(data)
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    refresh = variant._read_reseal_output(
+        reseal, inject_directory=inject, partition="vendor_a", build_id=FIXTURE_BUILD
+    )
+
+    with pytest.raises(BundleVariantError, match="has nonzero bytes after its vbmeta blob"):
+        variant._verify_refreshed_vbmeta_matches_stock(
+            avbtool, stock_vbmeta, refresh.vbmeta, refresh.vendor, refresh.injected
+        )
+
+
 @pytest.mark.parametrize(
     ("changes", "message"),
     [
@@ -359,6 +523,121 @@ def test_a_refreshed_vbmeta_of_another_vendor_is_refused(tmp_path: Path) -> None
     with pytest.raises(BundleVariantError, match="does not carry the descriptor of the resealed"):
         variant._read_reseal_output(
             reseal, inject_directory=inject, partition="vendor_a", build_id=FIXTURE_BUILD
+        )
+
+
+def test_a_resigned_long_non_vendor_property_change_is_refused_even_with_updated_record(
+    tmp_path: Path,
+) -> None:
+    inject, reseal, record_path, record = _reseal_fixture(tmp_path)
+    avbtool = _avbtool()
+    stock_vbmeta = _vbmeta_for(
+        avbtool, tmp_path, "stock", reseal / "vendor_a.img",
+        properties=("apkrun:" + "a" * 300,),
+    )
+    altered_vbmeta = _vbmeta_for(
+        avbtool,
+        tmp_path,
+        "altered",
+        reseal / "vendor_a.img",
+        properties=("apkrun:" + "b" * 300,),
+    )
+    (reseal / "vbmeta_a.img").write_bytes(altered_vbmeta.read_bytes())
+    record["vbmeta"]["sha256"] = _sha(altered_vbmeta.read_bytes())
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    refresh = variant._read_reseal_output(
+        reseal, inject_directory=inject, partition="vendor_a", build_id=FIXTURE_BUILD
+    )
+    with pytest.raises(BundleVariantError, match="changed a descriptor other than the vendor"):
+        variant._verify_refreshed_vbmeta_matches_stock(
+            avbtool, stock_vbmeta, refresh.vbmeta, refresh.vendor, refresh.injected
+        )
+
+
+@pytest.mark.parametrize(("field_offset", "value"), [(16, 2), (116, 1)])
+def test_a_resigned_vendor_descriptor_version_or_flags_change_is_refused(
+    tmp_path: Path, field_offset: int, value: int
+) -> None:
+    inject, reseal, record_path, record = _reseal_fixture(tmp_path)
+    avbtool = _avbtool()
+    stock_vbmeta = _vbmeta_for(avbtool, tmp_path, "stock-vendor", reseal / "vendor_a.img")
+    changed_vendor = _change_vendor_hashtree_u32(
+        reseal / "vendor_a.img", field_offset, value
+    )
+    altered_vbmeta = _vbmeta_for(avbtool, tmp_path, "altered-vendor", changed_vendor)
+    (reseal / "vbmeta_a.img").write_bytes(altered_vbmeta.read_bytes())
+    record["vbmeta"]["sha256"] = _sha(altered_vbmeta.read_bytes())
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    refresh = variant._read_reseal_output(
+        reseal, inject_directory=inject, partition="vendor_a", build_id=FIXTURE_BUILD
+    )
+    with pytest.raises(BundleVariantError, match="does not carry the exact descriptor"):
+        variant._verify_refreshed_vbmeta_matches_stock(
+            avbtool, stock_vbmeta, refresh.vbmeta, refresh.vendor, refresh.injected
+        )
+
+
+def test_a_resigned_public_key_metadata_change_is_refused_even_with_updated_record(
+    tmp_path: Path,
+) -> None:
+    inject, reseal, record_path, record = _reseal_fixture(tmp_path)
+    avbtool = _avbtool()
+    stock_metadata = tmp_path / "stock-public-key-metadata.bin"
+    altered_metadata = tmp_path / "altered-public-key-metadata.bin"
+    stock_metadata.write_bytes(b"stock metadata")
+    altered_metadata.write_bytes(b"other metadata")
+    stock_vbmeta = _vbmeta_for(
+        avbtool,
+        tmp_path,
+        "stock-with-metadata",
+        reseal / "vendor_a.img",
+        public_key_metadata=stock_metadata,
+    )
+    altered_vbmeta = _vbmeta_for(
+        avbtool,
+        tmp_path,
+        "altered-with-metadata",
+        reseal / "vendor_a.img",
+        public_key_metadata=altered_metadata,
+    )
+    (reseal / "vbmeta_a.img").write_bytes(altered_vbmeta.read_bytes())
+    record["vbmeta"]["sha256"] = _sha(altered_vbmeta.read_bytes())
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    refresh = variant._read_reseal_output(
+        reseal, inject_directory=inject, partition="vendor_a", build_id=FIXTURE_BUILD
+    )
+    with pytest.raises(BundleVariantError, match="changed stock public-key metadata"):
+        variant._verify_refreshed_vbmeta_matches_stock(
+            avbtool, stock_vbmeta, refresh.vbmeta, refresh.vendor, refresh.injected
+        )
+
+
+def test_a_resigned_release_string_change_is_refused_even_with_updated_record(
+    tmp_path: Path,
+) -> None:
+    inject, reseal, record_path, record = _reseal_fixture(tmp_path)
+    avbtool = _avbtool()
+    altered_vbmeta = _vbmeta_for(
+        avbtool,
+        tmp_path,
+        "altered-release-string",
+        reseal / "vendor_a.img",
+        release_string="attacker-controlled-release-string",
+    )
+    (reseal / "vbmeta_a.img").write_bytes(altered_vbmeta.read_bytes())
+    record["vbmeta"]["sha256"] = _sha(altered_vbmeta.read_bytes())
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    stock_vbmeta = _vbmeta_for(avbtool, tmp_path, "stock-release-string", reseal / "vendor_a.img")
+
+    refresh = variant._read_reseal_output(
+        reseal, inject_directory=inject, partition="vendor_a", build_id=FIXTURE_BUILD
+    )
+    with pytest.raises(BundleVariantError, match="changed stock AVB header fields"):
+        variant._verify_refreshed_vbmeta_matches_stock(
+            avbtool, stock_vbmeta, refresh.vbmeta, refresh.vendor, refresh.injected
         )
 
 

@@ -14,7 +14,10 @@ The stock bundle is read and never changed:
    GPT. The other bytes of the disk and the other files are copied.
 4. The copy is checked against the stock bytes. Every byte outside the replaced extents is
    equal, and the partition reads back as the replacement followed by zeros.
-5. The file entries, the super partition hash, `SHA256SUMS`, and `manifest.sig` are made by the
+5. The refreshed vbmeta is checked against the verified stock disk range: its signature, key,
+   rollback settings, every non-vendor descriptor, and public-key metadata must match the stock
+   vbmeta except for the replaced vendor descriptor.
+6. The file entries, the super partition hash, `SHA256SUMS`, and `manifest.sig` are made by the
    bundle module's own functions. The manifest is validated (runtime-image-manifest.md §5, §6).
 
 The variant keeps the stock `imageVersion` and `kind`, because the schema has no field for a
@@ -35,6 +38,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import sys
 import tempfile
 from collections.abc import Iterator, Mapping, Sequence
@@ -46,7 +50,14 @@ from typing import Any, BinaryIO
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from apkrun_image import lp, vendor_reseal
-from apkrun_image.avb import AvbError, _chain_partitions, _read_vbmeta, calculate_vbmeta_bootconfig
+from apkrun_image.avb import (
+    VBMETA_HEADER_SIZE,
+    AvbError,
+    HashUpdater,
+    _chain_partitions,
+    _read_vbmeta,
+    calculate_vbmeta_bootconfig,
+)
 from apkrun_image.bundle import (
     BundleError,
     _checksums,
@@ -223,8 +234,15 @@ def _expanded_sha256(sparse: Path, size: int, scratch: Path) -> str:
     return digest
 
 
-def _copy_range(source: BinaryIO, out: BinaryIO, start: int, end: int) -> None:
-    """Copy `source` into `out` between two offsets, leaving all-zero blocks as holes."""
+def _copy_range(
+    source: BinaryIO,
+    out: BinaryIO,
+    start: int,
+    end: int,
+    *,
+    source_digest: HashUpdater | None = None,
+) -> None:
+    """Copy `source` between two offsets and optionally hash the exact source bytes."""
     offset = start
     while offset < end:
         length = min(COPY_SIZE, end - offset)
@@ -232,22 +250,66 @@ def _copy_range(source: BinaryIO, out: BinaryIO, start: int, end: int) -> None:
         data = source.read(length)
         if len(data) != length:
             raise BundleVariantError(f"the stock disk ends before offset {offset + length}")
+        if source_digest is not None:
+            source_digest.update(data)
         write_skipping_zeros(out, offset, data)
         offset += length
 
 
-def _splice(stock_disk: Path, sparse: Path, destination: Path, offset: int, size: int) -> None:
-    """Write a copy of the stock disk whose super range holds the expanded `sparse` image."""
+def _hash_source_range(
+    source: BinaryIO,
+    digest: HashUpdater,
+    start: int,
+    end: int,
+    *,
+    range_digest: HashUpdater | None = None,
+) -> None:
+    """Hash a source range without copying it to the output."""
+    offset = start
+    while offset < end:
+        length = min(COPY_SIZE, end - offset)
+        source.seek(offset)
+        data = source.read(length)
+        if len(data) != length:
+            raise BundleVariantError(f"the stock disk ends before offset {offset + length}")
+        digest.update(data)
+        if range_digest is not None:
+            range_digest.update(data)
+        offset += length
+
+
+def _splice(
+    stock_disk: Path,
+    sparse: Path,
+    destination: Path,
+    offset: int,
+    size: int,
+    *,
+    expected_disk_sha256: str,
+    expected_super_sha256: str,
+) -> None:
+    """Write the replacement super and verify the exact stock bytes read during the copy."""
     total = stock_disk.stat().st_size
+    disk_digest = hashlib.sha256()
+    super_digest = hashlib.sha256()
     with stock_disk.open("rb") as source, destination.open("w+b") as out:
         out.truncate(total)
-        _copy_range(source, out, 0, offset)
-        _copy_range(source, out, offset + size, total)
+        _copy_range(source, out, 0, offset, source_digest=disk_digest)
+        _hash_source_range(source, disk_digest, offset, offset + size, range_digest=super_digest)
+        _copy_range(source, out, offset + size, total, source_digest=disk_digest)
         with sparse.open("rb") as stream:
             header = expand_into(stream, out, offset)
         if header.logical_size != size:
             raise BundleVariantError(
                 f"the replaced super expands to {header.logical_size} bytes, not {size}"
+            )
+        if disk_digest.hexdigest() != expected_disk_sha256:
+            raise BundleVariantError(
+                f"{stock_disk} changed after its stock manifest was checked"
+            )
+        if super_digest.hexdigest() != expected_super_sha256:
+            raise BundleVariantError(
+                f"the super partition of {stock_disk} changed after its manifest was checked"
             )
         out.flush()
         os.fsync(out.fileno())
@@ -282,6 +344,7 @@ def _verify_variant(
     partition: str,
     replacement: Path,
     extra: Sequence[tuple[int, bytes]] = (),
+    expected_replacement_sha256: str | None = None,
 ) -> None:
     """Check the variant disk against the stock disk and the replacement, byte for byte.
 
@@ -312,6 +375,9 @@ def _verify_variant(
                 raise BundleVariantError(f"the variant disk does not hold the bytes at {start}")
 
         image_size = replacement.stat().st_size
+        embedded_digest = (
+            hashlib.sha256() if expected_replacement_sha256 is not None else None
+        )
         with replacement.open("rb") as image:
             for start in range(0, target.size, COMPARE_SIZE):
                 length = min(COMPARE_SIZE, target.size - start)
@@ -329,6 +395,15 @@ def _verify_variant(
                     raise BundleVariantError(
                         f"{partition} does not read back the replacement at offset {start}"
                     )
+                if embedded_digest is not None:
+                    embedded_digest.update(actual)
+        if (
+            embedded_digest is not None
+            and embedded_digest.hexdigest() != expected_replacement_sha256
+        ):
+            raise BundleVariantError(
+                f"the embedded {partition} differs from its checked AVB snapshot"
+            )
 
 
 def _read_inject_output(directory: Path, partition: str, build_id: str) -> Path:
@@ -360,8 +435,9 @@ def _read_inject_output(directory: Path, partition: str, build_id: str) -> Path:
 
 @dataclass(frozen=True)
 class _Refresh:
-    """The resealed vendor and the refreshed top-level vbmeta, with their vendor-reseal record."""
+    """The checked injection, resealed vendor, refreshed vbmeta, and reseal record."""
 
+    injected: Path
     vendor: Path
     vbmeta: Path
     record: dict[str, Any]
@@ -392,7 +468,12 @@ def _text(value: object) -> str | None:
 
 
 def _read_reseal_output(
-    directory: Path, *, inject_directory: Path, partition: str, build_id: str
+    directory: Path,
+    *,
+    inject_directory: Path,
+    partition: str,
+    build_id: str,
+    injected_image: Path | None = None,
 ) -> _Refresh:
     """Return the resealed vendor and the refreshed vbmeta of `vendor-reseal` for this inject.
 
@@ -410,6 +491,8 @@ def _read_reseal_output(
     inject_record = _load_record(inject_path)
     if inject_record.get("buildId") != build_id:
         raise BundleVariantError(f"{inject_directory} was not made for build {build_id}")
+    if injected_image is None:
+        injected_image = _read_inject_output(inject_directory, partition, build_id)
     injected = _section(record, "injected", record_path)
     stock = _section(record, "stock", record_path)
     inject_output = _section(inject_record, "output", inject_path)
@@ -489,6 +572,7 @@ def _read_reseal_output(
             f"{record_path} does not describe the vendor descriptor of its vbmeta_a"
         )
     return _Refresh(
+        injected=injected_image,
         vendor=files["vendor"],
         vbmeta=files["vbmeta"],
         record=record,
@@ -613,6 +697,272 @@ def _read_range(stream: BinaryIO, offset: int, size: int) -> bytes:
     return data
 
 
+def _raw_vbmeta_descriptors(
+    image: Path,
+) -> tuple[bytes, list[tuple[int, str | None, bytes]], int, int]:
+    """Return the exact header and bounded descriptors from raw or footer-backed vbmeta."""
+    try:
+        with image.open("rb") as stream:
+            header, vbmeta_offset = _read_vbmeta(
+                stream,
+                artifact_size=image.stat().st_size,
+                artifact_name=str(image),
+            )
+            stream.seek(vbmeta_offset)
+            header_bytes = stream.read(VBMETA_HEADER_SIZE)
+            if len(header_bytes) != VBMETA_HEADER_SIZE:
+                raise BundleVariantError(f"{image} has a truncated vbmeta header")
+            descriptor_offset = (
+                vbmeta_offset
+                + VBMETA_HEADER_SIZE
+                + header.authentication_size
+                + header.descriptors_offset
+            )
+            stream.seek(descriptor_offset)
+            table = stream.read(header.descriptors_size)
+    except (AvbError, OSError, struct.error) as error:
+        raise BundleVariantError(f"{image} has invalid vbmeta descriptors: {error}") from None
+    if len(table) != header.descriptors_size:
+        raise BundleVariantError(f"{image} has a truncated vbmeta descriptor table")
+
+    descriptors: list[tuple[int, str | None, bytes]] = []
+    offset = 0
+    while offset < len(table):
+        if len(table) - offset < 16:
+            raise BundleVariantError(f"{image} has a truncated AVB descriptor header")
+        tag, following_size = struct.unpack_from(">QQ", table, offset)
+        end = offset + 16 + following_size
+        if following_size % 8 or end > len(table):
+            raise BundleVariantError(f"{image} has an invalid AVB descriptor size")
+        encoded = table[offset:end]
+        partition_name: str | None = None
+        if tag == 1:
+            # AvbHashtreeDescriptor: the fixed structure is 180 bytes including
+            # its generic descriptor header; the partition name follows it.
+            if len(encoded) < 180:
+                raise BundleVariantError(f"{image} has a truncated hashtree descriptor")
+            name_size = struct.unpack_from(">I", encoded, 104)[0]
+            if name_size > len(encoded) - 180:
+                raise BundleVariantError(f"{image} has an invalid hashtree partition name")
+            try:
+                partition_name = encoded[180 : 180 + name_size].decode("utf-8")
+            except UnicodeDecodeError:
+                raise BundleVariantError(
+                    f"{image} has a non-UTF-8 hashtree partition name"
+                ) from None
+        descriptors.append((tag, partition_name, encoded))
+        offset = end
+    return header_bytes, descriptors, vbmeta_offset, header.blob_size
+
+
+def _verify_refreshed_vbmeta_matches_stock(
+    avbtool: Path,
+    stock_vbmeta: Path,
+    refreshed_vbmeta: Path,
+    refreshed_vendor: Path,
+    injected_vendor: Path,
+) -> None:
+    """Verify staged AVB data and require vbmeta to differ only in its vendor descriptor."""
+    try:
+        stock_metadata = vendor_reseal.verify_vbmeta_signature(avbtool, stock_vbmeta)
+        refreshed_metadata = vendor_reseal.verify_vbmeta_signature(avbtool, refreshed_vbmeta)
+        stock_info = run_avbtool(avbtool, ["info_image", "--image", str(stock_vbmeta)])
+        refreshed_info = run_avbtool(
+            avbtool, ["info_image", "--image", str(refreshed_vbmeta)]
+        )
+        stock_top = vendor_reseal.parse_top(stock_info)
+        refreshed_top = vendor_reseal.parse_top(refreshed_info)
+        stock_header, stock_descriptors, _stock_offset, _stock_blob_size = (
+            _raw_vbmeta_descriptors(stock_vbmeta)
+        )
+        (
+            refreshed_header,
+            refreshed_descriptors,
+            refreshed_offset,
+            refreshed_blob_size,
+        ) = _raw_vbmeta_descriptors(refreshed_vbmeta)
+        _vendor_header, vendor_descriptors, _vendor_offset, _vendor_blob_size = (
+            _raw_vbmeta_descriptors(refreshed_vendor)
+        )
+        _injected_header, injected_descriptors, _injected_offset, _injected_blob_size = (
+            _raw_vbmeta_descriptors(injected_vendor)
+        )
+        refreshed_vendor_descriptors = [
+            descriptor
+            for tag, name, descriptor in refreshed_descriptors
+            if tag == 1 and name == vendor_reseal.PARTITION
+        ]
+        image_vendor_descriptors = [
+            descriptor
+            for tag, name, descriptor in vendor_descriptors
+            if tag == 1 and name == vendor_reseal.PARTITION
+        ]
+        injected_vendor_descriptors = [
+            descriptor
+            for tag, name, descriptor in injected_descriptors
+            if tag == 1 and name == vendor_reseal.PARTITION
+        ]
+        if (
+            len(refreshed_vendor_descriptors) != 1
+            or len(image_vendor_descriptors) != 1
+            or len(injected_vendor_descriptors) != 1
+        ):
+            raise BundleVariantError(
+                "the refreshed vbmeta, resealed vendor, and checked inject output must each "
+                "carry exactly one vendor descriptor"
+            )
+        if refreshed_vendor_descriptors != image_vendor_descriptors:
+            raise BundleVariantError(
+                f"the refreshed {VBMETA_LABEL} does not carry the exact descriptor "
+                "of its resealed vendor_a"
+            )
+        if image_vendor_descriptors != injected_vendor_descriptors:
+            raise BundleVariantError(
+                "the resealed vendor_a does not carry the exact descriptor of the checked "
+                "inject-vendor output"
+            )
+        refreshed_vendor_tree, refreshed_original_size = _verify_vendor_hashtree(
+            avbtool, refreshed_vendor
+        )
+        _injected_vendor_tree, injected_original_size = _verify_vendor_hashtree(
+            avbtool, injected_vendor
+        )
+    except BundleVariantError:
+        raise
+    except (ValueError, OSError) as error:
+        raise BundleVariantError(
+            f"stock or refreshed {VBMETA_LABEL} failed AVB verification: {error}"
+        ) from None
+
+    if (
+        stock_top.get("Algorithm") != vendor_reseal.VBMETA_ALGORITHM
+        or stock_top.get("Public key (sha1)", "").lower()
+        != vendor_reseal.VBMETA_PUBLIC_KEY_SHA1
+    ):
+        raise BundleVariantError(
+            f"stock {VBMETA_LABEL} is not signed with the pinned AOSP AVB development key"
+        )
+    if (
+        refreshed_top.get("Algorithm") != vendor_reseal.VBMETA_ALGORITHM
+        or refreshed_top.get("Public key (sha1)", "").lower()
+        != vendor_reseal.VBMETA_PUBLIC_KEY_SHA1
+    ):
+        raise BundleVariantError(
+            f"refreshed {VBMETA_LABEL} is not signed with the pinned AOSP AVB development key"
+        )
+    if refreshed_header != stock_header:
+        raise BundleVariantError(f"the refreshed {VBMETA_LABEL} changed stock AVB header fields")
+    if refreshed_metadata != stock_metadata:
+        raise BundleVariantError(f"the refreshed {VBMETA_LABEL} changed stock public-key metadata")
+    if refreshed_offset != 0:
+        raise BundleVariantError(f"the refreshed {VBMETA_LABEL} is not a raw vbmeta partition")
+    if _has_nonzero_bytes(refreshed_vbmeta, refreshed_blob_size):
+        raise BundleVariantError(
+            f"the refreshed {VBMETA_LABEL} has nonzero bytes after its vbmeta blob"
+        )
+
+    stock_vendor_indexes = [
+        index for index, (tag, name, _descriptor) in enumerate(stock_descriptors)
+        if tag == 1 and name == vendor_reseal.PARTITION
+    ]
+    refreshed_vendor_indexes = [
+        index for index, (tag, name, _descriptor) in enumerate(refreshed_descriptors)
+        if tag == 1 and name == vendor_reseal.PARTITION
+    ]
+    stock_vendor = [
+        descriptor
+        for tag, name, descriptor in stock_descriptors
+        if tag == 1 and name == vendor_reseal.PARTITION
+    ]
+    if (
+        len(stock_vendor) != 1
+        or len(refreshed_vendor_descriptors) != 1
+    ):
+        raise BundleVariantError(
+            "stock and refreshed vbmeta images must carry exactly one vendor descriptor"
+        )
+    if stock_vendor_indexes != refreshed_vendor_indexes:
+        raise BundleVariantError(
+            f"the refreshed {VBMETA_LABEL} moved the vendor descriptor"
+        )
+    if refreshed_original_size != injected_original_size:
+        raise BundleVariantError(
+            "the resealed and injected vendor images have different original image sizes"
+        )
+    if not _same_file_prefix(refreshed_vendor, injected_vendor, refreshed_original_size):
+        raise BundleVariantError(
+            "the resealed vendor data differs from the checked inject-vendor output"
+        )
+    stock_others = [
+        descriptor
+        for descriptor in stock_descriptors
+        if not (descriptor[0] == 1 and descriptor[1] == vendor_reseal.PARTITION)
+    ]
+    refreshed_others = [
+        descriptor
+        for descriptor in refreshed_descriptors
+        if not (descriptor[0] == 1 and descriptor[1] == vendor_reseal.PARTITION)
+    ]
+    if stock_others != refreshed_others:
+        raise BundleVariantError(
+            f"the refreshed {VBMETA_LABEL} changed a descriptor other than the vendor one"
+        )
+
+
+def _has_nonzero_bytes(image: Path, offset: int) -> bool:
+    """Return whether the bytes after `offset` in an image contain anything but zero padding."""
+    with image.open("rb") as stream:
+        stream.seek(offset)
+        while chunk := stream.read(COPY_SIZE):
+            if any(chunk):
+                return True
+    return False
+
+
+def _verify_vendor_hashtree(avbtool: Path, image: Path) -> tuple[dict[str, Any], int]:
+    """Verify the footer and hashtree of one vendor image using the vendored avbtool."""
+    info = run_avbtool(avbtool, ["info_image", "--image", str(image)])
+    top = vendor_reseal.parse_top(info)
+    tree = vendor_reseal.vendor_tree(info, f"{image}")
+    if top.get("Algorithm") != vendor_reseal.ALGORITHM:
+        raise BundleVariantError(f"{image} does not use the expected unsigned vendor footer")
+    original_size = vendor_reseal._original_size(info, str(image))
+    if original_size < 0 or original_size > image.stat().st_size:
+        raise BundleVariantError(f"{image} has an invalid original image size")
+    if tree["imageSize"] != original_size:
+        raise BundleVariantError(f"{image} has a hashtree for another original image size")
+    if tree["fecRoots"] != 0:
+        raise BundleVariantError(f"{image} has unexpected FEC data")
+
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix=".apkrun-verify-vendor-", dir=image.parent
+        ) as temporary:
+            link = Path(temporary) / f"{vendor_reseal.PARTITION}.part"
+            link.symlink_to(image.resolve())
+            verified = run_avbtool(avbtool, ["verify_image", "--image", str(link)])
+    except (OSError, ValueError) as error:
+        raise BundleVariantError(f"{image}: AVB hashtree verification failed: {error}") from None
+    success = f"Successfully verified {tree['hashAlgorithm']} hashtree of "
+    if success not in verified:
+        raise BundleVariantError(f"{image}: avbtool did not verify its hashtree")
+    return tree, original_size
+
+
+def _same_file_prefix(first: Path, second: Path, size: int) -> bool:
+    """Return whether two files have identical bytes in their first `size` bytes."""
+    if size < 0 or first.stat().st_size < size or second.stat().st_size < size:
+        return False
+    with first.open("rb") as first_stream, second.open("rb") as second_stream:
+        remaining = size
+        while remaining:
+            length = min(COPY_SIZE, remaining)
+            if first_stream.read(length) != second_stream.read(length):
+                return False
+            remaining -= length
+    return True
+
+
 def _write_range(path: Path, offset: int, data: bytes) -> None:
     """Write `data` into an existing file at `offset`, and flush it to the disk."""
     with path.open("r+b") as handle:
@@ -668,15 +1018,12 @@ def build_variant(
     disk_path = str(disk["path"])
     stock_disk = stock_bundle / disk_path
     super_offset, super_size = _super_location(stock_disk, disk, record)
-    with stock_disk.open("rb") as stream:
-        if _hash_range(stream, super_offset, super_size) != record["sha256"]:
-            raise BundleVariantError(
-                f"the super partition of {stock_disk} differs from its manifest entry"
-            )
     layout = _gpt_partitions(stock_disk, disk["logicalSize"])
     bootconfig_path = str(manifest["boot"]["bootconfig"]["path"])
     vbmeta_offset = vbmeta_size = 0
     vbmeta_bytes: bytes | None = None
+    stock_vbmeta_bytes: bytes | None = None
+    expected_replacement_sha256: str | None = None
     if refresh is not None:
         if VBMETA_LABEL not in layout:
             raise BundleVariantError(f"the stock disk has no {VBMETA_LABEL} partition")
@@ -689,12 +1036,13 @@ def build_variant(
             )
         stock_vbmeta_sha = _disk_partition(manifest, VBMETA_LABEL)["sha256"]
         with stock_disk.open("rb") as stream:
-            if _hash_range(stream, vbmeta_offset, vbmeta_size) != stock_vbmeta_sha:
+            stock_vbmeta_bytes = _read_range(stream, vbmeta_offset, vbmeta_size)
+            if hashlib.sha256(stock_vbmeta_bytes).hexdigest() != stock_vbmeta_sha:
                 raise BundleVariantError(
                     f"{VBMETA_LABEL} of {stock_disk} differs from the manifest"
                 )
             stock_values = _bootconfig_values(
-                stream, layout, _read_range(stream, vbmeta_offset, vbmeta_size)
+                stream, layout, stock_vbmeta_bytes
             )
         if refresh.record["stock"].get("vbmetaSha256") != stock_vbmeta_sha:
             raise BundleVariantError("the reseal record names another stock vbmeta_a")
@@ -707,6 +1055,51 @@ def build_variant(
     with _staging(output) as stage:
         work = stage / "work"
         work.mkdir()
+        replacement_snapshot = replacement
+        if refresh is not None:
+            if stock_vbmeta_bytes is None or vbmeta_bytes is None:
+                raise BundleVariantError("the stock or refreshed vbmeta bytes are missing")
+            stock_vbmeta_path = work / "stock-vbmeta_a.img"
+            refreshed_vbmeta_path = work / "refreshed-vbmeta_a.img"
+            replacement_snapshot = work / "resealed-vendor_a.img"
+            injected_snapshot = work / "injected-vendor_a.img"
+            shutil.copyfile(replacement, replacement_snapshot)
+            shutil.copyfile(refresh.injected, injected_snapshot)
+            stock_vbmeta_path.write_bytes(stock_vbmeta_bytes)
+            refreshed_vbmeta_path.write_bytes(vbmeta_bytes)
+            vendor_record = _section(refresh.record, "vendor", refresh.record_path)
+            injected_record = _section(refresh.record, "injected", refresh.record_path)
+            vbmeta_record = _section(refresh.record, "vbmeta", refresh.record_path)
+            if (
+                _text(vendor_record.get("sha256")) is None
+                or _sha256(replacement_snapshot) != vendor_record["sha256"]
+            ):
+                raise BundleVariantError(
+                    "the replacement vendor_a changed after its reseal record was checked"
+                )
+            expected_replacement_sha256 = str(vendor_record["sha256"])
+            if (
+                _text(injected_record.get("sha256")) is None
+                or _sha256(injected_snapshot) != injected_record["sha256"]
+            ):
+                raise BundleVariantError(
+                    "the injected vendor_a changed after its inject record was checked"
+                )
+            if (
+                _text(vbmeta_record.get("sha256")) is None
+                or _sha256(refreshed_vbmeta_path) != vbmeta_record["sha256"]
+            ):
+                raise BundleVariantError(
+                    "the refreshed vbmeta_a changed after its reseal record was checked"
+                )
+            avbtool = verify_avbtool(_repository_root(), load_component(AVBTOOL_COMPONENT))
+            _verify_refreshed_vbmeta_matches_stock(
+                avbtool,
+                stock_vbmeta_path,
+                refreshed_vbmeta_path,
+                replacement_snapshot,
+                injected_snapshot,
+            )
         expanded = _expanded_sha256(stock_super, super_size, work / "stock-super.raw")
         if expanded != record["sha256"]:
             raise BundleVariantError(
@@ -714,8 +1107,8 @@ def build_variant(
             )
 
         variant_sparse = work / "variant-super.sparse"
-        result = replace_partition(stock_super, partition, replacement, variant_sparse)
-        if refresh is not None and replacement.stat().st_size != result.partition_size:
+        result = replace_partition(stock_super, partition, replacement_snapshot, variant_sparse)
+        if refresh is not None and replacement_snapshot.stat().st_size != result.partition_size:
             raise BundleVariantError(
                 f"{replacement} is not the size of {partition}, so its footer would not end "
                 "the partition"
@@ -726,11 +1119,23 @@ def build_variant(
             target = bundle / entry["path"]
             target.parent.mkdir(parents=True, exist_ok=True)
             if entry["path"] == disk_path:
-                _splice(stock_disk, variant_sparse, target, super_offset, super_size)
+                _splice(
+                    stock_disk,
+                    variant_sparse,
+                    target,
+                    super_offset,
+                    super_size,
+                    expected_disk_sha256=entry["sha256"],
+                    expected_super_sha256=record["sha256"],
+                )
                 if vbmeta_bytes is not None:
                     _write_range(target, vbmeta_offset, vbmeta_bytes)
             else:
                 shutil.copyfile(stock_bundle / entry["path"], target)
+                if _file_entry(bundle, entry["path"]) != entry:
+                    raise BundleVariantError(
+                        f"the stock bundle's {entry['path']} changed after its manifest was checked"
+                    )
         variant_disk = bundle / disk_path
         extra = [(vbmeta_offset, vbmeta_bytes)] if vbmeta_bytes is not None else []
         _verify_variant(
@@ -739,8 +1144,9 @@ def build_variant(
             super_offset,
             super_size,
             partition,
-            replacement,
+            replacement_snapshot,
             extra=extra,
+            expected_replacement_sha256=expected_replacement_sha256,
         )
         with variant_disk.open("rb") as stream:
             super_sha = _hash_range(stream, super_offset, super_size)
@@ -798,8 +1204,8 @@ def build_variant(
                 "variantSuperSHA256": super_sha,
             },
             "replacement": {
-                "sha256": _sha256(replacement),
-                "size": replacement.stat().st_size,
+                "sha256": _sha256(replacement_snapshot),
+                "size": replacement_snapshot.stat().st_size,
             },
             "writer": {
                 "imageSize": result.image_size,
@@ -902,7 +1308,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not isinstance(build_id, str):
             raise BundleVariantError("manifest source.buildId is missing.")
         # The injected image is checked against its record. The vendor is the reseal (IR-746).
-        _read_inject_output(arguments.inject_output, arguments.partition, build_id)
+        injected_image = _read_inject_output(
+            arguments.inject_output, arguments.partition, build_id
+        )
         if arguments.reseal_output is None:
             raise BundleVariantError(
                 "--reseal-output is required: the variant must carry the refreshed vbmeta_a "
@@ -913,6 +1321,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             inject_directory=arguments.inject_output,
             partition=arguments.partition,
             build_id=build_id,
+            injected_image=injected_image,
         )
         root = _resolve_archive_root(document, source=arguments.source)
         archives = _archive_paths(root, document["source"]["archives"])

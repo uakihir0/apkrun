@@ -436,7 +436,7 @@ def test_a_super_hash_that_the_manifest_does_not_match_is_refused(
         _super_partition(manifest)["sha256"] = "0" * 64
 
     damaged = _stock_with_manifest_edit(tmp_path, stock_bundle, edit)
-    with pytest.raises(BundleVariantError, match="differs from its manifest entry"):
+    with pytest.raises(BundleVariantError, match="does not expand to the super partition"):
         _variant(
             damaged,
             _payload(tmp_path),
@@ -467,12 +467,31 @@ def test_a_replacement_of_exactly_the_partition_size_reads_back_without_padding(
 ) -> None:
     replacement = _payload(tmp_path, size=VENDOR_SIZE)
     _variant(stock_bundle, replacement, tmp_path / "variant")
-    _, region = _super_region(tmp_path / "variant")
+    super_offset, region = _super_region(tmp_path / "variant")
     target, _ = _vendor_extents(region)
     assert target.size == VENDOR_SIZE
     assert lp.read_partition_range(io.BytesIO(region), target, 0, target.size) == (
         replacement.read_bytes()
     )
+    bundle_variant._verify_variant(
+        stock_bundle / "disks/os.img",
+        tmp_path / "variant/disks/os.img",
+        super_offset,
+        len(region),
+        VENDOR,
+        replacement,
+        expected_replacement_sha256=_sha256(replacement.read_bytes()),
+    )
+    with pytest.raises(BundleVariantError, match="differs from its checked AVB snapshot"):
+        bundle_variant._verify_variant(
+            stock_bundle / "disks/os.img",
+            tmp_path / "variant/disks/os.img",
+            super_offset,
+            len(region),
+            VENDOR,
+            replacement,
+            expected_replacement_sha256="0" * 64,
+        )
 
 
 @pytest.mark.parametrize(
@@ -491,8 +510,15 @@ def test_a_splice_that_changes_one_byte_is_refused_and_nothing_is_written(
     position = 0 if where == "outside" else offset + extents[0][0]
     original = bundle_variant._splice
 
-    def corrupt(stock_disk: Path, sparse: Path, destination: Path, start: int, size: int) -> None:
-        original(stock_disk, sparse, destination, start, size)
+    def corrupt(
+        stock_disk: Path,
+        sparse: Path,
+        destination: Path,
+        start: int,
+        size: int,
+        **checksums: str,
+    ) -> None:
+        original(stock_disk, sparse, destination, start, size, **checksums)
         with destination.open("r+b") as stream:
             stream.seek(position)
             byte = stream.read(1)
@@ -532,6 +558,7 @@ def test_a_refreshed_vbmeta_is_restricted_to_stock_development_images(
     manifest["kind"] = "apkrun"
     monkeypatch.setattr(bundle_variant, "_verify_stock", lambda _bundle, _key: (b"{}", manifest))
     refresh = bundle_variant._Refresh(
+        injected=tmp_path / "injected-vendor_a.img",
         vendor=tmp_path / "vendor_a.img",
         vbmeta=tmp_path / "vbmeta_a.img",
         record={},

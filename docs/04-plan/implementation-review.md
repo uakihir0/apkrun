@@ -19788,3 +19788,49 @@ synthetic checks and starts no VM. Strict Swift formatting and
 **Adversarial review.** The first review found that an in-progress uncaptured gesture could inherit a later capture token, and that the debug view inspected every touch dispatch even when capture was off. Gesture lineage now preserves a sampled null token for a gesture first observed after capture begins, and the debug view has no `dispatchTouchEvent` override; the listener samples actions only while capture is active. The reviewer rechecked the fixes and found no remaining actionable findings.
 
 **Risk.** The pressed-state hook, capture-only touch listener, and active trace can perturb diagnostic timing. Elapsed-realtime timestamps cannot be subtracted from the MotionEvent uptime fields; the emitted start-time key names this clock domain explicitly. The debug variant does not override `dispatchTouchEvent`, and its capture-off pressed-state path does not read the clock or write a trace record; the release variant has no `setPressed` override. A maintainer should review the extra fixture instrumentation before drawing conclusions from a future GUI trace.
+
+## IR-1350: Parse pressed-state and counter timing as unjoined fixture evidence
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [input.md](../02-design/input.md) §11 and §15; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; `AndroidInputTraceJoinTests` |
+
+**Choice.** Bump the serialized trace evidence to schema 3 and retain the raw
+fixture lines alongside typed `pressedTransitions` and `clicks` arrays and
+malformed-record counts. Keep pressed transitions separate from clicks because
+they have no gesture key and use elapsed realtime. Validate explicit nullable
+fields, counter-write timing pairs, click/save outcomes, and correlation
+invariants before accepting a click. Join only a validated `unique_up` click
+whose UP sequence appears in the fixture touch records; leave ambiguous clicks
+unattached.
+
+**Reason.** IR-1349 added useful state-transition and synchronous-write timing
+observations, but the evidence previously retained those records only as raw
+strings. Typed fields make the evidence reviewable and testable. The available
+records do not carry a gesture ID, and elapsed-realtime timestamps cannot be
+compared with MotionEvent uptime, so a pressed transition cannot safely be
+assigned to an individual click or host event. Rejecting contradictory click
+records prevents invalid evidence from being treated as a failed save or
+attached to an UP.
+
+**Verification (2026-10-17).** All 10 synthetic
+`AndroidInputTraceJoinTests` pass under the `LinuxGuest` selector on macOS
+27.0.1. The new tests cover valid typed observations, malformed and
+contradictory fields, Codable round-trip, and rejection of an ambiguous or
+invalid UP correlation. Strict Swift formatting and `git diff --check` pass.
+No VM, GUI test, or GitHub Actions run.
+
+**Adversarial review.** Review found that missing nullable fields could be
+accepted, an inconsistent correlation sequence could attach an ambiguous
+callback to an UP, and `saveSucceeded` could disagree with `storedCounter`.
+The parser now requires those fields, validates the correlation and timing
+invariants, and requires a stored counter exactly when saving succeeds. The
+synthetic test exercises these malformed cases. Follow-up review found no
+additional actionable issues.
+
+**Risk.** Schema 3 is diagnostic evidence, not a product data format. Typed
+parsing does not connect pressed transitions to clicks, prove event delivery,
+or explain the product-mode click loss. The two dedicated GUI T2 runs and #024
+box 3 acceptance remain open.

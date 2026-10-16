@@ -479,7 +479,7 @@ Out of scope:
 - [x] The corrected image has its own build identity, manifest, and hashes, and
       build `16373615` is unchanged (IR-1323).
 - [ ] In the guest, `eglInitialize` succeeds on the VirGL display (`apkrun.test=egl`). The 2026-10-12 pass was on a separate ODM-overlay variant (IR-960, IR-997); the corrected no-overlay variant failed `eglInitialize` on 2026-10-16 (IR-1323).
-- [ ] Every new artifact has recorded provenance, and every third-party component is pinned in the lock (IR-1326, IR-1327).
+- [x] Every new artifact has recorded provenance, and every third-party component is pinned in the lock (IR-1326, IR-1327, IR-1328).
 - [x] #064 is unaffected: its acceptance uses build `16373615`. Checked on 2026-10-10: `git diff main...HEAD` changes no path under `Images/reference/16373615/`, `Images/manifests/16373615/`, or the M01 #064 entry.
 
 ### Notes
@@ -515,6 +515,43 @@ Out of scope:
   source-release pins and license texts (IR-1326); the provenance-and-lock
   criterion is checked. Release-license reviews in IR-483 and IR-486 remain
   open.
+
+- **Status (2026-10-16, pinned Mesa rebuild and 2026.10.2 VirGL boot: the EGL failure repeats).**
+  The full Mesa build now uses pinned Flex 2.6.4 and GNU m4 1.4.20, and its
+  manifest records both tools. The Flex cache stamp also includes the exact
+  m4 executable hash. The four built libraries passed the output verifier;
+  T0 passed 29 host checks and 35 checks including the built output. The
+  staging verifier passed before and after copying the libraries into the
+  Mesa product prebuilt directory.
+
+  The rebuilt `libgallium_dri.so` has SHA-256
+  `185a00dc816e33a366f758c0a3b6caf28fc3b226f3393e5656328506e4f671bc`;
+  the previous 2026.10.1 record names a different library hash. To keep each
+  boot result attached to the exact bytes tested, the 2026.10.1 bundle was
+  rebuilt with the current variant tool and its disk and manifest hashes were
+  confirmed unchanged before updating only its schema-3 builder record. The
+  new Mesa output is recorded as variant
+  `2026.10.2-cf16373615-arm64` under
+  `Images/reference/variants/2026.10.2-cf16373615-arm64/`; its disk hash is
+  `2b0fe6ddbe6031eeb60f309f0a4998db38d634d869d18b6715b63282333e3d3a`,
+  and its manifest hash is
+  `c61d182eb93dc980ceb4dae2cd4d8b840aea060835b45507197b0fccbe507978`.
+
+  Its T2 run loaded `virtio_gpu`, mounted `/vendor`, reported
+  `ro.hardware.egl=mesa`, and showed all four Mesa files under
+  `/vendor/lib64/egl` with the `same_process_hal_file` label. SurfaceFlinger
+  repeatedly received the sysfs `uevent` denial, failed to open a DRM device,
+  and aborted after `eglInitialize` returned `EGL_NOT_INITIALIZED`. After
+  150 seconds `sys.boot_completed` was still empty, so the test stopped the
+  stuck boot; `apkrun.test=egl` did not run. The repeated AVC and EGL errors
+  do not establish a causal relationship. Full logs remain outside the
+  repository at `/tmp/apkrun-099-home-2026102/Logs/`: the boot log is
+  2,712,596 bytes with SHA-256
+  `d04971b97e93185a866d9a8df9522bf18c2b0aa76f668e1e0d389386151b0150`, and
+  logcat is 7,847,952 bytes with SHA-256
+  `8f615957725aee96ee872f1623e68204c4bc221c6d26e4338aa3bc14cde1c55c`.
+  Sanitized excerpts are in the variant's `boot-evidence.md`; IR-1328 records
+  the artifact-identity choice and this failed T2 result.
 
 - Placement and the reasons for it are in IR-240. This task sits between #021 and
   #022, because #022 needs a working Mesa guest.

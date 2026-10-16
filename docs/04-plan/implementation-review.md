@@ -18773,13 +18773,13 @@ outstanding on the Linux AOSP builder.
 linkage that the static T0 check cannot detect. The Mesa license and NDK
 redistribution findings in IR-483 and IR-486 remain release blockers.
 
-## IR-1325: Retain minimal sanitized excerpts for the #099 T2 result
+## IR-1325: Retain minimal sanitized excerpts for #099 T2 results
 
 | Field | Value |
 |---|---|
 | Status | Needs maintainer review |
 | Task | #099 |
-| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #099; `Images/reference/variants/2026.10.1-cf16373615-arm64/boot-evidence.md` |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #099; `Images/reference/variants/2026.10.1-cf16373615-arm64/boot-evidence.md`; `Images/reference/variants/2026.10.2-cf16373615-arm64/boot-evidence.md` |
 
 **Choice.** Keep only the relevant virtio-gpu, `/vendor`, sysfs AVC, and EGL
 failure lines in the repository. Omit process IDs from these excerpts and keep
@@ -18791,9 +18791,11 @@ without checking out multi-megabyte logs or committing unrelated guest output.
 The full-log digests preserve a check against the original records; omitting
 process IDs keeps the retained evidence focused on the behavior being reviewed.
 
-**Verification.** The two full-log digests and byte counts match the captured
-files under `/tmp/apkrun-099-boot-evidence-20261016/`. Each excerpt maps to the
-original line numbers recorded in `boot-evidence.md`.
+**Verification.** The 2026.10.1 full-log digests and byte counts match the
+captured files under `/tmp/apkrun-099-boot-evidence-20261016/`. The
+2026.10.2 digests, byte counts, and excerpt line references match the files
+under `/tmp/apkrun-099-home-2026102/Logs/`. Each excerpt maps to the original
+line numbers recorded in its variant's `boot-evidence.md`.
 
 **Risk.** The full logs are local evidence and are not preserved by this
 commit. The excerpts intentionally omit surrounding events, so they do not
@@ -18859,3 +18861,42 @@ all four builder fields and schema version 3.
 **Risk.** A local build whose `workingTreeClean` is false needs the recorded
 source digest to identify the exact uncommitted transformation inputs; the
 commit alone is not a reproducible source reference.
+
+## IR-1328: Keep each #099 boot result attached to exact image bytes
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #099; `Images/reference/variants/2026.10.1-cf16373615-arm64/variant/variant.json`; `Images/reference/variants/2026.10.2-cf16373615-arm64/variant/variant.json`; both variants' `boot-evidence.md` |
+
+**Choice.** Rebuild the 2026.10.1 bundle with the current variant tool and
+confirm its disk and manifest hashes remain unchanged, then update only its
+schema-3 builder record. Record the rebuilt Mesa output, whose
+`libgallium_dri.so` hash differs from the earlier build, as a separate
+2026.10.2 variant and retain its independent T2 result. Do not transfer the
+2026.10.1 boot result to the new variant.
+
+**Reason.** A boot result applies to the exact image and libraries that were
+tested. Keeping the earlier identity and result intact preserves historical
+evidence; a new artifact identity prevents a changed Mesa binary from
+appearing to have passed the prior boot test.
+
+**Verification.** The rebuilt 2026.10.1 disk hash
+(`1d9b887b33c905ab916507b5c30489e7f9ebee7ec6bed4d17cedee6a4a36c049`) and
+manifest hash
+(`c648d01caf6c96c5b50890277007adbc4d511d7f65e560d049a1f757c3cad2df`)
+match their previous records. The pinned Mesa build and its output verifier
+pass; the focused host suite reports 29 checks and 35 checks when the built
+output is included, and the staging verifier passes before and after copying.
+Variant `2026.10.2-cf16373615-arm64` records its builder, source, inject,
+reseal, manifest, signature, and disk identities. Its T2 run initialized
+`virtio_gpu` and mounted `/vendor`, but EGL initialization failed and
+`sys.boot_completed` remained empty after 150 seconds. The sanitized evidence
+and full-log hashes are retained in that variant's `boot-evidence.md`.
+
+**Risk.** #099's EGL acceptance criterion remains open. This macOS host cannot
+compile the AOSP Soong product or SELinux policy, and the Mesa and NDK license
+review items IR-483 and IR-486 remain open. The observed sysfs AVC and EGL
+failure are correlated in time; this result does not prove one caused the
+other.

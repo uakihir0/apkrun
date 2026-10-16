@@ -19744,3 +19744,24 @@ They do not prove route acceptance, guest receipt, event identity, or app
 handling, and do not identify the intermittent click-loss cause. The test-only
 counter leaves the product input path unchanged. #024 and #103 acceptance
 remain open.
+
+## IR-1348: Detect global cancellation in the #103 click trace
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [input.md](../02-design/input.md) §11; `AndroidInputTests.stageDiscrepancies` |
+
+**Choice.** Treat `cancelAll` as a separately expected-zero event at both translated and routed boundaries in the controlled diagnostic click trace. Compare translated counts against the zero expectation and compare translated counts with route sends; do not look for a raw AppKit receipt for it. Add synthetic tests for translated, missing-at-route, and route-only cancellation, plus a normal click trace and touch-count delta.
+
+**Reason.** `cancelAll` can close a gesture without a `touch.cancel` event and has no corresponding raw pointer receipt. `InputRouter.sessionEnded` can also send `cancelAll` directly without a translated host event. The #103 trace previously compared only `touch.*` phases and could therefore pass its stage check when either form of global cancellation appeared during the prescribed click sequence. The new checks detect both paths without inventing a raw-event match.
+
+**Verification (2026-10-17).** All eight `AndroidInputTraceJoinTests` pass
+under the `LinuxGuest` selector on macOS 27.0.1, including the normal click,
+unexpected global cancellation, route-only cancellation from session cleanup,
+unrouted cancellation, and per-batch delta cases. The class contains only
+synthetic checks and starts no VM. Strict Swift formatting and
+`git diff --check` pass. GitHub Actions and GUI tests were not run.
+
+**Risk.** This is an aggregate diagnostic check at the host translation and route boundaries. It does not establish guest receipt, Android dispatch, app handling, or the intermittent-click cause. Both dedicated GUI T2 runs and #024 box 3 remain open.

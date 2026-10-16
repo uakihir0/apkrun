@@ -478,7 +478,8 @@ final class AndroidInputTests: XCTestCase {
                     "touch.move": 0,
                     "touch.up": clickCount,
                     "touch.cancel": 0,
-                ]
+                ],
+                expectedCancelAllCount: 0
             )
             let evidence = InputTraceEvidence(
                 schemaVersion: 2,
@@ -917,7 +918,8 @@ final class AndroidInputTests: XCTestCase {
     fileprivate static func stageDiscrepancies(
         host: InputTraceHostSnapshot,
         routedEvents: [InputSentEventHistory.Record],
-        expectedTouchCounts: [String: Int]
+        expectedTouchCounts: [String: Int],
+        expectedCancelAllCount: Int = 0
     ) -> [InputTraceStageDiscrepancy] {
         let routedTouchEvents = routedEvents.filter { $0.kindAndPhase.hasPrefix("touch.") }
         let phases = Set(expectedTouchCounts.keys)
@@ -968,6 +970,32 @@ final class AndroidInputTests: XCTestCase {
                         observedBatchSequences: routed.map(\.batchSequence)
                     ))
             }
+        }
+        let translatedCancelAllEvents = host.translatedEvents.filter { $0.kindAndPhase == "cancelAll" }
+        let routedCancelAllEvents = routedEvents.filter { $0.kindAndPhase == "cancelAll" }
+        if expectedCancelAllCount != translatedCancelAllEvents.count {
+            discrepancies.append(
+                InputTraceStageDiscrepancy(
+                    stage: "expected-to-translated",
+                    kindAndPhase: "cancelAll",
+                    expectedCount: expectedCancelAllCount,
+                    observedCount: translatedCancelAllEvents.count,
+                    sourceOrdinals: [],
+                    observedOrdinals: translatedCancelAllEvents.map(\.ordinal),
+                    observedBatchSequences: []
+                ))
+        }
+        if translatedCancelAllEvents.count != routedCancelAllEvents.count {
+            discrepancies.append(
+                InputTraceStageDiscrepancy(
+                    stage: "translated-to-routed",
+                    kindAndPhase: "cancelAll",
+                    expectedCount: translatedCancelAllEvents.count,
+                    observedCount: routedCancelAllEvents.count,
+                    sourceOrdinals: translatedCancelAllEvents.map(\.ordinal),
+                    observedOrdinals: [],
+                    observedBatchSequences: routedCancelAllEvents.map(\.batchSequence)
+                ))
         }
         return discrepancies
     }
@@ -1349,6 +1377,23 @@ final class AndroidInputTraceJoinTests: XCTestCase {
         XCTAssertEqual(counts, InputWireTouchPhaseCounts(down: 1, move: 1, up: 1, cancel: 1, cancelAll: 1))
     }
 
+    func testWireTouchPhaseCountDeltaTracksOnlyEventsAfterBaseline() {
+        let position = RuntimeAPI.DisplayPoint(x: 10, y: 20)
+        let time = RuntimeAPI.InputTimestamp(hostNanos: 123)
+        let before = InputWireTouchPhaseCounts(down: 4, move: 9, up: 4, cancel: 1, cancelAll: 2)
+        var after = before
+
+        after.record([
+            .touch(.init(phase: .down, pointerID: 0, position: position, time: time)),
+            .cancelAll(time),
+        ])
+
+        XCTAssertEqual(
+            after.delta(since: before),
+            InputWireTouchPhaseCounts(down: 1, cancelAll: 1)
+        )
+    }
+
     func testTouchMoveJoinsHostGuestAndFixtureWithoutBeingCountedAsAClick() {
         let hostTime: UInt64 = 987_654_321
         let host = InputTraceHostSnapshot(
@@ -1538,5 +1583,191 @@ final class AndroidInputTraceJoinTests: XCTestCase {
         XCTAssertEqual(joins.count, 1)
         XCTAssertNil(joins[0].acknowledgement)
         XCTAssertEqual(joins[0].fixtureDispatch, "ambiguous-ack")
+    }
+
+    func testTraceStageDiscrepanciesIncludeUnexpectedCancelAll() {
+        let host = InputTraceHostSnapshot(
+            rawReceipts: [],
+            discardedRawReceipts: 0,
+            translatedEvents: [
+                InputTraceTranslatedEvent(
+                    ordinal: 8,
+                    hostTimeNanos: 500,
+                    kindAndPhase: "cancelAll"
+                )
+            ],
+            discardedTranslatedEvents: 0
+        )
+        let routed = [
+            InputSentEventHistory.Record(
+                batchSequence: 22,
+                eventIndex: 0,
+                hostTimeNanos: 500,
+                kindAndPhase: "cancelAll"
+            )
+        ]
+
+        let discrepancies = AndroidInputTests.stageDiscrepancies(
+            host: host,
+            routedEvents: routed,
+            expectedTouchCounts: [:],
+            expectedCancelAllCount: 0
+        )
+
+        XCTAssertEqual(
+            discrepancies,
+            [
+                InputTraceStageDiscrepancy(
+                    stage: "expected-to-translated",
+                    kindAndPhase: "cancelAll",
+                    expectedCount: 0,
+                    observedCount: 1,
+                    sourceOrdinals: [],
+                    observedOrdinals: [8],
+                    observedBatchSequences: []
+                )
+            ])
+    }
+
+    func testTraceStageDiscrepanciesReportCancelAllNotRouted() {
+        let host = InputTraceHostSnapshot(
+            rawReceipts: [],
+            discardedRawReceipts: 0,
+            translatedEvents: [
+                InputTraceTranslatedEvent(
+                    ordinal: 9,
+                    hostTimeNanos: 600,
+                    kindAndPhase: "cancelAll"
+                )
+            ],
+            discardedTranslatedEvents: 0
+        )
+
+        let discrepancies = AndroidInputTests.stageDiscrepancies(
+            host: host,
+            routedEvents: [],
+            expectedTouchCounts: [:],
+            expectedCancelAllCount: 0
+        )
+
+        XCTAssertEqual(
+            discrepancies,
+            [
+                InputTraceStageDiscrepancy(
+                    stage: "expected-to-translated",
+                    kindAndPhase: "cancelAll",
+                    expectedCount: 0,
+                    observedCount: 1,
+                    sourceOrdinals: [],
+                    observedOrdinals: [9],
+                    observedBatchSequences: []
+                ),
+                InputTraceStageDiscrepancy(
+                    stage: "translated-to-routed",
+                    kindAndPhase: "cancelAll",
+                    expectedCount: 1,
+                    observedCount: 0,
+                    sourceOrdinals: [9],
+                    observedOrdinals: [],
+                    observedBatchSequences: []
+                ),
+            ])
+    }
+
+    func testTraceStageDiscrepanciesReportRouteOnlyCancelAll() {
+        let host = InputTraceHostSnapshot(
+            rawReceipts: [],
+            discardedRawReceipts: 0,
+            translatedEvents: [],
+            discardedTranslatedEvents: 0
+        )
+        let routed = [
+            InputSentEventHistory.Record(
+                batchSequence: 25,
+                eventIndex: 0,
+                hostTimeNanos: 700,
+                kindAndPhase: "cancelAll"
+            )
+        ]
+
+        let discrepancies = AndroidInputTests.stageDiscrepancies(
+            host: host,
+            routedEvents: routed,
+            expectedTouchCounts: [:],
+            expectedCancelAllCount: 0
+        )
+
+        XCTAssertEqual(
+            discrepancies,
+            [
+                InputTraceStageDiscrepancy(
+                    stage: "translated-to-routed",
+                    kindAndPhase: "cancelAll",
+                    expectedCount: 0,
+                    observedCount: 1,
+                    sourceOrdinals: [],
+                    observedOrdinals: [],
+                    observedBatchSequences: [25]
+                )
+            ])
+    }
+
+    func testTraceStageDiscrepanciesAcceptExpectedClickWithoutCancelAll() {
+        let host = InputTraceHostSnapshot(
+            rawReceipts: [
+                InputTraceRawReceipt(
+                    ordinal: 1,
+                    eventType: Int(NSEvent.EventType.leftMouseDown.rawValue),
+                    hostTimeNanos: 100
+                ),
+                InputTraceRawReceipt(
+                    ordinal: 2,
+                    eventType: Int(NSEvent.EventType.leftMouseUp.rawValue),
+                    hostTimeNanos: 200
+                ),
+            ],
+            discardedRawReceipts: 0,
+            translatedEvents: [
+                InputTraceTranslatedEvent(
+                    ordinal: 1,
+                    hostTimeNanos: 100,
+                    kindAndPhase: "touch.down"
+                ),
+                InputTraceTranslatedEvent(
+                    ordinal: 2,
+                    hostTimeNanos: 200,
+                    kindAndPhase: "touch.up"
+                ),
+            ],
+            discardedTranslatedEvents: 0
+        )
+        let routed = [
+            InputSentEventHistory.Record(
+                batchSequence: 23,
+                eventIndex: 0,
+                hostTimeNanos: 100,
+                kindAndPhase: "touch.down"
+            ),
+            InputSentEventHistory.Record(
+                batchSequence: 24,
+                eventIndex: 0,
+                hostTimeNanos: 200,
+                kindAndPhase: "touch.up"
+            ),
+        ]
+
+        let discrepancies = AndroidInputTests.stageDiscrepancies(
+            host: host,
+            routedEvents: routed,
+            expectedTouchCounts: [
+                "touch.down": 1,
+                "touch.move": 0,
+                "touch.up": 1,
+                "touch.cancel": 0,
+            ],
+            expectedCancelAllCount: 0
+        )
+
+        XCTAssertTrue(discrepancies.isEmpty, "\(discrepancies)")
     }
 }

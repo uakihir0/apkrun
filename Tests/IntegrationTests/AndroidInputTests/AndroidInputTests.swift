@@ -459,6 +459,7 @@ final class AndroidInputTests: XCTestCase {
                 return lines.filter { $0.contains("touch-trace ") }.count >= recordCount
             }
             let summary = Self.touchTraceSummary(in: fixtureLines)
+            let fixtureObservations = Self.fixtureObservations(in: fixtureLines)
             let unattributedFixtureClickRecords = fixtureLines.filter {
                 $0.contains("touch-trace kind=click ") && Self.keyValues(in: $0)["correlation"] == "ambiguous"
             }
@@ -482,19 +483,22 @@ final class AndroidInputTests: XCTestCase {
                 expectedCancelAllCount: 0
             )
             let evidence = InputTraceEvidence(
-                schemaVersion: 2,
+                schemaVersion: 3,
                 path: "WindowServer → AppKit → IOSurfaceLayerView → InputRouter → Guest Agent → HelloText",
                 captureMode: "one event per input batch; ACK requested for every batch",
                 clockDomains: [
                     "hostTimeNanos": "NSEvent.timestamp and InputCore use Mac mach continuous time",
                     "lastEventTimeMillis": "Guest MotionEvent.eventTime in Android uptime milliseconds",
                     "fixtureEventTimeMs": "HelloText MotionEvent.eventTime; match only to the guest ACK timestamp",
+                    "sampledAtElapsedRealtimeNanos":
+                        "HelloText pressed-state transitions and counter writes use Android elapsed realtime",
                     "receiveToInjectMicros":
                         "Guest monotonic interval from batch receipt to input injection completion",
                 ],
                 limitations: [
                     "The debug touch listener and per-event ACK cadence can change timing; compare with the separate product-cadence test.",
                     "Host and guest clock values have different epochs and are never subtracted.",
+                    "Fixture pressed transitions and counter timings are unjoined observations: they use elapsed realtime and have no gesture key, so they are not correlated with MotionEvent uptime or host events.",
                     "The route is M3 DevBoot/DevInputRoute and does not exercise the future wrapper-to-apkrund XPC path.",
                     "A click is linked to an UP only when the fixture reports a unique UP; ambiguous callbacks remain unattached in the global evidence.",
                 ],
@@ -514,6 +518,7 @@ final class AndroidInputTests: XCTestCase {
                 fixtureTraceLines: fixtureLines.filter {
                     $0.contains("touch-trace ") || $0.contains("debug touch trace drain")
                 },
+                fixtureObservations: fixtureObservations,
                 fixtureTraceRecords: summary?.records,
                 fixtureTraceDiscarded: summary?.discarded,
                 persistedCounterBefore: before,
@@ -815,6 +820,137 @@ final class AndroidInputTests: XCTestCase {
         touchTraceSummary(in: lines)?.records
     }
 
+    fileprivate static func fixtureObservations(in lines: [String]) -> InputTraceFixtureObservations {
+        var pressedTransitions: [InputTracePressedTransition] = []
+        var clicks: [InputTraceFixtureClick] = []
+        var malformedPressedTransitionCount = 0
+        var malformedClickCount = 0
+
+        for line in lines where line.contains("touch-trace ") {
+            let fields = keyValues(in: line)
+            switch fields["kind"] {
+            case "pressed-transition":
+                if let transition = pressedTransition(from: fields) {
+                    pressedTransitions.append(transition)
+                } else {
+                    malformedPressedTransitionCount += 1
+                }
+            case "click":
+                if let click = fixtureClick(from: fields) {
+                    clicks.append(click)
+                } else {
+                    malformedClickCount += 1
+                }
+            default:
+                break
+            }
+        }
+
+        return InputTraceFixtureObservations(
+            pressedTransitions: pressedTransitions,
+            clicks: clicks,
+            malformedPressedTransitionCount: malformedPressedTransitionCount,
+            malformedClickCount: malformedClickCount
+        )
+    }
+
+    private static func pressedTransition(from fields: [String: String]) -> InputTracePressedTransition? {
+        guard
+            let sequence = fields["sequence"].flatMap(UInt64.init),
+            let sampledAtElapsedRealtimeNanos = fields["sampledAtElapsedRealtimeNanos"].flatMap(UInt64.init),
+            let requestedPressed = fields["requestedPressed"].flatMap(Bool.init),
+            let pressedBefore = fields["pressedBefore"].flatMap(Bool.init),
+            let pressedAfter = fields["pressedAfter"].flatMap(Bool.init)
+        else {
+            return nil
+        }
+        return InputTracePressedTransition(
+            sequence: sequence,
+            sampledAtElapsedRealtimeNanos: sampledAtElapsedRealtimeNanos,
+            requestedPressed: requestedPressed,
+            pressedBefore: pressedBefore,
+            pressedAfter: pressedAfter
+        )
+    }
+
+    private static func fixtureClick(from fields: [String: String]) -> InputTraceFixtureClick? {
+        guard
+            let sequence = fields["sequence"].flatMap(UInt64.init),
+            let clickOrdinal = fields["clickOrdinal"].flatMap(UInt64.init),
+            validOptionalIntegerField("storedCounter", in: fields, as: Int.self),
+            let saveSucceeded = fields["saveSucceeded"].flatMap(Bool.init),
+            let correlation = fields["correlation"].flatMap(InputTraceFixtureClickCorrelation.init(rawValue:)),
+            let pendingUpCount = fields["pendingUpCount"].flatMap(UInt64.init),
+            validOptionalIntegerField("correlatedUpSequence", in: fields, as: UInt64.self),
+            validOptionalIntegerField(
+                "counterIncrementStartedAtElapsedRealtimeNanos", in: fields, as: UInt64.self),
+            validOptionalIntegerField("counterIncrementDurationNanos", in: fields, as: UInt64.self)
+        else {
+            return nil
+        }
+        let storedCounter = optionalIntegerField("storedCounter", in: fields, as: Int.self)
+        guard (storedCounter != nil) == saveSucceeded else {
+            return nil
+        }
+        let correlatedUpSequence = optionalIntegerField("correlatedUpSequence", in: fields, as: UInt64.self)
+        let counterIncrementStartedAtElapsedRealtimeNanos = optionalIntegerField(
+            "counterIncrementStartedAtElapsedRealtimeNanos", in: fields, as: UInt64.self)
+        let counterIncrementDurationNanos = optionalIntegerField(
+            "counterIncrementDurationNanos", in: fields, as: UInt64.self)
+        switch correlation {
+        case .uniqueUp:
+            guard pendingUpCount == 1, let correlatedUpSequence, correlatedUpSequence < sequence else {
+                return nil
+            }
+        case .ambiguous:
+            guard correlatedUpSequence == nil else {
+                return nil
+            }
+        }
+        guard
+            (counterIncrementStartedAtElapsedRealtimeNanos == nil)
+                == (counterIncrementDurationNanos == nil)
+        else {
+            return nil
+        }
+        return InputTraceFixtureClick(
+            sequence: sequence,
+            clickOrdinal: clickOrdinal,
+            storedCounter: storedCounter,
+            saveSucceeded: saveSucceeded,
+            correlation: correlation,
+            pendingUpCount: pendingUpCount,
+            correlatedUpSequence: correlatedUpSequence,
+            counterIncrementStartedAtElapsedRealtimeNanos: counterIncrementStartedAtElapsedRealtimeNanos,
+            counterIncrementDurationNanos: counterIncrementDurationNanos
+        )
+    }
+
+    private static func validOptionalIntegerField<Value: LosslessStringConvertible>(
+        _ key: String,
+        in fields: [String: String],
+        as type: Value.Type
+    ) -> Bool {
+        guard let rawValue = fields[key] else {
+            return false
+        }
+        if rawValue == "none" {
+            return true
+        }
+        return type.init(rawValue) != nil
+    }
+
+    private static func optionalIntegerField<Value: LosslessStringConvertible>(
+        _ key: String,
+        in fields: [String: String],
+        as type: Value.Type
+    ) -> Value? {
+        guard let rawValue = fields[key], rawValue != "none" else {
+            return nil
+        }
+        return type.init(rawValue)
+    }
+
     fileprivate static func joinTrace(
         host: InputTraceHostSnapshot,
         routedEvents: [InputSentEventHistory.Record],
@@ -823,7 +959,13 @@ final class AndroidInputTests: XCTestCase {
     ) -> [InputTraceLink] {
         let traceLines = fixtureLines.filter { $0.contains("touch-trace ") }
         let touchLines = traceLines.filter { keyValues(in: $0)["kind"] == "touch" }
-        let clickLines = traceLines.filter { keyValues(in: $0)["kind"] == "click" }
+        let clickLines: [(line: String, record: InputTraceFixtureClick)] = traceLines.compactMap { line in
+            let fields = keyValues(in: line)
+            guard fields["kind"] == "click", let record = fixtureClick(from: fields) else {
+                return nil
+            }
+            return (line: line, record: record)
+        }
         let acknowledgementsBySequence = Dictionary(grouping: acknowledgements, by: \.batchSequence)
 
         return routedEvents.map { routed in
@@ -863,9 +1005,9 @@ final class AndroidInputTests: XCTestCase {
                 return fields["action"] == fixtureAction
                     && fields["eventTimeMs"].flatMap(UInt64.init) == (guestTime == 0 ? nil : guestTime)
             }
-            let guestSequences = Set(fixtureTouches.compactMap { keyValues(in: $0)["sequence"] })
+            let guestSequences = Set(fixtureTouches.compactMap { keyValues(in: $0)["sequence"].flatMap(UInt64.init) })
             let uniquelyCorrelatedClicks = clickLines.filter {
-                guard let sequence = keyValues(in: $0)["correlatedUpSequence"] else {
+                guard $0.record.correlation == .uniqueUp, let sequence = $0.record.correlatedUpSequence else {
                     return false
                 }
                 return guestSequences.contains(sequence)
@@ -876,7 +1018,7 @@ final class AndroidInputTests: XCTestCase {
                 clickRecords = []
                 clickOutcome = "not-an-up"
             } else if !uniquelyCorrelatedClicks.isEmpty {
-                clickRecords = uniquelyCorrelatedClicks
+                clickRecords = uniquelyCorrelatedClicks.map(\.line)
                 clickOutcome = "unique-up"
             } else if fixtureTouches.isEmpty {
                 clickRecords = []
@@ -1359,6 +1501,146 @@ private final class ShellInputSampler: @unchecked Sendable {
 
 @MainActor
 final class AndroidInputTraceJoinTests: XCTestCase {
+    func testFixturePressedTransitionsAndCounterTimingsBecomeTypedUnjoinedObservations() throws {
+        let lines = [
+            "I APKRUN-FIXTURE: touch-trace kind=pressed-transition sequence=7 "
+                + "sampledAtElapsedRealtimeNanos=123456 requestedPressed=true pressedBefore=false pressedAfter=true",
+            "I APKRUN-FIXTURE: touch-trace kind=pressed-transition sequence=9 "
+                + "sampledAtElapsedRealtimeNanos=234567 requestedPressed=false pressedBefore=true pressedAfter=false",
+            "I APKRUN-FIXTURE: touch-trace kind=click sequence=11 clickOrdinal=1 storedCounter=1 "
+                + "saveSucceeded=true correlation=unique_up pendingUpCount=1 correlatedUpSequence=10 "
+                + "counterIncrementStartedAtElapsedRealtimeNanos=345678 counterIncrementDurationNanos=9012",
+            "I APKRUN-FIXTURE: touch-trace kind=click sequence=13 clickOrdinal=2 storedCounter=none "
+                + "saveSucceeded=false correlation=ambiguous pendingUpCount=2 correlatedUpSequence=none "
+                + "counterIncrementStartedAtElapsedRealtimeNanos=none counterIncrementDurationNanos=none",
+            "I APKRUN-FIXTURE: touch-trace kind=pressed-transition sequence=bad",
+            "I APKRUN-FIXTURE: touch-trace kind=click sequence=15 clickOrdinal=3 storedCounter=2 "
+                + "saveSucceeded=true correlation=unique_up pendingUpCount=1 correlatedUpSequence=14 "
+                + "counterIncrementStartedAtElapsedRealtimeNanos=not-a-time counterIncrementDurationNanos=8",
+            "I APKRUN-FIXTURE: touch-trace kind=click sequence=17 clickOrdinal=4 storedCounter=3 "
+                + "saveSucceeded=true correlation=ambiguous pendingUpCount=1 correlatedUpSequence=16 "
+                + "counterIncrementStartedAtElapsedRealtimeNanos=400 counterIncrementDurationNanos=8",
+            "I APKRUN-FIXTURE: touch-trace kind=click sequence=19 clickOrdinal=5 storedCounter=4 "
+                + "saveSucceeded=true correlation=unique_up pendingUpCount=2 correlatedUpSequence=18 "
+                + "counterIncrementStartedAtElapsedRealtimeNanos=500 counterIncrementDurationNanos=9",
+            "I APKRUN-FIXTURE: touch-trace kind=click sequence=21 clickOrdinal=6 storedCounter=5 "
+                + "saveSucceeded=true correlation=unique_up pendingUpCount=1 correlatedUpSequence=20 "
+                + "counterIncrementStartedAtElapsedRealtimeNanos=600",
+            "I APKRUN-FIXTURE: touch-trace kind=click sequence=23 clickOrdinal=7 storedCounter=none "
+                + "saveSucceeded=true correlation=unique_up pendingUpCount=1 correlatedUpSequence=22 "
+                + "counterIncrementStartedAtElapsedRealtimeNanos=700 counterIncrementDurationNanos=10",
+            "I APKRUN-FIXTURE: touch-trace kind=click sequence=25 clickOrdinal=8 storedCounter=6 "
+                + "saveSucceeded=false correlation=unique_up pendingUpCount=1 correlatedUpSequence=24 "
+                + "counterIncrementStartedAtElapsedRealtimeNanos=800 counterIncrementDurationNanos=11",
+        ]
+
+        let observations = AndroidInputTests.fixtureObservations(in: lines)
+
+        XCTAssertEqual(
+            observations.pressedTransitions,
+            [
+                InputTracePressedTransition(
+                    sequence: 7,
+                    sampledAtElapsedRealtimeNanos: 123_456,
+                    requestedPressed: true,
+                    pressedBefore: false,
+                    pressedAfter: true
+                ),
+                InputTracePressedTransition(
+                    sequence: 9,
+                    sampledAtElapsedRealtimeNanos: 234_567,
+                    requestedPressed: false,
+                    pressedBefore: true,
+                    pressedAfter: false
+                ),
+            ])
+        XCTAssertEqual(
+            observations.clicks,
+            [
+                InputTraceFixtureClick(
+                    sequence: 11,
+                    clickOrdinal: 1,
+                    storedCounter: 1,
+                    saveSucceeded: true,
+                    correlation: .uniqueUp,
+                    pendingUpCount: 1,
+                    correlatedUpSequence: 10,
+                    counterIncrementStartedAtElapsedRealtimeNanos: 345_678,
+                    counterIncrementDurationNanos: 9_012
+                ),
+                InputTraceFixtureClick(
+                    sequence: 13,
+                    clickOrdinal: 2,
+                    storedCounter: nil,
+                    saveSucceeded: false,
+                    correlation: .ambiguous,
+                    pendingUpCount: 2,
+                    correlatedUpSequence: nil,
+                    counterIncrementStartedAtElapsedRealtimeNanos: nil,
+                    counterIncrementDurationNanos: nil
+                ),
+            ])
+        XCTAssertEqual(observations.malformedPressedTransitionCount, 1)
+        XCTAssertEqual(observations.malformedClickCount, 6)
+        XCTAssertEqual(
+            try JSONDecoder().decode(InputTraceFixtureObservations.self, from: JSONEncoder().encode(observations)),
+            observations)
+    }
+
+    func testAmbiguousFixtureClickCannotJoinAnUp() {
+        let hostTime: UInt64 = 987_654_321
+        let host = InputTraceHostSnapshot(
+            rawReceipts: [
+                InputTraceRawReceipt(
+                    ordinal: 1,
+                    eventType: Int(NSEvent.EventType.leftMouseUp.rawValue),
+                    hostTimeNanos: hostTime
+                )
+            ],
+            discardedRawReceipts: 0,
+            translatedEvents: [
+                InputTraceTranslatedEvent(ordinal: 2, hostTimeNanos: hostTime, kindAndPhase: "touch.up")
+            ],
+            discardedTranslatedEvents: 0
+        )
+        let routed = [
+            InputSentEventHistory.Record(
+                batchSequence: 14,
+                eventIndex: 0,
+                hostTimeNanos: hostTime,
+                kindAndPhase: "touch.up"
+            )
+        ]
+        let acknowledgements = [
+            InputAcknowledgementHistory.Record(
+                batchSequence: 14,
+                rejectedEvents: 0,
+                receiveToInjectMicros: 90,
+                lastEventTimeMillis: 420
+            )
+        ]
+        let fixtureLines = [
+            "I APKRUN-FIXTURE: touch-trace kind=touch sequence=5 eventTimeMs=420 "
+                + "downTimeMs=400 action=UP pressedBefore=true enabled=true focused=true inside=true shown=true",
+            "I APKRUN-FIXTURE: touch-trace kind=click sequence=6 clickOrdinal=1 "
+                + "storedCounter=1 saveSucceeded=true correlation=ambiguous pendingUpCount=1 "
+                + "correlatedUpSequence=5 counterIncrementStartedAtElapsedRealtimeNanos=none "
+                + "counterIncrementDurationNanos=none",
+        ]
+
+        let joins = AndroidInputTests.joinTrace(
+            host: host,
+            routedEvents: routed,
+            acknowledgements: acknowledgements,
+            fixtureLines: fixtureLines
+        )
+
+        XCTAssertEqual(joins.count, 1)
+        XCTAssertEqual(joins[0].fixtureDispatch, "matched-view-touch")
+        XCTAssertTrue(joins[0].fixtureClickRecords.isEmpty)
+        XCTAssertEqual(joins[0].clickOutcome, "no-unique-up-correlation")
+    }
+
     func testWireTouchPhaseCountsSeparateCancelAllFromTouchCancel() {
         let position = RuntimeAPI.DisplayPoint(x: 10, y: 20)
         let time = RuntimeAPI.InputTimestamp(hostNanos: 123)
@@ -1460,7 +1742,8 @@ final class AndroidInputTraceJoinTests: XCTestCase {
                 + "downTimeMs=400 action=UP pressedBefore=true enabled=true focused=true inside=true shown=true",
             "I APKRUN-FIXTURE: touch-trace kind=click sequence=6 clickOrdinal=1 "
                 + "storedCounter=1 saveSucceeded=true correlation=unique_up pendingUpCount=1 "
-                + "correlatedUpSequence=5",
+                + "correlatedUpSequence=5 counterIncrementStartedAtElapsedRealtimeNanos=none "
+                + "counterIncrementDurationNanos=none",
         ]
 
         let joins = AndroidInputTests.joinTrace(

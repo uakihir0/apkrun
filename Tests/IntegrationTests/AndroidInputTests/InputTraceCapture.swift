@@ -170,6 +170,46 @@ struct InputTraceLink: Codable {
     let clickOutcome: String
 }
 
+/// A HelloText button state transition recorded while an explicit debug trace is active.
+///
+/// These observations use Android elapsed realtime and do not carry a gesture identifier.
+struct InputTracePressedTransition: Codable, Equatable {
+    let sequence: UInt64
+    let sampledAtElapsedRealtimeNanos: UInt64
+    let requestedPressed: Bool
+    let pressedBefore: Bool
+    let pressedAfter: Bool
+}
+
+enum InputTraceFixtureClickCorrelation: String, Codable {
+    case uniqueUp = "unique_up"
+    case ambiguous
+}
+
+/// One fixture click callback and the synchronous counter-write timing captured with it.
+struct InputTraceFixtureClick: Codable, Equatable {
+    let sequence: UInt64
+    let clickOrdinal: UInt64
+    let storedCounter: Int?
+    let saveSucceeded: Bool
+    let correlation: InputTraceFixtureClickCorrelation
+    let pendingUpCount: UInt64
+    let correlatedUpSequence: UInt64?
+    let counterIncrementStartedAtElapsedRealtimeNanos: UInt64?
+    let counterIncrementDurationNanos: UInt64?
+}
+
+/// Typed fixture observations retained alongside the raw lines in a diagnostic trace.
+///
+/// Pressed transitions and click callbacks remain separate collections: current fixture records cannot safely join
+/// them to one another or to MotionEvent uptime timestamps.
+struct InputTraceFixtureObservations: Codable, Equatable {
+    let pressedTransitions: [InputTracePressedTransition]
+    let clicks: [InputTraceFixtureClick]
+    let malformedPressedTransitionCount: Int
+    let malformedClickCount: Int
+}
+
 struct InputTraceStageDiscrepancy: Codable, Equatable {
     let stage: String
     let kindAndPhase: String
@@ -199,6 +239,7 @@ struct InputTraceEvidence: Codable {
     let ambiguousAcknowledgementSequences: [UInt64]
     let unattributedFixtureClickRecords: [String]
     let fixtureTraceLines: [String]
+    let fixtureObservations: InputTraceFixtureObservations
     let fixtureTraceRecords: Int?
     let fixtureTraceDiscarded: Int?
     let persistedCounterBefore: Int

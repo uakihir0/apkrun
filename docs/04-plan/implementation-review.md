@@ -19254,3 +19254,63 @@ pending.
 **Risk.** A future workflow that explicitly selects `AndroidInputInteractive`
 or sets `APKRUN_INPUT_INTERACTIVE_T2` will fail the workflow-policy test until
 the deferral is reviewed. This decision does not close #103 or #024 box 3.
+
+## IR-1337: Keep the AOSP AVB RSA fixture recognizable to the release scanner
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 |
+| Affected documents | [M02 #099](issues/M02-graphics.md#099-mesa-enabled-virgl-guest-image); [check-release-build.sh](../../scripts/release/check-release-build.sh); [test_release_check_keystores.py](../../scripts/tests/test_release_check_keystores.py); [run.sh](../../scripts/tests/run.sh) |
+
+**Choice.** Keep the upstream AOSP AVB development key in its PKCS#1 PEM
+format. Extend the release scanner to parse and validate its DER structure and
+RSA relationships, then detect the private components when the same
+unencrypted key is bundled as PKCS#1 PEM/DER, PKCS#8 PEM/DER, or unmarked
+Base64. Reject encrypted private-key PEM blocks and detect standard PKCS#5
+encrypted-key algorithm identifiers in raw, hexadecimal, or Base64-encoded
+bundle files. A public key derived from the fixture remains allowed.
+
+**Reason.** The release checker rejected the new AOSP fixture as an unknown
+test signing format during the local repository test run. Re-encoding the
+fixture would change its source representation just to satisfy the checker.
+Recognizing PKCS#1 keeps the AVB development fixture as sourced and makes the
+release guard cover its original and common unencrypted PKCS#8 encodings,
+including PEM without its armor markers. Encrypted keys remain sensitive when
+their decryption secret ships with the application, so the guard rejects
+recognizable encrypted PEM and standard PKCS#5 encrypted-key identifiers even
+when PKCS#8 DER armor is removed. The identifier must appear in a valid
+`EncryptedPrivateKeyInfo` structure so an isolated OID in documentation does
+not trigger a rejection. Checking the RSA equations also prevents malformed
+short components from becoming broad byte tokens that could reject unrelated
+release files.
+
+**Verification (2026-10-16).** The focused release-check suite accepts the
+AOSP key fixture; rejects malformed, truncated, trailing-data, and non-minimal
+DER; rejects the fixture key copied as PKCS#1 PEM/DER and re-encoded as PKCS#8
+PEM/DER or standard and URL-safe unmarked Base64, including an unterminated
+PEM block; and accepts a public-key-only bundle. Unmarked Base64 detection is
+also tested at each 1–3-byte boundary of the scanner's 1 MiB read chunk when a
+newline follows the fragment. Encrypted PKCS#8 PEM, DER, and standard or
+URL-safe Base64, including unpadded URL-safe input and 63-character or
+1–3-character line wrapping, after short and long incomplete Base64/DER
+prefixes, and after contiguous malformed or padded decoys, lowercase or
+wrapped uppercase hexadecimal, plus encrypted traditional PKCS#1 PEM, are
+refused. A 1 MiB binary with hundreds of thousands of short Base64-like and
+hexadecimal fragments passes without retaining per-fragment match lists. A
+large Base64 resource with many invalid DER candidates, a 1-MiB Base64
+resource with hundreds of thousands of invalid prefix probes, and an isolated
+binary or hexadecimal OID fragment are accepted. The full
+`scripts/tests/run.sh` suite passes, and the focused release-check suite passes
+again with the final contiguous-decoy and padding cases. GitHub Actions were
+not run.
+
+**Risk.** Detection covers this fixture's unencrypted two-prime RSA key and
+its PKCS#1 and PKCS#8 encodings, plus the listed PKCS#5 encryption identifiers.
+The scanner does not decrypt arbitrary containers or decode every possible
+textual encoding; stripped traditional PKCS#1 ciphertext and encryption
+schemes with unrecognized identifiers remain outside this check. To bound
+candidate work, more than 4096 DER-shaped starts in one read chunk fails the
+release check as uninspectable. More than 128 simultaneous plausible DER starts
+or a 64-KiB candidate with a recognized encrypted-key algorithm OID also fails
+closed.

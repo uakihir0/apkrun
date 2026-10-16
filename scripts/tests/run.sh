@@ -1989,7 +1989,7 @@ cases = (
     ("test-key-der-resource", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", ".der", False, "test signing material"),
     ("test-avb-public-key-resource", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", ".avbpubkey", False, "test signing material"),
     ("test-avb-private-key-resource", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", ".rsa.pem", False, "test signing material"),
-    ("test-keystore-resource", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", ".jks", False, "test signing material"),
+    ("test-keystore-resource", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", ".jks", False, "encrypted private-key material"),
     ("development-identity", "APKRUN_RELEASE_FIXTURE_CLEAN", "dev", None, False, "APKRunBuildIdentity"),
     ("release-update-identity", "APKRUN_RELEASE_FIXTURE_CLEAN", "updatetest", None, False, "updatetest"),
 )

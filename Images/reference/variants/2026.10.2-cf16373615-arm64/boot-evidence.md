@@ -25,7 +25,10 @@ causality. Earlier controls on the #099 Mesa vendor linked the SurfaceFlinger's
 denied sysfs `uevent` read to the failed DRM probe: the no-overlay control
 failed, while the experimental ODM policy overlay passed the EGL check
 (IR-1277, IR-1279). Those controls support a policy cause for this failure,
-but the exact 2026.10.2 disk has not yet been tested with the overlay.
+but at the time of this boot the exact 2026.10.2 disk had not yet been tested
+with the overlay. A later diagnostic control built from this source passed its
+EGL probe; IR-1329 and the #099 task notes record that separate 2026.10.3
+artifact and result. That control does not change the no-overlay result above.
 
 ## Sanitized excerpts
 
@@ -91,8 +94,9 @@ under `/vendor/lib64/egl` with the `same_process_hal_file` SELinux label. Both
 DRM nodes existed with mode `0666`; this does not establish that SurfaceFlinger
 successfully opened or used them. The rerun reproduced the sysfs denial and EGL
 failure. The VM was stopped after the completion property remained empty at
-150 seconds. The exact image still needs an overlay control to confirm whether
-the previously observed policy fix also resolves this build.
+150 seconds. At the time of this rerun, an overlay control for this exact image
+was still outstanding. IR-1329 records the later control result; it used a
+distinct 2026.10.3 diagnostic image.
 
 The rerun log records the denied `uevent` read at lines 5233–5235, including a
 failed syscall with `exit=-13`; the pathname is absent from that audit record,

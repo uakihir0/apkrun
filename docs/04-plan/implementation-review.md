@@ -18515,6 +18515,12 @@ variant. A maintainer may require direct renderer output or a rerun on the
 corrected image before accepting that criterion; the index now preserves both
 the existing checkbox state and the limitation.
 
+**Progress update (2026-10-16).** IR-1317 records the earlier 2-of-4
+checkpoint. IR-1328 later checked the corrected-image identity and provenance
+criteria, advancing the index to 3 of 4. IR-1329 records a successful diagnostic
+overlay control, but criterion 2 remains open because the control does not
+validate the production policy.
+
 ## IR-1318: Scope the edge-gesture periodic ACK to its own batch
 
 | Field | Value |
@@ -18899,11 +18905,60 @@ boot confirmed that both DRM nodes existed with mode 0666 and their expected
 SELinux labels, but again failed EGL initialization. The exact rerun output and
 full-log hashes are retained in that variant's `boot-evidence.md`. Earlier
 controlled results in IR-1277 and IR-1279 make the sysfs policy denial the
-leading explanation, while an overlay control on the exact 2026.10.2 disk
-remains outstanding.
+leading explanation. At the time of this entry, an overlay control on the
+exact 2026.10.2 disk remained outstanding; IR-1329 records the later control
+run and its result.
 
 **Risk.** #099's EGL acceptance criterion remains open. This macOS host cannot
 compile the AOSP Soong product or SELinux policy, and the Mesa and NDK license
 review items IR-483 and IR-486 remain open. The existing overlay grants
 type-wide rights and is diagnostic only; it does not decide a narrow
 production policy.
+
+## IR-1329: Keep the exact-image ODM overlay run diagnostic
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099, #022 diagnostic control |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #099; [issues/README.md](issues/README.md); [2026.10.2 boot evidence](../../Images/reference/variants/2026.10.2-cf16373615-arm64/boot-evidence.md); `Experiments/sepolicy-022/odm_variant.py`; `/tmp/apkrun-022-odm-2026102-control-final2/bundle/android-bundle.odm-control.json`; T2 logs listed in the #099 Notes |
+
+**Choice.** Build a new test-only control from the exact
+`2026.10.2-cf16373615-arm64` source bundle and identify the result as
+`2026.10.3-cf16373615-arm64`. Add the current 18-rule ODM SELinux overlay and
+an init-run EGL probe. Record the successful guest boot and probe, but leave
+#099 acceptance criterion 2 unchecked.
+
+**Reason.** The exact 2026.10.2 no-overlay bundle still fails
+`eglInitialize`. The control demonstrates that this source image can boot and
+initialize the VirGL EGL path with the diagnostic changes applied. Because the
+overlay grants type-wide rights to several domains and the probe is an added
+test binary, this run neither isolates the required permission nor validates
+the eventual production policy. Treating it as acceptance would overstate what
+the test establishes.
+
+**Verification.** `odm_variant.py prepare`, `build`, and `check` succeeded. The
+builder verified the source bundle's pinned manifest and disk hashes, checked
+the prepared ODM, vbmeta, filesystem, extracted tree, and precompiled policy
+against that source at both build and check time, verified the refreshed
+`odm` hashtree and signed `vbmeta_a`, and checked output hashes, signature,
+payload, policy rules, and key receipt fields. The output manifest SHA-256 is
+`e7adceaecc799c3dbbfccd30b5cdf4eafa36908cb3973e8e99dc8fb8aac580ed`; the disk
+SHA-256 is `2a408ef1e74de3c37bf7ec6372b04ae0843877529884abceb810b4b68f520217`.
+The T2 boot reached `sys.boot_completed=1`, reported
+`GLES: Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8`, and logged
+`APKRUN-TEST: egl ok: eglInitialize 1.5, EGL_VENDOR Android, EGL_VERSION 1.5
+Android META-EGL`. The probe only obtains an EGL display and initializes it;
+it does not create a context or render. The performance record reports
+`outcome=ready`. The guest and VM log SHA-256 values are recorded in #099's
+Notes. Some SELinux denials remained during this successful run, as documented
+there.
+
+**Risk.** The control is not a minimal policy experiment: all 18 rules are
+applied together. They grant broad access, including `untrusted_app` access to
+all `graphics_device` nodes, and the `sys.boot_completed` service runs without
+an opt-in gate in the `surfaceflinger` domain. Do not distribute or ship this
+bundle as a product image. A passing control cannot identify which permissions
+are required, confirm Soong compilation of the production policy, show
+application-domain rendering, or close #099 criterion 2. The prepared-source
+re-binding helper was reviewed adversarially; no actionable findings remained.

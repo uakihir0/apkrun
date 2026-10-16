@@ -478,7 +478,7 @@ Out of scope:
 
 - [x] The corrected image has its own build identity, manifest, and hashes, and
       build `16373615` is unchanged (IR-1323).
-- [ ] In the guest, `eglInitialize` succeeds on the VirGL display (`apkrun.test=egl`). The 2026-10-12 pass was on a separate ODM-overlay variant (IR-960, IR-997); the corrected no-overlay variant failed `eglInitialize` on 2026-10-16 (IR-1323).
+- [ ] In the guest, `eglInitialize` succeeds on the VirGL display (`apkrun.test=egl`). The 2026-10-12 pass was on a separate ODM-overlay variant (IR-960, IR-997); the corrected no-overlay variant failed `eglInitialize` on 2026-10-16 (IR-1323). A later 2026.10.3 diagnostic overlay control passed the probe but does not validate production policy (IR-1329).
 - [x] Every new artifact has recorded provenance, and every third-party component is pinned in the lock (IR-1326, IR-1327, IR-1328).
 - [x] #064 is unaffected: its acceptance uses build `16373615`. Checked on 2026-10-10: `git diff main...HEAD` changes no path under `Images/reference/16373615/`, `Images/manifests/16373615/`, or the M01 #064 entry.
 
@@ -546,10 +546,77 @@ Out of scope:
   not run. The earlier controlled results in IR-1277 and IR-1279 link the same
   SurfaceFlinger `uevent` denial to a failed DRM probe and show the experimental
   overlay passing on the earlier #099 payload. That makes the policy gap the
-  leading explanation, but the exact 2026.10.2 image has not yet had the
-  overlay control. Initial and repeat log hashes, excerpts, and command output
-  are recorded in the variant's `boot-evidence.md`; IR-1328 records the
-  artifact-identity choice and results.
+  leading explanation. At the time this result was recorded, the exact
+  2026.10.2 image had not yet had the overlay control; the later control run
+  is recorded below and in IR-1329. Initial and repeat log hashes, excerpts,
+  and command output are recorded in the variant's `boot-evidence.md`;
+  IR-1328 records the artifact-identity choice and results.
+
+- **Status (2026-10-16, exact-image ODM overlay control; diagnostic only).** A
+  test-only control was built from the pinned `2026.10.2-cf16373615-arm64`
+  bundle (manifest SHA-256
+  `c61d182eb93dc980ceb4dae2cd4d8b840aea060835b45507197b0fccbe507978`,
+  disk SHA-256
+  `2b0fe6ddbe6031eeb60f309f0a4998db38d634d869d18b6715b63282333e3d3a`).
+  `Experiments/sepolicy-022/odm_variant.py` completed its `prepare`, `build`,
+  and `check` stages. The resulting
+  `2026.10.3-cf16373615-arm64` control has manifest SHA-256
+  `e7adceaecc799c3dbbfccd30b5cdf4eafa36908cb3973e8e99dc8fb8aac580ed`,
+  disk SHA-256
+  `2a408ef1e74de3c37bf7ec6372b04ae0843877529884abceb810b4b68f520217`,
+  and test-only precompiled policy SHA-256
+  `55748a7a098f628f2e56031da6d8ab4ea3c3c4abeaac047b64b0ffbd7be2d515`.
+  The control adds 18 type-wide SELinux allow rules, the EGL probe binary, and
+  its init service. This is broad: `untrusted_app` gets `open`, `read`, `write`,
+  `ioctl`, and `map` on every `graphics_device`; five domains receive generic
+  `sysfs` access; and the service starts automatically after
+  `sys.boot_completed` with no opt-in gate. This control must not ship as a
+  product image. The final builder receipt is
+  `/tmp/apkrun-022-odm-2026102-control-final2/bundle/android-bundle.odm-control.json`
+  (SHA-256
+  `6cdc2758eb28129c95d140152fbef979b3fc1a62d70c9b1419726e8885c77660`).
+
+  T2 installed and booted the control with:
+
+  ```sh
+  rtk env APKRUN_HOME=/tmp/apkrun-099-home-2026102-overlay-control-20261016 \
+    .build/debug/apkrun dev image install \
+    /tmp/apkrun-022-odm-2026102-control/bundle/android-bundle
+  rtk lockf -k /tmp/apkrun-vm.lock env \
+    APKRUN_HOME=/tmp/apkrun-099-home-2026102-overlay-control-20261016 \
+    APKRUN_GUEST_DIR=/tmp/apkrun-099-guest \
+    .build/debug/apkrun dev boot --gpu virgl --console
+  ```
+
+  The final build under `...control-final2` has the same manifest and disk
+  hashes, as noted below. The guest reached `sys.boot_completed=1`;
+  `ro.hardware.egl`
+  was `mesa`; SELinux was `Enforcing`; and SurfaceFlinger reported
+  `GLES: Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8`. The init-run probe printed
+  `APKRUN-TEST: egl ok: eglInitialize 1.5, EGL_VENDOR Android, EGL_VERSION 1.5
+  Android META-EGL`. The performance record reports `outcome=ready` for
+  operation `1CF7B3B5-66A8-4259-A171-9494FB7F4D12`. The guest log is 9,006,320
+  bytes (SHA-256
+  `43cb412d7d3e284149db9e220532193562d02a9abdd3dc4ff701b7ffb13e97ec`); the VM
+  log is 755,568 bytes (SHA-256
+  `b7db85a3f9d32d65dbab3aa91989532d0df53f9aa6f28e15abd9c0fd663c2b40`).
+  After the final builder-source edits, the bundle was rebuilt and `check`
+  passed again. Its manifest and disk hashes are identical to the image used
+  for this T2 run, so the boot evidence remains bound to the final checked
+  artifact identity.
+
+  This control changes the ODM policy and adds a diagnostic guest binary, so
+  it does not establish which individual rule is necessary or that the
+  production policy is correct. The probe calls `eglGetDisplay` and
+  `eglInitialize` only; it does not create a GL context or render. Its reported
+  `EGL_VENDOR=Android` and `EGL_VERSION=Android META-EGL` are distinct from
+  SurfaceFlinger's Mesa/virgl renderer log. Some denials remained in this
+  successful boot: SurfaceFlinger and the probe were denied generic `sysfs`
+  `getattr`, and the probe was denied reading the `/odm/bin` parent directory.
+  Thus success does not mean every denial was removed. The exact 2026.10.2
+  no-overlay image still fails EGL initialization. Therefore acceptance
+  criterion 2 remains unchecked; IR-1329 records this conservative choice for
+  maintainer review.
 
 - Placement and the reasons for it are in IR-240. This task sits between #021 and
   #022, because #022 needs a working Mesa guest.
@@ -558,7 +625,7 @@ Out of scope:
   dependency is visible.
 - Filed on 2026-10-09 as GitHub issue #99. A new task takes its GitHub issue number, so
   the task number and the issue number are both #099 (IR-293 covers the earlier offset).
-- **Status (2026-10-12, the eglInitialize check on the ODM-overlay variant (IR-960), three locked boots: met on the third boot).** Boot 3 ran the binary directly as a service in the surfaceflinger domain, with no shell and no command-line gate (IR-992, IR-993). The guest's logcat capture holds `I APKRUN-TEST: egl ok: eglInitialize 1.5, EGL_VENDOR Android, EGL_VERSION 1.5 Android META-EGL` (pid 3301), so criterion 2 is ticked (IR-997). The test prints no GL renderer. The VirGL display is inferred from the same boot's `GLES: Mesa, virgl`. Boots 1 and 2 stopped at init (IR-994, IR-995). The open items are in IR-999.
+- **Status (2026-10-12, the eglInitialize check on the ODM-overlay variant (IR-960), three locked boots: met on the third boot).** Boot 3 ran the binary directly as a service in the surfaceflinger domain, with no shell and no command-line gate (IR-992, IR-993). The guest's logcat capture holds `I APKRUN-TEST: egl ok: eglInitialize 1.5, EGL_VENDOR Android, EGL_VERSION 1.5 Android META-EGL` (pid 3301), so criterion 2 was ticked at that time (IR-997). The test prints no GL renderer. The VirGL display is inferred from the same boot's `GLES: Mesa, virgl`. The later no-overlay failure and the current acceptance status are recorded above. Boots 1 and 2 stopped at init (IR-994, IR-995). The open items are in IR-999.
 - **Status (2026-10-11, the no-verity experiment: `disabled` is refused by the guest, and `logging` lets `/system`, `/odm`, `/product`, and `/system_ext` mount, but the injected `/vendor` never mounts and `ready` is not reached).** Judgments IR-728 (the experiment-only verity change) and IR-729 (how the stuck boots were stopped). Two VM boots were used, the last two allowed for this run, so the task has three boots in total.
   - Stock control. `/tmp/apkrun-test-linux/android-bundle` was not changed. The `shasum -a 256` values of its `manifest.json`, `SHA256SUMS`, `boot/cmdline.txt`, and `boot/bootconfig.txt` are the same before and after the experiment (`/tmp/apkrun-099-stock-control-before.txt` and `-after.txt`). Its `cmdline.txt` has no `veritymode` key, and its dm-verity tables in the #022 control log use `restart_on_corruption`.
   - Experiment bundle. `/tmp/apkrun-099-bundle-mesa-noverity` is the Mesa variant with one parameter appended to `boot/cmdline.txt`. The directory name follows the coordinator's plan, but the mode in it is `logging` (see boot B). `/tmp/apkrun-099-noverity-tool/make_noverity.py` builds it with the bundle module's own functions (`_file_entry`, `_checksums`, `render_signature`, `_load_signing_key` with `~/.config/apkrun/dev-image-key`), run by `Images/tools/.venv/bin/python`. The manifest differs from the base only in the two `boot/cmdline.txt` entries. `shasum -a 256 -c SHA256SUMS` gives OK for all six files, `validate` reports no violation, and OpenSSL verifies `manifest.sig`.

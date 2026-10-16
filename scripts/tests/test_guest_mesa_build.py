@@ -10,10 +10,12 @@ NDK's llvm-readelf and llvm-nm. Nothing here boots a guest.
   python3 scripts/tests/test_guest_mesa_build.py --out ThirdParty/out/mesa-android [--ndk DIR]
 """
 
+import hashlib
 import json
 import os
 import pathlib
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -140,6 +142,42 @@ class GuestMesaLockTests(unittest.TestCase):
         self.assertIn('"$m4_expected_version" "none"', script)
         self.assertIn('"$flex_expected_version" "$m4_binary_sha256"', script)
         self.assertIn('m4_binary_sha256="$(shasum -a 256 "$m4_binary"', script)
+
+    def test_flex_cache_rejects_a_changed_m4_dependency(self):
+        script = (REPO_ROOT / "scripts" / "guest" / "build-mesa-android.sh").read_text(encoding="utf-8")
+        match = re.search(r"(?ms)^tool_cache_matches\(\) \{\n.*?^\}", script)
+        self.assertIsNotNone(match, "the build script must define its cache validator")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            binary = root / "flex"
+            binary.write_text("#!/bin/sh\nprintf 'flex 2.6.4\\n'\n", encoding="utf-8")
+            binary.chmod(0o755)
+            stamp = root / ".apkrun-source-pin"
+            binary_sha256 = hashlib.sha256(binary.read_bytes()).hexdigest()
+            stamp.write_text(
+                "archive-sha256=flex-archive\n"
+                f"binary-sha256={binary_sha256}\n"
+                "version=flex 2.6.4\n"
+                "dependency-sha256=m4-binary-a\n",
+                encoding="utf-8",
+            )
+            command = (
+                f"{match.group(0)}\n"
+                'tool_cache_matches "$1" "$2" "$3" "$4" "$5"'
+            )
+            arguments = [
+                "bash",
+                "-c",
+                command,
+                "cache-test",
+                str(binary),
+                str(stamp),
+                "flex-archive",
+                "flex 2.6.4",
+            ]
+            self.assertEqual(subprocess.run([*arguments, "m4-binary-a"], check=False).returncode, 0)
+            self.assertNotEqual(subprocess.run([*arguments, "m4-binary-b"], check=False).returncode, 0)
 
     def test_python_tools_are_hash_pinned(self):
         lines = mesa.pip_requirements(lock_document()).splitlines()

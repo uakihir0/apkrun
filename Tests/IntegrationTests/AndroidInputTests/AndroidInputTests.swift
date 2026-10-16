@@ -413,6 +413,7 @@ final class AndroidInputTests: XCTestCase {
                 throw AndroidInputRunFailure.timedOut("the fixture's initial persisted click counter")
             }
             XCTAssertEqual(before, 0, "a new guest should start with an empty HelloText counter")
+            let clickCount = 100
             _ = try await run.adb.shell("logcat -c")
             let captureStart = try await run.startPerEventInputTraceCapture()
             _ = try await run.adb.shell(
@@ -421,7 +422,7 @@ final class AndroidInputTests: XCTestCase {
             var clickFailure: String?
             do {
                 let pointer = try run.pointer()
-                for _ in 0..<100 {
+                for _ in 0..<clickCount {
                     try await pointer.click(at: target, interClickGap: .milliseconds(50))
                 }
                 try await run.drainInput()
@@ -429,7 +430,7 @@ final class AndroidInputTests: XCTestCase {
                 clickFailure = String(describing: error)
             }
 
-            let expectedCount = before + 100
+            let expectedCount = before + clickCount
             let after = try? await Self.waitForPersistedClickCountPreservingTrace(
                 run, atLeast: expectedCount, timeout: .seconds(30))
             try await Task.sleep(for: .milliseconds(60))
@@ -454,8 +455,18 @@ final class AndroidInputTests: XCTestCase {
                 acknowledgements: trace.acknowledgements.records,
                 fixtureLines: fixtureLines
             )
+            let stageDiscrepancies = Self.stageDiscrepancies(
+                host: trace.host,
+                routedEvents: trace.routed.records,
+                expectedTouchCounts: [
+                    "touch.down": clickCount,
+                    "touch.move": 0,
+                    "touch.up": clickCount,
+                    "touch.cancel": 0,
+                ]
+            )
             let evidence = InputTraceEvidence(
-                schemaVersion: 1,
+                schemaVersion: 2,
                 path: "WindowServer → AppKit → IOSurfaceLayerView → InputRouter → Guest Agent → HelloText",
                 captureMode: "one event per input batch; ACK requested for every batch",
                 clockDomains: [
@@ -480,6 +491,9 @@ final class AndroidInputTests: XCTestCase {
                 discardedAcknowledgements: trace.acknowledgements.discardedRecords,
                 missingAcknowledgementSequences: trace.missingAcknowledgementSequences,
                 joins: joins,
+                stageDiscrepancies: stageDiscrepancies,
+                ambiguousAcknowledgementSequences: Self.ambiguousAcknowledgementSequences(
+                    trace.acknowledgements.records),
                 unattributedFixtureClickRecords: unattributedFixtureClickRecords,
                 fixtureTraceLines: fixtureLines.filter {
                     $0.contains("touch-trace ") || $0.contains("debug touch trace drain")
@@ -500,6 +514,9 @@ final class AndroidInputTests: XCTestCase {
             XCTAssertEqual(trace.routed.discardedRecords, 0)
             XCTAssertEqual(trace.acknowledgements.discardedRecords, 0)
             XCTAssertEqual(summary?.discarded, 0, "the fixture touch trace overflowed")
+            XCTAssertTrue(
+                stageDiscrepancies.isEmpty,
+                "the diagnostic click sequence has host input stage discrepancies: \(stageDiscrepancies)")
 
             let hostTouchEvents = trace.host.translatedEvents.filter { $0.kindAndPhase.hasPrefix("touch.") }
             let routeTouchEvents = trace.routed.records.filter { $0.kindAndPhase.hasPrefix("touch.") }
@@ -791,9 +808,7 @@ final class AndroidInputTests: XCTestCase {
         let traceLines = fixtureLines.filter { $0.contains("touch-trace ") }
         let touchLines = traceLines.filter { keyValues(in: $0)["kind"] == "touch" }
         let clickLines = traceLines.filter { keyValues(in: $0)["kind"] == "click" }
-        let acksBySequence = Dictionary(
-            uniqueKeysWithValues: acknowledgements.map { ($0.batchSequence, $0) }
-        )
+        let acknowledgementsBySequence = Dictionary(grouping: acknowledgements, by: \.batchSequence)
 
         return routedEvents.map { routed in
             let eventType: Int?
@@ -824,7 +839,8 @@ final class AndroidInputTests: XCTestCase {
             let translated = host.translatedEvents.filter {
                 $0.hostTimeNanos == routed.hostTimeNanos && $0.kindAndPhase == routed.kindAndPhase
             }
-            let acknowledgement = acksBySequence[routed.batchSequence]
+            let acknowledgementMatches = acknowledgementsBySequence[routed.batchSequence] ?? []
+            let acknowledgement = acknowledgementMatches.count == 1 ? acknowledgementMatches[0] : nil
             let guestTime = acknowledgement?.lastEventTimeMillis ?? 0
             let fixtureTouches = touchLines.filter { line in
                 let fields = keyValues(in: line)
@@ -854,7 +870,9 @@ final class AndroidInputTests: XCTestCase {
                 clickOutcome = "no-unique-up-correlation"
             }
             let dispatchOutcome: String
-            if acknowledgement == nil {
+            if acknowledgementMatches.count > 1 {
+                dispatchOutcome = "ambiguous-ack"
+            } else if acknowledgement == nil {
                 dispatchOutcome = "no-ack"
             } else if guestTime == 0 {
                 dispatchOutcome = "ack-without-accepted-motion-event"
@@ -878,6 +896,86 @@ final class AndroidInputTests: XCTestCase {
                 fixtureDispatch: dispatchOutcome,
                 clickOutcome: clickOutcome
             )
+        }
+    }
+
+    fileprivate static func stageDiscrepancies(
+        host: InputTraceHostSnapshot,
+        routedEvents: [InputSentEventHistory.Record],
+        expectedTouchCounts: [String: Int]
+    ) -> [InputTraceStageDiscrepancy] {
+        let routedTouchEvents = routedEvents.filter { $0.kindAndPhase.hasPrefix("touch.") }
+        let phases = Set(expectedTouchCounts.keys)
+            .union(host.rawReceipts.compactMap { Self.touchPhase(for: $0.eventType) })
+            .union(host.translatedEvents.filter { $0.kindAndPhase.hasPrefix("touch.") }.map(\.kindAndPhase))
+            .union(routedTouchEvents.map(\.kindAndPhase))
+
+        var discrepancies: [InputTraceStageDiscrepancy] = []
+        for phase in phases.sorted() {
+            let expectedCount = expectedTouchCounts[phase, default: 0]
+            let rawReceipts = host.rawReceipts.filter { Self.touchPhase(for: $0.eventType) == phase }
+            let translated = host.translatedEvents.filter { $0.kindAndPhase == phase }
+            let routed = routedTouchEvents.filter { $0.kindAndPhase == phase }
+
+            if expectedCount != rawReceipts.count {
+                discrepancies.append(
+                    InputTraceStageDiscrepancy(
+                        stage: "expected-to-raw",
+                        kindAndPhase: phase,
+                        expectedCount: expectedCount,
+                        observedCount: rawReceipts.count,
+                        sourceOrdinals: [],
+                        observedOrdinals: rawReceipts.map(\.ordinal),
+                        observedBatchSequences: []
+                    ))
+            }
+            if rawReceipts.count != translated.count {
+                discrepancies.append(
+                    InputTraceStageDiscrepancy(
+                        stage: "raw-to-translated",
+                        kindAndPhase: phase,
+                        expectedCount: rawReceipts.count,
+                        observedCount: translated.count,
+                        sourceOrdinals: rawReceipts.map(\.ordinal),
+                        observedOrdinals: translated.map(\.ordinal),
+                        observedBatchSequences: []
+                    ))
+            }
+            if translated.count != routed.count {
+                discrepancies.append(
+                    InputTraceStageDiscrepancy(
+                        stage: "translated-to-routed",
+                        kindAndPhase: phase,
+                        expectedCount: translated.count,
+                        observedCount: routed.count,
+                        sourceOrdinals: translated.map(\.ordinal),
+                        observedOrdinals: [],
+                        observedBatchSequences: routed.map(\.batchSequence)
+                    ))
+            }
+        }
+        return discrepancies
+    }
+
+    fileprivate static func ambiguousAcknowledgementSequences(
+        _ acknowledgements: [InputAcknowledgementHistory.Record]
+    ) -> [UInt64] {
+        Dictionary(grouping: acknowledgements, by: \.batchSequence)
+            .filter { $0.value.count > 1 }
+            .keys
+            .sorted()
+    }
+
+    private static func touchPhase(for eventType: Int) -> String? {
+        switch eventType {
+        case Int(NSEvent.EventType.leftMouseDown.rawValue):
+            "touch.down"
+        case Int(NSEvent.EventType.leftMouseDragged.rawValue):
+            "touch.move"
+        case Int(NSEvent.EventType.leftMouseUp.rawValue):
+            "touch.up"
+        default:
+            nil
         }
     }
 
@@ -1305,5 +1403,105 @@ final class AndroidInputTraceJoinTests: XCTestCase {
         XCTAssertEqual(joins[1].fixtureTouchRecords, [cancelLine])
         XCTAssertEqual(joins[1].fixtureDispatch, "matched-view-touch")
         XCTAssertEqual(joins[1].clickOutcome, "not-an-up")
+    }
+
+    func testTraceStageDiscrepanciesAndDuplicateAcknowledgementsAreExplicit() {
+        let host = InputTraceHostSnapshot(
+            rawReceipts: [
+                InputTraceRawReceipt(
+                    ordinal: 1,
+                    eventType: Int(NSEvent.EventType.leftMouseDown.rawValue),
+                    hostTimeNanos: 100
+                ),
+                InputTraceRawReceipt(
+                    ordinal: 2,
+                    eventType: Int(NSEvent.EventType.leftMouseUp.rawValue),
+                    hostTimeNanos: 200
+                ),
+            ],
+            discardedRawReceipts: 0,
+            translatedEvents: [
+                InputTraceTranslatedEvent(
+                    ordinal: 4,
+                    hostTimeNanos: 200,
+                    kindAndPhase: "touch.up"
+                )
+            ],
+            discardedTranslatedEvents: 0
+        )
+        let routed = [
+            InputSentEventHistory.Record(
+                batchSequence: 21,
+                eventIndex: 0,
+                hostTimeNanos: 300,
+                kindAndPhase: "key.down"
+            )
+        ]
+        let acknowledgements = [
+            InputAcknowledgementHistory.Record(
+                batchSequence: 21,
+                rejectedEvents: 0,
+                receiveToInjectMicros: 90,
+                lastEventTimeMillis: 420
+            ),
+            InputAcknowledgementHistory.Record(
+                batchSequence: 21,
+                rejectedEvents: 0,
+                receiveToInjectMicros: 91,
+                lastEventTimeMillis: 420
+            ),
+        ]
+
+        let discrepancies = AndroidInputTests.stageDiscrepancies(
+            host: host,
+            routedEvents: routed,
+            expectedTouchCounts: [
+                "touch.down": 1,
+                "touch.move": 1,
+                "touch.up": 1,
+            ]
+        )
+        let joins = AndroidInputTests.joinTrace(
+            host: host,
+            routedEvents: routed,
+            acknowledgements: acknowledgements,
+            fixtureLines: []
+        )
+
+        XCTAssertEqual(
+            discrepancies,
+            [
+                InputTraceStageDiscrepancy(
+                    stage: "raw-to-translated",
+                    kindAndPhase: "touch.down",
+                    expectedCount: 1,
+                    observedCount: 0,
+                    sourceOrdinals: [1],
+                    observedOrdinals: [],
+                    observedBatchSequences: []
+                ),
+                InputTraceStageDiscrepancy(
+                    stage: "expected-to-raw",
+                    kindAndPhase: "touch.move",
+                    expectedCount: 1,
+                    observedCount: 0,
+                    sourceOrdinals: [],
+                    observedOrdinals: [],
+                    observedBatchSequences: []
+                ),
+                InputTraceStageDiscrepancy(
+                    stage: "translated-to-routed",
+                    kindAndPhase: "touch.up",
+                    expectedCount: 1,
+                    observedCount: 0,
+                    sourceOrdinals: [4],
+                    observedOrdinals: [],
+                    observedBatchSequences: []
+                ),
+            ])
+        XCTAssertEqual(AndroidInputTests.ambiguousAcknowledgementSequences(acknowledgements), [21])
+        XCTAssertEqual(joins.count, 1)
+        XCTAssertNil(joins[0].acknowledgement)
+        XCTAssertEqual(joins[0].fixtureDispatch, "ambiguous-ack")
     }
 }

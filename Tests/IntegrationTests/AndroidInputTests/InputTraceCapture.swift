@@ -170,6 +170,16 @@ struct InputTraceLink: Codable {
     let clickOutcome: String
 }
 
+struct InputTraceStageDiscrepancy: Codable, Equatable {
+    let stage: String
+    let kindAndPhase: String
+    let expectedCount: Int
+    let observedCount: Int
+    let sourceOrdinals: [Int]
+    let observedOrdinals: [Int]
+    let observedBatchSequences: [UInt64]
+}
+
 struct InputTraceEvidence: Codable {
     let schemaVersion: Int
     let path: String
@@ -185,6 +195,8 @@ struct InputTraceEvidence: Codable {
     let discardedAcknowledgements: Int
     let missingAcknowledgementSequences: [UInt64]
     let joins: [InputTraceLink]
+    let stageDiscrepancies: [InputTraceStageDiscrepancy]
+    let ambiguousAcknowledgementSequences: [UInt64]
     let unattributedFixtureClickRecords: [String]
     let fixtureTraceLines: [String]
     let fixtureTraceRecords: Int?

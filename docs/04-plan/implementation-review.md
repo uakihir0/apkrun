@@ -19674,3 +19674,39 @@ it did not execute tests. The build reports the existing
 warnings. The screenshot T1, NativeWindowTests, #024's remaining click,
 physical-scroll, and guest-edge checks, #026's session and launch steps, and
 G4 remain open. GitHub Actions and the dedicated GUI tests were not run.
+
+## IR-1346: Report only expected #103 touch-stage discrepancies
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [input.md](../02-design/input.md) §11; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; `AndroidInputTests`; `InputTraceEvidence` |
+
+**Choice.** Bump the diagnostic attachment schema to 2 and report per-phase
+count discrepancies between the controlled click script's expected touch
+counts, raw AppKit receipts, translated touch events, and route sends. The
+diagnostic T2 fails if the prescribed 100-click sequence has any discrepancy.
+Duplicate ACK sequence numbers are ambiguous and are never selected
+arbitrarily.
+
+**Reason.** The previous join output started from successfully routed events,
+so host-stage losses had no summary that compared all expected clicks. The
+explicit phase counts come from this controlled plain-left-button test; they
+avoid treating other raw pointer events as failed touches, because translation
+can intentionally drop or convert them. Aggregate counts also avoid assigning
+a specific event when timestamps or phases repeat.
+
+**Verification (2026-10-16).** The two focused synthetic
+`AndroidInputTraceJoinTests` pass under the `LinuxGuest` configuration (2 of 2,
+no VM boot). They cover expected-to-raw, raw-to-translated,
+translated-to-routed discrepancies, and duplicate ACK sequences. Strict Swift
+formatting and `git diff --check` pass. No GitHub Actions or GUI tests were
+run.
+
+**Risk.** This diagnostic only localizes count discrepancies within the
+controlled input trace; it does not establish an Android or guest cause. If a
+bounded history reports discarded records, its stage counts are incomplete.
+Equal phase counts also cannot prove per-event identity; the existing joined
+trace remains responsible for correlating individual events.
+The #103 T2 runs and #024 click acceptance remain open.

@@ -1581,6 +1581,15 @@ The policy starts in `BOARD_SEPOLICY_DIRS`. If the Treble `neverallow` checks re
 
 Notes:
 
+- #099 provides a standalone Mesa product component at `Guest/product/mesa/`.
+  Its `mesa.mk` adds the four pinned EGL, GLES, and Gallium prebuilts from
+  `Android.bp`; `scripts/guest/stage-mesa-product.sh` verifies the NDK build
+  manifest and stages those files with a copy of the manifest. The staged
+  binaries are generated and git-ignored. The #035 product can inherit this
+  fragment after mapping the repository into the AOSP tree. This component
+  does not supply the rest of the APKRun product or a SELinux policy. Soong
+  dependency resolution, policy compilation, and a custom AOSP image still
+  require the Linux builder in §11.5.
 - The base product sets `PRODUCT_IGNORE_ALL_ANDROIDMK := true`, so all modules use `Android.bp`.
 - The base product uses a 16K maximum page size. Our Rust and Kotlin components have no page-size assumptions.
 - `vendor/google` is not needed. The desktop product (`aosp_cf_x86_64_desktop`) is x86-only and not used.

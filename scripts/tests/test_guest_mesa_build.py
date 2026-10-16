@@ -13,6 +13,7 @@ NDK's llvm-readelf and llvm-nm. Nothing here boots a guest.
 import json
 import os
 import pathlib
+import re
 import sys
 import tempfile
 import unittest
@@ -105,6 +106,77 @@ class GuestMesaLockTests(unittest.TestCase):
         for term in ("MIT", "BSD-2-Clause", "BSD-3-Clause", "BSL-1.0", "HPND",
                      "GPL-3.0-or-later WITH Bison-exception-2.2"):
             self.assertIn(term, license_text)
+
+
+class GuestMesaProductFragmentTests(unittest.TestCase):
+    product_dir = REPO_ROOT / "Guest" / "product" / "mesa"
+
+    def module_body(self, module_name):
+        text = (self.product_dir / "Android.bp").read_text(encoding="utf-8")
+        pattern = re.compile(
+            r'cc_prebuilt_library_shared\s*\{\s*name:\s*"' + re.escape(module_name) +
+            r'",(?P<body>.*?)^\}',
+            re.MULTILINE | re.DOTALL,
+        )
+        match = pattern.search(text)
+        self.assertIsNotNone(match, f"missing or duplicate module {module_name}")
+        self.assertIsNone(pattern.search(text, match.end()), f"duplicate module {module_name}")
+        return match.group("body")
+
+    def test_product_fragment_installs_all_locked_mesa_libraries_as_vendor_64_bit_egl(self):
+        modules = {
+            "libEGL_mesa": "libEGL_mesa.so",
+            "libGLESv2_mesa": "libGLESv2_mesa.so",
+            "libGLESv1_CM_mesa": "libGLESv1_CM_mesa.so",
+            "libgallium_dri": "libgallium_dri.so",
+        }
+        self.assertEqual(set(modules.values()), set(mesa.SHIPPED))
+        for module, library in modules.items():
+            with self.subTest(module=module):
+                body = self.module_body(module)
+                self.assertIn(f'srcs: ["prebuilt/vendor/lib64/{library}"]', body)
+                self.assertIn('vendor: true', body)
+                self.assertIn('compile_multilib: "64"', body)
+                self.assertIn('relative_install_path: "egl"', body)
+
+    def test_product_modules_declare_the_build_manifest_runtime_dependencies(self):
+        system_libraries = {"libc.so", "libdl.so", "libm.so"}
+        module_names = {
+            "libEGL_mesa.so": "libEGL_mesa",
+            "libGLESv2_mesa.so": "libGLESv2_mesa",
+            "libGLESv1_CM_mesa.so": "libGLESv1_CM_mesa",
+            "libgallium_dri.so": "libgallium_dri",
+        }
+        for library, module in module_names.items():
+            with self.subTest(library=library):
+                body = self.module_body(module)
+                declared = set(re.findall(r'"(lib[^"]+)"', body))
+                declared -= {"libc", "libdl", "libm"}
+                expected = {
+                    dependency.removesuffix(".so")
+                    for dependency in mesa.SHIPPED[library]["needed"] - system_libraries
+                }
+                self.assertEqual(expected, declared)
+
+    def test_product_package_fragment_contains_exactly_the_four_mesa_modules(self):
+        fragment = (self.product_dir / "mesa.mk").read_text(encoding="utf-8")
+        packages = set(re.findall(r"^\s+(lib[A-Za-z0-9_]+)\s*\\?$", fragment, re.MULTILINE))
+        self.assertEqual(
+            {"libEGL_mesa", "libGLESv1_CM_mesa", "libGLESv2_mesa", "libgallium_dri"},
+            packages,
+        )
+
+    def test_staging_script_verifies_output_before_copying(self):
+        script = (REPO_ROOT / "scripts" / "guest" / "stage-mesa-product.sh").read_text(encoding="utf-8")
+        self.assertLess(script.index('"$helper" verify'), script.index('cp "$out_dir/vendor/lib64/$library"'))
+        self.assertIn('cp "$out_dir/manifest.json" "$staging_dir/manifest.json"', script)
+        verifies = [match.start() for match in re.finditer(r'"\$helper" verify', script)]
+        self.assertEqual(2, len(verifies))
+        verify_targets = re.findall(r'"\$helper" verify "([^"]+)"', script)
+        self.assertEqual(["$out_dir", "$staging_dir"], verify_targets)
+        self.assertLess(script.index('cp "$out_dir/manifest.json"'), verifies[-1])
+        self.assertLess(verifies[-1], script.index('mv "$staging_dir" "$product_dir/prebuilt"'))
+        self.assertIn('Guest/product/mesa', script)
 
 
 class GuestMesaParserTests(unittest.TestCase):
@@ -331,7 +403,12 @@ def main(argv):
                              "usage: test_guest_mesa_build.py [--out DIR] [--ndk DIR]")
     suite = unittest.TestSuite()
     loader = unittest.TestLoader()
-    for case in (GuestMesaLockTests, GuestMesaParserTests, GuestMesaVerifierTests):
+    for case in (
+        GuestMesaLockTests,
+        GuestMesaProductFragmentTests,
+        GuestMesaParserTests,
+        GuestMesaVerifierTests,
+    ):
         suite.addTests(loader.loadTestsFromTestCase(case))
     if output is not None:
         readelf, nm = find_ndk_tools(ndk)

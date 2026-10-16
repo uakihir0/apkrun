@@ -1,0 +1,53 @@
+cc_prebuilt_library_shared {
+    name: "libEGL_mesa",
+    srcs: ["prebuilt/vendor/lib64/libEGL_mesa.so"],
+    vendor: true,
+    compile_multilib: "64",
+    relative_install_path: "egl",
+    system_shared_libs: ["libc", "libdl", "libm"],
+    shared_libs: [
+        "libcutils",
+        "libdrm",
+        "libgallium_dri",
+        "libhardware",
+        "liblog",
+        "libnativewindow",
+        "libsync",
+    ],
+}
+
+cc_prebuilt_library_shared {
+    name: "libGLESv2_mesa",
+    srcs: ["prebuilt/vendor/lib64/libGLESv2_mesa.so"],
+    vendor: true,
+    compile_multilib: "64",
+    relative_install_path: "egl",
+    system_shared_libs: ["libc"],
+    shared_libs: ["libgallium_dri"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libGLESv1_CM_mesa",
+    srcs: ["prebuilt/vendor/lib64/libGLESv1_CM_mesa.so"],
+    vendor: true,
+    compile_multilib: "64",
+    relative_install_path: "egl",
+    system_shared_libs: ["libc"],
+    shared_libs: ["libgallium_dri"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libgallium_dri",
+    srcs: ["prebuilt/vendor/lib64/libgallium_dri.so"],
+    vendor: true,
+    compile_multilib: "64",
+    relative_install_path: "egl",
+    system_shared_libs: ["libc", "libdl", "libm"],
+    shared_libs: [
+        "libcutils",
+        "libdrm",
+        "liblog",
+        "libsync",
+        "libz",
+    ],
+}

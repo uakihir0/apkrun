@@ -186,13 +186,21 @@ final class AndroidInputRun {
         guard let inputSink else {
             throw AndroidInputRunFailure.inputRouteUnbound
         }
-        await inputSink.drain()
+        _ = await inputSink.drain()
     }
 
     /// The route counters after all previously received view events have been routed.
     func inputCounters() async throws -> InputCounters {
         try await drainInput()
         return await route.counters()
+    }
+
+    /// Wire-encoded touch phases after all previously received view events have been routed.
+    func inputWireTouchPhaseCounts() async throws -> InputWireTouchPhaseCounts {
+        guard let inputSink else {
+            throw AndroidInputRunFailure.inputRouteUnbound
+        }
+        return await inputSink.drain()
     }
 
     /// Enables bounded guest ACK capture for an explicitly opted-in diagnostic run.
@@ -870,12 +878,65 @@ private final class DisplayFrames: FrameSource, @unchecked Sendable {
     }
 }
 
+/// Counts of test-window touch phases after wire conversion and before route dispatch.
+struct InputWireTouchPhaseCounts: Equatable, Sendable, CustomStringConvertible {
+    private(set) var down: Int
+    private(set) var move: Int
+    private(set) var up: Int
+    private(set) var cancel: Int
+    private(set) var cancelAll: Int
+
+    init(down: Int = 0, move: Int = 0, up: Int = 0, cancel: Int = 0, cancelAll: Int = 0) {
+        self.down = down
+        self.move = move
+        self.up = up
+        self.cancel = cancel
+        self.cancelAll = cancelAll
+    }
+
+    mutating func record(_ events: [RuntimeAPI.WireInputEvent]) {
+        for event in events {
+            switch event {
+            case .touch(let touch):
+                switch touch.phase {
+                case .down:
+                    down += 1
+                case .move:
+                    move += 1
+                case .up:
+                    up += 1
+                case .cancel:
+                    cancel += 1
+                }
+            case .cancelAll:
+                cancelAll += 1
+            default:
+                break
+            }
+        }
+    }
+
+    func delta(since earlier: Self) -> Self {
+        Self(
+            down: down - earlier.down,
+            move: move - earlier.move,
+            up: up - earlier.up,
+            cancel: cancel - earlier.cancel,
+            cancelAll: cancelAll - earlier.cancelAll
+        )
+    }
+
+    var description: String {
+        "down=\(down) move=\(move) up=\(up) touchCancel=\(cancel) cancelAll=\(cancelAll)"
+    }
+}
+
 /// The window's events, routed in order (the CLI's `EmbeddedInputSink`, decision D10). One task converts each queued
 /// list to the wire types of runtime-api.md §7.2 and routes it, so no batch overtakes another.
 private final class WireSink: PointerInputSink, @unchecked Sendable {
     private enum Command: Sendable {
         case events([InputCore.InputEvent])
-        case drained(CheckedContinuation<Void, Never>)
+        case drained(CheckedContinuation<InputWireTouchPhaseCounts, Never>)
     }
 
     private let queue: AsyncStream<Command>.Continuation
@@ -888,16 +949,19 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
         let made = AsyncStream.makeStream(of: Command.self, bufferingPolicy: .unbounded)
         queue = made.continuation
         Task {
+            var touchPhaseCounts = InputWireTouchPhaseCounts()
             for await command in made.stream {
                 switch command {
                 case .events(let events):
                     // A list longer than the route takes in one batch is cut, as `EmbeddedInputSink` cuts it.
                     for start in stride(from: 0, to: events.count, by: DevInputRoute.maximumEventsPerBatch) {
                         let end = min(start + DevInputRoute.maximumEventsPerBatch, events.count)
-                        await route.send(RuntimeAPI.InputBatch(events: events[start..<end].compactMap(WireSink.wire)))
+                        let wireEvents = events[start..<end].compactMap(WireSink.wire)
+                        touchPhaseCounts.record(wireEvents)
+                        await route.send(RuntimeAPI.InputBatch(events: wireEvents))
                     }
                 case .drained(let continuation):
-                    continuation.resume()
+                    continuation.resume(returning: touchPhaseCounts)
                 }
             }
         }
@@ -918,7 +982,7 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
     }
 
     /// Completes after every earlier event list has finished routing.
-    func drain() async {
+    func drain() async -> InputWireTouchPhaseCounts {
         await withCheckedContinuation { continuation in
             queue.yield(.drained(continuation))
         }

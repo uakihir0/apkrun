@@ -19710,3 +19710,37 @@ bounded history reports discarded records, its stage counts are incomplete.
 Equal phase counts also cannot prove per-event identity; the existing joined
 trace remains responsible for correlating individual events.
 The #103 T2 runs and #024 click acceptance remain open.
+
+## IR-1347: Count encoded touch phases in click test batches
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024; [input.md](../02-design/input.md) §15; `AndroidInputTests` |
+
+**Choice.** In the integration test's ordered `WireSink`, count touch phases
+after conversion to `RuntimeAPI.WireInputEvent` and before dispatch to
+`DevInputRoute`. Count global `cancelAll` separately. Require each controlled
+100-click batch to contain exactly 100 `DOWN` and 100 `UP` touch phases, with
+no `MOVE`, touch `CANCEL`, or `cancelAll`.
+
+**Reason.** `InputCounters.eventsSent` counts every routed event and can include
+hover or other input, so its lower bound does not show that click edges were
+encoded. A global `cancelAll` closes a gesture without a touch `CANCEL` phase,
+so it must be reported separately. The test sink can count both without
+retaining event history or enabling per-event acknowledgements. Its drain
+returns the counter snapshot after all earlier route sends complete.
+
+**Verification (2026-10-17).** A synthetic `AndroidInputTraceJoinTests` T0
+checks all four phases, counts `cancelAll` separately, and confirms mouse and
+key events do not affect touch counts. It passes 1/1 under `LinuxGuest` on
+macOS 27.0.1 without a VM boot. The integration test target compiles the
+baseline and interactive GUI test sources; neither GUI test nor GitHub Actions
+is run.
+
+**Risk.** These are aggregate counts at the host wire-conversion boundary.
+They do not prove route acceptance, guest receipt, event identity, or app
+handling, and do not identify the intermittent click-loss cause. The test-only
+counter leaves the product input path unchanged. #024 and #103 acceptance
+remain open.

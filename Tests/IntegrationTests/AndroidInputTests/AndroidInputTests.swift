@@ -1,6 +1,7 @@
 import AppKit
 import CryptoKit
 import Foundation
+import RuntimeAPI
 import RuntimeCore
 import XCTest
 
@@ -97,6 +98,7 @@ final class AndroidInputTests: XCTestCase {
             }
             XCTAssertEqual(initialCount, 0)
             let countersBefore = try await run.inputCounters()
+            let touchPhasesBefore = try await run.inputWireTouchPhaseCounts()
             let sampler = ShellInputSampler()
             sampler.start()
             _ = try await run.adb.shell("logcat -c")
@@ -109,15 +111,16 @@ final class AndroidInputTests: XCTestCase {
             XCTAssertEqual(shellInput, [], "adb shell input processes ran during the sequence")
             let lines = try await run.fixtureLog { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 }
             let clickNumbers = AndroidInputRun.numbers(in: lines, after: Self.clickPrefix)
+            let touchPhaseDelta = try await run.inputWireTouchPhaseCounts().delta(since: touchPhasesBefore)
             let countersAfter = try await run.inputCounters()
             guard let finalCount = try await Self.persistedClickCount(run) else {
                 throw AndroidInputRunFailure.timedOut("the fixture's final persisted click counter")
             }
             XCTAssertEqual(clickNumbers, Array(1...100))
             XCTAssertEqual(finalCount - initialCount, 100, "the fixture must persist every click callback")
-            XCTAssertGreaterThanOrEqual(
-                countersAfter.eventsSent - countersBefore.eventsSent, 200,
-                "click effects are checked separately; this aggregate can include non-touch events"
+            XCTAssertEqual(
+                touchPhaseDelta, InputWireTouchPhaseCounts(down: 100, up: 100),
+                "wire conversion must produce exactly one touch DOWN and UP for each click"
             )
             XCTAssertEqual(countersAfter.droppedRate - countersBefore.droppedRate, 0, "\(countersAfter)")
             XCTAssertEqual(countersAfter.droppedNotRunning - countersBefore.droppedNotRunning, 0, "\(countersAfter)")
@@ -290,12 +293,13 @@ final class AndroidInputTests: XCTestCase {
                     throw AndroidInputRunFailure.timedOut("the fixture's initial persisted click counter")
                 }
                 XCTAssertEqual(previousCount, 0, "a new guest should start with an empty HelloText counter")
-                var previousCounters = captureStartCounters
+                var previousWireTouchPhases = try await run.inputWireTouchPhaseCounts()
                 let clickDeltas = [100, 100, 100]
                 for (index, clickDelta) in clickDeltas.enumerated() {
                     var persistedCount: Int?
                     var counters: InputCounters?
                     var acknowledgements: InputAcknowledgementHistory?
+                    var touchPhaseDelta: InputWireTouchPhaseCounts?
                     do {
                         _ = try await run.adb.shell("logcat -c")
                         let pointer = try run.pointer()
@@ -312,6 +316,16 @@ final class AndroidInputTests: XCTestCase {
                             "batch \(index + 1) persisted \(reachedCount - previousCount) of \(clickDelta) clicks")
 
                         let sentCounters = try await run.inputCounters()
+                        let wireTouchPhases = try await run.inputWireTouchPhaseCounts()
+                        touchPhaseDelta = wireTouchPhases.delta(since: previousWireTouchPhases)
+                        let expectedTouchPhases = InputWireTouchPhaseCounts(down: clickDelta, up: clickDelta)
+                        let touchPhaseFailure =
+                            touchPhaseDelta == expectedTouchPhases
+                            ? nil
+                            : "expected \(expectedTouchPhases), got \(touchPhaseDelta.map { String(describing: $0) } ?? "unavailable")"
+                        XCTAssertEqual(
+                            touchPhaseDelta, expectedTouchPhases,
+                            "batch \(index + 1) wire touch phase counts: \(touchPhaseFailure ?? "unexpected mismatch")")
                         let lastAcknowledgedSequence = UInt64(sentCounters.batchesSent / 32 * 32)
                         if lastAcknowledgedSequence == 0 {
                             acknowledgements = try await run.acknowledgementHistory()
@@ -321,10 +335,6 @@ final class AndroidInputTests: XCTestCase {
                         }
                         let finalCounters = try await run.inputCounters()
                         counters = finalCounters
-                        XCTAssertGreaterThanOrEqual(
-                            finalCounters.eventsSent - previousCounters.eventsSent,
-                            clickDelta * 2,
-                            "batch \(index + 1) did not send both touch edges for every click")
                         XCTAssertEqual(finalCounters.droppedRate, 0, "batch \(index + 1)")
                         XCTAssertEqual(finalCounters.droppedNotRunning, 0, "batch \(index + 1)")
                         XCTAssertEqual(
@@ -362,11 +372,12 @@ final class AndroidInputTests: XCTestCase {
                             before: previousCount,
                             after: reachedCount,
                             counters: finalCounters,
+                            touchPhaseDelta: touchPhaseDelta,
                             acknowledgements: acknowledgements,
-                            failure: nil
+                            failure: touchPhaseFailure
                         )
                         previousCount = reachedCount
-                        previousCounters = finalCounters
+                        previousWireTouchPhases = wireTouchPhases
                     } catch {
                         if let currentCount = try? await Self.persistedClickCount(
                             run, timeout: .seconds(1))
@@ -376,6 +387,9 @@ final class AndroidInputTests: XCTestCase {
                         if let currentCounters = try? await run.inputCounters() {
                             counters = currentCounters
                         }
+                        if let currentWireTouchPhases = try? await run.inputWireTouchPhaseCounts() {
+                            touchPhaseDelta = currentWireTouchPhases.delta(since: previousWireTouchPhases)
+                        }
                         if let currentAcknowledgements = try? await run.acknowledgementHistory() {
                             acknowledgements = currentAcknowledgements
                         }
@@ -384,6 +398,7 @@ final class AndroidInputTests: XCTestCase {
                             before: previousCount,
                             after: persistedCount,
                             counters: counters,
+                            touchPhaseDelta: touchPhaseDelta,
                             acknowledgements: acknowledgements,
                             failure: String(describing: error)
                         )
@@ -1165,6 +1180,7 @@ final class AndroidInputTests: XCTestCase {
         before: Int,
         after: Int?,
         counters: InputCounters?,
+        touchPhaseDelta: InputWireTouchPhaseCounts?,
         acknowledgements: InputAcknowledgementHistory?,
         failure: String?
     ) {
@@ -1175,6 +1191,7 @@ final class AndroidInputTests: XCTestCase {
             persisted_after=\(after.map(String.init) ?? "unavailable")
             persisted_delta=\(after.map { String($0 - before) } ?? "unavailable")
             host_input_counters=\(counters.map { String(describing: $0) } ?? "unavailable")
+            wire_touch_phase_delta=\(touchPhaseDelta.map { String(describing: $0) } ?? "unavailable")
             normal_ack_sequence_and_rejections=\(ackRows)
             ack_history_discarded=\(acknowledgements.map { String($0.discardedRecords) } ?? "unavailable")
             failure=\(failure ?? "none")
@@ -1314,6 +1331,24 @@ private final class ShellInputSampler: @unchecked Sendable {
 
 @MainActor
 final class AndroidInputTraceJoinTests: XCTestCase {
+    func testWireTouchPhaseCountsSeparateCancelAllFromTouchCancel() {
+        let position = RuntimeAPI.DisplayPoint(x: 10, y: 20)
+        let time = RuntimeAPI.InputTimestamp(hostNanos: 123)
+        var counts = InputWireTouchPhaseCounts()
+
+        counts.record([
+            .touch(.init(phase: .down, pointerID: 0, position: position, time: time)),
+            .mouse(.init(action: .hoverMove, position: position, buttons: 0, time: time)),
+            .touch(.init(phase: .move, pointerID: 0, position: position, time: time)),
+            .key(.init(action: .down, androidKeyCode: 29, metaState: 0, repeatCount: 0, time: time)),
+            .touch(.init(phase: .up, pointerID: 0, position: position, time: time)),
+            .cancelAll(time),
+            .touch(.init(phase: .cancel, pointerID: 0, position: position, time: time)),
+        ])
+
+        XCTAssertEqual(counts, InputWireTouchPhaseCounts(down: 1, move: 1, up: 1, cancel: 1, cancelAll: 1))
+    }
+
     func testTouchMoveJoinsHostGuestAndFixtureWithoutBeingCountedAsAClick() {
         let hostTime: UInt64 = 987_654_321
         let host = InputTraceHostSnapshot(

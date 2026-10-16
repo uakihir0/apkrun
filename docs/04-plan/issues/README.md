@@ -215,7 +215,7 @@ listed. All tasks whose acceptance boxes are ticked are listed below the table.
 
 **Counts on `main`:** 96 tasks have a milestone entry (#001 to #095 and #099; #096 and
 #097 are post-v1 tracks). 28 have every box ticked, 6 have some boxes ticked and
-some open, and 62 have no ticked box. The IR log has 851 entries: 837 are marked
+some open, and 62 have no ticked box. The IR log has 853 entries: 839 are marked
 exactly "Needs maintainer review", 6 add a qualifier to that status, 7 carry
 another status, and one is superseded. Two entries carry the number IR-901 (see
 the note below the table).

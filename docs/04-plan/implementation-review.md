@@ -19314,3 +19314,63 @@ candidate work, more than 4096 DER-shaped starts in one read chunk fails the
 release check as uninspectable. More than 128 simultaneous plausible DER starts
 or a 64-KiB candidate with a recognized encrypted-key algorithm OID also fails
 closed.
+
+## IR-1338: Verify a fresh touch after top and left edge releases
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [M03 #024](issues/M03-input-and-basic-runtime.md#024-pointer-input); [EventTranslatorTests.swift](../../Packages/InputCore/Tests/InputCoreTests/EventTranslatorTests.swift) |
+
+**Choice.** Extend the top- and left-edge translator tests to send a new
+`DOWN` after the out-of-content `UP` and assert that it opens a fresh touch
+using the current mapper.
+
+**Reason.** The existing edge tests checked the clamped `MOVE` and `UP`
+coordinates, but only the right/bottom test checked that a later touch could
+start. The symmetric assertions cover the translator's local gesture reset
+on all four edges. They do not claim that the Android guest received the
+release or that a window-delivered gesture succeeds.
+
+**Verification (2026-10-16).** `swift test --package-path Packages/InputCore
+--filter EventTranslatorTests` passes. The dedicated `AndroidInputInteractive`
+and `AndroidInputEdge` GUI checks were not run.
+
+**Risk.** This is host translator coverage only. The top/left guest-side
+edge sequence still needs its opt-in T2 run; this addition does not resolve
+the guest-side evidence gap recorded in IR-1250.
+
+## IR-1339: Check route and persisted effects in the baseline click test
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [M03 #024](issues/M03-input-and-basic-runtime.md#024-pointer-input); [AndroidInputTests.swift](../../Tests/IntegrationTests/AndroidInputTests/AndroidInputTests.swift) |
+
+**Choice.** Strengthen the baseline 100-click T2 test with an initial and
+final persisted HelloText counter, at least 200 total routed events, and zero
+deltas in the checked host drop/coalescing counters. Keep its normal batching
+and ACK cadence; do not enable per-event ACKs or trace capture for this
+baseline.
+
+**Reason.** Ordered callback logs alone do not show whether the app's
+persisted state advanced or whether the host router dropped/coalesced input.
+The test asserts that persisted state and ordered callback logs each reflect
+100 clicks, and checks a coarse routed-event lower bound of 200. This total
+does not identify event kinds or prove the count of touch edges; hover exits
+or other routed events can contribute. It checks `droppedRate`,
+`droppedNotRunning`, `droppedChannel`, and `coalesced`, but omits
+`droppedInvalid`: that counter can include guest rejection ACKs not yet
+received and cannot prove all guest rejections were absent. The checks add no
+per-event diagnostic work that can change event timing. The separate
+WindowServer test remains the acceptance path for OS-dispatched input.
+
+**Verification (2026-10-16).** `xcodebuild build-for-testing` succeeded for
+`AndroidInputTests.testOneHundredClicksOnTheButtonAreLogged` under the
+`AndroidInput` configuration. The GUI test itself was not run.
+
+**Risk.** This test still sends events directly to the view and does not
+verify normal AppKit or WindowServer delivery. #024 box 3 remains open, and
+the opt-in WindowServer test remains unselected by GitHub workflows.

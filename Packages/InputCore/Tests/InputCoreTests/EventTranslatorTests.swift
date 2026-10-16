@@ -438,6 +438,7 @@ private let hoverTable: [(kind: PointerSample.Kind, x: Double, control: Bool)] =
     _ = translator.translate(sample(.leftDown))
     #expect(translator.translate(sample(.leftDragged, x: -50, y: 300, ms: 1)) == [touch(.move, 0, 168, ms: 1)])
     #expect(translator.translate(sample(.leftUp, x: -50, y: 300, ms: 2)) == [touch(.up, 0, 168, ms: 2)])
+    #expect(translator.translate(sample(.leftDown, ms: 3)) == [touch(.down, 200, 168, ms: 3)])
 }
 
 @Test func aDragThatLeavesTheTopEdgeIsClampedAndReleasedAtTheEdge() {
@@ -445,6 +446,7 @@ private let hoverTable: [(kind: PointerSample.Kind, x: Double, control: Bool)] =
     _ = translator.translate(sample(.leftDown))
     #expect(translator.translate(sample(.leftDragged, x: 250, y: 450, ms: 1)) == [touch(.move, 500, 0, ms: 1)])
     #expect(translator.translate(sample(.leftUp, x: 250, y: 450, ms: 2)) == [touch(.up, 500, 0, ms: 2)])
+    #expect(translator.translate(sample(.leftDown, ms: 3)) == [touch(.down, 200, 168, ms: 3)])
 }
 
 @Test func aGenerationChangeDuringAGestureCancelsIt() {

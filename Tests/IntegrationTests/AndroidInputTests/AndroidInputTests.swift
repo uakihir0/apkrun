@@ -92,6 +92,11 @@ final class AndroidInputTests: XCTestCase {
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")
         try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
             let target = try await run.centre(of: Self.buttonID)
+            guard let initialCount = try await Self.persistedClickCount(run) else {
+                throw AndroidInputRunFailure.timedOut("the fixture's initial persisted click counter")
+            }
+            XCTAssertEqual(initialCount, 0)
+            let countersBefore = try await run.inputCounters()
             let sampler = ShellInputSampler()
             sampler.start()
             _ = try await run.adb.shell("logcat -c")
@@ -103,7 +108,21 @@ final class AndroidInputTests: XCTestCase {
             let shellInput = await sampler.stop()
             XCTAssertEqual(shellInput, [], "adb shell input processes ran during the sequence")
             let lines = try await run.fixtureLog { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 }
-            XCTAssertEqual(AndroidInputRun.numbers(in: lines, after: Self.clickPrefix), Array(1...100))
+            let clickNumbers = AndroidInputRun.numbers(in: lines, after: Self.clickPrefix)
+            let countersAfter = try await run.inputCounters()
+            guard let finalCount = try await Self.persistedClickCount(run) else {
+                throw AndroidInputRunFailure.timedOut("the fixture's final persisted click counter")
+            }
+            XCTAssertEqual(clickNumbers, Array(1...100))
+            XCTAssertEqual(finalCount - initialCount, 100, "the fixture must persist every click callback")
+            XCTAssertGreaterThanOrEqual(
+                countersAfter.eventsSent - countersBefore.eventsSent, 200,
+                "click effects are checked separately; this aggregate can include non-touch events"
+            )
+            XCTAssertEqual(countersAfter.droppedRate - countersBefore.droppedRate, 0, "\(countersAfter)")
+            XCTAssertEqual(countersAfter.droppedNotRunning - countersBefore.droppedNotRunning, 0, "\(countersAfter)")
+            XCTAssertEqual(countersAfter.droppedChannel - countersBefore.droppedChannel, 0, "\(countersAfter)")
+            XCTAssertEqual(countersAfter.coalesced - countersBefore.coalesced, 0, "\(countersAfter)")
         }
     }
 

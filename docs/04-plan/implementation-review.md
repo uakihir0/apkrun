@@ -14963,6 +14963,8 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Consequence.** The `kmscube` pass proves the guest-side driver path and that the device answered the guest. It does not show that virglrenderer decoded or drew any of the submitted command streams, and its `hostReadbacks` assertion is not a measurement (IR-816). A follow-up needs to name the virglrenderer error for `submit` (for example by returning the status of `virgl_renderer_submit_cmd` from the bridge) and find why the context rejects the stream. The replay test pins the 61 rejects, so a fix shows up as a change, and the test does not claim rendering.
 
+**Follow-up.** IR-1333 adds a T2 assertion for zero recorded renderer failures and resolves both open questions above: the assertion is added, and criterion 5 stays checked under a narrowed definition limited to the guest report and the renderer failure counter. Keeping the checkbox under that revised scope is a judgment pending maintainer review. The original rejected submits and their unknown cause remain historical findings; the assertion does not prove pixel output, which remains outside this criterion.
+
 ## IR-814: The step 3 check is met for the replay with zero readbacks, and the kmscube pixels are not compared
 
 | Field | Value |
@@ -19125,3 +19127,19 @@ bundles must not be shipped.
 This entry supersedes only IR-1331's decision to keep #099 criterion 2 open
 until product policy is complete. IR-1331's measurements, limits, and the
 decision to keep both controls diagnostic remain unchanged.
+
+## IR-1333: Fail the Linux VirGL T2 test when the renderer reports an operation failure
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2, criterion 5) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §§7, 12, 14, 16; [M02-graphics.md](issues/M02-graphics.md) #022 step 2, Tests, and criterion 5; [IR-813](#ir-813-the-host-renderer-rejects-all-61-submit_3d-of-the-kmscube-context-so-the-linux-virgl-check-does-not-show-host-rendering) |
+
+**Choice.** Narrow criterion 5 to the Linux guest's `renderer=virgl` and `Rendered 59 frames` report for 60 requested, plus `device.statistics.rendererFailures == 0` after shutdown, and keep it checked based on the passing 2026-10-16 run. This scope and checkbox are pending maintainer review. Keep the `hostReadbacks == 0` assertion as a guard, while stating that its counter is not yet instrumented (IR-816). Pixel output is not part of this criterion.
+
+**Reason.** The previous T2 test could pass while virglrenderer rejected every `kmscube` submit because the device still replied successfully to the guest (IR-813, IR-460). `rendererFailures` already counts asynchronous renderer failures, and device shutdown drains queued renderer work before the harness returns. The post-run snapshot therefore covers the operations from this test without adding a product-code path or a second VM run.
+
+**Verification.** On 2026-10-16, `xcodebuild build-for-testing` and the focused signed `LinuxGuest` run passed. `VirglTests.testKmscubeRunsHeadlesslyThroughVirglWithoutRendererFailures` executed once in 1.228 s; its `renderer=virgl` and `requested=60 reported=59` assertions passed, along with the post-shutdown assertion `rendererFailures == 0`. The result bundle is `/tmp/apkrun-022-renderer-zero-final-20261016.xcresult`. The successful XCTest assertion is the recorded zero; the test does not print the counter on success.
+
+**Risk.** A zero failure count means the backend reported no renderer operation failure. It does not compare pixels or prove that a specific guest buffer reached a transfer. Those checks remain open under IR-849. The counter includes command and render work, fence creation, reset, and destroy failures, so the assertion message says “renderer failure,” not “submit rejected.”

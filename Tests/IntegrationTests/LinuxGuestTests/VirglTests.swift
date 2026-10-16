@@ -3,10 +3,10 @@ import GraphicsCore
 import VirtualMachineCore
 import XCTest
 
-/// T2 check of the headless virgl path: kmscube renders through Mesa's virgl driver on the
-/// Linux test guest, and the host reads no pixels back (graphics.md §12 step 2, #022).
+/// T2 check that the Linux guest runs kmscube through VirGL without reported renderer failures.
+/// It does not verify pixels, and `hostReadbacks` is not instrumented yet (IR-816).
 final class VirglTests: XCTestCase {
-    func testKmscubeRendersHeadlesslyThroughVirglWithoutHostReadbacks() async throws {
+    func testKmscubeRunsHeadlesslyThroughVirglWithoutRendererFailures() async throws {
         // The host runtime is the copy that scripts/tools/stage-hosted-test-inputs.sh stages beside the kernel. The
         // override also replaces any TEST_RUNNER_ value. Without it, the DEBUG lookup walks up from the test host to
         // the checkout under ~/Documents (GraphicsBridge.m), which the test process must not read (IR-600, IR-602).
@@ -41,7 +41,13 @@ final class VirglTests: XCTestCase {
         let detail = try okDetail(named: "virgl", in: result.records)
         XCTAssertTrue(detail.contains("renderer=virgl "), detail)
         XCTAssertTrue(detail.contains("requested=60 reported=59"), detail)
-        XCTAssertEqual(device.statistics.hostReadbacks, 0)
+        let statistics = device.statistics
+        XCTAssertEqual(statistics.hostReadbacks, 0)
+        XCTAssertEqual(
+            statistics.rendererFailures,
+            0,
+            "VirGL recorded \(statistics.rendererFailures) renderer failure(s)."
+        )
     }
 
     private func okDetail(named name: String, in records: [TestGuestRecord]) throws -> String {

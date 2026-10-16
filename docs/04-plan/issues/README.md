@@ -243,8 +243,9 @@ The stock Android image boots directly on Virtualization.framework (IR-306).
 
 Complete on acceptance boxes: #001, #002, #004, #005, #006, #007, #008, #009, #011, #012, #013, #014, #015, #016, #017, #018, #019, #020, #021, #022, #023, #025, #033, #062, #063, #065, #072, #099. A fully ticked task can still have a dependency, manual check, or maintainer review open, as listed above.
 
-**Recent work on `main`** (git log, 2026-10-09 to 2026-10-16): #022 kmscube on the VM and the
-drain before invalidation (`537731c`, `efc4fef`); the #099 offline Mesa injection and the verity
+**Recent work on `main`** (git log, 2026-10-09 to 2026-10-16): #022 kmscube on the VM,
+renderer failure checks, bounded backing observations, and paused reset/stop lifecycle
+(`537731c`, `efc4fef`, `f622092`, `bc96946`, `911f5bd`); the #099 offline Mesa injection and the verity
 steps (`10f921e` to `ce7a21e`); the #095 port and marker results (`bfd0860`, `c217fc8`,
 `4c6b7c0`); #016 PackageInstaller (`3d0031e`); the exact-image ODM control builder and EGL
 evidence (`ad78532`, `d9bc980`, `5f0681a`, `39ec354`); and the HelloGL application-domain

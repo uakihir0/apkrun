@@ -15,8 +15,6 @@ concurrency:
 
 env:
   APKRUN_CI: "1"
-  APKRUN_PULL_REQUEST_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-  APKRUN_PULL_REQUEST_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
 
 jobs:
   lint:
@@ -29,12 +27,7 @@ jobs:
           persist-credentials: false
       - name: Install pinned repository tools
         run: scripts/bootstrap
-      - name: Resolve exact test deferral scope
-        id: test-deferral
-        run: scripts/ci/resolve-test-deferral.sh
       - name: Run repository checks
-        env:
-          APKRUN_SKIP_CI_TESTS: ${{ steps.test-deferral.outputs.skip }}
         run: scripts/ci/run-checks.sh
 
   codegen:
@@ -143,9 +136,6 @@ jobs:
         run: mkdir -p build/ci
       - name: Install pinned repository tools
         run: scripts/bootstrap
-      - name: Resolve exact test deferral scope
-        id: test-deferral
-        run: scripts/ci/resolve-test-deferral.sh
       - name: Compute verified build cache key
         id: third-party-key
         run: echo "key=$(scripts/build-third-party.sh --print-cache-key virgl-runtime)" >> "$GITHUB_OUTPUT"
@@ -157,7 +147,6 @@ jobs:
       - name: Verify graphics libraries and public headers
         run: scripts/build-third-party.sh virgl-runtime
       - name: Run Swift T0 tests
-        if: steps.test-deferral.outputs.skip == 'false'
         run: >-
           swift test --skip 'SystemTests' -j 2
           --experimental-maximum-parallelization-width 2
@@ -185,9 +174,6 @@ jobs:
           persist-credentials: false
       - name: Install pinned repository tools
         run: scripts/bootstrap
-      - name: Resolve exact test deferral scope
-        id: test-deferral
-        run: scripts/ci/resolve-test-deferral.sh
       - name: Compute verified build cache key
         id: third-party-key
         run: echo "key=$(scripts/build-third-party.sh --print-cache-key virgl-runtime)" >> "$GITHUB_OUTPUT"
@@ -203,13 +189,10 @@ jobs:
           swift -e 'import Metal; guard MTLCreateSystemDefaultDevice() != nil
           else { fatalError("runnerMissingMetal") }'
       - name: Run Metal and VirGL T1 tests
-        if: steps.test-deferral.outputs.skip == 'false'
         run: swift test --filter GraphicsCoreSystemTests -j 2
       - name: Run Metal and VirGL T1 tests with Address Sanitizer
-        if: steps.test-deferral.outputs.skip == 'false'
         run: swift test --sanitize=address --filter GraphicsCoreSystemTests -j 2
       - name: Run Metal and VirGL T1 tests with Undefined Behavior Sanitizer
-        if: steps.test-deferral.outputs.skip == 'false'
         run: swift test --sanitize=undefined --filter GraphicsCoreSystemTests -j 2
 
   test-images:
@@ -220,9 +203,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Resolve exact test deferral scope
-        id: test-deferral
-        run: scripts/ci/resolve-test-deferral.sh
       - name: Install Python 3.12
         run: brew install python@3.12
       - name: Install image tooling
@@ -237,7 +217,6 @@ jobs:
             fi
           done
       - name: Run image tooling tests
-        if: steps.test-deferral.outputs.skip == 'false'
         run: Images/tools/.venv/bin/python -m pytest Images/tools/tests
       - name: Check image tooling style
         run: |

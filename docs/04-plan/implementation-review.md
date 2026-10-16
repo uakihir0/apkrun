@@ -18348,9 +18348,9 @@ Kept, and why:
 
 | Field | Value |
 |---|---|
-| Status | Needs maintainer review |
+| Status | Superseded by IR-1336 |
 | Task | #103 |
-| Affected documents | [ci.yml](../../.github/workflows/ci.yml); [integration.yml](../../.github/workflows/integration.yml); [nightly.yml](../../.github/workflows/nightly.yml); [run-checks.sh](../../scripts/ci/run-checks.sh); [resolve-test-deferral.sh](../../scripts/ci/resolve-test-deferral.sh) |
+| Affected documents | [ci.yml](../../.github/workflows/ci.yml); [integration.yml](../../.github/workflows/integration.yml); [nightly.yml](../../.github/workflows/nightly.yml); [run-checks.sh](../../scripts/ci/run-checks.sh); `resolve-test-deferral.sh` (deleted by IR-1336) |
 
 **Choice.** Skip the repository test harness in the lint job and the Swift,
 graphics, and image test steps on exact pushes to `refs/heads/main`, and on
@@ -18396,6 +18396,10 @@ still succeed, so reviewers must inspect step results rather than treat a
 green job as proof that its suite ran. A maintainer should restore test
 execution after the current implementation work reaches a suitable validation
 point.
+
+**Disposition (2026-10-16).** Superseded by IR-1336 after hostile review found
+that this policy suppressed unrelated test suites. The current interactive
+test's own opt-in guard is sufficient; normal CI coverage is restored.
 
 ## IR-1313: Keep click-loss ACK capture lean and attach the exact image variant
 
@@ -19215,3 +19219,38 @@ a known guest-written canary, prove a particular transfer consumed the sampled
 bytes, confirm host writes are visible to the guest, compare pixels, or prove
 a renderer operation was pending at invalidation. IR-849 remains open.
 `hostReadbacks == 0` remains uninstrumented (IR-816).
+
+## IR-1336: Keep the click-loss GUI test opt-in without suppressing CI suites
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [ci.yml](../../.github/workflows/ci.yml); [integration.yml](../../.github/workflows/integration.yml); [nightly.yml](../../.github/workflows/nightly.yml); [IntegrationTests.xctestplan](../../Tests/IntegrationTests/IntegrationTests.xctestplan); [AndroidInputTests.swift](../../Tests/IntegrationTests/AndroidInputTests/AndroidInputTests.swift); `run-checks.sh`; `test_workflow_runners.rb` |
+
+**Choice.** Keep `testThreeConsecutiveHundredClickBatchesThroughWindowServer`
+behind the `AndroidInputInteractive` test-plan configuration and its
+`APKRUN_INPUT_INTERACTIVE_T2=1` guard. Leave the normal CI suites and the
+manual Integration and Nightly workflows on their existing paths. The
+workflow-policy test checks that no GitHub workflow selects the interactive
+configuration or sets its opt-in environment variable.
+
+**Reason.** The user asked to skip the current GitHub Actions test and keep it
+from executing in code. Inspection found that no GitHub workflow selected
+`AndroidInputInteractive`; the test already skips unless its dedicated
+environment variable is set. The earlier deferral also suppressed the
+repository harness, Swift T0, graphics T1, image tests, and unrelated manual
+acceptance jobs. That broader suppression could leave required jobs green
+without test evidence, so the narrow per-test guard preserves the requested
+deferral and keeps unrelated coverage enabled.
+
+**Verification (2026-10-16).** The focused workflow-policy test passes and
+asserts that the interactive opt-in exists only in the named test-plan
+configuration, the method retains its `XCTSkip` guard, and no workflow enables
+it. The ordinary CI test-command inventory is unconditional again. No GitHub
+Actions workflow was triggered. The dedicated GUI T2 acceptance run remains
+pending.
+
+**Risk.** A future workflow that explicitly selects `AndroidInputInteractive`
+or sets `APKRUN_INPUT_INTERACTIVE_T2` will fail the workflow-policy test until
+the deferral is reviewed. This decision does not close #103 or #024 box 3.

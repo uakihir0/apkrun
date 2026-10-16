@@ -215,9 +215,10 @@ listed. All tasks whose acceptance boxes are ticked are listed below the table.
 
 **Counts on `main`:** 96 tasks have a milestone entry (#001 to #095 and #099; #096 and
 #097 are post-v1 tracks). 28 have every box ticked, 6 have some boxes ticked and
-some open, and 62 have no ticked box. The IR log has 849 entries: 836 are marked
-exactly "Needs maintainer review", 6 add a qualifier to that status, and 7 carry
-another status. Two entries carry the number IR-901 (see the note below the table).
+some open, and 62 have no ticked box. The IR log has 850 entries: 836 are marked
+exactly "Needs maintainer review", 6 add a qualifier to that status, 7 carry
+another status, and one is superseded. Two entries carry the number IR-901 (see
+the note below the table).
 
 **Project position:** The task issues #001 to #097 are mirrored as issues #2 to #98 (IR-293).
 Branch protection on `main` requires the eight CI checks (IR-294). IR-297 records the decision to

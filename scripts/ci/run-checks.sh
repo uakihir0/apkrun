@@ -4,13 +4,10 @@ set -uo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 
-checks=()
-if [[ "${APKRUN_SKIP_CI_TESTS:-false}" == "true" ]]; then
-    printf 'run-checks: skipping repository test harness because APKRUN_SKIP_CI_TESTS=true\n'
-else
-    checks+=("scripts/tests/run.sh")
-fi
-checks+=("scripts/check-module-deps.sh")
+checks=(
+    "scripts/tests/run.sh"
+    "scripts/check-module-deps.sh"
+)
 if [[ -f "$repo_root/scripts/check-logging.sh" ]]; then
     checks+=("scripts/check-logging.sh")
 fi

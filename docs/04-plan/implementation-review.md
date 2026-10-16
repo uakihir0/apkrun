@@ -19765,3 +19765,26 @@ synthetic checks and starts no VM. Strict Swift formatting and
 `git diff --check` pass. GitHub Actions and GUI tests were not run.
 
 **Risk.** This is an aggregate diagnostic check at the host translation and route boundaries. It does not establish guest receipt, Android dispatch, app handling, or the intermittent-click cause. Both dedicated GUI T2 runs and #024 box 3 remain open.
+
+## IR-1349: Capture actual button pressed transitions and counter-write timing
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [input.md](../02-design/input.md) §11; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; HelloText debug fixture |
+
+**Choice.**
+
+1. Use a debug-only `TraceableCounterButton` to record actual `setPressed` state transitions only during an explicit touch-trace capture. Keep the release class as a plain `Button` subclass with no touch override.
+2. Tie touch-gesture transitions to the capture token sampled at gesture DOWN. If capture first observes a MOVE, UP, or CANCEL from an in-progress gesture, give it no capture token. Retain the token with pressed state for delayed clear transitions; reject records whose token belongs to an earlier capture, and clear the button's lineage when its Activity is destroyed.
+3. Add the elapsed-realtime start time and duration of `CounterStore.increment()` to the fixture click record, only when a debug trace is active. Store transition timestamps in Android elapsed-realtime nanoseconds, separate from the existing MotionEvent uptime timestamps.
+4. Attach the touch listener only during capture and avoid a `dispatchTouchEvent` override. With no capture token, the debug button delegates pressed-state changes without a trace lock or clock read.
+
+**Reason.** The current listener records pressed state before default View dispatch and samples it on the next frame for DOWN and UP. It cannot show which `setPressed` transitions occurred between those samples. `CounterStore.increment()` performs synchronous `SharedPreferences.commit()`, but the trace does not record how long that operation takes. The extra data may help distinguish a missing pressed transition from a slow fixture write when a future diagnostic run captures a loss, without changing the release fixture or enabling diagnostic capture during the product-cadence test. Capture lineage prevents delayed records from a previous run entering a newly started trace and prevents an in-progress uncaptured gesture from inheriting a new token; the current token is removed when capture stops and all lineage is cleared when the Activity is destroyed.
+
+**Verification (2026-10-17).** `ANDROID_HOME=/Users/N3275/Library/Android/sdk rtk proxy ./gradlew --console=plain :HelloText:testReleaseUnitTest --tests io.apkrun.fixture.hellotext.TouchTraceTest :HelloText:assembleDebug :HelloText:assembleRelease` passes all eleven `TouchTraceTest` cases, including rejection of an old capture token and capture-lineage checks for uncaptured and cross-generation gestures, and compiles both debug and release fixture variants. Release lint and `git diff --check` pass. No GUI, VM, or GitHub Actions tests were run; the pressed-state hook is diagnostic evidence and does not identify the product-mode click-loss cause.
+
+**Adversarial review.** The first review found that an in-progress uncaptured gesture could inherit a later capture token, and that the debug view inspected every touch dispatch even when capture was off. Gesture lineage now preserves a sampled null token for a gesture first observed after capture begins, and the debug view has no `dispatchTouchEvent` override; the listener samples actions only while capture is active. The reviewer rechecked the fixes and found no remaining actionable findings.
+
+**Risk.** The pressed-state hook, capture-only touch listener, and active trace can perturb diagnostic timing. Elapsed-realtime timestamps cannot be subtracted from the MotionEvent uptime fields; the emitted start-time key names this clock domain explicitly. The debug variant does not override `dispatchTouchEvent`, and its capture-off pressed-state path does not read the clock or write a trace record; the release variant has no `setPressed` override. A maintainer should review the extra fixture instrumentation before drawing conclusions from a future GUI trace.

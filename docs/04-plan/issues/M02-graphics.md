@@ -541,17 +541,17 @@ Out of scope:
   `ro.hardware.egl=mesa`, and showed all four Mesa files under
   `/vendor/lib64/egl` with the `same_process_hal_file` label. SurfaceFlinger
   repeatedly received the sysfs `uevent` denial, failed to open a DRM device,
-  and aborted after `eglInitialize` returned `EGL_NOT_INITIALIZED`. After
-  150 seconds `sys.boot_completed` was still empty, so the test stopped the
-  stuck boot; `apkrun.test=egl` did not run. The repeated AVC and EGL errors
-  do not establish a causal relationship. Full logs remain outside the
-  repository at `/tmp/apkrun-099-home-2026102/Logs/`: the boot log is
-  2,712,596 bytes with SHA-256
-  `d04971b97e93185a866d9a8df9522bf18c2b0aa76f668e1e0d389386151b0150`, and
-  logcat is 7,847,952 bytes with SHA-256
-  `8f615957725aee96ee872f1623e68204c4bc221c6d26e4338aa3bc14cde1c55c`.
-  Sanitized excerpts are in the variant's `boot-evidence.md`; IR-1328 records
-  the artifact-identity choice and this failed T2 result.
+  and aborted after `eglInitialize` returned `EGL_NOT_INITIALIZED`. A second
+  no-overlay run confirmed `card0` and `renderD128` existed with mode `0666`,
+  and confirmed the selected Mesa property and vendor-file labels. Both runs
+  remained without `sys.boot_completed` at 150 seconds; `apkrun.test=egl` did
+  not run. The earlier controlled results in IR-1277 and IR-1279 link the same
+  SurfaceFlinger `uevent` denial to a failed DRM probe and show the experimental
+  overlay passing on the earlier #099 payload. That makes the policy gap the
+  leading explanation, but the exact 2026.10.2 image has not yet had the
+  overlay control. Initial and repeat log hashes, excerpts, and command output
+  are recorded in the variant's `boot-evidence.md`; IR-1328 records the
+  artifact-identity choice and results.
 
 - Placement and the reasons for it are in IR-240. This task sits between #021 and
   #022, because #022 needs a working Mesa guest.

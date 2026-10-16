@@ -22,11 +22,16 @@ aborted after finding no suitable `EGLConfig`.
 
 After 150 seconds, `sys.boot_completed` was still empty. The run was stopped
 without reaching Android boot completion, and `apkrun.test=egl` did not run.
-These observations do not establish that the AVC caused the EGL failure.
+This run alone shows the AVC and EGL failure together but does not establish
+causality. Earlier controls on the #099 Mesa vendor linked the SurfaceFlinger's
+denied sysfs `uevent` read to the failed DRM probe: the no-overlay control
+failed, while the experimental ODM policy overlay passed the EGL check
+(IR-1277, IR-1279). Those controls support a policy cause for this failure,
+but the exact 2026.10.2 disk has not yet been tested with the overlay.
 
 ## Sanitized excerpts
 
-The following excerpts omit timestamps and process IDs from the original lines.
+The following excerpts omit timestamps, process IDs, and audit envelope fields.
 Their source line numbers and the full-log hashes below identify the records.
 
 ```text
@@ -37,14 +42,15 @@ boot-20261016T032152Z.log:87
 init: [libfs_mgr] __mount(source=/dev/block/dm-13,target=/vendor,type=erofs)=0: Success
 
 logcat-20261016T032152Z.log:5552
-avc: denied { read } for comm="surfaceflinger" name="uevent" dev="sysfs" scontext=u:r:surfaceflinger:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=0
+avc: denied { read } for comm="surfaceflinger" name="uevent" dev="sysfs" ino=3405 scontext=u:r:surfaceflinger:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=0
 
 logcat-20261016T032152Z.log:5570
 W EGL-MAIN: Failed to open any DRM device
 
-logcat-20261016T032152Z.log:5677-5679
+logcat-20261016T032152Z.log:5676-5679
 W EGL-MAIN: egl: failed to create dri2 screen
 W libEGL: eglInitialize(...) failed (EGL_NOT_INITIALIZED)
+W SurfaceFlinger: no suitable EGLConfig found, trying a simpler query
 F SurfaceFlinger: no suitable EGLConfig found, giving up
 ```
 
@@ -57,3 +63,48 @@ Full logs remain outside the repository at
 |---|---:|---|
 | `vm/boot-20261016T032152Z.log` | 2,712,596 | `d04971b97e93185a866d9a8df9522bf18c2b0aa76f668e1e0d389386151b0150` |
 | `guest/logcat-20261016T032152Z.log` | 7,847,952 | `8f615957725aee96ee872f1623e68204c4bc221c6d26e4338aa3bc14cde1c55c` |
+
+## Diagnostic rerun
+
+The same exact variant was booted again at 2026-10-16 03:30 UTC. These
+contemporaneous ADB command results record the guest's runtime configuration
+and DRM nodes:
+
+```text
+$ adb -s 127.0.0.1:6520 shell getprop ro.hardware.egl
+mesa
+
+$ adb -s 127.0.0.1:6520 shell ls -lZ /dev/dri
+crw-rw-rw- 1 system graphics u:object_r:graphics_device:s0 226, 0 card0
+crw-rw-rw- 1 system graphics u:object_r:gpu_device:s0 226, 128 renderD128
+
+$ adb -s 127.0.0.1:6520 shell ls -lZ /vendor/lib64/egl
+libEGL_mesa.so       u:object_r:same_process_hal_file:s0
+libGLESv1_CM_mesa.so u:object_r:same_process_hal_file:s0
+libGLESv2_mesa.so    u:object_r:same_process_hal_file:s0
+libgallium_dri.so    u:object_r:same_process_hal_file:s0
+
+$ adb -s 127.0.0.1:6520 shell getprop sys.boot_completed
+<empty after 150 seconds>
+```
+
+Both DRM nodes existed with mode `0666`; this does not establish that
+SurfaceFlinger successfully opened or used them. The rerun reproduced the
+sysfs denial and EGL failure. The VM was stopped after the completion property
+remained empty at 150 seconds. The exact image still needs an overlay control
+to confirm whether the previously observed policy fix also resolves this build.
+
+The rerun log records the denied `uevent` read at lines 5233–5235, including a
+failed syscall with `exit=-13`; the pathname is absent from that audit record,
+so it does not identify which node SurfaceFlinger tried to open. Mesa reports
+that it could not open a DRM device at line 5259, then reports the failed DRI2
+screen and `eglInitialize` at lines 5343–5346. These events are close in time,
+but this run alone does not establish that the denied sysfs read caused the DRM
+probe failure.
+
+The rerun's full logs remain outside the repository under the same directory:
+
+| Log | Bytes | SHA-256 |
+|---|---:|---|
+| `vm/boot-20261016T033049Z.log` | 2,980,683 | `503410b6c666ae7cbceb6d0799e7f844ad1236d1095e7f730dbefb44d3b0aae6` |
+| `guest/logcat-20261016T033049Z.log` | 9,552,891 | `be2b26387336fbc190d1be28d4e599d9202772c3e28f2c61631c511a4a028e77` |

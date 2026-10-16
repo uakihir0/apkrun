@@ -18793,13 +18793,15 @@ process IDs keeps the retained evidence focused on the behavior being reviewed.
 
 **Verification.** The 2026.10.1 full-log digests and byte counts match the
 captured files under `/tmp/apkrun-099-boot-evidence-20261016/`. The
-2026.10.2 digests, byte counts, and excerpt line references match the files
-under `/tmp/apkrun-099-home-2026102/Logs/`. Each excerpt maps to the original
-line numbers recorded in its variant's `boot-evidence.md`.
+2026.10.2 initial-run and diagnostic-rerun digests and byte counts match the
+files under `/tmp/apkrun-099-home-2026102/Logs/`; the sanitized excerpts map to
+the initial-run line numbers recorded in its variant's `boot-evidence.md`.
 
 **Risk.** The full logs are local evidence and are not preserved by this
-commit. The excerpts intentionally omit surrounding events, so they do not
-establish a causal link between the AVC and the EGL failure.
+commit. A single run's excerpt does not establish causality; the earlier
+controlled overlay and no-overlay results in IR-1277 and IR-1279 provide
+separate evidence for the same denied-probe failure. The exact 2026.10.2 image
+has not yet been tested with that overlay.
 
 ## IR-1326: Pin Flex and GNU m4 for the guest Mesa build
 
@@ -18868,7 +18870,7 @@ commit alone is not a reproducible source reference.
 |---|---|
 | Status | Needs maintainer review |
 | Task | #099 |
-| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #099; `Images/reference/variants/2026.10.1-cf16373615-arm64/variant/variant.json`; `Images/reference/variants/2026.10.2-cf16373615-arm64/variant/variant.json`; both variants' `boot-evidence.md` |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #099; [android-image.md](../02-design/android-image.md) §4.6; [graphics.md](../02-design/graphics.md) §9.1; `Images/reference/variants/2026.10.1-cf16373615-arm64/variant/variant.json`; `Images/reference/variants/2026.10.2-cf16373615-arm64/variant/variant.json`; both variants' `boot-evidence.md` |
 
 **Choice.** Rebuild the 2026.10.1 bundle with the current variant tool and
 confirm its disk and manifest hashes remain unchanged, then update only its
@@ -18892,11 +18894,16 @@ output is included, and the staging verifier passes before and after copying.
 Variant `2026.10.2-cf16373615-arm64` records its builder, source, inject,
 reseal, manifest, signature, and disk identities. Its T2 run initialized
 `virtio_gpu` and mounted `/vendor`, but EGL initialization failed and
-`sys.boot_completed` remained empty after 150 seconds. The sanitized evidence
-and full-log hashes are retained in that variant's `boot-evidence.md`.
+`sys.boot_completed` remained empty after 150 seconds. A second no-overlay
+boot confirmed that both DRM nodes existed with mode 0666 and their expected
+SELinux labels, but again failed EGL initialization. The exact rerun output and
+full-log hashes are retained in that variant's `boot-evidence.md`. Earlier
+controlled results in IR-1277 and IR-1279 make the sysfs policy denial the
+leading explanation, while an overlay control on the exact 2026.10.2 disk
+remains outstanding.
 
 **Risk.** #099's EGL acceptance criterion remains open. This macOS host cannot
 compile the AOSP Soong product or SELinux policy, and the Mesa and NDK license
-review items IR-483 and IR-486 remain open. The observed sysfs AVC and EGL
-failure are correlated in time; this result does not prove one caused the
-other.
+review items IR-483 and IR-486 remain open. The existing overlay grants
+type-wide rights and is diagnostic only; it does not decide a narrow
+production policy.

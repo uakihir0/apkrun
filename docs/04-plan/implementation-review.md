@@ -19626,3 +19626,51 @@ tears between sampled frames. The original full-screen source remains in
 ignored local build output; no issue attachment was made. The G3 gate still
 validates only the tested single HelloGL workload and current development
 image.
+
+## IR-1345: Start the #026 window shell as partial groundwork
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #026, window step (partial) |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 and #026; [display-and-windowing.md](../02-design/display-and-windowing.md) §§7.3, 11, 12; `WindowingCore` |
+
+**Choice.** Begin the first #026 window slice before #024 acceptance is
+complete, following the user's explicit instruction to continue after
+deferring the requested GitHub Actions test. Replace the development-only
+`DisplayWindow` name with `SessionWindowController`, retain the fixed-size
+IOSurface window behavior, and add a startup placeholder. Keep pointer and
+keyboard input disabled until the first current-generation frame has been
+committed. Do not check any #026 acceptance criterion or claim G4.
+
+**Reason.** The user authorized continuing the project and local commits on
+`main`; the window's presentation shell can be implemented and verified
+independently while the remaining #024 evidence is pending. Recording this
+as partial work preserves the task dependency and makes the remaining gate
+visible. The window does not yet map all session states, own a session
+registry, launch or stop an Android app, or satisfy the screenshot or guest
+integration checks.
+
+**Review.** A hostile review found that leaving only the sink unset would
+still let startup key events mutate `KeyTranslator`, so an `UP` could reach
+the guest after the first frame without its matching `DOWN`. Input is now
+gated before pointer/key translation, including command-key equivalents.
+A T0 regression test holds a key and a pointer press across the input-enable
+transition, then asserts that no unmatched release reaches the newly
+installed sink. The review also found the Android input harness's outdated
+assumption that the IOSurface view was the window's content view; both view
+lookup and observer cleanup now find it among the child views. The review
+confirmed the gate, synchronous placeholder removal, and main-actor Core
+Animation callback bridge; no GUI or Actions tests were run.
+
+**Verification.** `swift test --package-path . --filter WindowingCoreTests
+-j 2` passed all 50 tests. `swift build --package-path . --product apkrun
+--traits EmbeddedRuntime -j 2` passed. `swift-format lint --strict` and
+`git diff --check` passed. `xcodebuild build-for-testing -project
+APKRun.xcodeproj -scheme IntegrationTests -destination
+'platform=macOS,arch=arm64'` passed and compiled the Android input harness;
+it did not execute tests. The build reports the existing
+`DisplayApplication.run()` actor-isolation and `SurfacePool` Sendable
+warnings. The screenshot T1, NativeWindowTests, #024's remaining click,
+physical-scroll, and guest-edge checks, #026's session and launch steps, and
+G4 remain open. GitHub Actions and the dedicated GUI tests were not run.

@@ -451,6 +451,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 | Fixture and sample apps on secondary displays | #029 | pending (§8) |
 | `IOSurfaceIsInUse` reflects WindowServer use of layer contents | #068 | pending (§5.2) |
 | Gate G4: HelloText renders and accepts input in a native Mac window ([../04-plan/roadmap.md](../04-plan/roadmap.md) §2) | #026 | pending (§12 #026) |
+| First-frame placeholder and startup input gate | #026 (partial, IR-1345) | WindowingCore T0: 50 tests passed; embedded CLI build passed. Screenshot T1 and the rest of #026 remain pending |
 | Gate G5: HelloText and HelloCompose in two windows, each on its own Android display, input reaching only its app | #030 | pending (§12 #030) |
 | HelloGL over XPC for 60 s at 60 fps: no tearing, `readyToDisplayed` p95 < 1 refresh interval + 4 ms, present cost < 2 ms p95, `hostReadbacks = 0` | #068 | pending (§5.5) |
 | Warm launch of HelloText: click → first frame p50 ≤ 1.5 s, and each step within its budget | #070 | pending (§9) |

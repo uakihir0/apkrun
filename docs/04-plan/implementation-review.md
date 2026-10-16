@@ -19143,3 +19143,19 @@ decision to keep both controls diagnostic remain unchanged.
 **Verification.** On 2026-10-16, `xcodebuild build-for-testing` and the focused signed `LinuxGuest` run passed. `VirglTests.testKmscubeRunsHeadlesslyThroughVirglWithoutRendererFailures` executed once in 1.228 s; its `renderer=virgl` and `requested=60 reported=59` assertions passed, along with the post-shutdown assertion `rendererFailures == 0`. The result bundle is `/tmp/apkrun-022-renderer-zero-final-20261016.xcresult`. The successful XCTest assertion is the recorded zero; the test does not print the counter on success.
 
 **Risk.** A zero failure count means the backend reported no renderer operation failure. It does not compare pixels or prove that a specific guest buffer reached a transfer. Those checks remain open under IR-849. The counter includes command and render work, fence creation, reset, and destroy failures, so the assertion message says “renderer failure,” not “submit rejected.”
+
+## IR-1334: Bound the Linux guest backing observation and keep its evidence partial
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2; partial evidence for IR-849) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §§12, 16; [M02-graphics.md](issues/M02-graphics.md) #022 step 2, Tests, and Notes; [issues/README.md](issues/README.md) §5; [IR-849](#ir-849-the-vm-run-must-confirm-the-pointer-and-the-reset-ordering-which-this-task-could-not-check) |
+
+**Choice.** Configure the Linux VirGL T2 recorder to inspect at most 4096 bytes from resource 4's attached backing once before its first renderer submission after attach. Keep only range and byte counts in memory; do not retain or serialize guest bytes. Disable operation recording unless the test is explicitly given a recording path. Require at least 864 sampled bytes and one nonzero byte in the T2 test.
+
+**Reason.** The sample checks that the live host mapping passed to virglrenderer exposes nonzero guest memory, while bounding render-thread work and keeping guest data out of logs and recordings. The first nonzero sample is only partial evidence: the test does not correlate the bytes with a specific command, transfer, or renderer read.
+
+**Verification.** Six focused T0 tests passed: both new observer tests and four existing recorder/replay tests, selected with `swift test --package-path Packages/GraphicsCore --filter 'aRecordedSessionReplaysToTheSameEngineCalls|aRecorderDoesNotChangeTheResponsesOrTheEngineCalls|aWrittenRecordingIsTheReplayFormat|aRecordingFromAnotherVersionIsRejected|recorderCountsNonzeroBytesWithoutRecordingGuestData|recorderBoundsSamplesAndReobservesAfterDetach'`. The focused signed `LinuxGuest` run passed `VirglTests.testKmscubeHasNonzeroResource4BackingWithoutRendererFailures` (1 test, 1.205 s) on arm64 macOS 27.0.1 build 26A434 / Xcode 27.0 build 27A266a. It asserted `renderer=virgl`, `requested=60 reported=59`, `rendererFailures == 0` after shutdown, and the bounded nonzero resource 4 sample. The result bundle is `/tmp/apkrun-022-backing-observer-20261016.xcresult`. A hostile review found no remaining pointer lifetime or concurrency defect in this change after the sampling cap and attachment lifecycle test were added.
+
+**Risk.** This does not confirm a known guest-written canary, that the first submission references resource 4, that an exact `TRANSFER3D` reads the sampled bytes, or that VirGL rendered pixels. It does not check pointer writes or reset/stop ordering, so IR-849 remains open. `hostReadbacks == 0` remains uninstrumented (IR-816).

@@ -46,6 +46,20 @@ struct VirGLRecording: Codable, Equatable, Sendable {
     }
 }
 
+/// A test-only summary of guest memory observed through a VirGL backing range.
+///
+/// The observation contains counts only. It never retains or serializes the guest bytes.
+public struct VirGLGuestBackingObservation: Equatable, Sendable {
+    /// The VirGL resource whose guest backing was observed.
+    public let resourceID: UInt32
+    /// The number of ranges the guest attached to the resource.
+    public let rangeCount: Int
+    /// The number of bytes read from the backing ranges.
+    public let sampledByteCount: Int
+    /// The number of nonzero sampled bytes visible through the host pointers.
+    public let nonzeroByteCount: Int
+}
+
 /// A failure to read a recording.
 public enum VirGLRecordingFailure: Error, Equatable, Sendable {
     case unsupportedVersion(Int)
@@ -59,14 +73,37 @@ public enum VirGLRecordingFailure: Error, Equatable, Sendable {
 /// `writeRecording(to:)`, so the `kmscube` stream can be replayed (graphics.md §14, M02-graphics.md #022 step 3).
 public final class VirGLRecorder: @unchecked Sendable {
     private let lock = NSLock()
+    private static let maximumGuestBackingSampleBytes = 4096
+    private let observedGuestResourceIDs: Set<UInt32>
+    private let recordsOperations: Bool
     private var operations: [VirGLOperation] = []
+    private var guestBackingObservations: [UInt32: VirGLGuestBackingObservation] = [:]
 
-    /// Creates an empty recorder.
-    public init() {}
+    /// Creates a recorder.
+    ///
+    /// - Parameters:
+    ///   - observingGuestResourceIDs: Guest resource IDs to sample before their first renderer submission after
+    ///     backing is attached. At most 4096 bytes per resource are inspected, and only byte counts are retained.
+    ///     Guest bytes are never retained or serialized.
+    ///   - recordsOperations: Whether to retain renderer operations for a replay recording.
+    public init(
+        observingGuestResourceIDs: Set<UInt32> = [],
+        recordsOperations: Bool = true
+    ) {
+        self.observedGuestResourceIDs = observingGuestResourceIDs
+        self.recordsOperations = recordsOperations
+    }
 
     /// The operations recorded so far.
     var recording: VirGLRecording {
         VirGLRecording(operations: lock.withLock { operations })
+    }
+
+    /// Test-only summaries of guest backing ranges sampled before the first renderer submission after attachment.
+    public func guestBackingObservationsForTest() -> [VirGLGuestBackingObservation] {
+        lock.withLock {
+            guestBackingObservations.values.sorted { $0.resourceID < $1.resourceID }
+        }
     }
 
     /// Writes the operations recorded so far to `url`, in the replay format of `VirGLRecording` (version 1).
@@ -79,7 +116,46 @@ public final class VirGLRecorder: @unchecked Sendable {
     }
 
     func record(_ operation: VirGLOperation) {
+        guard recordsOperations else { return }
         lock.withLock { operations.append(operation) }
+    }
+
+    func observesGuestResource(_ resourceID: UInt32) -> Bool {
+        observedGuestResourceIDs.contains(resourceID)
+    }
+
+    /// Samples up to 4096 bytes from the live ranges that the renderer receives for an observed resource. This runs
+    /// on the render thread, before the renderer is called with commands that may use the same resource.
+    @discardableResult
+    func observeGuestBacking(
+        resourceID: UInt32,
+        ranges: [VirGLBackingRange]
+    ) -> VirGLGuestBackingObservation? {
+        guard observesGuestResource(resourceID), !ranges.isEmpty else { return nil }
+
+        var sampledByteCount = 0
+        var nonzeroByteCount = 0
+        for range in ranges {
+            let bytesToSample = min(range.count, Self.maximumGuestBackingSampleBytes - sampledByteCount)
+            guard bytesToSample > 0 else { break }
+
+            let bytes = range.base.assumingMemoryBound(to: UInt8.self)
+            for offset in 0..<bytesToSample where bytes[offset] != 0 {
+                nonzeroByteCount += 1
+            }
+            sampledByteCount += bytesToSample
+        }
+
+        let observation = VirGLGuestBackingObservation(
+            resourceID: resourceID,
+            rangeCount: ranges.count,
+            sampledByteCount: sampledByteCount,
+            nonzeroByteCount: nonzeroByteCount
+        )
+        lock.withLock {
+            guestBackingObservations[resourceID] = observation
+        }
+        return observation
     }
 }
 
@@ -90,6 +166,10 @@ public final class VirGLRecorder: @unchecked Sendable {
 final class RecordingVirGLEngine: VirGLEngine {
     private let inner: any VirGLEngine
     private let recorder: VirGLRecorder
+    /// Accessed only on the render thread.
+    private var attachedGuestBackings: [UInt32: [VirGLBackingRange]] = [:]
+    /// Bound the observer to one sample per attached backing.
+    private var sampledGuestResources = Set<UInt32>()
 
     init(wrapping inner: any VirGLEngine, recorder: VirGLRecorder) {
         self.inner = inner
@@ -125,6 +205,12 @@ final class RecordingVirGLEngine: VirGLEngine {
     }
 
     func submit(context: UInt32, commands: [UInt8]) throws(GraphicsFailure) {
+        for (resourceID, ranges) in attachedGuestBackings
+        where recorder.observesGuestResource(resourceID) && !sampledGuestResources.contains(resourceID) {
+            if recorder.observeGuestBacking(resourceID: resourceID, ranges: ranges) != nil {
+                sampledGuestResources.insert(resourceID)
+            }
+        }
         recorder.record(.submit(context: context, commands: commands))
         try inner.submit(context: context, commands: commands)
     }
@@ -136,6 +222,8 @@ final class RecordingVirGLEngine: VirGLEngine {
 
     func unrefResource(id: UInt32) {
         recorder.record(.unrefResource(id: id))
+        attachedGuestBackings.removeValue(forKey: id)
+        sampledGuestResources.remove(id)
         inner.unrefResource(id: id)
     }
 
@@ -143,9 +231,14 @@ final class RecordingVirGLEngine: VirGLEngine {
     /// A replay supplies its own pages (IR-845).
     func attachBacking(resource: UInt32, ranges: [VirGLBackingRange]) throws(GraphicsFailure) {
         try inner.attachBacking(resource: resource, ranges: ranges)
+        if recorder.observesGuestResource(resource) {
+            attachedGuestBackings[resource] = ranges
+        }
     }
 
     func detachBacking(resource: UInt32) {
+        attachedGuestBackings.removeValue(forKey: resource)
+        sampledGuestResources.remove(resource)
         inner.detachBacking(resource: resource)
     }
 
@@ -192,10 +285,14 @@ final class RecordingVirGLEngine: VirGLEngine {
     func reset() throws(GraphicsFailure) {
         recorder.record(.reset)
         try inner.reset()
+        attachedGuestBackings.removeAll()
+        sampledGuestResources.removeAll()
     }
 
     func destroy() throws(GraphicsFailure) {
         try inner.destroy()
+        attachedGuestBackings.removeAll()
+        sampledGuestResources.removeAll()
     }
 }
 

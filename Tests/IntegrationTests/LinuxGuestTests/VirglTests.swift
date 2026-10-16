@@ -4,17 +4,18 @@ import VirtualMachineCore
 import XCTest
 
 /// T2 check that the Linux guest runs kmscube through VirGL without reported renderer failures.
-/// It does not verify pixels, and `hostReadbacks` is not instrumented yet (IR-816).
+/// A bounded resource 4 backing sample checks for nonzero guest memory before its first submission; this does not verify pixels.
+/// `hostReadbacks` is not instrumented yet (IR-816).
 final class VirglTests: XCTestCase {
-    func testKmscubeRunsHeadlesslyThroughVirglWithoutRendererFailures() async throws {
+    func testKmscubeHasNonzeroResource4BackingWithoutRendererFailures() async throws {
         // The host runtime is the copy that scripts/tools/stage-hosted-test-inputs.sh stages beside the kernel. The
         // override also replaces any TEST_RUNNER_ value. Without it, the DEBUG lookup walks up from the test host to
         // the checkout under ~/Documents (GraphicsBridge.m), which the test process must not read (IR-600, IR-602).
         let library = try LinuxGuestHarness.stagedInput("virgl-runtime/libvirglrenderer.1.dylib")
         XCTAssertEqual(setenv("APKRUN_VIRGL_RUNTIME_PATH", library.deletingLastPathComponent().path, 1), 0)
-        // The recorder is attached only when the environment names a file. It writes the renderer operations of the run
-        // in the replay format, for the replay test of graphics.md §14 (M02-graphics.md #022 step 3). The file must be
-        // under /tmp, so it stays out of the checkout and out of protected folders.
+        // The recorder is always attached for the bounded guest-backing sample. It writes renderer operations only when
+        // the environment names a file, in the replay format for graphics.md §14 (M02-graphics.md #022 step 3). The
+        // file must be under /tmp, so it stays out of the checkout and out of protected folders.
         // The path is standardized first, so a `..` segment cannot leave /tmp.
         let recordingURL = ProcessInfo.processInfo.environment["APKRUN_TEST_VIRGL_RECORDING"].map {
             URL(fileURLWithPath: $0).standardizedFileURL
@@ -23,7 +24,10 @@ final class VirglTests: XCTestCase {
             XCTFail("APKRUN_TEST_VIRGL_RECORDING must name a file under /tmp: \(recordingURL.path)")
             return
         }
-        let recorder = recordingURL == nil ? nil : VirGLRecorder()
+        let recorder = VirGLRecorder(
+            observingGuestResourceIDs: [4],
+            recordsOperations: recordingURL != nil
+        )
         let device = try VirtioGPUDevice.virgl(recorder: recorder)
         let result = try await LinuxGuestHarness.run(
             testCase: self,
@@ -32,7 +36,7 @@ final class VirglTests: XCTestCase {
             tests: ["virgl"],
             customDevices: [device]
         )
-        if let recordingURL, let recorder {
+        if let recordingURL {
             try recorder.writeRecording(to: recordingURL)
         }
 
@@ -47,6 +51,17 @@ final class VirglTests: XCTestCase {
             statistics.rendererFailures,
             0,
             "VirGL recorded \(statistics.rendererFailures) renderer failure(s)."
+        )
+        let resource4Backing = try XCTUnwrap(
+            recorder.guestBackingObservationsForTest().first { $0.resourceID == 4 },
+            "kmscube never submitted resource 4 with guest backing attached."
+        )
+        XCTAssertGreaterThan(resource4Backing.rangeCount, 0)
+        XCTAssertGreaterThanOrEqual(resource4Backing.sampledByteCount, 864)
+        XCTAssertGreaterThan(
+            resource4Backing.nonzeroByteCount,
+            0,
+            "The sampled host pointer for resource 4 exposed only zero bytes before its first submission."
         )
     }
 

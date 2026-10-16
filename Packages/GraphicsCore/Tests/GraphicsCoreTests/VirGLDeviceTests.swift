@@ -624,6 +624,69 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     #expect(replayed.calls == recordedCalls)
 }
 
+@Test func recorderCountsNonzeroBytesWithoutRecordingGuestData() throws {
+    let engine = FakeVirGLEngine(onFence: { _ in })
+    let recorder = VirGLRecorder(observingGuestResourceIDs: [4], recordsOperations: false)
+    let recordingEngine = RecordingVirGLEngine(wrapping: engine, recorder: recorder)
+    let memory = UnsafeMutableRawPointer.allocate(byteCount: 8, alignment: 1)
+    defer { memory.deallocate() }
+    let bytes = memory.assumingMemoryBound(to: UInt8.self)
+    bytes[0] = 0
+    bytes[1] = 0x12
+    bytes[2] = 0
+    bytes[3] = 0x34
+    bytes[4] = 0
+    bytes[5] = 0
+    bytes[6] = 0
+    bytes[7] = 0
+    let range = try #require(
+        VirGLBackingRange(UnsafeMutableRawBufferPointer(start: memory, count: 8))
+    )
+
+    try recordingEngine.attachBacking(resource: 4, ranges: [range])
+    try recordingEngine.submit(context: 2, commands: [])
+
+    let observations = recorder.guestBackingObservationsForTest()
+    #expect(observations.count == 1)
+    #expect(observations[0].resourceID == 4)
+    #expect(observations[0].rangeCount == 1)
+    #expect(observations[0].sampledByteCount == 8)
+    #expect(observations[0].nonzeroByteCount == 2)
+    #expect(recorder.recording.operations.isEmpty)
+}
+
+@Test func recorderBoundsSamplesAndReobservesAfterDetach() throws {
+    let engine = FakeVirGLEngine(onFence: { _ in })
+    let recorder = VirGLRecorder(observingGuestResourceIDs: [4], recordsOperations: false)
+    let recordingEngine = RecordingVirGLEngine(wrapping: engine, recorder: recorder)
+    let sampleMemory = UnsafeMutableRawPointer.allocate(byteCount: 8192, alignment: 1)
+    defer { sampleMemory.deallocate() }
+    let bytes = sampleMemory.assumingMemoryBound(to: UInt8.self)
+    bytes.initialize(repeating: 0, count: 8192)
+    let range = try #require(
+        VirGLBackingRange(UnsafeMutableRawBufferPointer(start: sampleMemory, count: 8192))
+    )
+
+    try recordingEngine.attachBacking(resource: 4, ranges: [range])
+    try recordingEngine.submit(context: 2, commands: [])
+    let firstObservation = try #require(recorder.guestBackingObservationsForTest().first)
+    #expect(firstObservation.sampledByteCount == 4096)
+    #expect(firstObservation.nonzeroByteCount == 0)
+
+    bytes[0] = 0x12
+    try recordingEngine.submit(context: 2, commands: [])
+    #expect(recorder.guestBackingObservationsForTest().first == firstObservation)
+
+    recordingEngine.detachBacking(resource: 4)
+    bytes[0] = 0x34
+    try recordingEngine.attachBacking(resource: 4, ranges: [range])
+    try recordingEngine.submit(context: 2, commands: [])
+    let reattachedObservation = try #require(recorder.guestBackingObservationsForTest().first)
+    #expect(reattachedObservation.sampledByteCount == 4096)
+    #expect(reattachedObservation.nonzeroByteCount == 1)
+    #expect(recorder.recording.operations.isEmpty)
+}
+
 /// Sends the same requests as `aRecorderDoesNotChangeTheResponsesOrTheEngineCalls`, with or without a recorder. It
 /// returns what the guest received and what the engine was asked to do.
 private func sessionResponses(recorder: VirGLRecorder?) async throws -> (

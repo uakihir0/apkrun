@@ -252,7 +252,7 @@ steps (`10f921e` to `ce7a21e`); the #095 port and marker results (`bfd0860`, `c2
 evidence (`ad78532`, `d9bc980`, `5f0681a`, `39ec354`); and the HelloGL application-domain
 comparison and the M2 policy boundary recorded in IR-1331 and IR-1332; #103
 trace-stage discrepancies and cancellation checks and #024 wire-phase counts
-(`d76f80f`, `50ff272`; IR-1346 to IR-1348).
+(`d76f80f`, `50ff272`, `efb78ac`; IR-1346 to IR-1348).
 
 **Note on IR-901.** The number IR-901 is used by the SELinux compiler entry only. The HAL-port entry was renumbered to IR-907 to remove the duplicate.
 offline", is the entry that IR-904 cites. The second, "Four of the marked ports are read by product

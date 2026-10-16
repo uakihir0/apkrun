@@ -292,6 +292,7 @@ def test_the_manifest_changes_identity_and_hashes_and_is_resigned(
     assert re.fullmatch(r"[0-9a-f]{40}", record["builder"]["gitRevision"])
     assert re.fullmatch(r"[0-9a-f]{64}", record["builder"]["sourceSHA256"])
     assert isinstance(record["builder"]["workingTreeClean"], bool)
+    assert json.loads((tmp_path / "variant.variant.json").read_text(encoding="utf-8")) == record
     assert "IR-1322" in record["decisions"]["identity"]  # type: ignore[index]
     for entry in manifest["files"]:
         data = (variant / entry["path"]).read_bytes()

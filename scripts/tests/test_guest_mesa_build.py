@@ -136,8 +136,10 @@ class GuestMesaLockTests(unittest.TestCase):
         self.assertIn('export M4="$m4_prefix/bin/m4"', script)
         self.assertIn('archive-sha256=$source_sha256', script)
         self.assertIn('binary-sha256=$binary_sha256', script)
-        self.assertIn('tool_cache_matches "$flex_binary" "$flex_stamp"', script)
-        self.assertIn('tool_cache_matches "$m4_binary" "$m4_stamp"', script)
+        self.assertIn('dependency-sha256=%s\\n', script)
+        self.assertIn('"$m4_expected_version" "none"', script)
+        self.assertIn('"$flex_expected_version" "$m4_binary_sha256"', script)
+        self.assertIn('m4_binary_sha256="$(shasum -a 256 "$m4_binary"', script)
 
     def test_python_tools_are_hash_pinned(self):
         lines = mesa.pip_requirements(lock_document()).splitlines()

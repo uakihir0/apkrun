@@ -193,7 +193,7 @@ fetch_tarball() {
 }
 
 tool_cache_matches() {
-    local binary="$1" stamp="$2" source_sha256="$3" expected_version="$4"
+    local binary="$1" stamp="$2" source_sha256="$3" expected_version="$4" dependency_sha256="$5"
     local version binary_sha256
     [[ -x "$binary" && -f "$stamp" ]] || return 1
     version="$("$binary" --version 2>/dev/null | head -n 1)" || return 1
@@ -201,16 +201,17 @@ tool_cache_matches() {
     [[ "$version" == "$expected_version" ]] || return 1
     [[ "$(sed -n '1p' "$stamp")" == "archive-sha256=$source_sha256" ]] || return 1
     [[ "$(sed -n '2p' "$stamp")" == "binary-sha256=$binary_sha256" ]] || return 1
-    [[ "$(sed -n '3p' "$stamp")" == "version=$expected_version" ]]
+    [[ "$(sed -n '3p' "$stamp")" == "version=$expected_version" ]] || return 1
+    [[ "$(sed -n '4p' "$stamp")" == "dependency-sha256=$dependency_sha256" ]]
 }
 
 write_tool_cache_stamp() {
-    local binary="$1" stamp="$2" source_sha256="$3" version="$4"
+    local binary="$1" stamp="$2" source_sha256="$3" version="$4" dependency_sha256="$5"
     local binary_sha256 temporary_stamp
     binary_sha256="$(shasum -a 256 "$binary" | awk '{print $1}')"
     temporary_stamp="$stamp.tmp.$$"
-    printf 'archive-sha256=%s\nbinary-sha256=%s\nversion=%s\n' \
-        "$source_sha256" "$binary_sha256" "$version" >"$temporary_stamp"
+    printf 'archive-sha256=%s\nbinary-sha256=%s\nversion=%s\ndependency-sha256=%s\n' \
+        "$source_sha256" "$binary_sha256" "$version" "$dependency_sha256" >"$temporary_stamp"
     mv "$temporary_stamp" "$stamp"
 }
 
@@ -228,24 +229,26 @@ m4_prefix="$work_dir/tools/m4"
 m4_binary="$m4_prefix/bin/m4"
 m4_stamp="$m4_prefix/.apkrun-source-pin"
 m4_expected_version="m4 (GNU M4) $m4_version"
-if ! tool_cache_matches "$m4_binary" "$m4_stamp" "$m4_sha256" "$m4_expected_version"; then
+if ! tool_cache_matches "$m4_binary" "$m4_stamp" "$m4_sha256" "$m4_expected_version" "none"; then
     rm -rf "$work_dir/build/m4-src" "$m4_prefix"
     mkdir -p "$work_dir/build/m4-src"
     tar -xJf "$work_dir/downloads/m4-$m4_version.tar.xz" -C "$work_dir/build/m4-src"
     (cd "$work_dir/build/m4-src/m4-$m4_version" && ./configure --prefix="$m4_prefix" \
         && make -j"$jobs" && make install) >"$logs/m4.log" 2>&1 || die "m4 build failed (see $logs/m4.log)"
     [[ "$("$m4_binary" --version | head -1)" == "$m4_expected_version" ]] || die "m4 version differs from the lock"
-    write_tool_cache_stamp "$m4_binary" "$m4_stamp" "$m4_sha256" "$m4_expected_version"
+    write_tool_cache_stamp "$m4_binary" "$m4_stamp" "$m4_sha256" "$m4_expected_version" "none"
 fi
-tool_cache_matches "$m4_binary" "$m4_stamp" "$m4_sha256" "$m4_expected_version" \
+tool_cache_matches "$m4_binary" "$m4_stamp" "$m4_sha256" "$m4_expected_version" "none" \
     || die "m4 cache does not match its locked source and executable hash"
+m4_binary_sha256="$(shasum -a 256 "$m4_binary" | awk '{print $1}')" \
+    || die "cannot hash the pinned m4 executable"
 
 export M4="$m4_prefix/bin/m4"
 flex_prefix="$work_dir/tools/flex"
 flex_binary="$flex_prefix/bin/flex"
 flex_stamp="$flex_prefix/.apkrun-source-pin"
 flex_expected_version="flex $flex_version"
-if ! tool_cache_matches "$flex_binary" "$flex_stamp" "$flex_sha256" "$flex_expected_version"; then
+if ! tool_cache_matches "$flex_binary" "$flex_stamp" "$flex_sha256" "$flex_expected_version" "$m4_binary_sha256"; then
     rm -rf "$work_dir/build/flex-src" "$flex_prefix"
     mkdir -p "$work_dir/build/flex-src"
     tar -xzf "$work_dir/downloads/flex-$flex_version.tar.gz" -C "$work_dir/build/flex-src"
@@ -254,9 +257,9 @@ if ! tool_cache_matches "$flex_binary" "$flex_stamp" "$flex_sha256" "$flex_expec
         && ./configure --prefix="$flex_prefix" && make -j"$jobs" && make install) \
         >"$logs/flex.log" 2>&1 || die "flex build failed (see $logs/flex.log)"
     [[ "$("$flex_binary" --version)" == "$flex_expected_version" ]] || die "flex version differs from the lock"
-    write_tool_cache_stamp "$flex_binary" "$flex_stamp" "$flex_sha256" "$flex_expected_version"
+    write_tool_cache_stamp "$flex_binary" "$flex_stamp" "$flex_sha256" "$flex_expected_version" "$m4_binary_sha256"
 fi
-tool_cache_matches "$flex_binary" "$flex_stamp" "$flex_sha256" "$flex_expected_version" \
+tool_cache_matches "$flex_binary" "$flex_stamp" "$flex_sha256" "$flex_expected_version" "$m4_binary_sha256" \
     || die "flex cache does not match its locked source and executable hash"
 
 # 3. Ninja, from the pinned source, bootstrapped by its own script.

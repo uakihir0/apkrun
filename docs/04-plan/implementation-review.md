@@ -19411,3 +19411,48 @@ Actions test was run.
 top/left T2 has not run. A maintainer may interpret box 7 as requiring
 guest-side edge delivery and choose to clear it, but the current checked box
 claims only the host-side clamping criterion; it does not claim T2 completion.
+
+## IR-1341: The G3 recording does not yet establish the C01-6 visual check
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02 #023](issues/M02-graphics.md#023-render-surfaceflinger-to-metal); [README.md](issues/README.md) §5; [test-strategy.md](test-strategy.md) §8; `scripts/run-gate.sh`; local `build/gates/G3/screen-recording.mp4` |
+
+**Choice.** Keep C01-6 open. Do not treat the existing MP4 as proof that
+HelloGL had no visible tearing or stutter.
+
+**Evidence.** `scripts/run-gate.sh` starts `screencapture -v -V 1800` without
+a window or region selector, so it records the full screen. `ffprobe` reports
+the local MP4 as 480×312, 1293.15 seconds, with an average frame rate of
+29.49 fps. A spot-check frame at offset 00:07:15 does not show the APKRun
+display window. The minute-level `window-list.txt` reports the window as
+on-screen at several times, but the artifacts do not align those timestamps
+with the sampled video frame or establish that the window was visible and
+unobscured there. The requested capture duration is 1800 seconds, but the MP4
+is 1293.15 seconds; the available artifacts do not identify the capture start
+or reliably align video offsets with the window-list timestamps. The automated
+pool-buffer check sampled 320 frames with zero mixed frames, and the run
+averaged 59.98 fps; those checks do not replace visual review of the recorded
+presentation.
+
+**Reason.** C01-6 asks whether the screen recording visibly presents HelloGL
+without tearing or stutter. The available full-screen recording is low
+resolution (480×312) and does not show the target window at the sampled point,
+so a spot check cannot establish that result. This review keeps the acceptance
+bar intact while recording why the existing evidence is insufficient.
+
+**Verification (2026-10-16).** Read the G3 recorder invocation and report,
+checked the MP4 metadata with `ffprobe`, inspected a frame at offset 00:07:15
+and the gate's `window-list.txt` independently, and checked the committed G3
+summary. The available records do not establish timestamp alignment. An
+adversarial review confirmed the evidence boundary and caught the mismatch
+between the requested and actual recording durations; the record now states
+that video offsets cannot be aligned to the window list. Temporary extracted
+frames were deleted. `git diff --check` passed. No GUI or Actions test was run.
+
+**Risk.** The full-screen recording may contain unrelated desktop content and
+is a local artifact. Keep it local unless it is reviewed and sanitized for
+sharing. A new recording method must still observe actual window presentation;
+capturing only the app surface could hide compositor or display stutter.

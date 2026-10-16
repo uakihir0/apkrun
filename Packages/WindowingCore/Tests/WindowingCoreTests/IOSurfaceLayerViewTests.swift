@@ -1,7 +1,29 @@
 import AppKit
+import InputCore
 import Testing
 
 @testable import WindowingCore
+
+private final class RecordingInputSink: PointerInputSink, @unchecked Sendable {
+    private(set) var events: [InputEvent] = []
+
+    func deliver(_ events: [InputEvent]) {
+        self.events.append(contentsOf: events)
+    }
+}
+
+private func keyEvent(_ type: NSEvent.EventType, code: UInt16) -> NSEvent {
+    NSEvent.keyEvent(
+        with: type, location: .zero, modifierFlags: [], timestamp: 1.5,
+        windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false,
+        keyCode: code)!
+}
+
+private func pointerEvent(_ type: NSEvent.EventType) -> NSEvent {
+    NSEvent.mouseEvent(
+        with: type, location: CGPoint(x: 50, y: 50), modifierFlags: [], timestamp: 1.5,
+        windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+}
 
 @MainActor
 @Test func rawPointerReceiptObserverReportsTheAppKitEventBeforeTranslation() throws {
@@ -33,4 +55,25 @@ import Testing
     #expect(receipts.count == 1)
     #expect(receipts.first?.0 == Int(NSEvent.EventType.leftMouseDown.rawValue))
     #expect(receipts.first?.1 == 12_500_000_000)
+}
+
+@MainActor
+@Test func startupKeyEventsDoNotMutateTranslatorState() {
+    let view = IOSurfaceLayerView(
+        frame: NSRect(x: 0, y: 0, width: 100, height: 100),
+        contentSize: CGSize(width: 100, height: 100),
+        contentScale: 1
+    )
+    view.update(pixelWidth: 100, pixelHeight: 100, generation: 1)
+    let sink = RecordingInputSink()
+    view.setInputEnabled(false)
+
+    view.keyDown(with: keyEvent(.keyDown, code: 0x00))
+    view.mouseDown(with: pointerEvent(.leftMouseDown))
+    view.setInputEnabled(true)
+    view.inputSink = sink
+    view.keyUp(with: keyEvent(.keyUp, code: 0x00))
+    view.mouseUp(with: pointerEvent(.leftMouseUp))
+
+    #expect(sink.events.isEmpty)
 }

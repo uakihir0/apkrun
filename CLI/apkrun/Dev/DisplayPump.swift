@@ -16,7 +16,7 @@
         private let inputSink: PointerInputSink
         private let onWindowClosed: @MainActor () -> Void
         private var source: SurfacePoolFrameSource?
-        private var window: DisplayWindow?
+        private var window: SessionWindowController?
         private var tasks: [Task<Void, Never>] = []
         #if APKRUN_TEST_READBACK
             private let tearing = TearingSampler()
@@ -69,7 +69,7 @@
             case .attached(let surfaces):
                 let source = SurfacePoolFrameSource(surfaces: surfaces, generation: 1, display: display)
                 let scale = NSScreen.main?.backingScaleFactor ?? 1
-                let window = DisplayWindow(
+                let window = SessionWindowController(
                     source: source, title: "APKRun display 0", backingScale: scale, inputSink: inputSink)
                 window.onClose = onWindowClosed
                 window.show()

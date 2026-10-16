@@ -1,22 +1,25 @@
 import AppKit
 import Dispatch
 
-/// A development window for one display (display-and-windowing.md §7, #023).
+/// Owns the native window for one app session (display-and-windowing.md §7, #026).
 ///
 /// The window is created at the scanout's size, so the surface shows at its native density, and it is never resized
-/// by the guest. The window consumes the frames of its source on the main actor, applies the layer's frame gate, and
-/// reports each displayed frame back to the source. Its pointer events go to the input sink (#024). The mapper follows
-/// the generation of the frames it shows.
+/// by the guest. Before the first frame, it shows a lightweight app placeholder. The window consumes the frames of its
+/// source on the main actor, applies the layer's frame gate, and reports each displayed frame back to the source. Its
+/// pointer events go to the input sink (#024). The mapper follows the generation of the frames it shows.
 @MainActor
-public final class DisplayWindow: NSObject, NSWindowDelegate {
+public final class SessionWindowController: NSObject, NSWindowDelegate {
     /// Runs when the user closes the window. The owner stops the runtime, which is the close action of the window.
     public var onClose: (@MainActor () -> Void)?
 
     private let window: NSWindow
     private let layerView: IOSurfaceLayerView
+    private let inputSink: PointerInputSink?
+    private var placeholderView: SessionWindowPlaceholderView?
     private let source: any FrameSource
     private var gate: LayerFrameGate
     private var consumer: Task<Void, Never>?
+    private var presentationState = SessionWindowPresentationState()
     /// The generation that the input mapper maps to. Nil until the first frame is shown.
     private var inputGeneration: UInt64?
 
@@ -26,7 +29,8 @@ public final class DisplayWindow: NSObject, NSWindowDelegate {
         source: any FrameSource,
         title: String,
         backingScale: CGFloat,
-        inputSink: PointerInputSink? = nil
+        inputSink: PointerInputSink? = nil,
+        appIcon: NSImage? = nil
     ) {
         self.source = source
         gate = LayerFrameGate(generation: source.generation)
@@ -40,6 +44,10 @@ public final class DisplayWindow: NSObject, NSWindowDelegate {
             contentSize: size,
             contentScale: backingScale
         )
+        layerView.setInputEnabled(false)
+        self.inputSink = inputSink
+        let placeholderView = SessionWindowPlaceholderView(
+            appName: title, appIcon: appIcon, frame: NSRect(origin: .zero, size: size))
         window = NSWindow(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.titled, .closable, .miniaturizable],
@@ -49,15 +57,25 @@ public final class DisplayWindow: NSObject, NSWindowDelegate {
         super.init()
         window.title = title
         window.isReleasedWhenClosed = false
-        layerView.inputSink = inputSink
-        window.contentView = layerView
+        let contentView = NSView(frame: NSRect(origin: .zero, size: size))
+        contentView.wantsLayer = true
+        contentView.layer?.backgroundColor = NSColor.black.cgColor
+        layerView.frame = contentView.bounds
+        layerView.autoresizingMask = [.width, .height]
+        placeholderView.autoresizingMask = [.width, .height]
+        contentView.addSubview(layerView)
+        contentView.addSubview(placeholderView)
+        window.contentView = contentView
         // Key events go to the first responder, so the view that forwards them must be it (input.md §5.1).
         window.initialFirstResponder = layerView
         window.delegate = self
+        window.collectionBehavior = [.fullScreenPrimary]
+        window.tabbingMode = .disallowed
         // Pointer moves without a button are hover events, so the window needs them (input.md §4.1).
         window.acceptsMouseMovedEvents = true
         window.setContentSize(size)
         window.center()
+        self.placeholderView = placeholderView
     }
 
     /// Shows the window, and starts applying the frames of the source.
@@ -71,9 +89,14 @@ public final class DisplayWindow: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Changes the window title, which the development display uses for its statistics line.
+    /// Changes the window title, which a developer display may use for its statistics line.
     public func setTitle(_ title: String) {
         window.title = title
+    }
+
+    /// Updates the status shown until the first frame arrives.
+    public func setPlaceholderStatus(_ status: String) {
+        placeholderView?.setStatus(status)
     }
 
     /// Closes the window without asking. The owner calls it when the boot ends.
@@ -112,10 +135,97 @@ public final class DisplayWindow: NSObject, NSWindowDelegate {
                 )
             }
             let source = source
-            layerView.show(source.surfaces[bufferIndex]) {
+            layerView.show(source.surfaces[bufferIndex]) { [weak self] in
                 source.frameDisplayed(sequence: sequence)
+                guard let self else {
+                    return
+                }
+                presentationState.markFramePresented()
+                guard !presentationState.showsPlaceholder else {
+                    return
+                }
+                placeholderView?.removeFromSuperview()
+                placeholderView = nil
+                layerView.inputSink = inputSink
+                layerView.setInputEnabled(presentationState.acceptsInput)
             }
         }
+    }
+}
+
+/// The placeholder remains visible until a current-generation frame has been committed to the window.
+struct SessionWindowPresentationState: Equatable {
+    private(set) var hasPresentedFrame = false
+
+    var showsPlaceholder: Bool {
+        !hasPresentedFrame
+    }
+
+    var acceptsInput: Bool {
+        hasPresentedFrame
+    }
+
+    mutating func markFramePresented() {
+        hasPresentedFrame = true
+    }
+}
+
+@MainActor
+private final class SessionWindowPlaceholderView: NSView {
+    private let appName: String
+    private let statusLabel = NSTextField(labelWithString: "Starting Android…")
+
+    init(appName: String, appIcon: NSImage?, frame: NSRect) {
+        self.appName = appName
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.cgColor
+
+        let fallbackIcon =
+            NSImage(
+                systemSymbolName: "app.fill",
+                accessibilityDescription: "\(appName) app icon"
+            ) ?? NSImage()
+        let icon = NSImageView(image: appIcon ?? fallbackIcon)
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 48, weight: .regular)
+        icon.contentTintColor = .white
+        icon.setContentHuggingPriority(.required, for: .vertical)
+
+        let nameLabel = NSTextField(labelWithString: appName)
+        nameLabel.font = .systemFont(ofSize: 20, weight: .semibold)
+        nameLabel.textColor = .white
+        statusLabel.textColor = NSColor(calibratedWhite: 0.78, alpha: 1)
+
+        let progress = NSProgressIndicator()
+        progress.style = .spinning
+        progress.isIndeterminate = true
+        progress.startAnimation(nil)
+
+        let stack = NSStackView(views: [icon, nameLabel, statusLabel, progress])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 14
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24),
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel("\(appName), Starting Android")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("SessionWindowPlaceholderView is created in code.")
+    }
+
+    func setStatus(_ status: String) {
+        statusLabel.stringValue = status
+        setAccessibilityLabel("\(appName), \(status)")
     }
 }
 

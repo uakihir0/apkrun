@@ -28,8 +28,10 @@ public final class IOSurfaceLayerView: NSView {
     /// The rectangle of the tracking area, so that a layout that does not move the content keeps the area.
     private var trackingRect: CGRect = .zero
     private var flushTimer: Timer?
+    /// Startup input must not mutate translator state until the first frame is committed.
+    private var inputEnabled = true
 
-    /// Receives the pointer and key events, in order. The owner sets it before the window shows.
+    /// Receives the pointer and key events, in order.
     public var inputSink: PointerInputSink?
 
     /// Observes raw pointer receipt for explicitly enabled diagnostics. The default input path does not call an observer.
@@ -68,11 +70,15 @@ public final class IOSurfaceLayerView: NSView {
         replaceMapper()
     }
 
-    /// Shows `surface`. `displayed` runs on the main thread after Core Animation commits the contents.
-    public func show(_ surface: IOSurface, displayed: @escaping @Sendable () -> Void) {
+    /// Shows `surface`. `displayed` runs on the main actor after Core Animation commits the contents.
+    public func show(_ surface: IOSurface, displayed: @escaping @MainActor @Sendable () -> Void) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        CATransaction.setCompletionBlock(displayed)
+        CATransaction.setCompletionBlock {
+            MainActor.assumeIsolated {
+                displayed()
+            }
+        }
         contentLayer.contents = surface
         CATransaction.commit()
     }
@@ -82,6 +88,11 @@ public final class IOSurfaceLayerView: NSView {
     public func update(pixelWidth: Int, pixelHeight: Int, generation: UInt64) {
         geometry = (pixelWidth: pixelWidth, pixelHeight: pixelHeight, generation: generation)
         replaceMapper()
+    }
+
+    /// Enables event translation after the owner is ready to route input to the guest.
+    func setInputEnabled(_ enabled: Bool) {
+        inputEnabled = enabled
     }
 
     /// The window lost key status. The open gesture, the buttons, the hover, and the keys end on the guest (input.md §4.2,
@@ -170,7 +181,10 @@ public final class IOSurfaceLayerView: NSView {
     /// The ⌘ shortcuts of input.md §6 (⌘C, ⌘X, ⌘V, ⌘A, ⌘Z, and ⌘[) reach the guest before the menus can take them. The
     /// other key equivalents are left to the menus, so ⌘Q, ⌘W, and the rest keep their meaning.
     public override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard let sample = KeyEventAdapter.sample(for: event), KeyTranslator.forwardsCommandShortcut(sample) else {
+        guard inputEnabled,
+            let sample = KeyEventAdapter.sample(for: event),
+            KeyTranslator.forwardsCommandShortcut(sample)
+        else {
             return false
         }
         deliver(keyTranslator.translate(sample))
@@ -202,6 +216,9 @@ public final class IOSurfaceLayerView: NSView {
     /// Converts one event to a sample, translates it, and sends the events that come out. A held hover or scroll starts
     /// the flush timer.
     private func forward(_ event: NSEvent) {
+        guard inputEnabled else {
+            return
+        }
         if let inputEventReceiptObserver {
             let timestampNanos = PointerEventAdapter.timestamp(seconds: event.timestamp).hostNanos
             inputEventReceiptObserver(Int(event.type.rawValue), timestampNanos)
@@ -218,6 +235,9 @@ public final class IOSurfaceLayerView: NSView {
 
     /// Converts one key event to a sample, translates it, and sends the events that come out.
     private func forwardKey(_ event: NSEvent) {
+        guard inputEnabled else {
+            return
+        }
         guard let sample = KeyEventAdapter.sample(for: event) else {
             return
         }

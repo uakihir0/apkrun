@@ -93,7 +93,7 @@ final class AndroidInputRun {
     private let bootLog = BootLog()
     private var frames: DisplayFrames?
     private var framesSeen = 0
-    private var window: DisplayWindow?
+    private var window: SessionWindowController?
     private var inputSink: WireSink?
     private var inputTraceRecorder: InputTraceRecorder?
     private var inputTouchEventRecorder: InputTouchEventRecorder?
@@ -403,8 +403,23 @@ final class AndroidInputRun {
 
     private func windowAndView() throws -> (NSWindow, IOSurfaceLayerView) {
         let window = try XCTUnwrap(NSApplication.shared.windows.first { $0.title == Self.windowTitle })
-        let view = try XCTUnwrap(window.contentView as? IOSurfaceLayerView)
+        let view = try XCTUnwrap(surfaceLayerView(in: window.contentView))
         return (window, view)
+    }
+
+    private func surfaceLayerView(in view: NSView?) -> IOSurfaceLayerView? {
+        guard let view else {
+            return nil
+        }
+        if let layerView = view as? IOSurfaceLayerView {
+            return layerView
+        }
+        for subview in view.subviews {
+            if let layerView = surfaceLayerView(in: subview) {
+                return layerView
+            }
+        }
+        return nil
     }
 
     /// The uiautomator dump of the screen, read with no input. A dump that fails gives an empty string.
@@ -506,7 +521,8 @@ final class AndroidInputRun {
 
     private func clearInputTraceCapture() {
         if let view = NSApplication.shared.windows
-            .first(where: { $0.title == Self.windowTitle })?.contentView as? IOSurfaceLayerView
+            .first(where: { $0.title == Self.windowTitle })
+            .flatMap({ surfaceLayerView(in: $0.contentView) })
         {
             view.inputEventReceiptObserver = nil
         }
@@ -553,7 +569,7 @@ final class AndroidInputRun {
             let source = DisplayFrames(surfaces: surfaces, display: display)
             let scale = NSScreen.main?.backingScaleFactor ?? 1
             let sink = WireSink(route: route)
-            let window = DisplayWindow(
+            let window = SessionWindowController(
                 source: source, title: Self.windowTitle, backingScale: scale, inputSink: sink)
             window.show()
             frames = source

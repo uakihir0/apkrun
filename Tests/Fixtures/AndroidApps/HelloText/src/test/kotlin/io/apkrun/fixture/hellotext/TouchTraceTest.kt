@@ -3,6 +3,7 @@ package io.apkrun.fixture.hellotext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -43,6 +44,9 @@ class TouchTraceTest {
     @Test
     fun captureIsOffByDefaultAndIgnoresInputSamplesAndClicks() {
         val trace = TouchTrace(capacity = 4)
+        trace.start()
+        val staleCaptureToken = requireNotNull(trace.activeCaptureToken())
+        trace.stopAndDrain()
 
         assertFalse(trace.isCapturing)
         assertNull(
@@ -61,6 +65,13 @@ class TouchTraceTest {
             input = TouchTraceInputToken(sequence = 1, captureToken = Any()),
             sampledAtUptimeMillis = 20,
             pressed = true,
+        )
+        trace.recordPressedTransition(
+            captureToken = staleCaptureToken,
+            sampledAtElapsedRealtimeNanos = 25,
+            requestedPressed = true,
+            pressedBefore = false,
+            pressedAfter = true,
         )
         assertNull(trace.recordClick(storedCounter = 1, saveSucceeded = true))
 
@@ -226,6 +237,116 @@ class TouchTraceTest {
         assertFalse(TouchTraceAction.MOVE.capturesPostDispatchPressedState)
         assertTrue(TouchTraceAction.UP.capturesPostDispatchPressedState)
         assertFalse(TouchTraceAction.CANCEL.capturesPostDispatchPressedState)
+    }
+
+    @Test
+    fun pressedTransitionsAndCounterTimingAreCapturedInOrder() {
+        val trace = TouchTrace(capacity = 8)
+        trace.start()
+        val captureToken = requireNotNull(trace.activeCaptureToken())
+
+        trace.recordPressedTransition(
+            captureToken = captureToken,
+            sampledAtElapsedRealtimeNanos = 1_000,
+            requestedPressed = true,
+            pressedBefore = false,
+            pressedAfter = true,
+        )
+        trace.recordPressedTransition(
+            captureToken = captureToken,
+            sampledAtElapsedRealtimeNanos = 1_100,
+            requestedPressed = false,
+            pressedBefore = false,
+            pressedAfter = false,
+        )
+        val clickSequence =
+            trace.recordClick(
+                storedCounter = 1,
+                saveSucceeded = true,
+                counterIncrementStartedAtElapsedRealtimeNanos = 1_200,
+                counterIncrementDurationNanos = 250,
+            )
+
+        val records = trace.stopAndDrain().records
+        assertEquals(listOf(1L, 2L), records.map(TouchTraceRecord::sequence))
+        val pressed = records[0] as TouchTraceRecord.PressedTransition
+        assertEquals(1_000L, pressed.sampledAtElapsedRealtimeNanos)
+        assertTrue(pressed.requestedPressed)
+        assertFalse(pressed.pressedBefore)
+        assertTrue(pressed.pressedAfter)
+        assertEquals(
+            "kind=pressed-transition sequence=1 sampledAtElapsedRealtimeNanos=1000 " +
+                "requestedPressed=true pressedBefore=false pressedAfter=true",
+            pressed.toLogcatLine(),
+        )
+        val click = records[1] as TouchTraceRecord.Click
+        assertEquals(clickSequence, click.sequence)
+        assertEquals(1_200L, click.counterIncrementStartedAtElapsedRealtimeNanos)
+        assertEquals(250L, click.counterIncrementDurationNanos)
+        assertTrue(
+            click.toLogcatLine().contains(
+                "counterIncrementStartedAtElapsedRealtimeNanos=1200 " +
+                    "counterIncrementDurationNanos=250"
+            )
+        )
+    }
+
+    @Test
+    fun pressedTransitionFromAnOlderCaptureIsIgnored() {
+        val trace = TouchTrace(capacity = 4)
+        trace.start()
+        val staleCaptureToken = requireNotNull(trace.activeCaptureToken())
+        trace.stopAndDrain()
+        trace.start()
+
+        trace.recordPressedTransition(
+            captureToken = staleCaptureToken,
+            sampledAtElapsedRealtimeNanos = 1_000,
+            requestedPressed = true,
+            pressedBefore = false,
+            pressedAfter = true,
+        )
+
+        assertTrue(trace.stopAndDrain().records.isEmpty())
+    }
+
+    @Test
+    fun gestureThatStartedBeforeCaptureCannotInheritItsToken() {
+        val lineage = TouchTraceCaptureLineage()
+        val uncapturedPressToken = lineage.captureTokenForPressedTransition(requestedPressed = true)
+        assertNull(uncapturedPressToken)
+        lineage.recordPressedState(pressed = true, captureToken = uncapturedPressToken)
+        val captureToken = TouchTraceCaptureToken(Any())
+        lineage.setActiveCaptureToken(captureToken)
+
+        // The capture-only listener first sees the already-running gesture's terminal event.
+        lineage.observeTouchAction(TouchTraceAction.UP)
+
+        assertNull(lineage.captureTokenForPressedTransition(requestedPressed = false))
+    }
+
+    @Test
+    fun pressedStateKeepsItsGestureCaptureAcrossStopAndStart() {
+        val lineage = TouchTraceCaptureLineage()
+        val originalCaptureToken = TouchTraceCaptureToken(Any())
+        lineage.setActiveCaptureToken(originalCaptureToken)
+        lineage.observeTouchAction(TouchTraceAction.DOWN)
+
+        val pressedToken = lineage.captureTokenForPressedTransition(requestedPressed = true)
+        assertSame(originalCaptureToken, pressedToken)
+        lineage.recordPressedState(pressed = true, captureToken = pressedToken)
+        val nextCaptureToken = TouchTraceCaptureToken(Any())
+        lineage.setActiveCaptureToken(nextCaptureToken)
+        val terminalGesture = requireNotNull(lineage.observeTouchAction(TouchTraceAction.UP))
+
+        val releaseToken = lineage.captureTokenForPressedTransition(requestedPressed = false)
+        assertSame(originalCaptureToken, releaseToken)
+        lineage.recordPressedState(pressed = false, captureToken = releaseToken)
+        lineage.clearGesture(terminalGesture)
+        assertSame(
+            nextCaptureToken,
+            lineage.captureTokenForPressedTransition(requestedPressed = false),
+        )
     }
 
     @Test

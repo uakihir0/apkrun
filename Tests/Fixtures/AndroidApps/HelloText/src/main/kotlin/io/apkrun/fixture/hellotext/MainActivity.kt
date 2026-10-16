@@ -26,7 +26,7 @@ import android.widget.TextView
 class MainActivity : Activity() {
     private lateinit var counter: CounterStore
     private lateinit var counterText: TextView
-    private lateinit var incrementButton: Button
+    private lateinit var incrementButton: TraceableCounterButton
     private var traceDebugBuild = false
     private var touchTraceObserver: TouchTraceObserverToken? = null
 
@@ -35,6 +35,7 @@ class MainActivity : Activity() {
         if (action == null) {
             return@OnTouchListener false
         }
+        incrementButton.noteTraceTouchAction(action)
         val inside =
             event.x >= 0f &&
                 event.y >= 0f &&
@@ -74,6 +75,9 @@ class MainActivity : Activity() {
         if (traceDebugBuild) {
             touchTraceObserver = DebugTouchTraceSession.observeCaptureState { capturing ->
                 incrementButton.setOnTouchListener(if (capturing) touchTraceListener else null)
+                incrementButton.setTraceCaptureToken(
+                    if (capturing) DebugTouchTraceSession.activeCaptureToken else null
+                )
             }
         }
         incrementButton.setOnClickListener { click() }
@@ -116,6 +120,7 @@ class MainActivity : Activity() {
             incrementButton.setOnTouchListener(null)
             touchTraceObserver?.let(DebugTouchTraceSession::removeCaptureStateObserver)
             touchTraceObserver = null
+            incrementButton.clearTraceCaptureTokens()
         }
         super.onDestroy()
     }
@@ -127,19 +132,47 @@ class MainActivity : Activity() {
     }
 
     private fun click() {
-        try {
-            val value = counter.increment()
-            if (traceDebugBuild) {
-                DebugTouchTraceSession.recordClick(storedCounter = value, saveSucceeded = true)
+        val counterIncrementStartedAtElapsedRealtimeNanos =
+            if (traceDebugBuild && DebugTouchTraceSession.isCapturing) {
+                SystemClock.elapsedRealtimeNanos()
+            } else {
+                null
             }
-            Log.i(LOG_TAG, "click $value")
-            showCount(value)
-        } catch (failure: IllegalStateException) {
-            if (traceDebugBuild) {
-                DebugTouchTraceSession.recordClick(storedCounter = null, saveSucceeded = false)
+        val value =
+            try {
+                counter.increment()
+            } catch (failure: IllegalStateException) {
+                val counterIncrementDurationNanos =
+                    counterIncrementStartedAtElapsedRealtimeNanos?.let {
+                        SystemClock.elapsedRealtimeNanos() - it
+                    }
+                if (traceDebugBuild) {
+                    DebugTouchTraceSession.recordClick(
+                        storedCounter = null,
+                        saveSucceeded = false,
+                        counterIncrementStartedAtElapsedRealtimeNanos =
+                            counterIncrementStartedAtElapsedRealtimeNanos,
+                        counterIncrementDurationNanos = counterIncrementDurationNanos,
+                    )
+                }
+                Log.e(LOG_TAG, "click not saved: ${failure.message}")
+                return
             }
-            Log.e(LOG_TAG, "click not saved: ${failure.message}")
+        val counterIncrementDurationNanos =
+            counterIncrementStartedAtElapsedRealtimeNanos?.let {
+                SystemClock.elapsedRealtimeNanos() - it
+            }
+        if (traceDebugBuild) {
+            DebugTouchTraceSession.recordClick(
+                storedCounter = value,
+                saveSucceeded = true,
+                counterIncrementStartedAtElapsedRealtimeNanos =
+                    counterIncrementStartedAtElapsedRealtimeNanos,
+                counterIncrementDurationNanos = counterIncrementDurationNanos,
+            )
         }
+        Log.i(LOG_TAG, "click $value")
+        showCount(value)
     }
 
     private fun showCount(value: Int) {

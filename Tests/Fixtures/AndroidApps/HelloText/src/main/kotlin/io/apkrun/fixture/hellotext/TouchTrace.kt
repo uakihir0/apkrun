@@ -13,7 +13,7 @@ class TouchTrace(private val capacity: Int = DEFAULT_CAPACITY) {
     private var recordCount = 0
     private var nextRecordSequence = 1L
     private var droppedRecordCount = 0L
-    private var capturing = false
+    @Volatile private var capturing = false
     private var captureToken: Any = Any()
     private var clickOrdinal = 0L
     private var pendingUpCount = 0L
@@ -26,7 +26,13 @@ class TouchTrace(private val capacity: Int = DEFAULT_CAPACITY) {
 
     /** True only between [start] and [stopAndDrain]. */
     val isCapturing: Boolean
-        get() = synchronized(this) { capturing }
+        get() = capturing
+
+    /** The identity of the active capture, used to reject delayed records from an older run. */
+    fun activeCaptureToken(): TouchTraceCaptureToken? =
+        synchronized(this) {
+            if (capturing) TouchTraceCaptureToken(captureToken) else null
+        }
 
     /**
      * Clears any prior capture state and starts a fresh capture.
@@ -120,13 +126,45 @@ class TouchTrace(private val capacity: Int = DEFAULT_CAPACITY) {
         }
     }
 
+    /** Records an actual pressed-state transition during the explicit debug capture. */
+    fun recordPressedTransition(
+        captureToken: TouchTraceCaptureToken,
+        sampledAtElapsedRealtimeNanos: Long,
+        requestedPressed: Boolean,
+        pressedBefore: Boolean,
+        pressedAfter: Boolean,
+    ) {
+        if (pressedBefore == pressedAfter) {
+            return
+        }
+        synchronized(this) {
+            if (!capturing || captureToken.identity !== this.captureToken) {
+                return
+            }
+            append(
+                TouchTraceRecord.PressedTransition(
+                    sequence = allocateSequence(),
+                    sampledAtElapsedRealtimeNanos = sampledAtElapsedRealtimeNanos,
+                    requestedPressed = requestedPressed,
+                    pressedBefore = pressedBefore,
+                    pressedAfter = pressedAfter,
+                )
+            )
+        }
+    }
+
     /**
      * Records a click callback and correlates it only when one identifiable UP is pending.
      *
      * An ambiguous callback consumes one pending-UP count without guessing which UP it matched. Any
      * remaining candidate UPs retain an unknown identity until the pending set is exhausted.
      */
-    fun recordClick(storedCounter: Int?, saveSucceeded: Boolean): Long? =
+    fun recordClick(
+        storedCounter: Int?,
+        saveSucceeded: Boolean,
+        counterIncrementStartedAtElapsedRealtimeNanos: Long? = null,
+        counterIncrementDurationNanos: Long? = null,
+    ): Long? =
         synchronized(this) {
             if (!capturing) {
                 return@synchronized null
@@ -152,6 +190,9 @@ class TouchTrace(private val capacity: Int = DEFAULT_CAPACITY) {
                     correlation = correlation,
                     pendingUpCount = pendingAtClick,
                     correlatedUpSequence = correlatedUpSequence,
+                    counterIncrementStartedAtElapsedRealtimeNanos =
+                        counterIncrementStartedAtElapsedRealtimeNanos,
+                    counterIncrementDurationNanos = counterIncrementDurationNanos,
                 )
             )
 
@@ -256,11 +297,18 @@ sealed class TouchTraceRecord {
             is PressedSample ->
                 "kind=pressed-sample phase=post-dispatch-next-frame sequence=$sequence " +
                     "inputSequence=$inputSequence sampledAtUptimeMs=$sampledAtUptimeMillis pressed=$pressed"
+            is PressedTransition ->
+                "kind=pressed-transition sequence=$sequence " +
+                    "sampledAtElapsedRealtimeNanos=$sampledAtElapsedRealtimeNanos " +
+                    "requestedPressed=$requestedPressed pressedBefore=$pressedBefore pressedAfter=$pressedAfter"
             is Click ->
                 "kind=click sequence=$sequence clickOrdinal=$clickOrdinal " +
                     "storedCounter=${storedCounter ?: "none"} saveSucceeded=$saveSucceeded " +
                     "correlation=${correlation.name.lowercase()} pendingUpCount=$pendingUpCount " +
-                    "correlatedUpSequence=${correlatedUpSequence ?: "none"}"
+                    "correlatedUpSequence=${correlatedUpSequence ?: "none"} " +
+                    "counterIncrementStartedAtElapsedRealtimeNanos=" +
+                    "${counterIncrementStartedAtElapsedRealtimeNanos ?: "none"} " +
+                    "counterIncrementDurationNanos=${counterIncrementDurationNanos ?: "none"}"
         }
 
     data class Touch(
@@ -282,6 +330,14 @@ sealed class TouchTraceRecord {
         val pressed: Boolean,
     ) : TouchTraceRecord()
 
+    data class PressedTransition(
+        override val sequence: Long,
+        val sampledAtElapsedRealtimeNanos: Long,
+        val requestedPressed: Boolean,
+        val pressedBefore: Boolean,
+        val pressedAfter: Boolean,
+    ) : TouchTraceRecord()
+
     data class Click(
         override val sequence: Long,
         val clickOrdinal: Long,
@@ -290,6 +346,8 @@ sealed class TouchTraceRecord {
         val correlation: Correlation,
         val pendingUpCount: Long,
         val correlatedUpSequence: Long?,
+        val counterIncrementStartedAtElapsedRealtimeNanos: Long?,
+        val counterIncrementDurationNanos: Long?,
     ) : TouchTraceRecord() {
         enum class Correlation {
             UNIQUE_UP,
@@ -311,6 +369,91 @@ internal constructor(
     internal val captureToken: Any,
 )
 
+/** Identity of a trace generation; a token never becomes valid again after that capture stops. */
+class TouchTraceCaptureToken internal constructor(internal val identity: Any)
+
+/**
+ * Keeps button state transitions attached to the capture that observed their gesture start.
+ *
+ * A terminal event first seen after capture starts is treated as an uncaptured gesture, so it
+ * cannot inherit the new capture token. The view clears completed gesture context on the next UI
+ * turn; pressed-state context remains until the matching state transition.
+ */
+internal class TouchTraceCaptureLineage {
+    private var activeCaptureToken: TouchTraceCaptureToken? = null
+    private var gestureCaptureToken: TouchTraceCaptureToken? = null
+    private var gestureWasSampled = false
+    private var gestureGeneration = 0L
+    private var pressedCaptureToken: TouchTraceCaptureToken? = null
+    private var pressedStateWasSampled = false
+
+    fun setActiveCaptureToken(token: TouchTraceCaptureToken?) {
+        activeCaptureToken = token
+    }
+
+    /** Returns a generation for a terminal gesture that should be cleared after dispatch. */
+    fun observeTouchAction(action: TouchTraceAction): Long? {
+        when (action) {
+            TouchTraceAction.DOWN -> beginGesture(activeCaptureToken)
+            TouchTraceAction.MOVE -> {
+                if (!gestureWasSampled) {
+                    beginGesture(captureToken = null)
+                }
+            }
+            TouchTraceAction.UP,
+            TouchTraceAction.CANCEL -> {
+                if (!gestureWasSampled) {
+                    beginGesture(captureToken = null)
+                }
+                return gestureGeneration
+            }
+        }
+        return null
+    }
+
+    fun clearGesture(generation: Long) {
+        if (gestureGeneration == generation) {
+            gestureCaptureToken = null
+            gestureWasSampled = false
+        }
+    }
+
+    fun captureTokenForPressedTransition(requestedPressed: Boolean): TouchTraceCaptureToken? =
+        when {
+            requestedPressed && gestureWasSampled -> gestureCaptureToken
+            requestedPressed -> activeCaptureToken
+            pressedStateWasSampled -> pressedCaptureToken
+            gestureWasSampled -> gestureCaptureToken
+            else -> activeCaptureToken
+        }
+
+    fun recordPressedState(pressed: Boolean, captureToken: TouchTraceCaptureToken?) {
+        if (pressed) {
+            pressedCaptureToken = captureToken
+            pressedStateWasSampled = true
+        } else {
+            pressedCaptureToken = null
+            pressedStateWasSampled = false
+        }
+    }
+
+    fun clear() {
+        activeCaptureToken = null
+        gestureCaptureToken = null
+        gestureWasSampled = false
+        pressedCaptureToken = null
+        pressedStateWasSampled = false
+    }
+
+    private fun beginGesture(captureToken: TouchTraceCaptureToken?) {
+        if (gestureGeneration < Long.MAX_VALUE) {
+            gestureGeneration += 1
+        }
+        gestureCaptureToken = captureToken
+        gestureWasSampled = true
+    }
+}
+
 /** The shared session controlled by debug broadcasts and observed by the debug Activity hook. */
 object DebugTouchTraceSession {
     private val trace = TouchTrace()
@@ -318,7 +461,10 @@ object DebugTouchTraceSession {
     private val captureStateObservers = linkedMapOf<TouchTraceObserverToken, (Boolean) -> Unit>()
 
     val isCapturing: Boolean
-        get() = synchronized(observerLock) { trace.isCapturing }
+        get() = trace.isCapturing
+
+    val activeCaptureToken: TouchTraceCaptureToken?
+        get() = trace.activeCaptureToken()
 
     /**
      * Subscribes to capture transitions and immediately reports the current state.
@@ -374,8 +520,33 @@ object DebugTouchTraceSession {
         pressed: Boolean,
     ) = trace.recordPostDispatchPressed(input, sampledAtUptimeMillis, pressed)
 
-    fun recordClick(storedCounter: Int?, saveSucceeded: Boolean) =
-        trace.recordClick(storedCounter, saveSucceeded)
+    fun recordPressedTransition(
+        captureToken: TouchTraceCaptureToken,
+        sampledAtElapsedRealtimeNanos: Long,
+        requestedPressed: Boolean,
+        pressedBefore: Boolean,
+        pressedAfter: Boolean,
+    ) =
+        trace.recordPressedTransition(
+            captureToken,
+            sampledAtElapsedRealtimeNanos,
+            requestedPressed,
+            pressedBefore,
+            pressedAfter,
+        )
+
+    fun recordClick(
+        storedCounter: Int?,
+        saveSucceeded: Boolean,
+        counterIncrementStartedAtElapsedRealtimeNanos: Long? = null,
+        counterIncrementDurationNanos: Long? = null,
+    ) =
+        trace.recordClick(
+            storedCounter,
+            saveSucceeded,
+            counterIncrementStartedAtElapsedRealtimeNanos,
+            counterIncrementDurationNanos,
+        )
 
     fun stopAndDrain(): TouchTraceDrain =
         synchronized(observerLock) {

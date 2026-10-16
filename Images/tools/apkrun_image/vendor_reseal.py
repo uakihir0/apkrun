@@ -11,8 +11,9 @@ both, with the vendored avbtool (IR-624):
 2. `vbmeta_a.img`: the stock top-level vbmeta with its vendor hashtree descriptor replaced by the
    descriptor of the new footer (`avbtool update_partition_descriptor`). The vbmeta is signed with
    the pinned AOSP AVB test key that already matches the stock public key (IR-1321). This output is
-   for development only. It keeps the stock rollback index, and every other descriptor is kept.
-   The blob is padded with zeros to the size of the stock file.
+   for development only. It keeps the stock header, rollback settings, every other serialized
+   descriptor, the release string, and the public-key metadata. The blob is padded with zeros to
+   the size of the stock file.
 
 Both images are checked with `info_image`, and the new footer is checked with `verify_image`. The
 outputs are moved into the output directory only after every check passes. The tool never boots.
@@ -182,8 +183,8 @@ def _vendored_avb_api(avbtool: Path) -> dict[str, Any]:
     return runpy.run_path(str(avbtool))
 
 
-def verify_vbmeta_signature(avbtool: Path, image: Path) -> None:
-    """Verify the vbmeta authentication block using the pinned avbtool implementation."""
+def verify_vbmeta_signature(avbtool: Path, image: Path) -> bytes:
+    """Verify vbmeta and return its bounded public-key metadata bytes."""
     try:
         with image.open("rb") as stream:
             header, offset = _read_vbmeta(
@@ -214,6 +215,41 @@ def verify_vbmeta_signature(avbtool: Path, image: Path) -> None:
         raise ResealError(f"{image}: could not verify the vbmeta signature: {error}") from None
     if not verified:
         raise ResealError(f"{image}: vbmeta signature does not verify.")
+    metadata_size = avb_header.public_key_metadata_size
+    metadata_offset = avb_header.public_key_metadata_offset
+    auxiliary_size = avb_header.auxiliary_data_block_size
+    if metadata_size == 0:
+        return b""
+    if metadata_offset > auxiliary_size or metadata_size > auxiliary_size - metadata_offset:
+        raise ResealError(f"{image}: public-key metadata extends past the auxiliary data block.")
+    auxiliary_offset = 256 + avb_header.authentication_data_block_size
+    metadata_start = auxiliary_offset + metadata_offset
+    metadata = blob[metadata_start : metadata_start + metadata_size]
+    if len(metadata) != metadata_size:
+        raise ResealError(f"{image}: public-key metadata is truncated.")
+    return metadata
+
+
+def vbmeta_release_string(avbtool: Path, image: Path) -> str:
+    """Return the release string from a bounded vbmeta header."""
+    try:
+        with image.open("rb") as stream:
+            _header, offset = _read_vbmeta(
+                stream,
+                artifact_size=image.stat().st_size,
+                artifact_name=str(image),
+            )
+            stream.seek(offset)
+            header_bytes = stream.read(256)
+    except (AvbError, OSError) as error:
+        raise ResealError(f"{image}: could not read the vbmeta header: {error}") from None
+    if len(header_bytes) != 256:
+        raise ResealError(f"{image}: the vbmeta header is truncated.")
+    tool = _vendored_avb_api(avbtool)
+    try:
+        return tool["AvbVBMetaHeader"](header_bytes).release_string
+    except (tool["AvbError"], OSError, ValueError, struct.error) as error:
+        raise ResealError(f"{image}: invalid vbmeta header: {error}") from None
 
 
 def _copy_prefix(source: Path, destination: Path, size: int) -> None:
@@ -302,7 +338,7 @@ def refresh_vbmeta(
     scratch: Path,
 ) -> dict[str, Any]:
     """Write signed stock vbmeta with the descriptor of `vendor` to `output`; return the record."""
-    verify_vbmeta_signature(avbtool, stock_vbmeta)
+    public_key_metadata = verify_vbmeta_signature(avbtool, stock_vbmeta)
     stock_info = _info(avbtool, stock_vbmeta)
     stock_top = parse_top(stock_info)
     stock_tree = vendor_tree(stock_info, "the stock vbmeta_a")
@@ -324,34 +360,47 @@ def refresh_vbmeta(
     rollback = stock_top.get("Rollback Index")
     if rollback is None:
         raise ResealError("the stock vbmeta_a has no rollback index.")
+    release_string = vbmeta_release_string(avbtool, stock_vbmeta)
     partition_size = stock_vbmeta.stat().st_size
 
     raw = scratch / "vbmeta-raw.bin"
-    run_avbtool(
-        avbtool,
-        [
-            "update_partition_descriptor",
-            "--image",
-            str(stock_vbmeta),
-            "--partition_image",
-            str(vendor),
-            "--output",
-            str(raw),
-            "--algorithm",
-            VBMETA_ALGORITHM,
-            "--key",
-            str(signing_key),
-            "--rollback_index",
-            rollback.split()[0],
-        ],
-    )
+    update_args = [
+        "update_partition_descriptor",
+        "--image",
+        str(stock_vbmeta),
+        "--partition_image",
+        str(vendor),
+        "--output",
+        str(raw),
+        "--algorithm",
+        VBMETA_ALGORITHM,
+        "--key",
+        str(signing_key),
+        "--rollback_index",
+        rollback.split()[0],
+        "--internal_release_string",
+        release_string,
+    ]
+    metadata_path: Path | None = None
+    try:
+        if public_key_metadata:
+            with tempfile.NamedTemporaryFile(dir=scratch, delete=False) as metadata_file:
+                metadata_path = Path(metadata_file.name)
+                metadata_file.write(public_key_metadata)
+            update_args.extend(["--public_key_metadata", str(metadata_path)])
+        run_avbtool(avbtool, update_args)
+    finally:
+        if metadata_path is not None:
+            metadata_path.unlink(missing_ok=True)
     blob = raw.read_bytes()
     if len(blob) > partition_size:
         raise ResealError("the refreshed vbmeta is larger than the stock partition.")
     padded = scratch / "vbmeta-padded.bin"
     padded.write_bytes(blob + bytes(partition_size - len(blob)))
 
-    verify_vbmeta_signature(avbtool, padded)
+    refreshed_metadata = verify_vbmeta_signature(avbtool, padded)
+    if refreshed_metadata != public_key_metadata:
+        raise ResealError("the refreshed vbmeta changed the public-key metadata.")
     new_info = _info(avbtool, padded)
     new_top = parse_top(new_info)
     if new_top.get("Algorithm") != VBMETA_ALGORITHM:

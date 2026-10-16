@@ -112,6 +112,8 @@ def _stock_vbmeta(
     vendor: Path,
     key: Path = TEST_KEY,
     algorithm: str = VBMETA_ALGORITHM,
+    public_key_metadata: Path | None = None,
+    release_string: str | None = None,
 ) -> Path:
     """A vbmeta_a-like image with a vendor hashtree, a hash descriptor, and a property."""
     boot = tmp / f"{name}-boot.img"
@@ -131,28 +133,30 @@ def _stock_vbmeta(
         ],
     )
     output = tmp / f"{name}-vbmeta.img"
-    run_avbtool(
-        avbtool,
-        [
-            "make_vbmeta_image",
-            "--output",
-            str(output),
-            "--algorithm",
-            algorithm,
-            "--key",
-            str(key),
-            "--rollback_index",
-            "7",
-            "--prop",
-            "test.key:value",
-            "--include_descriptors_from_image",
-            str(vendor),
-            "--include_descriptors_from_image",
-            str(boot),
-            "--padding_size",
-            "4096",
-        ],
-    )
+    arguments = [
+        "make_vbmeta_image",
+        "--output",
+        str(output),
+        "--algorithm",
+        algorithm,
+        "--key",
+        str(key),
+        "--rollback_index",
+        "7",
+        "--prop",
+        "test.key:value",
+        "--include_descriptors_from_image",
+        str(vendor),
+        "--include_descriptors_from_image",
+        str(boot),
+        "--padding_size",
+        "4096",
+    ]
+    if public_key_metadata is not None:
+        arguments.extend(["--public_key_metadata", str(public_key_metadata)])
+    if release_string is not None:
+        arguments.extend(["--internal_release_string", release_string])
+    run_avbtool(avbtool, arguments)
     return output
 
 
@@ -262,7 +266,9 @@ def test_the_refreshed_vbmeta_changes_only_the_vendor_descriptor(tmp_path: Path)
     scratch.mkdir()
     vendor = tmp_path / "vendor_a.img"
     reseal_vendor(avbtool, injected, stock, vendor, scratch)
-    stock_vbmeta = _stock_vbmeta(avbtool, tmp_path, "stock", stock)
+    stock_vbmeta = _stock_vbmeta(
+        avbtool, tmp_path, "stock", stock, release_string="stock-builder 1.0"
+    )
     refreshed_scratch = tmp_path / "refresh"
     refreshed_scratch.mkdir()
     output = tmp_path / "vbmeta_a.img"
@@ -278,6 +284,7 @@ def test_the_refreshed_vbmeta_changes_only_the_vendor_descriptor(tmp_path: Path)
     assert parse_top(new_info)["Algorithm"] == VBMETA_ALGORITHM
     assert parse_top(new_info)["Public key (sha1)"] == VBMETA_PUBLIC_KEY_SHA1
     assert parse_top(new_info)["Rollback Index"] == "7"
+    assert parse_top(new_info)["Release String"] == parse_top(old_info)["Release String"]
     assert record["signer"] == VBMETA_SIGNER
     assert record["publicKeySha1"] == VBMETA_PUBLIC_KEY_SHA1
     assert parse_hashtrees(new_info)["vendor"] == parse_hashtrees(_info(avbtool, vendor))["vendor"]
@@ -310,6 +317,28 @@ def test_the_refreshed_vbmeta_changes_only_the_vendor_descriptor(tmp_path: Path)
         ],
     )
     assert "Successfully verified SHA256_RSA4096 vbmeta struct" in verified
+
+
+def test_public_key_metadata_is_preserved_by_refresh(tmp_path: Path) -> None:
+    avbtool = _avbtool()
+    stock = _seal(avbtool, tmp_path, "stock", _content("stock"))
+    injected = _seal(avbtool, tmp_path, "injected", _content("injected"))
+    metadata = tmp_path / "public-key-metadata.bin"
+    metadata.write_bytes(b"APKRun public-key metadata fixture")
+    stock_vbmeta = _stock_vbmeta(
+        avbtool, tmp_path, "stock-with-metadata", stock, public_key_metadata=metadata
+    )
+    vendor_scratch = tmp_path / "vendor-scratch"
+    vendor_scratch.mkdir()
+    vendor = tmp_path / "vendor_a.img"
+    reseal_vendor(avbtool, injected, stock, vendor, vendor_scratch)
+    refresh_scratch = tmp_path / "refresh-scratch"
+    refresh_scratch.mkdir()
+    refreshed = tmp_path / "vbmeta_a.img"
+
+    assert verify_vbmeta_signature(avbtool, stock_vbmeta) == metadata.read_bytes()
+    refresh_vbmeta(avbtool, stock_vbmeta, vendor, TEST_KEY, refreshed, refresh_scratch)
+    assert verify_vbmeta_signature(avbtool, refreshed) == metadata.read_bytes()
 
 
 def test_a_signing_key_with_another_avb_identity_is_refused(tmp_path: Path) -> None:

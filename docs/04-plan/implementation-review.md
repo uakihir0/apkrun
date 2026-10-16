@@ -19015,3 +19015,113 @@ not prove the AVC caused that failure. No `untrusted_app` Hello APK or
 successful application render was tested, so successful application-domain
 rendering is not established. The host also cannot compile the product Soong
 policy; the working production policy remains for the product-image task.
+
+## IR-1331: Compare HelloGL application rendering under the exact ODM controls
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099, #022 diagnostic control |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #099 and #022; [issues/README.md](issues/README.md); [roadmap.md](roadmap.md) §1.2–§1.4; T2 evidence under `/tmp/apkrun-099-20261016-hello-domain-evidence/` |
+
+**Choice.** Run the same signed HelloGL fixture on the exact 2026.10.3
+`full-control` and 2026.10.4 `surfaceflinger-egl` diagnostic bundles. Record the
+successful untrusted-app GLES render on the 18-rule control and the
+`EGL_NOT_INITIALIZED` app failure on the two-rule control. Leave #099
+criterion 2 unchecked, preserve both image profiles as diagnostic only, and
+make #099 a prerequisite of #022.
+
+**Reason.** The earlier controls only ran an injected `eglInitialize` probe in
+the `surfaceflinger` domain, so they could not establish application-domain
+rendering. The 18-rule control now shows that HelloGL can render through VirGL
+under that broad policy. The same app fails to create a context under the
+two-rule profile. The corrected no-overlay image still fails its guest EGL
+check, and neither test profile is the eventual product policy. These results
+do not show which permission caused the narrow-profile failure; accepting the
+criterion or treating #022 as independent of #099 would overstate what the
+evidence proves.
+
+**Verification.** The fixture build completed with the pinned fixture signer;
+`HelloGL.apk` SHA-256 is
+`0e5a451e3c3979a8e341baf893e9b8a2c4b50e395710a31dd7b182b1773cfea`. The
+2026.10.3 bundle has manifest and disk hashes
+`e7adceaecc799c3dbbfccd30b5cdf4eafa36908cb3973e8e99dc8fb8aac580ed` and
+`2a408ef1e74de3c37bf7ec6372b04ae0843877529884abceb810b4b68f520217`; the
+2026.10.4 bundle has hashes
+`74af335c9db649715d705a85f497d8c00c1096d03e7f515b39de4817fe1bb5fb` and
+`93457778bcfedc000dc4da2d56d0d2a69e962d65897bdf683356bb5d0d0af5b1`.
+Both guest boots reached `sys.boot_completed=1` and report `outcome=ready`.
+On 2026.10.3, the process label was `u:r:untrusted_app`, its renderer event
+named `virgl`, and its FPS samples were 59.7 and 60.0. The host-window
+screenshot shows the running GLES surface and `hostReadbacks=0`. On 2026.10.4,
+the injected SurfaceFlinger probe passed, while HelloGL aborted with
+`Failed to create context, error = EGL_NOT_INITIALIZED`; its tombstone points
+to `libhwui` `EglManager::createContext`. The retained log also records
+`platform_app` read denials and system-app EGL failures. Their temporal
+association does not establish causality. Audit events were dropped, and the
+retained log has no `untrusted_app` AVC.
+
+The smoke runs do not replace #023's 60-second and 10-minute checks or a G3
+run. The original and gzip-retained log hashes, boot records, app log,
+screenshot hash, and summarized findings are in
+`/tmp/apkrun-099-20261016-hello-domain-evidence/`; `SHA256SUMS` validates the
+retained files and each compressed stream was checked against its source
+digest.
+
+**Risk.** The 18-rule control grants broad test-only permissions and must not
+ship. The two-rule failure does not identify a missing rule; audit loss limits
+negative claims about AVCs. Production policy and the corrected no-overlay
+guest EGL check remain open. This entry updates the application-rendering
+status in IR-1330 without changing its historical record.
+
+## IR-1332: Keep the M2 Mesa runtime check independent of product SELinux policy
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099, #022, #023, #035 |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #099 and #022; [M05-custom-android-image.md](issues/M05-custom-android-image.md) #035; [issues/README.md](issues/README.md); [roadmap.md](roadmap.md) §1.3–§1.4; T2 evidence under `/tmp/apkrun-099-20261016-hello-domain-evidence/` |
+
+**Choice.** Define #099 criterion 2 as a diagnostic Mesa-runtime check. Its
+corrected Mesa payload passes `apkrun.test=egl` and renders HelloGL under the
+test-only 2026.10.3 `full-control` ODM policy. Mark that criterion complete and
+allow dependent #022 work to proceed with the same diagnostic guest. Keep the
+2026.10.2 no-diagnostic-overlay EGL failure open for #035 step 8 to validate
+the custom image under its enforcing product policy. Do not ship or use either
+diagnostic policy as production policy.
+
+**Reason.** Requiring production SELinux policy for #099 would make M2 depend
+on #035, while #035 follows #034 and G3 on the roadmap. That reverses the
+documented development order and prevents #022 and G3 from proceeding. #099
+owns Mesa packaging and the guest EGL path; #035 owns the final product policy.
+The broad control proves that the Mesa libraries, VirGL device, app EGL
+context, and GLES rendering work together under an explicitly test-only
+policy. It does not prove that the current no-overlay image is usable or that
+the selected rules are minimal or safe for a product. #035 step 8 already
+runs G2–G6 on the custom image, so that remains the required product-policy
+verification point without either diagnostic profile.
+
+**Verification.** The signed HelloGL fixture has SHA-256
+`0e5a451e3c3979a8e341baf893e9b8a2c4b50e395710a31dd7b182b1773cfea`. On the
+exact 2026.10.3 bundle (manifest SHA-256
+`e7adceaecc799c3dbbfccd30b5cdf4eafa36908cb3973e8e99dc8fb8aac580ed`, disk
+SHA-256
+`2a408ef1e74de3c37bf7ec6372b04ae0843877529884abceb810b4b68f520217`), the
+guest reached `sys.boot_completed=1`, reported Mesa/virgl, and HelloGL ran in
+`u:r:untrusted_app` with renderer `virgl` and 59.7/60.0 FPS. The exact
+2026.10.4 two-rule profile's injected SurfaceFlinger probe passes, but HelloGL
+fails during EGL context creation; no causal permission is inferred. The
+2026.10.2 no-overlay image still fails EGL initialization. The T2 records,
+screenshots, compressed-log hashes, and source-stream hashes are retained in
+the evidence directory named above; the evidence manifests validate.
+
+**Risk.** This changes the interpretation of #099's remaining acceptance
+criterion and its completion boundary. The broad diagnostic profile grants
+type-wide test permissions. Maintainer review should confirm that this is an
+acceptable M2 milestone boundary. The EGL and policy integration gap remains
+open until #035's custom image passes the product checks, and the diagnostic
+bundles must not be shipped.
+
+This entry supersedes only IR-1331's decision to keep #099 criterion 2 open
+until product policy is complete. IR-1331's measurements, limits, and the
+decision to keep both controls diagnostic remain unchanged.

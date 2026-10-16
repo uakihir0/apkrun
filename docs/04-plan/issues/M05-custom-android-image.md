@@ -150,6 +150,7 @@ The APKRun AOSP product builds reproducibly on the Linux builder, and its image 
 8. **Acceptance** ([../../02-design/android-image.md](../../02-design/android-image.md) §8.4, §11.5; [../../02-design/guest-components.md](../../02-design/guest-components.md) §11 #035 step 4).
    - Boot the custom image under APKRun, run the reference diff of [../../02-design/android-image.md](../../02-design/android-image.md) §8.4 against the stock reference capture (`Images/reference/16373615/target`), and list every product change of §11.2 with its reason in `expected-differences.yaml` (§8.4).
    - Run the `AndroidCustom` suite, HelloProbe, and the G2–G6 checks on the custom image.
+   - Run the graphics checks on the custom `userdebug` image with the enforcing product policy and no injected ODM diagnostic profile. SurfaceFlinger must report Mesa VirGL, and HelloGL must render in `u:r:untrusted_app`.
    - Check: the acceptance criteria below.
 
 ### Tests
@@ -169,7 +170,10 @@ By tier ([../test-strategy.md](../test-strategy.md) §6.6):
 
 ### Acceptance criteria
 
-- [ ] The custom image reaches `boot_completed` under the APKRun VM (#035, FR-IMG-05).
+- [ ] The custom image reaches `boot_completed` under the APKRun VM with its
+      enforcing product policy and no injected ODM diagnostic profile.
+      SurfaceFlinger reports Mesa VirGL, and HelloGL renders in
+      `u:r:untrusted_app` (#035, FR-IMG-05).
 - [ ] The product inherits the Cuttlefish arm64 phone product and includes the Guest Agent, the bridge, the graphics configuration, development ADB, and the APKRun properties, with no service removed without #095 evidence (#035).
 - [ ] The image is built on the Linux builder with `scripts/aosp/remote-build.sh` from the pinned manifest, and its bundle's `provenance` records the pinned manifest, the container digest, and the APKRun revision (FR-IMG-05).
 - [ ] The Guest Agent and the Store Agent start as persistent, platform-signed priv-apps in `apkrun_guest_app` and `apkrun_store_app`, and the boot succeeds with `ro.control_privapp_permissions=enforce`.

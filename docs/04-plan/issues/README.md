@@ -111,7 +111,7 @@ Section references in a task entry: a bare `§N` refers to the first document in
 | #020 | Build graphics dependencies | M2 | #018 | | [graphics.md](../../02-design/graphics.md) §5 |
 | #021 | Android detects virtio-gpu | M2 | #019, #014 | | [graphics.md](../../02-design/graphics.md) §4 |
 | #099 | Mesa-enabled VirGL guest image | M2 | #020, #021 | | [graphics.md](../../02-design/graphics.md) §5 |
-| #022 | Android VirGL | M2 | #021, #020 | | [graphics.md](../../02-design/graphics.md) §5 |
+| #022 | Android VirGL | M2 | #021, #020, #099 | | [graphics.md](../../02-design/graphics.md) §5 |
 | #023 | Render SurfaceFlinger to Metal | M2 | #020, #022 | G3 | [graphics.md](../../02-design/graphics.md) §6 |
 | #033 | Define GuestProtocol | M3 | #007 | | [guest-protocol.md](../../02-design/guest-protocol.md) |
 | #072 | Guest Agent bootstrap | M3 | #033, #015 | | [guest-protocol.md](../../02-design/guest-protocol.md), [guest-components.md](../../02-design/guest-components.md) |
@@ -201,23 +201,23 @@ Gates G1–G9 are the project checkpoints. Their pass conditions are in [../road
 
 ## 5. Current progress
 
-**Updated:** 2026-10-11 UTC (state of `main` at `213984d`)
+**Updated:** 2026-10-16 UTC (local `main`)
 **Working branch:** `main`
 
 Task entries remain the source of truth for scope and acceptance. This section
 summarizes the work in progress on `main`. Its facts come from three sources:
 the acceptance checkboxes in each milestone file (counted per task by script),
 the IR entries that record open decisions, and the git log of `main`. The table
-lists every task in progress (some boxes ticked, some open), and #035 and #098,
-which have open decisions on `main` but no ticked box. The other 64 tasks with
-no ticked box are not listed. Tasks whose boxes are all ticked are listed in one
-line below the table.
+lists the six partially checked tasks, #035 which has no ticked box, #022,
+#023, and #072 whose boxes are all ticked but whose closure evidence or review
+is still open, and #098. The other 61 baseline tasks with no ticked box are not
+listed. All tasks whose acceptance boxes are ticked are listed below the table.
 
 **Counts on `main`:** 96 tasks have a milestone entry (#001 to #095 and #099; #096 and
-#097 are post-v1 tracks). 22 have every box ticked, 9 are in progress
-(some boxes ticked and some open), and 65 have no ticked box. The IR log has 649
-entries: 636 are marked exactly "Needs maintainer review", 6 add a qualifier to that status, and 7
-carry another status. Two entries carry the number IR-901 (see the note below the table).
+#097 are post-v1 tracks). 28 have every box ticked, 6 have some boxes ticked and
+some open, and 62 have no ticked box. The IR log has 846 entries: 833 are marked
+exactly "Needs maintainer review", 6 add a qualifier to that status, and 7 carry
+another status. Two entries carry the number IR-901 (see the note below the table).
 
 **Project position:** The task issues #001 to #097 are mirrored as issues #2 to #98 (IR-293).
 Branch protection on `main` requires the eight CI checks (IR-294). IR-297 records the decision to
@@ -230,25 +230,25 @@ The stock Android image boots directly on Virtualization.framework (IR-306).
 |---|---|---|---|
 | [#003 Boot minimal ARM64 Linux](M00-repository-and-vm-foundation.md#003-boot-minimal-arm64-linux) | 11 of 12 | The `linux-guest` T2 box stays open. The criterion needs a maintainer-run T2 result for the reviewed commit until lab capacity allows PR runs, and no lab runner exists (IR-295). | IR-295, IR-313, IR-314, IR-297 |
 | [#010 Extract Android kernel and ramdisk](M01-android-bring-up.md#010-extract-android-kernel-and-ramdisk) | 6 of 7 | Each `(reference)` value must trace to a capture or a VZ observation. The `drm_virgl` values stay unconfirmed until #022 confirms them; the maintainer chooses between accepting the source-derived set and emptying it. | IR-400, IR-401, IR-404 |
-| [#016 Install HelloText APK](M01-android-bring-up.md#016-install-hellotext-apk) | 4 of 5 | The device check of the counter across a restart waits for rendering and input (#026). The click cannot be driven yet: the headless profile draws no window. | IR-333 (the persistence contract is a JVM test). No IR entry records the window problem; the criterion text is the record. |
-| [#022 Android VirGL](M02-graphics.md#022-android-virgl) | 2 of 6 | `dumpsys SurfaceFlinger` naming the virgl renderer, with no SwiftShader or ANGLE library; the §9 documentation and reproducibility; and `sys.boot_completed=1` with `drmVirgl` (`guestSwiftshader` reached it, IR-801). The `drmVirgl` boot waits for the #035 sepolicy route. kmscube on the VM is ticked (IR-860). IR-849 lists three VM checks (pointer bytes, reset and stop ordering, resource 4 entries) that IR-860 does not record as run. | IR-800, IR-801, IR-849, IR-850, IR-905 |
+| [#022 Android VirGL](M02-graphics.md#022-android-virgl) | 6 of 6 | Dependencies are met with #099's test-only diagnostic Mesa runtime check. IR-961 still needs maintainer acceptance of the ODM-overlay evidence. IR-849 lists three VM checks (pointer bytes, reset and stop ordering, resource 4 entries) that IR-860 does not record as run. | IR-800, IR-801, IR-849, IR-850, IR-905, IR-961, IR-980, IR-1332 |
+| [#023 Render SurfaceFlinger to Metal](M02-graphics.md#023-render-surfaceflinger-to-metal) | 9 of 9 | The local G3 screen recording still needs its manual C01-6 check. M2 closure waits for #022 and the remaining G3 evidence. | IR-1203 to IR-1225 |
 | [#061 Diagnostics foundation](M00-repository-and-vm-foundation.md#061-diagnostics-foundation) | 9 of 10 | OQ-04 (`log show` as a standard user) stays open. This host has no non-admin account. The limit is recorded in the [#061 Notes](M00-repository-and-vm-foundation.md#061-diagnostics-foundation) and in [open-questions.md](../open-questions.md). | No IR entry records OQ-04. IR-246 and IR-247 (maintainer review pending) are the open review. |
 | [#064 Reference boot capture](M01-android-bring-up.md#064-reference-boot-capture) | 2 of 6 | Re-scoped (IR-305). Open: the `default`, `target`, and `swiftshader` profiles with every §8.3 item (deferred); normalized captures with no serial numbers, MAC addresses, host paths, or keys; the serial-shell run of `guest-capture.txt` (part of #014 step 5); and a schema-version-3 `host.json` with path-free host-tool identities (deferred). | IR-305, IR-306, IR-269, IR-271, IR-184 |
 | [#072 Guest Agent bootstrap](M03-input-and-basic-runtime.md#072-guest-agent-bootstrap) | 7 of 7 | The T2 suite `GuestAgentTests` passed 8 of 8 in the Xcode test host on 2026-10-13 (IR-438). The CLI does not print `runtime.requiredAgentUnavailable`, and whether it should is open; the code is asserted at T0 (IR-1229). Closure is for the maintainer (IR-1259). The device checks of 2026-10-12 are in the Notes. | IR-1226 to IR-1231, IR-435, IR-438, IR-1253 to IR-1255, IR-425, IR-431 (method variants) |
 | [#024 Pointer input](M03-input-and-basic-runtime.md#024-pointer-input) | 6 of 8 | Open: the 100-of-100 box (box 3); the click-loss investigation is follow-up #103. Six consecutive CLI batches of 100 clicks logged 590 of 600 (IR-1290), and the batch verdicts cannot show three consecutive 100-of-100 batches. The trackpad and wheel box (box 4) is the manual check C01-2 (T3). The T2 case passes the drag, trackpad, and wheel moves (IR-1288). Box 7 is flagged, not re-decided (IR-1250). The route does not rebind after an agent loss; the follow-up is #101. The T2 suite `AndroidInputTests` passes 7 of 7 on the odm7 bundle in its final run (IR-1294), and its click case logged 99 of 100 in one of six full runs (IR-1294). | IR-1233 to IR-1257, IR-1275 to IR-1294 |
 | [#095 Cuttlefish host-service substitution](M01-android-bring-up.md#095-cuttlefish-host-service-substitution) | 6 of 7 | Criterion 1 (all 20 console ports attached and numbered by `APKRUN-PORT` markers) stays open. The pinned test kernel exposes 8 `hvc` nodes (IR-372), and the 2026-10-11 boot received markers on `hvc0` and `hvc1` only (IR-877). IR-901 (second entry) records 13 ports that receive their full marker in two boots, and four ports (`hvc5`, `hvc8`, `hvc9`, `hvc12`) that product HALs read. The criterion text does not yet reflect IR-901. | IR-372, IR-873, IR-877, IR-901 (second entry) |
-| [#099 Mesa-enabled VirGL guest image](M02-graphics.md#099-mesa-enabled-virgl-guest-image) | 3 of 4 | EGL acceptance criterion 2 remains open: the exact 2026.10.2 no-overlay image fails EGL. The 2026.10.3 broad 18-rule control and 2026.10.4 two-rule SurfaceFlinger control both boot and pass the injected probe, but neither validates successful application-domain access/rendering or product policy. The narrow run still logs a `platform_app` `sysfs` read denial and an HWUI EGL context failure; causality is unproven (IR-1329, IR-1330). | IR-650, IR-727, IR-751, IR-800, IR-837, IR-997, IR-999, IR-1323, IR-1326, IR-1327, IR-1328, IR-1329, IR-1330 |
-| [#035 APKRun AOSP product](M05-custom-android-image.md#035-apkrun-aosp-product) | 0 of 10 | All 10 boxes are open. They cover the custom image's boot, the product contents, the remote build with provenance, the priv-app domains, the Hello capability list, the `untrusted_app` socket test, the sepolicy and `avc` checks, ADB in both developer modes, the reference diff, and the release AVB state (OQ-36). IR-900 to IR-906 record only the sepolicy route for the SurfaceFlinger sysfs label, which #022 criterion 4 needs. | IR-900, IR-903, IR-905, IR-906 |
+| [#099 Mesa-enabled VirGL guest image](M02-graphics.md#099-mesa-enabled-virgl-guest-image) | 4 of 4 | Its Mesa runtime check passes on the 2026.10.3 diagnostic control, including HelloGL in `untrusted_app`. The proposed #099 completion boundary is pending maintainer review in IR-1332. The image without a diagnostic overlay still fails EGL; #035 step 8 must confirm graphics on the custom image under enforcing product policy and without a diagnostic profile. The two-rule profile still fails HelloGL, and the `platform_app` `sysfs` AVC timing does not establish causality (IR-1329 to IR-1332). | IR-650, IR-727, IR-751, IR-800, IR-837, IR-997, IR-999, IR-1323, IR-1326, IR-1327, IR-1328, IR-1329, IR-1330, IR-1331, IR-1332 |
+| [#035 APKRun AOSP product](M05-custom-android-image.md#035-apkrun-aosp-product) | 0 of 10 | All 10 boxes are open. They cover the custom image's boot and production-policy graphics check (SurfaceFlinger Mesa VirGL plus HelloGL in `untrusted_app` with no diagnostic profile), the product contents, the remote build with provenance, the priv-app domains, the Hello capability list, the `untrusted_app` socket test, the sepolicy and `avc` checks, ADB in both developer modes, the reference diff, and the release AVB state (OQ-36, IR-1332). IR-900 to IR-906 record the earlier sepolicy route for the SurfaceFlinger sysfs label, which #022 criterion 4 needs. | IR-900, IR-903, IR-905, IR-906, IR-1332 |
 | #098 Parallel VM runs (follow-up, GitHub issue #100) | not in §3 or a milestone file | The T2 behavior is unverified (IR-539). The one-VM rule (test-strategy §3.6) needs a maintainer decision (IR-525). | IR-525, IR-528, IR-539 |
 
-Complete on the boxes: #001, #002, #004, #005, #006, #007, #008, #009, #011, #012, #013, #014, #015, #017, #018, #019, #020, #021, #033, #062, #063, #065. Their boxes are all ticked, and
-the IR entries that record their decisions are still open for maintainer review.
+Complete on acceptance boxes: #001, #002, #004, #005, #006, #007, #008, #009, #011, #012, #013, #014, #015, #016, #017, #018, #019, #020, #021, #022, #023, #025, #033, #062, #063, #065, #072, #099. A fully ticked task can still have a dependency, manual check, or maintainer review open, as listed above.
 
 **Recent work on `main`** (git log, 2026-10-09 to 2026-10-16): #022 kmscube on the VM and the
 drain before invalidation (`537731c`, `efc4fef`); the #099 offline Mesa injection and the verity
 steps (`10f921e` to `ce7a21e`); the #095 port and marker results (`bfd0860`, `c217fc8`,
-`4c6b7c0`); #016 PackageInstaller (`3d0031e`); and the exact-image ODM control builder and broad
-control evidence (`ad78532`, `d9bc980`).
+`4c6b7c0`); #016 PackageInstaller (`3d0031e`); the exact-image ODM control builder and EGL
+evidence (`ad78532`, `d9bc980`, `5f0681a`, `39ec354`); and the HelloGL application-domain
+comparison and the M2 policy boundary recorded in IR-1331 and IR-1332.
 
 **Note on IR-901.** The number IR-901 is used by the SELinux compiler entry only. The HAL-port entry was renumbered to IR-907 to remove the duplicate.
 offline", is the entry that IR-904 cites. The second, "Four of the marked ports are read by product

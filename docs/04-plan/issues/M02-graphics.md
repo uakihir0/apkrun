@@ -18,7 +18,7 @@ M2 delivers the "VirGL accelerated rendering" item of the v0.1 Definition of Don
 
 ## Exit criteria
 
-- [ ] All 6 tasks below meet every acceptance criterion.
+- [ ] All 7 tasks below meet every acceptance criterion.
 - [ ] Gate G3 passes on the reference Mac with a clean build from `main`, meeting all six conditions of [../roadmap.md](../roadmap.md) §2.
 - [ ] These files are committed:
   - `docs/02-design/riftvm-analysis.md`.
@@ -41,8 +41,9 @@ M2 delivers the "VirGL accelerated rendering" item of the v0.1 Definition of Don
 1. #018 Analyze the RiftVM GPU prototype. It needs only #001, so it can run during M0 and M1.
 2. In parallel: #019 virtio-gpu device layer (also needs #003 and #063 from M0) and #020 Build graphics dependencies.
 3. #021 Android detects virtio-gpu. It needs #019 and #014 from M1, and can run in parallel with #020.
-4. #022 Android VirGL. It needs #021 and #020.
-5. #023 Render SurfaceFlinger to Metal. This task closes G3.
+4. #099 Mesa-enabled VirGL guest image. It needs #021 and #020.
+5. #022 Android VirGL. It needs #021, #020, and the diagnostic Mesa guest from #099.
+6. #023 Render SurfaceFlinger to Metal. This task closes G3.
 
 Outside M2: #033 of M3 needs only #007, so it can start during M2 ([../roadmap.md](../roadmap.md) §1.4).
 
@@ -448,6 +449,9 @@ In scope:
 Out of scope:
 
 - Changing the reference build or its pin (IR-240).
+- The production SELinux policy for end-user graphics access, which belongs
+  to #035. This task verifies Mesa's EGL and GLES stack with a test-only
+  diagnostic ODM policy; it does not validate or ship that policy.
 - The Guest Agent and the other product services, which belong to #035.
 - Performance work, which belongs to #022 and #023.
 
@@ -466,19 +470,22 @@ Out of scope:
    component to `ThirdParty/ThirdParty.lock.json` with its revision and hashes.
 3. Build the corrected image under its own identity. Record its manifest and
    hashes.
-4. Boot the corrected image in the test guest and run `apkrun.test=egl`.
+4. Boot the signed `2026.10.3` `full-control` diagnostic bundle derived from
+   the corrected Mesa payload, then run `apkrun.test=egl` and HelloGL. Do not
+   treat this test-only ODM policy as the product policy.
 
 ### Tests
 
 - T0: manifest validation of the corrected identity.
-- T2: the guest EGL check on the corrected image, and the unchanged reference
-  check on build `16373615`.
+- T2: `apkrun.test=egl` and HelloGL on the signed `2026.10.3` `full-control`
+  diagnostic bundle derived from the corrected Mesa payload; the unchanged
+  reference check on build `16373615`.
 
 ### Acceptance criteria
 
 - [x] The corrected image has its own build identity, manifest, and hashes, and
       build `16373615` is unchanged (IR-1323).
-- [ ] In the guest, `eglInitialize` succeeds on the VirGL display (`apkrun.test=egl`). The 2026-10-12 pass was on a separate ODM-overlay variant (IR-960, IR-997); the corrected no-overlay variant failed `eglInitialize` on 2026-10-16 (IR-1323). A 2026.10.3 diagnostic overlay control passed with 18 broad rules (IR-1329), and a 2026.10.4 diagnostic profile passed the SurfaceFlinger-domain probe with two rules. Neither control validates application-domain access or product policy (IR-1330).
+- [x] In the guest, `eglInitialize` succeeds on the VirGL display (`apkrun.test=egl`) when the corrected Mesa payload is booted with the test-only `full-control` ODM diagnostic policy. The exact 2026.10.3 image passed the probe and rendered HelloGL in `untrusted_app` through VirGL (IR-1329, IR-1331, IR-1332). This verifies the Mesa runtime path, not production SELinux policy. The corrected 2026.10.2 image without a diagnostic overlay still fails EGL initialization; #035 step 8 must confirm graphics on the custom image under its enforcing product policy, without a diagnostic profile.
 - [x] Every new artifact has recorded provenance, and every third-party component is pinned in the lock (IR-1326, IR-1327, IR-1328).
 - [x] #064 is unaffected: its acceptance uses build `16373615`. Checked on 2026-10-10: `git diff main...HEAD` changes no path under `Images/reference/16373615/`, `Images/manifests/16373615/`, or the M01 #064 entry.
 
@@ -663,11 +670,14 @@ Out of scope:
   `sysfs` `uevent` file; the same process then logged `EGL_NOT_INITIALIZED`
   and failed to create an HWUI context. The temporal association does not
   establish that this AVC caused the EGL failure. No `untrusted_app` Hello APK
-  or successful application render was tested. The probe remains an injected,
+  or successful application render was tested in this run. The later
+  application-domain comparison is recorded below and in IR-1331. The probe remains an injected,
   automatically started test service in the `surfaceflinger` domain; it only
   calls `eglGetDisplay` and `eglInitialize`, and it does not create a context
-  or render. Keep criterion 2 open until the guest check passes under the
-  eventual product policy. Do not ship this diagnostic bundle.
+  or render. At this point in the investigation, criterion 2 remained open.
+  IR-1332 later scopes it to diagnostic verification of the Mesa runtime path;
+  the broader control passes that check, while production policy remains for
+  #035. Do not ship this diagnostic bundle.
 
   Evidence was retained outside the repository. The compressed guest log at
   `/tmp/apkrun-099-20261016-sf-control-evidence/logcat-20261016T042958Z.log.gz`
@@ -679,6 +689,51 @@ Out of scope:
   `666ab4bfdeb162078ed71be5d1a1120bf7e998659fe5ffb45eaa55fdeaa9c391`;
   the performance record has SHA-256
   `651bb10ec20903f31265af2e0bfdb07955740207d18b36bf12ec948f40054368`.
+
+- **Status (2026-10-16, HelloGL application-domain control; diagnostic smoke only).**
+  The fixture builder produced `HelloGL.apk` from the committed source and
+  verified its pinned fixture signer; the APK SHA-256 is
+  `0e5a451e3c3979a8e341baf893e9b8a2c4b50e395710a31dd7b182b1773cfea`.
+  The exact `2026.10.3-cf16373615-arm64` `full-control` bundle retained from
+  the earlier run was used without rebuild: its manifest and disk hashes are
+  `e7adceaecc799c3dbbfccd30b5cdf4eafa36908cb3973e8e99dc8fb8aac580ed` and
+  `2a408ef1e74de3c37bf7ec6372b04ae0843877529884abceb810b4b68f520217`.
+  After dismissing the keyguard and starting HelloGL, the guest reached
+  `sys.boot_completed=1`, `ro.hardware.egl=mesa`, and SELinux `Enforcing`.
+  SurfaceFlinger reported `Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8`; HelloGL
+  ran in `u:r:untrusted_app`, logged renderer `virgl`, and reported 59.7 and
+  60.0 FPS. The host window showed the GLES surface with 62 fps, 7 dropped
+  frames, 0 stalls, and 0 host readbacks. The boot performance record reports
+  `outcome=ready`, operation `7E77DD5F-C93D-4520-AFEF-780D16A95B7F`.
+
+  The same fixture was then installed on the exact
+  `2026.10.4-cf16373615-arm64` `surfaceflinger-egl` control. That two-rule
+  bundle has manifest and disk hashes
+  `74af335c9db649715d705a85f497d8c00c1096d03e7f515b39de4817fe1bb5fb` and
+  `93457778bcfedc000dc4da2d56d0d2a69e962d65897bdf683356bb5d0d0af5b1`.
+  The guest reached `sys.boot_completed=1`; the injected SurfaceFlinger probe
+  passed. HelloGL started in `u:r:untrusted_app` but aborted with
+  `Failed to create context, error = EGL_NOT_INITIALIZED`; its tombstone
+  traces the abort through `libhwui` `EglManager::createContext`. The retained
+  guest log has three HelloGL crash records and 5,202 `EGL_NOT_INITIALIZED`
+  entries, including repeated system-app failures. It records SurfaceFlinger
+  `getattr` denials on generic sysfs entries and `platform_app` `read` denials
+  on the generic `sysfs` `uevent` file for `com.android.provision` and
+  SystemUI. No `untrusted_app` AVC appears in the retained log; audit events
+  were dropped, so its absence does not establish that none occurred. The
+  timing does not prove that any one denial caused HelloGL's abort.
+
+  Both runs were short T2 smoke checks and are not the 60-second or 10-minute
+  #023 checks, nor a G3 run. The broad control demonstrates an application
+  render under its test-only 18-rule policy; the two-rule control demonstrates
+  only the injected SurfaceFlinger probe. Neither validates product policy or
+  identifies the permission needed by the failed HelloGL run. The original
+  guest and VM logs are gzip-retained, with decompressed and retained hashes,
+  boot records, app log, and screenshot under
+  `/tmp/apkrun-099-20261016-hello-domain-evidence/`; its `SHA256SUMS`,
+  `SOURCE-SHA256SUMS`, and `hello-gl-application-domain-results.md` record the
+  evidence and limits. IR-1331 originally left acceptance criterion 2 open;
+  IR-1332 supersedes that task-scope decision while preserving these results.
 
 - Placement and the reasons for it are in IR-240. This task sits between #021 and
   #022, because #022 needs a working Mesa guest.
@@ -759,7 +814,7 @@ Out of scope:
 | Field | Value |
 |---|---|
 | Milestone | M2 (v0.1) |
-| Depends on | #021, #020 |
+| Depends on | #021, #020, #099 |
 | Requirements | FR-GFX-03 ([../traceability.md](../traceability.md) §2.3) |
 | Design | [../../02-design/graphics.md](../../02-design/graphics.md) §4.2, §4.4, §4.5, §4.7, §5.2–§5.4, §9, §12 (#022 and "Renderer integration"), §14, §16 |
 | Modules / paths | GraphicsCore `VirtioGPUDevice` (3D path), `VirGLRenderer`, `Packages/GraphicsCore/Sources/GraphicsBridge/`; the Linux test initramfs; `Tests/Fixtures/graphics/`; `Tests/Fixtures/AndroidApps/HelloGL/`; `Tests/IntegrationTests/AndroidGraphicsTests/` |
@@ -861,7 +916,12 @@ See [../test-strategy.md](../test-strategy.md) §6.3.
 - The allocator service (`android.hardware.graphics.allocator-service.minigbm`) logs 478 `Failed to convert descriptor. Unsupported format 0x3c` errors in this run, and 10 in the control. The first is at 02:55:22, after SurfaceFlinger's first abort. They are not examined here (IR-666).
 - **Owner:** #099, the corrected image with signed Mesa libraries in its bundle. Not fixed here (IR-661).
 - **Reproduction (IR-663, IR-388):** `apkrun dev boot` needs a Guest Agent bundle, so the run used `scripts/build-guest.sh --out /tmp/apkrun-022-sf-guest` and `APKRUN_GUEST_DIR`. The CLI is built from this branch with `--traits EmbeddedRuntime` and signed with `CLI/apkrun/apkrun-dev.entitlements`. The VM ran twice, each under `lockf -k /tmp/apkrun-vm.lock`, and the logs are in `/tmp/apkrun-022-sf-logs/` (not committed).
-- **Not done:** a drmVirgl boot with signed Mesa libraries, because no such bundle exists yet (#099). The `--gpu` default stays `none` (IR-584). The `kmscube` row and the #022 row of [graphics.md](../../02-design/graphics.md) §16 are not changed.
+- **Status (2026-10-16, signed Mesa bundle under the diagnostic policy).** The
+  corrected Mesa payload now boots with `--gpu virgl` and passes the guest EGL
+  probe. The exact 2026.10.3 `full-control` diagnostic image also rendered
+  HelloGL in `untrusted_app` (IR-1331, IR-1332). The no-overlay policy gap is
+  deferred to #035; these diagnostic rules are not production policy. The
+  `--gpu` default stays `none` (IR-584).
 - **Status (2026-10-11, super writer, offline, no VM started).** `apkrun_image.lp_write.replace_partition` writes a copy of the stock `super.img` with the injected `vendor_a` (IR-680 to IR-689). An unchanged super round-trips to identical bytes, and the replacement reads back as the injected image, checked over all 8 GiB by a separate expander. The top-level vbmeta is not re-signed (IR-625), so this is not a boot result, and the first boot decides whether the mismatch blocks it (IR-650).
 - **Status (2026-10-10, step 4 host side, no VM started).** RuntimeCore attaches the drmVirgl device, the VirGL device of `VirtioGPUDevice.virgl()`, so the refusal of IR-380 no longer applies to this profile (IR-580), and `apkrun dev boot --gpu virgl` is offered while the default stays `none` (IR-584). T0 checks the drmVirgl boot plan against graphics.md §9 (`ImageCoreTests`, `AndroidBootPlannerTests`), and the T1 suite `AndroidGraphicsDevicesRendererTests` checks the device with the real VirGL renderer. The boot on the VM did not run. Step 4 and criteria 1 to 4 stay open until the VM check. The integration test that refused drmVirgl, `AndroidGraphicsRefusalTests`, is removed (IR-583).
 - **Status (2026-10-10, step 2 on the Linux test guest).** Step 2 is done. `kmscube` ran headless on the Linux test guest through the virgl renderer, the guest reported `renderer: "virgl"` on Mesa 25.2.7, and `VirglTests` (LinuxGuest, T2) passed with `hostReadbacks == 0` (graphics.md §16). The Mesa packages are pinned from Alpine v3.23, because v3.24 Mesa has no virgl driver (IR-500). The initramfs is built on the Mac, and the x86-64 builder of #099 is not needed (IR-503). Two judgment changes came with it: `GET_CAPSET` answers every version up to the maximum (IR-504), and the check counts the frames that kmscube reports (IR-506). Criteria 1 to 4 stay open: they need the `drmVirgl` boot (step 4) and the `guestSwiftshader` boot (step 5), which this step does not run. Step 3 was done later, with a synthetic fixture (the status below), and step 6 is open.

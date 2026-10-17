@@ -20299,9 +20299,23 @@ that concern. No other actionable findings were reported.
 **Verification (2026-10-17 UTC).** The focused renderer-log tests passed 2 of
 2. The full `GraphicsCoreTests` suite passed all 180 tests in 0.137 s.
 `swift-format lint --strict` with the source and test configurations passed,
-as did `git diff --check`. Tests cover a known `submit` label, omission of
-dynamic detail, and redaction of an unknown operation string. This change
-does not alter renderer behavior, failure counting, or guest responses.
+as did `git diff --check`. The current-main direct-view T2
+`AndroidInputTests.testOneHundredClicksOnTheButtonAreLogged` also passed once
+in 38.155 s. Its host log contains six device failure records with
+`operation=submit` between 05:40:08.889 and 05:40:08.963 JST, paired with six
+renderer-category records that have no operation label. The test runs direct
+view input, not WindowServer input. The T0 tests cover a known `submit` label,
+omission of dynamic detail, and redaction of an unknown operation string.
+This change does not alter renderer behavior, failure counting, or guest
+responses.
+
+The first failed submit is preceded on the same render thread by `Illegal
+resource 156`, `COPY_TRANSFER3D: 22`, and `Illegal command buffer 917549`.
+About 4 ms before that, the device log recorded a rejected guest command 262
+(`RESOURCE_ATTACH_BACKING`); it does not include a resource ID. These adjacent
+messages make an association plausible but do not correlate the rejected
+request with resource 156. The remaining five failed submits have no matching
+VirGL callback sequence.
 
 **Risk.** An operation label identifies the host renderer API call only. It
 does not identify which command inside a VirGL stream caused a rejection or

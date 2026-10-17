@@ -540,7 +540,8 @@ Paths are relative to `APKRun.app` in the sketch. #057 step 1 confirms the Spark
 ```bash
 xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
   -configuration Debug -only-test-configuration LinuxGuest \
-  APKRUN_TEST_LINUX_DIR="${TMPDIR:-/tmp}/apkrun-test-linux" APKRUN_CI=1 \
+  APKRUN_TEST_LINUX_DIR="${TMPDIR:-/tmp}/apkrun-test-linux" \
+  APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" APKRUN_CI=1 \
   DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY"
 ```
@@ -578,23 +579,42 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
   xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
     -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-103-derived" \
     -resultBundlePath "${TMPDIR:-/tmp}/apkrun-103-interactive.xcresult" \
+    APKRUN_TEST_LINUX_DIR="${TMPDIR:-/tmp}/apkrun-test-linux" \
+    APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
     -only-test-configuration AndroidInputInteractive \
     -only-testing:IntegrationTests/AndroidInputTests/testThreeConsecutiveHundredClickBatchesThroughWindowServer test
   xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
     -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-103-derived" \
     -resultBundlePath "${TMPDIR:-/tmp}/apkrun-103-trace.xcresult" \
+    APKRUN_TEST_LINUX_DIR="${TMPDIR:-/tmp}/apkrun-test-linux" \
+    APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
     -only-test-configuration AndroidInputTrace \
     -only-testing:IntegrationTests/AndroidInputTests/testOneHundredClickDiagnosticTraceJoinsHostGuestAndFixture test
   ```
 
+- `AndroidInputEdges` opts into the #024 top/left guest-edge check. It uses direct
+  view dispatch but `SessionWindowController.show()` activates the test window,
+  so run it only on a dedicated lab GUI session and select only this method:
+
+  ```bash
+  xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+    -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-024-edge-derived" \
+    -resultBundlePath "${TMPDIR:-/tmp}/apkrun-024-edge.xcresult" \
+    APKRUN_TEST_LINUX_DIR="${TMPDIR:-/tmp}/apkrun-test-linux" \
+    APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+    -only-test-configuration AndroidInputEdges \
+    -only-testing:IntegrationTests/AndroidInputTests/testDragsBeyondTopAndLeftEdgesCloseTheGuestTouch test
+  ```
+
   A dedicated lab GUI session is an ordinary logged-in macOS desktop reserved
   for these tests, typically on the reference Mac; it is not a separate APKRun
-  service. Both GUI tests require exactly one detected display. They activate
-  the test window and post system pointer events through WindowServer, which
-  can foreground APKRun and move or click that desktop's pointer. Do not run
-  either GUI test in a desktop being used for ordinary work or in unattended
-  CI, including a self-hosted GUI runner. A manually operated test desktop is
-  required for these acceptance runs.
+  service. Both #103 GUI tests require exactly one detected display. They
+  activate the test window and post system pointer events through WindowServer,
+  which can foreground APKRun and move or click that desktop's pointer. The
+  #024 edge test also activates the test window, but dispatches synthetic
+  events directly to the view. Do not run these tests in a desktop being used
+  for ordinary work or in unattended CI, including a self-hosted GUI runner.
+  A manually operated test desktop is required for these acceptance runs.
 
   Run each command separately on a dedicated lab GUI session with its pinned image and saved `.xcresult`; choose a new result-bundle path for every retry. The interactive case activates a window and posts system pointer events; trace capture is off so the fixture touch listener stays detached. The trace case enables the timing-perturbing listener and per-event ACK capture. Both currently exercise the embedded `DevBoot`/`DevInputRoute` path, not the future wrapper-to-apkrund XPC route.
 - The test plan `Tests/AcceptanceTests/AcceptanceTests.xctestplan` has one configuration per gate (`G1`–`G9`, each added by its gate task), plus `ReleaseSmoke` and `Network`. Automatic retry is off, except one retry for `Network` ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2.7).

@@ -20,13 +20,13 @@ private struct AndroidImageVariantReceipt: Decodable {
 /// fixed points inside HelloCompose's list.
 ///
 /// Showing the development window activates it. The edge-clamping and #103 cases therefore run only on a dedicated lab
-/// GUI session. The edge-clamping case additionally requires `APKRUN_INPUT_EDGE_T2=1`.
+/// GUI session. The edge-clamping case is enabled only by the `AndroidInputEdges` test-plan configuration.
 ///
 /// The suite runs in the Xcode test host (IR-438). Its boot needs a working guest renderer, which the odm7 overlay gives
 /// (IR-1278), and the host dismisses the keyguard before it launches the app (IR-1285). The device checks of the
 /// coordinator's scripted runs post the same gestures with the CGEvent helper in /tmp (decision D14). The suite runs only
-/// with APKRUN_INPUT_T2=1, which the AndroidInput configuration of IntegrationTests.xctestplan sets. The edge-clamping
-/// case also needs APKRUN_INPUT_EDGE_T2=1. The suite needs
+/// with APKRUN_INPUT_T2=1, which the AndroidInput configurations of IntegrationTests.xctestplan set. The
+/// `AndroidInputEdges` configuration also sets APKRUN_INPUT_EDGE_T2=1. The suite needs
 /// APKRUN_GUEST_DIR (the Guest Agent bundle), APKRUN_FIXTURE_APK (HelloText, a debug build: its `TEXT` and `DETAILS`
 /// broadcasts exist only there), and APKRUN_FIXTURE_COMPOSE_APK (HelloCompose). A missing input skips its test and names
 /// the variable.
@@ -132,7 +132,7 @@ final class AndroidInputTests: XCTestCase {
     /// Drags beyond the left and top edges clamp in the host and release the guest touch before a later click.
     func testDragsBeyondTopAndLeftEdgesCloseTheGuestTouch() async throws {
         guard ProcessInfo.processInfo.environment["APKRUN_INPUT_EDGE_T2"] == "1" else {
-            throw XCTSkip("Run only on a dedicated lab GUI session with APKRUN_INPUT_EDGE_T2=1.")
+            throw XCTSkip("Select AndroidInputEdges on a dedicated lab GUI session.")
         }
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")
         try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in

@@ -176,6 +176,50 @@
       }
     },
     {
+      "id": "0F4AFC2E-3F03-4E56-9C1F-003003003014",
+      "name": "AndroidInputEdges",
+      "options": {
+        "environmentVariableEntries": [
+          {
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "android-input",
+            "enabled": true
+          },
+          {
+            "key": "ANDROID_ADB_SERVER_PORT",
+            "value": "15043",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_INPUT_T2",
+            "value": "1",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_INPUT_EDGE_T2",
+            "value": "1",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_VIRGL_RUNTIME_PATH",
+            "value": "/tmp/apkrun-test-linux/virgl-runtime",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_GUEST_DIR",
+            "value": "/tmp/apkrun-test-guest",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_FIXTURE_APK",
+            "value": "/tmp/apkrun-test-fixtures/HelloText.apk",
+            "enabled": true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance": 1800
+      }
+    },
+    {
       "id": "0F4AFC2E-3F03-4E56-9C1F-003003003012",
       "name": "AndroidInputInteractive",
       "options": {

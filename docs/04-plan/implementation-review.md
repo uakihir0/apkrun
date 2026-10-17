@@ -19924,3 +19924,36 @@ be checked.
 **Risk.** The intermittent product-mode click loss remains unexplained. The
 three product-cadence WindowServer batches and diagnostic trace are still
 pending; #024 box 3 and #103 acceptance remain open.
+
+## IR-1352: Defer AOSP builder provisioning until a suitable host is available
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #035 |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §5; [M05-custom-android-image.md](issues/M05-custom-android-image.md) #035; [roadmap.md](roadmap.md) §1.3; [risks.md](risks.md) R-14 |
+
+**Choice.** Complete a read-only builder preflight on this Mac, but do not
+start an AOSP sync or create a cloud builder. Keep #035 implementation behind
+its #034 dependency. Resume builder setup when a project-designated Linux
+x86_64 host with the documented capacity is reachable.
+
+**Reason.** This Mac is `Darwin arm64`; its Docker engine reports Linux
+`aarch64` with 8,317,268,736 bytes of memory. The two local Lima VMs are also
+`aarch64` and have 120 GiB and 20 GiB disks. The host has about 83 GiB free,
+below the builder's 400 GB free-space requirement. `APKRUN_AOSP_BUILDER` is
+unset and the SSH `Host` scan returned no entries. The configured Google
+Cloud context could not refresh credentials for a read-only instance listing
+in this non-interactive session. These checks did not identify a usable
+remote target. Building locally would violate the documented x86_64, memory,
+and disk requirements.
+
+**Verification (2026-10-17).** `uname -sm`, `docker info`,
+`limactl list`, `df -h /tmp`, an `awk` scan of SSH `Host` entries,
+`printenv APKRUN_AOSP_BUILDER`, and a read-only `gcloud compute instances
+list` were checked. The last command failed before listing resources because
+credential refresh required interactive reauthentication. No cloud resource
+or AOSP checkout was created.
+
+**Risk.** R-14 remains open. The Linux builder is not ready, so #035 cannot
+start when #034 completes until a suitable host is available.

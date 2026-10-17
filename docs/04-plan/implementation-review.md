@@ -20256,6 +20256,17 @@ Accessibility status with read-only signing and TCC queries. The full
 checks only. It does not grant WindowServer access or replace the #103
 three-batch T2 run, which still skips before VM boot.
 
+**Retest after permission was believed to be enabled (2026-10-17 UTC).** The
+method-level `AndroidInputInteractive` run used the configured Apple
+Development signature, `APKRUN_TEST_LINUX_DIR=/tmp/apkrun-test-linux`, and
+`APKRUN_ANDROID_HOME=/tmp/apkrun-test-sdk`. Its result bundle,
+`/tmp/apkrun-103-interactive-local-recheck-20261018.xcresult`, selected one
+test and skipped it in 0.013 s because `CGPreflightPostEventAccess()` returned
+false for `APKRunTestHost` (`io.apkrun.testhost`). It did not install the
+image or start a VM. The latest read-only TCC query still reported `denied`
+for this host and `granted` for `com.openai.codex`. No permission prompt or
+settings change was made.
+
 **Risk.** The current TCC result may change if macOS settings or the hosted
 code identity changes. A grant to `com.openai.codex` does not grant
 `io.apkrun.testhost`; keep the test's preflight result as the authority for

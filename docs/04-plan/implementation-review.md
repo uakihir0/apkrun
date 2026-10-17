@@ -19834,3 +19834,81 @@ additional actionable issues.
 parsing does not connect pressed transitions to clicks, prove event delivery,
 or explain the product-mode click loss. The two dedicated GUI T2 runs and #024
 box 3 acceptance remain open.
+
+## IR-1351: Record local input T2 result and macOS permission skips
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Tasks | #024, #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 and #103; [test-strategy.md](test-strategy.md) §§2.4, 6.4 |
+
+**Choice.**
+
+1. Use the already-built, signed `odm7` bundle recorded by IR-1284 and IR-1307
+   for the local T2 attempt. Do not use the reconstructed stock bundle, whose
+   Mesa EGL driver fails to load and prevents SurfaceFlinger from starting.
+2. Record the passing direct-view 100-click test as a baseline smoke result,
+   not as #024 or #103 acceptance evidence. Keep all acceptance boxes unchanged.
+3. Preserve the `AndroidInputInteractive` and `AndroidInputTrace` skips as
+   macOS permission results. Do not bypass the host's Accessibility permission
+   check or change privacy settings.
+
+**Reason.** The stock-image failure is a graphics setup failure before input
+and is already documented in IR-1279. The staged `odm7` bundle matches the
+previously tested variant. The baseline `AndroidInput` case sends events
+directly to the view handlers, uses a slower click cadence, and does not test
+WindowServer/AppKit dispatch. It holds each press for 50 ms and then waits
+100 ms before the next click, about 150 ms between press starts; the
+interactive case uses a 50 ms inter-click gap, about 100 ms between starts.
+Only the interactive case can supply the three-consecutive-batch product-path
+evidence. The two WindowServer cases attach configured environment identity
+first, then check `CGPreflightPostEventAccess()` before image installation or
+VM boot. The attachment records the configured inputs; it does not prove that
+the image booted. Without Accessibility permission, the test bodies cannot
+produce input or trace evidence.
+
+**Verification (2026-10-17).** `APKRUN_TEST_LINUX_DIR=/tmp/apkrun-test-linux`
+selects the staged bundle at `/tmp/apkrun-test-linux/android-bundle`; the
+source bundle is `/tmp/apkrun-odmr/odm7/bundle/android-bundle`. The source and
+staged `manifest.json` files have SHA-256
+`113e3d9868c6d5073d9fd6c572c8b91c2e2ba7e5eb5c31ee81b33912fd844c3d`. The
+source receipt `/tmp/apkrun-odmr/odm7/bundle/android-bundle.variant.json` and
+staged receipt `/tmp/apkrun-test-linux/android-bundle.variant.json` have SHA-256
+`31ca03cb4ad3b8676d3c29ee40c7698bb73f10b02204b5d5b7ec65e4e35f6335`.
+
+- `/tmp/apkrun-103-input-100-odm7.xcresult`: the direct-view baseline passed
+  1/1 in 36.52 seconds. The result detail reports one test run and no retry.
+  It checks the ordered 1–100 fixture clicks, persisted counter delta, 100
+  wire DOWN and UP phases, zero deltas in `droppedRate`, `droppedNotRunning`,
+  `droppedChannel`, and `coalesced`, and absence of a `shell input` process.
+  It does not assert `droppedInvalid`. The result bundle does not attach image
+  identity; the hashes above identify the staged input used for the run.
+- The initial direct-view attempt against the reconstructed stock bundle was
+  stopped before input when the Mesa EGL driver failed to load, matching
+  IR-1279. Its guest log is preserved at
+  `/tmp/apkrun-103-input-run2-evidence/Logs/guest/logcat-20261017T130637Z.log`;
+  this attempt is not counted as an input test.
+- `/tmp/apkrun-103-interactive-odm7.xcresult`: the interactive case skipped
+  1/1 in 0.019 seconds with `WindowServer input needs Accessibility permission
+  on the dedicated lab GUI session.` Its `input-test-environment.json`
+  attachment identifies the configured input bundle and hashes; the skipped
+  case did not install or boot that image.
+- `/tmp/apkrun-103-trace-odm7.xcresult`: the trace case skipped 1/1 in
+  0.019 seconds with the same reason. It carries the same configured-input
+  identity attachment and did not boot the image.
+
+No VM was started by either skipped case. The passing smoke test emitted a
+non-failing QoS warning at
+`Packages/GraphicsCore/Sources/GraphicsCore/Renderer/RenderThread.swift:119`.
+GitHub Actions were not run.
+
+**Adversarial review.** The reviewer confirmed that the direct-view test
+provides only one slower batch and cannot close either acceptance item. Both
+permission-gated cases attach configured environment identity, then skip
+before image installation, VM boot, or trace capture. No acceptance box should
+be checked.
+
+**Risk.** The intermittent product-mode click loss remains unexplained. The
+three product-cadence WindowServer batches and diagnostic trace are still
+pending; #024 box 3 and #103 acceptance remain open.

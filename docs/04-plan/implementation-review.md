@@ -19897,6 +19897,18 @@ staged receipt `/tmp/apkrun-test-linux/android-bundle.variant.json` have SHA-256
 - `/tmp/apkrun-103-trace-odm7.xcresult`: the trace case skipped 1/1 in
   0.019 seconds with the same reason. It carries the same configured-input
   identity attachment and did not boot the image.
+- **Repeat verification after waiving the reserved-desktop condition for a
+  local attempt:** the documented `AndroidInputInteractive` and
+  `AndroidInputTrace` `xcodebuild` commands were run with the documented
+  development signing settings and `APKRUN_TEST_LINUX_DIR` build setting. Each
+  selected one test and reported one skip, zero failures, at the
+  `CGPreflightPostEventAccess()` check
+  (`/tmp/apkrun-103-interactive-signed-currentmac-20261017.xcresult`:
+  0.122 seconds; `/tmp/apkrun-103-trace-signed-currentmac-20261017.xcresult`:
+  0.010 seconds). Neither test installed the image or started a VM. Neither
+  command requests Accessibility permission or changes privacy settings. These
+  attempts do not satisfy the documented GUI acceptance environment or change
+  any task acceptance status.
 
 No VM was started by either skipped case. The passing smoke test emitted a
 non-failing QoS warning at

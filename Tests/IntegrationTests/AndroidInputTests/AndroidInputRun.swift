@@ -113,7 +113,13 @@ final class AndroidInputRun {
         _ body: (AndroidInputRun) async throws -> Void
     ) async throws {
         if pointerDelivery == .windowServer, !CGPreflightPostEventAccess() {
-            throw XCTSkip("WindowServer input needs Accessibility permission on the dedicated lab GUI session.")
+            let host = Bundle.main
+            let identifier = host.bundleIdentifier ?? ProcessInfo.processInfo.processName
+            throw XCTSkip(
+                "CGPreflightPostEventAccess() returned false for \(ProcessInfo.processInfo.processName) "
+                    + "(\(identifier)). Verify Accessibility is enabled for this exact test host in "
+                    + "System Settings > Privacy & Security > Accessibility: \(host.bundlePath)."
+            )
         }
         guard let guest = ProcessInfo.processInfo.environment["APKRUN_GUEST_DIR"], !guest.isEmpty else {
             throw XCTSkip(

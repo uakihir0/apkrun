@@ -20104,3 +20104,60 @@ environment, and reject fixtures for both the edge flag and configuration.
 dedicated-Mac waiver. It supports guest touch closure/recovery through the
 fixture but does not establish acceptance of every gesture event or satisfy
 physical-input checks.
+
+## IR-1356: Identify the hosted app in the input permission skip
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [build-system.md](../05-development/build-system.md) §12.4; `AndroidInputRun` |
+
+**Choice.** Keep the WindowServer preflight and skip behavior. Make the skip
+report the hosted process name, bundle identifier, and app path, and include
+the documented development signing settings in both #103 command examples.
+
+**Reason.** The user's Accessibility grant was believed to be enabled, but the
+actual hosted test still skipped. The test runs inside `APKRunTestHost`, not
+inside the `xcodebuild`, Terminal, or Peekaboo process. The prior command
+examples omitted the development signing settings required by the general T2
+instructions, so Xcode signed this local host with "Sign to Run Locally"
+(ad hoc); its designated requirement depended on a code hash. Naming the
+tested host and using the configured signer makes a future preflight result
+attributable to the application whose permission matters. Earlier
+development-signed retries also failed the preflight (IR-1351), so the
+ad-hoc identity alone does not explain the current result. The current result
+does not prove that macOS has no Accessibility grant for other apps.
+
+**Verification (2026-10-17 UTC).** The `AndroidInputInteractive` test was
+invoked with its method-level filter and the staged asset paths. That
+invocation omitted the development signing build settings, so Xcode used
+"Sign to Run Locally" (ad hoc). It selected only
+`testThreeConsecutiveHundredClickBatchesThroughWindowServer` and exited with
+one skipped test, zero failures. Its skip came from
+`CGPreflightPostEventAccess()` in
+`/tmp/apkrun-103-derived/Build/Products/Debug/APKRunTestHost.app` (bundle
+identifier `io.apkrun.testhost`), before image installation or VM boot.
+`codesign -dv` reported TeamIdentifier `not set`, and the designated
+requirement used the app's cdhash. The updated command was then run with
+`DEVELOPMENT_TEAM`, `CODE_SIGN_STYLE`,
+`CODE_SIGN_IDENTITY`, `APKRUN_TEST_LINUX_DIR`, and `APKRUN_ANDROID_HOME` as
+`xcodebuild` build settings. Xcode's build log reports the Apple Development
+identity, and `codesign -dv` reports `TeamIdentifier=QTXBTFA8BQ` for the built
+host. The selected method's two Xcode repetitions both skipped before image
+installation and VM boot in
+`/tmp/apkrun-103-interactive-20261018-r5.xcresult`; the result reports one
+skipped test case and zero failures. Both skip messages report
+`CGPreflightPostEventAccess()` false for `APKRunTestHost`
+(`io.apkrun.testhost`) at
+`/private/tmp/apkrun-103-derived/Build/Products/Debug/APKRunTestHost.app`.
+This confirms the configured signature was applied and that the current
+host's effective event-posting check is false; it does not prove that macOS
+has no Accessibility grant for another app or another code identity. The
+three click batches still require effective WindowServer access in this host.
+
+**Risk.** Ad hoc signatures change the designated requirement when the host
+binary changes, so a grant to one build may not carry to another. The
+documented test commands now use the configured development team and identity.
+This documentation and diagnostic change does not grant permission or satisfy
+#103 or #024 acceptance.

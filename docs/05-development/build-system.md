@@ -576,11 +576,15 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
 - `AndroidInputInteractive` and `AndroidInputTrace` are dedicated GUI configurations for #103. The plan selects the whole `IntegrationTests` target, so always pass the method-level filter as well as the matching configuration:
 
   ```bash
+  : "${APKRUN_TEST_DEVELOPMENT_TEAM:?Set the lab development team; see §2.8}"
+  : "${APKRUN_TEST_CODE_SIGN_IDENTITY:?Set the lab signing fingerprint; see §2.8}"
   xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
     -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-103-derived" \
     -resultBundlePath "${TMPDIR:-/tmp}/apkrun-103-interactive.xcresult" \
     APKRUN_TEST_LINUX_DIR="${TMPDIR:-/tmp}/apkrun-test-linux" \
     APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+    DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+    CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
     -only-test-configuration AndroidInputInteractive \
     -only-testing:IntegrationTests/AndroidInputTests/testThreeConsecutiveHundredClickBatchesThroughWindowServer test
   xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
@@ -588,10 +592,19 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
     -resultBundlePath "${TMPDIR:-/tmp}/apkrun-103-trace.xcresult" \
     APKRUN_TEST_LINUX_DIR="${TMPDIR:-/tmp}/apkrun-test-linux" \
     APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+    DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+    CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
     -only-test-configuration AndroidInputTrace \
     -only-testing:IntegrationTests/AndroidInputTests/testOneHundredClickDiagnosticTraceJoinsHostGuestAndFixture test
   ```
 
+- `CGPreflightPostEventAccess()` is checked by the hosted `APKRunTestHost`
+  process. If the check fails, verify that Accessibility is enabled for the
+  exact `APKRunTestHost.app` path shown in the skip message, adding that app
+  there if it is absent. A grant to Terminal, Xcode, or a different app does
+  not make the test host's preflight succeed. Sign the host with the
+  configured development identity above so its designated code requirement
+  remains stable across builds.
 - `AndroidInputEdges` opts into the #024 top/left guest-edge check. It uses direct
   view dispatch but `SessionWindowController.show()` activates the test window,
   so run it only on a dedicated lab GUI session and select only this method:

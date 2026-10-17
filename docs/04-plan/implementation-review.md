@@ -20156,6 +20156,16 @@ host's effective event-posting check is false; it does not prove that macOS
 has no Accessibility grant for another app or another code identity. The
 three click batches still require effective WindowServer access in this host.
 
+**Retest (2026-10-17 UTC).** Repeated the configured-signing invocation after
+the permission state was believed to be enabled. The method-level result bundle
+`/tmp/apkrun-103-interactive-20261018-r6.xcresult` again records two skipped
+repetitions before image installation or VM boot. Both report
+`CGPreflightPostEventAccess()` false for the signed
+`APKRunTestHost` (`io.apkrun.testhost`) at the same app path; `codesign -dv`
+reports TeamIdentifier `QTXBTFA8BQ`. This confirms the current test host still
+does not have effective event-posting access. It does not establish whether a
+grant exists for a different app path or code identity.
+
 **Risk.** Ad hoc signatures change the designated requirement when the host
 binary changes, so a grant to one build may not carry to another. The
 documented test commands now use the configured development team and identity.

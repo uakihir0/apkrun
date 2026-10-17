@@ -19957,3 +19957,150 @@ or AOSP checkout was created.
 
 **Risk.** R-14 remains open. The Linux builder is not ready, so #035 cannot
 start when #034 completes until a suitable host is available.
+
+## IR-1353: Recheck HelloCompose scroll directions on current main
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [input.md](../02-design/input.md) §4.4 and §15; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024; [build-system.md](../05-development/build-system.md) §12.4; `AndroidInputTests.testDragAndScrollMoveTheHelloComposeList` |
+
+**Choice.** Re-run only `testDragAndScrollMoveTheHelloComposeList` on current
+`main` with the `AndroidInput` configuration. Record its passing T2 result,
+but leave #024 box 4 unchecked until C01-2 verifies physical trackpad and
+wheel behavior against the macOS natural-scrolling setting.
+
+**Reason.** The prior documented T2 run is from October 13. The current test
+uses the latest main code and an installed Android 37 guest, so this one
+focused run checks the synthetic drag, precise-scroll, and line-scroll
+directions without repeating the full input suite. Its scroll helper creates
+CG scroll events and dispatches the resulting `NSEvent` directly to the view;
+it does not use a physical trackpad or wheel, nor does it read the host's
+natural-scrolling preference. The first local attempt skipped before boot
+because the hosted test could not locate `adb`. The retry supplied
+`APKRUN_ANDROID_HOME=/tmp/apkrun-test-sdk`, whose copied platform-tools are
+outside `~/Documents`, as required by the test-host setup.
+
+**Verification (2026-10-17 UTC, macOS 27.0.1, arm64, Android 37 image
+`2026.10.0-cf16373615-arm64`, main HEAD `27ae8b1`).** The result bundle
+`/tmp/apkrun-024-scroll-currentmac-20261018-retry.xcresult` reports one
+selected test, zero failures and skips, and two successful Xcode repetitions
+(21.08 s and 22.61 s). Both repetitions booted the guest and passed the
+HelloCompose drag, precise-scroll, and wheel-direction assertions. The initial
+attempt, `/tmp/apkrun-024-scroll-currentmac-20261018.xcresult`, skipped
+immediately with `adb was not found under ANDROID_HOME or on PATH:
+runtime.adbExecutableMissing`; it is not counted as passing evidence. The
+successful retry explicitly supplied `APKRUN_ANDROID_HOME`; the generic T2
+and #103 command examples now pass this required test-host build setting.
+Xcode reported the existing non-failing render-thread QoS warning at
+`Packages/GraphicsCore/Sources/GraphicsCore/Renderer/RenderThread.swift:119`.
+
+**Adversarial review.** Review confirmed the result contains two passing
+repetitions and no skipped or failed selected tests. It also confirmed the
+test directly dispatches the synthesized scroll event to the view, so it
+cannot establish hardware trackpad behavior or the user's natural-scrolling
+setting. No T3 criterion or #024 acceptance box is checked by this result.
+
+**Risk.** The physical C01-2 check remains outstanding. The successful T2
+result covers the synthetic guest path only and does not establish
+WindowServer delivery or close #024 box 4.
+
+## IR-1354: Prune redundant local input test result bundles
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Tasks | #024, #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 and #103 |
+
+**Choice.** Preserve one representative result for each repeated test
+sequence, retain the unique click-loss result, and remove only redundant
+temporary `.xcresult` bundles and one pre-input setup failure:
+
+- For the three passing #024 direct-view baseline runs, retain the latest
+  `apkrun-024-click-baseline-odm7-20261014-03.xcresult`; delete the earlier
+  unsuffixed and `-02` runs.
+- Of the eight #103 off-main click runs, retain the sole 99/100 failure
+  (`apkrun-103-offmain-20261014-03.xcresult`) and the latest passing
+  comparator (`apkrun-103-offmain-20261014-09.xcresult`); delete the passing
+  runs `-02`, `-04`, `-05`, `-06`, `-07`, and `-08`. Record the series as one
+  99/100 run among eight, not as #024/#103 acceptance.
+- Delete `apkrun-103-input-100-run1.xcresult`, which failed before VM boot
+  because `manifest.sig` was missing and contains no click observations.
+  This is distinct from the reconstructed-stock-image Mesa EGL failure in
+  IR-1279.
+
+**Reason.** The baseline bundles contain the same passing one-test result.
+The off-main set contains seven passes and one informative 99/100 failure;
+keeping the failure and one comparator preserves the observed sample and its
+missed final click without retaining six duplicate passes. The `manifest.sig`
+failure is a setup-only error with no input evidence. No prior documentation
+relies on a delete candidate as evidence; this entry lists the names for
+auditability. The representative and failure bundles preserve the relevant
+test outcomes. This cleanup reclaims about 632 MiB.
+
+**Adversarial review.** The reviewer enumerated all eight off-main bundles:
+`-03` is the sole 99/100 failure and `-02`, `-04` through `-09` pass. It
+confirmed `-09` is the latest pass, the baseline set has three passes with
+`-03` the latest, and `manifest.sig` is rejected during image installation
+before the VM starts. The selected deletion candidates have no exact-basename
+references in `docs/`.
+
+**Risk.** The pruned results cannot be recovered from `/tmp`. The retained
+failure and comparator preserve the specific click-loss observation and
+sample count; the remaining unique diagnostic bundles and the current
+IR-1351/IR-1353 results are untouched.
+
+**Execution (2026-10-17).** Removed the nine reviewed delete candidates. Their
+pre-cleanup `du` sizes total about 632 MiB. Confirmed that the retained #024
+baseline, #103 99/100 failure, and latest passing comparator still exist.
+
+## IR-1355: Run the top/left guest-edge check on the available Mac
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [input.md](../02-design/input.md) §15; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024; [build-system.md](../05-development/build-system.md) §12.4; [test_workflow_runners.rb](../../scripts/tests/test_workflow_runners.rb); `AndroidInputTests.testDragsBeyondTopAndLeftEdgesCloseTheGuestTouch` |
+
+**Choice.** Add a dedicated `AndroidInputEdges` test-plan configuration and
+run only `testDragsBeyondTopAndLeftEdgesCloseTheGuestTouch` on the available
+local Mac. The user explicitly waived the dedicated logged-in test-Mac
+requirement for this run. Keep the normal CI guard against enabling the edge
+or #103 desktop-input configurations.
+
+**Reason.** Xcode does not pass shell environment variables through to the
+hosted test in a reliable way, so the initial `AndroidInput` attempt skipped
+before VM boot. A named test-plan configuration makes the opt-in test
+reproducible and supplies the edge-test flag in the hosted process. The test
+window activates the desktop, but this case dispatches synthesized `NSEvent`s
+directly to the view; it does not post pointer events through WindowServer.
+
+**Verification (2026-10-17 UTC, macOS 27.0.1 build 26A434, MacBook Pro arm64,
+Android 37 image `2026.10.0-cf16373615-arm64`).** The
+`AndroidInputEdges` result bundle
+`/tmp/apkrun-024-edge-top-left-currentmac-20261018-config.xcresult` reports
+one selected test, zero failures and skips, and two passing Xcode repetitions
+(26.78 s and 28.24 s). The fixture's stable counter and following-click
+assertions passed. The test-plan ADB server port is 15043, unique to this
+configuration. Xcode recorded the existing render-thread QoS warning twice
+at `RenderThread.swift:119`. An initial attempt with the `AndroidInput`
+configuration skipped before boot because the hosted test could not find
+`adb`; the explicit edge configuration removed that setup ambiguity. The run
+used the main worktree based on `27ae8b1`; its test-source and configuration
+changes are committed as `3748f73`.
+
+**Adversarial review.** Review confirmed both repetitions passed and that this
+case directly dispatches synthesized events to the view. Its periodic ACK is
+a route-progress marker, not per-event guest acceptance. The result does not
+verify WindowServer dispatch, a physical mouse/trackpad, or the dedicated
+session's desktop-isolation condition. The workflow guard was strengthened to
+inspect all YAML scalar values in workflow and local-action documents,
+including `.yaml`, validate the exact test-plan opt-in values and required
+environment, and reject fixtures for both the edge flag and configuration.
+
+**Risk.** This is local T2 evidence recorded under the user's explicit
+dedicated-Mac waiver. It supports guest touch closure/recovery through the
+fixture but does not establish acceptance of every gesture event or satisfy
+physical-input checks.

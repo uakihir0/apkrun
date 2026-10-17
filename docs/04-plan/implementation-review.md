@@ -20227,3 +20227,36 @@ this run does not establish the same cause.
 product-cadence three-batch criterion, or the click-loss cause. The renderer
 errors are a separate graphics concern whose relation to input is unknown;
 the T2 pass must not be read as evidence that the renderer is healthy.
+
+## IR-1358: Reconcile the input test host's Accessibility result
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [issues/README.md](issues/README.md) #024 |
+
+**Choice.** Treat `APKRunTestHost`'s effective post-event permission result as
+process-specific. Preserve the `CGPreflightPostEventAccess()` guard and its
+skip; do not infer permission from another app's TCC status.
+
+**Reason.** The user believed the permission was enabled. A read-only
+`tccutil list -s Accessibility` query returned `denied` for the signed
+`io.apkrun.testhost` at the test-host build recorded in IR-1356, and `granted`
+for `com.openai.codex`. These are different app identities. The TCC output
+does not distinguish a user denial from missing authorization, while the
+hosted preflight directly reports whether that test process can post events.
+No permission prompt or settings change was made.
+
+**Verification (2026-10-17 UTC).** Confirmed the test host's bundle identifier
+`io.apkrun.testhost`, `TeamIdentifier=QTXBTFA8BQ`, and the separate Codex
+Accessibility status with read-only signing and TCC queries. The full
+`AndroidInputTraceJoinTests` class passed 10 of 10 under `LinuxGuest` in
+0.006 s, without a VM. This verifies the synthetic trace parser and join
+checks only. It does not grant WindowServer access or replace the #103
+three-batch T2 run, which still skips before VM boot.
+
+**Risk.** The current TCC result may change if macOS settings or the hosted
+code identity changes. A grant to `com.openai.codex` does not grant
+`io.apkrun.testhost`; keep the test's preflight result as the authority for
+the process that posts the events.

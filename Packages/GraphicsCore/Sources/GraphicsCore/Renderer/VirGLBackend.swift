@@ -2,6 +2,38 @@ import DiagnosticsCore
 import Foundation
 import VirtioDeviceCore
 
+private enum RendererOperationLogLabel: String {
+    case attachPresenter
+    case capsetFill
+    case capsetInfo
+    case contextAttachResource
+    case contextCreate
+    case contextDestroy
+    case contextDetachResource
+    case destroy
+    case fenceCreate
+    case initialize
+    case metalDevice
+    case presentBlit
+    case presentPoolCreate
+    case presentTargetCreate
+    case readResourceForTest
+    case reset
+    case resourceAttachBacking
+    case resourceCreate
+    case start
+    case submit
+    case transferRead
+    case transferWrite
+
+    static func field(for operation: String) -> String {
+        guard let label = Self(rawValue: operation) else {
+            return " operation=unknown"
+        }
+        return " operation=\(label.rawValue)"
+    }
+}
+
 /// A capset that the device answers from its cache (graphics.md §4.2).
 struct VirGLCapset: Equatable, Sendable {
     let id: UInt32
@@ -11,9 +43,13 @@ struct VirGLCapset: Equatable, Sendable {
 
 /// Counts the renderer operations that failed, and logs each one. The guest is not told (IR-460).
 final class RendererFailureLog: @unchecked Sendable {
-    private let logger = APKLogger(category: GraphicsLogCategory.device)
+    private let logger: APKLogger
     private let lock = NSLock()
     private var count: UInt64 = 0
+
+    init(logger: APKLogger = APKLogger(category: GraphicsLogCategory.device)) {
+        self.logger = logger
+    }
 
     /// The number of failures recorded so far.
     var total: UInt64 {
@@ -22,8 +58,15 @@ final class RendererFailureLog: @unchecked Sendable {
 
     func record(_ failure: GraphicsFailure) {
         lock.withLock { count += 1 }
+        let operationField: String
+        if case .rendererOperationFailed(let operation, _) = failure {
+            // Only known fixed renderer API names are safe to include in public diagnostics.
+            operationField = RendererOperationLogLabel.field(for: operation)
+        } else {
+            operationField = ""
+        }
         logger.error(
-            "virtio-gpu renderer operation failed: \(failure.code, .public)",
+            "virtio-gpu renderer operation failed: \(failure.code, .public)\(operationField, .public)",
             errorCode: failure.qualifiedCode
         )
     }

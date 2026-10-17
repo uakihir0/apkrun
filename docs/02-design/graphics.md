@@ -727,7 +727,7 @@ Before Android, prove VirGL end to end with Linux:
 | Case | Meaning | Remediation shown |
 |---|---|---|
 | `rendererInitFailed(stage, detail)` | EGL/ANGLE/virglrenderer initialization failed (stage: `egl`, `metal`, `virgl`) | update macOS / APKRun; try Graphics Safe Mode; attach diagnostics |
-| `rendererOperationFailed(operation, detail)` | capset, context, reset, or teardown failed, including a call from the wrong thread | restart Android; attach diagnostics if it continues |
+| `rendererOperationFailed(operation, detail)` | a renderer API operation failed, including resource, context, command submit, transfer, fence, presentation, reset, teardown, or a call from the wrong thread | restart Android; attach diagnostics if it continues |
 | `rendererLost(reason)` | context loss or GPU removal | Android restarts automatically |
 | `libraryMissing(name)` | VirGLRuntime dylib missing or invalid signature | reinstall APKRun |
 | `scanoutInvalid(ScanoutID)` | host requested a scanout outside 0…15 | bug report |

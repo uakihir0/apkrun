@@ -1,3 +1,5 @@
+import DiagnosticsCore
+import DiagnosticsCoreTestSupport
 import Foundation
 import Testing
 import VirtioDeviceCore
@@ -442,6 +444,40 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     try await eventually { control.completionCounts == [1, 1] }
     #expect(gpuResponseType(control.writtenBuffers[1]) == VirtioGPUResponseType.okNoData.rawValue)
     try await eventually { harness.device.statistics.rendererFailures == 1 }
+}
+
+@Test func rendererFailureLogIncludesOperationWithoutDynamicDetail() throws {
+    let sink = RecordingLogSink()
+    let failureLog = RendererFailureLog(
+        logger: APKLogger(category: GraphicsLogCategory.device, sink: sink)
+    )
+    let dynamicDetail = "guest supplied command data"
+
+    failureLog.record(
+        .rendererOperationFailed(operation: "submit", detail: dynamicDetail)
+    )
+
+    let entry = try #require(sink.entries.first)
+    #expect(entry.publicMessage == "virtio-gpu renderer operation failed: rendererOperationFailed operation=submit")
+    #expect(entry.publicMessage.contains(dynamicDetail) == false)
+    #expect(entry.errorCode == "graphics.rendererOperationFailed")
+    #expect(failureLog.total == 1)
+}
+
+@Test func rendererFailureLogHidesUnknownOperationLabels() throws {
+    let sink = RecordingLogSink()
+    let failureLog = RendererFailureLog(
+        logger: APKLogger(category: GraphicsLogCategory.device, sink: sink)
+    )
+
+    failureLog.record(
+        .rendererOperationFailed(operation: "guest supplied operation", detail: "dynamic detail")
+    )
+
+    let entry = try #require(sink.entries.first)
+    #expect(entry.publicMessage == "virtio-gpu renderer operation failed: rendererOperationFailed operation=unknown")
+    #expect(entry.publicMessage.contains("guest supplied operation") == false)
+    #expect(entry.publicMessage.contains("dynamic detail") == false)
 }
 
 @Test func aFenceBeyondThirtyTwoBitsIsAnInvalidParameter() async throws {

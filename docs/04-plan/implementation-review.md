@@ -20271,3 +20271,39 @@ settings change was made.
 code identity changes. A grant to `com.openai.codex` does not grant
 `io.apkrun.testhost`; keep the test's preflight result as the authority for
 the process that posts the events.
+
+## IR-1359: Include a privacy-safe renderer operation in failure logs
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §13.1; [M02-graphics.md](issues/M02-graphics.md) #022 |
+
+**Choice.** Add the fixed renderer API operation to the device failure log
+only when its string matches a closed set of production operation labels.
+Log `operation=unknown` for any other value, and never include the failure's
+dynamic detail. Preserve the failure count and the response already sent to
+the guest. Broaden §13.1 to describe failures across renderer operations.
+
+**Reason.** The current-main direct-view click run (IR-1357) logged renderer
+failures without identifying the failed API call, which prevented attribution
+to `submit`, transfer, or presentation. The operation field is a `String`, so
+the allowlist makes the public-log privacy assumption enforceable.
+
+**Adversarial review.** The reviewer identified that emitting the unconstrained
+operation string as public text would rely on every caller continuing to pass
+a literal. The closed allowlist and an unknown-value regression test address
+that concern. No other actionable findings were reported.
+
+**Verification (2026-10-17 UTC).** The focused renderer-log tests passed 2 of
+2. The full `GraphicsCoreTests` suite passed all 180 tests in 0.137 s.
+`swift-format lint --strict` with the source and test configurations passed,
+as did `git diff --check`. Tests cover a known `submit` label, omission of
+dynamic detail, and redaction of an unknown operation string. This change
+does not alter renderer behavior, failure counting, or guest responses.
+
+**Risk.** An operation label identifies the host renderer API call only. It
+does not identify which command inside a VirGL stream caused a rejection or
+establish a renderer-wide failure state. The #022 acceptance criteria remain
+unchanged.

@@ -20213,8 +20213,8 @@ asserted.
 The test-host output includes the existing `RenderThread.swift:119` QoS
 inversion warning in both repetitions. In each live VM, `Illegal resource`
 was reported (context 11/resource 159 in repetition 1; context 10/resource 163
-in repetition 2), followed by `TRANSFER3D: 22` in repetition 1 and
-`COPY_TRANSFER3D: 22` in repetition 2, and `Illegal command buffer 917549`.
+in repetition 2), followed by `COPY_TRANSFER3D: 22` in both repetitions, and
+`Illegal command buffer 917549`.
 Each run also emitted six `graphics renderer operation failed` messages over
 about 100 ms. These occur about 22 seconds after each test starts and about
 11 seconds before Android shutdown begins. The test still passes its click

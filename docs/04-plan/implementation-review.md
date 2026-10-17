@@ -20171,3 +20171,59 @@ binary changes, so a grant to one build may not carry to another. The
 documented test commands now use the configured development team and identity.
 This documentation and diagnostic change does not grant permission or satisfy
 #103 or #024 acceptance.
+
+## IR-1357: Repeat the direct-view click test on current main
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024; [issues/README.md](issues/README.md) #024; `AndroidInputTests.testOneHundredClicksOnTheButtonAreLogged` |
+
+**Choice.** Record the current-main T2 result as direct-view baseline evidence.
+Keep #024 box 3 and #103 acceptance open. Record the repeated renderer errors
+as a separate live-VM graphics observation without assigning them as the
+click-loss cause.
+
+**Reason.** This test uses `InputPointerDelivery.directView`, which calls the
+view's mouse handlers directly. It avoids the WindowServer permission gate,
+but does not exercise the real system pointer path that #103 requires. Its
+50 ms press plus 100 ms delay also gives a slower cadence than #103's
+product-mode batches. Passing this test can confirm the narrow click and wire
+conversion assertions only. The renderer errors recur during the live VM,
+before shutdown, so they are not described as teardown noise; the available
+click test has no per-click timestamps to establish whether they overlapped
+the click sequence or caused any click loss.
+
+**Verification (2026-10-17 UTC; macOS 27.0.1 build 26A434, MacBook Pro arm64;
+main HEAD `58fd1ed7`).** Ran only
+`testOneHundredClicksOnTheButtonAreLogged` with the `AndroidInput` test-plan
+configuration and the configured development signing identity. The result
+bundle `/tmp/apkrun-024-click-direct-currentmain-20261018-r2.xcresult`
+reports one selected test with two passing Xcode repetitions (35.477 s and
+36.023 s), zero failures, and zero skips. Each repetition asserts ordered
+fixture click records `1...100`, a persisted counter delta of 100, exactly
+100 wire-encoded touch `DOWN` and `UP` phases with no other touch phases or
+`cancelAll`, zero deltas in `droppedRate`, `droppedNotRunning`,
+`droppedChannel`, and `coalesced`; the 250 ms sampler observed no matching
+`adb shell input` process. Each repetition starts and stops its own VM; this
+does not test three batches in one guest session. `droppedInvalid` is not
+asserted.
+
+The test-host output includes the existing `RenderThread.swift:119` QoS
+inversion warning in both repetitions. In each live VM, `Illegal resource`
+was reported (context 11/resource 159 in repetition 1; context 10/resource 163
+in repetition 2), followed by `TRANSFER3D: 22` in repetition 1 and
+`COPY_TRANSFER3D: 22` in repetition 2, and `Illegal command buffer 917549`.
+Each run also emitted six `graphics renderer operation failed` messages over
+about 100 ms. These occur about 22 seconds after each test starts and about
+11 seconds before Android shutdown begins. The test still passes its click
+assertions, but its result does not validate graphics health. A similar error
+shape is recorded in
+[IR-830](implementation-review.md#ir-830-the-first-rejected-submit-returns-einval-with-three-virglrenderer-messages);
+this run does not establish the same cause.
+
+**Risk.** These repetitions do not establish WindowServer delivery, the
+product-cadence three-batch criterion, or the click-loss cause. The renderer
+errors are a separate graphics concern whose relation to input is unknown;
+the T2 pass must not be read as evidence that the renderer is healthy.

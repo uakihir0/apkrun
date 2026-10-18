@@ -612,7 +612,7 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 | Depends on | #026 |
 | Requirements | FR-RT-01, FR-PKG-07, FR-PKG-04 (the `current/` layout and the journal; `previous/` and `staged/` come with #037), FR-CLI-01 (`install`, `uninstall`, `list`, `info`), NFR-REL-01 ([../traceability.md](../traceability.md) §2.5, §2.6, §2.10, §2.12) |
 | Design | [../../02-design/package-store.md](../../02-design/package-store.md) §5, §11.1, §15 (#027), §16; [../../03-reference/runtime-api.md](../../03-reference/runtime-api.md) §3.8, §6.2, §8.1; [../../02-design/runtime-daemon.md](../../02-design/runtime-daemon.md) §7.2; [../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §13.2; [../../02-design/cli.md](../../02-design/cli.md) §4; [../../01-architecture/state-machines.md](../../01-architecture/state-machines.md) §5 |
-| Modules / paths | APKStoreCore `PackageID`, `VersionCode`, `PackageStore`, the journal, `APKInspector`; RuntimeCore `ADBStoreAgentChannel`, `Android/AdbClient.swift`; RuntimeHost `EmbeddedRuntimeService` (`StoreRuntimeAccess`); `CLI/apkrun/` (`install`, `uninstall`, `list`, `info`); `scripts/check-raw-adb.sh`; `Tests/Fixtures/AndroidApps/HelloSplit/`; `Tests/IntegrationTests/PackageStoreTests/` |
+| Modules / paths | APKStoreCore `PackageID`, `VersionCode`, `PackageStore`, the journal, `APKInspector`, `StoreAgentChannel`; RuntimeCore `Android/AdbClient.swift` and Guest Agent operations; RuntimeHost `ADBStoreAgentChannel`, `DevelopmentStoreRuntimeAccess`, `EmbeddedPackageService`; `CLI/apkrun/` (`install`, `uninstall`, `list`, `info`); `scripts/check-raw-adb.sh`; `Tests/Fixtures/AndroidApps/HelloSplit/`; `Tests/IntegrationTests/PackageStoreTests/` |
 | Risks / questions | None |
 
 ### Goal
@@ -687,6 +687,10 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 - [ ] A crash at any step of `firstInstall` or `uninstall` is recovered at the next `open()` (NFR-REL-01).
 - [ ] Uninstall keeps or deletes the app data as asked (FR-PKG-07, data part).
 - [ ] HelloSplit installs as one package with all its splits.
+
+### Progress
+
+- **Partial implementation (2026-10-18, IR-1367).** PackageStore, APK inspection, the stock-image ADB/Guest Agent channel, package RuntimeAPI types, and the embedded CLI commands are being wired together. The CLI builds and focused checks remain pending. The real-guest install, split-install, and uninstall run remains open; no acceptance criterion is checked.
 
 ### Notes
 

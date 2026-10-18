@@ -200,7 +200,7 @@ Notes:
 
 - An earlier sketch had `APKRun.app → RuntimeCore`. That would let the GUI own the VM, which contradicts ADR-0007. The GUI uses `RuntimeClient` only.
 - Clients import RuntimeAPI directly for the DTOs (for example `WrapperDocument` in the launcher). RuntimeClient does not re-export it.
-- APKStoreCore and IntegrationCore reach the guest through small channel protocols (`StoreAgentChannel`, `IntegrationChannel`) that RuntimeCore implements and RuntimeHost injects. This avoids an `APKStoreCore → RuntimeCore` edge.
+- APKStoreCore and IntegrationCore keep guest-facing channel protocols beside their policy modules. RuntimeHost supplies the adapters and injects them, using RuntimeCore's guest and ADB primitives. This avoids direct `APKStoreCore → RuntimeCore` and `IntegrationCore → RuntimeCore` dependency edges.
 - The dependency rules are checked by `scripts/check-module-deps.sh` in CI (#062). It reads the allowed graph from the two code blocks of this section, then checks the target dependencies from `swift package dump-package`, the Xcode targets from `xcodegen dump`, and the `import` lines of every production source file (SwiftPM lets a target import anything in its dependency closure).
 - Third-party code is allowed only where the graph names it: SwiftProtobuf in GuestProtocol, virglrenderer, libepoxy, and ANGLE behind GraphicsBridge, ZIPFoundation in APKStoreCore and UpdateCore (reading only, ADR-0017), ArgumentParser in the CLI, and Sparkle in APKRun.app. Adding another one needs an ADR ([decisions/README.md](decisions/README.md)).
 

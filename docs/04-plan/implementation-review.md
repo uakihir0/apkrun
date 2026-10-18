@@ -20673,3 +20673,85 @@ point is not implemented yet. Maintainer review should confirm the 4 s bound,
 the dyld/system read exception, the unsandboxed warning fallback, the
 process-creation denial, the 2 GiB temporary copy limit, the native window
 commit callback, and the development-only runtime shutdown.
+
+## IR-1366: Record #027 package-store sequencing and recovery decisions
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #027 |
+| Affected documents | [M03](issues/M03-input-and-basic-runtime.md) #026 and #027; [package-store.md](../02-design/package-store.md) §§2.1, 5.5 |
+
+**Choice.** Proceed with #027 implementation while #026's G4 gate remains
+unverified, following the user's direction to prioritize feature work on the
+shared Mac. Leave all #026 and #027 acceptance states unchanged. For package
+recovery, roll forward host cleanup, metadata, and commit when an uninstall
+transaction stopped after `guestUninstalled`. If Android does not report the
+target version after a failed guest commit, retain the incoming set for a
+`reinstallSameVersion` retry, while deleting the incoming set for `firstInstall`.
+Treat negative `VersionCode` values as invalid and reject them at input and
+decoding boundaries.
+
+**Reason.** The user explicitly asked to avoid strict GUI verification while
+using the same Mac and to favor completing functionality. Continuing #027 is
+a sequencing choice, not evidence that #026 or its dependency gate passed.
+After `guestUninstalled`, Android has already confirmed the irreversible
+operation; rolling the host transaction forward keeps the store aligned with
+Android and avoids issuing a duplicate uninstall. Retaining a same-version
+reinstall's incoming APK set enables retry without relying on the original import
+file, while `firstInstall` follows the documented cleanup rule. Android
+version codes are non-negative, so accepting a negative host value could make
+invalid package metadata participate in comparisons or recovery.
+
+**Verification.** Documentation-only specification update. No code or tests
+were run, and no #026 or #027 acceptance checkbox was changed.
+
+**Risk.** The #026 G4 evidence and #027 implementation, journal fault-injection
+tests, and stock-image verification remain open. Maintainers should confirm
+the retry policy and ensure negative values map to a typed, actionable store
+error when the implementation is added.
+
+## IR-1367: Record #027 implementation boundaries and verification scope
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #027 |
+| Affected documents | [modules.md](../01-architecture/modules.md) §3; [package-store.md](../02-design/package-store.md) §§1, 6.1, 15; [M03](issues/M03-input-and-basic-runtime.md) #027 |
+
+**Choice.** Keep `StoreAgentChannel` and `StoreRuntimeAccess` with
+APKStoreCore, and implement the stock-image ADB adapter and the embedded
+runtime access adapter in RuntimeHost. RuntimeHost uses RuntimeCore's
+Guest Agent and ADB primitives without adding a RuntimeCore → APKStoreCore
+dependency. Embedded package commands keep package DTOs behind RuntimeAPI.
+The embedded path runs package operations inside `DevBoot`, whose instance
+lock owns the runtime for the command's lifetime. Defer a daemon
+`storeOperation` activity assertion until the daemon-backed RuntimeHost path
+is implemented. Keep the real-Mac acceptance run open and do not wire the
+raw-ADB checker into GitHub Actions while the user has asked to pause Actions
+tests.
+
+**Reason.** The previous #027 module rows said RuntimeCore implemented
+`StoreAgentChannel`, although RuntimeCore cannot import APKStoreCore without
+violating the documented dependency boundary and taking on package policy.
+The thin RuntimeHost adapter uses existing RuntimeCore transport operations
+and lets APKStoreCore remain transport-independent. In the current embedded
+CLI, `DevBoot` holds the process-wide instance lock through boot, package
+operation, and shutdown. A persistent daemon will need an explicit busy
+assertion before it can safely admit concurrent runtime operations. The user
+also clarified that shared-Mac timing makes exact UI acceptance checks brittle
+and requested feature work take priority; focused host checks remain useful,
+while Mac UI and guest acceptance evidence stays outstanding.
+
+**Verification.** The raw-ADB checker self-tests pass. The main checker still
+finds existing diagnostic strings and test/experiment call sites, so its
+acceptance check remains open; the script has not been added to Actions. The
+embedded package-service tests and CLI build are being completed. No real-Mac
+UI or guest acceptance run was performed, and no #027 acceptance checkbox
+was changed.
+
+**Risk.** The implementation must keep Android package operations inside the
+stock-image adapter and must not report the daemon activity-assertion or
+real-guest acceptance criteria as complete. Maintainers should review the
+RuntimeHost channel placement, the embedded-only locking assumption, and the
+deferred Actions lint integration.

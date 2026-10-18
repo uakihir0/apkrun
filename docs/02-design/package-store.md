@@ -23,7 +23,7 @@ This document covers how APKRun keeps Android packages on the host and gets them
 | When to install updates, gentle-update windows, health check, whether to roll back | UpdateCore | The store executes; UpdateCore decides |
 | Wrappers | WrapperCore | The store knows nothing about wrapper bundles. It emits `PackageChange` events (§11.3) that WrapperCore consumes |
 
-APKStoreCore reaches the guest only through the `StoreAgentChannel` protocol that RuntimeCore implements and RuntimeHost injects ([../01-architecture/modules.md](../01-architecture/modules.md) §3).
+APKStoreCore reaches the guest only through `StoreAgentChannel`. RuntimeHost implements the channel and `StoreRuntimeAccess`, using RuntimeCore's Guest Agent and ADB primitives; APKStoreCore does not import RuntimeCore ([../01-architecture/modules.md](../01-architecture/modules.md) §3).
 
 ---
 
@@ -39,7 +39,7 @@ public struct PackageID: RawRepresentable, Codable, Sendable, Hashable, Comparab
     public init?(rawValue: String)
 }
 
-/// Android's longVersionCode: versionCodeMajor in the high 32 bits, versionCode in the low 32 bits.
+/// Android's non-negative longVersionCode: versionCodeMajor in the high 32 bits, versionCode in the low 32 bits.
 public typealias VersionCode = Int64
 
 /// Lowercase hex SHA-256 of a DER certificate or a file. Serialized as "sha256:<64 hex>".
@@ -47,6 +47,9 @@ public struct SHA256Digest: Codable, Sendable, Hashable { … }
 ```
 
 - Package names are case-sensitive in Android. The default APFS volume is case-insensitive. The store therefore resolves directories through an in-memory index (§3.2) and never builds `Packages/<id>` paths by string concatenation outside `APKRunPaths`.
+- `VersionCode` values are non-negative. Reject negative values read from APK metadata,
+  Android package facts, or persisted artifacts or records; never normalize them to zero
+  or use them in comparisons.
 - Version comparisons always use `VersionCode` (`longVersionCode`). `versionName` is for display only.
 
 ### 2.2 Artifacts
@@ -433,8 +436,11 @@ For each unfinished transaction, the last journaled step decides the action.
 | `rollback` | `guestRolledBack` | finish `filesRestored` by `setDigest`, then metadata and commit |
 | `rollback` (confirmed data-loss fallback, §7.3) | `guestUninstallRequested` or later, before `guestRolledBack` | post-boot: query Android. The package is absent → continue with the first install of `previous/`, because the user already confirmed the data loss. The `from` version is still installed → abort as above |
 | `uninstall` | `guestUninstallRequested` | post-boot: query Android. Still installed → abort (the package is `installed` again). Absent → continue |
+| `uninstall` | `guestUninstalled` | roll forward host cleanup: finish `filesRemoved`, write `metadataWritten` when keeping data or `recordRemoved` otherwise, then commit. Android has already confirmed removal, so do not issue another uninstall request |
 | `uninstall`, `forget`, `discardStaged` | a file step | roll forward |
 | `stage` | `begin` | if `staged/` has the new digest → roll forward, else abort and delete the `incoming/` set |
+
+If the `guestCommitRequested` check fails for `reinstallSameVersion`, retain its `incoming/<ticket>/` set so the same APK set can be retried. A failed `firstInstall` deletes its incoming set; an update retains `staged/` for retry.
 
 `PostBootTask`s run in step 5 of readiness ([runtime-daemon.md](runtime-daemon.md) §3.4). Each is one query. They never hold up `ready` for more than the 5 s budget. The rest runs after `ready` under a `storeOperation` assertion. If Android cannot answer (agent unavailable), the task is re-queued for the next boot and the package stays `pending`.
 
@@ -830,9 +836,9 @@ Each task lists the store-side steps. Update policy steps for the same task numb
 1. `APKStoreCore` target with `PackageID`, `VersionCode`, `SHA256Digest`, `ArtifactFile`, `ArtifactSet`, `PackageRecord` (fields as in §2.3; `updateAuthority` fixed to `manual`), and `PackageState`.
 2. `PackageStore` actor with `open()`, the journal (§5.1), and the kinds `firstInstall`, `reinstall`, `uninstall`, and `forget`, including recovery (§5.5) and fault-injection hooks (`APKRUN_STORE_FAULT=<kind>:<step>` crashes the process after that step in debug builds).
 3. `APKInspector` v0: single APKs and several `.apk` files as a split set, through aapt2 and SHA-256. The signature check is recorded as `notPerformed`, and Android verifies at install.
-4. `ADBStoreAgentChannel` (install, uninstall, `QueryPackage`, `ListPackages`) and a `StoreRuntimeAccess` implementation in `EmbeddedRuntimeService`.
+4. RuntimeHost's `ADBStoreAgentChannel` (install, uninstall, `QueryPackage`, `ListPackages`) and `DevelopmentStoreRuntimeAccess` implementation for the embedded runtime.
 5. `RuntimeService` store operations `importPackage`, `installImported`, `listPackages`, `packageInfo`, and `uninstallPackage`, with CLI commands `install`, `uninstall`, `list`, and `info` in embedded mode.
-6. Acceptance: the CLI and the tests use RuntimeCore, not raw shell commands. A CI lint rejects `adb shell` and `pm ` strings outside `ADBStoreAgentChannel`, `AdbClient` (RuntimeCore, built in #015), and the allowlist of [../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.3 (development scripts, the compatibility runner, and the reference capture tools). `apkrun install HelloText.apk --yes` produces `Packages/io.apkrun.fixture.hellotext/current/base.apk`, `artifact.json`, and `metadata.json`, and `apkrun list` shows the versionCode that Android reports. A fault-injection run of every step of `firstInstall` and `uninstall` leaves a consistent store after restart (T1).
+6. Acceptance: the CLI and tests use RuntimeAPI package operations, not raw shell commands. A CI lint rejects raw `adb shell` and `pm` package operations outside RuntimeHost's `ADBStoreAgentChannel`, RuntimeCore's `AdbClient` helpers, and the allowlist of [../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.3 (development scripts, the compatibility runner, and the reference capture tools). `apkrun install HelloText.apk --yes` produces `Packages/io.apkrun.fixture.hellotext/current/base.apk`, `artifact.json`, and `metadata.json`, and `apkrun list` shows the versionCode that Android reports. A fault-injection run of every step of `firstInstall` and `uninstall` leaves a consistent store after restart (T1).
 
 ### #036 Store Agent channel (M5, store side)
 

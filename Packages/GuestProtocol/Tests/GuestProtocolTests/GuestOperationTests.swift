@@ -47,6 +47,8 @@ private enum EnvelopeSchema {
         ("launch_application", GuestLaunchApplication.number),
         ("stop_application", GuestStopApplication.number),
         ("focus_display", GuestFocusDisplay.number),
+        ("query_package", GuestQueryPackage.number),
+        ("list_packages", GuestListPackages.number),
     ]
     for pair in pairs {
         #expect(requests[pair.name] == pair.number, "Request.\(pair.name) is not \(pair.number)")
@@ -82,5 +84,21 @@ private enum EnvelopeSchema {
         #expect(stop.mode == .finishTasks)
     } else {
         Issue.record("GuestStopApplication does not build the finish-tasks request")
+    }
+
+    let packageRequest: GPRequest.OneOf_Op? = GuestQueryPackage(package: "io.apkrun.fixture.hellotext").request()
+    #expect(GuestQueryPackage(package: "io.apkrun.fixture.hellotext").timeout == .seconds(5))
+    if case .queryPackage(let query)? = packageRequest {
+        #expect(query.package == "io.apkrun.fixture.hellotext")
+    } else {
+        Issue.record("GuestQueryPackage does not build a query request")
+    }
+
+    let packagesRequest: GPRequest.OneOf_Op? = GuestListPackages(filter: .userInstalled).request()
+    #expect(GuestListPackages(filter: .userInstalled).timeout == .seconds(5))
+    if case .listPackages(let list)? = packagesRequest {
+        #expect(list.filter == .userInstalled)
+    } else {
+        Issue.record("GuestListPackages does not build a list request")
     }
 }

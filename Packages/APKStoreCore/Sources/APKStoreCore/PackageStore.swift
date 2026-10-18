@@ -35,6 +35,7 @@ public enum PackageStoreFailure: Error, Equatable, Sendable {
     case unsafeSplitName
     case packageAlreadyInstalled
     case packageNotFound
+    case uninstallDataUnverified(PackageID)
     case operationInProgress
     case importTicketNotFound
     case importTicketExpired
@@ -44,6 +45,7 @@ public enum PackageStoreFailure: Error, Equatable, Sendable {
     case guestVersionMismatch
     case downgradeReinstallUnavailable
     case unsupportedJournalVersion(Int)
+    case journalUnreadable
     case unreadablePackageRecord
     case io
 }
@@ -64,6 +66,7 @@ public actor PackageStore {
         var preview: PackageImportPreview
         var createdAt: Date
         var facts: [PersistedAPKFacts]
+        var origin: ImportOrigin?
     }
 
     private struct PersistedAPKFacts: Codable, Sendable {
@@ -129,8 +132,8 @@ public actor PackageStore {
 
     private struct JournalReadResult {
         var entries: [JournalEntry]
-        var validByteCount: Int
         var issue: String?
+        var isReadOnly: Bool
     }
 
     private let packagesDirectory: URL
@@ -141,6 +144,14 @@ public actor PackageStore {
     private let clock: @Sendable () -> Date
     private let hostFreeSpace: @Sendable (URL) -> Int64
 
+    private var importsLockURL: URL {
+        packagesDirectory.appendingPathComponent(".imports.lock")
+    }
+
+    private var mutationLockURL: URL {
+        packagesDirectory.appendingPathComponent(".mutation.lock")
+    }
+
     private var records: [PackageID: PackageRecord] = [:]
     private var directories: [PackageID: String] = [:]
     private var tickets: [UUID: TicketManifest] = [:]
@@ -149,6 +160,7 @@ public actor PackageStore {
     private var operationsInProgress = Set<PackageID>()
     private var sequence: Int64 = 0
     private var opened = false
+    private var isReadOnly = false
 
     /// Creates a store rooted at a caller-selected `Packages/` directory.
     public init(
@@ -175,16 +187,26 @@ public actor PackageStore {
     /// Loads records, recovers host-only operations, and restores unexpired import tickets.
     public func open() async throws {
         try createDirectory(packagesDirectory)
-        try createDirectory(trashDirectory)
 
-        let journal = try readJournal()
+        let importsLock = try await acquireLock(at: importsLockURL)
+        defer { _ = Darwin.close(importsLock) }
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+
+        let journal = try withJournalLock { try readJournal() }
         sequence = journal.entries.last?.seq ?? 0
         journalIssue = journal.issue
+        isReadOnly = journal.isReadOnly
         transactions = Self.transactions(from: journal.entries)
+        if !isReadOnly {
+            try createDirectory(trashDirectory)
+        }
         try loadRecords()
-        try recoverHostOnlyTransactions()
-        try loadRecords()
-        try loadTicketsAndCleanScratch()
+        if !isReadOnly {
+            try recoverHostOnlyTransactions()
+            try loadRecords()
+            try loadTicketsAndCleanScratch()
+        }
         opened = true
     }
 
@@ -192,8 +214,13 @@ public actor PackageStore {
     ///
     /// Each source is copied into a private temporary directory before inspection. The returned
     /// ticket refers only to the private incoming set, so callers may release their source files.
-    public func importPackage(files: [URL]) async throws -> PackageImportPreview {
-        try requireOpen()
+    public func importPackage(
+        files: [URL],
+        origin: ImportOrigin? = nil
+    ) async throws -> PackageImportPreview {
+        try requireWritable()
+        let importsLock = try await acquireLock(at: importsLockURL)
+        defer { _ = Darwin.close(importsLock) }
         guard !files.isEmpty else { throw PackageStoreFailure.invalidImport }
         guard files.count <= Self.maximumAPKCount else {
             throw PackageStoreFailure.tooManyImportFiles
@@ -248,10 +275,11 @@ public actor PackageStore {
                         let unstagedExpected = max(0, remainingExpected - copiedFromThisFile)
                         let stagedSetEstimate = max(expectedSourceBytes, copiedAfterWrite + unstagedExpected)
                         return unstagedExpected + stagedSetEstimate + Self.importSpaceReserve
+                    },
+                    didCopy: { copied in
+                        copiedSourceBytes += copied
                     }
-                ) { copied in
-                    copiedSourceBytes += copied
-                }
+                )
                 try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
             } catch let failure as PackageStoreFailure {
                 throw failure
@@ -267,6 +295,9 @@ public actor PackageStore {
             facts.append(try await inspector(stagedURL))
         }
         let baseFacts = try Self.validateSplitFacts(facts)
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
         let packageDirectoryName = directoryName(for: baseFacts.packageID)
         let packageDirectory = packagesDirectory.appendingPathComponent(packageDirectoryName, isDirectory: true)
         let incoming =
@@ -368,7 +399,8 @@ public actor PackageStore {
         let manifest = TicketManifest(
             preview: preview,
             createdAt: clock(),
-            facts: facts.map(PersistedAPKFacts.init)
+            facts: facts.map(PersistedAPKFacts.init),
+            origin: origin
         )
         do {
             try writeJSON(manifest, to: incoming.appendingPathComponent("ticket.json"))
@@ -384,7 +416,7 @@ public actor PackageStore {
 
     /// Installs a new package or reinstalls a retained-data package from an import ticket.
     public func installImported(ticket: UUID) async throws -> PackageRecord {
-        try requireOpen()
+        try requireWritable()
         guard let manifest = try verifiedTicket(ticket) else {
             throw PackageStoreFailure.importTicketNotFound
         }
@@ -399,17 +431,14 @@ public actor PackageStore {
 
     /// Reinstalls the package in a ticket over its current version.
     public func reinstall(ticket: UUID, allowDowngrade: Bool = false) async throws -> PackageRecord {
-        try requireOpen()
+        try requireWritable()
         guard let manifest = try verifiedTicket(ticket) else {
             throw PackageStoreFailure.importTicketNotFound
         }
         guard let existing = records[manifest.preview.packageID] else {
             throw PackageStoreFailure.packageNotFound
         }
-        guard
-            existing.state == .installed || existing.state == .needsReinstall(.userdataReset)
-                || existing.state == .needsReinstall(.userdataRestored)
-        else {
+        guard Self.canReinstall(existing.state) else {
             throw PackageStoreFailure.packageNotFound
         }
         return try await performInstall(
@@ -422,13 +451,17 @@ public actor PackageStore {
 
     /// Uninstalls a package, optionally retaining its Android app data and package record.
     public func uninstall(packageID: PackageID, keepData: Bool = false) async throws {
-        try requireOpen()
-        guard let record = records[packageID] else { throw PackageStoreFailure.packageNotFound }
+        try requireWritable()
         guard let runtimeAccess else { throw PackageStoreFailure.runtimeUnavailable }
         guard operationsInProgress.insert(packageID).inserted else {
             throw PackageStoreFailure.operationInProgress
         }
         defer { operationsInProgress.remove(packageID) }
+
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard let record = records[packageID] else { throw PackageStoreFailure.packageNotFound }
 
         let operation = UUID()
         let transaction = Self.makeTransactionID(at: clock())
@@ -461,24 +494,20 @@ public actor PackageStore {
             try await runtimeAccess.withStoreAgent(operation) { channel in
                 try await channel.uninstall(packageID, keepData: keepData)
             }
-        } catch {
+        } catch let uninstallFailure {
+            let guestPackage: StorePackageInfo?
             do {
-                let guestPackage = try await queryPackage(packageID, through: runtimeAccess)
-                if guestPackage == nil {
-                    try appendStep(transaction, kind: "uninstall", step: "guestUninstalled")
-                    try finishUninstall(
-                        transaction: transaction,
-                        packageID: packageID,
-                        directory: directory,
-                        keepData: keepData
-                    )
-                    return
-                }
-                try appendAbort(transaction, reason: "guestUninstallFailed")
+                guestPackage = try await queryPackage(packageID, through: runtimeAccess)
             } catch {
                 // Leave the guest request pending when the runtime cannot answer.
+                throw uninstallFailure
             }
-            throw error
+            if guestPackage == nil {
+                try appendAbort(transaction, reason: "uninstallDataUnverified")
+                throw PackageStoreFailure.uninstallDataUnverified(packageID)
+            }
+            try appendAbort(transaction, reason: "guestUninstallFailed")
+            throw uninstallFailure
         }
         try injectFault(kind: "uninstall", step: "guestUninstallRequested")
         try appendStep(transaction, kind: "uninstall", step: "guestUninstalled")
@@ -493,7 +522,15 @@ public actor PackageStore {
 
     /// Removes APKRun's record and artifacts without issuing an Android uninstall.
     public func forget(packageID: PackageID) async throws {
-        try requireOpen()
+        try requireWritable()
+        guard operationsInProgress.insert(packageID).inserted else {
+            throw PackageStoreFailure.operationInProgress
+        }
+        defer { operationsInProgress.remove(packageID) }
+
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
         guard records[packageID] != nil else { throw PackageStoreFailure.packageNotFound }
         let transaction = Self.makeTransactionID(at: clock())
         let directory = directories[packageID] ?? directoryName(for: packageID)
@@ -537,7 +574,16 @@ public actor PackageStore {
     /// This is deliberately separate from `open()`: opening the store remains usable without
     /// booting Android. RuntimeHost calls this after it has a ready Guest Agent.
     public func recoverPendingTransactions() async throws {
-        try requireOpen()
+        try requireWritable()
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        let journal = try withJournalLock { try readJournal() }
+        sequence = journal.entries.last?.seq ?? 0
+        journalIssue = journal.issue
+        isReadOnly = journal.isReadOnly
+        transactions = Self.transactions(from: journal.entries)
+        try reloadRecordsPreservingImportDirectories()
+        guard !isReadOnly else { throw PackageStoreFailure.journalUnreadable }
         guard let runtimeAccess else {
             if transactions.values.contains(where: Self.needsGuestRecovery) {
                 throw PackageStoreFailure.runtimeUnavailable
@@ -603,13 +649,10 @@ public actor PackageStore {
                 if info != nil {
                     try appendAbort(transactionID, reason: "packageStillInstalled")
                 } else {
-                    try appendStep(transactionID, kind: kind, step: "guestUninstalled")
-                    try finishUninstall(
-                        transaction: transactionID,
-                        packageID: packageID,
-                        directory: directory,
-                        keepData: transaction.begin.keepData ?? false
-                    )
+                    // PackageManager absence cannot establish whether app data survived an
+                    // interrupted uninstall. Keep the transaction, record, and APKs intact
+                    // until the user can inspect Android and resolve the ambiguous outcome.
+                    throw PackageStoreFailure.uninstallDataUnverified(packageID)
                 }
 
             case ("uninstall", "guestUninstalled"):
@@ -634,13 +677,20 @@ public actor PackageStore {
     }
 
     /// Returns the current managed records in package-name order.
-    public func listManagedPackages() throws -> [PackageRecord] {
+    public func listManagedPackages() async throws -> [PackageRecord] {
         try requireOpen()
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
         return records.values.sorted { $0.packageId < $1.packageId }
     }
 
     private var journalURL: URL {
         packagesDirectory.appendingPathComponent("journal.jsonl")
+    }
+
+    private var journalLockURL: URL {
+        packagesDirectory.appendingPathComponent(".journal.lock")
     }
 
     private var trashDirectory: URL {
@@ -660,6 +710,9 @@ public actor PackageStore {
             throw PackageStoreFailure.operationInProgress
         }
         defer { operationsInProgress.remove(packageID) }
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
         let directory = directories[packageID] ?? directoryName(for: packageID)
         let incoming = incomingDirectory(packageID: packageID, directory: directory, ticket: preview.ticket)
         let current =
@@ -672,6 +725,16 @@ public actor PackageStore {
 
         if kind == "firstInstall", records[packageID] != nil {
             throw PackageStoreFailure.packageAlreadyInstalled
+        }
+        if kind == "reinstall" {
+            guard let existing = records[packageID],
+                existing.state == .uninstalledKeepingData || Self.canReinstall(existing.state)
+            else {
+                throw PackageStoreFailure.packageNotFound
+            }
+            guard from == existing.versionCode else {
+                throw PackageStoreFailure.guestVersionMismatch
+            }
         }
         if let from, preview.versionCode < from, !allowDowngrade {
             throw PackageStoreFailure.guestVersionMismatch
@@ -747,8 +810,7 @@ public actor PackageStore {
             } else if Self.packageMatchesPreInstallSnapshot(
                 previouslyInstalled: previouslyInstalled,
                 current: committedInfo
-            ) || committedInfo?.versionCode != preview.versionCode
-            {
+            ) || committedInfo?.versionCode != preview.versionCode {
                 try appendAbort(transaction, reason: "guestInstallFailed")
                 if kind == "firstInstall" {
                     removeIncoming(ticket: preview.ticket, packageID: packageID, directory: directory)
@@ -804,6 +866,17 @@ public actor PackageStore {
         try injectFault(kind: kind, step: "commit")
         try purgeTrash()
         return record
+    }
+
+    private static func canReinstall(_ state: PackageState) -> Bool {
+        switch state {
+        case .installed, .needsReinstall(.userdataReset), .needsReinstall(.userdataRestored):
+            return true
+        case .broken(.removedInAndroid), .broken(.artifactMissing), .broken(.reinstallFailed):
+            return true
+        case .uninstalledKeepingData, .broken(.signerChanged):
+            return false
+        }
     }
 
     private func finishInstallRecovery(
@@ -989,6 +1062,7 @@ public actor PackageStore {
                 ?? PackageSource(
                     kind: .file,
                     at: startedAt,
+                    origin: manifest.origin,
                     fileNames: manifest.preview.sourceFileNames,
                     container: .apk
                 ),
@@ -1048,8 +1122,9 @@ public actor PackageStore {
     private func verifiedTicket(_ ticket: UUID) throws -> TicketManifest? {
         guard activeTickets.contains(ticket), let manifest = tickets[ticket] else { return nil }
         let packageID = manifest.preview.packageID
-        guard clock().timeIntervalSince(manifest.createdAt) <= Self.importTicketLifetime
-            || transactionTicketForRecovery(ticket: ticket, packageID: packageID)
+        guard
+            clock().timeIntervalSince(manifest.createdAt) <= Self.importTicketLifetime
+                || transactionTicketForRecovery(ticket: ticket, packageID: packageID)
         else {
             removeIncoming(ticket: ticket, packageID: packageID)
             tickets[ticket] = nil
@@ -1124,7 +1199,8 @@ public actor PackageStore {
             && (try? packageDirectory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
         {
             let incomingRoot = packageDirectory.appendingPathComponent("incoming", isDirectory: true)
-            let incomingItems = fileManager.fileExists(atPath: incomingRoot.path)
+            let incomingItems =
+                fileManager.fileExists(atPath: incomingRoot.path)
                 ? ((try? fileManager.contentsOfDirectory(
                     at: incomingRoot,
                     includingPropertiesForKeys: [.isDirectoryKey],
@@ -1145,10 +1221,11 @@ public actor PackageStore {
                     }
                     continue
                 }
-                guard transactionTicketForRecovery(
-                    ticket: manifest.preview.ticket,
-                    packageID: manifest.preview.packageID
-                )
+                guard
+                    transactionTicketForRecovery(
+                        ticket: manifest.preview.ticket,
+                        packageID: manifest.preview.packageID
+                    )
                 else {
                     if candidate.deletingLastPathComponent() == incomingRoot {
                         try? fileManager.removeItem(at: candidate)
@@ -1225,7 +1302,7 @@ public actor PackageStore {
 
     private func readJournal() throws -> JournalReadResult {
         guard fileManager.fileExists(atPath: journalURL.path) else {
-            return JournalReadResult(entries: [], validByteCount: 0, issue: nil)
+            return JournalReadResult(entries: [], issue: nil, isReadOnly: false)
         }
         let data: Data
         do {
@@ -1237,9 +1314,11 @@ public actor PackageStore {
         var offset = 0
         var previousSequence: Int64?
         var issue: String?
+        var hasTornFinalLine = false
         while offset < data.count {
             guard let newline = data[offset...].firstIndex(of: 0x0A) else {
                 issue = "torn final journal line"
+                hasTornFinalLine = true
                 break
             }
             let line = data[offset..<newline]
@@ -1249,9 +1328,18 @@ public actor PackageStore {
                 issue = "invalid journal line"
                 break
             }
-            guard entry.v == 1 else { throw PackageStoreFailure.unsupportedJournalVersion(entry.v) }
-            if let previousSequence, entry.seq != previousSequence + 1 {
-                issue = "journal sequence gap"
+            guard entry.v == 1 else {
+                issue = "unsupported journal version \(entry.v)"
+                break
+            }
+            if let previousSequence {
+                let (expectedSequence, overflow) = previousSequence.addingReportingOverflow(1)
+                guard !overflow, entry.seq == expectedSequence else {
+                    issue = "journal sequence gap"
+                    break
+                }
+            } else if entry.seq != 1 {
+                issue = "invalid journal sequence"
                 break
             }
             guard entry.seq > 0 else {
@@ -1263,44 +1351,75 @@ public actor PackageStore {
             offset = newline + 1
         }
         if let issue {
-            let validPrefix = data.prefix(offset)
-            do {
-                try Data(validPrefix).write(to: journalURL, options: .atomic)
-                try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: journalURL.path)
-            } catch {
-                throw PackageStoreFailure.io
+            if hasTornFinalLine {
+                let validPrefix = data.prefix(offset)
+                do {
+                    try Data(validPrefix).write(to: journalURL, options: .atomic)
+                    try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: journalURL.path)
+                } catch {
+                    throw PackageStoreFailure.io
+                }
+                return JournalReadResult(entries: entries, issue: issue, isReadOnly: false)
             }
-            return JournalReadResult(entries: entries, validByteCount: offset, issue: issue)
+            return JournalReadResult(entries: entries, issue: issue, isReadOnly: true)
         }
-        return JournalReadResult(entries: entries, validByteCount: offset, issue: nil)
+        return JournalReadResult(entries: entries, issue: nil, isReadOnly: false)
     }
 
     private func append(_ entry: JournalEntry) throws {
+        try withJournalLock {
+            try appendLocked(entry)
+        }
+    }
+
+    private func appendLocked(_ entry: JournalEntry) throws {
+        let journal = try readJournal()
+        guard !journal.isReadOnly else {
+            isReadOnly = true
+            journalIssue = journal.issue
+            throw PackageStoreFailure.journalUnreadable
+        }
+        let currentSequence = journal.entries.last?.seq ?? 0
         var next = entry
-        sequence += 1
-        next.seq = sequence
+        let (nextSequence, overflow) = currentSequence.addingReportingOverflow(1)
+        guard !overflow else {
+            isReadOnly = true
+            journalIssue = "journal sequence exhausted"
+            throw PackageStoreFailure.journalUnreadable
+        }
+        next.seq = nextSequence
         let data: Data
         do {
             var encoded = try Self.encoder().encode(next)
             encoded.append(0x0A)
             data = encoded
         } catch {
-            sequence -= 1
             throw PackageStoreFailure.io
         }
         let descriptor = Darwin.open(journalURL.path, O_WRONLY | O_CREAT | O_APPEND, mode_t(0o600))
         guard descriptor >= 0 else {
-            sequence -= 1
             throw PackageStoreFailure.io
         }
         defer { _ = Darwin.close(descriptor) }
-        let written = data.withUnsafeBytes { bytes -> Int in
-            guard let baseAddress = bytes.baseAddress else { return 0 }
-            return Darwin.write(descriptor, baseAddress, bytes.count)
+        let writeResult = data.withUnsafeBytes { bytes -> Bool in
+            guard let baseAddress = bytes.baseAddress else { return false }
+            var offset = 0
+            while offset < bytes.count {
+                let written = Darwin.write(descriptor, baseAddress.advanced(by: offset), bytes.count - offset)
+                if written < 0, errno == EINTR {
+                    continue
+                }
+                guard written > 0 else {
+                    return false
+                }
+                offset += written
+            }
+            return true
         }
-        guard written == data.count, Darwin.fcntl(descriptor, F_BARRIERFSYNC) == 0 else {
+        guard writeResult, Darwin.fcntl(descriptor, F_BARRIERFSYNC) == 0 else {
             throw PackageStoreFailure.io
         }
+        sequence = nextSequence
 
         switch next.op {
         case "begin":
@@ -1314,6 +1433,65 @@ public actor PackageStore {
             transactions[next.txn] = nil
         default:
             break
+        }
+    }
+
+    private func withJournalLock<T>(_ body: () throws -> T) throws -> T {
+        let descriptor = Darwin.open(journalLockURL.path, O_RDWR | O_CREAT | O_EXLOCK, mode_t(0o600))
+        guard descriptor >= 0 else { throw PackageStoreFailure.io }
+        defer { _ = Darwin.close(descriptor) }
+        return try body()
+    }
+
+    private func acquireLock(at url: URL) async throws -> Int32 {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(30))
+        while true {
+            let descriptor = Darwin.open(
+                url.path,
+                O_RDWR | O_CREAT | O_EXLOCK | O_NONBLOCK,
+                mode_t(0o600)
+            )
+            if descriptor >= 0 {
+                return descriptor
+            }
+            guard errno == EWOULDBLOCK || errno == EINTR else {
+                throw PackageStoreFailure.io
+            }
+            guard !Task.isCancelled, clock.now < deadline else {
+                throw PackageStoreFailure.operationInProgress
+            }
+            do {
+                try await Task.sleep(for: .milliseconds(25))
+            } catch {
+                throw PackageStoreFailure.operationInProgress
+            }
+        }
+    }
+
+    private func reloadRecordsPreservingImportDirectories() throws {
+        var ticketDirectories: [PackageID: String] = [:]
+        for ticket in tickets.values {
+            let packageID = ticket.preview.packageID
+            if let directory = directories[packageID] {
+                ticketDirectories[packageID] = directory
+            }
+        }
+        try loadRecords()
+        for (packageID, directory) in ticketDirectories where records[packageID] == nil {
+            let hasIncomingTicket = tickets.values.contains { ticket in
+                ticket.preview.packageID == packageID
+                    && fileManager.fileExists(
+                        atPath: incomingDirectory(
+                            packageID: packageID,
+                            directory: directory,
+                            ticket: ticket.preview.ticket
+                        ).path
+                    )
+            }
+            if hasIncomingTicket {
+                directories[packageID] = directory
+            }
         }
     }
 
@@ -1544,6 +1722,11 @@ public actor PackageStore {
         guard opened else { throw PackageStoreFailure.notOpen }
     }
 
+    private func requireWritable() throws {
+        try requireOpen()
+        guard !isReadOnly else { throw PackageStoreFailure.journalUnreadable }
+    }
+
     private func injectFault(kind: String, step: String) throws {
         try faultInjector(kind, step)
     }
@@ -1635,11 +1818,12 @@ public actor PackageStore {
         requiredFreeSpaceAfterWrite: (Int64) -> Int64,
         didCopy: ((Int64) -> Void)? = nil
     ) throws {
-        guard fileManager.createFile(
-            atPath: destination.path,
-            contents: nil,
-            attributes: [.posixPermissions: 0o600]
-        ),
+        guard
+            fileManager.createFile(
+                atPath: destination.path,
+                contents: nil,
+                attributes: [.posixPermissions: 0o600]
+            ),
             let input = try? FileHandle(forReadingFrom: source),
             let output = try? FileHandle(forWritingTo: destination)
         else {

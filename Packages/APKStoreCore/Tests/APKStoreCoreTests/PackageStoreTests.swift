@@ -7,6 +7,7 @@ private struct InjectedStoreCrash: Error {}
 private enum SimulatedGuestFailure: Error {
     case installFailedAfterCommit
     case installFailedBeforeCommit
+    case uninstallFailed
     case queryUnavailable
 }
 
@@ -19,6 +20,11 @@ private actor FakeStoreChannel: StoreAgentChannel {
     private var installThrowsBeforeCommit = false
     private var queryThrows = false
     private var queryUnavailableAfterInstall = false
+    private var uninstallThrowsAfterRemoval = false
+    private var pauseNextUninstall = false
+    private var uninstallStarted = false
+    private var uninstallStartWaiter: CheckedContinuation<Void, Never>?
+    private var uninstallReleaseWaiter: CheckedContinuation<Void, Never>?
 
     func configureInstallFailureAfterCommit(queryUnavailable: Bool) {
         installThrowsAfterCommit = true
@@ -42,6 +48,27 @@ private actor FakeStoreChannel: StoreAgentChannel {
         installThrowsBeforeCommit = false
         queryUnavailableAfterInstall = false
         queryThrows = false
+    }
+
+    func configureUninstallFailureAfterRemoval() {
+        uninstallThrowsAfterRemoval = true
+    }
+
+    func pauseUninstall() {
+        pauseNextUninstall = true
+        uninstallStarted = false
+    }
+
+    func waitForUninstallStart() async {
+        guard !uninstallStarted else { return }
+        await withCheckedContinuation { continuation in
+            uninstallStartWaiter = continuation
+        }
+    }
+
+    func continueUninstall() {
+        uninstallReleaseWaiter?.resume()
+        uninstallReleaseWaiter = nil
     }
 
     func install(_ request: StoreInstallRequest, files: [URL]) async throws -> StorePackageInfo {
@@ -73,7 +100,19 @@ private actor FakeStoreChannel: StoreAgentChannel {
 
     func uninstall(_ package: PackageID, keepData: Bool) async throws {
         lastKeepData = keepData
+        if pauseNextUninstall {
+            pauseNextUninstall = false
+            uninstallStarted = true
+            uninstallStartWaiter?.resume()
+            uninstallStartWaiter = nil
+            await withCheckedContinuation { continuation in
+                uninstallReleaseWaiter = continuation
+            }
+        }
         packages[package] = nil
+        if uninstallThrowsAfterRemoval {
+            throw SimulatedGuestFailure.uninstallFailed
+        }
     }
 
     func packageInfo(_ package: PackageID) async throws -> StorePackageInfo? {
@@ -117,6 +156,14 @@ private actor FakeStoreRuntime: StoreRuntimeAccess {
     }
 }
 
+private actor CompletionFlag {
+    private(set) var isComplete = false
+
+    func complete() {
+        isComplete = true
+    }
+}
+
 @Test func packageStoreImportsPrivateCopiesAndComputesCanonicalDigest() async throws {
     let temporary = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: temporary) }
@@ -147,6 +194,227 @@ private actor FakeStoreRuntime: StoreRuntimeAccess {
     #expect(storedAPK != input)
 }
 
+@Test func packageStoresOpenedBeforeAnotherWriteKeepJournalSequencesMonotonic() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let channel = FakeStoreChannel()
+    let runtime = FakeStoreRuntime(channel: channel)
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let packagesDirectory = temporary.appendingPathComponent("Packages", isDirectory: true)
+    let firstStore = PackageStore(
+        packagesDirectory: packagesDirectory,
+        runtimeAccess: runtime,
+        inspector: { _ in facts() }
+    )
+    try await firstStore.open()
+    let preview = try await firstStore.importPackage(files: [input])
+    _ = try await firstStore.installImported(ticket: preview.ticket)
+
+    let secondStore = PackageStore(
+        packagesDirectory: packagesDirectory,
+        inspector: { _ in facts() }
+    )
+    try await secondStore.open()
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    try await firstStore.forget(packageID: packageID)
+    await #expect(throws: PackageStoreFailure.packageNotFound) {
+        try await secondStore.forget(packageID: packageID)
+    }
+
+    let reopened = PackageStore(
+        packagesDirectory: packagesDirectory,
+        inspector: { _ in facts() }
+    )
+    try await reopened.open()
+    #expect(await reopened.journalIssue == nil)
+    #expect(try await reopened.listManagedPackages().isEmpty)
+
+    let journalURL = packagesDirectory.appendingPathComponent("journal.jsonl")
+    let journalText = try String(contentsOf: journalURL, encoding: .utf8)
+    let sequences =
+        try journalText
+        .split(separator: "\n")
+        .map { line -> Int in
+            let object = try #require(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+            return try #require(object["seq"] as? Int)
+        }
+    #expect(sequences == Array(1...sequences.count))
+}
+
+@Test func packageStoreDoesNotClaimDataOutcomeWhenUninstallFailedAndPackageIsAbsent() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let channel = FakeStoreChannel()
+    let runtime = FakeStoreRuntime(channel: channel)
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let store = PackageStore(
+        packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
+        runtimeAccess: runtime,
+        inspector: { _ in facts() }
+    )
+    try await store.open()
+    let preview = try await store.importPackage(files: [input])
+    let installed = try await store.installImported(ticket: preview.ticket)
+    await channel.configureUninstallFailureAfterRemoval()
+
+    await #expect(
+        throws: PackageStoreFailure.uninstallDataUnverified(installed.packageId)
+    ) {
+        try await store.uninstall(packageID: installed.packageId, keepData: true)
+    }
+
+    let records = try await store.listManagedPackages()
+    #expect(records.first?.state == .installed)
+    #expect(await channel.lastKeepData == true)
+}
+
+@Test func packageStoreDoesNotClaimDataWasDeletedWhenUninstallFailedAndPackageIsAbsent() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let channel = FakeStoreChannel()
+    let runtime = FakeStoreRuntime(channel: channel)
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let store = PackageStore(
+        packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
+        runtimeAccess: runtime,
+        inspector: { _ in facts() }
+    )
+    try await store.open()
+    let preview = try await store.importPackage(files: [input])
+    let installed = try await store.installImported(ticket: preview.ticket)
+    await channel.configureUninstallFailureAfterRemoval()
+
+    await #expect(
+        throws: PackageStoreFailure.uninstallDataUnverified(installed.packageId)
+    ) {
+        try await store.uninstall(packageID: installed.packageId, keepData: false)
+    }
+
+    let records = try await store.listManagedPackages()
+    #expect(records.first?.state == .installed)
+    #expect(await channel.lastKeepData == false)
+}
+
+@Test func packageStoreRecoveryKeepsArtifactsWhenInterruptedUninstallOutcomeIsUnknown() async throws {
+    for keepData in [true, false] {
+        let temporary = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let channel = FakeStoreChannel()
+        let runtime = FakeStoreRuntime(channel: channel)
+        let input = temporary.appendingPathComponent("HelloText.apk")
+        try Data("base apk bytes".utf8).write(to: input)
+        let packages = temporary.appendingPathComponent("Packages", isDirectory: true)
+        let crashingStore = PackageStore(
+            packagesDirectory: packages,
+            runtimeAccess: runtime,
+            inspector: { _ in facts() },
+            faultInjector: { kind, step in
+                if kind == "uninstall", step == "guestUninstallRequested" {
+                    throw InjectedStoreCrash()
+                }
+            }
+        )
+        try await crashingStore.open()
+        let preview = try await crashingStore.importPackage(files: [input])
+        let installed = try await crashingStore.installImported(ticket: preview.ticket)
+        do {
+            try await crashingStore.uninstall(packageID: installed.packageId, keepData: keepData)
+            Issue.record("Expected an interruption after the guest uninstall request.")
+        } catch is InjectedStoreCrash {
+            // The guest removed the package, but the host did not record its result.
+        }
+
+        let recoveredStore = PackageStore(
+            packagesDirectory: packages,
+            runtimeAccess: runtime,
+            inspector: { _ in facts() }
+        )
+        try await recoveredStore.open()
+        await #expect(
+            throws: PackageStoreFailure.uninstallDataUnverified(installed.packageId)
+        ) {
+            try await recoveredStore.recoverPendingTransactions()
+        }
+
+        let record = try #require(try await recoveredStore.listManagedPackages().first)
+        #expect(record.state == .installed)
+        #expect(
+            FileManager.default.fileExists(
+                atPath: packages.appendingPathComponent("\(installed.packageId.rawValue)/current/base.apk").path
+            )
+        )
+        let journal = try String(contentsOf: packages.appendingPathComponent("journal.jsonl"), encoding: .utf8)
+        let entries =
+            try journal
+            .split(separator: "\n")
+            .map { line -> [String: Any] in
+                try #require(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+            }
+        let uninstallBegin = try #require(
+            entries.first { $0["kind"] as? String == "uninstall" && $0["op"] as? String == "begin" }
+        )
+        let uninstallTransaction = try #require(uninstallBegin["txn"] as? String)
+        #expect(
+            !entries.contains {
+                $0["txn"] as? String == uninstallTransaction && ["commit", "abort"].contains($0["op"] as? String ?? "")
+            }
+        )
+        #expect(
+            !entries.contains {
+                $0["txn"] as? String == uninstallTransaction && $0["step"] as? String == "guestUninstalled"
+            }
+        )
+    }
+}
+
+@Test func packageStoreSerializesForgetAgainstAnUninstallInAnotherStore() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let channel = FakeStoreChannel()
+    let runtime = FakeStoreRuntime(channel: channel)
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let packagesDirectory = temporary.appendingPathComponent("Packages", isDirectory: true)
+    let firstStore = PackageStore(
+        packagesDirectory: packagesDirectory,
+        runtimeAccess: runtime,
+        inspector: { _ in facts() }
+    )
+    try await firstStore.open()
+    let preview = try await firstStore.importPackage(files: [input])
+    let installed = try await firstStore.installImported(ticket: preview.ticket)
+
+    let secondStore = PackageStore(
+        packagesDirectory: packagesDirectory,
+        runtimeAccess: runtime,
+        inspector: { _ in facts() }
+    )
+    try await secondStore.open()
+    await channel.pauseUninstall()
+    let uninstallTask = Task {
+        try await firstStore.uninstall(packageID: installed.packageId, keepData: true)
+    }
+    await channel.waitForUninstallStart()
+
+    let completion = CompletionFlag()
+    let forgetTask = Task {
+        try await secondStore.forget(packageID: installed.packageId)
+        await completion.complete()
+    }
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(!(await completion.isComplete))
+    await channel.continueUninstall()
+    try await uninstallTask.value
+    try await forgetTask.value
+
+    #expect(await completion.isComplete)
+    #expect(try await firstStore.listManagedPackages().isEmpty)
+    #expect(try await secondStore.listManagedPackages().isEmpty)
+}
+
 @Test func packageStoreKeepsAmbiguousFirstInstallPendingUntilSameSetRetry() async throws {
     let temporary = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: temporary) }
@@ -164,7 +432,7 @@ private actor FakeStoreRuntime: StoreRuntimeAccess {
         clock: { createdAt }
     )
     try await store.open()
-    let preview = try await store.importPackage(files: [input])
+    let preview = try await store.importPackage(files: [input], origin: .cli)
     await channel.configureInstallFailureAfterCommit(queryUnavailable: true)
 
     do {
@@ -174,7 +442,8 @@ private actor FakeStoreRuntime: StoreRuntimeAccess {
         // The first request may have committed even though both calls failed.
     }
 
-    let incoming = packages
+    let incoming =
+        packages
         .appendingPathComponent("io.apkrun.fixture.hellotext/incoming/\(preview.ticket.uuidString)")
     #expect(FileManager.default.fileExists(atPath: incoming.appendingPathComponent("base.apk").path))
     let journal = try String(contentsOf: packages.appendingPathComponent("journal.jsonl"), encoding: .utf8)
@@ -198,6 +467,7 @@ private actor FakeStoreRuntime: StoreRuntimeAccess {
     await channel.configureInstallSuccess()
     let record = try await recoveredStore.installImported(ticket: preview.ticket)
     #expect(record.versionCode == preview.versionCode)
+    #expect(record.source.origin == .cli)
     #expect(try await recoveredStore.listManagedPackages().count == 1)
     try await recoveredStore.recoverPendingTransactions()
     #expect(try await recoveredStore.listManagedPackages().count == 1)
@@ -492,6 +762,33 @@ private actor FakeStoreRuntime: StoreRuntimeAccess {
     #expect(await reopened.journalIssue != nil)
     #expect(try await reopened.listManagedPackages().isEmpty)
     #expect(try Data(contentsOf: journal).last == 0x0A)
+}
+
+@Test func packageStoreKeepsMiddleJournalCorruptionReadOnly() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let packages = temporary.appendingPathComponent("Packages", isDirectory: true)
+    try FileManager.default.createDirectory(at: packages, withIntermediateDirectories: true)
+    let journal = packages.appendingPathComponent("journal.jsonl")
+    let corruptJournal = Data("{invalid}\n{\"seq\":2}\n".utf8)
+    try corruptJournal.write(to: journal)
+
+    let store = PackageStore(packagesDirectory: packages, inspector: { _ in facts() })
+    try await store.open()
+
+    #expect(await store.journalIssue == "invalid journal line")
+    #expect(try await store.listManagedPackages().isEmpty)
+    #expect(try Data(contentsOf: journal) == corruptJournal)
+
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    do {
+        _ = try await store.importPackage(files: [input])
+        Issue.record("A store with a corrupt journal must reject writes.")
+    } catch let failure as PackageStoreFailure {
+        #expect(failure == .journalUnreadable)
+    }
+    #expect(try Data(contentsOf: journal) == corruptJournal)
 }
 
 @Test func packageStoreImportTicketsExpireWithTheStoreProcess() async throws {

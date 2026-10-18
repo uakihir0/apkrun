@@ -20321,3 +20321,98 @@ VirGL callback sequence.
 does not identify which command inside a VirGL stream caused a rejection or
 establish a renderer-wide failure state. The #022 acceptance criteria remain
 unchanged.
+
+## IR-1360: Record the direct-view product-cadence diagnostic
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [M03](issues/M03-input-and-basic-runtime.md) #024; [issues/README.md](issues/README.md) #024; [input.md](../02-design/input.md) §15; [test-strategy.md](test-strategy.md) §6.4; [build-system.md](../05-development/build-system.md) |
+
+**Choice.** Add an opt-in `AndroidInputCadence` diagnostic that reuses the
+three consecutive 100-click assertions and 50 ms press plus 50 ms gap through
+direct view dispatch. Keep the WindowServer test's Accessibility preflight
+unchanged. Do not treat the direct-view diagnostic as #024 or #103 acceptance.
+
+**Reason.** The user asked to continue local testing on this Mac, while the
+signed `APKRunTestHost` still reports `CGPreflightPostEventAccess() == false`.
+The direct-view test provides evidence about the cadence and existing
+counter/ACK checks without bypassing that guard. It activates the APKRun
+window, so it remains an opt-in GUI test and is not enabled in GitHub Actions.
+
+**Verification (2026-10-18 UTC; macOS 27.0.1, Android 37 image
+`2026.10.0-cf16373615-arm64`).** The focused
+`AndroidInputTests.testThreeConsecutiveHundredClickBatchesThroughDirectView`
+run selected one test under `AndroidInputCadence` and failed in
+`/tmp/apkrun-024-cadence-recheck-20261018.xcresult` after batch 2 timed out
+waiting for 200 persisted clicks. Batch 1 persisted 100 of 100. Batch 2 had
+100 wire `DOWN` and 100 `UP` phases, all reported host drop and coalescing
+counters were zero, and the follow-up persisted-counter read remained at 198
+of 200. The test stopped there; batch 3 did not run. The bounded normal ACK
+history had no discarded records and reported zero rejected events for its
+captured sequences 32 through 384; it does not cover the final 16 of the 400
+sent batches. The wait and follow-up read do not rule out later fixture
+callbacks, and these periodic ACKs do not report the result of every event.
+This identifies no exact guest stage or cause.
+
+The first exploratory run,
+`/tmp/apkrun-024-cadence-20261018.xcresult`, is excluded from the result
+comparison: its batch evidence was captured, but the environment attachment
+incorrectly labeled direct-view delivery as WindowServer delivery. The test
+now records the selected delivery mode in that attachment.
+
+**Adversarial review.** The reviewer confirmed that the second run is valid
+failed diagnostic evidence, not a pass. The reviewer also noted that the
+window is ordered to the front and the artifact cannot rule out concurrent
+desktop interaction, though it provides no positive evidence of contamination.
+No product correction is supported by this test result.
+
+**Consequence.** #024 remains 6 of 8, with box 3 open. No acceptance checkbox
+changed. #103's WindowServer criterion remains unverified, and the process
+permission result is still specific to `APKRunTestHost`; direct-view dispatch
+does not replace that test.
+
+**Risk.** The diagnostic activates a desktop window. The observed 2-click
+deficit is measured at the fixture counter after the test deadline; the
+available host phases and periodic ACKs do not locate the missing increments.
+Do not infer a guest-side defect or a graphics/input relationship from this
+run.
+
+## IR-1361: Record the repeated live VirGL submit failures
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #022; [issues/README.md](issues/README.md) #022; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 |
+
+**Choice.** Record the renderer failure logs from the second direct-view
+cadence run as separate graphics evidence. Keep their relationship to the
+click-counter discrepancy unknown.
+
+**Reason.** A repeated live-VM observation can help compare the failure shape
+recorded in IR-1359, but the input test does not correlate renderer events
+with individual clicks or identify the guest command that caused a rejection.
+Recording the renderer messages under #022 keeps the evidence visible without
+turning temporal overlap into a causal claim.
+
+**Verification (2026-10-18 UTC; result bundle
+`/tmp/apkrun-024-cadence-recheck-20261018.xcresult`).** The live test-host log
+again contains six `operation=submit` renderer failure records. The same run
+also reports VirGL callback messages on context 11 (`RenderThread`):
+`Illegal resource 161`, `COPY_TRANSFER3D: 22`, and
+`Illegal command buffer 917549`. It contains guest command 262 rejection
+records as well, but does not correlate them to resource 161. These messages
+occurred during the same live-VM test that observed 98 persisted clicks in
+batch 2; the available evidence does not show that they overlapped those
+clicks or caused the discrepancy.
+
+**Consequence.** This is a repeated observation, not a renderer fix or a
+reproduction of a known root cause. No #022 or #024 acceptance checkbox
+changes. The narrowed #022 criterion and the click-loss investigation remain
+under review.
+
+**Risk.** The log records a failed host renderer API call and renderer
+callbacks, but does not identify the failing guest command stream or establish
+a renderer-wide health state.

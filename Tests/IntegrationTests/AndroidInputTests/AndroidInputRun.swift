@@ -21,7 +21,7 @@ enum AndroidInputRunFailure: Error, Equatable {
     case bootEnded(String)
     case inputRouteUnbound
     case inputAckTraceNotNegotiated
-    case windowNotActive
+    case windowNotActive(String)
     case ambiguousDisplay
     case cannotCreateSystemEvent
     case periodicAcknowledgementRequiresDirectView
@@ -116,6 +116,7 @@ final class AndroidInputRun {
     private var inputTraceRecorder: InputTraceRecorder?
     private var inputTouchEventRecorder: InputTouchEventRecorder?
     private var boot: Task<Void, Never>?
+    private var activationPolicyToRestore: NSApplication.ActivationPolicy?
 
     private init(home: URL, adb: AdbClient, pointerDelivery: InputPointerDelivery) {
         self.home = home
@@ -135,8 +136,8 @@ final class AndroidInputRun {
             let identifier = host.bundleIdentifier ?? ProcessInfo.processInfo.processName
             throw XCTSkip(
                 "CGPreflightPostEventAccess() returned false for \(ProcessInfo.processInfo.processName) "
-                    + "(\(identifier)). Verify Accessibility is enabled for this exact test host in "
-                    + "System Settings > Privacy & Security > Accessibility: \(host.bundlePath)."
+                    + "(\(identifier)). Verify Device Control and Data Access is enabled for this exact test host in "
+                    + "System Settings > Privacy & Security > Device Control and Data Access: \(host.bundlePath)."
             )
         }
         guard let guest = ProcessInfo.processInfo.environment["APKRUN_GUEST_DIR"], !guest.isEmpty else {
@@ -186,23 +187,40 @@ final class AndroidInputRun {
     /// Activates the display window before the test posts system mouse events.
     func prepareForWindowServerPointerDispatch() async throws {
         guard pointerDelivery == .windowServer else {
-            throw AndroidInputRunFailure.windowNotActive
+            throw AndroidInputRunFailure.windowNotActive("the test selected direct view delivery")
         }
         guard NSScreen.screens.count == 1 else {
             throw AndroidInputRunFailure.ambiguousDisplay
         }
         let (window, view) = try windowAndView()
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        let application = NSApplication.shared
+        if activationPolicyToRestore == nil {
+            activationPolicyToRestore = application.activationPolicy()
+        }
+        let stateBeforeActivation = Self.activationState(application: application, window: window)
+        let policyChangeSucceeded = application.setActivationPolicy(.regular)
+        application.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(view)
         let deadline = ContinuousClock.now + .seconds(5)
         while ContinuousClock.now < deadline {
-            if NSApplication.shared.isActive, window.isKeyWindow {
+            if application.isActive, window.isKeyWindow {
                 return
             }
             try await Task.sleep(for: .milliseconds(50))
         }
-        throw AndroidInputRunFailure.windowNotActive
+        let environment = ProcessInfo.processInfo.environment
+        let inputFlags = [
+            "APKRUN_INPUT_INTERACTIVE_T2",
+            "APKRUN_INPUT_TRACE_T2",
+        ].map { "\($0)=\(environment[$0] ?? "unset")" }
+        let stateAfterActivation = Self.activationState(application: application, window: window)
+        throw AndroidInputRunFailure.windowNotActive(
+            "requested regular activation policy (succeeded=\(policyChangeSucceeded)); "
+                + "input flags [\(inputFlags.joined(separator: ", "))]; "
+                + "before activation: \(stateBeforeActivation); "
+                + "after timeout: \(stateAfterActivation)"
+        )
     }
 
     /// Waits until the window sink has routed all previously received view events.
@@ -546,6 +564,14 @@ final class AndroidInputRun {
         clearInputTraceCapture()
         _ = await route.stopAcknowledgementHistoryCapture()
         window?.close()
+        if let activationPolicyToRestore {
+            let restored = NSApplication.shared.setActivationPolicy(activationPolicyToRestore)
+            if !restored {
+                let policyName = Self.activationPolicyName(activationPolicyToRestore)
+                XCTFail("Could not restore the test host's activation policy to \(policyName).")
+            }
+            self.activationPolicyToRestore = nil
+        }
         stop.continuation.yield(())
         await boot?.value
         VMRunResources.removeHomeOrReport(home)
@@ -660,6 +686,27 @@ final class AndroidInputRun {
                 throw AndroidInputRunFailure.timedOut("\(what) (boot: \(bootLog.recent))")
             }
             try await Task.sleep(for: .milliseconds(200))
+        }
+    }
+
+    fileprivate static func activationState(application: NSApplication, window: NSWindow) -> String {
+        let frontmostBundleIdentifier = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
+        return "policy=\(activationPolicyName(application.activationPolicy())), active=\(application.isActive), "
+            + "visible=\(window.isVisible), key=\(window.isKeyWindow), "
+            + "miniaturized=\(window.isMiniaturized), onActiveSpace=\(window.isOnActiveSpace), "
+            + "frontmostBundleID=\(frontmostBundleIdentifier)"
+    }
+
+    private static func activationPolicyName(_ policy: NSApplication.ActivationPolicy) -> String {
+        switch policy {
+        case .regular:
+            "regular"
+        case .accessory:
+            "accessory"
+        case .prohibited:
+            "prohibited"
+        @unknown default:
+            "unknown"
         }
     }
 }
@@ -808,7 +855,10 @@ struct InputPointer {
     private func postThroughWindowServer(_ type: NSEvent.EventType, at screenLocation: NSPoint) throws {
         let isRelease = type == .leftMouseUp || type == .rightMouseUp
         if !isRelease, !(NSApplication.shared.isActive && window.isKeyWindow) {
-            throw AndroidInputRunFailure.windowNotActive
+            throw AndroidInputRunFailure.windowNotActive(
+                "the window lost focus before \(type); "
+                    + AndroidInputRun.activationState(application: NSApplication.shared, window: window)
+            )
         }
         guard let screen = window.screen,
             let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber

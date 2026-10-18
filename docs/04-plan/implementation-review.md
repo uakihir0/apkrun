@@ -20508,3 +20508,67 @@ changes.
 **Risk.** The preflight establishes the host process's current event-posting
 access, but it does not identify which app the user may have enabled in
 System Settings. No permission prompt or settings change was made.
+
+## IR-1364: Record shared-Mac WindowServer diagnostics and resume feature work
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Tasks | #103 (follow-up of #024); #026 sequencing |
+| Affected documents | [M03](issues/M03-input-and-basic-runtime.md) #024, #026, and #103; [issues/README.md](issues/README.md) #024; [build-system.md](../05-development/build-system.md) §12.4; `AndroidInputRun` |
+
+**Choice.** Document the macOS 27 permission pane as **Device Control and
+Data Access**. Temporarily give the interactive test host `.regular`
+activation policy before WindowServer input, restore its original policy when
+the run closes, and retain focused activation diagnostics. Treat the shared
+Mac runs below as diagnostic observations only. Per the user's instruction,
+stop repeating strict GUI input runs while they use the Mac and resume #026
+feature implementation with #024 box 3 still open.
+
+**Reason.** The user enabled the permission for the exact test host, and its
+`CGPreflightPostEventAccess()` check now succeeds. The WindowServer test also
+requires a stable foreground window and pointer. The user clarified that they
+are using the same Mac during the run and asked that feature implementation
+take priority over strict click-count testing. This is a sequencing exception
+for maintainer review, not a claim that #024's dependency or acceptance
+criteria are complete.
+
+**Verification (2026-10-18 UTC; macOS 27.0.1, arm64).** The signed
+`AndroidInputInteractive` run selected only
+`testThreeConsecutiveHundredClickBatchesThroughWindowServer`. Its host
+permission preflight passed. Xcode's first attempt lost focus before the
+first click: no touch reached the guest, and the failure observation showed
+`active=false`, `key=false`, and VS Code as the frontmost app. The automatic
+retry logged 97 persisted clicks, 99 wire `DOWN` and 99 `UP` phases, zero
+host drop/coalescing counters, and zero rejections in the six normal ACKs
+through sequence 192. The result is
+`/tmp/apkrun-103-interactive-20261018-r10.xcresult`.
+
+The selected `AndroidInputTrace` rerun used
+`testOneHundredClickDiagnosticTraceJoinsHostGuestAndFixture` and enabled the
+timing-perturbing fixture listener and per-event ACK capture. One repetition
+persisted 100 clicks with 100 translated and routed `DOWN`/`UP` pairs and 100
+uniquely joined fixture click callbacks. Four `touch.down` joins lacked an
+exact raw-receipt association even though their translated events, ACKs, and
+fixture records were present; the stage discrepancy list was empty. The retry
+persisted 101 clicks: 100 callbacks joined to captured `UP` events plus one
+ambiguous callback with no pending `UP`. Host counters reported zero drops
+and coalescing. The extra callback was not attributable to the captured
+pointer sequence; the trace also contained keyboard events, and the shared
+desktop may have supplied input during the run. The result is
+`/tmp/apkrun-103-interactive-20261018-r11-trace.xcresult`. The updated
+activation diagnostics compile with `xcodebuild build-for-testing`, and
+`swift-format lint --strict` passes.
+
+**Consequence.** The enabled test-host permission is confirmed. The runs do
+not establish a product-mode click-loss cause: focus changed during one
+attempt, the traced configuration perturbs timing, and another callback was
+not joined to the captured pointer sequence. No speculative input change is
+made. #024 remains 6 of 8 with box 3 and the physical trackpad check (box 4)
+open; #103 remains open. At the user's direction, #026 feature work proceeds
+while these GUI criteria remain open. No acceptance checkbox changes.
+
+**Risk.** A shared desktop can add keyboard or pointer events and change focus
+while the test is running. Future acceptance runs still require an idle,
+dedicated GUI session; they are not a prerequisite for continuing the
+user-requested feature work.

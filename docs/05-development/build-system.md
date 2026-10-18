@@ -623,12 +623,13 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
   ```
 
 - `CGPreflightPostEventAccess()` is checked by the hosted `APKRunTestHost`
-  process. If the check fails, verify that Accessibility is enabled for the
-  exact `APKRunTestHost.app` path shown in the skip message, adding that app
-  there if it is absent. A grant to Terminal, Xcode, or a different app does
-  not make the test host's preflight succeed. Sign the host with the
-  configured development identity above so its designated code requirement
-  remains stable across builds.
+  process. On macOS 27, if the check fails, open System Settings > Privacy &
+  Security > Device Control and Data Access and enable the exact
+  `APKRunTestHost.app` path shown in the skip message, adding that app there
+  if it is absent. A grant to Terminal, Xcode, or a different app does not
+  make the test host's preflight succeed. Sign the host with the configured
+  development identity above so its designated code requirement remains
+  stable across builds.
 - `AndroidInputEdges` opts into the #024 top/left guest-edge check. It uses direct
   view dispatch but `SessionWindowController.show()` activates the test window,
   so run it only on a dedicated lab GUI session and select only this method:

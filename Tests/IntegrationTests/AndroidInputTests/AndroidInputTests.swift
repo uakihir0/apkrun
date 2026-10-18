@@ -432,17 +432,51 @@ final class AndroidInputTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["APKRUN_INPUT_TRACE_T2"] == "1" else {
             throw XCTSkip("Run only on a dedicated lab GUI session with APKRUN_INPUT_TRACE_T2=1.")
         }
+        try await runOneHundredClickDiagnosticTrace(pointerDelivery: .windowServer, untracedWarmupBatches: 0)
+    }
+
+    /// Diagnostic only: traces the second 100-click batch after an untraced warm-up through direct view dispatch.
+    ///
+    /// Per-event ACKs and the debug fixture listener perturb timing. The test activates the APKRun window, bypasses
+    /// WindowServer/AppKit dispatch, and cannot satisfy #024 box 3 or #103's WindowServer requirement.
+    func testOneHundredClickDiagnosticTraceJoinsHostGuestAndFixtureThroughDirectView() async throws {
+        guard ProcessInfo.processInfo.environment["APKRUN_INPUT_TRACE_CADENCE_T2"] == "1" else {
+            throw XCTSkip("Run only with the AndroidInputCadence test-plan configuration.")
+        }
+        try await runOneHundredClickDiagnosticTrace(pointerDelivery: .directView, untracedWarmupBatches: 1)
+    }
+
+    private func runOneHundredClickDiagnosticTrace(
+        pointerDelivery: InputPointerDelivery,
+        untracedWarmupBatches: Int
+    ) async throws {
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")
-        try Self.attachEnvironmentIdentity(fixture: apk, pointerDelivery: .windowServer)
-        try await AndroidInputRun.with(
-            apk: apk, package: Self.helloText, pointerDelivery: .windowServer
-        ) { run in
+        try Self.attachEnvironmentIdentity(fixture: apk, pointerDelivery: pointerDelivery)
+        try await AndroidInputRun.with(apk: apk, package: Self.helloText, pointerDelivery: pointerDelivery) { run in
             let target = try await run.centre(of: Self.buttonID)
-            try await run.prepareForWindowServerPointerDispatch()
-            guard let before = try await Self.persistedClickCount(run) else {
+            if pointerDelivery == .windowServer {
+                try await run.prepareForWindowServerPointerDispatch()
+            }
+            let warmupClickCount = untracedWarmupBatches * 100
+            guard let initial = try await Self.persistedClickCount(run) else {
                 throw AndroidInputRunFailure.timedOut("the fixture's initial persisted click counter")
             }
-            XCTAssertEqual(before, 0, "a new guest should start with an empty HelloText counter")
+            XCTAssertEqual(initial, 0, "a new guest should start with an empty HelloText counter")
+            if warmupClickCount > 0 {
+                let pointer = try run.pointer()
+                for _ in 0..<warmupClickCount {
+                    try await pointer.click(at: target, interClickGap: .milliseconds(50))
+                }
+                let warmedCounter = try await Self.waitForPersistedClickCount(run, atLeast: warmupClickCount)
+                guard warmedCounter == warmupClickCount else {
+                    throw AndroidInputRunFailure.timedOut(
+                        "the untraced warm-up reached \(warmedCounter) clicks; expected \(warmupClickCount)")
+                }
+            }
+            guard let before = try await Self.persistedClickCount(run) else {
+                throw AndroidInputRunFailure.timedOut("the fixture's persisted click counter before trace capture")
+            }
+            XCTAssertEqual(before, warmupClickCount, "the untraced warm-up must match its expected click count")
             let clickCount = 100
             _ = try await run.adb.shell("logcat -c")
             let captureStart = try await run.startPerEventInputTraceCapture()
@@ -499,8 +533,10 @@ final class AndroidInputTests: XCTestCase {
             )
             let evidence = InputTraceEvidence(
                 schemaVersion: 3,
-                path: "WindowServer → AppKit → IOSurfaceLayerView → InputRouter → Guest Agent → HelloText",
-                captureMode: "one event per input batch; ACK requested for every batch",
+                path: pointerDelivery.tracePathDescription,
+                captureMode:
+                    "\(pointerDelivery.diagnosticDescription); one event per input batch; "
+                    + "ACK requested for every batch; untraced warm-up clicks=\(warmupClickCount)",
                 clockDomains: [
                     "hostTimeNanos": "NSEvent.timestamp and InputCore use Mac mach continuous time",
                     "lastEventTimeMillis": "Guest MotionEvent.eventTime in Android uptime milliseconds",
@@ -512,6 +548,7 @@ final class AndroidInputTests: XCTestCase {
                 ],
                 limitations: [
                     "The debug touch listener and per-event ACK cadence can change timing; compare with the separate product-cadence test.",
+                    "Direct-view delivery bypasses WindowServer and AppKit dispatch; this trace cannot satisfy #024 box 3 or #103's WindowServer requirement.",
                     "Host and guest clock values have different epochs and are never subtracted.",
                     "Fixture pressed transitions and counter timings are unjoined observations: they use elapsed realtime and have no gesture key, so they are not correlated with MotionEvent uptime or host events.",
                     "The route is M3 DevBoot/DevInputRoute and does not exercise the future wrapper-to-apkrund XPC path.",
@@ -542,7 +579,7 @@ final class AndroidInputTests: XCTestCase {
             )
             try Self.attachTraceEvidence(evidence, failure: clickFailure)
 
-            XCTAssertNil(clickFailure, "the WindowServer click batch failed")
+            XCTAssertNil(clickFailure, "\(pointerDelivery.diagnosticDescription) click batch failed")
             XCTAssertEqual(after, expectedCount, "persisted counter after the diagnostic click batch")
             XCTAssertEqual(after.map { $0 - before }, 100)
             XCTAssertEqual(trace.host.discardedRawReceipts, 0)

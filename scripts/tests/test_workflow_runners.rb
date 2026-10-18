@@ -82,6 +82,7 @@ def enables_lab_gui_input_test?(workflow)
     value.include?("APKRUN_INPUT_INTERACTIVE_T2") ||
       value.include?("AndroidInputInteractive") ||
       value.include?("APKRUN_INPUT_CADENCE_T2") ||
+      value.include?("APKRUN_INPUT_TRACE_CADENCE_T2") ||
       value.include?("AndroidInputCadence") ||
       value.include?("APKRUN_INPUT_EDGE_T2") ||
       value.include?("AndroidInputEdges")
@@ -262,6 +263,7 @@ test_plan = JSON.parse(File.read(File.join(root, "Tests/IntegrationTests/Integra
 input_configs = {
   "AndroidInputCadence" => {
     "APKRUN_INPUT_CADENCE_T2" => "1",
+    "APKRUN_INPUT_TRACE_CADENCE_T2" => "1",
     "ANDROID_ADB_SERVER_PORT" => "15044"
   },
   "AndroidInputEdges" => {
@@ -301,6 +303,7 @@ enabled_opt_ins = configurations.flat_map do |name, entries|
 end
 expected_opt_ins = [
   ["AndroidInputCadence", "APKRUN_INPUT_CADENCE_T2", "1"],
+  ["AndroidInputCadence", "APKRUN_INPUT_TRACE_CADENCE_T2", "1"],
   ["AndroidInputEdges", "APKRUN_INPUT_EDGE_T2", "1"],
   ["AndroidInputInteractive", "APKRUN_INPUT_INTERACTIVE_T2", "1"]
 ]
@@ -325,9 +328,12 @@ end
 android_input_test_source = File.read(File.join(root, "Tests/IntegrationTests/AndroidInputTests/AndroidInputTests.swift"))
 unless android_input_test_source.include?('environment["APKRUN_INPUT_INTERACTIVE_T2"] == "1"') &&
     android_input_test_source.include?('environment["APKRUN_INPUT_CADENCE_T2"] == "1"') &&
+    android_input_test_source.include?('environment["APKRUN_INPUT_TRACE_CADENCE_T2"] == "1"') &&
     android_input_test_source.include?('environment["APKRUN_INPUT_EDGE_T2"] == "1"') &&
     android_input_test_source.include?("testThreeConsecutiveHundredClickBatchesThroughDirectView") &&
     android_input_test_source.include?("runThreeConsecutiveHundredClickBatches(pointerDelivery: .directView)") &&
+    android_input_test_source.include?("testOneHundredClickDiagnosticTraceJoinsHostGuestAndFixtureThroughDirectView") &&
+    android_input_test_source.include?("runOneHundredClickDiagnosticTrace(pointerDelivery: .directView") &&
     android_input_test_source.include?('throw XCTSkip("Run only on a dedicated lab GUI session')
   abort("FAIL workflow input-test guard: desktop input tests must remain opt-in")
 end
@@ -367,6 +373,16 @@ cadence_env_fixture = {
 }
 unless enables_lab_gui_input_test?(cadence_env_fixture)
   abort("FAIL workflow input-test guard fixture: a cadence environment opt-in was not detected")
+end
+trace_cadence_env_fixture = {
+  "jobs" => {
+    "test" => {
+      "steps" => [{ "env" => { "APKRUN_INPUT_TRACE_CADENCE_T2" => "1" } }]
+    }
+  }
+}
+unless enables_lab_gui_input_test?(trace_cadence_env_fixture)
+  abort("FAIL workflow input-test guard fixture: a trace cadence environment opt-in was not detected")
 end
 cadence_yaml_fixture = {
   "runs" => {

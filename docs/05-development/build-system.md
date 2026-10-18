@@ -610,6 +610,18 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
     -only-testing:IntegrationTests/AndroidInputTests/testThreeConsecutiveHundredClickBatchesThroughDirectView test
   ```
 
+- The direct-view trace variant uses the same `AndroidInputCadence` configuration. It runs one untraced 100-click warm-up, then traces the second 100-click batch across host receipts, routing, guest ACKs, fixture touch dispatch, and click callbacks. Its per-event ACKs and debug fixture listener perturb timing, so the result is diagnostic only and cannot satisfy #024 box 3 or #103:
+
+  ```bash
+  xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+    -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-024-trace-cadence-derived" \
+    -resultBundlePath "${TMPDIR:-/tmp}/apkrun-024-trace-cadence.xcresult" \
+    APKRUN_TEST_LINUX_DIR="${TMPDIR:-/tmp}/apkrun-test-linux" \
+    APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+    -only-test-configuration AndroidInputCadence \
+    -only-testing:IntegrationTests/AndroidInputTests/testOneHundredClickDiagnosticTraceJoinsHostGuestAndFixtureThroughDirectView test
+  ```
+
 - `CGPreflightPostEventAccess()` is checked by the hosted `APKRunTestHost`
   process. If the check fails, verify that Accessibility is enabled for the
   exact `APKRunTestHost.app` path shown in the skip message, adding that app

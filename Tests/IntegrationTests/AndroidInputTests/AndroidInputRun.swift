@@ -39,6 +39,15 @@ enum InputPointerDelivery: Sendable, Equatable {
             "CGEvent.post(tap: .cghidEventTap)"
         }
     }
+
+    var tracePathDescription: String {
+        switch self {
+        case .directView:
+            "NSEvent direct dispatch → IOSurfaceLayerView → InputRouter → Guest Agent → HelloText"
+        case .windowServer:
+            "CGEvent.post → WindowServer → AppKit → IOSurfaceLayerView → InputRouter → Guest Agent → HelloText"
+        }
+    }
 }
 
 struct InputTouchCaptureSnapshot {

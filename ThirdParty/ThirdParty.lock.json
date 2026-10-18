@@ -44,6 +44,20 @@
       "upstream": { "watch": "commits", "branch": "development" }
     },
     {
+      "name": "bundletool-all",
+      "group": "fixture-tooling",
+      "kind": "prebuilt",
+      "url": "https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar",
+      "version": "1.18.3",
+      "sha256": "a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29",
+      "repository": "https://github.com/google/bundletool",
+      "license": "Apache-2.0 AND BSD-3-Clause AND MIT",
+      "licenseFiles": ["LICENSE", "NOTICE", "META-INF/LICENSE", "META-INF/LICENSE.txt"],
+      "buildFlags": [],
+      "patches": [],
+      "ships": "tooling"
+    },
+    {
       "name": "alpine-linux-virt",
       "group": "test-linux",
       "kind": "prebuilt",

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">HelloSplit</string>
+    <string name="feature_name">HelloSplit feature</string>
+    <string name="locale_message">HelloSplit default</string>
+    <string name="density_marker_description">xhdpi split marker</string>
+    <string name="open_feature">Open install-time feature</string>
+</resources>

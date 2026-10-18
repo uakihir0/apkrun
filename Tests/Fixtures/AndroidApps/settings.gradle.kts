@@ -21,3 +21,7 @@ rootProject.name = "apkrun-fixtures"
 include(":HelloText")
 include(":HelloGL")
 include(":HelloCompose")
+include(":HelloSplit")
+include(":feature")
+
+project(":feature").projectDir = file("HelloSplitFeature")

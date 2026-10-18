@@ -30,6 +30,15 @@ enum AndroidInputRunFailure: Error, Equatable {
 enum InputPointerDelivery: Sendable, Equatable {
     case directView
     case windowServer
+
+    var diagnosticDescription: String {
+        switch self {
+        case .directView:
+            "NSEvent direct dispatch to IOSurfaceLayerView"
+        case .windowServer:
+            "CGEvent.post(tap: .cghidEventTap)"
+        }
+    }
 }
 
 struct InputTouchCaptureSnapshot {

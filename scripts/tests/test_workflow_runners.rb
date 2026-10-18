@@ -81,6 +81,8 @@ def enables_lab_gui_input_test?(workflow)
     value = value.to_s
     value.include?("APKRUN_INPUT_INTERACTIVE_T2") ||
       value.include?("AndroidInputInteractive") ||
+      value.include?("APKRUN_INPUT_CADENCE_T2") ||
+      value.include?("AndroidInputCadence") ||
       value.include?("APKRUN_INPUT_EDGE_T2") ||
       value.include?("AndroidInputEdges")
   end
@@ -258,6 +260,10 @@ puts("PASS manual integration and nightly workflows retain their original test b
 
 test_plan = JSON.parse(File.read(File.join(root, "Tests/IntegrationTests/IntegrationTests.xctestplan")))
 input_configs = {
+  "AndroidInputCadence" => {
+    "APKRUN_INPUT_CADENCE_T2" => "1",
+    "ANDROID_ADB_SERVER_PORT" => "15044"
+  },
   "AndroidInputEdges" => {
     "APKRUN_INPUT_EDGE_T2" => "1",
     "ANDROID_ADB_SERVER_PORT" => "15043"
@@ -294,6 +300,7 @@ enabled_opt_ins = configurations.flat_map do |name, entries|
     .map { |entry| [name, entry["key"], entry["value"]] }
 end
 expected_opt_ins = [
+  ["AndroidInputCadence", "APKRUN_INPUT_CADENCE_T2", "1"],
   ["AndroidInputEdges", "APKRUN_INPUT_EDGE_T2", "1"],
   ["AndroidInputInteractive", "APKRUN_INPUT_INTERACTIVE_T2", "1"]
 ]
@@ -317,7 +324,10 @@ input_configs.each do |configuration_name, exact_values|
 end
 android_input_test_source = File.read(File.join(root, "Tests/IntegrationTests/AndroidInputTests/AndroidInputTests.swift"))
 unless android_input_test_source.include?('environment["APKRUN_INPUT_INTERACTIVE_T2"] == "1"') &&
+    android_input_test_source.include?('environment["APKRUN_INPUT_CADENCE_T2"] == "1"') &&
     android_input_test_source.include?('environment["APKRUN_INPUT_EDGE_T2"] == "1"') &&
+    android_input_test_source.include?("testThreeConsecutiveHundredClickBatchesThroughDirectView") &&
+    android_input_test_source.include?("runThreeConsecutiveHundredClickBatches(pointerDelivery: .directView)") &&
     android_input_test_source.include?('throw XCTSkip("Run only on a dedicated lab GUI session')
   abort("FAIL workflow input-test guard: desktop input tests must remain opt-in")
 end
@@ -347,6 +357,24 @@ edge_yaml_fixture = {
 }
 unless enables_lab_gui_input_test?(edge_yaml_fixture)
   abort("FAIL workflow input-test guard fixture: an edge action command was not detected")
+end
+cadence_env_fixture = {
+  "jobs" => {
+    "test" => {
+      "steps" => [{ "env" => { "APKRUN_INPUT_CADENCE_T2" => "1" } }]
+    }
+  }
+}
+unless enables_lab_gui_input_test?(cadence_env_fixture)
+  abort("FAIL workflow input-test guard fixture: a cadence environment opt-in was not detected")
+end
+cadence_yaml_fixture = {
+  "runs" => {
+    "steps" => [{ "run" => "xcodebuild test -only-test-configuration AndroidInputCadence" }]
+  }
+}
+unless enables_lab_gui_input_test?(cadence_yaml_fixture)
+  abort("FAIL workflow input-test guard fixture: a cadence action command was not detected")
 end
 puts("PASS workflow input-test guard rejects GUI configuration, environment, and local-action opt-in fixtures")
 

@@ -598,6 +598,18 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
     -only-testing:IntegrationTests/AndroidInputTests/testOneHundredClickDiagnosticTraceJoinsHostGuestAndFixture test
   ```
 
+- `AndroidInputCadence` runs the three consecutive 100-click batches at the same 50 ms press and 50 ms gap cadence, using direct view dispatch. It activates the APKRun window but does not post system events or require Accessibility permission. This diagnostic cannot satisfy #024 box 3 or #103's WindowServer criterion; run only the selected method on a logged-in Mac:
+
+  ```bash
+  xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+    -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-024-cadence-derived" \
+    -resultBundlePath "${TMPDIR:-/tmp}/apkrun-024-cadence.xcresult" \
+    APKRUN_TEST_LINUX_DIR="${TMPDIR:-/tmp}/apkrun-test-linux" \
+    APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+    -only-test-configuration AndroidInputCadence \
+    -only-testing:IntegrationTests/AndroidInputTests/testThreeConsecutiveHundredClickBatchesThroughDirectView test
+  ```
+
 - `CGPreflightPostEventAccess()` is checked by the hosted `APKRunTestHost`
   process. If the check fails, verify that Accessibility is enabled for the
   exact `APKRunTestHost.app` path shown in the skip message, adding that app

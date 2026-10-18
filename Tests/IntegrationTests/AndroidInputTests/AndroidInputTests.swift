@@ -278,13 +278,28 @@ final class AndroidInputTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["APKRUN_INPUT_INTERACTIVE_T2"] == "1" else {
             throw XCTSkip("Run only on a dedicated lab GUI session with APKRUN_INPUT_INTERACTIVE_T2=1.")
         }
+        try await runThreeConsecutiveHundredClickBatches(pointerDelivery: .windowServer)
+    }
+
+    /// Diagnostic only: exercises the product 50 ms press/gap cadence through direct view dispatch.
+    ///
+    /// This activates the APKRun window but bypasses WindowServer and AppKit window dispatch. It can compare cadence
+    /// behavior without Accessibility permission, but cannot satisfy #024 box 3 or #103's WindowServer requirement.
+    func testThreeConsecutiveHundredClickBatchesThroughDirectView() async throws {
+        guard ProcessInfo.processInfo.environment["APKRUN_INPUT_CADENCE_T2"] == "1" else {
+            throw XCTSkip("Run only with the AndroidInputCadence test-plan configuration.")
+        }
+        try await runThreeConsecutiveHundredClickBatches(pointerDelivery: .directView)
+    }
+
+    private func runThreeConsecutiveHundredClickBatches(pointerDelivery: InputPointerDelivery) async throws {
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")
-        try Self.attachEnvironmentIdentity(fixture: apk)
-        try await AndroidInputRun.with(
-            apk: apk, package: Self.helloText, pointerDelivery: .windowServer
-        ) { run in
+        try Self.attachEnvironmentIdentity(fixture: apk, pointerDelivery: pointerDelivery)
+        try await AndroidInputRun.with(apk: apk, package: Self.helloText, pointerDelivery: pointerDelivery) { run in
             let target = try await run.centre(of: Self.buttonID)
-            try await run.prepareForWindowServerPointerDispatch()
+            if pointerDelivery == .windowServer {
+                try await run.prepareForWindowServerPointerDispatch()
+            }
             let captureStartCounters = try await run.startAcknowledgementHistoryCapture()
             let firstAcknowledgedSequenceAfterCaptureStart =
                 UInt64(captureStartCounters.batchesSent / 32 + 1) * 32
@@ -418,7 +433,7 @@ final class AndroidInputTests: XCTestCase {
             throw XCTSkip("Run only on a dedicated lab GUI session with APKRUN_INPUT_TRACE_T2=1.")
         }
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")
-        try Self.attachEnvironmentIdentity(fixture: apk)
+        try Self.attachEnvironmentIdentity(fixture: apk, pointerDelivery: .windowServer)
         try await AndroidInputRun.with(
             apk: apk, package: Self.helloText, pointerDelivery: .windowServer
         ) { run in
@@ -1288,7 +1303,7 @@ final class AndroidInputTests: XCTestCase {
         XCTAssertEqual(shellInput, [], "adb shell input processes ran during the sequence")
     }
 
-    private static func attachEnvironmentIdentity(fixture: URL) throws {
+    private static func attachEnvironmentIdentity(fixture: URL, pointerDelivery: InputPointerDelivery) throws {
         let bundle = try AndroidBootSession.bundleDirectory()
         guard let guestPath = ProcessInfo.processInfo.environment["APKRUN_GUEST_DIR"], !guestPath.isEmpty else {
             throw XCTSkip("APKRUN_GUEST_DIR is not set.")
@@ -1298,7 +1313,7 @@ final class AndroidInputTests: XCTestCase {
         let guestManifest = guestBundle.appendingPathComponent("apkrun-guest.json")
         let guestAPK = guestBundle.appendingPathComponent("apkrun-guest.apk")
         let identity: [String: Any] = [
-            "delivery": "CGEvent.post(tap: .cghidEventTap)",
+            "delivery": pointerDelivery.diagnosticDescription,
             "image_bundle": bundle.path,
             "image_manifest_sha256": try sha256(of: imageManifest),
             "image_manifest": try JSONSerialization.jsonObject(with: Data(contentsOf: imageManifest)),

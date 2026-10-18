@@ -11,7 +11,15 @@ struct APKRunCommand: AsyncParsableCommand {
                 commandName: "apkrun",
                 abstract: "Run Android apps as Mac apps.",
                 version: Output.versionFlag(BuildInfo.current),
-                subcommands: [VersionCommand.self, LogsCommand.self, DevCommand.self]
+                subcommands: [
+                    VersionCommand.self,
+                    LogsCommand.self,
+                    InstallCommand.self,
+                    UninstallCommand.self,
+                    ListPackagesCommand.self,
+                    PackageInfoCommand.self,
+                    DevCommand.self,
+                ]
             )
         #else
             CommandConfiguration(

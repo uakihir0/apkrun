@@ -5,6 +5,11 @@ import Testing
 
 @testable import apkrun
 
+#if APKRUN_EMBEDDED_RUNTIME
+    import Darwin
+    import RuntimeAPI
+#endif
+
 private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent("Golden")
 
 @Test func versionHumanOutputMatchesGolden() {
@@ -303,6 +308,74 @@ private final class CLIOutputRecorder: @unchecked Sendable {
     #expect(details["message"] as? String == "not a package isn't a valid Android package name.")
     #expect(ExitCodes.code(for: error) == 64)
 }
+
+#if APKRUN_EMBEDDED_RUNTIME
+    @Test func packageImportRejectsNonRegularInputBeforeOpeningIt() throws {
+        let fifo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("APKRun-PackageInput-\(UUID().uuidString)")
+        let result = fifo.path.withCString { Darwin.mkfifo($0, mode_t(0o600)) }
+        #expect(result == 0)
+        defer { try? FileManager.default.removeItem(at: fifo) }
+
+        do {
+            _ = try PackageCommandSupport.inputFiles([fifo.path])
+            Issue.record("named pipe unexpectedly passed APK file validation")
+        } catch let failure as CLIFailure {
+            guard case .invalidArgument(let argument, let reason) = failure else {
+                Issue.record("unexpected CLI failure: \(failure)")
+                return
+            }
+            #expect(argument == "file")
+            #expect(reason == "notRegularFile")
+        }
+    }
+
+    @Test func packageDisplayNamesReplaceTerminalAndBidiControls() {
+        let unsafeName = "Bad\u{001B}[2J\nName\u{202E}"
+
+        #expect(PackageCommandSupport.safeTerminalText(unsafeName) == "Bad�[2J�Name�")
+        #expect(PackageCommandSupport.safeTerminalText("👨‍👩‍👧‍👦") == "👨‍👩‍👧‍👦")
+    }
+
+    @Test func packageListTextIncludesStateAndSanitizesTheLabel() throws {
+        let packageID = try #require(RuntimePackageID(rawValue: "com.example.app"))
+        let summary = RuntimePackageSummary(
+            packageID: packageID,
+            displayName: "App\nName",
+            versionCode: 42,
+            state: .uninstalledKeepingData
+        )
+
+        #expect(
+            PackageCommandSupport.packageListLine(summary)
+                == "App�Name\tcom.example.app\t42\tmanaged\tuninstalled, data kept"
+        )
+    }
+
+    @Test func sameInstalledPackagePromptsForVerificationAndUsesRuntimeResult() throws {
+        let ticket = try #require(
+            RuntimeImportTicket(rawValue: "00000000-0000-0000-0000-000000000001")
+        )
+        let packageID = try #require(RuntimePackageID(rawValue: "com.example.app"))
+        let preview = RuntimeImportPreview(
+            ticket: ticket,
+            packageID: packageID,
+            displayName: "Example\u{001B}[2J",
+            versionCode: 42,
+            files: [],
+            relation: .sameAsInstalled
+        )
+
+        #expect(
+            PackageCommandSupport.installConfirmationPrompt(for: preview)
+                == "Verify Example�[2J (com.example.app) is installed; reinstall if missing?"
+        )
+        #expect(
+            PackageCommandSupport.installSuccessVerb(for: preview.relation)
+                == "Installed or verified"
+        )
+    }
+#endif
 
 @Test func invalidSourceSpecDoesNotExposeTheSuppliedURL() throws {
     let suppliedSpec = "https://user:credential@example.invalid/private/path?token=private-token"

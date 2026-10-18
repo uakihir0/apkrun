@@ -9,6 +9,10 @@ OPTIONS:
 SUBCOMMANDS:
   version                 Show APKRun version information.
   logs                    Read APKRun host logs.
+  install                 Inspect and install one APK or a set of APK splits.
+  uninstall               Remove an installed Android app.
+  list                    List installed Android apps.
+  info                    Show stored and last-known Android details for an app.
   dev                     Run development-only APKRun commands.
 
   See 'apkrun help <subcommand>' for detailed help.

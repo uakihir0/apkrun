@@ -305,6 +305,47 @@ public actor DevelopmentGuestAgent {
         }
     }
 
+    /// Installs a base APK and its splits in one PackageInstaller session through the development ADB channel.
+    public func installMultiple(
+        apks: [URL],
+        allowDowngrade: Bool = false
+    ) async throws(AdbFailure) {
+        do {
+            try await adb.installMultiple(apks: apks, allowDowngrade: allowDowngrade)
+        } catch {
+            logger.error("The Android package set install failed", errorCode: error.qualifiedCode)
+            throw error
+        }
+    }
+
+    /// Queries the Android PackageManager through Guest Agent operation 19.
+    ///
+    /// `nil` means the package is not installed. The stock-image channel does not use `pm` output as package truth.
+    public func queryPackage(_ package: String) async throws(GuestAgentFailure) -> GPPackageInfo? {
+        try requireAvailable()
+        do {
+            return try await supervisor.send(GuestQueryPackage(package: package))
+        } catch let failure {
+            if case .remote(code: .notFound, _, operation: "QueryPackage") = failure {
+                return nil
+            }
+            throw .operation(failure)
+        }
+    }
+
+    /// Lists Android packages through Guest Agent operation 20.
+    public func listPackages(
+        filter: GPPackageFilter = .userInstalled
+    ) async throws(GuestAgentFailure) -> [GPPackageSummary] {
+        try requireAvailable()
+        do {
+            let result = try await supervisor.send(GuestListPackages(filter: filter))
+            return result.packages
+        } catch {
+            throw .operation(error)
+        }
+    }
+
     /// Finishes every task of a package without force-stopping its process (#026, guest-protocol.md §7.1 #15).
     ///
     /// The Guest Agent emits `TaskVanished` before acknowledging this operation. This bounded snapshot check keeps

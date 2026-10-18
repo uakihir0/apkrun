@@ -39,6 +39,7 @@ public actor SessionRegistry {
         let packageID: String
         var state: AppSessionState
         var taskIDs: Set<Int32>
+        var stateBeforeClosing: AppSessionState?
         var launchReplyPending = false
         var vanishedDuringLaunch: Set<Int32> = []
 
@@ -86,12 +87,49 @@ public actor SessionRegistry {
         }
         let previous = entry.state
         entry.state = next
+        if next == .closing {
+            entry.stateBeforeClosing = previous
+        } else if next.isEnded {
+            entry.stateBeforeClosing = nil
+        }
         if next == .launching {
             entry.launchReplyPending = true
             entry.vanishedDuringLaunch.removeAll()
         }
         entries[id] = entry
         log("session state \(String(describing: previous)) -> \(String(describing: next))", entry: entry)
+        return entry.snapshot
+    }
+
+    /// Completes a close after the Guest Agent confirms that the package has no remaining tasks.
+    @discardableResult
+    public func stopCompleted(packageID: String) -> AppSessionSnapshot? {
+        guard var entry = entries.values.first(where: { $0.packageID == packageID && $0.state == .closing }) else {
+            return nil
+        }
+        let previous = entry.state
+        entry.taskIDs.removeAll()
+        entry.launchReplyPending = false
+        entry.vanishedDuringLaunch.removeAll()
+        entry.stateBeforeClosing = nil
+        entry.state = .ended(.userClosed)
+        entries[entry.id] = entry
+        log("session state \(String(describing: previous)) -> \(String(describing: entry.state))", entry: entry)
+        return entry.snapshot
+    }
+
+    /// Restores the previous live state when the Guest Agent could not finish a close.
+    @discardableResult
+    public func stopFailed(packageID: String) -> AppSessionSnapshot? {
+        guard var entry = entries.values.first(where: { $0.packageID == packageID && $0.state == .closing }),
+            let previous = entry.stateBeforeClosing
+        else {
+            return nil
+        }
+        entry.state = previous
+        entry.stateBeforeClosing = nil
+        entries[entry.id] = entry
+        log("session close failed; restored \(String(describing: previous))", entry: entry)
         return entry.snapshot
     }
 
@@ -177,6 +215,7 @@ public actor SessionRegistry {
                 }
                 let previous = entry.state
                 entry.state = next
+                entry.stateBeforeClosing = nil
                 log("session state \(String(describing: previous)) -> \(String(describing: next))", entry: entry)
             }
         }
@@ -206,6 +245,7 @@ public actor SessionRegistry {
         case (.requested, .waitingForRuntime), (.requested, .acquiringDisplay),
             (.waitingForRuntime, .acquiringDisplay), (.acquiringDisplay, .launching),
             (.launching, .running), (.running, .backgrounded), (.backgrounded, .running),
+            (.requested, .closing), (.waitingForRuntime, .closing), (.acquiringDisplay, .closing),
             (.launching, .closing), (.running, .closing), (.backgrounded, .closing):
             true
         case (.launching, .ended(.appExited)), (.running, .ended(.appExited)), (.backgrounded, .ended(.appExited)),

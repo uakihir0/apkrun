@@ -283,16 +283,52 @@ public actor AdbClient {
         try Self.requirePackageSuccess(result, command: "install")
     }
 
-    /// Uninstalls `packageName` with `adb uninstall`.
-    public func uninstall(packageName: String, timeout: Duration = .seconds(60)) async throws(AdbFailure) {
+    /// Installs one base APK and zero or more split APKs in one PackageInstaller operation.
+    ///
+    /// The caller verifies the package and file digests before calling. `-d` is reserved for an explicitly
+    /// debuggable guest image; normal installs never request a downgrade.
+    public func installMultiple(
+        apks: [URL],
+        allowDowngrade: Bool = false,
+        timeout: Duration = .seconds(180)
+    ) async throws(AdbFailure) {
+        guard !apks.isEmpty,
+            apks.allSatisfy({ $0.isFileURL && FileManager.default.isReadableFile(atPath: $0.path) })
+        else {
+            throw .invalidArgument(command: "install-multiple")
+        }
+        let downgrade = allowDowngrade ? ["-d"] : []
+        let result = try await runDeviceCommand(
+            "install-multiple",
+            arguments: ["install-multiple", "-r", "--no-streaming"] + downgrade + apks.map(\.path),
+            timeout: timeout
+        )
+        try Self.requirePackageSuccess(result, command: "install-multiple")
+    }
+
+    /// Uninstalls `packageName`, optionally retaining its private app data (`pm uninstall -k`).
+    public func uninstall(
+        packageName: String,
+        keepData: Bool = false,
+        timeout: Duration = .seconds(60)
+    ) async throws(AdbFailure) {
         guard Self.isPackageName(packageName) else {
             throw .invalidArgument(command: "uninstall")
         }
-        let result = try await runDeviceCommand(
-            "uninstall",
-            arguments: ["uninstall", packageName],
-            timeout: timeout
-        )
+        let result: AdbProcessResult
+        if keepData {
+            result = try await runDeviceCommand(
+                "uninstall",
+                arguments: ["shell", "pm uninstall -k \(packageName)"],
+                timeout: timeout
+            )
+        } else {
+            result = try await runDeviceCommand(
+                "uninstall",
+                arguments: ["uninstall", packageName],
+                timeout: timeout
+            )
+        }
         try Self.requirePackageSuccess(result, command: "uninstall")
     }
 

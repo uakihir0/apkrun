@@ -315,9 +315,12 @@ private final class FakeADB: @unchecked Sendable {
               "-s 127.0.0.1:6520 shell reboot -p") exit 0 ;;
               "-s 127.0.0.1:6520 shell exit-7") exit 7 ;;
               "-s 127.0.0.1:6520 install -r "*) echo "Performing Streamed Install"; echo "Success"; exit 0 ;;
+              "-s 127.0.0.1:6520 install-multiple -r --no-streaming "*) echo "Success"; exit 0 ;;
+              "-s 127.0.0.1:6520 install-multiple -r --no-streaming -d "*) echo "Success"; exit 0 ;;
               "-s 127.0.0.1:6520 uninstall io.apkrun.fixture.hellotext") echo "Success"; exit 0 ;;
               "-s 127.0.0.1:6520 uninstall io.apkrun.absent")
                 echo "Failure [DELETE_FAILED_INTERNAL_ERROR]"; exit 1 ;;
+              "-s 127.0.0.1:6520 shell pm uninstall -k io.apkrun.fixture.hellotext") echo "Success"; exit 0 ;;
               "-s 127.0.0.1:6520 shell pm list packages --show-versioncode io.apkrun.fixture.hellotext")
                 echo "package:io.apkrun.fixture.hellotext versionCode:1"; exit 0 ;;
               "-s 127.0.0.1:6520 shell dumpsys package io.apkrun.fixture.hellotext")
@@ -584,6 +587,41 @@ func adbClientInstallsUninstallsAndReadsThePackageThroughAdb() async throws {
     #expect(metadata == AdbPackageMetadata(versionCode: 1, versionName: "1.0", minSdk: 29, targetSdk: 37))
     // The install and uninstall commands are adb commands, not shell commands.
     #expect(await client.shellInvocationCount == 2)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbClientInstallsSplitSetsWithoutStreamingAndCanKeepDataOnUninstall() async throws {
+    let fake = try FakeADB()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+    let base = fake.directory.appendingPathComponent("base.apk")
+    let split = fake.directory.appendingPathComponent("split_config.arm64_v8a.apk")
+    try Data("base".utf8).write(to: base)
+    try Data("split".utf8).write(to: split)
+
+    try await client.installMultiple(apks: [base, split])
+    try await client.uninstall(packageName: "io.apkrun.fixture.hellotext", keepData: true)
+
+    #expect(
+        try fake.calls() == [
+            "-s 127.0.0.1:6520 install-multiple -r --no-streaming \(base.path) \(split.path)",
+            "-s 127.0.0.1:6520 shell pm uninstall -k io.apkrun.fixture.hellotext",
+        ]
+    )
+    #expect(await client.shellInvocationCount == 1)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbClientAllowsDowngradeOnlyWhenExplicitlyRequested() async throws {
+    let fake = try FakeADB()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+    let apk = fake.directory.appendingPathComponent("base.apk")
+    try Data("base".utf8).write(to: apk)
+
+    try await client.installMultiple(apks: [apk], allowDowngrade: true)
+
+    #expect(
+        try fake.calls() == ["-s 127.0.0.1:6520 install-multiple -r --no-streaming -d \(apk.path)"]
+    )
 }
 
 @Test(.timeLimit(.minutes(1)))

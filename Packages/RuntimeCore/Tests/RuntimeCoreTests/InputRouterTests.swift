@@ -150,7 +150,7 @@ func aBatchFromAnUnknownSessionIsDroppedAsInvalid() async {
     #expect(await channel.batches.isEmpty)
 }
 
-@Test(.timeLimit(.minutes(1)), arguments: [AppSessionState.launching, .closing, .ended])
+@Test(.timeLimit(.minutes(1)), arguments: [AppSessionState.launching, .closing, .ended(.userClosed)])
 func aSessionThatDoesNotAcceptInputDropsItsEvents(state: AppSessionState) async {
     let channel = RecordingInputChannel()
     let clock = TestClock()
@@ -182,7 +182,7 @@ func theStateChangesTheNextBatch() async {
     await router.route([touch(.down)], from: session)
     await router.setState(.backgrounded, for: session)
     await router.route([touch(.move)], from: session)
-    await router.setState(.ended, for: session)
+    await router.setState(.ended(.userClosed), for: session)
     await router.route([touch(.up)], from: session)
     #expect(await channel.batches.count == 2)
     #expect(await router.counters.droppedNotRunning == 1)

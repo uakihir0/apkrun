@@ -38,11 +38,21 @@ public struct GuestLaunchReport: Equatable, Sendable {
     }
 }
 
+/// A task lifecycle event relayed from the Guest Agent to embedded runtime clients.
+public enum DevelopmentGuestTaskEvent: Equatable, Sendable {
+    /// The Guest Agent reported a task for a package.
+    case appeared(packageID: String, taskID: Int32)
+    /// The Guest Agent removed a task for a package.
+    case vanished(packageID: String, taskID: Int32)
+}
+
 /// The development Guest Agent of one boot (guest-components.md §3, §6.1): it installs and starts the agent, keeps
 /// the control connection, restarts a dead agent within the restart budget, and removes its forwards when it stops.
 public actor DevelopmentGuestAgent {
     /// The control connection, with its keepalive and resync.
     public nonisolated let supervisor: GuestAgentSupervisor
+    /// Task lifecycle changes from the control connection, narrowed to the RuntimeCore API.
+    public nonisolated let taskEvents: AsyncStream<DevelopmentGuestTaskEvent>
 
     private let adb: AdbClient
     private let provisioner: GuestAgentProvisioner
@@ -59,6 +69,8 @@ public actor DevelopmentGuestAgent {
     /// The input connection, and the control session token that it presents (input.md §8, decision D11).
     private var inputConnection: GuestConnection?
     private var inputConnectionToken: Data?
+    private let taskEventContinuation: AsyncStream<DevelopmentGuestTaskEvent>.Continuation
+    private var taskEventRelay: Task<Void, Never>?
 
     /// Creates the coordinator for `bundle`, reached through `adb`.
     public init(
@@ -83,6 +95,12 @@ public actor DevelopmentGuestAgent {
             logSink: logSink,
             restartAgent: { loss in await relay.restart(loss) }
         )
+        let (taskEvents, taskEventContinuation) = AsyncStream.makeStream(
+            of: DevelopmentGuestTaskEvent.self,
+            bufferingPolicy: .bufferingNewest(1024)
+        )
+        self.taskEvents = taskEvents
+        self.taskEventContinuation = taskEventContinuation
         relay.set { [weak self] loss in
             guard let self else {
                 return false
@@ -126,6 +144,7 @@ public actor DevelopmentGuestAgent {
             throw error
         }
         try requireStarted(started)
+        startTaskEventRelay()
         do {
             try await supervisor.start(connectTimeout: connectTimeout)
         } catch GuestAgentFailure.stopped {
@@ -147,6 +166,9 @@ public actor DevelopmentGuestAgent {
     public func stop() async {
         generation += 1
         await supervisor.stop()
+        taskEventRelay?.cancel()
+        taskEventRelay = nil
+        taskEventContinuation.finish()
         // The input connection belongs to the control session, so it ends with it.
         await inputConnection?.close()
         inputConnection = nil
@@ -214,6 +236,30 @@ public actor DevelopmentGuestAgent {
         }
     }
 
+    /// Starts relaying task lifecycle events before the control connection can publish them.
+    private func startTaskEventRelay() {
+        guard taskEventRelay == nil else {
+            return
+        }
+        let updates = supervisor.updates
+        let continuation = taskEventContinuation
+        taskEventRelay = Task {
+            for await event in updates {
+                guard let kind = event.kind else {
+                    continue
+                }
+                switch kind {
+                case .taskAppeared(let task), .taskChanged(let task):
+                    continuation.yield(.appeared(packageID: task.package, taskID: task.taskID))
+                case .taskVanished(let task):
+                    continuation.yield(.vanished(packageID: task.package, taskID: task.taskID))
+                default:
+                    break
+                }
+            }
+        }
+    }
+
     /// Throws `stopped` when ``stop()`` has run since `started`, so that a start in flight does not go on.
     private func requireStarted(_ started: UInt64) throws(GuestAgentFailure) {
         if generation != started {
@@ -238,6 +284,48 @@ public actor DevelopmentGuestAgent {
         default: outcome = "started"
         }
         return GuestLaunchReport(taskID: result.taskID, component: result.component, outcome: outcome)
+    }
+
+    /// Installs a development APK through Android's PackageInstaller for `apkrun dev launch <apk>` (#026).
+    ///
+    /// The Guest Agent owns the shared ADB client; this narrow method keeps raw ADB use inside RuntimeCore.
+    public func installAPK(_ apk: URL, package: String) async throws(AdbFailure) {
+        let installLogger = APKLogger(
+            category: RuntimeLogCategory.agents,
+            sink: logSink,
+            context: LogContext(packageID: package, displayID: "0")
+        )
+        installLogger.info("Installing the Android package through PackageInstaller")
+        do {
+            try await adb.install(apk: apk)
+            installLogger.info("Installed the Android package through PackageInstaller")
+        } catch {
+            installLogger.error("The Android package install failed", errorCode: error.qualifiedCode)
+            throw error
+        }
+    }
+
+    /// Finishes every task of a package without force-stopping its process (#026, guest-protocol.md §7.1 #15).
+    ///
+    /// The Guest Agent emits `TaskVanished` before acknowledging this operation. This bounded snapshot check keeps
+    /// the host session open until those events have been applied, while leaving margin inside the protocol's 5 s
+    /// operation deadline.
+    public func stopApplication(package: String) async throws(GuestAgentFailure) -> Bool {
+        try requireAvailable()
+        do {
+            _ = try await supervisor.send(GuestStopApplication(package: package))
+        } catch {
+            throw .operation(error)
+        }
+        let deadline = ContinuousClock.now + .seconds(4)
+        while ContinuousClock.now < deadline {
+            let stillRunning = await supervisor.snapshot.tasks.values.contains { $0.package == package }
+            if !stillRunning {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return !(await supervisor.snapshot.tasks.values.contains { $0.package == package })
     }
 
     /// Throws `requiredAgentUnavailable` once the restart budget is spent, and the agent stays down.

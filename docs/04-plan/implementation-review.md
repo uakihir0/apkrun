@@ -20572,3 +20572,104 @@ while these GUI criteria remain open. No acceptance checkbox changes.
 while the test is running. Future acceptance runs still require an idle,
 dedicated GUI session; they are not a prerequisite for continuing the
 user-requested feature work.
+
+## IR-1365: Implement the embedded #026 app-session close path
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #026 |
+| Affected documents | [M03](issues/M03-input-and-basic-runtime.md) #026; [display-and-windowing.md](../02-design/display-and-windowing.md) §7.6; [state-machines.md](../01-architecture/state-machines.md) §3; [package-store.md](../02-design/package-store.md) §4.3; [guest-protocol.md](../02-design/guest-protocol.md) §7.1 |
+
+**Choice.** Implement a display-0-only `SessionRegistry` and
+`EmbeddedRuntimeService` for the M3 embedded CLI path. `apkrun dev launch
+<apk|package>` resolves an APK package ID with `aapt2`, installs the original
+APK through `AdbClient`, and launches through the Guest Agent. Android's
+PackageManager remains authoritative after install. APK IDs follow the package
+store's segment grammar and 255-character limit. The `aapt2` process reads
+a private, mode-0700 staging directory and runs under `sandbox-exec` with
+process creation, network, and writes denied; the profile allows the tool, that
+staged copy, and the read-only macOS runtime files needed by dyld. Denying
+process creation prevents an `aapt2` child from keeping output pipes open after
+the timed process exits. If `sandbox-exec` is absent, the CLI warns and
+continues without that sandbox. The staged source is capped at the package
+store's 2 GiB per-file limit, including a streaming bound if the source grows
+during copying.
+
+Closing the `apkrun dev launch` window sends
+`StopApplication(FINISH_TASKS)`, then the CLI stops its embedded runtime after
+the Guest Agent reports the package's tasks gone. A tracked task that exits
+before the first frame is also an app exit and ends the session. If the
+appeared and vanished events arrive before the `LaunchApplication` reply,
+buffer them by task ID and reconcile them with the returned ID. A different
+package task must not end the pending launch. Keep `FORCE_STOP` unsupported.
+Bound guest task removal to 4 s inside the protocol's 5 s operation deadline;
+if removal fails, report a warning and stop the embedded runtime anyway.
+
+**Reason.** #026 specifies one embedded display and the `stop` close policy.
+The protocol and task-service design do not give this operation a separate
+deadline. The 4 s bound leaves time for the agent response and host event
+handling while preserving the existing 5 s request timeout. Stopping the
+embedded runtime after window close matches M3's single-process ownership;
+it does not alter the later daemon-backed wrapper lifecycle. The APK input
+form is needed by #026; using `aapt2` only to choose the guest package keeps
+host-side parsing out of PackageManager's authority. Staging avoids granting
+the parser access to the APK's parent directory, and the minimal locale-only
+environment prevents inherited `DYLD_*` variables from changing tool loading.
+The dyld rules and read-only system runtime paths let macOS start the tool
+without making user files readable. A source size preflight rejects oversized
+APKs before temporary storage is allocated; a bounded streaming copy protects
+against a file that grows after that check. Launch-time task events are
+reconciled by ID so an unrelated package task cannot end the returned task's
+session, while the returned task's own early exit remains an app exit. The
+close monitor starts before Android boot: closing before launch cancels boot
+or prevents it from starting, while a close after launch begins leaves the
+Guest Agent available to finish the app tasks. `running` follows the native
+window's Core Animation commit callback rather than the GPU blit counter.
+
+The user asked to prioritize feature work and accept mostly-working behavior
+while sharing the Mac, so this implementation proceeds without another
+strict WindowServer acceptance run.
+
+**Verification (2026-10-18 UTC; macOS 27.0.1, arm64).** Eleven focused
+`RuntimeHostTests`, five `RuntimeCoreTests`, and three `GuestProtocolTests`
+passed. Coverage includes APK resolution, bounded aapt2 execution, sandboxed
+staged-file reads/write denial, the fast-exit lifecycle race, and buffered
+window close. The `apkrun` product built with the `EmbeddedRuntime` trait;
+Swift format strict lint and `git diff --check` passed. The Guest Gradle unit
+suites passed: 80 `guestd` tests, 9 `agentruntime` tests, and `ktfmtCheck`.
+No WindowServer, T1 screenshot, or Android guest test was run.
+
+**Follow-up verification (2026-10-18).** The focused
+`swift test --filter 'embeddedRuntimeService|sessionRegistry|developmentAPK|devLaunchFrameWait|developerDisplayCounts'`
+run passed. Coverage includes the 2 GiB staging cap, package-name grammar,
+launch task-ID reconciliation (including vanish-before-appearance), early
+window close observation, sandbox write and process-creation denial, and the
+native window frame-commit counter. The embedded `apkrun` build, strict Swift
+format lint, and `git diff --check` passed after these fixes. Guest Gradle
+results above remain the latest Guest test run; Guest sources did not change
+in this follow-up.
+
+**Hostile review (2026-10-18).** The reviewer found that an aapt2 child could
+inherit output pipes after the direct process exited and outlive its timeout.
+The sandbox now denies process creation, with a policy test. The reviewer also
+found that GPU blit completion could mark a session `running` before the
+window committed the frame. The state transition now follows the window's
+Core Animation completion callback, with a counter test and a design note.
+The reviewer rechecked both repairs and found no remaining issue in either.
+
+**Consequence.** The development CLI installs and launches APK input, finishes
+package tasks on window close, and shuts down its embedded runtime. The #026
+acceptance checkboxes remain unchanged. `NativeWindowTests`, T1 screenshot
+coverage, the G4 gate support and evidence, and T2 guest verification are
+still open. #024's click-reliability and trackpad checks also remain open per
+IR-1364.
+
+**Risk.** The host-side close flow, sandbox policy, and embedded build have
+compile/T0 coverage, but the hidden `IActivityTaskManager.removeTask` call,
+installation through the live guest, and actual window-close timing still
+need a real-guest run. The documented task's `scripts/run-gate.sh G4` entry
+point is not implemented yet. Maintainer review should confirm the 4 s bound,
+the dyld/system read exception, the unsandboxed warning fallback, the
+process-creation denial, the 2 GiB temporary copy limit, the native window
+commit callback, and the development-only runtime shutdown.

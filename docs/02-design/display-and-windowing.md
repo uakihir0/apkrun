@@ -349,6 +349,11 @@ The chosen behavior is recorded in §11 and in R-04.
 | `ended(.error(...))` | error panel: message, remediation, "Try Again", "Open APKRun" ([../03-reference/error-catalog.md](../03-reference/error-catalog.md)) |
 | `ended(.appCrashed)` | "‹App› stopped unexpectedly" with "Reopen" |
 
+On the embedded development path, `launching → running` follows the native
+window's Core Animation transaction completion (`frameDisplayed`). The GPU
+`framesPresented` counter records completed blits and does not prove that the
+window has committed the frame.
+
 The window is a standard titled window: title = app display name, a black background, `collectionBehavior = [.fullScreenPrimary]`, and `tabbingMode = .disallowed` (one window per app). There is no emulator frame, toolbar, or navigation buttons. Android navigation uses keyboard mappings (Esc → Back, [input.md](input.md)).
 
 ### 7.4 Fullscreen
@@ -371,6 +376,24 @@ A wrapper has exactly one window. **Closing the window ends the session and quit
 |---|---|---|
 | `stop` | yes | The Guest Agent removes the session's tasks (`IActivityTaskManager.removeTask`, as when swiping an app away in Recents). The process may stay cached by Android, which speeds up the next launch |
 | `keepRunning` | no (a per-app setting, useful for music or messaging apps) | The Guest Agent moves the root task to display 0 behind the launcher (`moveRootTaskToDisplay(taskId, 0)`, then to back). Audio and notifications continue. The next launch moves the task to a new display instead of starting a new one |
+
+In M3's embedded development mode, `apkrun dev launch` owns the VM and its
+display-0 window in one CLI process. Closing that window sends
+`StopApplication(FINISH_TASKS)`. The Guest Agent removes every task for the
+package and publishes `TaskVanished` before replying; the host waits for the
+task snapshot to clear, then stops the embedded runtime and exits the CLI.
+If the Guest Agent reports that the active task exits on its own, the CLI
+closes the window and stops the embedded runtime as well.
+The Guest Agent's task-removal wait is bounded to 4 s within the operation's
+5 s deadline. If task removal fails or times out, the CLI reports a warning
+and still shuts down the embedded runtime. `FORCE_STOP` is not used.
+The CLI observes close and Ctrl-C while Android boots. Closing before
+`LaunchApplication` starts stops the boot without installing or launching the
+APK. Once launch begins, the CLI keeps the Guest Agent available long enough
+to finish package tasks before stopping Android.
+Ctrl-C stops the runtime without first stopping the app, and `--no-window`
+keeps its one-shot launch behavior. This development-only lifecycle does not
+change the daemon-backed wrapper policy above.
 
 Then the display is released (§3.4). The session ends with `.userClosed` when the Guest Agent reports `tasksCleared`, or after 5 s ([../01-architecture/state-machines.md](../01-architecture/state-machines.md) §3).
 

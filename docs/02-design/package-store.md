@@ -236,7 +236,8 @@ Detection looks at content, never at the file extension alone. ZIP reading uses 
 | size, SHA-256 | streaming hash | computed during the copy |
 
 - aapt2 runs as a subprocess with a 20 s timeout per call, a 16 MiB output cap, and `LANG=C`. Its output is parsed by a tolerant line parser with golden tests for the pinned aapt2 version. Updating aapt2 needs a re-run of the golden tests (#073).
-- aapt2 parses untrusted input. It runs in a `sandbox-exec` profile that denies network and writes and allows reads only of the ticket directory and the tool (hardening item in #091). If `sandbox-exec` is missing, it runs unsandboxed and logs a warning.
+- aapt2 parses untrusted input. It runs in a `sandbox-exec` profile that denies process creation, network, and writes and allows reads only of the ticket directory, the tool, and the read-only system runtime files required to launch aapt2 on macOS (hardening item in #091). Denying process creation prevents descendants from holding output pipes open beyond the subprocess timeout. It does not read other user files. If `sandbox-exec` is missing, it runs unsandboxed and logs a warning.
+- The development-only `apkrun dev launch <apk>` resolver uses the same 2 GiB per-file limit as APK transfer. It checks the source size before staging and enforces the limit while streaming the private copy, so a growing source cannot exhaust temporary storage.
 - The inspector never executes anything from the APK.
 
 ### 4.4 Split sets and split selection

@@ -101,6 +101,7 @@ enum AppSessionState: Sendable, Equatable {
 | acquiringDisplay | ended(.error) | pool exhausted (`RuntimeFailure.displayPoolExhausted`) |
 | launching | running | first frame on the display after `LaunchApplication` |
 | launching | ended(.error) | launch timeout (15 s) or Guest Agent error |
+| launching | ended(.appExited) | the Guest Agent reports that the task returned by `LaunchApplication` exited before its first frame and no other package task remains |
 | running | backgrounded | wrapper reported occlusion/minimize |
 | backgrounded | running | wrapper visible again |
 | running, backgrounded | closing | wrapper `closeSession` or window closed |
@@ -113,6 +114,11 @@ enum AppSessionState: Sendable, Equatable {
 | any except ended | ended(.packageUninstalled) | the package is being uninstalled ([../02-design/package-store.md](../02-design/package-store.md) §8 step 2a). The wrapper closes its window and quits |
 
 Only one live session per package is allowed. A second `openSession` for the same package returns the existing session, and the wrapper just activates its window.
+
+While `LaunchApplication` is in flight, the registry retains task events by task
+ID and waits for its reply. It reconciles the returned task ID with those
+events, including vanish events whose appearance predates the subscription.
+A different task for the same package cannot end the new launch.
 
 ## 4. DisplayState (RuntimeCore, owner `DisplayPool`)
 

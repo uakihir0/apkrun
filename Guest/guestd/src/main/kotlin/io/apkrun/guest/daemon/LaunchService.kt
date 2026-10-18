@@ -9,6 +9,8 @@ import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchMode
 import io.apkrun.guest.protocol.v1.LaunchOutcome
 import io.apkrun.guest.protocol.v1.LaunchResult
+import io.apkrun.guest.protocol.v1.StopApplication
+import io.apkrun.guest.protocol.v1.StopMode
 import io.apkrun.guest.protocol.v1.TaskInfo
 import io.apkrun.guest.runtime.AgentLog
 import io.apkrun.guest.runtime.HiddenApi
@@ -87,6 +89,34 @@ class LaunchService(
             .setComponent(task.getTopComponent().ifEmpty { task.getBaseComponent() })
             .setOutcome(outcome)
             .build()
+    }
+
+    /**
+     * Finishes every task of the requested package. Force-stop remains unsupported here; it is
+     * implemented with the rest of the full Guest Agent operations in #034.
+     */
+    suspend fun stop(request: StopApplication) {
+        val pkg = request.getPackage()
+        if (!isPackageName(pkg)) {
+            throw GuestFailure(
+                GuestErrorCode.GUEST_ERROR_CODE_INVALID_ARGUMENT,
+                "the package name is not valid",
+            )
+        }
+        when (request.getMode()) {
+            StopMode.STOP_MODE_FINISH_TASKS -> tasks.removeAllForPackage(pkg)
+            StopMode.STOP_MODE_FORCE_STOP ->
+                throw GuestFailure(
+                    GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
+                    "force-stop is not available in this agent build",
+                )
+            StopMode.STOP_MODE_UNSPECIFIED,
+            StopMode.UNRECOGNIZED ->
+                throw GuestFailure(
+                    GuestErrorCode.GUEST_ERROR_CODE_INVALID_ARGUMENT,
+                    "the stop mode is not supported",
+                )
+        }
     }
 
     /**

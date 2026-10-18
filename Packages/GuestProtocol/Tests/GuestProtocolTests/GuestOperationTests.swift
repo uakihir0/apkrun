@@ -45,6 +45,7 @@ private enum EnvelopeSchema {
         ("get_snapshot", GuestGetSnapshot.number),
         ("set_display_policy", GuestSetDisplayPolicy.number),
         ("launch_application", GuestLaunchApplication.number),
+        ("stop_application", GuestStopApplication.number),
         ("focus_display", GuestFocusDisplay.number),
     ]
     for pair in pairs {
@@ -74,5 +75,12 @@ private enum EnvelopeSchema {
         #expect(launch.package == "io.apkrun.fixture.hellotext")
     } else {
         Issue.record("GuestLaunchApplication does not build the launch request")
+    }
+    let stopRequest: GPRequest.OneOf_Op? = GuestStopApplication(package: "io.apkrun.fixture.hellotext").request()
+    if case .stopApplication(let stop)? = stopRequest {
+        #expect(stop.package == "io.apkrun.fixture.hellotext")
+        #expect(stop.mode == .finishTasks)
+    } else {
+        Issue.record("GuestStopApplication does not build the finish-tasks request")
     }
 }

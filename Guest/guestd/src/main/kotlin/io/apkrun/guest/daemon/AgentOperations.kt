@@ -4,6 +4,7 @@ import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.Snapshot
+import io.apkrun.guest.protocol.v1.StopApplication
 
 /**
  * The operations of the development agent that the [Dispatcher] calls (guest-protocol.md §7.1). The
@@ -19,6 +20,9 @@ interface AgentOperations {
 
     /** Launches the package of a request on its display (launch.v1). */
     fun launchApplication(request: LaunchApplication): LaunchResult
+
+    /** Stops every task belonging to the package (launch.v1). */
+    suspend fun stopApplication(request: StopApplication)
 
     /** Moves the focus to the top task of a display (input.v1). */
     fun focusDisplay(displayId: Int)

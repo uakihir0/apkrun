@@ -176,6 +176,43 @@ public struct GuestLaunchApplication: GuestOperation {
     }
 }
 
+/// `StopApplication` with `FINISH_TASKS`: removes each task of a package without force-stopping its process
+/// (guest-protocol.md §7.1 #15; #026).
+public struct GuestStopApplication: GuestOperation {
+    /// The decoded result of the operation.
+    public typealias Result = GPEmpty
+    /// The operation number of guest-protocol.md §7.1.
+    public static let number = 15
+    /// The package whose tasks should finish.
+    public let package: String
+
+    /// Creates the #026 finish-tasks operation. Force-stop remains outside this API.
+    public init(package: String) {
+        self.package = package
+    }
+
+    /// The name that errors report for the operation.
+    public var operationName: String { "StopApplication" }
+    /// The capability that the operation needs.
+    public var capability: GuestCapability { .launch }
+    /// The time the agent has to answer.
+    public var timeout: Duration { .seconds(5) }
+
+    /// The request that carries the operation.
+    public func request() -> GPRequest.OneOf_Op {
+        var stop = GPStopApplication()
+        stop.package = package
+        stop.mode = .finishTasks
+        return .stopApplication(stop)
+    }
+
+    /// Decodes the agent's answer into the result of the operation.
+    public static func decode(_ result: GPResponse.OneOf_Result) -> GPEmpty? {
+        if case .stopApplication(let empty) = result { return empty }
+        return nil
+    }
+}
+
 /// `FocusDisplay`: moves the focus to the top task of a display (guest-protocol.md §7.1 #18).
 public struct GuestFocusDisplay: GuestOperation {
     /// The decoded result of the operation.

@@ -12,6 +12,8 @@ import io.apkrun.guest.protocol.v1.Request
 import io.apkrun.guest.protocol.v1.Response
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.Snapshot
+import io.apkrun.guest.protocol.v1.StopApplication
+import io.apkrun.guest.protocol.v1.StopMode
 import io.apkrun.guest.runtime.ServiceMethodMissing
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -32,6 +34,7 @@ private class FakeOperations : AgentOperations {
     val maximumRunning = AtomicInteger(0)
     var delayMillis = 0L
     var failure: RuntimeException? = null
+    var stoppedRequest: StopApplication? = null
     /**
      * Released by the first operation that starts. Tests that need an op to be in flight wait on
      * it.
@@ -60,6 +63,11 @@ private class FakeOperations : AgentOperations {
             .setTaskId(7)
             .setOutcome(LaunchOutcome.LAUNCH_OUTCOME_STARTED)
             .build()
+    }
+
+    override suspend fun stopApplication(request: StopApplication) {
+        enter()
+        stoppedRequest = request
     }
 
     override fun focusDisplay(displayId: Int) = enter()
@@ -94,6 +102,11 @@ class DispatcherTest {
             )
             .build()
 
+    private fun stop(packageName: String, mode: StopMode): Request =
+        Request.newBuilder()
+            .setStopApplication(StopApplication.newBuilder().setPackage(packageName).setMode(mode))
+            .build()
+
     private fun dispatcher(operations: AgentOperations, defaultTimeout: Long = 5_000L) =
         Dispatcher(operations, uptimeMillis = { 1_000L }, defaultTimeoutMillis = defaultTimeout)
 
@@ -119,6 +132,18 @@ class DispatcherTest {
         val response = dispatcher(FakeOperations()).dispatch(1, launch(0), enabled)
         assertEquals(GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED, response.getError().getCode())
         assertTrue(response.getError().getMessage().contains("launch.v1"))
+    }
+
+    @Test
+    fun stopApplicationUsesLaunchCapabilityAndReturnsItsResult() = runBlocking {
+        val operations = FakeOperations()
+        val request = stop("io.apkrun.fixture.hellotext", StopMode.STOP_MODE_FINISH_TASKS)
+
+        val response = dispatcher(operations).dispatch(1, request, setOf(GuestCapability.LAUNCH))
+
+        assertTrue(response.hasStopApplication())
+        assertEquals("io.apkrun.fixture.hellotext", operations.stoppedRequest?.getPackage())
+        assertEquals(StopMode.STOP_MODE_FINISH_TASKS, operations.stoppedRequest?.getMode())
     }
 
     @Test

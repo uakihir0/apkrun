@@ -5,6 +5,7 @@ import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.Snapshot
+import io.apkrun.guest.protocol.v1.StopApplication
 import io.apkrun.guest.protocol.v1.SystemState
 import io.apkrun.guest.runtime.HiddenApi
 
@@ -33,6 +34,8 @@ class DeviceOperations(
 
     override fun launchApplication(request: LaunchApplication): LaunchResult =
         launch.launch(request)
+
+    override suspend fun stopApplication(request: StopApplication) = launch.stop(request)
 
     override fun focusDisplay(displayId: Int) = tasks.focus(displayId)
 

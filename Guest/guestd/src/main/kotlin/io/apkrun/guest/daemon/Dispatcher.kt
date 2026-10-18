@@ -145,6 +145,10 @@ class Dispatcher(
                     }
                 Response.newBuilder().setLaunchApplication(result).build()
             }
+            Request.OpCase.STOP_APPLICATION -> {
+                operations.stopApplication(request.stopApplication)
+                Response.newBuilder().setStopApplication(Empty.getDefaultInstance()).build()
+            }
             Request.OpCase.FOCUS_DISPLAY -> {
                 val displayId = request.focusDisplay.displayId
                 withContext(executorFor(displayId)) { operations.focusDisplay(displayId) }
@@ -181,7 +185,8 @@ class Dispatcher(
                 Request.OpCase.PING,
                 Request.OpCase.GET_SNAPSHOT -> GuestCapability.CORE
                 Request.OpCase.SET_DISPLAY_POLICY -> GuestCapability.DISPLAY
-                Request.OpCase.LAUNCH_APPLICATION -> GuestCapability.LAUNCH
+                Request.OpCase.LAUNCH_APPLICATION,
+                Request.OpCase.STOP_APPLICATION -> GuestCapability.LAUNCH
                 Request.OpCase.FOCUS_DISPLAY -> GuestCapability.INPUT
                 else -> null
             }

@@ -161,6 +161,7 @@ object SystemServices {
                     ),
                     MethodRequirement("setFocusedTask", listOf(listOf("int"))),
                     MethodRequirement("moveRootTaskToDisplay", listOf(listOf("int", "int"))),
+                    MethodRequirement("removeTask", listOf(listOf("int"))),
                 ),
         )
 

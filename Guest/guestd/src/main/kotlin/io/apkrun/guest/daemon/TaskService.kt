@@ -8,6 +8,11 @@ import io.apkrun.guest.protocol.v1.TaskVanished
 import io.apkrun.guest.runtime.AgentLog
 import io.apkrun.guest.runtime.HiddenApi
 import io.apkrun.guest.runtime.SystemServices
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** The most tasks that one `getTasks` call asks for. */
 private const val MAXIMUM_TASKS = 100
@@ -24,8 +29,17 @@ class TaskService(
     private val events: EventBus,
     /** Runs a refresh on the `apkrun-callbacks` thread (see [DisplayService]). */
     private val callbacks: (() -> Unit) -> Unit,
+    /** Task inventory adapter, replaceable by a fake in JVM tests. */
+    private val readTaskList: (() -> List<TaskInfo>)? = null,
+    /** Task removal adapter, replaceable by a fake in JVM tests. */
+    private val removeTaskById: (Int) -> Unit = { taskId ->
+        SystemServices.activityTask.call("removeTask", taskId)
+    },
+    private val nowMillis: () -> Long = { System.nanoTime() / NANOS_PER_MILLI },
+    private val waitMillis: suspend (Long) -> Unit = { delay(it) },
 ) {
     private val known = LinkedHashMap<Int, TaskInfo>()
+    private val removalLock = Mutex()
 
     /**
      * Registers the task listener and reads the first list. A missing listener only fails task
@@ -58,7 +72,7 @@ class TaskService(
     }
 
     /** The tasks that Android reports now, most recent first. */
-    fun list(): List<TaskInfo> = readTasks()
+    fun list(): List<TaskInfo> = readCurrentTasks()
 
     /** The display of the most recent visible task, or display 0 when no task is visible. */
     fun focusedDisplayId(): Int = list().firstOrNull { it.getVisible() }?.getDisplayId() ?: 0
@@ -81,12 +95,49 @@ class TaskService(
     }
 
     /**
+     * Removes every task for [packageName] and waits until a refresh observes their disappearance.
+     * Each refresh publishes the existing `TaskVanished` events before this method returns, so the
+     * dispatcher sends them before the `StopApplication` response (guest-protocol.md §6, §7.1).
+     */
+    suspend fun removeAllForPackage(packageName: String) {
+        removalLock.withLock {
+            val context = currentCoroutineContext()
+            val deadline = nowMillis() + TASK_REMOVAL_TIMEOUT_MILLIS
+            context.ensureActive()
+            val packageTasks = refresh().filter { it.getPackage() == packageName }
+            context.ensureActive()
+            packageTasks.forEach {
+                context.ensureActive()
+                removeTaskById(it.getTaskId())
+            }
+
+            while (true) {
+                context.ensureActive()
+                val remainingTasks = refresh().filter { it.getPackage() == packageName }
+                context.ensureActive()
+                if (remainingTasks.isEmpty()) {
+                    return
+                }
+                val remainingMillis = deadline - nowMillis()
+                if (remainingMillis <= 0) {
+                    throw GuestFailure(
+                        GuestErrorCode.GUEST_ERROR_CODE_TIMEOUT,
+                        "the package tasks did not disappear after removal",
+                        mapOf("package" to packageName),
+                    )
+                }
+                waitMillis(minOf(TASK_POLL_MILLIS, remainingMillis))
+            }
+        }
+    }
+
+    /**
      * Publishes the differences between the last list of tasks and the list that Android reports
      * now. It returns the list that it read, so that a caller answers with the tasks it published.
      */
     @Synchronized
     fun refresh(): List<TaskInfo> {
-        val current = readTasks().associateBy { it.getTaskId() }
+        val current = readCurrentTasks().associateBy { it.getTaskId() }
         for ((id, task) in current) {
             val before = known[id]
             if (before == null) {
@@ -121,13 +172,15 @@ class TaskService(
         return current.values.toList()
     }
 
-    private fun readTasks(): List<TaskInfo> {
+    private fun readTasksFromSystem(): List<TaskInfo> {
         val raw =
             SystemServices.activityTask.call("getTasks", *taskListArguments()) ?: return emptyList()
         val items =
             (raw as? List<*>) ?: (HiddenApi.read(raw, "list") as? List<*>) ?: return emptyList()
         return items.filterNotNull().map { toProto(it) }
     }
+
+    private fun readCurrentTasks(): List<TaskInfo> = readTaskList?.invoke() ?: readTasksFromSystem()
 
     /**
      * The arguments of `getTasks` for the variant of this image. The 4-parameter form takes the
@@ -157,5 +210,14 @@ class TaskService(
             .setWindowingMode(windowingMode ?: 0)
             .setVisible(HiddenApi.read(info, "isVisible") as? Boolean ?: false)
             .build()
+    }
+
+    private companion object {
+        /**
+         * Leaves time for the host to receive the response within the five-second default deadline.
+         */
+        const val TASK_REMOVAL_TIMEOUT_MILLIS = 4_000L
+        const val TASK_POLL_MILLIS = 100L
+        const val NANOS_PER_MILLI = 1_000_000L
     }
 }

@@ -33,16 +33,20 @@
         let display = DeveloperDisplay(pixelWidth: 1024, pixelHeight: 768)
         /// Stop requests for the boot: Ctrl-C, or the window closing.
         let stops = AsyncStream.makeStream(of: Void.self)
+        /// App-session close requests, separate from Ctrl-C so dev launch can finish tasks before VM shutdown.
+        let appCloseRequests = AsyncStream.makeStream(of: Void.self)
         /// The development input route of the boot. The boot binds it to display 0 (#024).
         let inputRoute: DevInputRoute
         /// The window's pointer events, sent to `inputRoute`.
         let inputSink: EmbeddedInputSink
         /// Whether the statistics go to standard error as well as to the window title.
         let showStatistics: Bool
+        private let stopsAppOnClose: Bool
         private var pump: DisplayPump?
 
-        private init(showStatistics: Bool) {
+        private init(showStatistics: Bool, stopsAppOnClose: Bool) {
             self.showStatistics = showStatistics
+            self.stopsAppOnClose = stopsAppOnClose
             let route = DevInputRoute()
             inputRoute = route
             inputSink = EmbeddedInputSink(route: route)
@@ -51,8 +55,12 @@
         /// Runs `command` on a detached task, and the window's event loop on this thread, until the command ends.
         ///
         /// Call it on the main thread, from a context that is not an actor job: nothing is awaited before the loop starts.
-        static func runEventLoop(showStatistics: Bool, command: @escaping @Sendable () async -> Void) {
-            let session = DisplayWindowSession(showStatistics: showStatistics)
+        static func runEventLoop(
+            showStatistics: Bool,
+            stopsAppOnClose: Bool = false,
+            command: @escaping @Sendable () async -> Void
+        ) {
+            let session = DisplayWindowSession(showStatistics: showStatistics, stopsAppOnClose: stopsAppOnClose)
             registryLock.withLock {
                 registered = session
             }
@@ -69,8 +77,13 @@
         /// Starts the pump that makes the window when the display is attached. It runs on the main actor.
         @MainActor
         private func startPump() {
-            let pump = DisplayPump(display: display, showStatistics: showStatistics, inputSink: inputSink) { [stops] in
-                stops.continuation.yield()
+            let pump = DisplayPump(display: display, showStatistics: showStatistics, inputSink: inputSink) {
+                [stops, appCloseRequests, stopsAppOnClose] in
+                if stopsAppOnClose {
+                    appCloseRequests.continuation.yield(())
+                } else {
+                    stops.continuation.yield(())
+                }
             }
             pump.start()
             self.pump = pump

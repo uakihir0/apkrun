@@ -43,6 +43,8 @@ public struct DevBootOptions: Sendable {
     public var guestAgentDirectory: URL?
     /// A package to launch on display 0 once Android is ready (`apkrun dev launch`, #072). Nil launches nothing.
     public var launchPackage: String?
+    /// An optional APK to install before launching `launchPackage` (#026).
+    public var launchAPKURL: URL?
     /// The window's connection to display 0 (`apkrun dev boot --window`, #023). Nil shows nothing. It needs `drmVirgl`.
     public var developerDisplay: DeveloperDisplay?
     /// The development input route of the window (#024). Nil binds no input. It is bound once the Guest Agent is ready,
@@ -59,6 +61,7 @@ public struct DevBootOptions: Sendable {
         stopWhenReady: Bool = false,
         guestAgentDirectory: URL? = nil,
         launchPackage: String? = nil,
+        launchAPKURL: URL? = nil,
         developerDisplay: DeveloperDisplay? = nil,
         inputRoute: DevInputRoute? = nil
     ) {
@@ -70,6 +73,7 @@ public struct DevBootOptions: Sendable {
         self.stopWhenReady = stopWhenReady
         self.guestAgentDirectory = guestAgentDirectory
         self.launchPackage = launchPackage
+        self.launchAPKURL = launchAPKURL
         self.developerDisplay = developerDisplay
         self.inputRoute = inputRoute
     }
@@ -105,12 +109,17 @@ public struct DevBoot: Sendable {
         options: DevBootOptions,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         stopRequests: AsyncStream<Void>,
+        appCloseRequests: AsyncStream<Void>? = nil,
         onEvent: @escaping @Sendable (DevBootEvent) -> Void
     ) async throws {
         // Every log line of the boot carries one operation ID (AGENTS §8).
         try await OperationContext.withNew {
             try await execute(
-                options: options, environment: environment, stopRequests: stopRequests, onEvent: onEvent
+                options: options,
+                environment: environment,
+                stopRequests: stopRequests,
+                appCloseRequests: appCloseRequests,
+                onEvent: onEvent
             )
         }
     }
@@ -119,6 +128,7 @@ public struct DevBoot: Sendable {
         options: DevBootOptions,
         environment: [String: String],
         stopRequests: AsyncStream<Void>,
+        appCloseRequests: AsyncStream<Void>?,
         onEvent: @escaping @Sendable (DevBootEvent) -> Void
     ) async throws {
         let paths = APKRunPaths(allowingHomeOverride: true, environment: environment)
@@ -165,6 +175,12 @@ public struct DevBoot: Sendable {
             guestAgentBundle: guestAgentBundle,
             developmentDisplay: options.developerDisplay?.core
         )
+        var embeddedSession: EmbeddedRuntimeService?
+        if let package = options.launchPackage, options.developerDisplay != nil {
+            let service = EmbeddedRuntimeService(logSink: diagnostics.logSink)
+            _ = try await service.requestSession(packageID: package)
+            embeddedSession = service
+        }
         // The window's events end with the boot, so it can close after Android has stopped.
         defer {
             options.developerDisplay?.finish()
@@ -200,42 +216,125 @@ public struct DevBoot: Sendable {
             logcat.close()
         }
 
+        let stopSignal = DevBootStopSignal()
+        await stopSignal.attachStopHandler { await supervisor.stop() }
+        let stopRequestMonitor = Self.observeStopRequests(
+            stopRequests: stopRequests,
+            appCloseRequests: appCloseRequests,
+            signal: stopSignal
+        )
+        var taskEventMonitor: Task<Void, Never>?
+        defer {
+            stopRequestMonitor.cancel()
+            taskEventMonitor?.cancel()
+        }
+        var stopCause: StopCause = .signal
         let started = ContinuousClock.now
-        try await supervisor.ensureReady(.cli)
-        onEvent(.message("Android is ready after \(ContinuousClock.now - started)"))
-        // The window's input reaches display 0 through the Guest Agent (#024). It is bound before the launch.
-        var inputBinding: Task<Void, Never>?
-        if let route = options.inputRoute {
-            if let agent = await supervisor.developmentGuestAgent {
-                let binding = DevInputBinding(route: route, agent: agent, logSink: diagnostics.logSink)
-                inputBinding = Task { await binding.run(report: onEvent) }
-            } else {
-                onEvent(.catalogWarning(RuntimeFailure.inputNotBound(cause: nil)))
+        if await stopSignal.current() == nil {
+            do {
+                try await supervisor.ensureReady(.cli)
+                if await stopSignal.current() == nil {
+                    onEvent(.message("Android is ready after \(ContinuousClock.now - started)"))
+                }
+            } catch {
+                guard let requestedStop = await stopSignal.current() else {
+                    throw error
+                }
+                stopCause = requestedStop
             }
         }
+        // The window's input reaches display 0 through the Guest Agent (#024). It is bound before the launch.
+        var inputBinding: Task<Void, Never>?
         do {
-            if let package = options.launchPackage {
+            if let requestedStop = await stopSignal.current() {
+                stopCause = requestedStop
+            } else if let embeddedSession {
+                _ = try await embeddedSession.displayReady()
+            }
+            if await stopSignal.current() == nil, let route = options.inputRoute {
+                if let agent = await supervisor.developmentGuestAgent {
+                    let binding = DevInputBinding(route: route, agent: agent, logSink: diagnostics.logSink)
+                    inputBinding = Task { await binding.run(report: onEvent) }
+                } else {
+                    onEvent(.catalogWarning(RuntimeFailure.inputNotBound(cause: nil)))
+                }
+            }
+            if let package = options.launchPackage, await stopSignal.current() == nil {
                 guard let agent = await supervisor.developmentGuestAgent else {
                     throw GuestAgentFailure.startFailed
                 }
-                let report = try await agent.launch(package: package, displayID: 0)
-                onEvent(
-                    .message(
-                        "launched \(package) on display 0: task \(report.taskID) \(report.component) (\(report.outcome))"
+                if let apkURL = options.launchAPKURL {
+                    try await agent.installAPK(apkURL, package: package)
+                }
+                var mayLaunch = true
+                if let embeddedSession {
+                    _ = try await embeddedSession.beginLaunch()
+                    taskEventMonitor = Task {
+                        for await event in agent.taskEvents {
+                            guard let snapshot = await embeddedSession.taskEvent(event) else {
+                                continue
+                            }
+                            if snapshot.state == .ended(.appExited) {
+                                await stopSignal.signal(.appExited)
+                                return
+                            }
+                        }
+                    }
+                    mayLaunch = await stopSignal.beginLaunch()
+                }
+                if mayLaunch, await stopSignal.current() == nil {
+                    let frameCountBeforeLaunch = options.developerDisplay?.windowFrameCommitCount ?? 0
+                    let report = try await agent.launch(package: package, displayID: 0)
+                    if let embeddedSession {
+                        let snapshot = try await embeddedSession.launched(taskID: report.taskID)
+                        if snapshot.state == .ended(.appExited) {
+                            await stopSignal.signal(.appExited)
+                        }
+                    }
+                    onEvent(
+                        .message(
+                            "launched \(package) on display 0: task \(report.taskID) \(report.component) (\(report.outcome))"
+                        )
                     )
-                )
-            }
-            if !options.stopWhenReady {
-                onEvent(.message("press Ctrl-C to stop Android"))
-                for await _ in stopRequests {
-                    break
+                    if let display = options.developerDisplay {
+                        switch await Self.waitForFrame(
+                            after: frameCountBeforeLaunch,
+                            on: display,
+                            stopSignal: stopSignal
+                        ) {
+                        case .presented:
+                            if let embeddedSession {
+                                _ = try await embeddedSession.firstFramePresented()
+                            }
+                        case .timedOut:
+                            if embeddedSession != nil {
+                                onEvent(
+                                    .warning("Android launched the app, but display 0 has not produced a new frame yet")
+                                )
+                            }
+                        case .stopped(let cause):
+                            stopCause = cause
+                        }
+                    }
                 }
             }
+            if let requestedStop = await stopSignal.current() {
+                stopCause = requestedStop
+            } else if !options.stopWhenReady {
+                onEvent(.message("press Ctrl-C to stop Android"))
+                stopCause = await stopSignal.wait()
+            }
         } catch {
-            // A failed launch still stops Android, so the VM and the agent do not run on after the command has failed.
+            if let requestedStop = await stopSignal.current() {
+                stopCause = requestedStop
+            } else {
+                // A failed launch still stops Android, so the VM and the agent do not run on after the command fails.
+                _ = try? await embeddedSession?.fail(.runtimeFailed)
+                await endInput(inputBinding, route: options.inputRoute)
+                await stopSignal.stopRuntime()
+                throw error
+            }
             await endInput(inputBinding, route: options.inputRoute)
-            await supervisor.stop()
-            throw error
         }
         // The counters of the route are read before the route is unbound, which discards its router (input.md §11).
         if let route = options.inputRoute {
@@ -246,7 +345,88 @@ public struct DevBoot: Sendable {
         }
         onEvent(.message("stopping Android"))
         await endInput(inputBinding, route: options.inputRoute)
-        await supervisor.stop()
+        if stopCause == .appWindowClosed,
+            let package = options.launchPackage,
+            let embeddedSession,
+            let agent = await supervisor.developmentGuestAgent
+        {
+            _ = try? await embeddedSession.windowClosed()
+            do {
+                if try await agent.stopApplication(package: package) {
+                    _ = await embeddedSession.taskVanished()
+                    onEvent(.message("finished Android tasks for \(package)"))
+                } else {
+                    onEvent(.warning("Android still reports tasks for \(package) after the close request"))
+                }
+            } catch {
+                onEvent(.warning("could not finish Android tasks for \(package): \(error.qualifiedCode)"))
+            }
+        }
+        await stopSignal.stopRuntime()
+        _ = try? await embeddedSession?.runtimeStopped()
+    }
+
+    enum StopCause: Sendable, Equatable {
+        case signal
+        case appWindowClosed
+        case appExited
+    }
+
+    enum FrameWaitResult: Sendable, Equatable {
+        case presented
+        case timedOut
+        case stopped(StopCause)
+    }
+
+    static func observeStopRequests(
+        stopRequests: AsyncStream<Void>,
+        appCloseRequests: AsyncStream<Void>?,
+        signal: DevBootStopSignal
+    ) -> Task<Void, Never> {
+        Task {
+            await withTaskGroup(of: StopCause.self) { group in
+                group.addTask {
+                    for await _ in stopRequests {
+                        return .signal
+                    }
+                    return .signal
+                }
+                if let appCloseRequests {
+                    group.addTask {
+                        for await _ in appCloseRequests {
+                            return .appWindowClosed
+                        }
+                        return .signal
+                    }
+                }
+                let cause = await group.next() ?? .signal
+                await signal.signal(cause)
+                group.cancelAll()
+            }
+        }
+    }
+
+    static func waitForFrame(
+        after sequence: UInt64,
+        on display: DeveloperDisplay,
+        stopSignal: DevBootStopSignal,
+        timeout: Duration = .seconds(15),
+        pollInterval: Duration = .milliseconds(50)
+    ) async -> FrameWaitResult {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if let cause = await stopSignal.current() {
+                return .stopped(cause)
+            }
+            if display.windowFrameCommitCount > sequence {
+                return .presented
+            }
+            try? await Task.sleep(for: pollInterval)
+        }
+        if let cause = await stopSignal.current() {
+            return .stopped(cause)
+        }
+        return .timedOut
     }
 
     /// Stops the input binding, and unbinds the route. The unbinding sends `cancelAll` while the agent still runs, so
@@ -265,6 +445,76 @@ public struct DevBoot: Sendable {
         case .stopping: "stopping"
         case .failed(let failure): "failed(\(failure.qualifiedCode))"
         }
+    }
+}
+
+actor DevBootStopSignal {
+    private var cause: DevBoot.StopCause?
+    private var waiter: CheckedContinuation<DevBoot.StopCause, Never>?
+    private var applicationLaunchStarted = false
+    private var stopHandler: (@Sendable () async -> Void)?
+    private var stopTask: Task<Void, Never>?
+
+    func attachStopHandler(_ handler: @escaping @Sendable () async -> Void) {
+        stopHandler = handler
+        if let cause, shouldStopRuntimeImmediately(for: cause) {
+            scheduleStop(using: handler)
+        }
+    }
+
+    func beginLaunch() -> Bool {
+        guard cause == nil else {
+            return false
+        }
+        applicationLaunchStarted = true
+        return true
+    }
+
+    func signal(_ cause: DevBoot.StopCause) {
+        guard self.cause == nil else {
+            return
+        }
+        self.cause = cause
+        waiter?.resume(returning: cause)
+        waiter = nil
+        if shouldStopRuntimeImmediately(for: cause), let stopHandler {
+            scheduleStop(using: stopHandler)
+        }
+    }
+
+    func current() -> DevBoot.StopCause? {
+        cause
+    }
+
+    func wait() async -> DevBoot.StopCause {
+        if let cause {
+            return cause
+        }
+        return await withCheckedContinuation { waiter = $0 }
+    }
+
+    func stopRuntime() async {
+        guard let stopHandler else {
+            return
+        }
+        scheduleStop(using: stopHandler)
+        await stopTask?.value
+    }
+
+    private func shouldStopRuntimeImmediately(for cause: DevBoot.StopCause) -> Bool {
+        switch cause {
+        case .appWindowClosed:
+            !applicationLaunchStarted
+        case .signal, .appExited:
+            true
+        }
+    }
+
+    private func scheduleStop(using handler: @escaping @Sendable () async -> Void) {
+        guard stopTask == nil else {
+            return
+        }
+        stopTask = Task { await handler() }
     }
 }
 

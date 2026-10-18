@@ -40,6 +40,8 @@ public final class DeveloperDisplay: @unchecked Sendable {
 
     /// The RuntimeCore display that the boot attaches to its GPU device.
     let core: DevelopmentDisplay
+    private let windowFrameLock = NSLock()
+    private var windowFrameCommitCountValue: UInt64 = 0
 
     /// Creates the display for `pixelWidth` x `pixelHeight` pixels. The boot attaches it when it starts.
     public init(pixelWidth: Int, pixelHeight: Int) {
@@ -66,8 +68,17 @@ public final class DeveloperDisplay: @unchecked Sendable {
         }
     }
 
+    /// The number of frames committed by the native window (display-and-windowing.md §5.2).
+    ///
+    /// This advances from the window's Core Animation transaction completion callback, unlike
+    /// `statistics.framesPresented`, which counts completed GPU blits.
+    public var windowFrameCommitCount: UInt64 {
+        windowFrameLock.withLock { windowFrameCommitCountValue }
+    }
+
     /// The window has displayed frame `sequence` (display-and-windowing.md §5.2).
     public func frameDisplayed(sequence: UInt64) {
+        windowFrameLock.withLock { windowFrameCommitCountValue &+= 1 }
         core.frameDisplayed(sequence: sequence)
     }
 

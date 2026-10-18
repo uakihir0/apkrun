@@ -3,6 +3,10 @@ package io.apkrun.guest.daemon
 import android.os.SystemClock
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
+import io.apkrun.guest.protocol.v1.ListPackages
+import io.apkrun.guest.protocol.v1.PackageInfo
+import io.apkrun.guest.protocol.v1.PackageList
+import io.apkrun.guest.protocol.v1.QueryPackage
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
@@ -18,6 +22,7 @@ class DeviceOperations(
     private val displays: DisplayService,
     private val tasks: TaskService,
     private val launch: LaunchService,
+    private val packages: PackageService,
 ) : AgentOperations {
     override fun snapshot(): Snapshot =
         Snapshot.newBuilder()
@@ -38,6 +43,10 @@ class DeviceOperations(
     override suspend fun stopApplication(request: StopApplication) = launch.stop(request)
 
     override fun focusDisplay(displayId: Int) = tasks.focus(displayId)
+
+    override fun queryPackage(request: QueryPackage): PackageInfo = packages.query(request)
+
+    override fun listPackages(request: ListPackages): PackageList = packages.list(request)
 
     private fun systemState(): SystemState =
         SystemState.newBuilder()

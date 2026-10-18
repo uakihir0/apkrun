@@ -2,6 +2,10 @@ package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
+import io.apkrun.guest.protocol.v1.ListPackages
+import io.apkrun.guest.protocol.v1.PackageInfo
+import io.apkrun.guest.protocol.v1.PackageList
+import io.apkrun.guest.protocol.v1.QueryPackage
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
@@ -26,4 +30,10 @@ interface AgentOperations {
 
     /** Moves the focus to the top task of a display (input.v1). */
     fun focusDisplay(displayId: Int)
+
+    /** Returns package metadata from Android's PackageManager (packages.v1). */
+    fun queryPackage(request: QueryPackage): PackageInfo
+
+    /** Lists packages from Android's PackageManager (packages.v1). */
+    fun listPackages(request: ListPackages): PackageList
 }

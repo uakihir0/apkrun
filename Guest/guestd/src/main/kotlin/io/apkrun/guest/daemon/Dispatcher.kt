@@ -149,6 +149,14 @@ class Dispatcher(
                 operations.stopApplication(request.stopApplication)
                 Response.newBuilder().setStopApplication(Empty.getDefaultInstance()).build()
             }
+            Request.OpCase.QUERY_PACKAGE ->
+                Response.newBuilder()
+                    .setQueryPackage(operations.queryPackage(request.queryPackage))
+                    .build()
+            Request.OpCase.LIST_PACKAGES ->
+                Response.newBuilder()
+                    .setListPackages(operations.listPackages(request.listPackages))
+                    .build()
             Request.OpCase.FOCUS_DISPLAY -> {
                 val displayId = request.focusDisplay.displayId
                 withContext(executorFor(displayId)) { operations.focusDisplay(displayId) }
@@ -188,6 +196,8 @@ class Dispatcher(
                 Request.OpCase.LAUNCH_APPLICATION,
                 Request.OpCase.STOP_APPLICATION -> GuestCapability.LAUNCH
                 Request.OpCase.FOCUS_DISPLAY -> GuestCapability.INPUT
+                Request.OpCase.QUERY_PACKAGE,
+                Request.OpCase.LIST_PACKAGES -> GuestCapability.PACKAGES
                 else -> null
             }
 

@@ -7,7 +7,13 @@ import io.apkrun.guest.protocol.v1.ImePolicy
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchOutcome
 import io.apkrun.guest.protocol.v1.LaunchResult
+import io.apkrun.guest.protocol.v1.ListPackages
+import io.apkrun.guest.protocol.v1.PackageFilter
+import io.apkrun.guest.protocol.v1.PackageInfo
+import io.apkrun.guest.protocol.v1.PackageList
+import io.apkrun.guest.protocol.v1.PackageSummary
 import io.apkrun.guest.protocol.v1.Ping
+import io.apkrun.guest.protocol.v1.QueryPackage
 import io.apkrun.guest.protocol.v1.Request
 import io.apkrun.guest.protocol.v1.Response
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
@@ -35,6 +41,8 @@ private class FakeOperations : AgentOperations {
     var delayMillis = 0L
     var failure: RuntimeException? = null
     var stoppedRequest: StopApplication? = null
+    var queriedPackage: QueryPackage? = null
+    var listedPackages: ListPackages? = null
     /**
      * Released by the first operation that starts. Tests that need an op to be in flight wait on
      * it.
@@ -71,6 +79,20 @@ private class FakeOperations : AgentOperations {
     }
 
     override fun focusDisplay(displayId: Int) = enter()
+
+    override fun queryPackage(request: QueryPackage): PackageInfo {
+        enter()
+        queriedPackage = request
+        return PackageInfo.newBuilder().setPackage(request.getPackage()).build()
+    }
+
+    override fun listPackages(request: ListPackages): PackageList {
+        enter()
+        listedPackages = request
+        return PackageList.newBuilder()
+            .addPackages(PackageSummary.newBuilder().setPackage("io.apkrun.fixture.hellotext"))
+            .build()
+    }
 }
 
 class DispatcherTest {
@@ -144,6 +166,41 @@ class DispatcherTest {
         assertTrue(response.hasStopApplication())
         assertEquals("io.apkrun.fixture.hellotext", operations.stoppedRequest?.getPackage())
         assertEquals(StopMode.STOP_MODE_FINISH_TASKS, operations.stoppedRequest?.getMode())
+    }
+
+    @Test
+    fun queryPackageUsesPackagesCapabilityAndReturnsPackageMetadata() = runBlocking {
+        val operations = FakeOperations()
+        val request =
+            Request.newBuilder()
+                .setQueryPackage(QueryPackage.newBuilder().setPackage("io.apkrun.fixture.app"))
+                .build()
+
+        val response = dispatcher(operations).dispatch(1, request, setOf(GuestCapability.PACKAGES))
+
+        assertTrue(response.hasQueryPackage())
+        assertEquals("io.apkrun.fixture.app", response.getQueryPackage().getPackage())
+        assertEquals("io.apkrun.fixture.app", operations.queriedPackage?.getPackage())
+    }
+
+    @Test
+    fun listPackagesUsesPackagesCapabilityAndReturnsItsPackageList() = runBlocking {
+        val operations = FakeOperations()
+        val request =
+            Request.newBuilder()
+                .setListPackages(
+                    ListPackages.newBuilder().setFilter(PackageFilter.PACKAGE_FILTER_ALL)
+                )
+                .build()
+
+        val response = dispatcher(operations).dispatch(1, request, setOf(GuestCapability.PACKAGES))
+
+        assertTrue(response.hasListPackages())
+        assertEquals(1, response.getListPackages().getPackagesCount())
+        assertEquals(
+            PackageFilter.PACKAGE_FILTER_ALL,
+            operations.listedPackages?.getFilter(),
+        )
     }
 
     @Test

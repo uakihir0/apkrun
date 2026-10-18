@@ -49,7 +49,7 @@ class LaunchService(
     /** Launches the package of [request] on its display, and returns the task that it has there. */
     fun launch(request: LaunchApplication): LaunchResult {
         val pkg = request.getPackage()
-        if (!isPackageName(pkg)) {
+        if (!PackageName.isValid(pkg)) {
             throw GuestFailure(
                 GuestErrorCode.GUEST_ERROR_CODE_INVALID_ARGUMENT,
                 "the package name is not valid",
@@ -97,7 +97,7 @@ class LaunchService(
      */
     suspend fun stop(request: StopApplication) {
         val pkg = request.getPackage()
-        if (!isPackageName(pkg)) {
+        if (!PackageName.isValid(pkg)) {
             throw GuestFailure(
                 GuestErrorCode.GUEST_ERROR_CODE_INVALID_ARGUMENT,
                 "the package name is not valid",
@@ -254,15 +254,5 @@ class LaunchService(
             }
             Thread.sleep(TASK_POLL_MILLIS)
         }
-    }
-
-    private fun isPackageName(name: String): Boolean {
-        val parts = name.split('.')
-        return parts.size >= 2 &&
-            parts.all { part ->
-                part.isNotEmpty() &&
-                    part[0].isLetter() &&
-                    part.all { it.isLetterOrDigit() || it == '_' }
-            }
     }
 }

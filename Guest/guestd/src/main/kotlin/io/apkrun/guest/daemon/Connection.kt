@@ -259,6 +259,7 @@ class Connection(
                 GuestCapability.LAUNCH,
                 GuestCapability.INPUT,
                 GuestCapability.INPUT_ACK_TRACE,
+                GuestCapability.PACKAGES,
             )
     }
 }

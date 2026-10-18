@@ -20466,3 +20466,45 @@ remains unverified. No acceptance checkbox changes.
 **Risk.** A passing traced batch does not establish reliable uninstrumented
 click delivery or identify why the prior run persisted only 98 clicks. The
 direct-view path bypasses WindowServer and AppKit dispatch.
+
+## IR-1363: Recheck WindowServer permission in the hosted test process
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 (follow-up of #024) |
+| Affected documents | [M03](issues/M03-input-and-basic-runtime.md) #024 and #103; [issues/README.md](issues/README.md) #024; [build-system.md](../05-development/build-system.md) |
+
+**Choice.** Rerun the selected WindowServer test on this ordinary local Mac
+after the user indicated that Accessibility permission was likely enabled.
+Keep the existing `CGPreflightPostEventAccess()` guard and record the result
+from the actual hosted test process.
+
+**Reason.** Xcode launches `APKRunTestHost` to post the `CGEvent`s. A grant to
+the desktop app or another process does not establish that this host can post
+events. The host's preflight is the relevant runtime check, and bypassing it
+would invalidate the WindowServer test.
+
+**Verification (2026-10-18 UTC; macOS 27.0.1, arm64).** The
+`AndroidInputInteractive` configuration selected only
+`AndroidInputTests.testThreeConsecutiveHundredClickBatchesThroughWindowServer`
+with the configured Apple Development signing settings. Both Xcode
+repetitions were skipped: the first in 0.011 seconds and the second in 0.008
+seconds (aggregate test-case duration 0.0095 seconds), because
+`CGPreflightPostEventAccess()` returned false for
+`APKRunTestHost` (`io.apkrun.testhost`) at
+`/private/tmp/apkrun-103-derived/Build/Products/Debug/APKRunTestHost.app`.
+The result bundle is
+`/tmp/apkrun-103-interactive-20261018-r7.xcresult`. No guest image was
+installed and no VM was started. Xcode's overall `TEST SUCCEEDED` status
+reflects a successful test session with one skipped test; this is not a test
+pass.
+
+**Consequence.** The permission currently effective for this test host is
+false, regardless of a grant that may be enabled for another app. #103's
+WindowServer criterion and #024 box 3 remain open. No acceptance checkbox
+changes.
+
+**Risk.** The preflight establishes the host process's current event-posting
+access, but it does not identify which app the user may have enabled in
+System Settings. No permission prompt or settings change was made.

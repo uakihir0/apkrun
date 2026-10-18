@@ -37,9 +37,8 @@ final class AndroidADBTests: XCTestCase {
             let processes = try await adb.shell("ps -A")
             XCTAssertEqual(processes.status, 0)
             XCTAssertTrue(processes.output.contains("init"))
-            let packages = try await adb.shell("pm list packages")
-            XCTAssertEqual(packages.status, 0)
-            XCTAssertTrue(packages.output.contains("package:"))
+            let packages = try await adb.listPackages()
+            XCTAssertFalse(packages.isEmpty)
             let logcat = try await adb.logcatDump()
             XCTAssertFalse(logcat.isEmpty)
             let shellCount = await adb.shellInvocationCount

@@ -20416,3 +20416,53 @@ under review.
 **Risk.** The log records a failed host renderer API call and renderer
 callbacks, but does not identify the failing guest command stream or establish
 a renderer-wide health state.
+
+## IR-1362: Trace the second direct-view cadence batch
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 (follow-up of #024) |
+| Affected documents | [M03](issues/M03-input-and-basic-runtime.md) #024 and #103; [issues/README.md](issues/README.md) #024; [input.md](../02-design/input.md) §15; [test-strategy.md](test-strategy.md) §6.4; [build-system.md](../05-development/build-system.md) |
+
+**Choice.** Add an opt-in direct-view variant of the existing cross-layer
+click trace. It sends one untraced 100-click warm-up batch, then records the
+second 100-click batch through view receipts, translation, route sends, guest
+ACKs, HelloText touch dispatch, and click callbacks. Keep the existing
+WindowServer test and its permission preflight unchanged.
+
+**Reason.** IR-1360's direct-view cadence diagnostic stopped in batch 2 with
+98 persisted clicks despite the expected wire phases and zero reported host
+drop counters. The existing #103 trace can distinguish where observations
+stop, and placing it on batch 2 follows the observed sequence. Direct view
+allows this diagnosis on the ordinary Mac without weakening the WindowServer
+preflight. Per-event ACKs and the debug fixture listener perturb timing, so
+this experiment can localize a reproduced gap in this path but cannot confirm
+the uninstrumented cadence result.
+
+**Verification (2026-10-18 UTC; macOS 27.0.1 build 26A434, arm64; Android 37
+image `2026.10.0-cf16373615-arm64`).** The focused
+`AndroidInputTests.testOneHundredClickDiagnosticTraceJoinsHostGuestAndFixtureThroughDirectView`
+passed once in 41.731 seconds under `AndroidInputCadence`.
+`/tmp/apkrun-103-direct-trace-cadence-20261018.xcresult` records a persisted
+counter of 100 before tracing and 200 after it, a delta of 100. The captured
+second batch has 200 raw view receipts, 200 translated events, 200 routed
+events, and 200 ACKs with zero rejections, no missing sequences, and no
+discarded records. All 200 DOWN/UP touch events join to fixture touch
+dispatch; all 100 UP events join to unique click callbacks. The fixture
+reported 200 pressed transitions, 100 clicks, and no malformed records.
+There are no stage discrepancies in this run.
+
+**Adversarial review.** No actionable findings. The reviewer confirmed the
+exact 100-click warm-up, actual direct-view path in the attachment, unchanged
+WindowServer preflight, and the GitHub Actions opt-in guard.
+
+**Consequence.** This run did not reproduce the earlier batch-2 deficit, and
+its timing-perturbing instrumentation prevents it from explaining that
+observation. It is useful stage-coverage evidence for a successful direct-view
+batch only. #024 remains 6 of 8 with box 3 open; #103's WindowServer criterion
+remains unverified. No acceptance checkbox changes.
+
+**Risk.** A passing traced batch does not establish reliable uninstrumented
+click delivery or identify why the prior run persisted only 98 clicks. The
+direct-view path bypasses WindowServer and AppKit dispatch.

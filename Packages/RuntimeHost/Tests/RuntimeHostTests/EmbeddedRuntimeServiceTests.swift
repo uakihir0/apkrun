@@ -1,3 +1,4 @@
+import RuntimeAPI
 import RuntimeCore
 import Testing
 
@@ -101,6 +102,136 @@ func embeddedRuntimeServiceReconcilesAnUntrackedVanishWithTheLaunchReply() async
     #expect(launchReply.state == .ended(.appExited))
     #expect(launchReply.taskIDs.isEmpty)
     #expect(await service.currentSession() == launchReply)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceImplementsRuntimeLaunchAndTerminate() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent()
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let stopSignal = DevBootStopSignal()
+    let service = EmbeddedRuntimeService(developerDisplay: display, stopSignal: stopSignal)
+    await service.attachGuestAgent(guest)
+    let runtime: any RuntimeSessionService = service
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    let launchTask = Task {
+        try await runtime.launch(RuntimeLaunchRequest(packageID: package))
+    }
+    for _ in 0..<100 {
+        if await guest.launchedPackages.count == 1 {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await guest.launchedPackages == [package.rawValue])
+    display.frameDisplayed(sequence: 1)
+
+    let launched = try await launchTask.value
+    #expect(launched.packageID == package)
+    #expect(launched.state == .running)
+    let terminated = try await runtime.terminate(RuntimeTerminateRequest(packageID: package))
+    #expect(terminated.hadSession)
+    #expect(await service.currentSession()?.state == .ended(.userClosed))
+
+    let unmanaged = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellocompose"))
+    let stoppedWithoutSession = try await runtime.terminate(RuntimeTerminateRequest(packageID: unmanaged))
+    #expect(!stoppedWithoutSession.hadSession)
+    #expect(await guest.stoppedPackages == [package.rawValue, unmanaged.rawValue])
+    display.finish()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceRejectsLaunchWithoutAWindow() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent()
+    let service = EmbeddedRuntimeService()
+    await service.attachGuestAgent(guest)
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    await #expect(
+        throws: RuntimeWireError.runtime(
+            "windowUnavailable",
+            message: "APKRun couldn't open an Android app window.",
+            remediation: "Start the app from APKRun or use a window-backed runtime session."
+        )
+    ) {
+        try await service.launch(RuntimeLaunchRequest(packageID: package))
+    }
+
+    #expect(await guest.launchedPackages.isEmpty)
+    #expect(await service.currentSession() == nil)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceRejectsLaunchOfUninstalledPackage() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent(isInstalled: false)
+    let service = EmbeddedRuntimeService()
+    await service.attachGuestAgent(guest)
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    do {
+        _ = try await service.launch(RuntimeLaunchRequest(packageID: package))
+        Issue.record("Runtime launch must check Android package inventory.")
+    } catch {
+        #expect(error.code == "runtime.packageNotInstalled")
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceClosesASessionTerminatedBeforeLaunch() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent()
+    let service = EmbeddedRuntimeService()
+    await service.attachGuestAgent(guest)
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    _ = try await service.requestSession(packageID: package.rawValue)
+    let result = try await service.terminate(RuntimeTerminateRequest(packageID: package))
+
+    #expect(result.hadSession)
+    #expect(await service.currentSession()?.state == .ended(.userClosed))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceRestoresSessionWhenGuestCannotStopTasks() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent(stopResult: false)
+    let service = EmbeddedRuntimeService()
+    await service.attachGuestAgent(guest)
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    _ = try await service.requestSession(packageID: package.rawValue)
+    do {
+        _ = try await service.terminate(RuntimeTerminateRequest(packageID: package))
+        Issue.record("Termination must not succeed while Android still reports package tasks.")
+    } catch {
+        #expect(error.code == "runtime.guestAgentOperationFailed")
+    }
+
+    #expect(await service.currentSession()?.state == .waitingForRuntime)
+}
+
+private actor FakeEmbeddedSessionGuestAgent: EmbeddedSessionGuestAgent {
+    private let installed: Bool
+    private let stopResult: Bool
+    private(set) var launchedPackages: [String] = []
+    private(set) var stoppedPackages: [String] = []
+
+    init(isInstalled: Bool = true, stopResult: Bool = true) {
+        installed = isInstalled
+        self.stopResult = stopResult
+    }
+
+    func isInstalled(_ package: String) async throws(GuestAgentFailure) -> Bool {
+        installed
+    }
+
+    func launch(package: String, displayID: Int32) async throws(GuestAgentFailure) -> GuestLaunchReport {
+        launchedPackages.append(package)
+        return GuestLaunchReport(taskID: 23, component: "\(package)/.MainActivity", outcome: "started")
+    }
+
+    func stopApplication(package: String) async throws(GuestAgentFailure) -> Bool {
+        stoppedPackages.append(package)
+        return stopResult
+    }
 }
 
 @Test(.timeLimit(.minutes(1)))

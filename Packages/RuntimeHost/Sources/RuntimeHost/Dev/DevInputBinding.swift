@@ -36,7 +36,7 @@ struct DevInputBinding: Sendable {
                         boundToken = token
                         reportedFailure = false
                         report(.message("input is bound to display 0"))
-                        report(.message("adb shell commands so far: \(await agent.adbShellInvocationCount)"))
+                        report(.message("ADB shell invocations so far: \(await agent.adbShellInvocationCount)"))
                     } catch {
                         if !reportedFailure {
                             report(.catalogWarning(RuntimeFailure.inputNotBound(cause: error)))

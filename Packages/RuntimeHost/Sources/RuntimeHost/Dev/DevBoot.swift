@@ -1,6 +1,7 @@
 import DiagnosticsCore
 import Foundation
 import ImageCore
+import RuntimeAPI
 import RuntimeCore
 
 /// The GPU profile of `apkrun dev boot --gpu` (cli.md §5; runtime-api.md §15).
@@ -93,6 +94,34 @@ public enum DevBootEvent: Sendable {
     case catalogWarning(any APKRunError)
 }
 
+/// The already-booted development runtime made available to a short embedded operation.
+///
+/// Package CLI commands use this callback to run through the normal RuntimeHost and package-store
+/// path, then return so `DevBoot` can stop Android and release the instance lock.
+public struct DevelopmentRuntimeContext: Sendable {
+    /// The installed Android image used by this runtime.
+    public let image: InstalledImage
+    /// The per-user runtime state store.
+    public let instanceStore: InstanceStore
+    /// The supervisor that owns the active Android runtime.
+    public let supervisor: RuntimeSupervisor
+    /// The diagnostics context for this embedded run.
+    public let diagnostics: DiagnosticsContext
+
+    /// Creates the context passed to one embedded runtime operation.
+    public init(
+        image: InstalledImage,
+        instanceStore: InstanceStore,
+        supervisor: RuntimeSupervisor,
+        diagnostics: DiagnosticsContext
+    ) {
+        self.image = image
+        self.instanceStore = instanceStore
+        self.supervisor = supervisor
+        self.diagnostics = diagnostics
+    }
+}
+
 /// Boots the Android image of a development bundle inside the embedded CLI process.
 public struct DevBoot: Sendable {
     /// Creates the development boot runner.
@@ -110,6 +139,7 @@ public struct DevBoot: Sendable {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         stopRequests: AsyncStream<Void>,
         appCloseRequests: AsyncStream<Void>? = nil,
+        onRuntimeReady: (@Sendable (DevelopmentRuntimeContext) async throws -> Void)? = nil,
         onEvent: @escaping @Sendable (DevBootEvent) -> Void
     ) async throws {
         // Every log line of the boot carries one operation ID (AGENTS §8).
@@ -119,6 +149,7 @@ public struct DevBoot: Sendable {
                 environment: environment,
                 stopRequests: stopRequests,
                 appCloseRequests: appCloseRequests,
+                onRuntimeReady: onRuntimeReady,
                 onEvent: onEvent
             )
         }
@@ -129,6 +160,7 @@ public struct DevBoot: Sendable {
         environment: [String: String],
         stopRequests: AsyncStream<Void>,
         appCloseRequests: AsyncStream<Void>?,
+        onRuntimeReady: (@Sendable (DevelopmentRuntimeContext) async throws -> Void)?,
         onEvent: @escaping @Sendable (DevBootEvent) -> Void
     ) async throws {
         let paths = APKRunPaths(allowingHomeOverride: true, environment: environment)
@@ -175,9 +207,14 @@ public struct DevBoot: Sendable {
             guestAgentBundle: guestAgentBundle,
             developmentDisplay: options.developerDisplay?.core
         )
+        let stopSignal = DevBootStopSignal()
         var embeddedSession: EmbeddedRuntimeService?
-        if let package = options.launchPackage, options.developerDisplay != nil {
-            let service = EmbeddedRuntimeService(logSink: diagnostics.logSink)
+        if let package = options.launchPackage, let developerDisplay = options.developerDisplay {
+            let service = EmbeddedRuntimeService(
+                logSink: diagnostics.logSink,
+                developerDisplay: developerDisplay,
+                stopSignal: stopSignal
+            )
             _ = try await service.requestSession(packageID: package)
             embeddedSession = service
         }
@@ -216,7 +253,6 @@ public struct DevBoot: Sendable {
             logcat.close()
         }
 
-        let stopSignal = DevBootStopSignal()
         await stopSignal.attachStopHandler { await supervisor.stop() }
         let stopRequestMonitor = Self.observeStopRequests(
             stopRequests: stopRequests,
@@ -235,6 +271,16 @@ public struct DevBoot: Sendable {
                 try await supervisor.ensureReady(.cli)
                 if await stopSignal.current() == nil {
                     onEvent(.message("Android is ready after \(ContinuousClock.now - started)"))
+                    if let onRuntimeReady {
+                        try await onRuntimeReady(
+                            DevelopmentRuntimeContext(
+                                image: image,
+                                instanceStore: store,
+                                supervisor: supervisor,
+                                diagnostics: diagnostics
+                            )
+                        )
+                    }
                 }
             } catch {
                 guard let requestedStop = await stopSignal.current() else {
@@ -266,9 +312,8 @@ public struct DevBoot: Sendable {
                 if let apkURL = options.launchAPKURL {
                     try await agent.installAPK(apkURL, package: package)
                 }
-                var mayLaunch = true
                 if let embeddedSession {
-                    _ = try await embeddedSession.beginLaunch()
+                    await embeddedSession.attachGuestAgent(agent)
                     taskEventMonitor = Task {
                         for await event in agent.taskEvents {
                             guard let snapshot = await embeddedSession.taskEvent(event) else {
@@ -280,41 +325,32 @@ public struct DevBoot: Sendable {
                             }
                         }
                     }
-                    mayLaunch = await stopSignal.beginLaunch()
                 }
+                let mayLaunch = await stopSignal.beginLaunch()
                 if mayLaunch, await stopSignal.current() == nil {
-                    let frameCountBeforeLaunch = options.developerDisplay?.windowFrameCommitCount ?? 0
-                    let report = try await agent.launch(package: package, displayID: 0)
                     if let embeddedSession {
-                        let snapshot = try await embeddedSession.launched(taskID: report.taskID)
-                        if snapshot.state == .ended(.appExited) {
+                        guard let packageID = RuntimePackageID(rawValue: package) else {
+                            throw RuntimeWireError.runtime(
+                                "internal",
+                                message: "The Android package identifier is invalid.",
+                                remediation: "Check the package name and try again."
+                            )
+                        }
+                        let result = try await embeddedSession.launch(RuntimeLaunchRequest(packageID: packageID))
+                        if await embeddedSession.currentSession()?.state == .ended(.appExited) {
                             await stopSignal.signal(.appExited)
                         }
-                    }
-                    onEvent(
-                        .message(
-                            "launched \(package) on display 0: task \(report.taskID) \(report.component) (\(report.outcome))"
+                        onEvent(.message("launched \(package) on display 0 (session state: \(result.state))"))
+                    } else {
+                        let report = try await agent.launch(package: package, displayID: 0)
+                        onEvent(
+                            .message(
+                                "launched \(package) on display 0: task \(report.taskID) \(report.component) (\(report.outcome))"
+                            )
                         )
-                    )
-                    if let display = options.developerDisplay {
-                        switch await Self.waitForFrame(
-                            after: frameCountBeforeLaunch,
-                            on: display,
-                            stopSignal: stopSignal
-                        ) {
-                        case .presented:
-                            if let embeddedSession {
-                                _ = try await embeddedSession.firstFramePresented()
-                            }
-                        case .timedOut:
-                            if embeddedSession != nil {
-                                onEvent(
-                                    .warning("Android launched the app, but display 0 has not produced a new frame yet")
-                                )
-                            }
-                        case .stopped(let cause):
-                            stopCause = cause
-                        }
+                    }
+                    if let requestedStop = await stopSignal.current() {
+                        stopCause = requestedStop
                     }
                 }
             }
@@ -341,7 +377,7 @@ public struct DevBoot: Sendable {
             onEvent(.message("input counters: \(await route.counters())"))
         }
         if let agent = await supervisor.developmentGuestAgent {
-            onEvent(.message("adb shell commands so far: \(await agent.adbShellInvocationCount)"))
+            onEvent(.message("ADB shell invocations so far: \(await agent.adbShellInvocationCount)"))
         }
         onEvent(.message("stopping Android"))
         await endInput(inputBinding, route: options.inputRoute)

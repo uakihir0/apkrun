@@ -21833,3 +21833,32 @@ PackageManager metadata or APKRun settings and wrapper fields in the complete
 design. Cached unmanaged package facts can be stale until the daemon next
 queries a ready Android runtime.
 
+## IR-1383: Add the runtime restart command
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #032 |
+| Affected documents | [cli.md](../02-design/cli.md) §4.1; [M04](issues/M04-daemon-and-guest-protocol.md) #032 |
+
+**Choices.** Implement `apkrun runtime restart` by calling the existing
+`stopRuntime` request followed by `startRuntime`, and require confirmation
+unless `--yes` is present. Until the status API exposes active app sessions,
+ask for confirmation on every restart rather than only when sessions are
+active. Move the existing install/uninstall prompt behavior to a shared
+`CLIConfirmation` so both embedded and non-embedded commands use the same
+rules.
+
+**Reason.** The runtime API already provides orderly stop and start operations,
+so restart needs no new wire message or retry behavior. Stopping Android can
+interrupt app sessions; since the current status DTO cannot tell whether any
+are active, always prompting avoids silently disrupting them. This is more
+conservative than the eventual conditional prompt and can be narrowed once
+session state is available.
+
+**Verification.** The focused CLI parser test passes for status, start, stop,
+and restart with `--yes`. Swift format lint and `git diff --check` pass.
+
+**Risk for review.** A confirmation is shown even when Android has no active
+sessions. `--yes` skips it for scripts and other non-interactive use.
+

@@ -1,4 +1,5 @@
 #if APKRUN_EMBEDDED_RUNTIME
+    import AppKit
     import Foundation
     import RuntimeHost
     import WindowingCore
@@ -29,8 +30,8 @@
             return arguments.contains("launch") && !arguments.contains("--no-window") && !helpRequested
         }
 
-        /// The display 0 of the boot. Its size is the scanout's mode, 1024 x 768, until #028 gives the image's default mode.
-        let display = DeveloperDisplay(pixelWidth: 1024, pixelHeight: 768)
+        /// Display 0 resolved from the default portrait size, visible frame, and main screen's backing scale.
+        let display: DeveloperDisplay
         /// Stop requests for the boot: Ctrl-C, or the window closing.
         let stops = AsyncStream.makeStream(of: Void.self)
         /// App-session close requests, separate from Ctrl-C so dev launch can finish tasks before VM shutdown.
@@ -44,9 +45,29 @@
         private let stopsAppOnClose: Bool
         private var pump: DisplayPump?
 
-        private init(showStatistics: Bool, stopsAppOnClose: Bool) {
+        private init(
+            showStatistics: Bool,
+            stopsAppOnClose: Bool,
+            backingScale: CGFloat,
+            pointSize: CGSize
+        ) {
             self.showStatistics = showStatistics
             self.stopsAppOnClose = stopsAppOnClose
+            do {
+                display = try DeveloperDisplay(
+                    pointSize: pointSize,
+                    backingScale: backingScale
+                )
+            } catch {
+                Output.writeLogLine(
+                    "warning: the initial display geometry could not be resolved; using the clamped size at 160 dpi",
+                    toStandardError: true
+                )
+                display = DeveloperDisplay(
+                    pixelWidth: max(2, Int(pointSize.width.rounded())),
+                    pixelHeight: max(2, Int(pointSize.height.rounded()))
+                )
+            }
             let route = DevInputRoute()
             inputRoute = route
             inputSink = EmbeddedInputSink(route: route)
@@ -60,7 +81,23 @@
             stopsAppOnClose: Bool = false,
             command: @escaping @Sendable () async -> Void
         ) {
-            let session = DisplayWindowSession(showStatistics: showStatistics, stopsAppOnClose: stopsAppOnClose)
+            let geometry = MainActor.assumeIsolated {
+                let screen = NSScreen.main
+                let visibleSize =
+                    screen?.visibleFrame.size
+                    ?? CGSize(width: 480 / 0.9, height: 850 / 0.9)
+                let pointSize = CGSize(
+                    width: min(480, visibleSize.width * 0.9),
+                    height: min(850, visibleSize.height * 0.9)
+                )
+                return (pointSize, screen?.backingScaleFactor ?? 1)
+            }
+            let session = DisplayWindowSession(
+                showStatistics: showStatistics,
+                stopsAppOnClose: stopsAppOnClose,
+                backingScale: geometry.1,
+                pointSize: geometry.0
+            )
             registryLock.withLock {
                 registered = session
             }

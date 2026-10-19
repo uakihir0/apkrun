@@ -249,7 +249,7 @@ on frameReady(gen, i, seq, t):
 - `frameDisplayed` is sent from the transaction completion block, which runs after Core Animation has committed the new contents. Combined with rule 2(b) this makes reuse safe without knowing WindowServer's timing.
 - In embedded development mode (before #031/#032) the same view is fed by `SurfacePoolFrameSource` in `CLI/apkrun/Dev/` (#023). As built in #023: the presenter attaches to the boot's drmVirgl device before the guest starts (`DevelopmentDisplay` in RuntimeCore, `DeveloperDisplay` in RuntimeHost; the design's name `DeveloperService` is the RuntimeHost type). RuntimeHost wraps RuntimeCore's types, so the CLI never imports GraphicsCore. The AppKit loop runs on the main thread from the entry point before its first suspension, and the boot runs on a detached task. A loop that runs inside a main-actor job or a main-queue block stops the runtime's queue (IR-1103). It adapts the `SurfaceSet` and frame events of the embedded-only `DeveloperService` ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §15) to `FrameSource` and reports `frameDisplayed` back to it, in process instead of over XPC. Neither WindowingCore nor the CLI imports GraphicsCore.
 
-- **Development window (#023), fixed-size:** display 0 keeps the image's default mode, and the window scales the layer with aspect fit when it is resized (graphics.md §12 #023, step 3).
+- **Development window (#023, extended by #067 step 2), fixed-size:** the original #023 path kept the image's default mode and scaled the layer with aspect fit. The current embedded-runtime path resolves a 480 × 850 pt initial mode (clamped to 90% of the main screen's visible frame) before guest boot. It remains fixed-size until #067 step 3 adds live resize.
 
 ### 5.4 Color and format
 
@@ -270,7 +270,7 @@ on frameReady(gen, i, seq, t):
 `DisplayGeometryResolver` (RuntimeCore, pure function, T0-tested) maps a `DisplayGeometry` to a `ResolvedDisplayMode`:
 
 ```text
-renderScale = min(backingScale, 4095 / pointWidth, 4095 / pointHeight)        // EDID DTD limit, graphics.md §6.4
+renderScale = min(backingScale, 4095 / pointWidth, 4095 / pointHeight)        // also lowered until the 60 Hz EDID timing is expressible
 pixelSize   = (round(pointWidth × renderScale), round(pointHeight × renderScale)) rounded down to even numbers
 preferenceZoom = clamp(requestedZoom, 0.75...2.0)
 effectiveZoom  = preferenceZoom adjusted only as needed for 120...640 dpi
@@ -283,6 +283,7 @@ Consequences:
 - At `zoom = 1.0`, **one Android dp is one macOS point**. A 480 × 850 pt window on a Retina Mac is a 960 × 1700 px display at 320 dpi (`xhdpi`), and the app sees a 480 × 850 dp screen, the same as a mid-size phone.
 - `zoom > 1` enlarges the Android UI (fewer dp in the same window). `zoom < 1` shows more content. View menu: Zoom In (⌘=), Zoom Out (⌘−), Actual Size (⌘0). The requested value is stored per package in `settings.json` (`window.zoom`, [../03-reference/package-metadata-json.md](../03-reference/package-metadata-json.md)); the resolved effective value is returned with the mode. The write path is the `resize` that carries the new zoom: apkrund stores it and posts `packages.settingsChanged` ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §14.3).
 - If the backing pixel size would exceed 4095 px (for example a fullscreen window on a 5K or 6K display), `renderScale` drops below `backingScale`. Android renders fewer pixels, the layer upscales them (`contentsScale = renderScale`), and the dp size stays the same. A DisplayID extension for larger modes is post-v1 ([graphics.md](graphics.md) §6.4).
+- The 4095-pixel active-field limit is not the only EDID constraint: the CVT reduced-blanking detailed timing must also fit its pixel-clock and horizontal-frequency fields. The resolver may lower `renderScale` further to keep the requested 60 Hz mode expressible.
 - The EDID physical size is derived from `densityDpi`, so the DPI reported to Android is consistent with the forced density. Android's `xdpi`/`ydpi` values follow the EDID. `densityDpi` follows the forced density (§4).
 - If the requested zoom and capped render scale would produce a density outside 120–640 dpi, the resolver adjusts the effective zoom within 0.75–2.0. It returns a typed failure when the range cannot be met. Windows below 320 × 400 dp at the effective zoom are rejected so the resolver does not silently change the requested geometry.
 
@@ -293,11 +294,11 @@ Consequences:
 | Minimum content size | 320 × 400 dp → points = dp × effective zoom | Android phone UI assumptions (smallest width ≥ 320 dp) |
 | Maximum content size | the screen's visible frame; pixel size capped by §6.1 | EDID limit |
 | Density range | 120–640 dpi | the effective zoom is adjusted within the stored 0.75–2.0 range; impossible geometry fails |
-| Default window size | from the package settings `window.defaultWidth/defaultHeight` (initially copied from `wrapper.json`, [wrapper.md](wrapper.md) §3; points, default 480 × 850 portrait; 850 × 480 if the launcher activity requests landscape), clamped to 90 % of the screen's visible frame | Initial preference copied from the generated app |
+| Default window size | from the package settings `window.defaultWidth/defaultHeight` (initially copied from `wrapper.json`, [wrapper.md](wrapper.md) §3; points, default 480 × 850 portrait; 850 × 480 if the launcher activity requests landscape), clamped to 90 % of the screen's visible frame | Initial preference copied from the generated app; the embedded development window currently applies the 480 × 850 portrait default and clamp |
 
 ### 6.3 Display 0 geometry
 
-Display 0 boots with the image's default mode and `androidboot.lcd_density = 160 × backing scale of the main screen at boot` ([android-image.md](android-image.md) §6.2). In `primaryDisplayCompatibility` mode it is reconfigured to the window geometry with the same path as pool displays (§7.1), including forced density.
+Product display 0 boots with the image's default mode and `androidboot.lcd_density = 160 × backing scale of the main screen at boot` ([android-image.md](android-image.md) §6.2). In the embedded development window path, APKRun resolves the initial 480 × 850 pt geometry, clamped to 90% of the main screen's visible frame, uses that density in `androidboot.lcd_density`, and configures scanout 0 before the guest starts. After the Guest Agent handshake, `SetDisplayPolicy` applies the resolved density to Android display 0 before the runtime becomes ready. At zoom 1 this is 160 × backing scale; a later zoom step may resolve another density. In `primaryDisplayCompatibility` mode it is reconfigured to the window geometry with the same path as pool displays (§7.1), including forced density.
 
 ---
 
@@ -491,7 +492,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 
 Embedded development mode, display 0, before DisplayPool.
 
-1. WindowingCore: `SessionWindowController`, `IOSurfaceLayerView`, the `FrameSource`/`InputSink` protocols, placeholder states (§7.3). The window is fixed-size, with the display 0 mode from the image.
+1. WindowingCore: `SessionWindowController`, `IOSurfaceLayerView`, the `FrameSource`/`InputSink` protocols, placeholder states (§7.3). The window is fixed-size. #026 initially used display 0's image mode; #067 step 2 now resolves the development window's initial mode from its geometry. Resize remains in #067 step 3.
 2. `SurfacePoolFrameSource` for embedded mode (through `DeveloperService`, §5.3).
 3. `apkrun dev launch <apk|package>` ([cli.md](cli.md)): boots Android if needed (embedded runtime), installs the APK over ADB, launches it on display 0 through the Guest Agent (#072), and opens the window. Pointer and keyboard go through InputCore → Guest Agent (#024, #025).
 4. The close policy (§7.6) is implemented with `stop` only. Closing the window stops the app. The CLI exits when the last window closes.

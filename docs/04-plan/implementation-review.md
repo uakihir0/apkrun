@@ -20830,3 +20830,116 @@ stability, orientation behavior, or Retina sharpness on a Mac.
 Maintainers should review the zoom adjustment, the typed unsupported-density
 failure, and the minimum-size contract before the resolver is wired into
 window resizing.
+
+## IR-1369: Resolve #067 modes against the full EDID timing limits
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #067 |
+| Affected documents | [display-and-windowing.md](../02-design/display-and-windowing.md) §6; [graphics.md](../02-design/graphics.md) §6.4; [M03](issues/M03-input-and-basic-runtime.md) #067 |
+
+**Choice.** `DisplayGeometryResolver` validates each resolved 60 Hz mode
+against `DisplayMode.isSupported`, which checks the detailed-timing pixel clock
+and advertised horizontal-frequency range as well as the 4095-pixel active
+field. If the initial scale exceeds the 655.35 MHz detailed-timing clock, the
+resolver lowers `renderScale` and finds the largest expressible mode. The EDID
+range descriptor's minimum horizontal frequency is 20 kHz instead of 30 kHz.
+
+**Reason.** The current resolver's dimension-only cap could return 4094 × 4094
+at 60 Hz, which the EDID timing cannot encode. The documented 320 × 400
+minimum and 850 × 480 landscape default also fall below 30 kHz at 60 Hz.
+Using 20 kHz admits the documented 320 × 400 dp minimum and 850 × 480
+landscape default. At the lowest zoom, 240 × 300 px is still below 20 kHz, so
+the EDID timing generator extends vertical blanking until the quantized clock
+meets the descriptor. The 1024 × 768 mode at 24 Hz remains below the advertised
+range and rejected. Lowering render scale preserves 60 Hz for oversized
+windows; using a lower refresh rate would contradict the #067 resolver
+contract.
+
+**Verification.** Focused T0 cases resolve Retina, non-Retina, minimum,
+landscape, and timing-limited large geometries, then check each mode with
+`DisplayMode.isSupported`. GraphicsCore tests check the advertised 20–255 kHz
+range, the minimum-zoom mode's extended blanking, and updated golden blocks.
+The display is virtual; the effect of the 20 kHz descriptor and the extra
+vertical blanking on the current Android HWC has not been checked on a guest.
+
+**Risk.** Timing constraints can reduce the resolution of a large window below
+the active-field-only 4095-pixel cap. The window layer must use the resolved
+render scale when resize support is added. Maintainers should review the 20 kHz
+range minimum, the extended-blanking timing, and the lower-resolution 60 Hz
+fallback.
+
+## IR-1370: Wire the initial development window to scanout 0
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #067 |
+| Affected documents | [display-and-windowing.md](../02-design/display-and-windowing.md) §§6.1, 6.3; [M03](issues/M03-input-and-basic-runtime.md) #067 |
+
+**Choice.** The development window resolves the documented initial 480 × 850
+point content size, clamped to 90% of the main screen's visible frame, against
+the screen's backing scale before boot. The
+resolved mode sets `androidboot.lcd_density`, enables scanout 0 before attaching
+the presenter, and supplies EDID physical size through its density. After the
+Guest Agent handshake, the supervisor sends `SetDisplayPolicy` for display 0
+before reporting the runtime ready or launching an app. If the default geometry
+cannot be resolved, the CLI logs a warning and continues at the clamped point
+dimensions rounded to whole pixels and 160 dpi so the development runtime
+remains usable.
+
+**Reason.** This connects the existing resolver, EDID generator, scanout, and
+Guest Agent operation at the narrow initial-mode seam without adding the later
+resize or `DisplayPool` lifecycle. The boot density also covers `dev boot
+--window` when its Guest Agent bundle is absent, while the policy operation
+refreshes the Android display after a successful handshake. Capturing the
+visible frame and backing scale once ensures the scanout and initial native
+window use the same geometry until step 3 implements screen movement and
+resize.
+
+**Verification.** T0 resolves the default Retina and non-Retina modes and
+checks their EDID support. The host builds and focused package tests pass.
+No real guest readback of `wm density`, visible window check, or resize test
+was performed; those acceptance criteria remain unchecked.
+
+**Risk.** The fallback is intentionally fixed at non-Retina density and is
+used only if the built-in default geometry unexpectedly violates the resolver
+limits. The initial geometry stays fixed after the window moves or resizes
+until #067 step 3 is implemented. Maintainers should review the startup screen
+capture, fallback, direct scanout 0 setup, and the Guest Agent policy ordering.
+
+## IR-1371: Preserve #067 minimum-size behavior and clamp the initial window
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #067 |
+| Affected documents | [display-and-windowing.md](../02-design/display-and-windowing.md) §§5.3, 6.1–6.3; [graphics.md](../02-design/graphics.md) §6.4; [M03](issues/M03-input-and-basic-runtime.md) #026, #067 |
+
+**Choice.** The EDID generator keeps the 20 kHz horizontal range and extends
+vertical blanking for short modes until the quantized horizontal frequency
+reaches that minimum. `minimumPointSize(for:)` resolves density and timing
+without rejecting the candidate for being below the minimum it is asked to
+report. The initial development window clamps each dimension of 480 × 850 pt
+to 90% of the main screen's visible frame.
+
+**Reason.** At zoom 0.75, the minimum 320 × 400 dp Android display is 240 ×
+300 px at 120 dpi. Its ordinary reduced-blanking timing is 18.75 kHz, while
+the legacy 1024 × 768 @ 24 Hz mode is about 18.792 kHz. An integer-kHz EDID
+range cannot admit one while rejecting the other, so the short mode gets
+additional vertical blanking. Resize needs to query the minimum while the
+candidate is still undersized, and the documented window clamp keeps the
+initial development window visible on shorter screens.
+
+**Verification.** T0 checks the zoom-0.75 minimum mode, the 1024 × 768 @
+24 Hz rejection, extended blanking, and minimum-size lookup for an undersized
+candidate. The startup size calculation is covered by code review; the shared
+Mac window was not inspected.
+
+**Risk.** Extra vertical blanking is an APKRun adjustment on top of CVT reduced
+blanking and should be checked against the virtual Android display's EDID
+consumer. If a screen's visible frame is smaller than the minimum Android
+content size, the 90% clamp and minimum-size rule cannot both be satisfied.
+The generated window still uses the fixed compatibility density if geometry
+resolution fails.

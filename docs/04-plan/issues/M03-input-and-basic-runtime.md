@@ -532,7 +532,7 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 
 - WindowingCore `SessionWindowController`: a normal `NSWindow` with a title and the standard window buttons. There is no host-side emulator chrome: no toolbar, device frame, or control buttons.
 - `IOSurfaceLayerView` from #023 and #024, with the `FrameSource` and `InputSink` protocols and the placeholder states of §7.3.
-- A fixed-size window with display 0's mode from the image. Resize comes with #067.
+- A fixed-size window. The initial #026 path used display 0's image mode; #067 step 2 now configures the development display from window geometry before boot. Live resize still comes with #067 step 3.
 - `SurfacePoolFrameSource` bound to the session (§5.3).
 - A minimal `SessionRegistry` for embedded sessions on display 0 ([../../02-design/runtime-daemon.md](../../02-design/runtime-daemon.md) §7). It calls `ScanoutController` directly for scanout 0 (§3.1).
 - `apkrun dev launch <apk|package>`: boots Android if needed, installs an APK through `AdbClient`, launches it on display 0 through the Guest Agent, and opens the window.
@@ -717,7 +717,7 @@ The Android display follows the Mac window's size and backing scale. On a Retina
 
 ### Scope
 
-- `DisplayGeometryResolver` (§6.1): `renderScale = min(backingScale, 4095 / w, 4095 / h)`, even pixel sizes, and `densityDpi = round(160 × renderScale × zoom)`, with the limits of §6.2.
+- `DisplayGeometryResolver` (§6.1): start with `renderScale = min(backingScale, 4095 / w, 4095 / h)`, then lower it as needed for an expressible 60 Hz EDID timing; produce even pixel sizes and `densityDpi = round(160 × renderScale × zoom)`, with the limits of §6.2.
 - The EDID physical size from the density ([../../02-design/graphics.md](../../02-design/graphics.md) §6.4).
 - Density through `SetDisplayPolicy` (§4).
 - Live resize (§7.1): a 150 ms quiet time, a new scanout mode, `DisplayChanged` within 3 s, a new `SurfaceSet` with `surfacesReplaced`, a `CoordinateMapper` generation change, and coalescing.
@@ -778,7 +778,7 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 
 ### Progress
 
-- **Implementation in progress (2026-10-19, IR-1368).** Step 1 adds a pure RuntimeCore `DisplayGeometryResolver` with Retina/non-Retina sizing, even pixel dimensions under the EDID 4095 px cap, density/zoom bounds, the minimum content size, and typed geometry failures. Its focused T0 suite passes (9 test functions, 13 parameterized cases). EDID updates, Guest Agent density application, window resize, display-ID stability, orientation, and Mac acceptance remain open; no acceptance criterion is checked.
+- **Implementation in progress (2026-10-19, IR-1368–IR-1371).** Step 1 resolves even pixel dimensions and checks the generated 60 Hz EDID timing, lowering render scale when the pixel-clock limit requires it. Step 2 extends vertical blanking for minimum-size modes to satisfy the 20 kHz EDID range and wires the visible-frame-clamped development window geometry through boot density, scanout 0, EDID physical size, and Guest Agent `SetDisplayPolicy` before runtime readiness. Focused T0 checks cover resolver timing support, undersized geometry queries, and EDID fields. Real-guest density, window resize, display-ID stability, orientation, and Mac acceptance remain open; no acceptance criterion is checked.
 
 ### Notes
 

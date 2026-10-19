@@ -68,9 +68,8 @@
             switch event {
             case .attached(let surfaces):
                 let source = SurfacePoolFrameSource(surfaces: surfaces, generation: 1, display: display)
-                let scale = NSScreen.main?.backingScaleFactor ?? 1
                 let window = SessionWindowController(
-                    source: source, title: "APKRun display 0", backingScale: scale, inputSink: inputSink)
+                    source: source, title: "APKRun display 0", backingScale: display.backingScale, inputSink: inputSink)
                 window.onClose = onWindowClosed
                 window.show()
                 self.source = source

@@ -448,9 +448,20 @@ public actor DevelopmentGuestAgent {
     /// reconnects without a restart. A dead or unresponsive agent counts a death, and it is restarted within the budget.
     /// Internal so that a test can drive the restart without a connection (`@testable`).
     func handleLoss(_ loss: GuestAgentLoss) async -> Bool {
-        if loss == .disconnected, (try? await provisioner.isRunning()) == true {
-            return true
+        let started = generation
+        guard !Task.isCancelled else {
+            return false
         }
+        if loss == .disconnected {
+            let isRunning = (try? await provisioner.isRunning()) == true
+            guard generation == started, !Task.isCancelled else {
+                return false
+            }
+            if isRunning {
+                return true
+            }
+        }
+        guard generation == started, !Task.isCancelled else { return false }
         guard budget.recordDeath(at: clock()) else {
             restartsRefused = true
             return false
@@ -458,6 +469,11 @@ public actor DevelopmentGuestAgent {
         logger.notice("Restarting the Guest Agent after a \(String(describing: loss), .public) loss")
         do {
             try await provisioner.startAgent()
+            guard generation == started, !Task.isCancelled else {
+                // `stop()` may have raced the ADB command after it was sent. Do not leave a restarted agent behind.
+                await provisioner.stopAgent()
+                return false
+            }
             return true
         } catch {
             restartsRefused = true

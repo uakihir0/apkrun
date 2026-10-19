@@ -21470,12 +21470,49 @@ Making a failed attempt terminal keeps its completed gate and startup failure
 consistent; resetting only `hasStarted` could otherwise let a retry bypass the
 gate with stale startup state.
 
-**Verification.** `swift test --filter DiagnosticsIndexTests` passed (2
-tests), and `swift test --filter DaemonUncleanExitRecoveryTests` passed (6
-tests). Coverage includes newest-report selection, private index writes,
-Debug-only targeted ADB cleanup and disconnect through a fake runner, recovery
-invocation after unclean exit, and lifecycle gating while status remains
-available, including the terminal duplicate-lock startup path. Focused
-`swift-format lint --strict` passed for the changed production and test Swift
-files, and `git diff --check` passed. No Xcode app build or live LaunchAgent,
-ADB command, or Android VM was started.
+**Guest Agent status choice.** Expose the development Guest Agent's normalized
+connection state and last accepted/refused protocol version in
+`RuntimeHostStatus`. Add optional fields to the API 1.1 reply; decode missing
+fields from API 1.0 daemons as `nil`. Distinguish initial connection from
+reconnection and preserve incompatible protocol versions as status. Read the
+state and version in one supervisor snapshot.
+
+**Reason.** #031's recovery acceptance check needs clients to see the Guest
+Agent return to `connected` after a process restart. The status needs to
+distinguish a temporary reconnection from an exhausted restart budget and
+explain a rejected protocol version. Reading both in one actor call avoids
+combining values from separate connection changes. Bumping the minor version follows
+RuntimeAPI §2.3 for an additive reply field; optional decode and encoding keeps
+old daemon replies readable and old clients can ignore extra JSON fields.
+
+**Risk.** This slice reports the existing supervisor state but does not yet
+enforce the 5-second request wait, 30-second required-agent failure, 60-second
+ADB-and-console watchdog, or §4.2 session/configuration reconciliation.
+`runtimeStatus` exposes only the development Guest Agent currently constructed
+by RuntimeSupervisor; production Guest Agent and Store Agent supervision are
+not implemented here. The live disconnect/reconnect acceptance case remains
+for a future reference-Mac run.
+
+**Review correction.** A timed-out initial handshake is `unavailable`, rather
+than `notStarted`. When a failed boot tears down a live connection, status
+reports `unavailable` while retaining the negotiated protocol version;
+incompatible handshake details stay `incompatible`. Reconnect callbacks check
+the stop generation after each await, and a development restart that finishes
+after stop is immediately terminated.
+
+**Reason.** Status must describe the failed attempt and must not claim a
+connected agent after its VM and connection have been torn down. An explicit
+stop must remain terminal even when an ADB restart callback or command finishes
+late.
+
+**Verification.** `swift test --package-path . --filter
+'GuestAgentSupervisorTests|RuntimeHostStatusTests|AdbGuestAgentTests'` passed
+37 tests. This covers status encoding and legacy decoding, incompatible and
+timed-out connection status, failure-state normalization, stop during a
+deferred reconnect retry, and a delayed fake-ADB process start racing stop.
+Earlier focused checks passed 2 `DiagnosticsIndexTests` and 6
+`DaemonUncleanExitRecoveryTests`, including newest-report selection, private
+index writes, Debug-only targeted ADB cleanup through a fake runner, recovery
+after unclean exit, and listener lifecycle gating. Focused
+`swift-format lint --strict` and `git diff --check` passed for the combined
+changes. No live LaunchAgent, ADB command, or Android VM was started.

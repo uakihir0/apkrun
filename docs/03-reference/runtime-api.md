@@ -98,7 +98,7 @@ apkrund sets the requirement on each anonymous listener with `NSXPCListener.setC
 
 ```swift
 public enum RuntimeAPI {
-    public static let version = APIVersion(major: 1, minor: 0)       // the control and wrapper protocols
+    public static let version = APIVersion(major: 1, minor: 1)       // the control and wrapper protocols
     public static let wrapperMajors: [Int] = [1]                     // served on the wrapper endpoint: N and N−1
     public static let brokerRevision = 1                              // additive-only broker protocol
     public static let maintenanceRevision = 1                         // additive-only MaintenanceControl
@@ -108,7 +108,9 @@ public struct APIVersion: Codable, Sendable, Comparable { public var major: Int;
 ```
 
 - The initial versioned XPC contract is `1.0` in #031: the broker handshake and the `runtimeStatus`, `runtime start`, and `runtime stop` control operations. #032 completes the API around these operations without changing their wire shape. Before #031 there is no XPC runtime API (§3.8).
+- Version `1.1` adds the optional Guest Agent state and protocol-version fields to `RuntimeHostStatus`; older clients ignore the added JSON keys, and new clients decode older replies with both fields set to `nil`.
 - `components.json` of a release records `"runtimeAPI": { "current": "M.m", "wrapperMajors": [N−1, N] }` ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.3). A major is dropped only as that section allows.
+- The #031 `RuntimeHostStatus` includes optional `guestAgentState` and `guestAgentProtocolVersion` fields. Clients accept their absence as `nil`.
 
 ### 2.2 Rules per endpoint
 
@@ -755,7 +757,7 @@ public struct BootLoopGuardStatus: Codable, Sendable {
 
 public struct AgentConnection: Codable, Sendable {
     public var agent: AgentKind               // §17.2
-    public var state: AgentConnectionState    // .connected, .connecting, .disconnected, .incompatible
+    public var state: AgentConnectionState    // .notStarted, .connecting, .connected, .reconnecting, .unresponsive, .unavailable, .incompatible
     public var protocolVersion: String?
     public var required: Bool                 // dev image: guestd; custom image: guestd and store
 }
@@ -768,6 +770,26 @@ public struct RuntimeSummary: Codable, Sendable {   // the wrapper endpoint's vi
     public var runtimeVersion: String
 }
 ```
+
+The #031 control DTO, `RuntimeHostStatus`, includes these optional Guest Agent
+fields:
+
+```swift
+public enum GuestAgentConnectionState: String, Codable, Sendable {
+    case notStarted, connecting, connected, reconnecting, unresponsive, unavailable, incompatible, unknown
+}
+
+public struct RuntimeHostStatus: Codable, Sendable {
+    public var guestAgentState: GuestAgentConnectionState?
+    public var guestAgentProtocolVersion: String?
+}
+```
+
+`guestAgentState` is `nil` when the host cannot observe a Guest Agent. The
+protocol version is `nil` until a handshake has supplied one. Both fields are
+optional so replies from an older daemon decode with `nil`, and hosts omit them
+when no Guest Agent state is available. An unrecognized state from a newer
+daemon decodes as `unknown`.
 
 `runtimeInfo`:
 
@@ -2869,7 +2891,7 @@ public struct ActivityKind: RawRepresentable, Codable, Sendable, Hashable {   //
 }
 
 public enum AgentKind: String, Codable, Sendable { case guest, store, unknown }   // Guest Agent, Store Agent (guest-components.md)
-public enum AgentConnectionState: String, Codable, Sendable { case connected, connecting, disconnected, incompatible, unknown }
+public enum AgentConnectionState: String, Codable, Sendable { case notStarted, connecting, connected, reconnecting, unresponsive, unavailable, incompatible, unknown }
 
 public enum AndroidWindowMode: String, Codable, Sendable { case secondaryDisplay, primaryDisplayCompatibility, unknown }
 public enum ClosePolicy: String, Codable, Sendable { case stop, keepRunning, unknown }

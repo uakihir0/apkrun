@@ -104,15 +104,33 @@ public actor GuestAgentSupervisor {
     public enum State: Equatable, Sendable {
         /// Not started, or stopped.
         case stopped
-        /// Connecting, or reconnecting after a loss.
+        /// Establishing the first connection.
         case connecting
         /// Connected and resynchronised.
         case ready
+        /// Reconnecting after a lost connection.
+        case reconnecting
         /// Three pings went unanswered.
         case unresponsive
+        /// The guest speaks an incompatible protocol version.
+        case incompatible
         /// The agent died more often than its budget allows, or it kept violating the protocol. The supervisor does not
         /// reconnect.
         case unavailable
+    }
+
+    /// A consistent connection-state/version pair for diagnostics and RuntimeAPI status.
+    public struct StatusSnapshot: Equatable, Sendable {
+        /// The current connection state.
+        public let state: State
+        /// The last accepted or refused protocol version.
+        public let protocolVersion: ProtocolVersion?
+
+        /// Creates a connection status snapshot.
+        public init(state: State, protocolVersion: ProtocolVersion?) {
+            self.state = state
+            self.protocolVersion = protocolVersion
+        }
     }
 
     /// The protocol violations within ``violationWindow`` that stop the reconnection (guest-protocol.md §12.2).
@@ -124,6 +142,8 @@ public actor GuestAgentSupervisor {
     public private(set) var state: State = .stopped
     /// The session of the current connection, or nil while there is none.
     public private(set) var session: GuestSessionInfo?
+    /// The most recently accepted or refused protocol version, while one is known.
+    public private(set) var protocolVersion: ProtocolVersion?
     /// The state that the events and the snapshot have built.
     public private(set) var snapshot = GuestSnapshotState()
     /// The applied events, in order, for the consumers that act on them (for example a launch waiting for its task).
@@ -198,6 +218,7 @@ public actor GuestAgentSupervisor {
             return
         }
         state = .connecting
+        protocolVersion = nil
         let started = generation
         let deadline = ContinuousClock.now + connectTimeout
         var delay = backoffMinimum
@@ -214,7 +235,7 @@ public actor GuestAgentSupervisor {
                     throw .stopped
                 }
                 if !error.isRetriable {
-                    state = .stopped
+                    markTerminalState(for: error)
                     throw Self.startFailure(error)
                 }
                 if recordViolation(error) {
@@ -226,7 +247,7 @@ public actor GuestAgentSupervisor {
                 }
                 let left = deadline - ContinuousClock.now
                 if left <= .zero {
-                    state = .stopped
+                    state = .unavailable
                     throw Self.startFailure(error)
                 }
                 try? await Task.sleep(for: min(delay, left))
@@ -253,11 +274,17 @@ public actor GuestAgentSupervisor {
         let closing = connection
         connection = nil
         session = nil
+        protocolVersion = nil
         awaitingSnapshot = false
         buffered = []
         await closing?.close()
         state = .stopped
         androidRestartContinuation.finish()
+    }
+
+    /// Reads the connection state and negotiated version together as one status snapshot.
+    public func statusSnapshot() -> StatusSnapshot {
+        StatusSnapshot(state: state, protocolVersion: protocolVersion)
     }
 
     /// Sends one operation through the current connection. Without a connection the call fails with
@@ -317,6 +344,7 @@ public actor GuestAgentSupervisor {
             }
             connection = next
             session = info
+            protocolVersion = info.agentProtocolVersion
             consumer?.cancel()
             consumer = Task {
                 for await event in next.events {
@@ -410,7 +438,7 @@ public actor GuestAgentSupervisor {
                     }
                 }
             }
-            guard !Task.isCancelled, state != .unavailable else {
+            guard !Task.isCancelled, state != .unavailable, state != .incompatible else {
                 return
             }
             let elapsed = ContinuousClock.now - cycleStart
@@ -436,7 +464,10 @@ public actor GuestAgentSupervisor {
         consumer?.cancel()
         consumer = nil
         await dead.close()
-        state = .connecting
+        guard generation == started, !Task.isCancelled, maintenance != nil else {
+            return
+        }
+        state = .reconnecting
         if let cause, recordViolation(cause) {
             state = .unavailable
             logger.error(
@@ -444,7 +475,11 @@ public actor GuestAgentSupervisor {
                 errorCode: "runtime.requiredAgentUnavailable")
             return
         }
-        guard await restartAgent(reason) else {
+        let restarted = await restartAgent(reason)
+        guard generation == started, !Task.isCancelled, maintenance != nil else {
+            return
+        }
+        guard restarted else {
             logger.error(
                 "The Guest Agent restart budget is spent, so the agent stays down",
                 errorCode: "runtime.requiredAgentUnavailable")
@@ -462,7 +497,7 @@ public actor GuestAgentSupervisor {
                     return
                 }
                 if !error.isRetriable {
-                    state = .unavailable
+                    markTerminalState(for: error)
                     logger.error(
                         "The Guest Agent refused the reconnection, so the agent stays down",
                         errorCode: "runtime.requiredAgentUnavailable")
@@ -475,7 +510,11 @@ public actor GuestAgentSupervisor {
                         errorCode: "runtime.requiredAgentUnavailable")
                     return
                 }
-                guard await restartAgent(.disconnected) else {
+                let restarted = await restartAgent(.disconnected)
+                guard generation == started, !Task.isCancelled, maintenance != nil else {
+                    return
+                }
+                guard restarted else {
                     logger.error(
                         "The Guest Agent restart budget is spent, so the agent stays down",
                         errorCode: "runtime.requiredAgentUnavailable")
@@ -501,6 +540,16 @@ public actor GuestAgentSupervisor {
         violations.removeAll { now - $0 > Self.violationWindow }
         violations.append(now)
         return violations.count >= Self.violationLimit
+    }
+
+    /// Keeps an incompatible version visible to `runtimeStatus`; other terminal failures are unavailable.
+    private func markTerminalState(for failure: GuestProtocolFailure) {
+        if case .incompatibleVersion(_, let guest) = failure {
+            protocolVersion = guest
+            state = .incompatible
+        } else {
+            state = .unavailable
+        }
     }
 
     /// The start failure of a handshake that did not complete. A refused version or Hello is named, and a connection

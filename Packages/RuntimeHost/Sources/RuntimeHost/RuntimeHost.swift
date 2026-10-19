@@ -310,6 +310,7 @@ public actor RuntimeHost {
     /// Returns a point-in-time view for the control endpoint.
     public func status() async -> RuntimeHostStatus {
         let runtimeStateValue = await supervisor?.state
+        let guestAgentStatus = await supervisor?.guestAgentStatusSnapshot()
         let runtimeState: String
         let bootProgress: Double?
         if let runtimeStateValue {
@@ -330,6 +331,20 @@ public actor RuntimeHost {
             runtimeState = "stopped"
             bootProgress = nil
         }
+        let guestAgentStateName: GuestAgentConnectionState?
+        if let guestAgentStatus {
+            switch guestAgentStatus.state {
+            case .stopped: guestAgentStateName = .notStarted
+            case .connecting: guestAgentStateName = .connecting
+            case .ready: guestAgentStateName = .connected
+            case .reconnecting: guestAgentStateName = .reconnecting
+            case .unresponsive: guestAgentStateName = .unresponsive
+            case .incompatible: guestAgentStateName = .incompatible
+            case .unavailable: guestAgentStateName = .unavailable
+            }
+        } else {
+            guestAgentStateName = nil
+        }
         let crashLoopActive = (try? stateStore?.bootLoopGuardIsActive()) ?? startupAssessment?.crashLoopActive ?? false
         return RuntimeHostStatus(
             hostState: hostState,
@@ -339,7 +354,9 @@ public actor RuntimeHost {
             startupFailureCode: startupFailure?.code,
             crashLoopActive: crashLoopActive,
             daemonPID: Int32(getpid()),
-            imageVersion: image?.version.description
+            imageVersion: image?.version.description,
+            guestAgentState: guestAgentStateName,
+            guestAgentProtocolVersion: guestAgentStatus?.protocolVersion?.description
         )
     }
 

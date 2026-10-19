@@ -2,8 +2,8 @@
 
 /// The major and minor version used by RuntimeAPI compatibility checks.
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
-    /// Version 1.0 introduces the authenticated control endpoint.
-    public static let current = APIVersion(major: 1, minor: 0)
+    /// Version 1.0 introduces the authenticated control endpoint; 1.1 adds Guest Agent status fields.
+    public static let current = APIVersion(major: 1, minor: 1)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -134,6 +134,39 @@ public enum RuntimeEndpointReply: Codable, Equatable, Sendable {
     case rejected(RuntimeEndpointRejection)
 }
 
+/// The normalized state of the Guest Agent connection observed by the runtime host.
+public enum GuestAgentConnectionState: String, Codable, Equatable, Sendable {
+    /// The Guest Agent cannot exist yet because the runtime has not reached its connection phase.
+    case notStarted
+    /// The initial connection is being established.
+    case connecting
+    /// The Guest Agent is connected and synchronized.
+    case connected
+    /// The host is restoring a connection that was lost.
+    case reconnecting
+    /// The Guest Agent missed its keepalive responses.
+    case unresponsive
+    /// The Guest Agent cannot be reached and the host stopped retrying.
+    case unavailable
+    /// The Guest Agent's protocol version is incompatible with the host.
+    case incompatible
+    /// The host received a state added by a newer API version.
+    case unknown
+
+    /// Decodes an unrecognized state as ``unknown``.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        self = Self(rawValue: value) ?? .unknown
+    }
+
+    /// Encodes this state using its normalized wire value.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
 /// The RuntimeHost status snapshot served by the control endpoint.
 public struct RuntimeHostStatus: Codable, Equatable, Sendable {
     /// `starting`, `running`, `degraded`, `shuttingDown`, or `stopped`.
@@ -152,6 +185,10 @@ public struct RuntimeHostStatus: Codable, Equatable, Sendable {
     public let daemonPID: Int32
     /// The installed image version, when available.
     public let imageVersion: String?
+    /// The normalized Guest Agent state, or nil when this host cannot observe one.
+    public let guestAgentState: GuestAgentConnectionState?
+    /// The Guest Agent protocol version from its latest handshake, when available.
+    public let guestAgentProtocolVersion: String?
 
     /// Creates a status snapshot.
     public init(
@@ -162,7 +199,9 @@ public struct RuntimeHostStatus: Codable, Equatable, Sendable {
         startupFailureCode: String?,
         crashLoopActive: Bool,
         daemonPID: Int32,
-        imageVersion: String?
+        imageVersion: String?,
+        guestAgentState: GuestAgentConnectionState? = nil,
+        guestAgentProtocolVersion: String? = nil
     ) {
         self.hostState = hostState
         self.runtimeState = runtimeState
@@ -172,6 +211,8 @@ public struct RuntimeHostStatus: Codable, Equatable, Sendable {
         self.crashLoopActive = crashLoopActive
         self.daemonPID = daemonPID
         self.imageVersion = imageVersion
+        self.guestAgentState = guestAgentState
+        self.guestAgentProtocolVersion = guestAgentProtocolVersion
     }
 }
 

@@ -14,6 +14,31 @@ private func eventually(within seconds: Double = 8, _ condition: () async -> Boo
     }
 }
 
+@Test func failedBootStatusDoesNotReportATornDownAgentAsConnected() {
+    let version = ProtocolVersion(major: 1, minor: 0)
+    let retained = RuntimeSupervisor.guestAgentStatusAfterStop(
+        GuestAgentSupervisor.StatusSnapshot(state: .ready, protocolVersion: version),
+        preservingFailure: true
+    )
+    #expect(retained.state == .unavailable)
+    #expect(retained.protocolVersion == version)
+
+    let incompatibleVersion = ProtocolVersion(major: 2, minor: 0)
+    let incompatible = RuntimeSupervisor.guestAgentStatusAfterStop(
+        GuestAgentSupervisor.StatusSnapshot(state: .incompatible, protocolVersion: incompatibleVersion),
+        preservingFailure: true
+    )
+    #expect(incompatible.state == .incompatible)
+    #expect(incompatible.protocolVersion == incompatibleVersion)
+
+    let stopped = RuntimeSupervisor.guestAgentStatusAfterStop(
+        GuestAgentSupervisor.StatusSnapshot(state: .ready, protocolVersion: version),
+        preservingFailure: false
+    )
+    #expect(stopped.state == .stopped)
+    #expect(stopped.protocolVersion == nil)
+}
+
 private func display(_ id: Int32) -> GPDisplayInfo {
     var info = GPDisplayInfo()
     info.displayID = id
@@ -67,6 +92,30 @@ private final class LossLog: @unchecked Sendable {
 
     var all: [GuestAgentLoss] {
         lock.withLock { values }
+    }
+}
+
+/// Pauses the second restart callback so a test can stop the supervisor during the await.
+private actor RestartGate {
+    private var entered = false
+    private var entryContinuation: CheckedContinuation<Void, Never>?
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func pause() async {
+        entered = true
+        entryContinuation?.resume()
+        entryContinuation = nil
+        await withCheckedContinuation { releaseContinuation = $0 }
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { entryContinuation = $0 }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
     }
 }
 
@@ -188,11 +237,14 @@ func aClosedConnectionIsReconnectedAndResynchronised() async throws {
         keepaliveInterval: .seconds(60),
         restartAgent: { loss in
             losses.record(loss)
+            try? await Task.sleep(for: .milliseconds(50))
             return true
         }
     )
     try await supervisor.start(connectTimeout: .seconds(2))
     transport.agents[0].hangUp()
+    try await eventually { await supervisor.state == .reconnecting }
+    #expect(await supervisor.protocolVersion?.description == "1.0")
     try await eventually { await supervisor.state == .ready && transport.agents.count >= 2 }
     #expect(losses.all == [.disconnected])
     let displays = await supervisor.snapshot.displays.keys.sorted()
@@ -280,6 +332,7 @@ func aConnectionThatNeverComesUpTimesOut() async throws {
     } catch {
         #expect(error == .connectTimedOut)
     }
+    #expect(await supervisor.state == .unavailable)
 }
 
 private func displayRemovedEvent(_ id: Int32) -> GPEvent.OneOf_Kind {
@@ -303,6 +356,9 @@ func aRefusedVersionFailsTheStartAtOnce() async throws {
     } catch {
         #expect(error == .handshakeFailed(reason: "incompatibleVersion"))
     }
+    let status = await supervisor.statusSnapshot()
+    #expect(status.state == .incompatible)
+    #expect(status.protocolVersion?.description == "2.0")
     #expect(ContinuousClock.now - started < .seconds(3))
     #expect(transport.agents.count == 1)
 }
@@ -376,6 +432,42 @@ func aRestartedAgentThatDiesBeforeItConnectsIsRestartedAgain() async throws {
     try await eventually { await supervisor.state == .ready && transport.agents.count >= 2 }
     #expect(losses.all == [.disconnected, .disconnected, .disconnected])
     await supervisor.stop()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aStoppedSupervisorDoesNotBecomeUnavailableAfterADeferredRestart() async throws {
+    let losses = LossLog()
+    let gate = RestartGate()
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello()
+        agent.answer = { request in
+            isGetSnapshot(request) ? .getSnapshot(snapshot(displays: [0])) : pongResult(for: request)
+        }
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: transport,
+        keepaliveInterval: .seconds(60),
+        backoffMinimum: .milliseconds(10),
+        backoffMaximum: .milliseconds(20),
+        restartAgent: { loss in
+            losses.record(loss)
+            if losses.all.count == 2 {
+                await gate.pause()
+                return false
+            }
+            return true
+        }
+    )
+    try await supervisor.start(connectTimeout: .seconds(2))
+    transport.refuseNext(1)
+    transport.agents[0].hangUp()
+    await gate.waitUntilEntered()
+
+    await supervisor.stop()
+    await gate.release()
+    try await Task.sleep(for: .milliseconds(30))
+
+    #expect(await supervisor.state == .stopped)
 }
 
 @Test(.timeLimit(.minutes(1)))

@@ -92,6 +92,8 @@ private struct BootDraft: Sendable {
 public actor RuntimeSupervisor {
     /// The current state.
     public private(set) var state: RuntimeState = .stopped
+    /// The Guest Agent state retained after the last failed boot.
+    private var lastGuestAgentStatus: GuestAgentSupervisor.StatusSnapshot?
     /// State changes and console output, in order. Finishes when the supervisor is released.
     public nonisolated let events: AsyncStream<RuntimeEvent>
     /// The Android serial shell, in developer mode once a boot has started.
@@ -191,6 +193,7 @@ public actor RuntimeSupervisor {
             throw .androidBootFailed(detail: "the runtime is not stopped")
         }
         stopRequested = false
+        lastGuestAgentStatus = nil
         isBooting = true
         defer { isBooting = false }
         do {
@@ -207,6 +210,14 @@ public actor RuntimeSupervisor {
             throw error
         }
         writeBootRecord(outcome: "ready")
+    }
+
+    /// Returns a consistent view of the active Guest Agent, or the final state retained after a failed boot.
+    public func guestAgentStatusSnapshot() async -> GuestAgentSupervisor.StatusSnapshot? {
+        if let developmentGuestAgent {
+            return await developmentGuestAgent.supervisor.statusSnapshot()
+        }
+        return lastGuestAgentStatus
     }
 
     /// Stops Android: `reboot -p` over ADB (or over the serial shell when ADB is not connected) in
@@ -659,12 +670,32 @@ public actor RuntimeSupervisor {
 
     /// Stops the Guest Agent of the boot. It runs before the guest powers off, so that the supervisor does not
     /// try to restart an agent that is going down.
-    private func stopGuestAgent() async {
+    private func stopGuestAgent(preservingFailureStatus: Bool = false) async {
         guard let agent = developmentGuestAgent else {
             return
         }
+        let status = await agent.supervisor.statusSnapshot()
         developmentGuestAgent = nil
+        lastGuestAgentStatus = Self.guestAgentStatusAfterStop(status, preservingFailure: preservingFailureStatus)
         await agent.stop()
+    }
+
+    /// Teardown ends live connection states. Keep terminal diagnosis and negotiated protocol information available.
+    static func guestAgentStatusAfterStop(
+        _ status: GuestAgentSupervisor.StatusSnapshot,
+        preservingFailure: Bool
+    ) -> GuestAgentSupervisor.StatusSnapshot {
+        guard preservingFailure else {
+            return GuestAgentSupervisor.StatusSnapshot(state: .stopped, protocolVersion: nil)
+        }
+        let state: GuestAgentSupervisor.State =
+            switch status.state {
+            case .connecting, .ready, .reconnecting, .unresponsive:
+                .unavailable
+            case .incompatible, .stopped, .unavailable:
+                status.state
+            }
+        return GuestAgentSupervisor.StatusSnapshot(state: state, protocolVersion: status.protocolVersion)
     }
 
     /// Closes the forwarder and forgets the ADB client of the boot that just ended.
@@ -822,7 +853,7 @@ public actor RuntimeSupervisor {
     ]
 
     private func fail(_ failure: RuntimeBootFailure) async {
-        await stopGuestAgent()
+        await stopGuestAgent(preservingFailureStatus: !stopRequested)
         bootProgress?.finish()
         bootProgress = nil
         if stopRequested {

@@ -50,6 +50,10 @@ private final class FakeGuestADB: @unchecked Sendable {
                 exit 1 ;;
               "-s 127.0.0.1:6520 shell kill 2121") rm -f "$dir/running"; exit 0 ;;
               *"app_process"*)
+                if [ -f "$dir/block-start" ]; then
+                  touch "$dir/start-entered"
+                  while [ -f "$dir/block-start" ]; do sleep 0.01; done
+                fi
                 if [ -f "$dir/refuse-start" ]; then exit 1; fi
                 touch "$dir/running"; exit 0 ;;
               *) exit 0 ;;
@@ -93,6 +97,22 @@ private final class FakeGuestADB: @unchecked Sendable {
 
     func refuseNextInstall() throws {
         try Data().write(to: directory.appendingPathComponent("refuse-install"))
+    }
+
+    func blockAgentStart() throws {
+        try Data().write(to: directory.appendingPathComponent("block-start"))
+    }
+
+    var agentStartEntered: Bool {
+        FileManager.default.fileExists(atPath: directory.appendingPathComponent("start-entered").path)
+    }
+
+    func allowAgentStart() {
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent("block-start"))
+    }
+
+    var agentIsRunning: Bool {
+        FileManager.default.fileExists(atPath: directory.appendingPathComponent("running").path)
     }
 }
 
@@ -298,4 +318,27 @@ func aFourthDeathWithinAMinuteIsRequiredAgentUnavailable() async throws {
         // The catalog code is the one that the host reports (error-catalog.md).
         #expect(error.qualifiedCode == "runtime.requiredAgentUnavailable")
     }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aRestartFinishingAfterStopDoesNotLeaveTheAgentRunning() async throws {
+    let fake = try FakeGuestADB()
+    try fake.blockAgentStart()
+    let agent = DevelopmentGuestAgent(
+        adb: AdbClient(executable: fake.executable),
+        bundle: bundle(version: 1000)
+    )
+    let restart = Task { await agent.handleLoss(.unresponsive) }
+    let deadline = ContinuousClock.now + .seconds(5)
+    while !fake.agentStartEntered, ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(fake.agentStartEntered, "the fake ADB did not reach the blocked start command")
+
+    await agent.stop()
+    fake.allowAgentStart()
+
+    #expect(await restart.value == false)
+    #expect(!fake.agentIsRunning)
+    #expect(fake.calls.contains("-s 127.0.0.1:6520 shell kill 2121"))
 }

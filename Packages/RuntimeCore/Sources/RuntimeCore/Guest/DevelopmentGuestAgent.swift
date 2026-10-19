@@ -262,6 +262,9 @@ public actor DevelopmentGuestAgent {
     /// usable, or when the control session has another token, because a new control session refuses the old one.
     public func inputChannel() async throws(GuestAgentFailure) -> GuestInputChannel {
         try requireAvailable()
+        guard await supervisor.statusSnapshot().state == .ready else {
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
+        }
         guard let token = await supervisor.session?.sessionToken else {
             throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
         }
@@ -279,6 +282,12 @@ public actor DevelopmentGuestAgent {
             _ = try await connection.open()
         } catch {
             throw Self.inputFailure(error)
+        }
+        guard await supervisor.statusSnapshot().state == .ready,
+            await supervisor.session?.sessionToken == token
+        else {
+            await connection.close()
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
         }
         // A caller that ran meanwhile may have opened a usable one. It is kept, and the new one is closed.
         if let kept = await reusableInputConnection(token: token) {

@@ -16,6 +16,27 @@ public struct AppSessionSnapshot: Sendable, Equatable {
 
 }
 
+/// Work the runtime owner should perform after reconciling one session with a guest snapshot.
+public enum SessionReconciliationAction: Sendable, Equatable {
+    /// The guest already has the session's tasks, or no follow-up is needed for its state.
+    case none
+    /// The session is still launching and should receive an idempotent `LaunchApplication`.
+    case relaunchApplication
+}
+
+/// The resulting session state and any follow-up work after guest snapshot reconciliation.
+public struct SessionReconciliationResult: Sendable, Equatable {
+    /// The session after applying the guest's display and task state.
+    public let session: AppSessionSnapshot
+    /// The work the runtime owner should perform after reconciliation.
+    public let action: SessionReconciliationAction
+
+    fileprivate init(session: AppSessionSnapshot, action: SessionReconciliationAction) {
+        self.session = session
+        self.action = action
+    }
+}
+
 /// Errors returned by the embedded and leased-display session registry.
 public enum SessionRegistryFailure: Error, Sendable, Equatable {
     /// The request did not name a package.
@@ -247,7 +268,7 @@ public actor SessionRegistry {
         guard taskID >= 0,
             var entry = entries.values.first(where: { $0.packageID == packageID && $0.state.isLive }),
             entry.state == .launching,
-            entry.launchReplyPending
+            entry.launchReplyPending || entry.taskIDs.contains(taskID)
         else {
             return nil
         }
@@ -320,6 +341,95 @@ public actor SessionRegistry {
             await allocationToRelease.pool.release(allocationToRelease.lease)
         }
         return entry.snapshot
+    }
+
+    /// Reconciles one existing app session with the Guest Agent's complete snapshot.
+    ///
+    /// A missing bound display ends the session and releases its lease; queued or acquiring sessions are not
+    /// compared against their placeholder display ID. Running and backgrounded sessions adopt the snapshot's task
+    /// IDs for their package and end when that package has no tasks. A launching session with no package task
+    /// remains launching and returns an idempotent relaunch action.
+    public func reconcile(
+        sessionID: SessionID,
+        against guest: GuestSnapshotState
+    ) throws(SessionRegistryFailure) -> SessionReconciliationResult {
+        guard var entry = entries[sessionID] else {
+            throw .sessionNotFound
+        }
+        guard !entry.state.isEnded else {
+            return SessionReconciliationResult(session: entry.snapshot, action: .none)
+        }
+
+        let displayIsBound: Bool
+        if entry.displayAcquisitionPending {
+            displayIsBound = false
+        } else if entry.displayLease != nil {
+            displayIsBound = true
+        } else if entry.displayMode == .primaryDisplayCompatibility {
+            switch entry.state {
+            case .launching, .running, .backgrounded, .closing:
+                displayIsBound = true
+            case .requested, .waitingForRuntime, .acquiringDisplay, .ended:
+                displayIsBound = false
+            }
+        } else {
+            displayIsBound = false
+        }
+        guard !displayIsBound || guest.displays[entry.displayID] != nil else {
+            let previous = entry.state
+            entry.state = .ended(.error(.displayLost))
+            entry.stateBeforeClosing = nil
+            let allocationToRelease = Self.takeDisplayAllocationIfEnded(from: &entry)
+            entries[entry.id] = entry
+            log("session state \(String(describing: previous)) -> \(String(describing: entry.state))", entry: entry)
+            if let allocationToRelease {
+                Task {
+                    await allocationToRelease.pool.release(allocationToRelease.lease)
+                }
+            }
+            return SessionReconciliationResult(session: entry.snapshot, action: .none)
+        }
+
+        let packageTaskIDs = Set(
+            guest.tasks.values
+                .filter { $0.package == entry.packageID && $0.taskID >= 0 }
+                .map(\.taskID)
+        )
+        switch entry.state {
+        case .launching:
+            entry.taskIDs = packageTaskIDs
+            if !packageTaskIDs.isEmpty {
+                entry.launchReplyPending = false
+                entry.vanishedDuringLaunch.removeAll()
+            }
+            entries[entry.id] = entry
+            return SessionReconciliationResult(
+                session: entry.snapshot,
+                action: packageTaskIDs.isEmpty ? .relaunchApplication : .none
+            )
+        case .running, .backgrounded:
+            entry.taskIDs = packageTaskIDs
+            if packageTaskIDs.isEmpty {
+                let previous = entry.state
+                entry.state = .ended(.appExited)
+                entry.stateBeforeClosing = nil
+                entry.launchReplyPending = false
+                entry.vanishedDuringLaunch.removeAll()
+                let allocationToRelease = Self.takeDisplayAllocationIfEnded(from: &entry)
+                entries[entry.id] = entry
+                log("session state \(String(describing: previous)) -> \(String(describing: entry.state))", entry: entry)
+                if let allocationToRelease {
+                    Task {
+                        await allocationToRelease.pool.release(allocationToRelease.lease)
+                    }
+                }
+            } else {
+                entries[entry.id] = entry
+            }
+            return SessionReconciliationResult(session: entry.snapshot, action: .none)
+        case .requested, .waitingForRuntime, .acquiringDisplay, .closing, .ended:
+            return SessionReconciliationResult(session: entry.snapshot, action: .none)
+        }
     }
 
     /// Returns a session by ID, including its terminal snapshot.

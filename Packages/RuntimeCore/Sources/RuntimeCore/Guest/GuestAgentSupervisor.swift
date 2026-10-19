@@ -170,6 +170,7 @@ public actor GuestAgentSupervisor {
     private let updateContinuation: AsyncStream<GPEvent>.Continuation
     private let androidRestartContinuation: AsyncStream<GuestAndroidRestart>.Continuation
     private var stateObservers: [UUID: AsyncStream<State>.Continuation] = [:]
+    private var resynchronizationHandlers: [UUID: @Sendable (GuestSnapshotState) async -> Void] = [:]
     private var connection: GuestConnection?
     private var consumer: Task<Void, Never>?
     private var maintenance: Task<Void, Never>?
@@ -328,6 +329,31 @@ public actor GuestAgentSupervisor {
         }
         stream.continuation.yield(state)
         return stream.stream
+    }
+
+    /// Registers a host-state reconciler that runs after each complete snapshot and before the connection becomes
+    /// ready. When already ready, the current snapshot is delivered once before this method returns.
+    ///
+    /// Handlers should reconcile host-owned state only. Guest operations needed by a handler must be scheduled to run
+    /// after it returns, because ordinary sends wait for this barrier to complete.
+    @discardableResult
+    public func addResynchronizationHandler(
+        _ handler: @escaping @Sendable (GuestSnapshotState) async -> Void
+    ) async -> UUID {
+        let id = UUID()
+        resynchronizationHandlers[id] = handler
+        guard state == .ready, let current = connection, await current.isUsable,
+            state == .ready, connection === current
+        else {
+            return id
+        }
+        await handler(snapshot)
+        return id
+    }
+
+    /// Removes a previously registered host-state reconciler.
+    public func removeResynchronizationHandler(_ id: UUID) {
+        resynchronizationHandlers[id] = nil
     }
 
     /// Sends one operation through the current connection. During a reconnect it waits up to
@@ -526,12 +552,49 @@ public actor GuestAgentSupervisor {
                     )
                 )
             }
-            awaitingSnapshot = false
-            for event in buffered {
+            var eventsToPublish = buffered
+            for event in eventsToPublish {
                 snapshot.apply(event)
-                updateContinuation.yield(event)
             }
             buffered = []
+
+            var reconciledHandlerIDs: Set<UUID> = []
+            while true {
+                let handlers = resynchronizationHandlers.sorted { $0.key.uuidString < $1.key.uuidString }
+                for (id, handler) in handlers {
+                    guard resynchronizationHandlers[id] != nil else {
+                        continue
+                    }
+                    await handler(snapshot)
+                    guard generation == started, connection === next else {
+                        throw GuestProtocolFailure.disconnected
+                    }
+                    reconciledHandlerIDs.insert(id)
+                }
+
+                let eventsReceivedDuringReconciliation = buffered
+                buffered = []
+                if !eventsReceivedDuringReconciliation.isEmpty {
+                    eventsToPublish.append(contentsOf: eventsReceivedDuringReconciliation)
+                    for event in eventsReceivedDuringReconciliation {
+                        snapshot.apply(event)
+                    }
+                    // Reconcile the updated complete state before allowing queued requests to proceed.
+                    continue
+                }
+
+                let currentHandlerIDs = Set(resynchronizationHandlers.keys)
+                guard currentHandlerIDs.isSubset(of: reconciledHandlerIDs) else {
+                    // A handler can be registered while another handler is suspended.
+                    continue
+                }
+                break
+            }
+
+            awaitingSnapshot = false
+            for event in eventsToPublish {
+                updateContinuation.yield(event)
+            }
         } catch {
             awaitingSnapshot = false
             buffered = []

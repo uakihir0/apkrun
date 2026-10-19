@@ -149,6 +149,111 @@ private actor RestartGate {
     }
 }
 
+/// Holds one selected snapshot reconciliation so the test can check the readiness barrier.
+private actor SnapshotReconciliationGate {
+    private let pausesOnInvocation: Int
+    private var invocationCount = 0
+    private var observedSnapshots: [GuestSnapshotState] = []
+    private var entryContinuation: CheckedContinuation<Void, Never>?
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    init(pausesOnInvocation: Int) {
+        self.pausesOnInvocation = pausesOnInvocation
+    }
+
+    func reconcile(_ snapshot: GuestSnapshotState) async {
+        invocationCount += 1
+        observedSnapshots.append(snapshot)
+        guard invocationCount == pausesOnInvocation else {
+            return
+        }
+        entryContinuation?.resume()
+        entryContinuation = nil
+        await withCheckedContinuation { releaseContinuation = $0 }
+    }
+
+    func waitUntilPaused() async {
+        guard invocationCount < pausesOnInvocation else { return }
+        await withCheckedContinuation { entryContinuation = $0 }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+
+    var snapshots: [GuestSnapshotState] { observedSnapshots }
+}
+
+/// Rechecks a scheduled launch after reconciliation, like the embedded session service does behind its operation gate.
+private actor LaunchingSessionReconciler {
+    private let registry: SessionRegistry
+    private let sessionID: SessionID
+    private let relaunchGate: RelaunchCheckGate
+    private var recordedActions: [SessionReconciliationAction] = []
+    private var relaunchChecks = 0
+    private var relaunchCount = 0
+
+    init(registry: SessionRegistry, sessionID: SessionID, relaunchGate: RelaunchCheckGate) {
+        self.registry = registry
+        self.sessionID = sessionID
+        self.relaunchGate = relaunchGate
+    }
+
+    func reconcile(_ snapshot: GuestSnapshotState) async {
+        guard let result = try? await registry.reconcile(sessionID: sessionID, against: snapshot) else {
+            return
+        }
+        recordedActions.append(result.action)
+        guard result.action == .relaunchApplication else {
+            return
+        }
+        Task {
+            await relaunchGate.wait()
+            await checkWhetherRelaunchIsStillNeeded()
+        }
+    }
+
+    private func checkWhetherRelaunchIsStillNeeded() async {
+        relaunchChecks += 1
+        guard let current = await registry.session(sessionID),
+            current.state == .launching,
+            current.taskIDs.isEmpty
+        else {
+            return
+        }
+        relaunchCount += 1
+    }
+
+    var actions: [SessionReconciliationAction] { recordedActions }
+    var completedRelaunchChecks: Int { relaunchChecks }
+    var relaunched: Int { relaunchCount }
+}
+
+/// Delays the relaunch recheck until the latest complete snapshot has been applied.
+private actor RelaunchCheckGate {
+    private var isPaused = false
+    private var pauseContinuation: CheckedContinuation<Void, Never>?
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        isPaused = true
+        pauseContinuation?.resume()
+        pauseContinuation = nil
+        await withCheckedContinuation { releaseContinuation = $0 }
+    }
+
+    func waitUntilPaused() async {
+        guard !isPaused else { return }
+        await withCheckedContinuation { pauseContinuation = $0 }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+}
+
 /// Records Android reboot notifications from a supervisor stream.
 private final class AndroidRestartLog: @unchecked Sendable {
     private let lock = NSLock()
@@ -283,6 +388,127 @@ func aClosedConnectionIsReconnectedAndResynchronised() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func queuedSendsWaitForSnapshotReconciliationAndEventsStayOrdered() async throws {
+    let gate = SnapshotReconciliationGate(pausesOnInvocation: 2)
+    let transport = InMemoryTransport { _, agent, number in
+        agent.sendHello()
+        agent.answer = { request in
+            if isGetSnapshot(request) {
+                return .getSnapshot(snapshot(displays: [number == 1 ? 0 : 3]))
+            }
+            return pongResult(for: request)
+        }
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: transport,
+        keepaliveInterval: .seconds(60),
+        requestReconnectTimeout: .seconds(2),
+        restartAgent: { _ in true }
+    )
+    await supervisor.addResynchronizationHandler { snapshot in
+        await gate.reconcile(snapshot)
+    }
+    try await supervisor.start(connectTimeout: .seconds(2))
+
+    transport.agents[0].hangUp()
+    await gate.waitUntilPaused()
+    #expect(await supervisor.state == .reconnecting)
+    #expect(await gate.snapshots.map { $0.displays.keys.sorted() } == [[0], [3]])
+
+    let queuedSend = Task {
+        try await supervisor.send(GuestPing(nonce: 123), timeout: .seconds(1))
+    }
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(transport.agents[1].requests.filter(isPing).isEmpty)
+
+    // Events received while the host applies the snapshot remain buffered behind the same barrier.
+    transport.agents[1].sendEvent(.displayAdded(display(9)))
+    try await Task.sleep(for: .milliseconds(20))
+    let eventIsStillBuffered = await supervisor.snapshot.displays[9] == nil
+    #expect(eventIsStillBuffered)
+    await gate.release()
+
+    let pong = try await queuedSend.value
+    #expect(pong.nonce == 123)
+    try await eventually {
+        let state = await supervisor.state
+        let hasReplayedEvent = await supervisor.snapshot.displays[9] != nil
+        return state == .ready && hasReplayedEvent
+    }
+    #expect(transport.agents[1].requests.filter(isPing).count == 1)
+    await supervisor.stop()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func taskEventDuringReconciliationPreventsRelaunchFromStaleSnapshot() async throws {
+    let sessionPackage = "io.apkrun.fixture.hellotext"
+    let registry = SessionRegistry()
+    let session = try await registry.request(packageID: sessionPackage)
+    _ = try await registry.transition(session.id, to: .waitingForRuntime)
+    _ = try await registry.transition(session.id, to: .acquiringDisplay)
+    _ = try await registry.transition(session.id, to: .launching)
+
+    let taskGate = SnapshotReconciliationGate(pausesOnInvocation: 2)
+    let relaunchGate = RelaunchCheckGate()
+    let sessionReconciler = LaunchingSessionReconciler(
+        registry: registry,
+        sessionID: session.id,
+        relaunchGate: relaunchGate
+    )
+    let transport = InMemoryTransport { _, agent, number in
+        agent.sendHello()
+        agent.answer = { request in
+            guard isGetSnapshot(request) else { return pongResult(for: request) }
+            let state =
+                number == 1
+                ? guestSnapshot(displays: [0], tasks: [(taskID: 90, packageID: sessionPackage)])
+                : guestSnapshot(displays: [0])
+            return .getSnapshot(state)
+        }
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: transport,
+        keepaliveInterval: .seconds(60),
+        restartAgent: { _ in true }
+    )
+    await supervisor.addResynchronizationHandler { state in
+        await sessionReconciler.reconcile(state)
+        await taskGate.reconcile(state)
+    }
+    try await supervisor.start(connectTimeout: .seconds(2))
+    #expect(await registry.session(session.id)?.taskIDs == [90])
+
+    transport.agents[0].hangUp()
+    await taskGate.waitUntilPaused()
+    #expect(await sessionReconciler.actions == [.none, .relaunchApplication])
+    await relaunchGate.waitUntilPaused()
+
+    var appearedTask = GPTaskInfo()
+    appearedTask.taskID = 91
+    appearedTask.displayID = 0
+    appearedTask.package = sessionPackage
+    transport.agents[1].sendEvent(.taskAppeared(appearedTask))
+    try await Task.sleep(for: .milliseconds(20))
+    #expect(await supervisor.snapshot.tasks[91] == nil)
+
+    await taskGate.release()
+    try await eventually {
+        let state = await supervisor.state
+        let hasTask = await supervisor.snapshot.tasks[91] != nil
+        let reconciliationCount = await taskGate.snapshots.count
+        return state == .ready && hasTask && reconciliationCount == 3
+    }
+    #expect(await sessionReconciler.actions == [.none, .relaunchApplication, .none])
+    #expect(await registry.session(session.id)?.state == .launching)
+    #expect(await registry.session(session.id)?.taskIDs == [91])
+
+    await relaunchGate.release()
+    try await eventually { await sessionReconciler.completedRelaunchChecks == 1 }
+    #expect(await sessionReconciler.relaunched == 0)
+    await supervisor.stop()
+}
+
+@Test(.timeLimit(.minutes(1)))
 func androidRestartIsDetectedByAnUptimeRollbackButAgentRestartIsNot() async throws {
     let transport = InMemoryTransport { _, agent, number in
         agent.sendHello()
@@ -324,6 +550,22 @@ func androidRestartIsDetectedByAnUptimeRollbackButAgentRestartIsNot() async thro
     )
     await supervisor.stop()
     monitor.cancel()
+}
+
+private func guestSnapshot(
+    displays displayIDs: [Int32],
+    tasks taskRecords: [(taskID: Int32, packageID: String)] = []
+) -> GPSnapshot {
+    var result = GPSnapshot()
+    result.displays = displayIDs.map(display)
+    result.tasks = taskRecords.map { record in
+        var task = GPTaskInfo()
+        task.taskID = record.taskID
+        task.displayID = 0
+        task.package = record.packageID
+        return task
+    }
+    return result
 }
 
 @Test(.timeLimit(.minutes(1)))

@@ -5,14 +5,14 @@
     import RuntimeAPI
     import RuntimeHost
 
-    /// `apkrun dev launch <apk|package>`: boots Android, starts the Guest Agent, launches the package on display 0
+    /// `apkrun dev launch <apk|package>`: boots Android, starts the Guest Agent, and launches on the selected display
     /// through `LaunchApplication`, and prints the result (cli.md §5, #072). With the development window (the default,
     /// decision D13) the boot goes on until the window closes or Ctrl-C, and the window sends its pointer events to the
     /// app. With `--no-window` Android stops once the launch is done, as #072 did.
     struct DevLaunchCommand: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "launch",
-            abstract: "Boot Android, launch a package on display 0, and show it in a development window."
+            abstract: "Boot Android, launch a package on the selected display, and show it in a development window."
         )
 
         @Argument(
@@ -25,10 +25,20 @@
             help: "The Guest Agent bundle directory (default: APKRUN_GUEST_DIR, then the app's Resources/guest).")
         var guestDir: String?
 
+        @Option(name: .long, help: "The Android display to use: 0 for compatibility, or secondary for a pooled window.")
+        var display = "0"
+
         @Flag(name: .long, help: "Launch without the window, and stop Android when the launch is done.")
         var noWindow = false
 
         mutating func run() async throws {
+            guard display == "0" || display == "secondary" else {
+                throw CLIFailure.invalidArgument(argument: "--display", reason: "name")
+            }
+            guard !noWindow || display == "0" else {
+                throw CLIFailure.invalidArgument(argument: "--display", reason: "entry")
+            }
+            let usesSecondaryDisplay = display == "secondary"
             let session = noWindow ? nil : DisplayWindowSession.current
             guard noWindow || session != nil else {
                 throw CLIFailure.invalidArgument(argument: "--no-window", reason: "entry")
@@ -50,8 +60,11 @@
                     launchAPKURL: launchAPKURL
                 )
                 if let session {
-                    options.developerDisplay = session.display
+                    options.developerDisplay = usesSecondaryDisplay ? nil : session.display
                     options.inputRoute = session.inputRoute
+                    options.windowDisplay = session.display
+                    options.windowDisplayMode =
+                        usesSecondaryDisplay ? .secondaryDisplay : .primaryDisplayCompatibility
                 }
                 let onRuntimeReady:
                     (

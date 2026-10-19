@@ -183,6 +183,27 @@ func embeddedRuntimeServiceRejectsLaunchWithoutAWindow() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceRejectsAnotherPackageWhileTheWindowSessionIsOwned() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent()
+    let service = EmbeddedRuntimeService()
+    await service.attachGuestAgent(guest)
+    _ = try await service.requestSession(packageID: "io.apkrun.fixture.hellotext")
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellocompose"))
+
+    await #expect(
+        throws: RuntimeWireError.runtime(
+            "sessionAlreadyExists",
+            message: "io.apkrun.fixture.hellotext already has a live app session on another display.",
+            remediation: "Close its current window before requesting another display."
+        )
+    ) {
+        try await service.launch(RuntimeLaunchRequest(packageID: package))
+    }
+
+    #expect(await guest.launchedPackages.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1)))
 func embeddedRuntimeServiceRejectsLaunchOfUninstalledPackage() async throws {
     let guest = FakeEmbeddedSessionGuestAgent(isInstalled: false)
     let service = EmbeddedRuntimeService()
@@ -330,6 +351,23 @@ func devBootStopSignalSkipsAPKInstallWhenWindowClosedFirst() async {
 
     #expect(!(await signal.beginPackageInstall()))
     #expect(await signal.hasScheduledRuntimeStop())
+    await signal.stopRuntime()
+    #expect(await probe.events == ["stop"])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func devBootStopSignalDefersStoppingUntilAnActiveDisplaySessionCanReleaseItsLease() async {
+    let signal = DevBootStopSignal()
+    let probe = DevBootStopProbe()
+    await signal.attachStopHandler {
+        await probe.record("stop")
+    }
+    #expect(await signal.beginDisplayAcquisition())
+
+    await signal.signal(.signal)
+
+    #expect(await signal.current() == .signal)
+    #expect(!(await signal.hasScheduledRuntimeStop()))
     await signal.stopRuntime()
     #expect(await probe.events == ["stop"])
 }

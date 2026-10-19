@@ -15,6 +15,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     private let window: NSWindow
     private let layerView: IOSurfaceLayerView
     private let inputSink: PointerInputSink?
+    private let allowsResize: Bool
     private var placeholderView: SessionWindowPlaceholderView?
     private var errorView: SessionWindowErrorView?
     private let source: any FrameSource
@@ -36,6 +37,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         title: String,
         backingScale: CGFloat,
         inputSink: PointerInputSink? = nil,
+        allowsResize: Bool = true,
         appIcon: NSImage? = nil,
         onGeometryChanged:
             ((CGSize, CGFloat, Double, @escaping @MainActor (DisplayResizeOutcome) -> Void) -> Void)? = nil
@@ -51,13 +53,18 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
             zoom: surfaceSet.zoom
         )
         self.onGeometryChanged = onGeometryChanged
+        self.allowsResize = allowsResize
         layerView.setInputEnabled(false)
         self.inputSink = inputSink
         let placeholderView = SessionWindowPlaceholderView(
             appName: title, appIcon: appIcon, frame: NSRect(origin: .zero, size: size))
+        var styleMask: NSWindow.StyleMask = [.titled, .closable, .miniaturizable]
+        if allowsResize {
+            styleMask.insert(.resizable)
+        }
         window = NSWindow(
             contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: styleMask,
             backing: .buffered,
             defer: false
         )
@@ -90,9 +97,11 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         window.acceptsMouseMovedEvents = true
         window.setContentSize(size)
         window.center()
-        layerView.onZoomChanged = { [weak self] zoom in
-            self?.window.contentMinSize = NSSize(width: 320 * zoom, height: 400 * zoom)
-            self?.requestGeometryUpdate(zoom: zoom)
+        if allowsResize {
+            layerView.onZoomChanged = { [weak self] zoom in
+                self?.window.contentMinSize = NSSize(width: 320 * zoom, height: 400 * zoom)
+                self?.requestGeometryUpdate(zoom: zoom)
+            }
         }
         self.placeholderView = placeholderView
     }
@@ -250,7 +259,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     }
 
     private func requestGeometryUpdate(zoom: Double? = nil) {
-        guard isShown, !presentationState.hasFailed else {
+        guard allowsResize, isShown, !presentationState.hasFailed else {
             return
         }
         geometryUpdatePending = true

@@ -14,6 +14,8 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
     private var taskID: Int32?
     private var guestAgent: (any EmbeddedSessionGuestAgent)?
     private let developerDisplay: DeveloperDisplay?
+    private let displayPool: DisplayPool?
+    private let inputRoute: DevInputRoute?
     private let stopSignal: DevBootStopSignal?
     private var sessionOperationInFlight = false
     private var sessionOperationWaiters: [CheckedContinuation<Void, Never>] = []
@@ -22,6 +24,8 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
     public init(registry: SessionRegistry? = nil, logSink: (any LogSink)? = nil) {
         self.registry = registry ?? SessionRegistry(logSink: logSink)
         developerDisplay = nil
+        displayPool = nil
+        inputRoute = nil
         stopSignal = nil
     }
 
@@ -29,10 +33,14 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         registry: SessionRegistry? = nil,
         logSink: (any LogSink)? = nil,
         developerDisplay: DeveloperDisplay,
-        stopSignal: DevBootStopSignal
+        stopSignal: DevBootStopSignal,
+        displayPool: DisplayPool? = nil,
+        inputRoute: DevInputRoute? = nil
     ) {
         self.registry = registry ?? SessionRegistry(logSink: logSink)
         self.developerDisplay = developerDisplay
+        self.displayPool = displayPool
+        self.inputRoute = inputRoute
         self.stopSignal = stopSignal
     }
 
@@ -52,6 +60,11 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
                 message: "The Android Guest Agent is unavailable.",
                 remediation: "Boot Android with the development Guest Agent, then retry."
             )
+        }
+        if let current = await currentSession(), !current.state.isEnded,
+            current.packageID != requestedPackage
+        {
+            throw Self.wireError(for: .sessionAlreadyExists(packageID: current.packageID))
         }
         let isInstalled: Bool
         do throws(GuestAgentFailure) {
@@ -77,7 +90,11 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
 
         var snapshot: AppSessionSnapshot
         do throws(SessionRegistryFailure) {
-            snapshot = try await requestSession(packageID: requestedPackage)
+            if let current = await currentSession(), !current.state.isEnded {
+                snapshot = current
+            } else {
+                snapshot = try await requestSession(packageID: requestedPackage)
+            }
             if snapshot.state == .waitingForRuntime {
                 snapshot = try await displayReady()
             }
@@ -108,7 +125,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         let frameCountBeforeLaunch = developerDisplay.windowFrameCommitCount
         let report: GuestLaunchReport
         do throws(GuestAgentFailure) {
-            report = try await guestAgent.launch(package: requestedPackage, displayID: 0)
+            report = try await guestAgent.launch(package: requestedPackage, displayID: snapshot.displayID)
         } catch {
             await markRuntimeFailed()
             throw Self.wireError(for: error)
@@ -215,7 +232,55 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
     /// Records that Android is ready and the embedded session is using primary display 0.
     @discardableResult
     public func displayReady() async throws(SessionRegistryFailure) -> AppSessionSnapshot {
-        try await transition(to: .acquiringDisplay)
+        if let current = await currentSession(), current.state == .acquiringDisplay {
+            return current
+        }
+        return try await transition(to: .acquiringDisplay)
+    }
+
+    /// Acquires and attaches a display lease before input is bound or the app is launched.
+    @discardableResult
+    func requestLeasedSession(
+        packageID: String,
+        configuration: DisplayConfiguration
+    ) async throws(RuntimeWireError) -> AppSessionSnapshot {
+        guard let displayPool, let developerDisplay else {
+            throw .runtime(
+                "windowUnavailable",
+                message: "APKRun couldn't connect a virtual Android display to the window.",
+                remediation: "Use `apkrun dev launch --display 0` or start Android with a graphics window."
+            )
+        }
+        let snapshot: AppSessionSnapshot
+        do throws(SessionRegistryFailure) {
+            snapshot = try await registry.requestLeased(
+                packageID: packageID,
+                configuration: configuration,
+                displayPool: displayPool
+            )
+        } catch {
+            throw Self.wireError(for: error)
+        }
+        sessionID = snapshot.id
+        self.packageID = packageID
+        guard let lease = await registry.displayLease(snapshot.id) else {
+            _ = try? await registry.transition(snapshot.id, to: .ended(.error(.runtimeFailed)))
+            throw .runtime("internal", message: "The display lease was not recorded for the app session.")
+        }
+        if lease.scanout.rawValue != 0 {
+            do {
+                try developerDisplay.attach(lease: lease)
+            } catch {
+                _ = try? await registry.transition(snapshot.id, to: .ended(.error(.runtimeFailed)))
+                throw .runtime(
+                    "displayAttachFailed",
+                    message: "APKRun couldn't connect Android's display to the native window.",
+                    remediation: "Close the window, then retry the launch."
+                )
+            }
+        }
+        await inputRoute?.setDisplayID(lease.androidDisplayID)
+        return snapshot
     }
 
     /// Records that the Guest Agent is starting the requested package.
@@ -367,9 +432,9 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
             return .runtime("invalidPackageID", message: "The Android package identifier is invalid.")
         case .displayInUse(let packageID):
             return .runtime(
-                "displayPoolExhausted",
-                message: "Display 0 is already in use by \(packageID).",
-                remediation: "Close that app before launching another one."
+                "primaryDisplayBusy",
+                message: "\(packageID) is already using the compatibility window mode.",
+                remediation: "Close \(packageID) or switch it to the standard secondary display mode."
             )
         case .sessionAlreadyExists(let packageID):
             return .runtime(
@@ -391,6 +456,18 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
             )
         case .displayPool(.staleLease):
             return .runtime("internal", message: "The Android display lease is no longer current.")
+        case .displayPool(.primaryDisplayBusy):
+            return .runtime(
+                "primaryDisplayBusy",
+                message: "Another app is already using the compatibility window mode.",
+                remediation: "Close that app or switch it to the standard secondary display mode."
+            )
+        case .displayPool(.primaryDisplayUnavailable):
+            return .runtime(
+                "displayAttachFailed",
+                message: "The compatibility display has no active graphics presenter.",
+                remediation: "Start Android with the primary development window, then retry."
+            )
         case .displayPool(.invalidGeometry):
             return .runtime("displayGeometryInvalid", message: "The requested app window size is invalid.")
         case .displayPool(.reconfigureFailed(let stateUncertain)):

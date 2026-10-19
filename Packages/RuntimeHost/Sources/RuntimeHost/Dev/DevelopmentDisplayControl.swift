@@ -219,6 +219,18 @@ public actor DevelopmentDisplayControl {
                 message: "The host GPU could not configure the virtual display.",
                 remediation: "Check virgl support and run `apkrun dev displays` again."
             )
+        case .primaryDisplayBusy:
+            .runtime(
+                "primaryDisplayBusy",
+                message: "Another app is already using the compatibility window mode.",
+                remediation: "Close that app or switch it to the standard secondary display mode."
+            )
+        case .primaryDisplayUnavailable:
+            .runtime(
+                "displayAttachFailed",
+                message: "The compatibility display has no active graphics presenter.",
+                remediation: "Start Android with the primary development window, then retry."
+            )
         }
     }
 }

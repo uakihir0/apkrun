@@ -114,7 +114,8 @@
                     source: source,
                     title: windowTitle,
                     backingScale: display.backingScale,
-                    inputSink: inputSink
+                    inputSink: inputSink,
+                    allowsResize: display.supportsWindowResize
                 ) { [weak self] pointSize, backingScale, zoom, completion in
                     guard let self else {
                         completion(.rejected)

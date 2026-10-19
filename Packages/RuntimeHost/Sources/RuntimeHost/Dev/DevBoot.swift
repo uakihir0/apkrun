@@ -48,6 +48,10 @@ public struct DevBootOptions: Sendable {
     public var launchAPKURL: URL?
     /// The window's connection to display 0 (`apkrun dev boot --window`, #023). Nil shows nothing. It needs `drmVirgl`.
     public var developerDisplay: DeveloperDisplay?
+    /// The window that receives app frames. A secondary lease attaches after Android is ready.
+    public var windowDisplay: DeveloperDisplay?
+    /// The display policy selected by `apkrun dev launch`.
+    public var windowDisplayMode: AndroidWindowMode
     /// The development input route of the window (#024). Nil binds no input. It is bound once the Guest Agent is ready,
     /// and it is unbound before Android stops.
     public var inputRoute: DevInputRoute?
@@ -64,7 +68,9 @@ public struct DevBootOptions: Sendable {
         launchPackage: String? = nil,
         launchAPKURL: URL? = nil,
         developerDisplay: DeveloperDisplay? = nil,
-        inputRoute: DevInputRoute? = nil
+        inputRoute: DevInputRoute? = nil,
+        windowDisplay: DeveloperDisplay? = nil,
+        windowDisplayMode: AndroidWindowMode = .primaryDisplayCompatibility
     ) {
         self.gpu = gpu
         self.cpuCount = cpuCount
@@ -77,6 +83,8 @@ public struct DevBootOptions: Sendable {
         self.launchAPKURL = launchAPKURL
         self.developerDisplay = developerDisplay
         self.inputRoute = inputRoute
+        self.windowDisplay = windowDisplay ?? developerDisplay
+        self.windowDisplayMode = windowDisplayMode
     }
 }
 
@@ -228,9 +236,10 @@ public struct DevBoot: Sendable {
         onEvent: @escaping @Sendable (DevBootEvent) -> Void
     ) async throws {
         var returnedNormally = false
+        let windowDisplay = options.windowDisplay ?? options.developerDisplay
         defer {
             if !preserveWindowOnError || returnedNormally {
-                options.developerDisplay?.finish()
+                windowDisplay?.finish()
             }
         }
         let paths = APKRunPaths(allowingHomeOverride: true, environment: environment)
@@ -279,15 +288,6 @@ public struct DevBoot: Sendable {
         )
         let stopSignal = DevBootStopSignal()
         var embeddedSession: EmbeddedRuntimeService?
-        if let package = options.launchPackage, let developerDisplay = options.developerDisplay {
-            let service = EmbeddedRuntimeService(
-                logSink: diagnostics.logSink,
-                developerDisplay: developerDisplay,
-                stopSignal: stopSignal
-            )
-            _ = try await service.requestSession(packageID: package)
-            embeddedSession = service
-        }
         let logcat = try LogcatFile(directory: paths.logsRoot.appendingPathComponent("guest", isDirectory: true))
         onEvent(.message("logcat goes to \(logcat.url.path)"))
         let consoles = DevConsoleSocketServer(directory: paths.devConsoleDirectory)
@@ -334,24 +334,60 @@ public struct DevBoot: Sendable {
         var stopCause: StopCause = .signal
         let started = ContinuousClock.now
         if await stopSignal.current() == nil {
-            if options.developerDisplay != nil {
+            if windowDisplay != nil {
                 onEvent(.windowStatus("Starting Android…"))
             }
             do {
                 try await supervisor.ensureReady(.cli)
                 if await stopSignal.current() == nil {
                     onEvent(.message("Android is ready after \(ContinuousClock.now - started)"))
-                    if options.developerDisplay != nil, options.launchPackage != nil {
+                    if windowDisplay != nil, options.launchPackage != nil {
                         onEvent(.windowStatus("Preparing app…"))
                     }
-                    if let onRuntimeReady {
+                    if let package = options.launchPackage, let windowDisplay {
+                        guard let displayPool = await supervisor.makeDisplayPool() else {
+                            throw RuntimeWireError.runtime(
+                                "displayAttachFailed",
+                                message: "APKRun couldn't prepare the Android display pool.",
+                                remediation: "Restart Android with the development Guest Agent and graphics enabled."
+                            )
+                        }
+                        let service = EmbeddedRuntimeService(
+                            logSink: diagnostics.logSink,
+                            developerDisplay: windowDisplay,
+                            stopSignal: stopSignal,
+                            displayPool: displayPool,
+                            inputRoute: options.inputRoute
+                        )
+                        if await stopSignal.beginDisplayAcquisition() {
+                            let mode = windowDisplay.mode
+                            let renderScale = max(mode.renderScale, 0.01)
+                            let configuration = DisplayConfiguration(
+                                geometry: DisplayGeometry(
+                                    pointSize: CGSize(
+                                        width: Double(mode.pixelSize.width) / renderScale,
+                                        height: Double(mode.pixelSize.height) / renderScale
+                                    ),
+                                    backingScale: Double(windowDisplay.backingScale),
+                                    zoom: mode.zoom
+                                ),
+                                mode: options.windowDisplayMode
+                            )
+                            _ = try await service.requestLeasedSession(
+                                packageID: package,
+                                configuration: configuration
+                            )
+                            embeddedSession = service
+                        }
+                    }
+                    if await stopSignal.current() == nil, let onRuntimeReady {
                         runtimeSessionService = try await onRuntimeReady(
                             DevelopmentRuntimeContext(
                                 image: image,
                                 instanceStore: store,
                                 supervisor: supervisor,
                                 diagnostics: diagnostics,
-                                developerDisplay: options.developerDisplay,
+                                developerDisplay: windowDisplay,
                                 stopSignal: stopSignal,
                                 existingSession: embeddedSession
                             )
@@ -365,7 +401,7 @@ public struct DevBoot: Sendable {
                 stopCause = requestedStop
             }
         }
-        // The window's input reaches display 0 through the Guest Agent (#024). It is bound before the launch.
+        // The window's input reaches its leased Android display through the Guest Agent (#024, #029).
         var inputBinding: Task<Void, Never>?
         do {
             if let requestedStop = await stopSignal.current() {
@@ -394,7 +430,7 @@ public struct DevBoot: Sendable {
                 } else {
                     mayLaunch = await stopSignal.beginLaunch()
                 }
-                if mayLaunch, options.developerDisplay != nil {
+                if mayLaunch, windowDisplay != nil {
                     let displayName: String
                     do {
                         let packageInfo = try await agent.queryPackage(package)
@@ -420,7 +456,7 @@ public struct DevBoot: Sendable {
                     }
                 }
                 if mayLaunch, await stopSignal.current() == nil {
-                    if options.developerDisplay != nil {
+                    if windowDisplay != nil {
                         onEvent(.windowStatus("Starting app…"))
                     }
                     if let embeddedSession {
@@ -441,7 +477,10 @@ public struct DevBoot: Sendable {
                         if await embeddedSession.currentSession()?.state == .ended(.appExited) {
                             await stopSignal.signal(.appExited)
                         }
-                        onEvent(.message("launched \(package) on display 0 (session state: \(result.state))"))
+                        let displayID = (await embeddedSession.currentSession())?.displayID ?? 0
+                        onEvent(
+                            .message("launched \(package) on display \(displayID) (session state: \(result.state))")
+                        )
                     } else {
                         let report = try await agent.launch(package: package, displayID: 0)
                         onEvent(
@@ -499,8 +538,8 @@ public struct DevBoot: Sendable {
                 onEvent(.warning("could not finish Android tasks for \(package): \(error.qualifiedCode)"))
             }
         }
-        await stopSignal.stopRuntime()
         _ = try? await embeddedSession?.runtimeStopped()
+        await stopSignal.stopRuntime()
         returnedNormally = true
     }
 
@@ -619,6 +658,14 @@ actor DevBootStopSignal {
         return true
     }
 
+    func beginDisplayAcquisition() -> Bool {
+        guard cause == nil else {
+            return false
+        }
+        applicationOperationStarted = true
+        return true
+    }
+
     func beginLaunch() -> Bool {
         guard cause == nil else {
             return false
@@ -666,7 +713,9 @@ actor DevBootStopSignal {
         switch cause {
         case .appWindowClosed:
             !applicationOperationStarted
-        case .signal, .appExited:
+        case .signal:
+            !applicationOperationStarted
+        case .appExited:
             true
         }
     }

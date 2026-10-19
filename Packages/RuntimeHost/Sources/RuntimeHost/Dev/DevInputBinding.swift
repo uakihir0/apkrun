@@ -35,7 +35,8 @@ struct DevInputBinding: Sendable {
                         channel = next
                         boundToken = token
                         reportedFailure = false
-                        report(.message("input is bound to display 0"))
+                        let displayID = await route.targetDisplayIDForDiagnostics()
+                        report(.message("input is bound to display \(displayID)"))
                         report(.message("ADB shell invocations so far: \(await agent.adbShellInvocationCount)"))
                     } catch {
                         if !reportedFailure {

@@ -195,6 +195,17 @@ func aBoundRouteSendsItsEventsOnDisplayZero() async {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func aBoundRouteUsesItsSelectedLeasedDisplay() async {
+    let channel = CollectingInputChannel()
+    let route = DevInputRoute()
+    await route.setDisplayID(7)
+    await route.bind(router: InputRouter(channel: channel))
+    await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
+
+    #expect(await channel.batches.first?.displayID == 7)
+}
+
+@Test(.timeLimit(.minutes(1)))
 func aBoundRouteExposesTheAcknowledgementCoverageItReceives() async throws {
     let channel = AcknowledgingInputChannel()
     let route = DevInputRoute()

@@ -67,17 +67,19 @@ public struct DeveloperDisplayStatistics: Equatable, Sendable {
     public var cpuPixelCopies: UInt64
 }
 
-/// The development window's connection to display 0 of an embedded boot (runtime-api.md §15, #023).
+/// The development window's connection to one embedded scanout (runtime-api.md §15, #023, #029).
 ///
-/// The CLI reads display 0 through this type, because it may not import RuntimeCore or GraphicsCore. The events are
-/// the frames of the boot's presenter, and the window reports each displayed frame back through `frameDisplayed`.
+/// The CLI reads a boot presenter or a leased pool through this type, because it may not import RuntimeCore or
+/// GraphicsCore. The window reports displayed frames back through `frameDisplayed`.
 public final class DeveloperDisplay: @unchecked Sendable {
-    /// The resolved geometry of display 0.
+    /// The resolved geometry of the window's Android display.
     public var mode: ResolvedDisplayMode { core.mode }
     /// The latest pool, available for reconciliation if a bounded frame stream drops its replacement event.
     public var currentSurfaceSet: DeveloperSurfaceSet? {
         core.currentSurfaceSet.map(DeveloperSurfaceSet.init)
     }
+    /// Whether this display has a presenter-backed resize path.
+    public var supportsWindowResize: Bool { core.supportsWindowResize }
     /// The backing scale used to size the initial native window.
     public var backingScale: CGFloat {
         windowFrameLock.withLock { backingScaleValue }
@@ -185,6 +187,11 @@ public final class DeveloperDisplay: @unchecked Sendable {
         windowFrameLock.withLock {
             backingScaleValue = backingScale
         }
+    }
+
+    /// Connects a leased secondary scanout's IOSurface pool to this window.
+    public func attach(lease: DisplayLease) throws {
+        try core.attach(lease: lease)
     }
 
     /// Returns a pool while a frame from that generation may still be in flight.

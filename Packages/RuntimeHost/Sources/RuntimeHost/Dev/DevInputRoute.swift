@@ -19,6 +19,7 @@ public actor DevInputRoute {
 
     private var router: InputRouter?
     private var session: SessionID?
+    private var targetDisplayID = DevInputRoute.displayID
     /// The drops that happen before the router sees the events: the events of an unbound route, and the events cut
     /// from a long batch.
     private var localCounters = InputCounters()
@@ -26,11 +27,24 @@ public actor DevInputRoute {
     /// Creates an unbound route.
     public init() {}
 
+    /// Selects the Android display before the route is bound to the guest input router.
+    public func setDisplayID(_ displayID: Int32) {
+        guard router == nil, displayID >= 0 else {
+            return
+        }
+        targetDisplayID = displayID
+    }
+
+    /// The selected Android display, for the development binding status message.
+    func targetDisplayIDForDiagnostics() -> Int32 {
+        targetDisplayID
+    }
+
     /// Binds the route to `router` for `session`, which is registered on display 0 in the running state. A route that
     /// was bound before is unbound first.
     public func bind(router: InputRouter, session: SessionID = DevInputRoute.developmentSession) async {
         await unbind()
-        await router.register(session: session, displayID: Self.displayID, state: .running)
+        await router.register(session: session, displayID: targetDisplayID, state: .running)
         self.router = router
         self.session = session
     }

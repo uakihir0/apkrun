@@ -309,6 +309,16 @@ public actor DevelopmentGuestAgent {
         return GuestLaunchReport(taskID: result.taskID, component: result.component, outcome: outcome)
     }
 
+    /// Moves Android's global task focus to the top task on `displayID` (input.md §7.2).
+    public func focusDisplay(displayID: Int32) async throws(GuestAgentFailure) {
+        try requireAvailable()
+        do {
+            _ = try await supervisor.send(GuestFocusDisplay(displayID: displayID))
+        } catch {
+            throw .operation(error)
+        }
+    }
+
     /// Waits for display 0 to adopt a scanout mode, then applies the matching density and local IME policy.
     public func applyDisplayPolicy(for mode: ResolvedDisplayMode) async -> Bool {
         let width = mode.pixelSize.width

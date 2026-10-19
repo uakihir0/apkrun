@@ -61,6 +61,38 @@ actor RecordingInputChannel: InputChannel {
     }
 }
 
+struct FocusDisplayCall: Equatable, Sendable {
+    let displayID: Int32
+    let cancelDisplayIDsAlreadySent: [Int32]
+}
+
+actor RecordingFocusDisplay {
+    private(set) var calls: [FocusDisplayCall] = []
+
+    func focus(_ displayID: Int32, after batches: [GPInputBatch]) {
+        let cancelledDisplays = batches.compactMap { batch in
+            batch.events.contains(where: { label($0) == "cancelAll" }) ? batch.displayID : nil
+        }
+        calls.append(
+            FocusDisplayCall(
+                displayID: displayID,
+                cancelDisplayIDsAlreadySent: cancelledDisplays
+            )
+        )
+    }
+}
+
+actor RetryableFocusDisplay {
+    private(set) var calls = 0
+
+    func focus() throws {
+        calls += 1
+        if calls == 1 {
+            throw GuestProtocolFailure.disconnected
+        }
+    }
+}
+
 /// A clock that the test moves. The router reads it in nanoseconds.
 final class TestClock: @unchecked Sendable {
     private let lock = NSLock()
@@ -112,6 +144,7 @@ private func makeRouter(
 ) async -> InputRouter {
     let router = InputRouter(channel: channel, clock: { clock.now })
     await router.register(session: session, displayID: display, state: state)
+    await router.focusChanged(session, focused: true)
     return router
 }
 
@@ -148,6 +181,152 @@ func aBatchFromAnUnknownSessionIsDroppedAsInvalid() async {
     let counters = await router.counters
     #expect(counters.droppedInvalid == 2)
     #expect(await channel.batches.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aDisplayCannotBeRegisteredToTwoSessions() async {
+    let channel = RecordingInputChannel()
+    let clock = TestClock()
+    let first = SessionID.app(UUID())
+    let second = SessionID.app(UUID())
+    let router = await makeRouter(channel, clock: clock, session: first)
+
+    let conflictingRegistration = await router.register(session: second, displayID: display, state: .running)
+    await router.route([touch(.down)], from: second)
+
+    #expect(conflictingRegistration == .displayAlreadyOwned)
+    #expect(await router.counters.droppedInvalid == 1)
+    #expect(await channel.batches.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func changingFocusCancelsTheOldSessionAndRoutesOnlyToTheNewOwner() async {
+    let channel = RecordingInputChannel()
+    let focus = RecordingFocusDisplay()
+    let first = SessionID.app(UUID())
+    let second = SessionID.app(UUID())
+    let router = InputRouter(
+        channel: channel,
+        clock: { 0 },
+        focusDisplay: { displayID in
+            await focus.focus(displayID, after: await channel.batches)
+        }
+    )
+    await router.register(session: first, displayID: 7, state: .running)
+    await router.register(session: second, displayID: 8, state: .running)
+
+    await router.focusChanged(first, focused: true)
+    await router.route([touch(.down)], from: first)
+    await router.focusChanged(second, focused: true)
+    await router.route([touch(.down), touch(.up)], from: second)
+    await router.route([touch(.up)], from: first)
+
+    let batches = await channel.batches
+    #expect(batches.map(\.displayID) == [7, 7, 8])
+    #expect(label(batches[1].events[0]) == "cancelAll")
+    let routedKinds = kinds(batches[2])
+    #expect(routedKinds.count == 2)
+    #expect(routedKinds.allSatisfy { if case .touch = $0 { true } else { false } })
+    let focusCalls = await focus.calls
+    #expect(focusCalls.map(\.displayID) == [7, 8])
+    #expect(focusCalls[0].cancelDisplayIDsAlreadySent.isEmpty)
+    #expect(focusCalls[1].cancelDisplayIDsAlreadySent == [7])
+    #expect(await router.counters.droppedNotFocused == 1)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aFailedGuestFocusOperationDropsTheSessionInput() async {
+    let channel = RecordingInputChannel()
+    let session = SessionID.app(UUID())
+    let router = InputRouter(
+        channel: channel,
+        clock: { 0 },
+        focusDisplay: { _ in throw GuestProtocolFailure.disconnected }
+    )
+    await router.register(session: session, displayID: display, state: .running)
+
+    await router.focusChanged(session, focused: true)
+    await router.route([touch(.down)], from: session)
+
+    #expect(await channel.batches.isEmpty)
+    #expect(await router.counters.droppedNotFocused == 1)
+    #expect(await router.counters.eventsSent == 0)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aFocusedSessionRetriesGuestFocusAfterItsTaskAppears() async {
+    let channel = RecordingInputChannel()
+    let session = SessionID.app(UUID())
+    let focus = RetryableFocusDisplay()
+    let router = InputRouter(
+        channel: channel,
+        clock: { 0 },
+        focusDisplay: { _ in try await focus.focus() }
+    )
+    await router.register(session: session, displayID: display, state: .running)
+
+    await router.focusChanged(session, focused: true, generation: 7)
+    await router.route([touch(.down)], from: session)
+    await router.focusChanged(session, focused: true, generation: 7)
+    await router.route([touch(.down)], from: session)
+
+    #expect(await focus.calls == 2)
+    #expect(await router.counters.droppedNotFocused == 1)
+    #expect(await router.counters.eventsSent == 1)
+    #expect(await channel.batches.map(\.displayID) == [display])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func anOlderFocusCallbackCannotTakeFocusBackFromANewerWindow() async {
+    let channel = RecordingInputChannel()
+    let focus = RecordingFocusDisplay()
+    let first = SessionID.app(UUID())
+    let second = SessionID.app(UUID())
+    let router = InputRouter(
+        channel: channel,
+        clock: { 0 },
+        focusDisplay: { displayID in
+            await focus.focus(displayID, after: await channel.batches)
+        }
+    )
+    await router.register(session: first, displayID: 7, state: .running)
+    await router.register(session: second, displayID: 8, state: .running)
+
+    await router.focusChanged(second, focused: true, generation: 2)
+    await router.focusChanged(first, focused: true, generation: 1)
+    await router.route([touch(.down)], from: second)
+    await router.route([touch(.down)], from: first)
+
+    #expect(await channel.batches.map(\.displayID) == [8])
+    #expect(await focus.calls.map(\.displayID) == [8])
+    #expect(await router.counters.droppedNotFocused == 1)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func endingANonFocusedSessionLeavesItsFocusedSiblingRoutable() async {
+    let channel = RecordingInputChannel()
+    let focus = RecordingFocusDisplay()
+    let focused = SessionID.app(UUID())
+    let background = SessionID.app(UUID())
+    let router = InputRouter(
+        channel: channel,
+        clock: { 0 },
+        focusDisplay: { displayID in
+            await focus.focus(displayID, after: await channel.batches)
+        }
+    )
+    await router.register(session: focused, displayID: 7, state: .running)
+    await router.register(session: background, displayID: 8, state: .running)
+    await router.focusChanged(focused, focused: true)
+
+    await router.sessionEnded(background)
+    await router.route([touch(.down), touch(.up)], from: focused)
+
+    let batches = await channel.batches
+    #expect(batches.map(\.displayID) == [7])
+    #expect(kinds(batches[0]).count == 2)
+    #expect(await focus.calls.map(\.displayID) == [7])
+    #expect(await router.counters.droppedNotFocused == 0)
 }
 
 @Test(.timeLimit(.minutes(1)), arguments: [AppSessionState.launching, .closing, .ended(.userClosed)])

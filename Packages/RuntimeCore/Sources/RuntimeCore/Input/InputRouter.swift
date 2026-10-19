@@ -29,6 +29,8 @@ public struct InputCounters: Equatable, Sendable {
     public var droppedRate = 0
     /// Events dropped because their session was not running or backgrounded (`input.dropped.notRunning`).
     public var droppedNotRunning = 0
+    /// Events dropped because their session did not own the display or did not have window focus.
+    public var droppedNotFocused = 0
     /// Events dropped for a session that is not registered, or rejected by the guest (`input.dropped.invalid`).
     public var droppedInvalid = 0
     /// Events dropped because the input stream could not carry them (`input.dropped.channel`).
@@ -47,6 +49,7 @@ public struct InputCounters: Equatable, Sendable {
     public mutating func add(_ other: InputCounters) {
         droppedRate += other.droppedRate
         droppedNotRunning += other.droppedNotRunning
+        droppedNotFocused += other.droppedNotFocused
         droppedInvalid += other.droppedInvalid
         droppedChannel += other.droppedChannel
         coalesced += other.coalesced
@@ -133,16 +136,26 @@ extension InputCounters: CustomStringConvertible {
     /// input.md §11 under their names.
     public var description: String {
         "sent=\(eventsSent) batches=\(batchesSent) input.dropped.rate=\(droppedRate) "
-            + "input.dropped.notRunning=\(droppedNotRunning) input.dropped.invalid=\(droppedInvalid) "
+            + "input.dropped.notRunning=\(droppedNotRunning) input.dropped.notFocused=\(droppedNotFocused) "
+            + "input.dropped.invalid=\(droppedInvalid) "
             + "input.dropped.channel=\(droppedChannel) input.coalesced=\(coalesced)"
     }
+}
+
+/// Why a session could not be registered as the owner of an Android display.
+public enum InputRouterRegistrationFailure: Error, Equatable, Sendable {
+    /// Another session already owns the display.
+    case displayAlreadyOwned
+    /// A registered session cannot move to a different display without ending its old lease first.
+    case sessionAlreadyOwnsAnotherDisplay
 }
 
 /// The routing of input to the guest (input.md §7.1, runtime-api.md §7.3). The router keeps the sessions, checks
 /// that a session may send, limits its rate, merges events when the guest is behind, and sends the rest as batches.
 ///
 /// Routes are serialised: a batch is sent in full before the next one starts, so the events keep their order across
-/// calls. The display of a session comes from its registration (the lease), and never from an event.
+/// calls. The display of a session comes from its registration (the lease), and never from an event. Only the focused
+/// session may route input; a focus transition cancels any open input on the session losing focus.
 public actor InputRouter {
     /// The events per second that one session may send (runtime-api.md §7.3).
     public static let eventsPerSecond = 2_000
@@ -157,6 +170,8 @@ public actor InputRouter {
 
     /// Returns the time in nanoseconds of a monotonic clock. The rate window and the cancel timestamps use it.
     public typealias Clock = @Sendable () -> UInt64
+    /// Moves the Guest Agent's Android task focus to a display.
+    public typealias FocusDisplayOperation = @Sendable (Int32) async throws -> Void
 
     /// A registered session.
     private struct Entry {
@@ -202,8 +217,15 @@ public actor InputRouter {
 
     private let channel: any InputChannel
     private let clock: Clock
+    private let focusDisplay: FocusDisplayOperation
     private let logger: APKLogger
     private var sessions: [SessionID: Entry] = [:]
+    /// Each live display has at most one session owner, from the DisplayPool lease.
+    private var displayOwners: [Int32: SessionID] = [:]
+    /// Android uses global task focus; input is admitted only for this session.
+    private var focusedSession: SessionID?
+    /// Older native focus callbacks may arrive after a newer callback from another window.
+    private var focusGeneration: UInt64 = 0
     private var nextGeneration: UInt64 = 1
     private var nextBatchSequence: UInt64 = 1
     /// Whether a route or an end holds the send turn. The waiters take it in arrival order.
@@ -285,10 +307,12 @@ public actor InputRouter {
     public init(
         channel: any InputChannel,
         clock: @escaping Clock = InputRouter.monotonicNanoseconds,
+        focusDisplay: @escaping FocusDisplayOperation = { _ in },
         logSink: (any LogSink)? = nil
     ) {
         self.channel = channel
         self.clock = clock
+        self.focusDisplay = focusDisplay
         logger = APKLogger(category: InputLogCategory.route, sink: logSink)
         // The reader ends when the channel's acks finish, which is when its connection closes.
         let acks = channel.acks
@@ -304,16 +328,123 @@ public actor InputRouter {
         DispatchTime.now().uptimeNanoseconds
     }
 
-    /// Registers a session on the Android display `displayID`, in `state`. A session that is registered again starts
-    /// over with an empty rate window.
-    public func register(session: SessionID, displayID: Int32, state: AppSessionState) {
+    /// Registers `session` as the sole owner of `displayID`, in `state`. Re-registering the same session on its
+    /// existing display starts a fresh rate window. A session cannot claim a display held by another session or move
+    /// to another display without ending the prior registration first.
+    @discardableResult
+    public func register(
+        session: SessionID,
+        displayID: Int32,
+        state: AppSessionState
+    ) -> InputRouterRegistrationFailure? {
+        if let owner = displayOwners[displayID], owner != session {
+            return .displayAlreadyOwned
+        }
+        if let current = sessions[session], current.displayID != displayID {
+            return .sessionAlreadyOwnsAnotherDisplay
+        }
         sessions[session] = Entry(generation: nextGeneration, displayID: displayID, state: state)
+        displayOwners[displayID] = session
         nextGeneration += 1
+        return nil
     }
 
     /// Changes the state of a registered session. A session that is not registered is left alone.
     public func setState(_ state: AppSessionState, for session: SessionID) {
         sessions[session]?.state = state
+    }
+
+    /// Changes which registered session owns Android's global focus. The session losing focus receives `.cancelAll`
+    /// before the Guest Agent focuses the new display, so an in-progress gesture cannot remain open on the old app.
+    ///
+    /// The focus operation is injected because display focus travels over the Guest Agent control channel, separate
+    /// from the input stream. If it fails, the router leaves input unfocused rather than sending keys to the wrong app.
+    public func focusChanged(
+        _ session: SessionID,
+        focused: Bool,
+        generation suppliedGeneration: UInt64? = nil
+    ) async {
+        let generation = suppliedGeneration ?? (focusGeneration &+ 1)
+        // An equal generation is an explicit retry of the current window's focus. Task appearance can
+        // arrive while the first Guest Agent request is still in flight, so take the turn and check
+        // again after that request completes. Older window notifications are always stale.
+        guard generation >= focusGeneration,
+            generation != focusGeneration || focused
+        else {
+            return
+        }
+        focusGeneration = max(focusGeneration, generation)
+        guard let requested = sessions[session],
+            displayOwners[requested.displayID] == session
+        else {
+            return
+        }
+
+        if !focused, focusedSession != session {
+            return
+        }
+
+        await takeTurn()
+        defer { releaseTurn() }
+
+        guard focusGeneration == generation else {
+            return
+        }
+        guard let current = sessions[session],
+            current.generation == requested.generation,
+            displayOwners[current.displayID] == session
+        else {
+            return
+        }
+
+        if focused {
+            // Another equal-generation retry may have waited behind the successful first attempt.
+            if focusedSession == session {
+                return
+            }
+            let previousFocus = focusedSession
+            focusedSession = nil
+            if let previousFocus, previousFocus != session,
+                let previous = sessions[previousFocus],
+                displayOwners[previous.displayID] == previousFocus
+            {
+                let now = clock()
+                await send([.cancelAll(InputTimestamp(hostNanos: now))], displayID: previous.displayID, at: now)
+            }
+
+            // Reserve focus while the Guest Agent operation is in flight. Routes queue behind this turn and re-check
+            // focus before sending, so the first event after a native focus notification is not dropped prematurely.
+            focusedSession = session
+            do {
+                try await focusDisplay(current.displayID)
+            } catch {
+                guard focusGeneration == generation else {
+                    return
+                }
+                if focusedSession == session {
+                    focusedSession = nil
+                }
+                logger.warning("Android display focus could not be changed")
+                return
+            }
+
+            guard focusGeneration == generation,
+                let latest = sessions[session],
+                latest.generation == current.generation,
+                displayOwners[latest.displayID] == session
+            else {
+                return
+            }
+            focusedSession = session
+        } else {
+            // Re-check after taking the send turn because a newer focus transition may have run while waiting.
+            guard focusedSession == session else {
+                return
+            }
+            focusedSession = nil
+            let now = clock()
+            await send([.cancelAll(InputTimestamp(hostNanos: now))], displayID: current.displayID, at: now)
+        }
     }
 
     /// Routes a batch of events from `session`, in order (runtime-api.md §7.3). Dropped events are counted, and nothing
@@ -334,8 +465,17 @@ public actor InputRouter {
             warnOncePerSecond("An input batch named a session that is not registered, so it is dropped")
             return
         }
+        guard displayOwners[arrival.displayID] == session else {
+            counters.droppedInvalid += events.count
+            warnOncePerSecond("An input batch came from a session that does not own its display, so it is dropped")
+            return
+        }
         guard arrival.state.acceptsInput else {
             counters.droppedNotRunning += events.count
+            return
+        }
+        guard focusedSession == session else {
+            counters.droppedNotFocused += events.count
             return
         }
         await takeTurn()
@@ -345,6 +485,14 @@ public actor InputRouter {
             current.state.acceptsInput
         else {
             counters.droppedNotRunning += events.count
+            return
+        }
+        guard displayOwners[current.displayID] == session else {
+            counters.droppedInvalid += events.count
+            return
+        }
+        guard focusedSession == session else {
+            counters.droppedNotFocused += events.count
             return
         }
         let now = clock()
@@ -367,15 +515,25 @@ public actor InputRouter {
     }
 
     /// Ends a session. Its open gestures, buttons, and keys are cancelled on the guest, after the batches that were
-    /// routed before. A session that is not registered is left alone.
+    /// routed before when it still owns focus. A previous focus-loss event has already cancelled the session, and an
+    /// unfocused session could not have sent input.
     public func sessionEnded(_ session: SessionID) async {
         guard let ended = sessions.removeValue(forKey: session) else {
             return
         }
+        if displayOwners[ended.displayID] == session {
+            displayOwners.removeValue(forKey: ended.displayID)
+        }
+        let needsCancellation = focusedSession == session
+        if needsCancellation {
+            focusedSession = nil
+        }
         await takeTurn()
         defer { releaseTurn() }
-        let now = clock()
-        await send([.cancelAll(InputTimestamp(hostNanos: now))], displayID: ended.displayID, at: now)
+        if needsCancellation {
+            let now = clock()
+            await send([.cancelAll(InputTimestamp(hostNanos: now))], displayID: ended.displayID, at: now)
+        }
     }
 
     // MARK: - Sending

@@ -21947,3 +21947,28 @@ unverified locally. The prompt is unconditional until active session state is
 exposed. Full anonymous-XPC acceptance and a live Android restart remain
 outstanding.
 
+## IR-1386: Include daemon ownership in runtime status JSON
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #032 |
+| Affected documents | [cli.md](../02-design/cli.md) §4.1; [M04](issues/M04-daemon-and-guest-protocol.md) #032 |
+
+**Choices.** Add `result.owner: "apkrund"` to `apkrun runtime status --json`.
+Keep `RuntimeHostStatus` unchanged and add the field in the CLI's output
+envelope.
+
+**Reason.** This status command reaches the authenticated daemon control
+endpoint, so `apkrund` is its owner. Enriching the CLI envelope meets the
+current #032 output contract without changing the shared XPC DTO or requiring
+an API version bump.
+
+**Verification.** A focused CLI test checks the owner, schema version, and
+representative runtime fields in the encoded JSON. The full #032 acceptance
+criteria remain open.
+
+**Risk for review.** The current status path has no embedded-runtime owner.
+If a future command uses this output for `apkrun-dev`, it must provide the
+actual owner instead of reusing the daemon-only constant.
+

@@ -22036,3 +22036,79 @@ must acquire their hold before starting work that may invoke a lifecycle
 action. Review this callback restriction when the live activity sources and
 `RuntimeSupervisor` action handler are composed.
 
+## IR-1388: Add a synchronous daemon package-install path
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #032 |
+| Affected documents | [runtime-api.md](../03-reference/runtime-api.md) §§2, 4.9, 4.10, 8.1–8.2; [package-store.md](../02-design/package-store.md) §§3.3, 4, 11; [cli.md](../02-design/cli.md) §4.2; [M04](issues/M04-daemon-and-guest-protocol.md) #032 |
+
+**Choices.** Add API 1.7 control calls for package import and install, using
+the existing package request and result DTOs. The CLI opens regular files and
+passes only `FileHandle`s over XPC. The daemon validates the handle set and
+copies with `pread`, so caller offsets are unchanged and no client path is
+opened by apkrund. Cap one daemon XPC import at 20 files while preserving the
+PackageStore's 256-file internal limit; cap each file at 2 GiB and the set at
+8 GiB. Import opens the store but leaves Android stopped; install starts
+Android on demand, attaches the daemon-owned store channel, and uses the
+existing `PackageInstaller` path. The first daemon-backed CLI slice supports
+manual update authority, shows file hashes and signing status, and confirms
+every install that may change package state. A same-set preview still confirms
+and reapplies the APK set through PackageInstaller.
+
+**Reason.** RuntimeAPI already specifies descriptor transfer and the
+PackageStore already owns staging, verification, and installation. Reusing
+those boundaries avoids paths crossing the XPC trust boundary and keeps
+Android lifecycle ownership in apkrund. The existing API and host do not yet
+provide `OperationHandle`/`EventHub` for store operations, so this increment
+uses a single synchronous reply and does not add a second progress mechanism.
+The same-set preview proves only that imported APK bytes match the host's
+managed artifact record. PackageManager reports package/version/signing
+metadata but does not report installed APK byte digests, so it cannot prove
+that Android still has those bytes. Skipping the install or its confirmation
+could silently leave a different same-version, same-signer build installed or
+could replace it without asking. Keep the import relation as a preview hint,
+confirm, and reinstall until a guest query can prove installed artifact
+identity.
+
+An install transport failure or unusable reply after dispatch is reported as
+`runtime.operationResultUnknown`; the client never replays that request. This
+distinguishes a possibly completed install from a connection failure before
+dispatch and tells the user to inspect package state before retrying.
+
+**Verification.** Focused RuntimeAPI, RuntimeClient, RuntimeHost, and CLI tests
+cover the DTOs and client call path, exact handle coverage, unchanged source
+offsets, control-client authorization, staging of same-set previews, internal
+imports above the XPC file limit, and preview/confirmation behavior.
+
+**Risk for review.** Import and install can outlast the CLI's useful wait,
+especially during first boot or when copying large APK sets. An XPC disconnect
+does not prove that daemon work stopped, and callers must inspect package
+state before retrying an uncertain install. This is temporary partial
+behavior: the design's operation handles, progress events, cancellation, and
+bounded operation lifetime remain outstanding under #032. This entry does not
+change the accepted RuntimeAPI long-operation design.
+
+## IR-1389: Reserve the runtime during daemon package installation
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #032 |
+| Affected documents | [runtime-daemon.md](../02-design/runtime-daemon.md) §§2.4, 3.5; [M04](issues/M04-daemon-and-guest-protocol.md) #032 |
+
+**Choice.** `RuntimeHost.installImported` holds a package-install reservation
+from before its first suspension point until the synchronous install returns.
+User stop, restart, and reset reject while that reservation is active.
+Daemon shutdown waits for active package installs to finish before stopping
+Android.
+
+**Reason.** PackageInstaller operates through the live Guest Agent and can
+take long enough for a lifecycle request to arrive while the actor is
+suspended. Without a reservation, stop or restart can detach the package
+channel mid-install. Shutdown already drains lifecycle operations, but its
+initial VM stop would otherwise interrupt an install before that drain.
+Operation deadlines and cancellation remain part of the outstanding #032
+operation API.
+

@@ -111,7 +111,7 @@ Exit status 0 is not restarted by launchd. The next client connection, the next 
 
 `SIGTERM` (logout, system shutdown, `SMAppService.unregister()`, `launchctl bootout`):
 
-1. Reject new XPC connections while existing clients drain. Lifecycle operations that race with shutdown get `RuntimeControlError` code `runtime.hostShuttingDown`; status remains available to connected clients and reports `shuttingDown`. Shut down any daemon-owned headless session service, remove its Guest Agent observers, and wait for active session operations and deferred display releases before stopping Android.
+1. Reject new XPC connections while existing clients drain. Lifecycle operations that race with shutdown get `RuntimeControlError` code `runtime.hostShuttingDown`; status remains available to connected clients and reports `shuttingDown`. Shut down any daemon-owned headless session service, remove its Guest Agent observers, and wait for active package installs, session operations, and deferred display releases before stopping Android.
 2. `RuntimeSupervisor.stop(reason: .hostShutdown)` with a 40 s deadline (§3.5). Sessions end with `.runtimeStopped`. Wrappers show nothing new: during logout they are quitting too.
 3. Flush logs, write `daemon.json` with `cleanExit = true`, close the XPC connections, and exit 0.
 
@@ -272,6 +272,7 @@ stop(reason, force)
 - With `reason == .hostShutdown` the whole sequence has a 40 s deadline (§2.4). Step 6 then goes straight to `stop()` when the deadline is near.
 - Without a Guest Agent (it is unreachable), step 4 is skipped.
 - Every stop logs the path it took (`graceful`, `powerButton`, `forced`) and its duration. `apkrun doctor` warns when the last 3 stops were forced.
+- While a package install is active, RuntimeHost rejects user stop, restart, and reset with `runtime.invalidTransition`. Daemon shutdown drains the install before stopping Android. The operation API will later provide bounded wait and cancellation behavior (#032).
 
 ### 3.6 Failure handling and automatic restart
 

@@ -180,7 +180,7 @@ Packages/
 
 ### 3.3 Set digest
 
-`setDigest = SHA-256` over the UTF-8 lines `"<name>\t<sha256 hex>\n"` for each file, sorted by `name`. Two sets with the same digest are the same install. The store uses this to make repeated imports and repeated staging no-ops (§4.7), and recovery uses it to identify slots.
+`setDigest = SHA-256` over the UTF-8 lines `"<name>\t<sha256 hex>\n"` for each file, sorted by `name`. Two sets with the same digest contain the same APK bytes and names. This proves equality of the host artifact sets; it does not prove that Android still has those bytes installed. The store uses the digest to classify repeated imports and staging (§4.7), and recovery uses it to identify slots. A client must not skip installation based only on this digest unless the guest can confirm its installed APK bytes.
 
 ### 3.4 Space
 
@@ -206,6 +206,11 @@ Import copies with `clonefile(2)` when the source is on the same APFS volume. Ot
 | Provider download | UpdateCore gets a ticket with `PackageStore.beginDownloadTicket(id)`, the provider writes into `incoming/<ticket>/`, and UpdateCore calls `PackageStore.inspect(ticket)` | [update-system.md](update-system.md) §5 |
 | Portable wrapper bootstrap | the wrapper sends `importBootstrap` with a file handle to `Contents/Resources/bootstrap/` | first import on a new Mac only (#089, [wrapper.md](wrapper.md)) |
 | Adoption of an unmanaged package | `adoptPackage(id)` | no artifact (§9.3) |
+
+The PackageStore import contract accepts up to 256 APKs per set (§4.2).
+The first daemon XPC endpoint and `apkrun install` CLI limit one request to 20
+open file handles; that transport limit does not reduce PackageStore's limit
+for embedded or other internal callers.
 
 ### 4.2 Container formats
 
@@ -340,7 +345,7 @@ public struct ImportPreview: Codable, Sendable {
 
 public enum ImportRelation: Codable, Sendable {
     case newPackage
-    case sameAsInstalled                           // same setDigest → nothing to do ("Already installed")
+    case sameAsInstalled                           // same host artifact set as the managed record
     case reinstallSameVersion                      // same versionCode, different files (for example other splits)
     case update(from: VersionCode)                 // routed to UpdateCore as a manual update
     case downgrade(from: VersionCode)              // refused (FR-UPD-05)
@@ -692,9 +697,19 @@ The XPC operations are listed with their DTOs in [../03-reference/runtime-api.md
 
 #027's `install()`, `uninstall()`, `listInstalled()`, and `applicationInfo()` map to `importPackage` + `installImported`, `uninstallPackage`, `listPackages(.managed)`, and `packageInfo`. `launch()` and `terminate()` are session operations ([runtime-daemon.md](runtime-daemon.md) §7).
 
+The first daemon-backed `importPackage`/`installImported` control path in
+RuntimeAPI 1.7 is synchronous and supports manual update authority. It reuses
+the same store transactions and validations described here. The target API
+remains a long operation with progress and cancellation; see IR-1388 in the
+implementation review log for this temporary implementation gap.
+
 ### 11.2 Authorization
 
-Store operations are available on the `.control` endpoint only. A wrapper endpoint gets `packageInfo` and `packageIcon` for its own package and nothing else (NFR-SEC-07, [../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2).
+Store operations are available on the `.control` endpoint only. The initial
+control authorization allows APKRun.app, the menu bar app, and the CLI; import
+and install are denied to the generic launcher and wrappers. A wrapper endpoint
+gets `packageInfo` and `packageIcon` for its own package and nothing else
+(NFR-SEC-07, [../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2).
 
 ### 11.3 Events
 

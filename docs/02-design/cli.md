@@ -155,7 +155,7 @@ Operations that return an `OperationHandle` ([runtime-daemon.md](runtime-daemon.
 
 | Command | Task | Behavior |
 |---|---|---|
-| `apkrun install <file>… [--yes] [--provider <spec>] [--updates automatic\|notify\|manual] [--wrap [--output <dir>]]` | #027 **E**, #073, #037 (`--provider`, `--updates`), #075 (`--wrap`) | imports the files as one package ([package-store.md](package-store.md) §4), prints the preview (name, package, version, signer digest, size, warnings, relation), asks, and installs. `--provider` sets authority `apkrun` with the mode `automatic`, or `notifyOnly` with `--updates notify`. `--updates manual` sets authority `manual` (`InstallOptions.authority`) and keeps a given provider unused. Without either flag, the defaults of [update-system.md](update-system.md) §2.4 apply. The alternate flag spellings (`--update auto\|notify\|manual`, `--update-provider direct --update-url <url>`) map to the current options ([update-system.md](update-system.md) §11.3). `--wrap` also creates the Mac app (as `apkrun wrap`). Refused relations (downgrade, other signer) exit 5 with the store's message. Already installed with the same version: exits 0 with "already installed" |
+| `apkrun install <file>… [--yes] [--provider <spec>] [--updates automatic\|notify\|manual] [--wrap [--output <dir>]]` | #027 **E**, #073, #037 (`--provider`, `--updates`), #075 (`--wrap`) | imports the files as one package ([package-store.md](package-store.md) §4), prints the preview (name, package, version, signer digest, size, warnings, relation), asks, and installs. `--provider` sets authority `apkrun` with the mode `automatic`, or `notifyOnly` with `--updates notify`. `--updates manual` sets authority `manual` (`InstallOptions.authority`) and keeps a given provider unused. Without either flag, the defaults of [update-system.md](update-system.md) §2.4 apply. The alternate flag spellings (`--update auto\|notify\|manual`, `--update-provider direct --update-url <url>`) map to the current options ([update-system.md](update-system.md) §11.3). `--wrap` also creates the Mac app (as `apkrun wrap`). Refused relations (downgrade, other signer) exit 5 with the store's message. A same-set preview confirms and reinstalls until the guest can report installed APK byte digests. |
 | `apkrun uninstall <package> [--keep-data] [--keep-wrapper] [--forget] [--yes]` | #027 **E**, #076 | [package-store.md](package-store.md) §8. The Mac app goes to the Trash unless `--keep-wrapper`. `--forget` removes the record without Android (when Android cannot start) |
 | `apkrun list [--all] [--json]` | #027 target; initial daemon query in #032 | queries apkrund over `RuntimeControlClient` XPC. Managed records are listed by default. `--all` includes packages from the daemon's current or cached Android inventory without starting Android |
 | `apkrun info <package> [--json]` | #027 target; initial daemon query in #032 | queries apkrund over `RuntimeControlClient` XPC for the package summary, version, state, managed flag, update authority, stored APK count/bytes, and known Android data size. Wrapper paths, signer details, settings, update source, and compatibility details remain part of the broader #027/#090 scope |
@@ -169,6 +169,20 @@ Operations that return an `OperationHandle` ([runtime-daemon.md](runtime-daemon.
 | `apkrun settings <package> get <key>` | #079 | one value |
 | `apkrun settings <package> set <key> <value>` | #079 | `updatePackageSettings(id, patch)`. The value is parsed by the key's type (bool: `true`/`false`/`on`/`off`; enums by name; numbers). Invalid values exit 64 with the allowed values. Prints "applies the next time ‹App› opens" where that is true |
 | `apkrun settings <package> reset (<key> \| --all)` | #079 | removes the stored value. The effective value falls back to the compatibility recommendation, else the default ([../03-reference/configuration.md](../03-reference/configuration.md) §3.2) |
+
+The first daemon-backed `install` path is available in the normal CLI build.
+It opens up to 20 regular files and transfers their handles over control XPC,
+prints each selected file's size and SHA-256 along with the signing status, and
+confirms before sending `installImported`. A preview that matches the stored
+artifact set still asks before proceeding and reapplies the APK set through
+PackageInstaller: PackageManager currently reports package metadata and signing
+digests but not the installed APK byte digests needed to prove an exact match.
+Preview/import leaves Android stopped; install starts it on demand. This first
+slice accepts manual update authority only. The provider, update, wrapper,
+operation-progress, and cancellation options remain in their listed follow-up
+tasks. Because the current import/install replies are synchronous, an XPC
+disconnect does not show whether an install finished; query package state
+before retrying.
 
 ### 4.3 Updates
 

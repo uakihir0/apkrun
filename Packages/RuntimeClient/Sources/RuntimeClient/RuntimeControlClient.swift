@@ -135,6 +135,21 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Clears the automatic boot-loop guard without deleting Android data.
+    ///
+    /// A transport failure is returned to the caller without replaying this state-changing request.
+    public func resetRuntime() async throws(RuntimeControlClientError) -> RuntimeHostStatus {
+        let opened = try await ensureControl()
+        do {
+            let request = RuntimeResetControlRequest(header: makeHeader())
+            let data = try Self.encode(request)
+            return try Self.decodeControlReply(from: await opened.channel.resetRuntime(data))
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
     /// Launches the requested package once and returns the session result.
     ///
     /// A transport failure is returned to the caller without replaying this side-effecting request.
@@ -637,6 +652,7 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func runtimeStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func startRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func stopRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func resetRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func listPackages(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func packageInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data
@@ -807,6 +823,20 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.stopRuntime(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func resetRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.resetRuntime(request) { response in finish(.success(response)) }
         }
     }
 

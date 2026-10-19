@@ -35,6 +35,7 @@ import Testing
     #expect(try await client.runtimeStatus() == status)
     #expect(try await client.startRuntime() == status)
     #expect(try await client.stopRuntime() == status)
+    #expect(try await client.resetRuntime() == status)
 
     let snapshot = transport.snapshot()
     #expect(snapshot.serviceName == "io.apkrun.apkrund.dev.xpc")
@@ -58,7 +59,14 @@ import Testing
     #expect(snapshot.statusRequests.count == 2)
     #expect(snapshot.startRequests.count == 1)
     #expect(snapshot.stopRequests.count == 1)
-    for data in snapshot.statusRequests + snapshot.startRequests + snapshot.stopRequests {
+    #expect(snapshot.resetRequests.count == 1)
+    let resetRequest = try JSONDecoder().decode(
+        RuntimeResetControlRequest.self,
+        from: snapshot.resetRequests[0]
+    )
+    #expect(resetRequest.header.apiVersion == APIVersion.current)
+    #expect(resetRequest.header.clientKind == RuntimeClientKind.cli)
+    for data in snapshot.statusRequests + snapshot.startRequests + snapshot.stopRequests + snapshot.resetRequests {
         let request = try JSONDecoder().decode(ControlRequestHeader.self, from: data)
         #expect(request.header.apiVersion == APIVersion.current)
         #expect(request.header.clientKind == RuntimeClientKind.cli)
@@ -261,6 +269,18 @@ import Testing
     #expect(terminateSnapshot.terminateRequests.count == 1)
     #expect(terminateSnapshot.controlConnections == 2)
     #expect(terminateSnapshot.brokerConnections == 2)
+
+    transport.failNextReset()
+    do {
+        _ = try await client.resetRuntime()
+        Issue.record("The mock reset transport failure was not returned to the caller.")
+    } catch {
+        #expect(error == .transportFailure(domain: "NSCocoaErrorDomain", code: 4099))
+    }
+    let resetSnapshot = transport.snapshot()
+    #expect(resetSnapshot.resetRequests.count == 1)
+    #expect(resetSnapshot.controlConnections == 3)
+    #expect(resetSnapshot.brokerConnections == 3)
 }
 
 @Test func controlClientPreservesTypedSessionErrors() async throws {
@@ -539,12 +559,14 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var packageInfoRequestsValue: [Data] = []
     private var launchRequestsValue: [Data] = []
     private var terminateRequestsValue: [Data] = []
+    private var resetRequestsValue: [Data] = []
     private var brokerConnectionsValue = 0
     private var controlConnectionsValue = 0
     private var brokerInvalidationsValue = 0
     private var failNextStatusValue = false
     private var failNextLaunchValue = false
     private var failNextTerminateValue = false
+    private var failNextResetValue = false
     private var endpointBusyRejectionsValue: Int
 
     init(
@@ -679,6 +701,18 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return statusData
     }
 
+    func resetRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        let shouldFail = lock.withLock {
+            resetRequestsValue.append(request)
+            defer { failNextResetValue = false }
+            return failNextResetValue
+        }
+        if shouldFail {
+            throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+        }
+        return statusData
+    }
+
     func listPackages(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         lock.withLock { packageListRequestsValue.append(request) }
         return packageListData
@@ -728,6 +762,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 packageInfoRequests: packageInfoRequestsValue,
                 launchRequests: launchRequestsValue,
                 terminateRequests: terminateRequestsValue,
+                resetRequests: resetRequestsValue,
                 brokerConnections: brokerConnectionsValue,
                 controlConnections: controlConnectionsValue,
                 brokerInvalidations: brokerInvalidationsValue
@@ -747,6 +782,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         lock.withLock { failNextTerminateValue = true }
     }
 
+    func failNextReset() {
+        lock.withLock { failNextResetValue = true }
+    }
+
     struct Snapshot {
         let serviceName: String?
         let brokerRequirement: String?
@@ -760,6 +799,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let packageInfoRequests: [Data]
         let launchRequests: [Data]
         let terminateRequests: [Data]
+        let resetRequests: [Data]
         let brokerConnections: Int
         let controlConnections: Int
         let brokerInvalidations: Int

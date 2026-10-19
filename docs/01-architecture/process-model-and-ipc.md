@@ -61,12 +61,12 @@ Before #031 there is no daemon. `apkrun dev …` commands link `RuntimeHost`, `W
 
 ### 2.2 Connection establishment and authentication (broker pattern)
 
-The main Mach service is reachable by any process of the logged-in user. Therefore it exposes only a **broker** interface. Real capabilities are handed out as **anonymous listener endpoints**, each protected by a code-signing requirement (`NSXPCListener.setConnectionCodeSigningRequirement`, macOS 13+, public API).
+The main Mach service is reachable by any process of the logged-in user. Therefore it exposes only a **broker** interface. For a control request, it creates a one-use **anonymous listener endpoint** protected by the requested client's code-signing requirement (`NSXPCListener.setConnectionCodeSigningRequirement`, macOS 13+, public API). The broker connection and that listener endpoint share one short-lived reservation, so a delayed connection cannot consume another client's grant.
 
 ```text
 client ──(1) connect io.apkrun.apkrund.xpc──▶ BrokerService
         hello(clientKind, claimedIdentity, apiVersion) → HelloReply(runtimeVersion, runtimeBuild, apiVersion, hostState)
-        requestEndpoint(kind) → NSXPCListenerEndpoint
+        requestEndpoint(kind) → one-use NSXPCListenerEndpoint
               kind = .control    → requirement: APKRun's own signing identity
               kind = .maintenance → same requirement as .control; version-stable (runtime-maintenance.md §8.1)
               kind = .wrapper(bundleID) → requirement: identifier "<bundleID>" and cdhash H"<registered cdhash>"
@@ -134,6 +134,7 @@ integration (desktop-integration.md §3.3):
 |---|---|
 | apkrund not registered | RuntimeClient opens APKRun.app (`NSWorkspace.open(bundleID)`) with `--register-runtime`. The wrapper shows "APKRun needs to finish setup". |
 | apkrund crashed mid-session | Connection invalidated. The wrapper shows "APKRun restarted — reopening…" and retries `openSession` with backoff (1 s, 2 s, 4 s; max 3). The VM is gone, so it goes through a cold launch. |
+| Control listener is at its eight-connection limit | RuntimeClient probes each new endpoint with idempotent `runtimeStatus` and retries rejected control connections with bounded backoff before sending a side-effecting request. |
 | API major mismatch | Actionable error dialog. The wrapper never tries to continue. |
 | APKRun or Android is updating (`HelloReply.hostState == updating`, `RuntimeFailure.hostUpdating`, or `ended(.runtimeUpdating)`) | The wrapper shows screen U "APKRun is updating" and retries `openSession` every 2 s for up to 10 minutes ([../02-design/wrapper.md](../02-design/wrapper.md) §5.4). The menu bar relaunches itself when `hello` reports another build ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.7) |
 | Endpoint rejected (requirement mismatch) | The wrapper calls `requestApproval`. The user sees the approval prompt in APKRun.app. |

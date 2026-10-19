@@ -160,8 +160,8 @@ Operations that return an `OperationHandle` ([runtime-daemon.md](runtime-daemon.
 | `apkrun list [--all] [--json]` | #027 **E** | managed packages: name, package, version, update choice, status, Mac app. `--all` adds unmanaged packages (`managed = false`) from the last known Android inventory and does not start Android |
 | `apkrun info <package> [--json]` | #027 **E** | name, package, version (`versionName (versionCode)`), update authority, update source, Mac app path and status, runtime status, installed/updated dates, signer digest, settings summary, and `compatibility` when the compatibility database has an entry for the installed version (#090, [diagnostics.md](diagnostics.md) §10.3) |
 | `apkrun inspect <file>… [--json]` | #073, #090 | `inspectFile`: the host preview only ([package-store.md](package-store.md) §4.3, §11.1), with `compatibility` when the database has an entry (#090). Needs apkrund but never starts Android, and nothing is installed |
-| `apkrun launch <package> [--json]` | #032 | `launch(packageID)` ([runtime-daemon.md](runtime-daemon.md) §7.2). Opens the Mac app (or the generic launcher) and returns when the session is `running`, printing the first-frame time |
-| `apkrun stop <package>` | #032 | `terminate(packageID)`: closes the window and force-stops the app |
+| `apkrun launch <package> [--json]` | #032 | `launch(packageID)` ([runtime-daemon.md](runtime-daemon.md) §7.2). Opens the Mac app (or the generic launcher) and returns when the session is `running`. Until #068 supplies a window frame, the Debug headless hook reports the session state; first-frame timing is available with the launcher window |
+| `apkrun stop <package>` | #032 | `terminate(packageID)`: closes the window and stops the app |
 | `apkrun repair <package> [--yes]` | #076 | `repairPackage` for a `broken` package ([package-store.md](package-store.md) §11.1) |
 | `apkrun rollback <package> [--allow-data-loss] [--yes]` | #043 | `rollbackPackage` ([update-system.md](update-system.md) §8.5) |
 | `apkrun adopt <package>` | #073 | `adoptPackage` for an unmanaged package ([package-store.md](package-store.md) §9.3) |

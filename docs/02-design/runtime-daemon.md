@@ -111,7 +111,7 @@ Exit status 0 is not restarted by launchd. The next client connection, the next 
 
 `SIGTERM` (logout, system shutdown, `SMAppService.unregister()`, `launchctl bootout`):
 
-1. Reject new XPC connections while existing clients drain. Lifecycle operations that race with shutdown get `RuntimeControlError` code `runtime.hostShuttingDown`; status remains available to connected clients and reports `shuttingDown`.
+1. Reject new XPC connections while existing clients drain. Lifecycle operations that race with shutdown get `RuntimeControlError` code `runtime.hostShuttingDown`; status remains available to connected clients and reports `shuttingDown`. Shut down any daemon-owned headless session service, remove its Guest Agent observers, and wait for active session operations and deferred display releases before stopping Android.
 2. `RuntimeSupervisor.stop(reason: .hostShutdown)` with a 40 s deadline (§3.5). Sessions end with `.runtimeStopped`. Wrappers show nothing new: during logout they are quitting too.
 3. Flush logs, write `daemon.json` with `cleanExit = true`, close the XPC connections, and exit 0.
 
@@ -335,7 +335,10 @@ current, buffered events are published in order and queued requests may resume.
 Handlers are idempotent host-side reconciliation; guest operations such as a
 retry of `LaunchApplication` are scheduled to run after this barrier. Opening a
 new input channel also requires the agent to be ready, so input cannot bypass
-reconciliation.
+reconciliation. A handler must not wait for input-router cleanup that can
+send guest requests: detach the local route during the callback and complete
+`sessionEnded` after readiness resumes, or the reconnect barrier can wait on
+itself.
 
 ### 4.3 Operations during a disconnect
 
@@ -514,12 +517,12 @@ Wrappers open sessions. Control clients (GUI, menu bar, CLI) do not own windows,
 | Component | Serves | Notes |
 |---|---|---|
 | `XPCBrokerListener` | Mach service `io.apkrun.apkrund.xpc` | `hello`, `requestEndpoint`, `requestApproval` only ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2) |
-| `ControlEndpoint` | anonymous listener with the APKRun signing requirement | full `RuntimeService` |
+| `ControlEndpoint` | one-use anonymous listener per grant, with the selected APKRun client signing requirement | full `RuntimeService` |
 | `WrapperEndpoint(bundleID)` | one anonymous listener per registered wrapper, created lazily, with `identifier` + `cdhash` requirement | session API for its own package, `runtimeStatus` |
 | `EventHub` | all endpoints | fan-out of `RuntimeEvent` topics to subscribers (§8.4) |
 | `XPCRuntimeExporter` | — | adapts the `RuntimeService` Swift protocol to the `@objc` protocols of RuntimeAPI. The same `EmbeddedRuntimeService` instance serves XPC and embedded mode |
 
-Wrapper endpoints are created when a wrapper asks for one and dropped 10 minutes after their last connection closes. Re-registration (new cdhash after re-approval) replaces the listener.
+Control listeners are created per grant, expire after 5 seconds if unused, and accept one connection. Wrapper endpoints are created when a wrapper asks for one and dropped 10 minutes after their last connection closes. Re-registration (new cdhash after re-approval) replaces the listener.
 
 ### 8.2 Request rules
 

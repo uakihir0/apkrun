@@ -21689,3 +21689,82 @@ readiness; sustained guest event traffic could extend reconnect time. Launch
 retry classification relies on the stable protocol failure catalog strings.
 The behavior has only been exercised with host tests, not a real guest.
 
+## IR-1381: Expose daemon-owned headless launch and stop through control XPC
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #032 |
+| Affected documents | [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2; [runtime-daemon.md](../02-design/runtime-daemon.md) §2.4; [runtime-api.md](../03-reference/runtime-api.md) §2; [cli.md](../02-design/cli.md) §3; [M04](issues/M04-daemon-and-guest-protocol.md) #032 |
+
+**Choices.** Add versioned control-XPC launch and terminate requests, with
+typed replies, and expose `apkrun launch` and `apkrun stop`. The daemon starts
+Android on demand, checks the installed package through Guest Agent, acquires
+a secondary display lease, drains and acknowledges frames, and tracks the
+session through `SessionRegistry`. Keep these two control operations limited
+to the app, menu bar, and CLI client kinds; the generic launcher receives its
+session channel in #068. Enable this headless path only in Debug builds with
+the #032 test hook. Limit control endpoints to eight, broker connections to
+32, and each connection to 64 in-flight requests. Create one anonymous
+control listener per grant, bind it to the selected client's code-signing
+requirement, and bind its reservation to that one-use listener and broker
+connection for at most five seconds. Bound pending grant state separately at
+32 without consuming any of the eight live-control slots. Probe the accepted
+control connection with the idempotent status operation and retry transport
+refusals before any side effect. Map the new `busy` rejection to the existing
+`hostShuttingDown` value for API 1.0–1.2 clients.
+Retry transient endpoint admission with bounded backoff. Decode structured
+broker admission errors during hello. On service shutdown, reject new
+operations, remove observers, wait for snapshot reconciliation and in-flight
+operations, then stop frame drainers and Android. Reconcile snapshot state
+inside the Guest Agent barrier but defer display release until after the
+handler returns; hold later session operations until release completes.
+Detach the local input route in a terminal snapshot callback, but defer the
+router's guest-facing `sessionEnded` cleanup until the reconnect barrier opens.
+Reject a session-service construction if the runtime stops while its
+dependencies are being obtained.
+
+**Reason.** This is the first useful vertical path from a non-embedded CLI
+through apkrund to an Android app and gives #068 a daemon-owned session service
+to reuse. A separate launcher session channel keeps package-window capability
+out of general control clients. Reserving capacity atomically prevents a
+granted endpoint from later failing as an unexplained transport error; version
+fallback preserves the documented minor-version compatibility rule. The
+one-use endpoint itself enforces the exact code requirement for the claimed
+client kind, and the reservation ID prevents a delayed endpoint connection
+from consuming a different grant. Broker claims do not reserve live-control
+capacity before a signature-checked connection arrives, consistent with the
+rule against using process identifiers for authorization; the idempotent
+preflight detects a saturated listener before the client sends a side effect.
+Snapshot callbacks cannot wait for display release while the Guest Agent
+holds its reconnect barrier. Tracked release work runs after the handler
+returns, and later session operations wait until it completes. Input cleanup
+can itself send to the Guest Agent, so terminal reconciliation drops the
+local route immediately and schedules its router cleanup after the barrier.
+A runtime
+generation check prevents reusing a stale Guest Agent after Android stops.
+Full daemon shutdown closes the session service before stopping Android. The
+headless hook is the specified temporary path before native app windows exist.
+
+**Verification.** Focused RuntimeHost, RuntimeClient, RuntimeAPI, and CLI
+tests pass, including headless display lease cleanup, reconnect reconciliation,
+shutdown rejection, no replay of launch and terminate, broker error decoding,
+API versioning, immediate snapshot delivery during observer registration, and
+registration guidance. Swift format lint and `git diff --check` pass. Per the
+user's request, no GitHub Actions, dedicated login host, LaunchAgent, or live
+VM test was run.
+
+**Risk for review.** This is a partial #032 implementation. Release builds do
+not enable headless launch, first-frame reporting awaits #068, and the broader
+list, info, install, event, operation, authorization, and real-XPC acceptance
+work remains. The broker's one-use endpoint grants have only been compiled
+and exercised through host tests, not a live installed app. The integration
+path has only been exercised with focused host tests, not a live Android
+guest. Since the broker is intentionally reachable by every process of the
+logged-in user, a local process can temporarily consume the bounded pool of 32
+pending grants and cause endpoint requests to return `busy` until grants
+expire after five seconds. The endpoint signing requirement still prevents
+that process from connecting to a granted control endpoint. This bounded
+availability tradeoff keeps the documented broker model and avoids using
+process IDs or audit tokens for authorization; it needs maintainer review.
+

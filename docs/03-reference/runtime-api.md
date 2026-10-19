@@ -29,7 +29,7 @@ Out of scope: the host–guest protocol ([../02-design/guest-protocol.md](../02-
 | Endpoint | How it is reached | Served to | `@objc` protocol | Version rule (§2) | Served in host state (§3.7) |
 |---|---|---|---|---|---|
 | Broker | Mach service `io.apkrun.apkrund.xpc` of the LaunchAgent `io.apkrun.apkrund`. Debug builds: `io.apkrun.apkrund.dev.xpc`, label `io.apkrun.apkrund.dev` | any process of the logged-in user | `RuntimeBrokerXPC` | frozen, additive only | all |
-| Control | anonymous `NSXPCListener`, one per host client identifier | APKRun.app, APKRunMenuBar, apkrun CLI, the generic launcher | `RuntimeControlXPC` | same major, minor ≤ server | all, with the restrictions of §3.7 |
+| Control | one-use anonymous `NSXPCListener` created per grant and bound to the selected client's code-signing requirement | APKRun.app, APKRunMenuBar, apkrun CLI, the generic launcher | `RuntimeControlXPC` | same major, minor ≤ server | all, with the restrictions of §3.7 |
 | Maintenance | anonymous `NSXPCListener`, one per host client identifier | APKRun.app, APKRunMenuBar, apkrun CLI | `MaintenanceControl` | frozen, additive only | all |
 | Wrapper(bundleID) | anonymous `NSXPCListener`, one per registered wrapper, created on first request, dropped 10 minutes after its last connection closes, replaced on re-registration | that wrapper's launcher | `RuntimeWrapperXPC` | major N and N−1 | all, with the restrictions of §3.7 |
 
@@ -98,9 +98,9 @@ apkrund sets the requirement on each anonymous listener with `NSXPCListener.setC
 
 ```swift
 public enum RuntimeAPI {
-    public static let version = APIVersion(major: 1, minor: 1)       // the control and wrapper protocols
+    public static let version = APIVersion(major: 1, minor: 3)       // the control and wrapper protocols
     public static let wrapperMajors: [Int] = [1]                     // served on the wrapper endpoint: N and N−1
-    public static let brokerRevision = 1                              // additive-only broker protocol
+    public static let brokerRevision = 2                              // additive-only broker protocol
     public static let maintenanceRevision = 1                         // additive-only MaintenanceControl
 }
 
@@ -109,6 +109,8 @@ public struct APIVersion: Codable, Sendable, Comparable { public var major: Int;
 
 - The initial versioned XPC contract is `1.0` in #031: the broker handshake and the `runtimeStatus`, `runtime start`, and `runtime stop` control operations. #032 completes the API around these operations without changing their wire shape. Before #031 there is no XPC runtime API (§3.8).
 - Version `1.1` adds the optional Guest Agent state and protocol-version fields to `RuntimeHostStatus`; older clients ignore the added JSON keys, and new clients decode older replies with both fields set to `nil`.
+- Version `1.2` adds the `launch` and `terminate` methods to `RuntimeControlXPC`, with versioned request headers and typed result-or-error replies. These operations are sent once; a transport failure is surfaced to the caller and is never automatically replayed.
+- Version `1.3` bounds control admission to 8 live connections and 64 requests in flight per connection. A broker that cannot issue a control connection rejects the request with `busy`; an over-limit operation returns `runtime.busy`. Requests from API 1.0–1.2 clients use the already-defined `hostShuttingDown` rejection when the control connection limit is reached, because those clients cannot decode the 1.3 `busy` case.
 - `components.json` of a release records `"runtimeAPI": { "current": "M.m", "wrapperMajors": [N−1, N] }` ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.3). A major is dropped only as that section allows.
 - The #031 `RuntimeHostStatus` includes optional `guestAgentState` and `guestAgentProtocolVersion` fields. Clients accept their absence as `nil`.
 
@@ -121,7 +123,7 @@ public struct APIVersion: Codable, Sendable, Comparable { public var major: Int;
 | Wrapper | the server's major and the previous major (N−1), any minor for N−1, minor ≤ the server's for N | `runtime.apiVersionMismatch(client:server:)`, remediation "Update Mac App". The launcher normally avoids this with the checks of §2.4 |
 | Maintenance | every client. No major | — |
 
-A client newer than the server in minor only (for example client `1.3`, server `1.2`) is refused on the control endpoint. Control clients ship in the same APKRun.app as apkrund, so this happens only during an APKRun update, which the maintenance endpoint covers ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.6).
+A client newer than the server in minor only (for example client `1.4`, server `1.3`) is refused on the control endpoint. Control clients ship in the same APKRun.app as apkrund, so this happens only during an APKRun update, which the maintenance endpoint covers ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.6).
 
 ### 2.3 Minor and major changes
 
@@ -624,7 +626,8 @@ Topics, payloads, coalescing, and ordering are in §16. Summary:
 | Limit | Value | Over the limit |
 |---|---|---|
 | Requests in flight per connection | 64 | `runtime.busy` |
-| Control connections at once | 8 | new connection invalidated; the pending `requestEndpoint` returns `runtime.busy` |
+| Control connections at once | 8 | new connection invalidated; the pending `requestEndpoint` returns `busy` |
+| Pending control-endpoint grants | Up to 32 globally; 5 s, bound to one-use endpoint and broker connection; do not reserve a live-control slot | `busy`; current clients retry admission for up to 5 s |
 | Connections per wrapper endpoint | 4 | as above |
 | Broker connections at once | 32 | new connections invalidated |
 | Message size (JSON) | 32 MiB | `runtime.malformedRequest` |
@@ -874,6 +877,8 @@ public enum ProvisioningStep: String, Codable, Sendable {
 | session channel messages | §6.3 | W, L (own session) | 1 or U | §6.3 | [../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.3 |
 
 APKRun.app and the CLI never open app sessions. They call `launch`, which opens the wrapper or the generic launcher, and that process opens the session (ADR-0006).
+
+The current control endpoint carries `launch` and `terminate` as `RuntimeLaunchControlRequest` and `RuntimeTerminateControlRequest`. Each includes `APIRequestHeader` and `packageID`; the reply includes exactly one of the operation result or `RuntimeWireError`. Until #068 adds the native launcher, Debug builds can use the #032 headless hook to create a daemon-owned session on a leased secondary display and discard its frames.
 
 ### 6.2 `openSession`, `launch`, `terminate`
 

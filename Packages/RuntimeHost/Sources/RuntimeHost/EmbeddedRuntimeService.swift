@@ -12,14 +12,18 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
     private var sessionID: SessionID?
     private var packageID: String?
     private var taskID: Int32?
+    private var pendingLaunchFrameCount: UInt64?
+    private var frameReconciliationSessionID: SessionID?
     private var guestAgent: (any EmbeddedSessionGuestAgent)?
     private let developerDisplay: DeveloperDisplay?
     private let displayPool: DisplayPool?
     private let inputRoute: DevInputRoute?
     private let stopSignal: DevBootStopSignal?
     private let windowState: DevBootAppWindowState?
+    private let onTerminalSessionReconciled: (@Sendable (AppSessionSnapshot) async -> Void)?
     private var sessionOperationInFlight = false
     private var sessionOperationWaiters: [CheckedContinuation<Void, Never>] = []
+    private var guestAgentResynchronizationHandlerID: UUID?
 
     /// Creates a service for one embedded CLI run.
     public init(registry: SessionRegistry? = nil, logSink: (any LogSink)? = nil) {
@@ -29,6 +33,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         inputRoute = nil
         stopSignal = nil
         windowState = nil
+        onTerminalSessionReconciled = nil
     }
 
     init(
@@ -38,7 +43,8 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         stopSignal: DevBootStopSignal,
         displayPool: DisplayPool? = nil,
         inputRoute: DevInputRoute? = nil,
-        windowState: DevBootAppWindowState? = nil
+        windowState: DevBootAppWindowState? = nil,
+        onTerminalSessionReconciled: (@Sendable (AppSessionSnapshot) async -> Void)? = nil
     ) {
         self.registry = registry ?? SessionRegistry(logSink: logSink)
         self.developerDisplay = developerDisplay
@@ -46,10 +52,17 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         self.inputRoute = inputRoute
         self.stopSignal = stopSignal
         self.windowState = windowState
+        self.onTerminalSessionReconciled = onTerminalSessionReconciled
     }
 
-    func attachGuestAgent(_ guestAgent: any EmbeddedSessionGuestAgent) {
+    func attachGuestAgent(_ guestAgent: any EmbeddedSessionGuestAgent) async {
+        if let previous = self.guestAgent, let handlerID = guestAgentResynchronizationHandlerID {
+            await previous.removeResynchronizationHandler(handlerID)
+        }
         self.guestAgent = guestAgent
+        guestAgentResynchronizationHandlerID = await guestAgent.addResynchronizationHandler { [weak self] snapshot in
+            await self?.reconcileGuestSnapshot(snapshot)
+        }
     }
 
     /// Closes this window's app without touching sessions owned by sibling windows.
@@ -191,13 +204,19 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
             )
         }
 
-        let frameCountBeforeLaunch = developerDisplay.windowFrameCommitCount
+        let frameCountBeforeLaunch = pendingLaunchFrameCount ?? developerDisplay.windowFrameCommitCount
+        pendingLaunchFrameCount = frameCountBeforeLaunch
         let report: GuestLaunchReport
         do throws(GuestAgentFailure) {
             report = try await guestAgent.launch(package: requestedPackage, displayID: snapshot.displayID)
         } catch {
-            await markRuntimeFailed()
-            throw Self.wireError(for: error)
+            guard Self.isTransientGuestLaunchFailure(error) else {
+                await markRuntimeFailed()
+                throw Self.wireError(for: error)
+            }
+            // Keep the launch session and native window alive. The reconnect callback will
+            // reconcile the snapshot, then retry or finish the first-frame transition.
+            return try Self.launchResult(for: snapshot)
         }
         do throws(SessionRegistryFailure) {
             snapshot = try await launched(taskID: report.taskID)
@@ -301,6 +320,9 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         let snapshot = try await registry.request(packageID: packageID)
         sessionID = snapshot.id
         self.packageID = packageID
+        taskID = nil
+        pendingLaunchFrameCount = nil
+        frameReconciliationSessionID = nil
         guard snapshot.state == .requested else {
             return snapshot
         }
@@ -364,7 +386,11 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
     /// Records that the Guest Agent is starting the requested package.
     @discardableResult
     public func beginLaunch() async throws(SessionRegistryFailure) -> AppSessionSnapshot {
-        try await transition(to: .launching)
+        let snapshot = try await transition(to: .launching)
+        if pendingLaunchFrameCount == nil {
+            pendingLaunchFrameCount = developerDisplay?.windowFrameCommitCount
+        }
+        return snapshot
     }
 
     /// Adds the task returned by `LaunchApplication`.
@@ -381,9 +407,12 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
     @discardableResult
     public func firstFramePresented() async throws(SessionRegistryFailure) -> AppSessionSnapshot {
         if let current = await currentSession(), current.state.isEnded {
+            pendingLaunchFrameCount = nil
             return current
         }
-        return try await transition(to: .running)
+        let snapshot = try await transition(to: .running)
+        pendingLaunchFrameCount = nil
+        return snapshot
     }
 
     /// Begins the close policy before the Guest Agent removes the package's tasks.
@@ -469,7 +498,197 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         }
     }
 
+    /// Applies the guest's complete state before the supervisor releases requests queued during reconnect.
+    private func reconcileGuestSnapshot(_ guestSnapshot: GuestSnapshotState) async {
+        guard let sessionID else {
+            return
+        }
+        let result: SessionReconciliationResult
+        do throws(SessionRegistryFailure) {
+            result = try await registry.reconcile(sessionID: sessionID, against: guestSnapshot)
+        } catch {
+            return
+        }
+        guard self.sessionID == sessionID else {
+            return
+        }
+
+        if result.session.state.isEnded {
+            pendingLaunchFrameCount = nil
+            frameReconciliationSessionID = nil
+            await inputRoute?.unbind()
+            if let onTerminalSessionReconciled {
+                await onTerminalSessionReconciled(result.session)
+            } else {
+                switch result.session.state {
+                case .ended(.appExited):
+                    // A single-window dev command owns the VM and stops it when its app exits.
+                    await stopSignal?.signal(.appExited)
+                case .ended(.error(.displayLost)):
+                    // Do not leave a single-window command waiting after Android loses its display.
+                    await stopSignal?.signal(.appWindowCloseFailed)
+                default:
+                    break
+                }
+            }
+        }
+
+        if result.session.state == .launching,
+            let observedTaskID = result.session.taskIDs.sorted().first,
+            pendingLaunchFrameCount != nil
+        {
+            scheduleFirstFrameReconciliation(sessionID: sessionID, taskID: observedTaskID)
+        }
+
+        guard result.action == .relaunchApplication else {
+            return
+        }
+        // GuestAgentSupervisor awaits this handler before reopening normal sends. Defer the relaunch so it can use
+        // the newly ready connection, and serialize it with any launch or close already in progress.
+        Task { [weak self] in
+            await self?.relaunchAfterResynchronization(sessionID: sessionID)
+        }
+    }
+
+    /// Reissues a lost launch reply after reconnect without waiting for the app's first frame.
+    private func relaunchAfterResynchronization(sessionID: SessionID) async {
+        await acquireSessionOperation()
+        defer { releaseSessionOperation() }
+
+        guard self.sessionID == sessionID,
+            let current = await registry.session(sessionID),
+            current.state == .launching,
+            current.taskIDs.isEmpty,
+            await windowState?.isClosed() != true,
+            let guestAgent
+        else {
+            return
+        }
+
+        pendingLaunchFrameCount = developerDisplay?.windowFrameCommitCount
+        let report: GuestLaunchReport
+        do {
+            report = try await guestAgent.launch(package: current.packageID, displayID: current.displayID)
+        } catch {
+            if !Self.isTransientGuestLaunchFailure(error) {
+                await finishFailedResynchronization(sessionID: sessionID)
+            }
+            return
+        }
+
+        guard self.sessionID == sessionID,
+            let latest = await registry.session(sessionID),
+            latest.state == .launching
+        else {
+            return
+        }
+        if let completed = await registry.launchCompleted(packageID: latest.packageID, taskID: report.taskID) {
+            taskID = report.taskID
+            if completed.state.isEnded {
+                pendingLaunchFrameCount = nil
+                await inputRoute?.unbind()
+                if let onTerminalSessionReconciled {
+                    await onTerminalSessionReconciled(completed)
+                } else {
+                    switch completed.state {
+                    case .ended(.appExited):
+                        await stopSignal?.signal(.appExited)
+                    case .ended(.error(.displayLost)):
+                        await stopSignal?.signal(.appWindowCloseFailed)
+                    default:
+                        break
+                    }
+                }
+            } else if completed.state == .launching {
+                scheduleFirstFrameReconciliation(sessionID: sessionID, taskID: report.taskID)
+            }
+        } else if let current = await registry.session(sessionID),
+            current.state == .launching,
+            current.taskIDs.contains(report.taskID)
+        {
+            // A launch already in flight may have recorded this same task while the gate was held.
+            taskID = report.taskID
+            scheduleFirstFrameReconciliation(sessionID: sessionID, taskID: report.taskID)
+        }
+    }
+
+    private func scheduleFirstFrameReconciliation(sessionID: SessionID, taskID: Int32) {
+        guard frameReconciliationSessionID != sessionID else {
+            return
+        }
+        frameReconciliationSessionID = sessionID
+        Task { [weak self] in
+            await self?.completeObservedLaunchAfterResynchronization(sessionID: sessionID, taskID: taskID)
+        }
+    }
+
+    /// Finishes the normal first-frame transition when a reconnect snapshot already contains the launched app.
+    private func completeObservedLaunchAfterResynchronization(sessionID: SessionID, taskID: Int32) async {
+        await acquireSessionOperation()
+        defer { releaseSessionOperation() }
+        defer {
+            if frameReconciliationSessionID == sessionID {
+                frameReconciliationSessionID = nil
+            }
+        }
+
+        guard self.sessionID == sessionID,
+            let current = await registry.session(sessionID),
+            current.state == .launching,
+            current.taskIDs.contains(taskID),
+            let frameCountBeforeLaunch = pendingLaunchFrameCount,
+            let developerDisplay,
+            let stopSignal
+        else {
+            return
+        }
+
+        switch await DevBoot.waitForFrame(
+            after: frameCountBeforeLaunch,
+            on: developerDisplay,
+            stopSignal: stopSignal,
+            windowState: windowState
+        ) {
+        case .presented:
+            guard self.sessionID == sessionID,
+                let latest = await registry.session(sessionID),
+                latest.state == .launching,
+                latest.taskIDs.contains(taskID)
+            else {
+                return
+            }
+            _ = try? await firstFramePresented()
+        case .timedOut:
+            guard self.sessionID == sessionID,
+                let latest = await registry.session(sessionID),
+                latest.state == .launching,
+                latest.taskIDs.contains(taskID)
+            else {
+                return
+            }
+            await finishFailedResynchronization(sessionID: sessionID)
+        case .stopped, .windowClosed:
+            break
+        }
+    }
+
+    private func finishFailedResynchronization(sessionID: SessionID) async {
+        await markRuntimeFailed()
+        await inputRoute?.unbind()
+        guard let terminal = await registry.session(sessionID),
+            terminal.state == .ended(.error(.runtimeFailed))
+        else {
+            return
+        }
+        if let onTerminalSessionReconciled {
+            await onTerminalSessionReconciled(terminal)
+        } else {
+            await stopSignal?.signal(.appWindowCloseFailed)
+        }
+    }
+
     private func markRuntimeFailed() async {
+        pendingLaunchFrameCount = nil
         _ = try? await fail(.runtimeFailed)
     }
 
@@ -598,6 +817,23 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         )
     }
 
+    /// Keeps a lost launch reply reconcilable; the snapshot decides whether to retain or relaunch the task.
+    private static func isTransientGuestLaunchFailure(_ failure: GuestAgentFailure) -> Bool {
+        switch failure {
+        case .connectTimedOut:
+            true
+        case .stopped, .requiredAgentUnavailable:
+            false
+        case .operationFailed(let reason):
+            reason == "disconnected"
+                || reason.hasPrefix("timeout.")
+                || reason.hasPrefix("agentUnavailable.")
+                || reason == "handshakeTimedOut"
+        case .bundleMissing, .installFailed, .startFailed, .handshakeFailed, .adb:
+            false
+        }
+    }
+
     private func transition(to state: AppSessionState) async throws(SessionRegistryFailure) -> AppSessionSnapshot {
         guard let sessionID else {
             throw .sessionNotFound
@@ -610,11 +846,35 @@ protocol EmbeddedSessionGuestAgent: Sendable {
     func isInstalled(_ package: String) async throws(GuestAgentFailure) -> Bool
     func launch(package: String, displayID: Int32) async throws(GuestAgentFailure) -> GuestLaunchReport
     func stopApplication(package: String) async throws(GuestAgentFailure) -> Bool
+    func addResynchronizationHandler(
+        _ handler: @escaping @Sendable (GuestSnapshotState) async -> Void
+    ) async -> UUID
+    func removeResynchronizationHandler(_ id: UUID) async
+}
+
+extension EmbeddedSessionGuestAgent {
+    func addResynchronizationHandler(
+        _ handler: @escaping @Sendable (GuestSnapshotState) async -> Void
+    ) async -> UUID {
+        UUID()
+    }
+
+    func removeResynchronizationHandler(_ id: UUID) async {}
 }
 
 extension DevelopmentGuestAgent: EmbeddedSessionGuestAgent {
     func isInstalled(_ package: String) async throws(GuestAgentFailure) -> Bool {
         try await queryPackage(package) != nil
+    }
+
+    func addResynchronizationHandler(
+        _ handler: @escaping @Sendable (GuestSnapshotState) async -> Void
+    ) async -> UUID {
+        await supervisor.addResynchronizationHandler(handler)
+    }
+
+    func removeResynchronizationHandler(_ id: UUID) async {
+        await supervisor.removeResynchronizationHandler(id)
     }
 }
 

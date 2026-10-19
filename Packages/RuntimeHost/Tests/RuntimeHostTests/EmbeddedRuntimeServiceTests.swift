@@ -1,4 +1,6 @@
 import CoreGraphics
+import Foundation
+import GuestProtocol
 import RuntimeAPI
 import RuntimeCore
 import Testing
@@ -264,6 +266,284 @@ func embeddedRuntimeServiceClosesAnUnlaunchedWindowWithoutStoppingItsPackage() a
 }
 
 @Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceReconcilesTerminalGuestSnapshotThroughMultiWindowCallback() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent()
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let stopSignal = DevBootStopSignal()
+    let reconciled = ReconciliationResultLog()
+    let service = EmbeddedRuntimeService(
+        developerDisplay: display,
+        stopSignal: stopSignal,
+        onTerminalSessionReconciled: { await reconciled.append($0) }
+    )
+    defer { display.finish() }
+
+    _ = try await service.requestSession(packageID: "io.apkrun.fixture.hellotext")
+    _ = try await service.displayReady()
+    _ = try await service.beginLaunch()
+    _ = try await service.launched(taskID: 23)
+    _ = try await service.firstFramePresented()
+    await service.attachGuestAgent(guest)
+
+    await guest.resynchronize(with: guestSnapshot(displays: [0]))
+
+    let results = await reconciled.results
+    #expect(results.count == 1)
+    #expect(results.first?.state == .ended(.appExited))
+    #expect(await service.currentSession()?.state == .ended(.appExited))
+    #expect(await stopSignal.current() == nil)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceSignalsSingleWindowWhenSnapshotShowsAppExited() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent()
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let stopSignal = DevBootStopSignal()
+    let service = EmbeddedRuntimeService(developerDisplay: display, stopSignal: stopSignal)
+    defer { display.finish() }
+
+    _ = try await service.requestSession(packageID: "io.apkrun.fixture.hellotext")
+    _ = try await service.displayReady()
+    _ = try await service.beginLaunch()
+    _ = try await service.launched(taskID: 23)
+    _ = try await service.firstFramePresented()
+    await service.attachGuestAgent(guest)
+
+    await guest.resynchronize(with: guestSnapshot(displays: [0]))
+
+    #expect(await service.currentSession()?.state == .ended(.appExited))
+    #expect(await stopSignal.current() == .appExited)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceStopsSingleWindowAfterSnapshotLosesItsDisplay() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent()
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let stopSignal = DevBootStopSignal()
+    let service = EmbeddedRuntimeService(developerDisplay: display, stopSignal: stopSignal)
+    defer { display.finish() }
+
+    _ = try await service.requestSession(packageID: "io.apkrun.fixture.hellotext")
+    _ = try await service.displayReady()
+    _ = try await service.beginLaunch()
+    _ = try await service.launched(taskID: 23)
+    _ = try await service.firstFramePresented()
+    await service.attachGuestAgent(guest)
+
+    await guest.resynchronize(with: guestSnapshot(displays: []))
+
+    #expect(await service.currentSession()?.state == .ended(.error(.displayLost)))
+    #expect(await stopSignal.current() == .appWindowCloseFailed)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceRelaunchesMissingLaunchingTaskWithoutWaitingForFrame() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent()
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let service = EmbeddedRuntimeService(
+        developerDisplay: display,
+        stopSignal: DevBootStopSignal()
+    )
+    defer { display.finish() }
+
+    _ = try await service.requestSession(packageID: "io.apkrun.fixture.hellotext")
+    _ = try await service.displayReady()
+    _ = try await service.beginLaunch()
+    await service.attachGuestAgent(guest)
+
+    await guest.resynchronize(with: guestSnapshot(displays: [0]))
+    for _ in 0..<100 {
+        if await guest.launchedPackages.count == 1 {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+
+    #expect(await guest.launchedPackages == ["io.apkrun.fixture.hellotext"])
+    #expect(await service.currentSession()?.state == .launching)
+    #expect(await service.currentSession()?.taskIDs == [23])
+
+    display.frameDisplayed(sequence: 1)
+    for _ in 0..<100 {
+        if await service.currentSession()?.state == .running {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await service.currentSession()?.state == .running)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceFinishesLaunchWhenSnapshotAlreadyContainsItsTask() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent(
+        launchFailures: [.operationFailed(reason: "disconnected")]
+    )
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let service = EmbeddedRuntimeService(
+        developerDisplay: display,
+        stopSignal: DevBootStopSignal()
+    )
+    defer { display.finish() }
+    await service.attachGuestAgent(guest)
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    do {
+        _ = try await service.launch(RuntimeLaunchRequest(packageID: package))
+        Issue.record("the first Guest Agent launch should report its simulated lost reply")
+    } catch {
+        #expect(error.code == "runtime.guestAgentOperationFailed")
+    }
+    #expect(await service.currentSession()?.state == .launching)
+
+    await guest.resynchronize(
+        with: guestSnapshot(
+            displays: [0],
+            tasks: [(taskID: 23, displayID: 0, packageID: package.rawValue)]
+        )
+    )
+
+    #expect(await guest.launchedPackages == [package.rawValue])
+    #expect(await service.currentSession()?.state == .launching)
+    #expect(await service.currentSession()?.taskIDs == [23])
+
+    display.frameDisplayed(sequence: 1)
+    for _ in 0..<100 {
+        if await service.currentSession()?.state == .running {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+
+    #expect(await service.currentSession()?.state == .running)
+    #expect(await guest.launchedPackages == [package.rawValue])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func transientLaunchDisconnectStaysReconcilableAndRelaunchesFromSnapshot() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent(
+        launchFailures: [.operationFailed(reason: "agentUnavailable.guestAgent")]
+    )
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let stopSignal = DevBootStopSignal()
+    let service = EmbeddedRuntimeService(developerDisplay: display, stopSignal: stopSignal)
+    defer { display.finish() }
+    await service.attachGuestAgent(guest)
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    let launch = try await service.launch(RuntimeLaunchRequest(packageID: package))
+    #expect(launch.state == .launching)
+    #expect(await service.currentSession()?.state == .launching)
+    #expect(await service.currentSession()?.taskIDs.isEmpty == true)
+
+    await guest.resynchronize(with: guestSnapshot(displays: [0]))
+    for _ in 0..<100 {
+        if await guest.launchedPackages.count == 2 {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+
+    #expect(await guest.launchedPackages.count == 2)
+    #expect(await service.currentSession()?.state == .launching)
+    #expect(await service.currentSession()?.taskIDs == [23])
+    #expect(await stopSignal.current() == nil)
+
+    display.frameDisplayed(sequence: 1)
+    for _ in 0..<100 {
+        if await service.currentSession()?.state == .running {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await service.currentSession()?.state == .running)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func exhaustedAgentRestartBudgetEndsDeferredLaunch() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent(
+        launchFailures: [
+            .operationFailed(reason: "disconnected"),
+            .requiredAgentUnavailable,
+        ]
+    )
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let stopSignal = DevBootStopSignal()
+    let service = EmbeddedRuntimeService(developerDisplay: display, stopSignal: stopSignal)
+    defer { display.finish() }
+    await service.attachGuestAgent(guest)
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    _ = try await service.launch(RuntimeLaunchRequest(packageID: package))
+    await guest.resynchronize(with: guestSnapshot(displays: [0]))
+
+    for _ in 0..<100 {
+        if await service.currentSession()?.state == .ended(.error(.runtimeFailed)) {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+
+    #expect(await guest.launchedPackages.count == 2)
+    #expect(await service.currentSession()?.state == .ended(.error(.runtimeFailed)))
+    #expect(await stopSignal.current() == .appWindowCloseFailed)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func remoteLaunchRejectionStillEndsTheFailedSession() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent(
+        launchFailures: [.operationFailed(reason: "remote.launchApplication.INVALID_ARGUMENT")]
+    )
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let service = EmbeddedRuntimeService(
+        developerDisplay: display,
+        stopSignal: DevBootStopSignal()
+    )
+    defer { display.finish() }
+    await service.attachGuestAgent(guest)
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    do {
+        _ = try await service.launch(RuntimeLaunchRequest(packageID: package))
+        Issue.record("the simulated remote rejection must fail the launch")
+    } catch {
+        #expect(error.code == "runtime.guestAgentOperationFailed")
+    }
+
+    #expect(await service.currentSession()?.state == .ended(.error(.runtimeFailed)))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func failedSnapshotRelaunchNotifiesTheWindowOwner() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent(
+        launchFailures: [.operationFailed(reason: "remote.launchApplication.INVALID_ARGUMENT")]
+    )
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let reconciled = ReconciliationResultLog()
+    let service = EmbeddedRuntimeService(
+        developerDisplay: display,
+        stopSignal: DevBootStopSignal(),
+        onTerminalSessionReconciled: { await reconciled.append($0) }
+    )
+    defer { display.finish() }
+
+    _ = try await service.requestSession(packageID: "io.apkrun.fixture.hellotext")
+    _ = try await service.displayReady()
+    _ = try await service.beginLaunch()
+    await service.attachGuestAgent(guest)
+
+    await guest.resynchronize(with: guestSnapshot(displays: [0]))
+    for _ in 0..<100 {
+        if await reconciled.results.count == 1 {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+
+    #expect(await reconciled.results.first?.state == .ended(.error(.runtimeFailed)))
+    #expect(await service.currentSession()?.state == .ended(.error(.runtimeFailed)))
+}
+
+@Test(.timeLimit(.minutes(1)))
 func embeddedMultiSessionServiceTerminatesOnlyTheOwningWindow() async throws {
     let firstGuest = FakeEmbeddedSessionGuestAgent()
     let secondGuest = FakeEmbeddedSessionGuestAgent()
@@ -388,6 +668,59 @@ func devBootObservesWindowClosesBeforeAndroidIsReady() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func devBootClosesWindowWhenReconnectSnapshotLosesItsDisplay() async throws {
+    let package = "io.apkrun.fixture.hellotext"
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let (closeRequests, closeContinuation) = AsyncStream.makeStream(of: Void.self)
+    let launch = DevBootAppLaunch(
+        packageID: package,
+        apkURL: nil,
+        display: display,
+        displayMode: .primaryDisplayCompatibility,
+        inputRoute: DevInputRoute(),
+        closeRequests: closeRequests
+    )
+    let (events, eventContinuation) = AsyncStream.makeStream(of: DevBootEvent.self)
+    let coordinator = DevBootMultiWindowCoordinator(
+        launches: [launch],
+        stopSignal: DevBootStopSignal(),
+        report: { eventContinuation.yield($0) }
+    )
+    let registry = SessionRegistry()
+    let session = try await registry.request(packageID: package)
+    _ = try await registry.transition(session.id, to: .waitingForRuntime)
+    _ = try await registry.transition(session.id, to: .acquiringDisplay)
+    _ = try await registry.transition(session.id, to: .launching)
+    _ = await registry.launchCompleted(packageID: package, taskID: 23)
+    _ = try await registry.transition(session.id, to: .running)
+    let lostDisplay = try await registry.reconcile(sessionID: session.id, against: GuestSnapshotState())
+    defer {
+        closeContinuation.finish()
+        eventContinuation.finish()
+        display.finish()
+    }
+
+    await coordinator.reconcileTerminalSession(lostDisplay.session)
+    eventContinuation.finish()
+    var reportedEvents: [DevBootEvent] = []
+    for await event in events {
+        reportedEvents.append(event)
+    }
+
+    #expect(await launch.windowState.isClosed())
+    #expect(
+        reportedEvents.contains {
+            if case .appWindowExited(packageID: package) = $0 { true } else { false }
+        }
+    )
+    #expect(
+        reportedEvents.contains {
+            if case .warning = $0 { true } else { false }
+        }
+    )
+}
+
+@Test(.timeLimit(.minutes(1)))
 func devBootStopsTheRuntimeWhenAClosedWindowCannotStopItsApp() async throws {
     let package = "io.apkrun.fixture.hellotext"
     let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
@@ -439,12 +772,20 @@ func devBootStopsTheRuntimeWhenAClosedWindowCannotStopItsApp() async throws {
 private actor FakeEmbeddedSessionGuestAgent: EmbeddedSessionGuestAgent {
     private let installed: Bool
     private let stopResult: Bool
+    private var launchFailures: [GuestAgentFailure]
     private(set) var launchedPackages: [String] = []
     private(set) var stoppedPackages: [String] = []
+    private var resynchronizationHandlerID: UUID?
+    private var resynchronizationHandler: (@Sendable (GuestSnapshotState) async -> Void)?
 
-    init(isInstalled: Bool = true, stopResult: Bool = true) {
+    init(
+        isInstalled: Bool = true,
+        stopResult: Bool = true,
+        launchFailures: [GuestAgentFailure] = []
+    ) {
         installed = isInstalled
         self.stopResult = stopResult
+        self.launchFailures = launchFailures
     }
 
     func isInstalled(_ package: String) async throws(GuestAgentFailure) -> Bool {
@@ -453,6 +794,9 @@ private actor FakeEmbeddedSessionGuestAgent: EmbeddedSessionGuestAgent {
 
     func launch(package: String, displayID: Int32) async throws(GuestAgentFailure) -> GuestLaunchReport {
         launchedPackages.append(package)
+        if !launchFailures.isEmpty {
+            throw launchFailures.removeFirst()
+        }
         return GuestLaunchReport(taskID: 23, component: "\(package)/.MainActivity", outcome: "started")
     }
 
@@ -460,6 +804,57 @@ private actor FakeEmbeddedSessionGuestAgent: EmbeddedSessionGuestAgent {
         stoppedPackages.append(package)
         return stopResult
     }
+
+    func addResynchronizationHandler(
+        _ handler: @escaping @Sendable (GuestSnapshotState) async -> Void
+    ) async -> UUID {
+        let id = UUID()
+        resynchronizationHandlerID = id
+        resynchronizationHandler = handler
+        return id
+    }
+
+    func removeResynchronizationHandler(_ id: UUID) async {
+        guard resynchronizationHandlerID == id else {
+            return
+        }
+        resynchronizationHandlerID = nil
+        resynchronizationHandler = nil
+    }
+
+    func resynchronize(with snapshot: GuestSnapshotState) async {
+        await resynchronizationHandler?(snapshot)
+    }
+}
+
+private actor ReconciliationResultLog {
+    private(set) var results: [AppSessionSnapshot] = []
+
+    func append(_ result: AppSessionSnapshot) {
+        results.append(result)
+    }
+}
+
+private func guestSnapshot(
+    displays displayIDs: [Int32],
+    tasks taskRecords: [(taskID: Int32, displayID: Int32, packageID: String)] = []
+) -> GuestSnapshotState {
+    var snapshot = GPSnapshot()
+    snapshot.displays = displayIDs.map { displayID in
+        var display = GPDisplayInfo()
+        display.displayID = displayID
+        return display
+    }
+    snapshot.tasks = taskRecords.map { record in
+        var task = GPTaskInfo()
+        task.taskID = record.taskID
+        task.displayID = record.displayID
+        task.package = record.packageID
+        return task
+    }
+    var state = GuestSnapshotState()
+    state.replace(with: snapshot)
+    return state
 }
 
 @Test(.timeLimit(.minutes(1)))

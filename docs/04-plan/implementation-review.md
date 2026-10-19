@@ -21638,3 +21638,54 @@ pass for `APKRunApp.swift`. There is no APKRun unit-test target, and the full
 app build enters the third-party VirGL build, so this change uses source
 typechecking rather than adding an unexecuted test target.
 
+## IR-1380: Reconcile app sessions before reopening the Guest Agent
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #031 |
+| Affected documents | [runtime-daemon.md](../02-design/runtime-daemon.md) §4.2; [M04](issues/M04-daemon-and-guest-protocol.md) #031 |
+
+**Choices.** Keep the Guest Agent non-ready until host session handlers apply
+the complete guest snapshot. While a handler runs, fold incoming task and
+display events into the candidate snapshot and run handlers again; include
+handlers registered during reconciliation before releasing queued requests.
+Publish buffered events to subscribers in order after the snapshot is stable.
+Do not allow direct input-channel creation before readiness. When a launching
+session has lost its launch reply, keep it reconcilable across transient agent
+failures while returning the `launching` phase so the owning command and native
+window remain alive, idempotently reissue `LaunchApplication` when no task is
+present, and resume the first-frame transition when the snapshot already
+contains the task. A late launch reply matching a task recovered from the
+snapshot is accepted idempotently. Exhausting the agent restart budget is
+terminal and closes the affected window. Each actual relaunch captures a fresh
+frame baseline; an already-running task keeps the original launch baseline.
+Terminal sessions unbind input, release their display lease, and close/report
+their native window through the single-window or multi-window owner.
+
+**Reason.** Reconnect can race both host requests and guest task events. The
+snapshot barrier prevents requests and input from observing stale host session
+state; draining events before release prevents a stale snapshot from causing
+an unnecessary relaunch. A snapshot task is evidence that the lost launch
+request succeeded even when its reply did not reach the host, so retaining the
+original frame sequence lets the existing launch lifecycle finish normally.
+When no task exists and APKRun actually retries the launch, a new frame
+baseline prevents a frame from an earlier attempt from marking the retry
+successful. Typed remote launch rejections and an exhausted agent restart
+budget end the failed session; recoverable connection failures wait for the
+next synchronized snapshot without making the launch command tear down Android.
+
+**Verification.** Focused RuntimeCore tests pass for snapshot reconciliation,
+event arrival during a blocked handler, and sends held behind the barrier.
+Focused RuntimeHost tests pass for app exit and display-loss reconciliation,
+idempotent relaunch, first-frame recovery, transient disconnects, restart
+budget exhaustion, and remote rejections. A snapshot-recovered task also
+accepts its matching late launch reply. `swift-format lint --strict` and
+`git diff --check` pass. No dedicated-lab, LaunchAgent, or live VM test was run.
+
+**Risk for review.** Handlers may run more than once while events arrive and
+must remain idempotent. The drain loop waits for a quiet point before
+readiness; sustained guest event traffic could extend reconnect time. Launch
+retry classification relies on the stable protocol failure catalog strings.
+The behavior has only been exercised with host tests, not a real guest.
+

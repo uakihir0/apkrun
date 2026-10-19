@@ -218,6 +218,35 @@ actor DevBootMultiWindowCoordinator {
         await stopIfAllWindowsEnded()
     }
 
+    /// Closes a window when the guest snapshot shows that its session ended during a reconnect.
+    func reconcileTerminalSession(_ session: AppSessionSnapshot) async {
+        let packageID = session.packageID
+        guard let launch = launches[packageID], markClosed(packageID) else {
+            return
+        }
+        await launch.windowState.close()
+        await launch.inputRoute.unbind()
+        if let service = services[packageID] {
+            _ = try? await service.runtimeStopped()
+        }
+        launch.display.finish()
+
+        switch session.state {
+        case .ended(.appExited):
+            break
+        case .ended(.error(.displayLost)):
+            report(
+                .warning(
+                    "Android display was lost for \(packageID) during reconnect; close and relaunch its window."
+                )
+            )
+        default:
+            report(.warning("Android session for \(packageID) ended during reconnect: \(session.state)."))
+        }
+        report(.appWindowExited(packageID: packageID))
+        await stopIfAllWindowsEnded()
+    }
+
     /// Ends all remaining windows when Ctrl-C stops the shared VM.
     func stopAllWindows() async {
         for (packageID, launch) in launches {
@@ -620,7 +649,10 @@ public struct DevBoot: Sendable {
                                 stopSignal: stopSignal,
                                 displayPool: displayPool,
                                 inputRoute: launch.inputRoute,
-                                windowState: launch.windowState
+                                windowState: launch.windowState,
+                                onTerminalSessionReconciled: { session in
+                                    await coordinator.reconcileTerminalSession(session)
+                                }
                             )
                             await service.attachGuestAgent(agent)
                             _ = try await service.requestLeasedSession(

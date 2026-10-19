@@ -327,6 +327,16 @@ Rule: **the host is the source of truth for configuration, the guest for Android
 
 4. Send `InputEvent.cancelAll` to every leased display, so no touch stays down across the gap ([input.md](input.md) §7).
 
+The supervisor keeps the agent non-ready while snapshot handlers reconcile
+host state. Events received while a handler runs are applied to the candidate
+snapshot, then handlers run again; handlers registered during that pass are
+also invoked before readiness. Once the snapshot and handlers are
+current, buffered events are published in order and queued requests may resume.
+Handlers are idempotent host-side reconciliation; guest operations such as a
+retry of `LaunchApplication` are scheduled to run after this barrier. Opening a
+new input channel also requires the agent to be ready, so input cannot bypass
+reconciliation.
+
 ### 4.3 Operations during a disconnect
 
 - Frames keep flowing. The graphics path does not depend on the agent.

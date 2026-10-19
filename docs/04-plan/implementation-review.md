@@ -21964,9 +21964,9 @@ endpoint, so `apkrund` is its owner. Enriching the CLI envelope meets the
 current #032 output contract without changing the shared XPC DTO or requiring
 an API version bump.
 
-**Verification.** A focused CLI test checks the owner, schema version, and
-representative runtime fields in the encoded JSON. The full #032 acceptance
-criteria remain open.
+**Verification.** A focused CLI test checks the owner, schema version, every
+populated status field, and the output key set in the encoded JSON. The full
+#032 acceptance criteria remain open.
 
 **Risk for review.** The current status path has no embedded-runtime owner.
 If a future command uses this output for `apkrun-dev`, it must provide the

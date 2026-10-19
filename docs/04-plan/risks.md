@@ -26,9 +26,9 @@ A risk is something that could make a planned design fail or cost much more than
 |---|---|---|---|---|---|
 | R-01 | Limits of the macOS 27 custom virtio device API | High | Medium | #063, #019, #028 | Linux part settled (#019, positive); Android open (#028) |
 | R-02 | virglrenderer / ANGLE correctness for Android's GLES use | High | Medium | #020, #022, #023 | open |
-| R-03 | Graphics performance with one renderer thread | Medium | Medium | #023, #030, #068, #070 | open |
+| R-03 | Graphics performance with one renderer thread | Medium | Medium | #023, #030, #068, #070 | partial; two-display performance unmeasured |
 | R-04 | Multi-display: scanout hotplug, mode changes, apps on secondary displays | High | Medium | #028, #029, #067, #030 | open |
-| R-05 | Input injection and IME on secondary displays | High | Low | #024, #030, #071 | open |
+| R-05 | Input injection and IME on secondary displays | High | Low | #024, #030, #071 | partial; two-window guest input and IME unverified |
 | R-06 | The stock Cuttlefish image does not boot on the VZ topology | High | Medium | #012–#014 | G2 passed from `691e114` on the task branch (2026-10-09, android-image.md §8.5); closes with the clean-`main` G2 run |
 | R-07 | No VM save/restore while VirGL is active | Medium | High (known) | accepted; #070 measures cold start | watching |
 | R-08 | Memory footprint of the guest and the renderer | Medium | Medium | #028, #070 | open |
@@ -77,7 +77,7 @@ A risk is something that could make a planned design fail or cost much more than
 - **Mitigation.** No CPU readback on the normal path (FR-GFX-05), IOSurface pools shared with the wrapper ([ADR-0006](../01-architecture/decisions/0006-wrapper-owned-window-iosurface.md)), frame statistics and readback counters ([../02-design/graphics.md](../02-design/graphics.md) §7), the perf harness ([../02-design/diagnostics.md](../02-design/diagnostics.md) §9).
 - **Fallback.** Lower the frame rate of background windows; one renderer context thread per display if virglrenderer allows it; revise the provisional targets with an ADR ([../00-product/requirements.md](../00-product/requirements.md) §2).
 - **Settled by.** #023 (one display), #030 (two displays, embedded runtime), #068 and #070 (through the XPC path in apkrund, measured by the perf harness).
-- **Result.** Partial (2026-10-16): the one-display G3 run averaged 59.99 fps across 61 HelloGL events over ten minutes, with 0 mixed frames in 408 alternating-phase samples and no renderer crash (IR-1344). APKRun present-time p95 and multi-display performance remain unmeasured and are owned by #030, #068, and #070.
+- **Result.** Partial (2026-10-19, IR-1378): the embedded two-window path is implemented. The one-display G3 run averaged 59.99 fps across 61 HelloGL events over ten minutes, with 0 mixed frames in 408 alternating-phase samples and no renderer crash (IR-1344). Two-display execution, APKRun present-time p95, and multi-display performance remain unmeasured and are owned by #030, #068, and #070.
 
 ### R-04 Multi-display
 
@@ -93,7 +93,7 @@ A risk is something that could make a planned design fail or cost much more than
 - **Mitigation.** Per-display injection and focus routing ([../02-design/input.md](../02-design/input.md) §7); the APKRun IME with the per-display `ime_policy` (`LOCAL`, `FALLBACK_DISPLAY`, `HIDE`; [../02-design/guest-protocol.md](../02-design/guest-protocol.md)).
 - **Fallback.** `primaryDisplayCompatibility` for affected apps; `FALLBACK_DISPLAY` IME policy.
 - **Settled by.** #024, #030 (independent input to two displays), #071 (typing goes to the focused display).
-- **Result.** Partial (#024, 2026-10-12 UTC, build 16373615): input on display 0 only. Clicks, drags, scrolls, and a right-click reached HelloText and HelloCompose on display 0. Secondary displays are not tested; #029 and #030 settle them. See [issues/M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md#024-pointer-input).
+- **Result.** Partial (2026-10-19, IR-1378): #024 verified clicks, drags, scrolls, and right-click on display 0. #030 now implements per-window focus-gated routing and task-focus retry with host-side tests. Secondary-display guest input and the #071 IME behavior remain unverified. See [issues/M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md#024-pointer-input).
 
 ### R-06 Stock Cuttlefish image on the VZ topology
 

@@ -21274,3 +21274,54 @@ remain pending until a guest run; the corresponding acceptance criteria stay
 unchecked. Maintainers should review primary-presenter reuse, the fixed-size
 secondary window, stop-time lease cleanup, the one-package guard, fullscreen
 launch options, and invalid versus unknown display errors.
+
+## IR-1378: Run two app windows in one embedded runtime
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #030 |
+| Affected documents | [M03](issues/M03-input-and-basic-runtime.md) #030; [display-and-windowing.md](../02-design/display-and-windowing.md) §§11–12; [input.md](../02-design/input.md) §§7, 15; [graphics.md](../02-design/graphics.md) §16; [risks.md](risks.md) R-03, R-05 |
+
+**Choices.** Keep one VM, Guest Agent, `DisplayPool`, `SessionRegistry`, and
+input stream for both windows. Give each package its own session service,
+display lease, native window, and close stream, and consume Guest Agent task
+events once before dispatching by package ID. Use the existing primary
+presenter for the first package and one pooled secondary display for the
+second, preserving #029's display-0 compatibility path. The key window owns
+Android's global task focus; the shared `InputRouter` serializes focus with
+input and fails closed when `FocusDisplay` fails. Retry focus when Android
+reports the app task, because AppKit can make the window key before that task
+exists. Window close ends that route before stopping the package and releasing
+its lease. If the Guest Agent cannot stop the closed app, stop the shared
+runtime and release all sessions; retaining an invisible live task and lease
+would leave the display pool unusable.
+
+**Reason.** Sharing one guest and renderer preserves the product architecture
+and avoids treating windows as separate virtual machines. Per-package session
+services keep task and close lifecycle isolated. A serialized focus operation
+prevents key events from reaching the previously focused Android app. The
+task-appearance retry closes the startup ordering gap without weakening the
+input gate. A shared focus generation preserves AppKit callback order across
+the per-window queues and prevents a late notification from taking focus
+back. Close monitors start before VM readiness, so closing both windows while
+Android boots stops the shared runtime immediately. Runtime teardown is the
+bounded failure path when Android cannot finish the app task.
+
+**Verification.** `swift test --package-path Packages/RuntimeCore --filter
+InputRouterTests` passed (34 tests) after adding shared-display ownership,
+focus failure, retry, stale-notification, and cancellation coverage.
+`swift test --package-path
+Packages/RuntimeHost --filter EmbeddedRuntimeServiceTests` passed (22 tests),
+including per-package close, failed-stop teardown, and close-before-readiness
+coverage. The Guest Agent
+`:guestd:testDebugUnitTest` task and `swift build --product apkrun --traits
+EmbeddedRuntime` passed. Swift formatting and `git diff --check` passed. No
+live Android two-window run, G5 gate, or two-display performance measurement
+was performed; acceptance remains open.
+
+**Review items and risk.** Maintainers should review the shared event
+dispatcher, primary-display compatibility choice, fail-closed input focus,
+task-appearance retry and focus generations, pre-readiness close monitoring,
+and the whole-runtime fallback after an app-stop failure. G5, secondary-display
+input, IME behavior, and R-03 measurements remain unverified.

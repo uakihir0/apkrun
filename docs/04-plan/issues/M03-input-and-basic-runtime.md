@@ -1000,6 +1000,25 @@ from build success):
 | Modules / paths | RuntimeCore `InputRouter`, `SessionRegistry`; WindowingCore `SessionWindowController` (focus); `Guest/guestd/` `TaskService` (`FocusDisplay`); `CLI/apkrun/Dev/`; `Tests/IntegrationTests/DisplayPoolTests/`; `Tests/AcceptanceTests/` |
 | Risks / questions | R-03, R-05 |
 
+**Implementation in progress (2026-10-19, IR-1378).** `apkrun dev launch
+<apk1> <apk2>` now prepares a primary window and a pooled secondary window
+under one VM and Guest Agent. Each package has its own session service, display
+lease, and close request; both share one task-event consumer and one
+focus-gated `InputRouter`. A key-window change applies Android task focus, and
+task appearance retries focus if the window became key before the app existed.
+Shared focus generations discard delayed notifications from another window.
+Close monitoring begins before VM startup. Closing one window stops only its
+package and releases its lease. If Android cannot stop that package, APKRun
+stops the shared runtime so no invisible live session or display lease is left
+behind.
+
+The `InputRouterTests` (34 tests), `EmbeddedRuntimeServiceTests` (22 tests),
+Guest Agent
+`testDebugUnitTest`, and the embedded `apkrun` build pass. No live two-window
+guest run, G5 gate, or two-display performance measurement was run; those
+acceptance items remain unchecked. The implementation and failure fallback
+need maintainer review.
+
 ### Goal
 
 Two Android apps run at the same time in two independent Mac windows, each on its own Android display. Input goes only to the app of the focused window.

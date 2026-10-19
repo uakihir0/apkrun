@@ -663,7 +663,7 @@ The CLI and the tests install, launch, terminate, uninstall, list, and inspect a
    - Add the package operations and embedded `launch` and `terminate` to `EmbeddedRuntimeService`, and the four CLI commands.
    - Check: `apkrun-dev install Tests/Fixtures/apks/HelloText.apk`, then `apkrun-dev list` shows the package with its versionCode.
 6. **Lint and migration.**
-   - `scripts/check-raw-adb.sh` rejects `adb shell` and `pm ` in Swift sources and scripts outside `ADBStoreAgentChannel`, `AdbClient`, and the allowlist (`scripts/dev/`, `Tests/Compatibility/`, `Images/tools/reference/`).
+   - `scripts/check-raw-adb.sh` rejects executable `adb shell` and `pm ` command examples in product Swift sources and scripts outside `ADBStoreAgentChannel`, `AdbClient`, and the allowlist (`scripts/dev/`, `Images/tools/reference/`). It ignores comments, generated protobuf sources, tests, and `Experiments/`, where raw ADB is used to exercise or diagnose the transport.
    - Move the #016 and #017 tests to the runtime API.
    - Check: the lint passes on `main` and fails on a planted raw call.
 7. **Acceptance run.**
@@ -690,7 +690,7 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 
 ### Progress
 
-- **Partial implementation (2026-10-18, IR-1367).** PackageStore, APK inspection, the stock-image ADB/Guest Agent channel, package RuntimeAPI types, and the embedded CLI commands are being wired together. The CLI builds and focused checks remain pending. The real-guest install, split-install, and uninstall run remains open; no acceptance criterion is checked.
+- **Implementation in progress (2026-10-19, IR-1367).** PackageStore, APK inspection, the stock-image ADB/Guest Agent channel, package RuntimeAPI types, and embedded `install`, `uninstall`, `list`, and `info` commands are implemented. An interrupted uninstall with an ambiguous data outcome remains pending without blocking PackageManager inspection; `apkrun uninstall <package> --forget` records an explicit host-side resolution without asserting the data outcome. Focused PackageStore (16), RuntimeHost (61), and CLI (28) Swift tests pass, as do the Guest Agent JVM tests, raw-ADB checker and self-tests, strict format check, and reproducible HelloSplit fixture build. Real-guest package operations remain open; no acceptance criterion is checked.
 
 ### Notes
 
@@ -775,6 +775,10 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 - [ ] The resize policy is defined and documented (FR-DSP-05): the §7.1 sequence, or fallback B, recorded under R-04.
 - [ ] Input hits the right point after a resize.
 - [ ] The orientation decision is written into §7.7.
+
+### Progress
+
+- **Implementation in progress (2026-10-19, IR-1368).** Step 1 adds a pure RuntimeCore `DisplayGeometryResolver` with Retina/non-Retina sizing, even pixel dimensions under the EDID 4095 px cap, density/zoom bounds, the minimum content size, and typed geometry failures. Its focused T0 suite passes (9 test functions, 13 parameterized cases). EDID updates, Guest Agent density application, window resize, display-ID stability, orientation, and Mac acceptance remain open; no acceptance criterion is checked.
 
 ### Notes
 

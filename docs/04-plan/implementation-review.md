@@ -20717,7 +20717,7 @@ error when the implementation is added.
 |---|---|
 | Status | Needs maintainer review |
 | Task | #027 |
-| Affected documents | [modules.md](../01-architecture/modules.md) §3; [package-store.md](../02-design/package-store.md) §§1, 6.1, 15; [M03](issues/M03-input-and-basic-runtime.md) #027 |
+| Affected documents | [modules.md](../01-architecture/modules.md) §3; [package-store.md](../02-design/package-store.md) §§1, 6.1, 15; [error-catalog.md](../03-reference/error-catalog.md) §10.4; [M03](issues/M03-input-and-basic-runtime.md) #027 |
 
 **Choice.** Keep `StoreAgentChannel` and `StoreRuntimeAccess` with
 APKStoreCore, and implement the stock-image ADB adapter and the embedded
@@ -20729,7 +20729,33 @@ lock owns the runtime for the command's lifetime. Defer a daemon
 `storeOperation` activity assertion until the daemon-backed RuntimeHost path
 is implemented. Keep the real-Mac acceptance run open and do not wire the
 raw-ADB checker into GitHub Actions while the user has asked to pause Actions
-tests.
+tests. PackageStore reserves same-package operations within a process and
+uses a cross-process `.mutation.lock` around filesystem transactions.
+`listManagedPackages()` reloads records while holding that lock. An
+`.imports.lock` protects temporary APK staging from startup cleanup.
+
+For the embedded CLI, package operations return typed in-process results;
+the long-operation handle and event broker are deferred to the daemon work in
+#031 and #032. `RuntimeSessionService.launch` reports the launch phase after
+`LaunchApplication` responds. It does not claim `.running` until a window
+client reports its first frame, and this service does not create a Mac window.
+Session launch and termination operations are serialized. A terminate request
+can close a session before launch starts, while a failed guest stop restores
+the prior session state.
+
+An ambiguous ADB uninstall failure followed by PackageManager reporting the
+package absent does not prove that app data was kept or deleted. Preserve the
+host record and return `store.uninstallDataUnverified` for either request. The
+same fail-closed rule applies after a crash at `guestUninstallRequested`:
+recovery leaves the request pending, preserves the host record and APK slots,
+and continues so PackageManager inventory remains inspectable. A subsequent
+`--forget` writes its durable intent first, then aborts the ambiguous uninstall
+with a reason that records the user's host-side choice. Recovery completes that
+forget after a crash at any journaled step without asserting the Android
+app-data outcome. The raw-ADB checker scans product source and scripts, but
+skips comments, generated protobuf source, test harnesses, and `Experiments/`;
+those paths contain transport fixtures and diagnostic commands rather than
+production package operations.
 
 **Reason.** The previous #027 module rows said RuntimeCore implemented
 `StoreAgentChannel`, although RuntimeCore cannot import APKStoreCore without
@@ -20741,17 +20767,66 @@ operation, and shutdown. A persistent daemon will need an explicit busy
 assertion before it can safely admit concurrent runtime operations. The user
 also clarified that shared-Mac timing makes exact UI acceptance checks brittle
 and requested feature work take priority; focused host checks remain useful,
-while Mac UI and guest acceptance evidence stays outstanding.
+while Mac UI and guest acceptance evidence stays outstanding. The store lock
+closes a second-process `--forget` race that an in-memory actor reservation
+cannot cover. It is separate from the journal lock, which only protects append
+sequencing. PackageManager absence alone cannot establish app-data state after
+ADB has already returned an uninstall error. Limiting raw-ADB lint to
+production code avoids false failures from diagnostic prose, test harnesses,
+generated protocol comments, and isolated experiments; package behavior
+remains covered by RuntimeAPI and channel tests.
 
-**Verification.** The raw-ADB checker self-tests pass. The main checker still
-finds existing diagnostic strings and test/experiment call sites, so its
-acceptance check remains open; the script has not been added to Actions. The
-embedded package-service tests and CLI build are being completed. No real-Mac
-UI or guest acceptance run was performed, and no #027 acceptance checkbox
+**Verification.** Focused Swift tests pass for PackageStore (16), RuntimeHost
+(61), and the embedded CLI (28). The Guest Agent JVM tests, raw-ADB checker,
+raw-ADB checker self-tests, strict format check, and reproducible HelloSplit
+fixture build also pass. The raw-ADB checker has not been added to Actions. No
+real guest package operation was performed, and no #027 acceptance checkbox
 was changed.
 
 **Risk.** The implementation must keep Android package operations inside the
 stock-image adapter and must not report the daemon activity-assertion or
 real-guest acceptance criteria as complete. Maintainers should review the
-RuntimeHost channel placement, the embedded-only locking assumption, and the
-deferred Actions lint integration.
+RuntimeHost channel placement, direct in-process result shape, mutation and
+scratch lock scope, raw-ADB checker exclusions, lack of window ownership in
+this service, and deferred Actions lint integration.
+
+## IR-1368: Proceed with the independent #067 geometry resolver
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #067 |
+| Affected documents | [display-and-windowing.md](../02-design/display-and-windowing.md) §§6.1–6.2; [M03](issues/M03-input-and-basic-runtime.md) #026, #027, #067 |
+
+**Choice.** Implement #067 step 1 as a pure RuntimeCore calculation while the
+shared Mac's #026 window acceptance and #027 guest-operation checks remain
+open. Keep those acceptance boxes unchecked. Do not claim the #067 resize or
+display behavior works until its later integration steps have evidence.
+`DisplayGeometryResolver` clamps the persisted zoom preference to 0.75–2.0,
+then adjusts the effective zoom only when needed to satisfy 120–640 dpi. It
+returns a typed error if that density range cannot be met within the
+preference range. It rejects windows below the 320 × 400 dp minimum instead of
+silently enlarging pixels or claiming a larger logical window. `minimumPointSize`
+exposes the corresponding point size so the window layer can enforce that
+minimum in a later step.
+
+**Reason.** The user asked to favor product implementation and approximate
+Mac checks because they also use the shared Mac. The resolver's arithmetic is
+independent of #026's native-window wiring and can be verified with fast T0
+tests. This advances reusable feature work without treating the unmet
+dependency evidence as passed. Keeping stored zoom within its documented
+range avoids persisting an effective value that the settings layer cannot
+accept; explicit failure is safer than producing density outside the guest's
+supported range.
+
+**Verification.** The focused resolver tests cover Retina and non-Retina
+geometry, the EDID pixel cap and even sizing, zoom and density limits, minimum
+size, and malformed input (9 test functions, 13 parameterized cases). Strict
+Swift format lint passes for both touched source and test files. The tests do
+not establish window resizing, density application on a guest, display-ID
+stability, orientation behavior, or Retina sharpness on a Mac.
+
+**Risk.** This sequencing leaves #026 and #027 device acceptance incomplete.
+Maintainers should review the zoom adjustment, the typed unsupported-density
+failure, and the minimum-size contract before the resolver is wired into
+window resizing.

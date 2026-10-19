@@ -339,7 +339,7 @@ let package = Package(
         ),
         .testTarget(
             name: "RuntimeCoreTests",
-            dependencies: ["RuntimeCore"],
+            dependencies: ["RuntimeCore", "GraphicsCore"],
             path: "Packages/RuntimeCore/Tests/RuntimeCoreTests",
             exclude: ["Fixtures"]
         ),

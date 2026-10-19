@@ -1,4 +1,5 @@
 import CoreGraphics
+import GraphicsCore
 import Testing
 
 @testable import RuntimeCore
@@ -23,6 +24,7 @@ func displayGeometryResolverMapsRetinaAndNonRetinaSizes(
     #expect(mode.renderScale == backingScale)
     #expect(mode.zoom == 1)
     #expect(mode.refreshHz == 60)
+    #expect(graphicsMode(for: mode).isSupported)
 }
 
 @Test
@@ -31,12 +33,23 @@ func displayGeometryResolverCapsPixelsAndRoundsThemDownToEvenDimensions() throws
         DisplayGeometry(pointSize: CGSize(width: 3000, height: 3000), backingScale: 2)
     )
 
-    #expect(mode.pixelSize == PixelSize(width: 4094, height: 4094))
-    #expect(mode.renderScale == 4095.0 / 3000.0)
-    #expect(mode.pixelSize.width.isMultiple(of: 2))
-    #expect(mode.pixelSize.height.isMultiple(of: 2))
     #expect(mode.pixelSize.width <= DisplayGeometryResolver.maximumPixelDimension)
     #expect(mode.pixelSize.height <= DisplayGeometryResolver.maximumPixelDimension)
+    #expect(mode.pixelSize.width.isMultiple(of: 2))
+    #expect(mode.pixelSize.height.isMultiple(of: 2))
+    #expect(mode.renderScale < 4095.0 / 3000.0)
+    #expect(graphicsMode(for: mode).isSupported)
+}
+
+@Test(arguments: [
+    DisplayGeometry(pointSize: CGSize(width: 320, height: 400), backingScale: 1),
+    DisplayGeometry(pointSize: CGSize(width: 850, height: 480), backingScale: 1),
+    DisplayGeometry(pointSize: CGSize(width: 480, height: 850), backingScale: 2),
+])
+func displayGeometryResolverProducesModesTheEdidCanExpress(_ geometry: DisplayGeometry) throws {
+    let mode = try DisplayGeometryResolver.resolve(geometry)
+
+    #expect(graphicsMode(for: mode).isSupported)
 }
 
 @Test(arguments: [
@@ -62,14 +75,18 @@ func displayGeometryResolverClampsZoomToPreferenceAndDensityLimits(
 func displayGeometryResolverAdjustsZoomWhenThePixelCapWouldLowerDensity() throws {
     let geometry = DisplayGeometry(pointSize: CGSize(width: 5000, height: 5000), backingScale: 1, zoom: 0.75)
     let mode = try DisplayGeometryResolver.resolve(geometry)
-    let expectedRenderScale = 4095.0 / 5000.0
-    let expectedZoom = 120.0 / (160.0 * expectedRenderScale)
+    let maximumRenderScale = 4095.0 / 5000.0
+    let expectedZoom = 120.0 / (160.0 * mode.renderScale)
     let minimumPointSize = try DisplayGeometryResolver.minimumPointSize(for: geometry)
 
-    #expect(mode.pixelSize == PixelSize(width: 4094, height: 4094))
-    #expect(mode.renderScale == expectedRenderScale)
-    #expect(mode.zoom == expectedZoom)
+    #expect(mode.pixelSize.width < DisplayGeometryResolver.maximumPixelDimension)
+    #expect(mode.pixelSize.height < DisplayGeometryResolver.maximumPixelDimension)
+    #expect(mode.renderScale < maximumRenderScale)
+    #expect(abs(mode.zoom - expectedZoom) < 0.001)
     #expect(mode.densityDpi == 120)
+    #expect(graphicsMode(for: mode).isSupported)
+    #expect(mode.pixelSize.width.isMultiple(of: 2))
+    #expect(mode.pixelSize.height.isMultiple(of: 2))
     #expect(minimumPointSize.width == CGFloat(320.0 * mode.zoom))
     #expect(minimumPointSize.height == CGFloat(400.0 * mode.zoom))
 }
@@ -81,6 +98,27 @@ func displayGeometryResolverPreservesTheMinimumAndroidContentSize() throws {
 
     #expect(mode.pixelSize == PixelSize(width: 320, height: 400))
     #expect(try DisplayGeometryResolver.minimumPointSize(for: minimumGeometry) == CGSize(width: 320, height: 400))
+}
+
+@Test
+func displayGeometryResolverAcceptsTheMinimumSizeAtTheLowestZoom() throws {
+    let geometry = DisplayGeometry(pointSize: CGSize(width: 240, height: 300), backingScale: 1, zoom: 0.75)
+    let mode = try DisplayGeometryResolver.resolve(geometry)
+
+    #expect(mode.zoom == 0.75)
+    #expect(mode.densityDpi == 120)
+    #expect(mode.pixelSize == PixelSize(width: 240, height: 300))
+    #expect(graphicsMode(for: mode).isSupported)
+}
+
+@Test
+func displayGeometryResolverReportsTheMinimumForAnUndersizedCandidate() throws {
+    let geometry = DisplayGeometry(pointSize: CGSize(width: 100, height: 100), backingScale: 2)
+
+    #expect(try DisplayGeometryResolver.minimumPointSize(for: geometry) == CGSize(width: 320, height: 400))
+    #expect(throws: DisplayGeometryResolverFailure.belowMinimumSize(width: 320, height: 400)) {
+        try DisplayGeometryResolver.resolve(geometry)
+    }
 }
 
 @Test
@@ -129,4 +167,13 @@ func displayGeometryResolverRejectsInvalidInputs(_ geometry: DisplayGeometry) {
     #expect(throws: DisplayGeometryResolverFailure.invalidGeometry) {
         try DisplayGeometryResolver.resolve(geometry)
     }
+}
+
+private func graphicsMode(for mode: ResolvedDisplayMode) -> DisplayMode {
+    DisplayMode(
+        widthPixels: mode.pixelSize.width,
+        heightPixels: mode.pixelSize.height,
+        refreshHz: mode.refreshHz,
+        dotsPerInch: mode.densityDpi
+    )
 }

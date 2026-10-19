@@ -1,4 +1,5 @@
 import CoreGraphics
+import GraphicsCore
 
 /// The logical size of an Android display window in macOS points.
 public struct DisplayGeometry: Equatable, Sendable {
@@ -71,6 +72,9 @@ public enum DisplayGeometryResolverFailure: Error, Equatable, Sendable {
 
     /// The density limits require a zoom outside the persisted preference range.
     case densityRangeRequiresZoomOutsidePreference(requiredZoom: Double)
+
+    /// No mode at the preferred refresh rate fits the EDID timing and range limits.
+    case noExpressibleMode(width: Double, height: Double, refreshHz: Int)
 }
 
 /// Resolves macOS window geometry into an Android scanout mode.
@@ -98,6 +102,13 @@ public enum DisplayGeometryResolver {
     public static func resolve(_ geometry: DisplayGeometry) throws(DisplayGeometryResolverFailure)
         -> ResolvedDisplayMode
     {
+        try resolve(geometry, enforcingMinimumSize: true)
+    }
+
+    private static func resolve(
+        _ geometry: DisplayGeometry,
+        enforcingMinimumSize: Bool
+    ) throws(DisplayGeometryResolverFailure) -> ResolvedDisplayMode {
         let pointWidth = Double(geometry.pointSize.width)
         let pointHeight = Double(geometry.pointSize.height)
         guard
@@ -109,55 +120,96 @@ public enum DisplayGeometryResolver {
             throw .invalidGeometry
         }
 
-        let renderScale = min(
+        let maximumRenderScale = min(
             geometry.backingScale,
             Double(maximumPixelDimension) / pointWidth,
             Double(maximumPixelDimension) / pointHeight
         )
-        let effectiveZoom = try resolvedZoom(requestedZoom: geometry.zoom, renderScale: renderScale)
-        let minimumSize = minimumPointSize(forZoom: effectiveZoom)
-        guard pointWidth >= minimumSize.width, pointHeight >= minimumSize.height else {
-            throw .belowMinimumSize(width: minimumSize.width, height: minimumSize.height)
+
+        if let mode = try resolvedMode(
+            pointWidth: pointWidth,
+            pointHeight: pointHeight,
+            requestedZoom: geometry.zoom,
+            renderScale: maximumRenderScale,
+            enforcingMinimumSize: enforcingMinimumSize
+        ) {
+            return mode
         }
 
-        let width = evenPixelDimension(pointWidth * renderScale)
-        let height = evenPixelDimension(pointHeight * renderScale)
-        let density = Int((baseDensityDpi * renderScale * effectiveZoom).rounded())
+        // The 12-bit EDID dimensions are not the only timing limit. At 60 Hz, a
+        // mode near 4095 x 4095 exceeds the detailed-timing pixel clock, so lower
+        // the render scale until the mode is expressible, then maximize that scale.
+        var highestUnsupportedScale = maximumRenderScale
+        var scale = maximumRenderScale
+        var best: ResolvedDisplayMode?
+        for _ in 0..<64 {
+            scale *= 0.95
+            guard scale > 0 else {
+                break
+            }
+            do throws(DisplayGeometryResolverFailure) {
+                if let candidate = try resolvedMode(
+                    pointWidth: pointWidth,
+                    pointHeight: pointHeight,
+                    requestedZoom: geometry.zoom,
+                    renderScale: scale,
+                    enforcingMinimumSize: enforcingMinimumSize
+                ) {
+                    best = candidate
+                    break
+                }
+            } catch .densityRangeRequiresZoomOutsidePreference(let requiredZoom) {
+                if requiredZoom > zoomRange.upperBound {
+                    break
+                }
+            } catch .belowMinimumSize {
+                break
+            } catch {
+                throw error
+            }
+            highestUnsupportedScale = scale
+        }
+        guard var best else {
+            throw .noExpressibleMode(
+                width: pointWidth,
+                height: pointHeight,
+                refreshHz: preferredRefreshRate
+            )
+        }
 
-        return ResolvedDisplayMode(
-            pixelSize: PixelSize(width: width, height: height),
-            densityDpi: min(densityRange.upperBound, max(densityRange.lowerBound, density)),
-            renderScale: renderScale,
-            zoom: effectiveZoom,
-            refreshHz: preferredRefreshRate
-        )
+        var lowestSupportedScale = best.renderScale
+        for _ in 0..<40 {
+            let midpoint = (lowestSupportedScale + highestUnsupportedScale) / 2
+            guard midpoint > lowestSupportedScale, midpoint < highestUnsupportedScale else {
+                break
+            }
+            guard
+                let candidate = try? resolvedMode(
+                    pointWidth: pointWidth,
+                    pointHeight: pointHeight,
+                    requestedZoom: geometry.zoom,
+                    renderScale: midpoint,
+                    enforcingMinimumSize: enforcingMinimumSize
+                )
+            else {
+                highestUnsupportedScale = midpoint
+                continue
+            }
+            best = candidate
+            lowestSupportedScale = midpoint
+        }
+        return best
     }
 
     /// Returns the minimum point dimensions that preserve 320 × 400 dp for this geometry's zoom.
     ///
-    /// The render scale is derived from the supplied point size because large windows can hit
-    /// the EDID pixel cap, which in turn affects the density-limited effective zoom.
+    /// EDID timing limits may lower the render scale, which can in turn change the
+    /// density-limited effective zoom.
     public static func minimumPointSize(
         for geometry: DisplayGeometry
     ) throws(DisplayGeometryResolverFailure) -> CGSize {
-        let pointWidth = Double(geometry.pointSize.width)
-        let pointHeight = Double(geometry.pointSize.height)
-        guard
-            pointWidth.isFinite, pointWidth > 0,
-            pointHeight.isFinite, pointHeight > 0,
-            geometry.backingScale.isFinite, geometry.backingScale > 0,
-            geometry.zoom.isFinite, geometry.zoom > 0
-        else {
-            throw .invalidGeometry
-        }
-
-        let renderScale = min(
-            geometry.backingScale,
-            Double(maximumPixelDimension) / pointWidth,
-            Double(maximumPixelDimension) / pointHeight
-        )
-        let effectiveZoom = try resolvedZoom(requestedZoom: geometry.zoom, renderScale: renderScale)
-        let minimumSize = minimumPointSize(forZoom: effectiveZoom)
+        let mode = try resolve(geometry, enforcingMinimumSize: false)
+        let minimumSize = minimumPointSize(forZoom: mode.zoom)
         return CGSize(width: minimumSize.width, height: minimumSize.height)
     }
 
@@ -177,6 +229,49 @@ public enum DisplayGeometryResolver {
         }
 
         return preferenceZoom
+    }
+
+    private static func resolvedMode(
+        pointWidth: Double,
+        pointHeight: Double,
+        requestedZoom: Double,
+        renderScale: Double,
+        enforcingMinimumSize: Bool
+    ) throws(DisplayGeometryResolverFailure) -> ResolvedDisplayMode? {
+        let effectiveZoom = try resolvedZoom(requestedZoom: requestedZoom, renderScale: renderScale)
+        let minimumSize = minimumPointSize(forZoom: effectiveZoom)
+        guard
+            !enforcingMinimumSize
+                || (pointWidth >= minimumSize.width && pointHeight >= minimumSize.height)
+        else {
+            throw .belowMinimumSize(width: minimumSize.width, height: minimumSize.height)
+        }
+
+        let pixelSize = PixelSize(
+            width: evenPixelDimension(pointWidth * renderScale),
+            height: evenPixelDimension(pointHeight * renderScale)
+        )
+        let density = min(
+            densityRange.upperBound,
+            max(densityRange.lowerBound, Int((baseDensityDpi * renderScale * effectiveZoom).rounded()))
+        )
+        let graphicsMode = DisplayMode(
+            widthPixels: pixelSize.width,
+            heightPixels: pixelSize.height,
+            refreshHz: preferredRefreshRate,
+            dotsPerInch: density
+        )
+        guard graphicsMode.isSupported else {
+            return nil
+        }
+
+        return ResolvedDisplayMode(
+            pixelSize: pixelSize,
+            densityDpi: density,
+            renderScale: renderScale,
+            zoom: effectiveZoom,
+            refreshHz: preferredRefreshRate
+        )
     }
 
     private static func zoomRequired(

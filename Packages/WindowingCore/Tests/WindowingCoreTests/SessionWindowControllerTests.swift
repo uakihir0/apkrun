@@ -23,3 +23,15 @@ import Testing
     #expect(state.hasPresentedFrame)
     #expect(!state.showsPlaceholder)
 }
+
+@Test func aLaunchFailureKeepsInputDisabledAfterFurtherFrames() {
+    var state = SessionWindowPresentationState()
+    state.markFramePresented()
+    #expect(state.acceptsInput)
+
+    state.markFailed()
+    state.markFramePresented()
+
+    #expect(state.hasFailed)
+    #expect(!state.acceptsInput)
+}

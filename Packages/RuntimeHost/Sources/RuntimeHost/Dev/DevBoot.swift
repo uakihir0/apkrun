@@ -84,6 +84,10 @@ public struct DevBootOptions: Sendable {
 public enum DevBootEvent: Sendable {
     /// A runtime state change, as text (`booting(init)`, `ready`, …).
     case state(String)
+    /// A short status for the native development-window placeholder.
+    case windowStatus(String)
+    /// The Android application label for the native development window.
+    case windowTitle(String)
     /// Bytes from the kernel console.
     case console(Data)
     /// A one-line status message for the developer.
@@ -139,6 +143,7 @@ public struct DevBoot: Sendable {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         stopRequests: AsyncStream<Void>,
         appCloseRequests: AsyncStream<Void>? = nil,
+        preserveWindowOnError: Bool = false,
         onRuntimeReady: (@Sendable (DevelopmentRuntimeContext) async throws -> Void)? = nil,
         onEvent: @escaping @Sendable (DevBootEvent) -> Void
     ) async throws {
@@ -149,6 +154,7 @@ public struct DevBoot: Sendable {
                 environment: environment,
                 stopRequests: stopRequests,
                 appCloseRequests: appCloseRequests,
+                preserveWindowOnError: preserveWindowOnError,
                 onRuntimeReady: onRuntimeReady,
                 onEvent: onEvent
             )
@@ -160,9 +166,16 @@ public struct DevBoot: Sendable {
         environment: [String: String],
         stopRequests: AsyncStream<Void>,
         appCloseRequests: AsyncStream<Void>?,
+        preserveWindowOnError: Bool,
         onRuntimeReady: (@Sendable (DevelopmentRuntimeContext) async throws -> Void)?,
         onEvent: @escaping @Sendable (DevBootEvent) -> Void
     ) async throws {
+        var returnedNormally = false
+        defer {
+            if !preserveWindowOnError || returnedNormally {
+                options.developerDisplay?.finish()
+            }
+        }
         let paths = APKRunPaths(allowingHomeOverride: true, environment: environment)
         let lock = try InstanceLock.acquire(paths: paths, owner: .apkrunDev)
         defer { lock.close() }
@@ -218,10 +231,6 @@ public struct DevBoot: Sendable {
             _ = try await service.requestSession(packageID: package)
             embeddedSession = service
         }
-        // The window's events end with the boot, so it can close after Android has stopped.
-        defer {
-            options.developerDisplay?.finish()
-        }
         let logcat = try LogcatFile(directory: paths.logsRoot.appendingPathComponent("guest", isDirectory: true))
         onEvent(.message("logcat goes to \(logcat.url.path)"))
         let consoles = DevConsoleSocketServer(directory: paths.devConsoleDirectory)
@@ -267,10 +276,16 @@ public struct DevBoot: Sendable {
         var stopCause: StopCause = .signal
         let started = ContinuousClock.now
         if await stopSignal.current() == nil {
+            if options.developerDisplay != nil {
+                onEvent(.windowStatus("Starting Android…"))
+            }
             do {
                 try await supervisor.ensureReady(.cli)
                 if await stopSignal.current() == nil {
                     onEvent(.message("Android is ready after \(ContinuousClock.now - started)"))
+                    if options.developerDisplay != nil, options.launchPackage != nil {
+                        onEvent(.windowStatus("Preparing app…"))
+                    }
                     if let onRuntimeReady {
                         try await onRuntimeReady(
                             DevelopmentRuntimeContext(
@@ -309,10 +324,27 @@ public struct DevBoot: Sendable {
                 guard let agent = await supervisor.developmentGuestAgent else {
                     throw GuestAgentFailure.startFailed
                 }
+                let mayLaunch: Bool
                 if let apkURL = options.launchAPKURL {
-                    try await agent.installAPK(apkURL, package: package)
+                    mayLaunch = try await Self.installAPKAndBeginLaunch(stopSignal: stopSignal) {
+                        onEvent(.windowStatus("Installing app…"))
+                        try await agent.installAPK(apkURL, package: package)
+                    }
+                } else {
+                    mayLaunch = await stopSignal.beginLaunch()
                 }
-                if let embeddedSession {
+                if mayLaunch, options.developerDisplay != nil {
+                    let displayName: String
+                    do {
+                        let packageInfo = try await agent.queryPackage(package)
+                        let label = packageInfo?.label.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        displayName = label.isEmpty ? package : label
+                    } catch {
+                        displayName = package
+                    }
+                    onEvent(.windowTitle(displayName))
+                }
+                if mayLaunch, let embeddedSession {
                     await embeddedSession.attachGuestAgent(agent)
                     taskEventMonitor = Task {
                         for await event in agent.taskEvents {
@@ -326,8 +358,10 @@ public struct DevBoot: Sendable {
                         }
                     }
                 }
-                let mayLaunch = await stopSignal.beginLaunch()
                 if mayLaunch, await stopSignal.current() == nil {
+                    if options.developerDisplay != nil {
+                        onEvent(.windowStatus("Starting app…"))
+                    }
                     if let embeddedSession {
                         guard let packageID = RuntimePackageID(rawValue: package) else {
                             throw RuntimeWireError.runtime(
@@ -400,6 +434,18 @@ public struct DevBoot: Sendable {
         }
         await stopSignal.stopRuntime()
         _ = try? await embeddedSession?.runtimeStopped()
+        returnedNormally = true
+    }
+
+    static func installAPKAndBeginLaunch(
+        stopSignal: DevBootStopSignal,
+        install: @escaping @Sendable () async throws -> Void
+    ) async throws -> Bool {
+        guard await stopSignal.beginPackageInstall() else {
+            return false
+        }
+        try await install()
+        return await stopSignal.beginLaunch()
     }
 
     enum StopCause: Sendable, Equatable {
@@ -487,7 +533,7 @@ public struct DevBoot: Sendable {
 actor DevBootStopSignal {
     private var cause: DevBoot.StopCause?
     private var waiter: CheckedContinuation<DevBoot.StopCause, Never>?
-    private var applicationLaunchStarted = false
+    private var applicationOperationStarted = false
     private var stopHandler: (@Sendable () async -> Void)?
     private var stopTask: Task<Void, Never>?
 
@@ -498,11 +544,19 @@ actor DevBootStopSignal {
         }
     }
 
+    func beginPackageInstall() -> Bool {
+        guard cause == nil else {
+            return false
+        }
+        applicationOperationStarted = true
+        return true
+    }
+
     func beginLaunch() -> Bool {
         guard cause == nil else {
             return false
         }
-        applicationLaunchStarted = true
+        applicationOperationStarted = true
         return true
     }
 
@@ -520,6 +574,10 @@ actor DevBootStopSignal {
 
     func current() -> DevBoot.StopCause? {
         cause
+    }
+
+    func hasScheduledRuntimeStop() -> Bool {
+        stopTask != nil
     }
 
     func wait() async -> DevBoot.StopCause {
@@ -540,7 +598,7 @@ actor DevBootStopSignal {
     private func shouldStopRuntimeImmediately(for cause: DevBoot.StopCause) -> Bool {
         switch cause {
         case .appWindowClosed:
-            !applicationLaunchStarted
+            !applicationOperationStarted
         case .signal, .appExited:
             true
         }

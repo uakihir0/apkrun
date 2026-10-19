@@ -15,12 +15,16 @@
         private let showStatistics: Bool
         private let inputSink: PointerInputSink
         private let onWindowClosed: @MainActor () -> Void
+        private var windowTitle = "APKRun display 0"
+        private var placeholderStatus = "Starting Android…"
         private var source: SurfacePoolFrameSource?
         private var window: SessionWindowController?
+        private var failureWindow: SessionFailureWindowController?
         private var tasks: [Task<Void, Never>] = []
         private var pendingGeometry: (pointSize: CGSize, backingScale: CGFloat, zoom: Double)?
         private var resizeCompletions: [@MainActor (Bool) -> Void] = []
         private var resizeTask: Task<Void, Never>?
+        private var isShowingFailure = false
         #if APKRUN_TEST_READBACK
             private let tearing = TearingSampler()
         #endif
@@ -64,20 +68,51 @@
                 task.cancel()
             }
             tasks.removeAll()
-            resizeTask?.cancel()
-            resizeTask = nil
-            pendingGeometry = nil
-            resizeCompletions.removeAll()
+            cancelResize()
             window?.close()
+            failureWindow?.close()
+            failureWindow = nil
+        }
+
+        func setWindowTitle(_ title: String) {
+            windowTitle = title
+            window?.setAppName(title)
+        }
+
+        func setPlaceholderStatus(_ status: String) {
+            placeholderStatus = status
+            window?.setPlaceholderStatus(status)
+        }
+
+        func showFailure(appName: String, message: String, remediation: String) -> Bool {
+            isShowingFailure = true
+            cancelResize()
+            if let window {
+                window.showFailure(message: message, remediation: remediation)
+                return true
+            }
+            let failureWindow = SessionFailureWindowController(
+                title: appName,
+                appName: appName,
+                message: message,
+                remediation: remediation
+            )
+            failureWindow.onClose = onWindowClosed
+            failureWindow.show()
+            self.failureWindow = failureWindow
+            return true
         }
 
         private func handle(_ event: DeveloperDisplayEvent) {
             switch event {
             case .attached(let surfaceSet):
+                guard failureWindow == nil else {
+                    return
+                }
                 let source = SurfacePoolFrameSource(surfaceSet: surfaceSet, display: display)
                 let window = SessionWindowController(
                     source: source,
-                    title: "APKRun display 0",
+                    title: windowTitle,
                     backingScale: display.backingScale,
                     inputSink: inputSink
                 ) { [weak self] pointSize, backingScale, zoom, completion in
@@ -93,6 +128,7 @@
                     )
                 }
                 window.onClose = onWindowClosed
+                window.setPlaceholderStatus(placeholderStatus)
                 window.show()
                 self.source = source
                 self.window = window
@@ -112,6 +148,10 @@
             zoom: Double,
             completion: @escaping @MainActor (Bool) -> Void
         ) {
+            guard !isShowingFailure else {
+                completion(false)
+                return
+            }
             pendingGeometry = (pointSize, backingScale, zoom)
             resizeCompletions.append(completion)
             guard resizeTask == nil else {
@@ -151,6 +191,17 @@
                 for completion in completions {
                     completion(lastResizeSucceeded)
                 }
+            }
+        }
+
+        private func cancelResize() {
+            pendingGeometry = nil
+            resizeTask?.cancel()
+            resizeTask = nil
+            let completions = resizeCompletions
+            resizeCompletions.removeAll()
+            for completion in completions {
+                completion(false)
             }
         }
 

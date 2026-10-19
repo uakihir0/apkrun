@@ -261,6 +261,21 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
     #endif
 }
 
+#if APKRUN_EMBEDDED_RUNTIME
+    @Test func developmentLaunchOnlyStartsTheWindowForAnActualLaunch() {
+        #expect(DisplayWindowSession.request(in: ["dev", "launch", "HelloText.apk"]) == .launch)
+        #expect(DisplayWindowSession.request(in: ["dev", "launch", "--no-window", "HelloText.apk"]) == nil)
+        #expect(DisplayWindowSession.request(in: ["help", "launch"]) == nil)
+        #expect(DisplayWindowSession.request(in: ["dev", "launch", "--help"]) == nil)
+        #expect(DisplayWindowSession.request(in: ["dev", "boot", "--window", "--help"]) == nil)
+        #expect(DisplayWindowSession.request(in: ["dev", "boot", "--guest-dir", "launch"]) == nil)
+        #expect(DisplayWindowSession.request(in: ["dev", "launch", "--guest-dir", "boot"]) == .launch)
+        #expect(
+            DisplayWindowSession.request(in: ["dev", "boot", "--window", "--guest-dir", "launch"]) == .boot
+        )
+    }
+#endif
+
 private final class CLIOutputRecorder: @unchecked Sendable {
     struct Line: Equatable {
         let text: String

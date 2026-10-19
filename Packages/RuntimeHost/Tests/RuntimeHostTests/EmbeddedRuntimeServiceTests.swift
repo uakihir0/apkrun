@@ -281,6 +281,59 @@ func devLaunchFrameWaitRespondsToBufferedWindowClose() async {
     #expect(ContinuousClock.now - startedAt < .seconds(1))
 }
 
+@Test(.timeLimit(.minutes(1)))
+func devBootInstallCloseDefersStopAndSkipsLaunchUntilInstallCompletes() async throws {
+    let signal = DevBootStopSignal()
+    let probe = DevBootStopProbe()
+    await signal.attachStopHandler {
+        await probe.record("stop")
+    }
+    let gate = DevBootInstallGate()
+
+    let operation = Task {
+        let mayLaunch = try await DevBoot.installAPKAndBeginLaunch(stopSignal: signal) {
+            await probe.record("install-start")
+            await gate.pause()
+            await probe.record("install-finished")
+        }
+        if mayLaunch {
+            await probe.record("launch")
+        }
+        return mayLaunch
+    }
+
+    await gate.waitUntilStarted()
+    await signal.signal(.appWindowClosed)
+
+    #expect(await signal.current() == .appWindowClosed)
+    #expect(!(await signal.hasScheduledRuntimeStop()))
+    #expect(await probe.events == ["install-start"])
+
+    await gate.release()
+    #expect(try await !operation.value)
+    #expect(await probe.events == ["install-start", "install-finished"])
+    #expect(!(await signal.hasScheduledRuntimeStop()))
+
+    await signal.stopRuntime()
+    #expect(await probe.events == ["install-start", "install-finished", "stop"])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func devBootStopSignalSkipsAPKInstallWhenWindowClosedFirst() async {
+    let signal = DevBootStopSignal()
+    let probe = DevBootStopProbe()
+    await signal.attachStopHandler {
+        await probe.record("stop")
+    }
+
+    await signal.signal(.appWindowClosed)
+
+    #expect(!(await signal.beginPackageInstall()))
+    #expect(await signal.hasScheduledRuntimeStop())
+    await signal.stopRuntime()
+    #expect(await probe.events == ["stop"])
+}
+
 @Test func developerDisplayCountsOnlyNativeWindowFrameCommits() {
     let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
     defer { display.finish() }
@@ -292,4 +345,44 @@ func devLaunchFrameWaitRespondsToBufferedWindowClose() async {
     display.frameDisplayed(sequence: 2)
 
     #expect(display.windowFrameCommitCount == 2)
+}
+
+private actor DevBootStopProbe {
+    private(set) var events: [String] = []
+
+    func record(_ event: String) {
+        events.append(event)
+    }
+}
+
+private actor DevBootInstallGate {
+    private let started: AsyncStream<Void>
+    private let startedContinuation: AsyncStream<Void>.Continuation
+    private let releaseRequest: AsyncStream<Void>
+    private let releaseContinuation: AsyncStream<Void>.Continuation
+
+    init() {
+        let (started, startedContinuation) = AsyncStream.makeStream(of: Void.self)
+        self.started = started
+        self.startedContinuation = startedContinuation
+        let (releaseRequest, releaseContinuation) = AsyncStream.makeStream(of: Void.self)
+        self.releaseRequest = releaseRequest
+        self.releaseContinuation = releaseContinuation
+    }
+
+    func pause() async {
+        startedContinuation.yield(())
+        for await _ in releaseRequest {
+            break
+        }
+    }
+
+    func waitUntilStarted() async {
+        var iterator = started.makeAsyncIterator()
+        _ = await iterator.next()
+    }
+
+    func release() {
+        releaseContinuation.yield(())
+    }
 }

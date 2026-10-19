@@ -4,6 +4,11 @@
     import RuntimeHost
     import WindowingCore
 
+    private enum DisplayWindowUpdate: Sendable {
+        case title(String)
+        case status(String)
+    }
+
     /// The window of `apkrun dev boot --window`: the display, the stop requests, and the event loop (#023).
     ///
     /// AppKit runs on the main thread, so `APKRunCommand.main` enters the loop there before its first suspension, and the
@@ -19,15 +24,35 @@
             registryLock.withLock { registered }
         }
 
-        /// Whether `arguments` ask for a development window: `dev boot --window`, and `dev launch` unless it has
-        /// `--no-window` (decision D13). The check is on the words, because the loop starts before the arguments are
-        /// parsed. A request for help does not open a window.
-        static func isRequested(_ arguments: [String]) -> Bool {
-            if arguments.contains("boot") && arguments.contains("--window") {
-                return true
+        enum Request: Equatable {
+            case boot
+            case launch
+        }
+
+        /// The requested development window, based on the actual command path.
+        ///
+        /// `dev boot --window` opens a boot window; `dev launch` opens an app window unless it has `--no-window`
+        /// (decision D13). A request for help does not open a window. Command arguments are inspected before
+        /// `--` so positional values cannot change the selected command or window mode.
+        static func request(in arguments: [String]) -> Request? {
+            let commandArguments = Array(arguments.prefix(while: { $0 != "--" }))
+            let helpRequested =
+                commandArguments.first == "help"
+                || commandArguments.contains { ["-h", "-help", "--help"].contains($0) }
+            guard !helpRequested else {
+                return nil
             }
-            let helpRequested = arguments.contains { ["-h", "-help", "--help"].contains($0) }
-            return arguments.contains("launch") && !arguments.contains("--no-window") && !helpRequested
+            guard commandArguments.count >= 2, commandArguments[0] == "dev" else {
+                return nil
+            }
+            switch commandArguments[1] {
+            case "boot" where commandArguments.contains("--window"):
+                return .boot
+            case "launch" where !commandArguments.contains("--no-window"):
+                return .launch
+            default:
+                return nil
+            }
         }
 
         /// Display 0 resolved from the default portrait size, visible frame, and main screen's backing scale.
@@ -36,6 +61,8 @@
         let stops = AsyncStream.makeStream(of: Void.self)
         /// App-session close requests, separate from Ctrl-C so dev launch can finish tasks before VM shutdown.
         let appCloseRequests = AsyncStream.makeStream(of: Void.self)
+        private let windowUpdates: AsyncStream<DisplayWindowUpdate>
+        private let windowUpdateContinuation: AsyncStream<DisplayWindowUpdate>.Continuation
         /// The development input route of the boot. The boot binds it to display 0 (#024).
         let inputRoute: DevInputRoute
         /// The window's pointer events, sent to `inputRoute`.
@@ -44,6 +71,8 @@
         let showStatistics: Bool
         private let stopsAppOnClose: Bool
         private var pump: DisplayPump?
+        private var windowUpdateTask: Task<Void, Never>?
+        @MainActor private var earlyFailureWindow: SessionFailureWindowController?
 
         private init(
             showStatistics: Bool,
@@ -53,6 +82,12 @@
         ) {
             self.showStatistics = showStatistics
             self.stopsAppOnClose = stopsAppOnClose
+            let (windowUpdates, windowUpdateContinuation) = AsyncStream.makeStream(
+                of: DisplayWindowUpdate.self,
+                bufferingPolicy: .bufferingNewest(16)
+            )
+            self.windowUpdates = windowUpdates
+            self.windowUpdateContinuation = windowUpdateContinuation
             do {
                 display = try DeveloperDisplay(
                     pointSize: pointSize,
@@ -116,6 +151,9 @@
         /// Starts the pump that makes the window when the display is attached. It runs on the main actor.
         @MainActor
         private func startPump() {
+            guard earlyFailureWindow == nil else {
+                return
+            }
             let pump = DisplayPump(display: display, showStatistics: showStatistics, inputSink: inputSink) {
                 [stops, appCloseRequests, stopsAppOnClose] in
                 if stopsAppOnClose {
@@ -126,6 +164,54 @@
             }
             pump.start()
             self.pump = pump
+            let updates = windowUpdates
+            windowUpdateTask = Task { @MainActor [weak self] in
+                for await update in updates {
+                    guard let pump = self?.pump else {
+                        continue
+                    }
+                    switch update {
+                    case .title(let title):
+                        pump.setWindowTitle(title)
+                    case .status(let status):
+                        pump.setPlaceholderStatus(status)
+                    }
+                }
+            }
+        }
+
+        func publishWindowTitle(_ title: String) {
+            windowUpdateContinuation.yield(.title(title))
+        }
+
+        func publishPlaceholderStatus(_ status: String) {
+            windowUpdateContinuation.yield(.status(status))
+        }
+
+        @MainActor
+        func showFailure(appName: String, message: String, remediation: String) -> Bool {
+            if let pump {
+                return pump.showFailure(appName: appName, message: message, remediation: remediation)
+            }
+            let failureWindow = SessionFailureWindowController(
+                title: appName,
+                appName: appName,
+                message: message,
+                remediation: remediation
+            )
+            let closeContinuation = appCloseRequests.continuation
+            failureWindow.onClose = {
+                closeContinuation.yield(())
+            }
+            failureWindow.show()
+            earlyFailureWindow = failureWindow
+            return true
+        }
+
+        func waitForAppWindowClose() async {
+            for await _ in appCloseRequests.stream {
+                return
+            }
         }
     }
 #endif

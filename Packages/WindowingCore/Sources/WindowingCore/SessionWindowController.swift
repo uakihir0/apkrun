@@ -16,6 +16,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     private let layerView: IOSurfaceLayerView
     private let inputSink: PointerInputSink?
     private var placeholderView: SessionWindowPlaceholderView?
+    private var errorView: SessionWindowErrorView?
     private let source: any FrameSource
     private var gate: LayerFrameGate
     private var consumer: Task<Void, Never>?
@@ -111,9 +112,43 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         window.title = title
     }
 
+    /// Changes the app name shown in the window and in its placeholder or failure panel.
+    public func setAppName(_ title: String) {
+        window.title = title
+        placeholderView?.setAppName(title)
+        errorView?.setAppName(title)
+    }
+
     /// Updates the status shown until the first frame arrives.
     public func setPlaceholderStatus(_ status: String) {
         placeholderView?.setStatus(status)
+    }
+
+    /// Replaces the app frame with a persistent launch failure and its remediation.
+    public func showFailure(message: String, remediation: String) {
+        presentationState.markFailed()
+        geometryDebounce?.cancel()
+        geometryDebounce = nil
+        geometryUpdatePending = false
+        window.styleMask.remove(.resizable)
+        layerView.setInputEnabled(false)
+        placeholderView?.removeFromSuperview()
+        placeholderView = nil
+        errorView?.removeFromSuperview()
+        guard let contentView = window.contentView else {
+            return
+        }
+        let view = SessionWindowErrorView(
+            appName: window.title,
+            message: message,
+            remediation: remediation
+        ) { [weak self] in
+            self?.window.performClose(nil)
+        }
+        view.frame = contentView.bounds
+        view.autoresizingMask = [.width, .height]
+        contentView.addSubview(view)
+        errorView = view
     }
 
     /// Closes the window without asking. The owner calls it when the boot ends.
@@ -208,7 +243,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     }
 
     private func requestGeometryUpdate(zoom: Double? = nil) {
-        guard isShown else {
+        guard isShown, !presentationState.hasFailed else {
             return
         }
         geometryUpdatePending = true
@@ -256,23 +291,29 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
 /// The placeholder remains visible until a current-generation frame has been committed to the window.
 struct SessionWindowPresentationState: Equatable {
     private(set) var hasPresentedFrame = false
+    private(set) var hasFailed = false
 
     var showsPlaceholder: Bool {
         !hasPresentedFrame
     }
 
     var acceptsInput: Bool {
-        hasPresentedFrame
+        hasPresentedFrame && !hasFailed
     }
 
     mutating func markFramePresented() {
         hasPresentedFrame = true
     }
+
+    mutating func markFailed() {
+        hasFailed = true
+    }
 }
 
 @MainActor
 private final class SessionWindowPlaceholderView: NSView {
-    private let appName: String
+    private var appName: String
+    private let nameLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "Starting Android…")
 
     init(appName: String, appIcon: NSImage?, frame: NSRect) {
@@ -291,7 +332,7 @@ private final class SessionWindowPlaceholderView: NSView {
         icon.contentTintColor = .white
         icon.setContentHuggingPriority(.required, for: .vertical)
 
-        let nameLabel = NSTextField(labelWithString: appName)
+        nameLabel.stringValue = appName
         nameLabel.font = .systemFont(ofSize: 20, weight: .semibold)
         nameLabel.textColor = .white
         statusLabel.textColor = NSColor(calibratedWhite: 0.78, alpha: 1)
@@ -326,6 +367,12 @@ private final class SessionWindowPlaceholderView: NSView {
     func setStatus(_ status: String) {
         statusLabel.stringValue = status
         setAccessibilityLabel("\(appName), \(status)")
+    }
+
+    func setAppName(_ appName: String) {
+        self.appName = appName
+        nameLabel.stringValue = appName
+        setAccessibilityLabel("\(appName), \(statusLabel.stringValue)")
     }
 }
 

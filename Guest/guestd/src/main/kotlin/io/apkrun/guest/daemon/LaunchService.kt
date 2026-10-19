@@ -34,6 +34,26 @@ private const val SHELL_PACKAGE = "com.android.shell"
 private const val CURRENT_USER_ID = 0
 
 /**
+ * Android boundary adapters used by [LaunchService]. The default implementation calls the
+ * framework; tests replace these functions to inspect the launch arguments without an Android VM.
+ */
+internal enum class LaunchWindowingMode {
+    FULLSCREEN
+}
+
+internal data class DisplayLaunchOptions(
+    val displayId: Int,
+    val windowingMode: LaunchWindowingMode,
+)
+
+internal data class LaunchServiceAdapters(
+    val createIntent: (LaunchApplication, () -> Context) -> Any? = ::createLaunchIntent,
+    val createOptions: (DisplayLaunchOptions) -> Any? = ::createLaunchOptions,
+    val startActivityAsUser: (Array<out Any?>) -> Any? = ::invokeStartActivityAsUser,
+    val startResult: (String) -> Int = ::activityStartResult,
+)
+
+/**
  * `LaunchApplication` (launch.v1, guest-components.md §6.4). The activity starts through
  * `startActivityAsUser` with the shell package as the calling package, because the system context's
  * package does not belong to the agent's uid. The activity is placed on its display with
@@ -41,11 +61,29 @@ private const val CURRENT_USER_ID = 0
  * that task is moved first. The result is the task that appears on the display within 2 s, and
  * without one the answer is TIMEOUT.
  */
-class LaunchService(
+class LaunchService
+private constructor(
     private val tasks: TaskService,
     private val displays: DisplayService,
     private val system: () -> Context,
+    private val adapters: LaunchServiceAdapters,
 ) {
+    constructor(
+        tasks: TaskService,
+        displays: DisplayService,
+        system: () -> Context,
+    ) : this(tasks, displays, system, LaunchServiceAdapters())
+
+    internal companion object {
+        /** Creates a service with fake framework adapters for focused JVM tests. */
+        fun withAdapters(
+            tasks: TaskService,
+            displays: DisplayService,
+            system: () -> Context,
+            adapters: LaunchServiceAdapters,
+        ): LaunchService = LaunchService(tasks, displays, system, adapters)
+    }
+
     /** Launches the package of [request] on its display, and returns the task that it has there. */
     fun launch(request: LaunchApplication): LaunchResult {
         val pkg = request.getPackage()
@@ -56,7 +94,14 @@ class LaunchService(
             )
         }
         val displayId = request.getDisplayId()
-        if (displayId < 0 || displays.modeOf(displayId) == null) {
+        if (displayId < 0) {
+            throw GuestFailure(
+                GuestErrorCode.GUEST_ERROR_CODE_INVALID_ARGUMENT,
+                "the display ID is not valid",
+                mapOf("display_id" to displayId.toString()),
+            )
+        }
+        if (displays.modeOf(displayId) == null) {
             throw GuestFailure(
                 GuestErrorCode.GUEST_ERROR_CODE_NOT_FOUND,
                 "the display is not known",
@@ -124,69 +169,46 @@ class LaunchService(
      * code.
      */
     private fun startActivity(request: LaunchApplication, displayId: Int) {
-        val intent =
-            if (request.hasComponent()) {
-                val component =
-                    ComponentName.unflattenFromString(request.getComponent())
-                        ?: throw GuestFailure(
-                            GuestErrorCode.GUEST_ERROR_CODE_INVALID_ARGUMENT,
-                            "the component is not valid",
-                        )
-                Intent(Intent.ACTION_MAIN).setComponent(component)
-            } else {
-                // The launcher activity comes from PackageManager, and the start names the explicit
-                // component. A package-only intent is resolved against the caller's visibility,
-                // which
-                // the shell uid does not have for every package.
-                system().packageManager.getLaunchIntentForPackage(request.getPackage())
-                    ?: throw GuestFailure(
-                        GuestErrorCode.GUEST_ERROR_CODE_NOT_FOUND,
-                        "the package has no launcher activity",
-                        mapOf("package" to request.getPackage()),
-                    )
-            }
-        if (request.hasAction()) {
-            intent.action = request.getAction()
-        }
-        if (request.hasDataUri()) {
-            intent.data = android.net.Uri.parse(request.getDataUri())
-        }
+        val intent = adapters.createIntent(request, system)
         var flags = Intent.FLAG_ACTIVITY_NEW_TASK
         if (request.getMode() == LaunchMode.LAUNCH_MODE_CLEAR_TASK) {
             flags = flags or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
-        intent.addFlags(flags)
+        (intent as? Intent)?.addFlags(flags)
         val result =
-            SystemServices.activityTask.call(
-                "startActivityAsUser",
-                null,
-                SHELL_PACKAGE,
-                null,
-                intent,
-                null,
-                null,
-                null,
-                0,
-                flags,
-                null,
-                launchOptions(displayId),
-                CURRENT_USER_ID,
+            adapters.startActivityAsUser(
+                arrayOf(
+                    null,
+                    SHELL_PACKAGE,
+                    null,
+                    intent,
+                    null,
+                    null,
+                    null,
+                    0,
+                    flags,
+                    null,
+                    adapters.createOptions(
+                        DisplayLaunchOptions(displayId, LaunchWindowingMode.FULLSCREEN)
+                    ),
+                    CURRENT_USER_ID,
+                )
             ) as? Int ?: Int.MIN_VALUE
         AgentLog.info(
             "the activity start for ${request.getPackage()} on display $displayId returned $result"
         )
         when (result) {
-            startResult("START_SUCCESS"),
-            startResult("START_TASK_TO_FRONT"),
-            startResult("START_DELIVERED_TO_TOP") -> Unit
-            startResult("START_INTENT_NOT_RESOLVED"),
-            startResult("START_CLASS_NOT_FOUND") ->
+            adapters.startResult("START_SUCCESS"),
+            adapters.startResult("START_TASK_TO_FRONT"),
+            adapters.startResult("START_DELIVERED_TO_TOP") -> Unit
+            adapters.startResult("START_INTENT_NOT_RESOLVED"),
+            adapters.startResult("START_CLASS_NOT_FOUND") ->
                 throw GuestFailure(
                     GuestErrorCode.GUEST_ERROR_CODE_NOT_FOUND,
                     "the package has no activity for the launch",
                     mapOf("package" to request.getPackage()),
                 )
-            startResult("START_PERMISSION_DENIED") ->
+            adapters.startResult("START_PERMISSION_DENIED") ->
                 throw GuestFailure(
                     GuestErrorCode.GUEST_ERROR_CODE_PERMISSION_DENIED,
                     "Android refused the start",
@@ -198,40 +220,6 @@ class LaunchService(
                     mapOf("start_result" to result.toString()),
                 )
         }
-    }
-
-    /**
-     * A start result of `ActivityManager`, read from this image. Android renumbers these between
-     * releases (on build 16373615 `START_INTENT_NOT_RESOLVED` is -91), so the values are not
-     * written into the agent.
-     */
-    private fun startResult(name: String): Int =
-        try {
-            checkNotNull(HiddenApi.classOrNull("android.app.ActivityManager"))
-                .getField(name)
-                .getInt(null)
-        } catch (error: ReflectiveOperationException) {
-            Int.MIN_VALUE
-        }
-
-    /**
-     * `ActivityOptions` that place the activity on [displayId]. `setLaunchDisplayId` is a hidden
-     * method.
-     */
-    private fun launchOptions(displayId: Int): android.os.Bundle {
-        val options = ActivityOptions.makeBasic()
-        try {
-            ActivityOptions::class
-                .java
-                .getMethod("setLaunchDisplayId", Int::class.javaPrimitiveType)
-                .invoke(options, displayId)
-        } catch (error: ReflectiveOperationException) {
-            throw GuestFailure(
-                GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
-                "ActivityOptions.setLaunchDisplayId is not available on this image",
-            )
-        }
-        return options.toBundle()
     }
 
     /**
@@ -256,3 +244,94 @@ class LaunchService(
         }
     }
 }
+
+private fun createLaunchIntent(request: LaunchApplication, system: () -> Context): Intent {
+    val intent =
+        if (request.hasComponent()) {
+            val component =
+                ComponentName.unflattenFromString(request.getComponent())
+                    ?: throw GuestFailure(
+                        GuestErrorCode.GUEST_ERROR_CODE_INVALID_ARGUMENT,
+                        "the component is not valid",
+                    )
+            Intent(Intent.ACTION_MAIN).setComponent(component)
+        } else {
+            // The launcher activity comes from PackageManager, and the start names the explicit
+            // component. A package-only intent is resolved against the caller's visibility, which
+            // the shell uid does not have for every package.
+            system().packageManager.getLaunchIntentForPackage(request.getPackage())
+                ?: throw GuestFailure(
+                    GuestErrorCode.GUEST_ERROR_CODE_NOT_FOUND,
+                    "the package has no launcher activity",
+                    mapOf("package" to request.getPackage()),
+                )
+        }
+    if (request.hasAction()) {
+        intent.action = request.getAction()
+    }
+    if (request.hasDataUri()) {
+        intent.data = android.net.Uri.parse(request.getDataUri())
+    }
+    return intent
+}
+
+/**
+ * ActivityOptions that place the activity fullscreen on [displayId], per display-and-windowing.md
+ * §4.
+ */
+private fun createLaunchOptions(request: DisplayLaunchOptions): android.os.Bundle {
+    val options = ActivityOptions.makeBasic()
+    invokeIntegerOption(options, "setLaunchDisplayId", request.displayId)
+    when (request.windowingMode) {
+        LaunchWindowingMode.FULLSCREEN -> {
+            val windowConfiguration =
+                HiddenApi.classOrNull("android.app.WindowConfiguration")
+                    ?: throw GuestFailure(
+                        GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
+                        "WindowConfiguration.WINDOWING_MODE_FULLSCREEN is not available on this image",
+                    )
+            val fullscreenMode =
+                try {
+                    windowConfiguration.getField("WINDOWING_MODE_FULLSCREEN").getInt(null)
+                } catch (error: ReflectiveOperationException) {
+                    throw GuestFailure(
+                        GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
+                        "WindowConfiguration.WINDOWING_MODE_FULLSCREEN is not available on this image",
+                    )
+                }
+            invokeIntegerOption(options, "setLaunchWindowingMode", fullscreenMode)
+        }
+    }
+    return options.toBundle()
+}
+
+private fun invokeIntegerOption(options: ActivityOptions, methodName: String, value: Int) {
+    try {
+        ActivityOptions::class
+            .java
+            .getMethod(methodName, Int::class.javaPrimitiveType)
+            .invoke(options, value)
+    } catch (error: ReflectiveOperationException) {
+        throw GuestFailure(
+            GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
+            "ActivityOptions.$methodName is not available on this image",
+        )
+    }
+}
+
+private fun invokeStartActivityAsUser(arguments: Array<out Any?>): Any? =
+    SystemServices.activityTask.call("startActivityAsUser", *arguments)
+
+/**
+ * A start result of `ActivityManager`, read from this image. Android renumbers these between
+ * releases (on build 16373615 `START_INTENT_NOT_RESOLVED` is -91), so the values are not written
+ * into the agent.
+ */
+private fun activityStartResult(name: String): Int =
+    try {
+        checkNotNull(HiddenApi.classOrNull("android.app.ActivityManager"))
+            .getField(name)
+            .getInt(null)
+    } catch (error: ReflectiveOperationException) {
+        Int.MIN_VALUE
+    }

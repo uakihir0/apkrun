@@ -273,7 +273,9 @@ Hidden API restrictions do not apply to `app_process` or to platform-signed syst
 ### 6.4 Launch details
 
 - `LaunchApplication` resolves the component (`getLaunchIntentForPackage`, or the given component) and builds the intent with `FLAG_ACTIVITY_NEW_TASK` (plus `FLAG_ACTIVITY_CLEAR_TASK` for `CLEAR_TASK`).
+- A negative `display_id` is `INVALID_ARGUMENT`; a nonnegative ID that Android does not currently report is `NOT_FOUND`.
 - **As built (#072).** The activity starts through `startActivityAsUser` with `com.android.shell` as the calling package. A start through the system context is refused on build 16373615 (`Permission Denial: package=android`). The result codes are read from `ActivityManager` on the image (IR-428, IR-429).
+- Launch options select the requested display and `WINDOWING_MODE_FULLSCREEN` ([display-and-windowing.md](display-and-windowing.md) §4).
 - If the package already has a root task, the agent moves it to the requested display (`moveRootTaskToDisplay`) and brings it to the front instead of starting a second task ([guest-protocol.md](guest-protocol.md) §7.1).
 - The result is returned when `ITaskStackListener` reports the task on the target display, or after `startActivity` returned `START_SUCCESS`/`START_TASK_TO_FRONT` and the task appears in `getTasks` within 2 s. Otherwise the agent answers `TIMEOUT` with the start result in `detail`.
 

@@ -71,7 +71,22 @@
                     options: options,
                     stopRequests: stops.stream,
                     appCloseRequests: session?.appCloseRequests.stream,
-                    preserveWindowOnError: session != nil
+                    preserveWindowOnError: session != nil,
+                    onRuntimeReady: session == nil
+                        ? nil
+                        : { context in
+                            let service = EmbeddedPackageService()
+                            do {
+                                try await service.attachRuntime(context: context)
+                                return service
+                            } catch {
+                                Output.writeLogLine(
+                                    "warning: package store is unavailable; continuing with the window session",
+                                    toStandardError: true
+                                )
+                                return await context.makeSessionService()
+                            }
+                        }
                 ) { event in
                     switch event {
                     case .state(let state):

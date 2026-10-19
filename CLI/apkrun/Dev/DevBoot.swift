@@ -2,6 +2,7 @@
     import ArgumentParser
     import Dispatch
     import Foundation
+    import RuntimeAPI
     import RuntimeHost
     import WindowingCore
 
@@ -126,7 +127,24 @@
                 options.developerDisplay = session.display
                 options.inputRoute = session.inputRoute
             }
-            try await DevBoot().run(options: options, stopRequests: stops.stream, onEvent: onEvent)
+            let packageService = EmbeddedPackageService()
+            try await DevBoot().run(
+                options: options,
+                stopRequests: stops.stream,
+                onRuntimeReady: { context in
+                    guard await context.supervisor.developmentGuestAgent != nil else {
+                        return nil
+                    }
+                    do {
+                        try await packageService.attachRuntime(context: context)
+                        return packageService
+                    } catch {
+                        onEvent(.warning("package inventory refresh failed (\(error.code)); continuing Android boot"))
+                        return nil
+                    }
+                },
+                onEvent: onEvent
+            )
         }
     }
 #endif

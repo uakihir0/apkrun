@@ -143,7 +143,7 @@
             abstract: "List installed Android apps."
         )
 
-        @Flag(name: .long, help: "Include packages installed outside APKRun. This starts Android.")
+        @Flag(name: .long, help: "Include packages installed outside APKRun that were last seen in Android.")
         var all = false
 
         @Flag(name: .long, help: "Print the result as JSON.")
@@ -152,22 +152,39 @@
         mutating func run() async throws {
             let service = EmbeddedPackageService()
             let request = RuntimeListPackagesRequest(filter: all ? .all : .managed)
-            let packages: [RuntimePackageSummary]
-            if all {
-                packages = try await PackageCommandSupport.withReadyRuntime(service) {
-                    try await service.listPackages(request)
-                }
-            } else {
-                packages = try await service.listPackages(request)
-            }
+            let result = try await service.listPackages(request)
 
             if json {
-                PackageCommandSupport.writeJSON(packages)
-            } else if packages.isEmpty {
-                Output.write("No apps installed.")
+                PackageCommandSupport.writeJSON(result)
             } else {
-                for package in packages {
-                    Output.write(PackageCommandSupport.packageListLine(package))
+                if all {
+                    switch result.source {
+                    case .managedRecords:
+                        break
+                    case .liveAndroid:
+                        Output.write(
+                            "Android inventory: live (observed \(result.observedAt.map(ISO8601DateFormatter().string(from:)) ?? "unknown"))."
+                        )
+                    case .cachedAndroid:
+                        Output.write(
+                            "Android inventory: cached from \(result.observedAt.map(ISO8601DateFormatter().string(from:)) ?? "unknown")."
+                        )
+                    case .noAndroidInventory:
+                        Output.write(
+                            "No Android inventory is saved yet. Run `apkrun dev boot` to discover installed apps."
+                        )
+                    }
+                }
+                if result.packages.isEmpty {
+                    if !all || result.source != .noAndroidInventory {
+                        Output.write("No apps installed.")
+                    } else {
+                        Output.write("No managed apps are recorded.")
+                    }
+                } else {
+                    for package in result.packages {
+                        Output.write(PackageCommandSupport.packageListLine(package))
+                    }
                 }
             }
         }
@@ -199,7 +216,7 @@
                 )
                 Output.write(
                     "Version: \(summary.versionName.map(PackageCommandSupport.safeTerminalText) ?? "unknown") "
-                        + "(\(summary.versionCode))"
+                        + "(\(summary.versionCode.map(String.init) ?? "unknown"))"
                 )
                 Output.write("State: \(PackageCommandSupport.stateName(summary.state))")
                 Output.write("Managed: \(summary.managed ? "yes" : "no")")
@@ -325,7 +342,7 @@
         static func packageListLine(_ package: RuntimePackageSummary) -> String {
             let ownership = package.managed ? "managed" : "unmanaged"
             return "\(safeTerminalText(package.displayName))\t\(package.packageID.rawValue)"
-                + "\t\(package.versionCode)\t\(ownership)\t\(stateName(package.state))"
+                + "\t\(package.versionCode.map(String.init) ?? "unknown")\t\(ownership)\t\(stateName(package.state))"
         }
 
         static func installConfirmationPrompt(for preview: RuntimeImportPreview) -> String {
@@ -386,6 +403,7 @@
                 onRuntimeReady: { context in
                     try await service.attachRuntime(context: context, environment: environment)
                     await result.store(try await operation())
+                    return service
                 },
                 onEvent: { event in
                     switch event {

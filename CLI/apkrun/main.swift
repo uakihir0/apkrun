@@ -33,6 +33,7 @@ struct APKRunCommand: AsyncParsableCommand {
                     VersionCommand.self,
                     RuntimeCommand.self,
                     LogsCommand.self,
+                    InstallCommand.self,
                     ListPackagesCommand.self,
                     PackageInfoCommand.self,
                     LaunchCommand.self,

@@ -217,6 +217,12 @@ enum RuntimeStatusOutput {
                 message: failure.message,
                 remediation: "Check `apkrun runtime status` before retrying; the daemon may still finish the restart."
             )
+        case .operationResultUnknown:
+            return fromCatalog(
+                "runtime.operationResultUnknown",
+                fallbackMessage: "APKRun couldn't confirm whether the install completed.",
+                fallbackRemediation: "Check package state before retrying."
+            )
         case .requestCancelled:
             return fromCatalog(
                 "runtime.cancelled",

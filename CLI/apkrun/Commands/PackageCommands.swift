@@ -41,12 +41,6 @@
                 files: handles
             )
 
-            PackageCommandSupport.writePreview(preview)
-            try PackageCommandSupport.confirm(
-                PackageCommandSupport.installConfirmationPrompt(for: preview),
-                yes: yes
-            )
-
             let allowDowngrade: Bool
             if case .downgrade = preview.relation {
                 // The install prompt (or explicit --yes) is the downgrade approval for this CLI flow.
@@ -54,23 +48,20 @@
             } else {
                 allowDowngrade = false
             }
+            let installRequest = RuntimeInstallImportedRequest(
+                ticket: preview.ticket,
+                options: RuntimeInstallOptions(allowDowngrade: allowDowngrade)
+            )
+            PackageCommandSupport.writePreview(preview)
+            try PackageCommandSupport.confirm(
+                PackageCommandSupport.installConfirmationPrompt(for: preview),
+                yes: yes
+            )
+
             let result = try await PackageCommandSupport.withReadyRuntime(service) {
-                try await service.installImported(
-                    RuntimeInstallImportedRequest(
-                        ticket: preview.ticket,
-                        options: RuntimeInstallOptions(allowDowngrade: allowDowngrade)
-                    )
-                )
+                try await service.installImported(installRequest)
             }
-            if json {
-                PackageCommandSupport.writeJSON(result)
-            } else {
-                Output.write(
-                    "\(PackageCommandSupport.installSuccessVerb(for: preview.relation)) "
-                        + "\(PackageCommandSupport.safeTerminalText(result.displayName)) "
-                        + "(\(result.packageID.rawValue)), version \(result.versionCode)."
-                )
-            }
+            PackageCommandSupport.writeInstallResult(result, json: json)
         }
     }
 
@@ -236,16 +227,23 @@
             let displayName = safeTerminalText(preview.displayName)
             let packageID = preview.packageID.rawValue
             if case .sameAsInstalled = preview.relation {
-                return "Verify \(displayName) (\(packageID)) is installed; reinstall if missing?"
+                return "Reinstall \(displayName) (\(packageID)) using the selected APK files?"
             }
             return "Install \(displayName) (\(packageID))?"
         }
 
-        static func installSuccessVerb(for relation: RuntimeImportRelation) -> String {
-            if case .sameAsInstalled = relation {
-                return "Installed or verified"
+        static func writeInstallResult(
+            _ result: RuntimePackageSummary,
+            json: Bool
+        ) {
+            if json {
+                writeJSON(result)
+            } else {
+                Output.write(
+                    "Installed \(safeTerminalText(result.displayName)) "
+                        + "(\(result.packageID.rawValue)), version \(result.versionCode)."
+                )
             }
-            return "Installed"
         }
 
         static func writeJSON<Value: Encodable>(_ value: Value) {
@@ -319,7 +317,7 @@
         private static func relationName(_ relation: RuntimeImportRelation) -> String {
             switch relation {
             case .newPackage: "new package"
-            case .sameAsInstalled: "already installed"
+            case .sameAsInstalled: "same stored APK set (will reinstall)"
             case .reinstallSameVersion: "reinstall same version"
             case .update: "update"
             case .downgrade: "downgrade"

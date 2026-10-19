@@ -30,6 +30,118 @@ import Testing
     #expect((runtimeInfo as? PackageInfoCommand)?.runtime == true)
 }
 
+#if !APKRUN_EMBEDDED_RUNTIME
+    @Test func daemonInstallCommandParsesConfirmationAndJSONFlags() async throws {
+        let command = try await APKRunCommand.asyncParseAsRoot([
+            "install", "example.apk", "--yes", "--json",
+        ])
+
+        #expect((command as? InstallCommand)?.files == ["example.apk"])
+        #expect((command as? InstallCommand)?.yes == true)
+        #expect((command as? InstallCommand)?.json == true)
+    }
+
+    @Test func daemonInstallRejectsMoreThanTwentyInputFilesBeforeOpeningThem() {
+        let paths = Array(repeating: "not-opened.apk", count: 21)
+        do {
+            _ = try DaemonInstallSupport.inputFiles(paths)
+            Issue.record("more than twenty package files unexpectedly passed validation")
+        } catch let failure as CLIFailure {
+            guard case .invalidArgument(let argument, let reason) = failure else {
+                Issue.record("unexpected CLI failure: \(failure)")
+                return
+            }
+            #expect(argument == "file")
+            #expect(reason == "tooMany")
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test func daemonInstallDowngradePromptNamesBothVersions() throws {
+        let preview = RuntimeImportPreview(
+            ticket: try #require(RuntimeImportTicket(rawValue: "00000000-0000-0000-0000-000000000001")),
+            packageID: try #require(RuntimePackageID(rawValue: "com.example.app")),
+            displayName: "Example",
+            versionCode: 12,
+            files: [],
+            relation: .downgrade(from: 18)
+        )
+
+        let prompt = DaemonInstallSupport.installConfirmationPrompt(for: preview)
+        #expect(prompt.contains("Downgrade Example (com.example.app)"))
+        #expect(prompt.contains("from version 18 to version 12"))
+        #expect(prompt.contains("debuggable Android image"))
+    }
+
+    @Test func daemonInstallPreviewShowsFileHashesAndSigningStatus() throws {
+        let preview = RuntimeImportPreview(
+            ticket: try #require(RuntimeImportTicket(rawValue: "00000000-0000-0000-0000-000000000001")),
+            packageID: try #require(RuntimePackageID(rawValue: "com.example.app")),
+            displayName: "Example",
+            versionCode: 12,
+            files: [
+                RuntimeArtifactFile(
+                    name: "base.apk",
+                    size: 120,
+                    sha256: try #require(
+                        RuntimeSHA256Digest(rawValue: "sha256:\(String(repeating: "a", count: 64))")
+                    )
+                )
+            ],
+            relation: .newPackage,
+            warnings: [.signingNotChecked]
+        )
+
+        let text = DaemonInstallSupport.previewText(preview)
+        #expect(text.contains("Files (1, 120 bytes):"))
+        #expect(text.contains("base.apk: 120 bytes, sha256:\(String(repeating: "a", count: 64))"))
+        #expect(text.contains("Signing: not checked"))
+    }
+
+    @Test func daemonInstallRequiresConfirmationForCachedSameSetPreview() throws {
+        #expect(DaemonInstallSupport.requiresConfirmation)
+        let preview = RuntimeImportPreview(
+            ticket: try #require(RuntimeImportTicket(rawValue: "00000000-0000-0000-0000-000000000001")),
+            packageID: try #require(RuntimePackageID(rawValue: "com.example.app")),
+            displayName: "Example",
+            versionCode: 12,
+            files: [],
+            relation: .sameAsInstalled
+        )
+        #expect(DaemonInstallSupport.installConfirmationPrompt(for: preview).contains("Reinstall"))
+        #expect(
+            DaemonInstallSupport.previewText(preview)
+                .contains("Relation: same stored APK set (will reinstall)")
+        )
+    }
+
+    @Test func daemonInstallTimeoutExplainsHowToCheckBeforeRetrying() async throws {
+        let packageID = try #require(RuntimePackageID(rawValue: "com.example.app"))
+        let failure = await DaemonInstallSupport.installFailure(
+            RuntimeControlClientError.requestTimedOut(operation: "installImported"),
+            packageID: packageID
+        )
+
+        #expect(failure.code == "runtime.operationResultUnknown")
+        #expect(failure.remediation?.contains("apkrun info com.example.app") == true)
+        #expect(failure.remediation?.contains("before retrying") == true)
+    }
+
+    @Test func daemonInstallTransportFailureExplainsThatInstallMayHaveCompleted() async throws {
+        let packageID = try #require(RuntimePackageID(rawValue: "com.example.app"))
+        let failure = await DaemonInstallSupport.installFailure(
+            RuntimeControlClientError.operationResultUnknown(operation: "installImported"),
+            packageID: packageID
+        )
+
+        #expect(failure.code == "runtime.operationResultUnknown")
+        #expect(failure.message.contains("could not confirm"))
+        #expect(failure.remediation?.contains("apkrun info com.example.app") == true)
+        #expect(failure.remediation?.contains("before retrying") == true)
+    }
+#endif
+
 @Test func runtimeRestartCommandParsesConfirmationFlag() async throws {
     let command = try await APKRunCommand.asyncParseAsRoot(["runtime", "restart", "--yes"])
     #expect((command as? RuntimeRestartCommand)?.yes == true)
@@ -655,7 +767,7 @@ private final class CLIOutputRecorder: @unchecked Sendable {
         )
     }
 
-    @Test func sameInstalledPackagePromptsForVerificationAndUsesRuntimeResult() throws {
+    @Test func sameSetPreviewAsksBeforeReinstalling() throws {
         let ticket = try #require(
             RuntimeImportTicket(rawValue: "00000000-0000-0000-0000-000000000001")
         )
@@ -671,11 +783,7 @@ private final class CLIOutputRecorder: @unchecked Sendable {
 
         #expect(
             PackageCommandSupport.installConfirmationPrompt(for: preview)
-                == "Verify Example�[2J (com.example.app) is installed; reinstall if missing?"
-        )
-        #expect(
-            PackageCommandSupport.installSuccessVerb(for: preview.relation)
-                == "Installed or verified"
+                == "Reinstall Example�[2J (com.example.app) using the selected APK files?"
         )
     }
 #endif

@@ -242,6 +242,29 @@ public actor GuestAgentSupervisor {
         return try await connection.send(operation, timeout: timeout)
     }
 
+    /// Waits for the event consumer to observe the requested mode on one Android display.
+    ///
+    /// This reads the supervisor's snapshot, which is updated by its existing single event consumer. It does not create
+    /// another iterator over `updates`, so task and display events keep their existing delivery semantics.
+    public func waitForDisplayMode(
+        displayID: Int32,
+        width: Int,
+        height: Int,
+        timeout: Duration
+    ) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline, !Task.isCancelled {
+            if let display = snapshot.displays[displayID],
+                display.mode.widthPx == width,
+                display.mode.heightPx == height
+            {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return false
+    }
+
     // MARK: - Connection
 
     /// Opens a connection, reads its handshake, and resynchronises with `GetSnapshot` before anything else. The

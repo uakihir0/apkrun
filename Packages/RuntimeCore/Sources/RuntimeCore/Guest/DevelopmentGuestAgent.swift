@@ -286,6 +286,41 @@ public actor DevelopmentGuestAgent {
         return GuestLaunchReport(taskID: result.taskID, component: result.component, outcome: outcome)
     }
 
+    /// Waits for display 0 to adopt a scanout mode, then applies the matching density and local IME policy.
+    public func applyDisplayPolicy(for mode: ResolvedDisplayMode) async -> Bool {
+        let width = mode.pixelSize.width
+        let height = mode.pixelSize.height
+        guard
+            await supervisor.waitForDisplayMode(
+                displayID: 0,
+                width: width,
+                height: height,
+                timeout: .seconds(3)
+            )
+        else {
+            logger.warning(
+                "Android display 0 did not report resized mode \(width, .public)x\(height, .public) within 3 s")
+            return false
+        }
+        do throws(GuestProtocolFailure) {
+            _ = try await supervisor.send(
+                GuestSetDisplayPolicy(
+                    displayID: 0,
+                    densityDPI: Int32(mode.densityDpi),
+                    imePolicy: .local
+                )
+            )
+            logger.info(
+                "Applied resized display 0 policy at \(mode.densityDpi, .public) dpi for \(width, .public)x\(height, .public)"
+            )
+            return true
+        } catch {
+            logger.warning(
+                "Android display 0 density update failed: \(error.catalogName, .public)")
+            return false
+        }
+    }
+
     /// Installs a development APK through Android's PackageInstaller for `apkrun dev launch <apk>` (#026).
     ///
     /// The Guest Agent owns the shared ADB client; this narrow method keeps raw ADB use inside RuntimeCore.

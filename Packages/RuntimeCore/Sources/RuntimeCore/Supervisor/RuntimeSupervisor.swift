@@ -366,6 +366,9 @@ public actor RuntimeSupervisor {
                 bootLogger.info(
                     "Applied display 0 policy at \(developmentDisplay.mode.densityDpi, .public) dpi for boot \(plan.bootRecordID.uuidString, .public)"
                 )
+                developmentDisplay.setDensityUpdater { mode in
+                    await agent.applyDisplayPolicy(for: mode)
+                }
             }
         }
         try throwIfStopped()

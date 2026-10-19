@@ -42,6 +42,12 @@ apkrund does **not** render UI, own windows, or accept input from anything but X
 | Periodic wake | `StartInterval` 3600 s (launchd starts the job if it is not running) | `UpdateScheduler` runs any check that is due ([update-system.md](update-system.md) §3), then the process exits after the grace period. It never boots the VM for a check. The only boot for updates is the opt-in `updates.startRuntimeToInstall` ([update-system.md](update-system.md) §3.5) |
 | Crash | `KeepAlive.SuccessfulExit = false` | crash recovery (§2.5) |
 
+The daemon exits with status 0 after a controlled startup failure that prevents
+the broker from being constructed. This avoids a persistent restart loop for
+a stable bundle or signing error. A later Mach-service request or scheduled
+`StartInterval` retries startup; an unexpected process crash still exits
+unsuccessfully and is restarted by launchd.
+
 launchd job keys added to the plist in [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §1.1:
 
 | Key | Value | Why |
@@ -71,6 +77,12 @@ The order is fixed. Each step logs `host.startup.<step>` with its duration. Targ
 
 "Degraded" means: apkrund keeps running and serves the broker, but `runtimeStatus` returns `RuntimeFailure.hostStartupFailed(step:)`, and operations that need the failed component return the same error. The GUI and `apkrun doctor` show it with the remediation from the error catalog. apkrund never crash-loops because of bad data on disk.
 
+In #031, failure to load the Guest Agent bundle before constructing
+`RuntimeSupervisor` is reported as degraded step 8. The broker remains
+available so clients can inspect the startup failure; runtime start returns
+that failure. A failure to construct the runtime supervisor itself remains
+fatal.
+
 ### 2.3 Instance lock
 
 - `Runtime/instance.lock`, taken with `flock(LOCK_EX | LOCK_NB)` for the process lifetime. The file contains the owner (`apkrund` or `apkrun-dev`), PID, and binary path, for error messages only.
@@ -92,9 +104,9 @@ Exit status 0 is not restarted by launchd. The next client connection, the next 
 
 `SIGTERM` (logout, system shutdown, `SMAppService.unregister()`, `launchctl bootout`):
 
-1. Stop accepting new XPC requests. Pending replies get `RuntimeFailure.hostShuttingDown`.
+1. Reject new XPC connections while existing clients drain. Lifecycle operations that race with shutdown get `RuntimeControlError` code `runtime.hostShuttingDown`; status remains available to connected clients and reports `shuttingDown`.
 2. `RuntimeSupervisor.stop(reason: .hostShutdown)` with a 40 s deadline (§3.5). Sessions end with `.runtimeStopped`. Wrappers show nothing new: during logout they are quitting too.
-3. Flush logs, write `daemon.json` with `cleanExit = true`, exit 0.
+3. Flush logs, write `daemon.json` with `cleanExit = true`, close the XPC connections, and exit 0.
 
 If the deadline passes, the VM is force-stopped (`VMController.stop()`), which is still better than launchd's `SIGKILL` at 45 s: userdata is written through the host page cache, so a forced VM stop loses only data Android had not yet flushed.
 
@@ -114,7 +126,7 @@ If the deadline passes, the VM is force-stopped (`VMController.stop()`), which i
 }
 ```
 
-On startup, `cleanExit == false` with a PID that is not running means the previous apkrund crashed or was killed:
+On startup, after the new process acquires the exclusive instance lock, `cleanExit == false` means the previous apkrund crashed or was killed. Lock ownership establishes that the prior daemon no longer owns the runtime; do not infer this from the recorded PID, which may have been reused:
 
 - Log `host.previousExitUnclean` (fault level) and append the time to `recentUncleanExits` (last 10 kept).
 - Record the newest `~/Library/Logs/DiagnosticReports/apkrund-*.ips` path in the diagnostics index, so `apkrun diagnostics` includes it ([diagnostics.md](diagnostics.md)).

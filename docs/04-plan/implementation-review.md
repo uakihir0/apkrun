@@ -21325,3 +21325,85 @@ dispatcher, primary-display compatibility choice, fail-closed input focus,
 task-appearance retry and focus generations, pre-readiness close monitoring,
 and the whole-runtime fallback after an app-stop failure. G5, secondary-display
 input, IME behavior, and R-03 measurements remain unverified.
+
+## IR-1379: Introduce the daemon control surface in stages
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #031 |
+| Affected documents | [runtime-daemon.md](../02-design/runtime-daemon.md) §§2, 3, 8, 13, 16; [runtime-api.md](../03-reference/runtime-api.md) §§1–3; [cli.md](../02-design/cli.md) §4.1; [M04](issues/M04-daemon-and-guest-protocol.md) #031–#032 |
+
+**Choices.** Define RuntimeAPI 1.0 with #031's broker handshake and three
+control operations (`runtimeStatus`, `runtime start`, `runtime stop`), and keep
+their DTO and operation shapes when #032 adds the full API. Expose those three
+operations as CLI commands now; the rest of the CLI moves to RuntimeClient in
+#032. Count an unclean daemon exit only after acquiring the exclusive runtime
+lock, rather than checking whether the stored PID is alive. Enable the
+development Guest Agent transport only in Debug builds; Release builds keep it
+off. Estimate boot progress from the five newest successful boots of the same
+kind, fall back to equal phase steps when there is no usable history, and cap
+pre-ready progress at 95%. Let apkrund exit after two minutes stopped with no
+XPC clients or lifecycle operation so launchd can demand-start it again.
+Report a missing Guest Agent bundle as degraded step 8 so the broker can still
+serve status. Exit successfully after a controlled bootstrap or broker setup
+failure to prevent launchd's `KeepAlive` policy from looping on a persistent
+configuration error; unexpected process crashes still use the restart path.
+Register the runtime on ordinary APKRun.app launch, while retaining the
+one-shot `--register-runtime` path for development setup. Preserve a pending
+`.requiresApproval` service instead of repeatedly unregistering and registering
+it. Install signal handlers before daemon startup; on shutdown, reject new
+connections and lifecycle requests, let in-flight XPC replies finish, then
+invalidate the listeners. Track broker calls before validating their payload,
+and return a typed endpoint rejection after shutdown stops lifecycle admission.
+Make concurrent shutdown callers wait for the same cleanup. Add the documented
+`runtime.hostShuttingDown` catalog entry so CLI shutdown errors keep retry exit
+code 75. Align the development installer with the documented
+`build/Build/Products/Debug` output.
+
+**Reason.** The first three commands make daemon ownership usable and provide
+the smallest practical way to operate and inspect it before #032's larger
+session API exists. Keeping the wire shape stable avoids a second CLI/client
+rewrite. The exclusive lock is the reliable evidence that an earlier daemon
+has exited; its PID may already belong to an unrelated process. Debug-only
+Guest Agent access supports development diagnosis without exposing the
+development transport in production. Historical boot markers provide
+machine-specific estimates; equal steps are a deterministic fallback until
+enough matching boots exist. The idle exit matches the two-minute design grace
+period, checks for a lifecycle operation before closing its listeners, and lets
+launchd start the daemon for a later request. Controlled startup failures have
+a chance to recover on a later request or periodic wake without a tight
+restart loop. Ordinary registration closes the fresh-install gap in the
+process model. Treating `.requiresApproval` as a pending state prevents a
+launch-time unregister/register loop. Early signal handling covers logout
+during lengthy startup, while tracking XPC replies avoids closing channels
+before clients receive lifecycle errors or status. The error-catalog source
+listed the retry behavior but did not contain its JSON entry; restoring that
+entry keeps generated CLI exit handling consistent with the documented code.
+
+**Verification.** The Debug EmbeddedRuntime `apkrun` product and apkrund
+Debug Xcode scheme build. `APKRunApp.swift` passes a direct Swift typecheck.
+Focused RuntimeHost, RuntimeClient, boot-progress, LaunchAgent, guest-embed,
+development-installer, and shutdown-error catalog checks pass. Generated error
+catalog code and Markdown are current. No test operation starts or registers
+the shared Mac's daemon. A full APKRun Xcode build was stopped after its
+embed phase started rebuilding ANGLE. Per the user's direction, the dedicated
+reference-Mac tests and G6 run are deferred; their acceptance criteria and
+runtime-daemon verification-log rows remain pending.
+
+**Review items and risk.** Maintainers should review the initial API version
+boundary, Debug-only development transport, idle-exit policy, lock-based
+unclean-exit inference, and the bounded boot-progress fallback. The current
+control subset does not implement #032's full CLI switch, app sessions, or
+wrapper endpoints. Ordinary app launch now registers the daemon; pending
+approval is preserved instead of repeatedly unregistering and registering it.
+SIGTERM rejects new XPC connections but lets existing calls drain before
+invalidating the listeners. Concurrent shutdown callers wait for the same
+cleanup to finish, and endpoint requests arriving after request draining
+receive a typed retryable rejection. The development installer follows the
+documented `build/Build/Products/Debug` output and permits an alternate
+products directory.
+The 300 ms listener readiness target is not yet measured, and the current
+startup sequence still performs image recovery before creating the listener.
+T2 crash recovery, launchd restart, and G6 interactivity remain unverified on
+the reference Mac.

@@ -18,7 +18,7 @@ scripts/build-third-party.sh virgl-runtime         # once; later runs hit the ca
 scripts/build-guest.sh                             # guest agent APKs (§7)
 scripts/generate-project.sh                        # APKRun.xcodeproj from project.yml (§2.2)
 swift build && swift test                          # all Swift packages and the CLI, tiers T0 and T1
-xcodebuild -project APKRun.xcodeproj -scheme APKRun -configuration Debug build
+xcodebuild -project APKRun.xcodeproj -scheme APKRun -configuration Debug -derivedDataPath build build
 scripts/dev/install-dev-app.sh                     # "~/Applications/APKRun Dev.app" + agent registration (§13)
 ```
 
@@ -702,12 +702,13 @@ Debug builds never replace an installed release ([../02-design/runtime-daemon.md
 | CLI name | `apkrun` | `apkrun-dev` | — |
 
 ```bash
-scripts/dev/install-dev-app.sh          # copies the Debug build, runs "APKRun --register-runtime", links apkrun-dev
+scripts/dev/install-dev-app.sh          # copies build/Build/Products/Debug/APKRun.app, registers the agent, links apkrun-dev
 launchctl kickstart -k gui/$(id -u)/io.apkrun.apkrund.dev
 launchctl print gui/$(id -u)/io.apkrun.apkrund.dev
 ```
 
-- Registering straight from DerivedData works, but every clean build moves the path. Use the install script.
+- Registering straight from DerivedData works, but the path varies by machine. Use the install script.
+- The quick-start build stores its Debug app at `build/Build/Products/Debug/APKRun.app`. Set `APKRUN_BUILD_PRODUCTS_DIR` or pass the app path when using another DerivedData directory.
 - `install-dev-app.sh` links `~/.local/bin/apkrun-dev` to the CLI inside the installed Debug app. Release users get `apkrun` through `sudo ln -sf "/Applications/APKRun.app/Contents/Resources/bin/apkrun" /usr/local/bin/apkrun` ([../02-design/cli.md](../02-design/cli.md)).
 - Debug builds create wrappers in `~/Applications/APKRun Dev/`. How their bundle IDs differ from release wrappers is decided in #045 together with the mapping in [../02-design/wrapper.md](../02-design/wrapper.md) §4.
 

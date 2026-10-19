@@ -107,7 +107,7 @@ public enum RuntimeAPI {
 public struct APIVersion: Codable, Sendable, Comparable { public var major: Int; public var minor: Int }   // encoded "1.0"
 ```
 
-- The first released version is `1.0` at #032. Before #032 there is no XPC and no version check (§3.8).
+- The initial versioned XPC contract is `1.0` in #031: the broker handshake and the `runtimeStatus`, `runtime start`, and `runtime stop` control operations. #032 completes the API around these operations without changing their wire shape. Before #031 there is no XPC runtime API (§3.8).
 - `components.json` of a release records `"runtimeAPI": { "current": "M.m", "wrapperMajors": [N−1, N] }` ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.3). A major is dropped only as that section allows.
 
 ### 2.2 Rules per endpoint
@@ -203,24 +203,24 @@ public struct EndpointRequest: Codable, Sendable {
     public var selfCdhash: String?            // wrappers: the launcher's own cdhash (SecCodeCopySelf); advisory only
 }
 
-public enum EndpointRejection: String, Codable, Sendable {
-    case notRegistered                        // wrapper: bundle ID not in the registry
-    case cdhashMismatch                       // wrapper: registered with another cdhash
-    case unsupportedAPI                       // wrapper major outside RuntimeAPI.wrapperMajors
-    case unknownClient                        // control or maintenance: no listener for the claimed identity
+public enum RuntimeEndpointRejection: String, Codable, Sendable {
+    case unknownClient                        // control: no listener for the claimed identity
+    case malformedRequest                     // invalid or unsupported request
+    case hostShuttingDown                     // daemon is draining requests before shutdown
 }
 ```
 
 ```swift
-public enum EndpointReply: Codable, Sendable {
+public enum RuntimeEndpointReply: Codable, Sendable {
     case granted                              // the NSXPCListenerEndpoint travels next to the JSON reply (§4.9)
-    case rejected(EndpointRejection)
+    case rejected(RuntimeEndpointRejection)
 }
 // @objc: func requestEndpoint(_ request: Data, reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void)
 ```
 
 - `selfCdhash` lets apkrund answer `cdhashMismatch` without an endpoint round trip. It grants nothing: the listener requirement still checks the real cdhash. When `selfCdhash` is missing and the cdhash differs, the endpoint connection is invalidated right after `resume()`, and the launcher treats that as `cdhashMismatch`.
 - A rejected wrapper goes to approval (§3.4). A rejected control client shows "APKRun is damaged. Download it again." (`runtime.notAuthorized`).
+- While the daemon drains accepted calls for shutdown, new endpoint requests are rejected with `hostShuttingDown`; clients can retry after launchd starts the service again.
 - Deadline: 5 s.
 
 ### 3.4 `requestApproval` (broker)

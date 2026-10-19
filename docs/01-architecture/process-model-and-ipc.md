@@ -36,7 +36,7 @@
 </dict>
 ```
 
-- `APKRun.app` calls `SMAppService.agent(plistName: "io.apkrun.apkrund.plist").register()` on first launch. If `status == .requiresApproval`, the app explains why and calls `SMAppService.openSystemSettingsLoginItems()`.
+- `APKRun.app` calls `SMAppService.agent(plistName: "io.apkrun.apkrund.plist").register()` on ordinary launch when the service is absent or its embedded plist changed. `--register-runtime` remains available to the development installer and setup flow. If registration fails, the app explains the next step. If `status == .requiresApproval`, a new registration opens Login Items; later launches show an approval prompt without unregistering and registering the pending service again.
 - `KeepAlive.SuccessfulExit = false` makes launchd restart apkrund after a crash (NFR-REL-02). A clean idle exit (status 0) is not restarted. The next client connection relaunches it on demand.
 - `RunAtLoad`, `StartInterval`, and `ExitTimeOut` serve preboot and startup recovery, background update checks, and a graceful Android shutdown on logout. The reasons are in [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §2.1.
 - Debug builds use the label `io.apkrun.apkrund.dev` and the Mach service `io.apkrun.apkrund.dev.xpc` ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §2.6).

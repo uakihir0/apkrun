@@ -32,6 +32,12 @@ class DisplayService(
      * a socket.
      */
     private val callbacks: (() -> Unit) -> Unit,
+    /** Display inventory adapter, replaceable by a fake in JVM tests. */
+    private val readDisplayInventory: (() -> Map<Int, DisplayInfo>)? = null,
+    /** Density adapter, replaceable by a fake in JVM tests. */
+    private val forceDensity: ((Int, Int, Int) -> Unit)? = null,
+    /** IME policy adapter, replaceable by a fake in JVM tests. */
+    private val applyImePolicy: ((Int, Int) -> Unit)? = null,
 ) {
     private val known = LinkedHashMap<Int, DisplayInfo>()
     private val removalListeners = CopyOnWriteArrayList<(Int) -> Unit>()
@@ -78,6 +84,9 @@ class DisplayService(
 
     /** The displays that Android reports now, by display ID. */
     fun readDisplays(): Map<Int, DisplayInfo> {
+        readDisplayInventory?.let {
+            return it()
+        }
         val wrapper = SystemServices.display
         val ids =
             wrapper.call("getDisplayIds", *displayIdsArguments()) as? IntArray ?: return emptyMap()
@@ -91,7 +100,7 @@ class DisplayService(
 
     /** Publishes the differences between the last list and the list that Android reports now. */
     @Synchronized
-    fun refresh() {
+    fun refresh(): Map<Int, DisplayInfo> {
         val current = readDisplays()
         for ((id, info) in current) {
             val before = known[id]
@@ -107,6 +116,7 @@ class DisplayService(
         }
         known.clear()
         known.putAll(current)
+        return current
     }
 
     /**
@@ -136,14 +146,42 @@ class DisplayService(
                     GuestErrorCode.GUEST_ERROR_CODE_INVALID_ARGUMENT,
                     "the IME policy is not set",
                 )
-        SystemServices.window.call(
-            "setForcedDisplayDensityForUser",
-            displayId,
-            request.densityDpi,
-            SYSTEM_USER_ID,
-        )
-        SystemServices.window.call("setDisplayImePolicy", displayId, policy)
-        refresh()
+        if (forceDensity == null) {
+            SystemServices.window.call(
+                "setForcedDisplayDensityForUser",
+                displayId,
+                request.densityDpi,
+                SYSTEM_USER_ID,
+            )
+        } else {
+            forceDensity.invoke(displayId, request.densityDpi, SYSTEM_USER_ID)
+        }
+        if (applyImePolicy == null) {
+            SystemServices.window.call("setDisplayImePolicy", displayId, policy)
+        } else {
+            applyImePolicy.invoke(displayId, policy)
+        }
+        val updated = refresh()[displayId]
+        if (updated == null) {
+            throw GuestFailure(
+                GuestErrorCode.GUEST_ERROR_CODE_NOT_FOUND,
+                "the display disappeared while its policy was being applied",
+                mapOf("display_id" to displayId.toString()),
+            )
+        }
+        // Zero retains Android's default-density behavior; hosts send a positive resolved density
+        // for window-backed displays.
+        if (request.densityDpi > 0 && updated.getDensityDpi() != request.densityDpi) {
+            throw GuestFailure(
+                GuestErrorCode.GUEST_ERROR_CODE_FAILED_PRECONDITION,
+                "Android did not apply the requested display density",
+                mapOf(
+                    "display_id" to displayId.toString(),
+                    "requested_density_dpi" to request.densityDpi.toString(),
+                    "actual_density_dpi" to updated.getDensityDpi().toString(),
+                ),
+            )
+        }
     }
 
     /** The mode of a display, or null when the display is not known. */

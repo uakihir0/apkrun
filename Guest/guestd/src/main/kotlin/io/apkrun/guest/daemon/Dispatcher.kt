@@ -14,6 +14,8 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -28,6 +30,7 @@ class Dispatcher(
     private val uptimeMillis: () -> Long,
     private val defaultTimeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
 ) {
+    private val displayLocks = ConcurrentHashMap<Int, Mutex>()
     private val displayExecutors = ConcurrentHashMap<Int, CoroutineDispatcher>()
     private val active = ConcurrentHashMap<Long, Deferred<Response?>>()
     private val cancelled = ConcurrentHashMap.newKeySet<Long>()
@@ -134,13 +137,18 @@ class Dispatcher(
                 Response.newBuilder().setGetSnapshot(operations.snapshot()).build()
             Request.OpCase.SET_DISPLAY_POLICY -> {
                 val policy = request.setDisplayPolicy
-                withContext(executorFor(policy.displayId)) { operations.setDisplayPolicy(policy) }
+                withDisplayLock(policy.displayId) { operations.setDisplayPolicy(policy) }
                 Response.newBuilder().setSetDisplayPolicy(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.CLEAR_DISPLAY -> {
+                val clear = request.clearDisplay
+                withDisplayLock(clear.displayId) { operations.clearDisplay(clear) }
+                Response.newBuilder().setClearDisplay(Empty.getDefaultInstance()).build()
             }
             Request.OpCase.LAUNCH_APPLICATION -> {
                 val launch = request.launchApplication
                 val result =
-                    withContext(executorFor(launch.displayId)) {
+                    withDisplayLock(launch.displayId) {
                         operations.launchApplication(launch)
                     }
                 Response.newBuilder().setLaunchApplication(result).build()
@@ -159,7 +167,7 @@ class Dispatcher(
                     .build()
             Request.OpCase.FOCUS_DISPLAY -> {
                 val displayId = request.focusDisplay.displayId
-                withContext(executorFor(displayId)) { operations.focusDisplay(displayId) }
+                withDisplayLock(displayId) { operations.focusDisplay(displayId) }
                 Response.newBuilder().setFocusDisplay(Empty.getDefaultInstance()).build()
             }
             else ->
@@ -170,11 +178,17 @@ class Dispatcher(
         }
 
     /**
-     * The one-at-a-time executor of [displayId]. It is created on first use and kept for the
-     * agent's life.
+     * Holds the display operation lock through suspension as well as synchronous framework work.
+     * Each display also has its own dispatcher so different displays can run concurrently.
      */
-    private fun executorFor(displayId: Int): CoroutineDispatcher =
-        displayExecutors.getOrPut(displayId) { Dispatchers.Default.limitedParallelism(1) }
+    private suspend fun <T> withDisplayLock(displayId: Int, action: suspend () -> T): T =
+        withContext(
+            displayExecutors.computeIfAbsent(displayId) {
+                Dispatchers.Default.limitedParallelism(1)
+            }
+        ) {
+            displayLocks.computeIfAbsent(displayId) { Mutex() }.withLock { action() }
+        }
 
     companion object {
         /**
@@ -192,7 +206,8 @@ class Dispatcher(
             when (operation) {
                 Request.OpCase.PING,
                 Request.OpCase.GET_SNAPSHOT -> GuestCapability.CORE
-                Request.OpCase.SET_DISPLAY_POLICY -> GuestCapability.DISPLAY
+                Request.OpCase.SET_DISPLAY_POLICY,
+                Request.OpCase.CLEAR_DISPLAY -> GuestCapability.DISPLAY
                 Request.OpCase.LAUNCH_APPLICATION,
                 Request.OpCase.STOP_APPLICATION -> GuestCapability.LAUNCH
                 Request.OpCase.FOCUS_DISPLAY -> GuestCapability.INPUT

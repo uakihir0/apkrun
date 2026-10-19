@@ -1,6 +1,8 @@
 package io.apkrun.guest.daemon
 
 import android.os.SystemClock
+import io.apkrun.guest.protocol.v1.ClearDisplay
+import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
 import io.apkrun.guest.protocol.v1.ListPackages
@@ -36,6 +38,17 @@ class DeviceOperations(
             .build()
 
     override fun setDisplayPolicy(request: SetDisplayPolicy) = displays.applyPolicy(request)
+
+    override suspend fun clearDisplay(request: ClearDisplay) {
+        if (displays.readDisplays()[request.displayId] == null) {
+            throw GuestFailure(
+                GuestErrorCode.GUEST_ERROR_CODE_NOT_FOUND,
+                "the display is not known",
+                mapOf("display_id" to request.displayId.toString()),
+            )
+        }
+        tasks.clearDisplay(request)
+    }
 
     override fun launchApplication(request: LaunchApplication): LaunchResult =
         launch.launch(request)

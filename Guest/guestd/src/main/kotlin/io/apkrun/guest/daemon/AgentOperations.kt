@@ -1,5 +1,6 @@
 package io.apkrun.guest.daemon
 
+import io.apkrun.guest.protocol.v1.ClearDisplay
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
 import io.apkrun.guest.protocol.v1.ListPackages
@@ -21,6 +22,9 @@ interface AgentOperations {
 
     /** Applies the density and the IME policy of a display (display.v1). */
     fun setDisplayPolicy(request: SetDisplayPolicy)
+
+    /** Clears every task from a display and reports when it is empty (display.v1). */
+    suspend fun clearDisplay(request: ClearDisplay)
 
     /** Launches the package of a request on its display (launch.v1). */
     fun launchApplication(request: LaunchApplication): LaunchResult

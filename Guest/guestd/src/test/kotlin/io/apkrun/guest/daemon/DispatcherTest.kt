@@ -2,6 +2,7 @@ package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.v1.ClearDisplay
+import io.apkrun.guest.protocol.v1.ClearPolicy
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.ImePolicy
 import io.apkrun.guest.protocol.v1.LaunchApplication
@@ -17,6 +18,7 @@ import io.apkrun.guest.protocol.v1.QueryPackage
 import io.apkrun.guest.protocol.v1.Request
 import io.apkrun.guest.protocol.v1.Response
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
+import io.apkrun.guest.protocol.v1.Shutdown
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
 import io.apkrun.guest.protocol.v1.StopMode
@@ -41,6 +43,7 @@ private class FakeOperations : AgentOperations {
     var delayMillis = 0L
     var failure: RuntimeException? = null
     var stoppedRequest: StopApplication? = null
+    var clearedDisplay: ClearDisplay? = null
     var queriedPackage: QueryPackage? = null
     var listedPackages: ListPackages? = null
     /**
@@ -76,6 +79,11 @@ private class FakeOperations : AgentOperations {
     override suspend fun stopApplication(request: StopApplication) {
         enter()
         stoppedRequest = request
+    }
+
+    override suspend fun clearDisplay(request: ClearDisplay) {
+        enter()
+        clearedDisplay = request
     }
 
     override fun focusDisplay(displayId: Int) = enter()
@@ -129,6 +137,15 @@ class DispatcherTest {
             .setStopApplication(StopApplication.newBuilder().setPackage(packageName).setMode(mode))
             .build()
 
+    private fun clearDisplay(displayId: Int): Request =
+        Request.newBuilder()
+            .setClearDisplay(
+                ClearDisplay.newBuilder()
+                    .setDisplayId(displayId)
+                    .setPolicy(ClearPolicy.CLEAR_POLICY_FINISH_TASKS)
+            )
+            .build()
+
     private fun dispatcher(operations: AgentOperations, defaultTimeout: Long = 5_000L) =
         Dispatcher(operations, uptimeMillis = { 1_000L }, defaultTimeoutMillis = defaultTimeout)
 
@@ -142,8 +159,7 @@ class DispatcherTest {
 
     @Test
     fun anOperationThisBuildDoesNotHaveIsUnsupported() = runBlocking {
-        val request =
-            Request.newBuilder().setClearDisplay(ClearDisplay.newBuilder().setDisplayId(1)).build()
+        val request = Request.newBuilder().setShutdown(Shutdown.getDefaultInstance()).build()
         val response = dispatcher(FakeOperations()).dispatch(1, request, everything)
         assertEquals(GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED, response.getError().getCode())
     }
@@ -166,6 +182,24 @@ class DispatcherTest {
         assertTrue(response.hasStopApplication())
         assertEquals("io.apkrun.fixture.hellotext", operations.stoppedRequest?.getPackage())
         assertEquals(StopMode.STOP_MODE_FINISH_TASKS, operations.stoppedRequest?.getMode())
+    }
+
+    @Test
+    fun clearDisplayUsesDisplayCapabilityAndItsPerDisplayExecutor() = runBlocking {
+        val operations = FakeOperations()
+        val request = clearDisplay(3).clearDisplay
+
+        val response =
+            dispatcher(operations)
+                .dispatch(
+                    1,
+                    Request.newBuilder().setClearDisplay(request).build(),
+                    setOf(GuestCapability.DISPLAY),
+                )
+
+        assertTrue(response.hasClearDisplay())
+        assertEquals(3, operations.clearedDisplay?.displayId)
+        assertEquals(ClearPolicy.CLEAR_POLICY_FINISH_TASKS, operations.clearedDisplay?.policy)
     }
 
     @Test
@@ -216,6 +250,17 @@ class DispatcherTest {
         val dispatcher = dispatcher(operations)
         val first = async { dispatcher.dispatch(1, policy(0), everything) }
         val second = async { dispatcher.dispatch(2, policy(0), everything) }
+        first.await()
+        second.await()
+        assertEquals(1, operations.maximumRunning.get())
+    }
+
+    @Test
+    fun clearDisplayAndPolicyOperationsOnOneDisplayRunOneAtATime() = runBlocking {
+        val operations = FakeOperations().apply { delayMillis = 60 }
+        val dispatcher = dispatcher(operations)
+        val first = async { dispatcher.dispatch(1, policy(1), everything) }
+        val second = async { dispatcher.dispatch(2, clearDisplay(1), everything) }
         first.await()
         second.await()
         assertEquals(1, operations.maximumRunning.get())

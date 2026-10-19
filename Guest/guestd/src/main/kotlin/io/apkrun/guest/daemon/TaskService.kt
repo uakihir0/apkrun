@@ -1,13 +1,17 @@
 package io.apkrun.guest.daemon
 
 import android.content.ComponentName
+import io.apkrun.guest.protocol.v1.ClearDisplay
+import io.apkrun.guest.protocol.v1.ClearPolicy
 import io.apkrun.guest.protocol.v1.DisplayEmpty
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.TaskInfo
 import io.apkrun.guest.protocol.v1.TaskVanished
+import io.apkrun.guest.protocol.v1.TasksCleared
 import io.apkrun.guest.runtime.AgentLog
 import io.apkrun.guest.runtime.HiddenApi
 import io.apkrun.guest.runtime.SystemServices
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -35,11 +39,17 @@ class TaskService(
     private val removeTaskById: (Int) -> Unit = { taskId ->
         SystemServices.activityTask.call("removeTask", taskId)
     },
+    /** Task move adapter, replaceable by a fake in JVM tests. */
+    private val moveTaskById: (Int, Int) -> Unit = { taskId, displayId ->
+        SystemServices.activityTask.call("moveRootTaskToDisplay", taskId, displayId)
+    },
     private val nowMillis: () -> Long = { System.nanoTime() / NANOS_PER_MILLI },
     private val waitMillis: suspend (Long) -> Unit = { delay(it) },
 ) {
     private val known = LinkedHashMap<Int, TaskInfo>()
     private val removalLock = Mutex()
+    private val displayClearLocks = ConcurrentHashMap<Int, Mutex>()
+    private val clearingDisplays = ConcurrentHashMap.newKeySet<Int>()
 
     /**
      * Registers the task listener and reads the first list. A missing listener only fails task
@@ -132,6 +142,119 @@ class TaskService(
     }
 
     /**
+     * Clears every task on [request]'s display, then publishes `TasksCleared`. A clear suppresses
+     * `DisplayEmpty` for that display while task events are reconciled, so the host observes one
+     * completion signal for the operation (guest-protocol.md §8.3).
+     */
+    suspend fun clearDisplay(request: ClearDisplay) {
+        val displayId = request.displayId
+        if (displayId < 0) {
+            throw GuestFailure(
+                GuestErrorCode.GUEST_ERROR_CODE_INVALID_ARGUMENT,
+                "the display ID is not valid",
+                mapOf("display_id" to displayId.toString()),
+            )
+        }
+        val policy =
+            when (request.policy) {
+                ClearPolicy.CLEAR_POLICY_FINISH_TASKS -> ClearAction.FINISH
+                ClearPolicy.CLEAR_POLICY_MOVE_TO_DEFAULT_DISPLAY -> {
+                    if (displayId == 0) {
+                        throw GuestFailure(
+                            GuestErrorCode.GUEST_ERROR_CODE_INVALID_ARGUMENT,
+                            "display 0 cannot be moved to itself",
+                            mapOf("display_id" to displayId.toString()),
+                        )
+                    }
+                    ClearAction.MOVE_TO_DEFAULT
+                }
+                ClearPolicy.CLEAR_POLICY_UNSPECIFIED,
+                ClearPolicy.UNRECOGNIZED ->
+                    throw GuestFailure(
+                        GuestErrorCode.GUEST_ERROR_CODE_INVALID_ARGUMENT,
+                        "the clear policy is not supported",
+                    )
+            }
+
+        displayClearLocks
+            .computeIfAbsent(displayId) { Mutex() }
+            .withLock {
+                val context = currentCoroutineContext()
+                val deadline = nowMillis() + TASK_CLEAR_TIMEOUT_MILLIS
+                val attemptedTaskIds = mutableSetOf<Int>()
+                clearingDisplays.add(displayId)
+                try {
+                    while (true) {
+                        context.ensureActive()
+                        val remaining =
+                            synchronized(this) {
+                                val current = refresh().filter { it.getDisplayId() == displayId }
+                                if (current.isEmpty()) {
+                                    events.publish {
+                                        it.setTasksCleared(
+                                            TasksCleared.newBuilder()
+                                                .setDisplayId(displayId)
+                                                .setRemainingTasks(0)
+                                        )
+                                    }
+                                }
+                                current
+                            }
+                        context.ensureActive()
+                        if (remaining.isEmpty()) {
+                            return
+                        }
+
+                        val remainingMillis = deadline - nowMillis()
+                        if (remainingMillis <= 0) {
+                            throw GuestFailure(
+                                GuestErrorCode.GUEST_ERROR_CODE_TIMEOUT,
+                                "the display tasks did not clear before the deadline",
+                                mapOf(
+                                    "display_id" to displayId.toString(),
+                                    "remaining_tasks" to remaining.size.toString(),
+                                ),
+                            )
+                        }
+                        remaining
+                            .filter { attemptedTaskIds.add(it.getTaskId()) }
+                            .forEach { task ->
+                                context.ensureActive()
+                                removalLock.withLock {
+                                    context.ensureActive()
+                                    if (deadline - nowMillis() <= 0) {
+                                        throw GuestFailure(
+                                            GuestErrorCode.GUEST_ERROR_CODE_TIMEOUT,
+                                            "the display tasks did not clear before the deadline",
+                                            mapOf(
+                                                "display_id" to displayId.toString(),
+                                                "remaining_tasks" to remaining.size.toString(),
+                                            ),
+                                        )
+                                    }
+                                    val stillOnDisplay =
+                                        readCurrentTasks().any {
+                                            it.getTaskId() == task.getTaskId() &&
+                                                it.getDisplayId() == displayId
+                                        }
+                                    if (stillOnDisplay) {
+                                        when (policy) {
+                                            ClearAction.FINISH -> removeTaskById(task.getTaskId())
+                                            ClearAction.MOVE_TO_DEFAULT ->
+                                                moveTaskById(task.getTaskId(), 0)
+                                        }
+                                    }
+                                }
+                            }
+                        waitMillis(minOf(TASK_POLL_MILLIS, remainingMillis))
+                    }
+                } finally {
+                    clearingDisplays.remove(displayId)
+                }
+            }
+    }
+
+    /**
      * Publishes the differences between the last list of tasks and the list that Android reports
      * now. It returns the list that it read, so that a caller answers with the tasks it published.
      */
@@ -161,7 +284,7 @@ class TaskService(
         val displaysBefore = known.values.map { it.getDisplayId() }.toSet()
         val displaysNow = current.values.map { it.getDisplayId() }.toSet()
         for (displayId in displaysBefore - displaysNow) {
-            if (displayId != 0) {
+            if (displayId != 0 && displayId !in clearingDisplays) {
                 events.publish {
                     it.setDisplayEmpty(DisplayEmpty.newBuilder().setDisplayId(displayId))
                 }
@@ -217,7 +340,13 @@ class TaskService(
          * Leaves time for the host to receive the response within the five-second default deadline.
          */
         const val TASK_REMOVAL_TIMEOUT_MILLIS = 4_000L
+        const val TASK_CLEAR_TIMEOUT_MILLIS = 4_000L
         const val TASK_POLL_MILLIS = 100L
         const val NANOS_PER_MILLI = 1_000_000L
+
+        enum class ClearAction {
+            FINISH,
+            MOVE_TO_DEFAULT,
+        }
     }
 }

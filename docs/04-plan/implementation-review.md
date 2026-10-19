@@ -21788,3 +21788,48 @@ connecting to a granted control endpoint. This bounded availability tradeoff
 keeps the documented broker model and avoids using process IDs or audit tokens
 for authorization; it needs maintainer review.
 
+## IR-1382: Add package-list and package-info control queries
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #032 |
+| Affected documents | [runtime-api.md](../03-reference/runtime-api.md) §§2, 8; [cli.md](../02-design/cli.md) §3; [M04](issues/M04-daemon-and-guest-protocol.md) #032 |
+
+**Choices.** Add API 1.4 control messages and client methods for package-list
+and package-info queries. The daemon owns one package service and never starts
+Android for reads. `listPackages(.all)` uses a live inventory only if the
+supervisor is already ready and otherwise returns saved inventory. Package
+details resolve managed records first, then unmanaged entries from the live or
+saved Android inventory; unmanaged entries report no stored APK files and
+zero artifact bytes. The generic launcher can request details for one package
+but cannot enumerate the package list; wrappers remain denied on the control
+endpoint. `apkrun info` without a package shows the runtime-status fields the
+daemon currently provides, and `info --displays` returns an actionable
+catalogued error until #028 exposes the display snapshot.
+
+**Reason.** The package store design lets the generic launcher inspect
+`packageInfo` for any package, but does not grant it package enumeration.
+Restricting `listPackages` avoids expanding launcher authority over the
+Android inventory. Android remains the source of truth for installed apps, so
+unmanaged package details are derived from PackageManager inventory; while
+Android is stopped, the last inventory is all that can be known without
+starting the VM. An unmanaged package has no host-stored APK artifacts, so an
+empty file list and zero artifact bytes represent that state without
+inventing a store record. The runtime overview and display snapshot remain
+separate until their documented data is available.
+
+**Verification.** The CLI query tests pass in both normal and EmbeddedRuntime
+builds, and the error-catalog test passes. Focused RuntimeHost tests pass for
+launcher authorization, a cached unmanaged package detail, typed not-found,
+and package queries while Android remains stopped. RuntimeAPI DTO and
+RuntimeClient query tests passed earlier in this slice. Swift format lint,
+error-catalog generation check, and `git diff --check` pass. Full #032
+acceptance, real XPC, and live Android checks remain outstanding.
+
+**Risk for review.** Unmanaged package information is limited to inventory
+summary fields; the current wire detail DTO does not expose the wider
+PackageManager metadata or APKRun settings and wrapper fields in the complete
+design. Cached unmanaged package facts can be stale until the daemon next
+queries a ready Android runtime.
+

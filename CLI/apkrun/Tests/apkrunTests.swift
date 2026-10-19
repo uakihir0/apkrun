@@ -77,6 +77,17 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
 }
 
 #if APKRUN_EMBEDDED_RUNTIME
+    @Test func runtimeControlCommandsParseStatusStartAndStop() async throws {
+        let status = try await APKRunCommand.asyncParseAsRoot(["runtime", "status", "--json"])
+        #expect((status as? RuntimeStatusCommand)?.json == true)
+
+        let start = try await APKRunCommand.asyncParseAsRoot(["runtime", "start"])
+        #expect(start is RuntimeStartCommand)
+
+        let stop = try await APKRunCommand.asyncParseAsRoot(["runtime", "stop"])
+        #expect(stop is RuntimeStopCommand)
+    }
+
     @Test func developmentDisplayCommandsParseAddInEitherOptionOrder() throws {
         #expect(
             try DevDisplaysInputParser.parse("add --size 960x1700 --dpi 320")

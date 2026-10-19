@@ -1,4 +1,5 @@
 import DiagnosticsCore
+import RuntimeAPI
 
 enum ExitCodes {
     static let success = 0
@@ -14,6 +15,9 @@ enum ExitCodes {
     static let interrupted = 130
 
     static func code(for error: any Error) -> Int {
+        if let error = error as? RuntimeWireError {
+            return ErrorCatalog.cliExit(for: error.code) ?? failure
+        }
         guard let error = error as? any APKRunError else {
             return internalError
         }

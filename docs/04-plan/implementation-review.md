@@ -20738,7 +20738,9 @@ For the embedded CLI, package operations return typed in-process results;
 the long-operation handle and event broker are deferred to the daemon work in
 #031 and #032. `RuntimeSessionService.launch` reports the launch phase after
 `LaunchApplication` responds. It does not claim `.running` until a window
-client reports its first frame, and this service does not create a Mac window.
+client reports its first frame. `EmbeddedPackageService` stays headless by
+default, but a display-backed `DevelopmentRuntimeContext` can provide it a
+session service attached to the existing developer window and Guest Agent.
 Session launch and termination operations are serialized. A terminate request
 can close a session before launch starts, while a failed guest stop restores
 the prior session state.
@@ -20787,8 +20789,94 @@ was changed.
 stock-image adapter and must not report the daemon activity-assertion or
 real-guest acceptance criteria as complete. Maintainers should review the
 RuntimeHost channel placement, direct in-process result shape, mutation and
-scratch lock scope, raw-ADB checker exclusions, lack of window ownership in
-this service, and deferred Actions lint integration.
+scratch lock scope, raw-ADB checker exclusions, conditional display-backed
+session routing, and deferred Actions lint integration.
+
+## IR-1374: Keep damaged package records visible and route embedded sessions
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #027 |
+| Affected documents | [package-store.md](../02-design/package-store.md) §§3.2, 5.4; [runtime-api.md](../03-reference/runtime-api.md) §§8.3, 8.5; [M03](issues/M03-input-and-basic-runtime.md) #027 |
+
+**Choice.** When a package record cannot decode, retain a per-package issue if
+its ID can be validated from the canonical package directory name or, when the
+directory name is not usable, read from the record envelope. A valid directory
+identity takes precedence over a conflicting metadata `packageId`. A package
+directory with durable package data but missing metadata is also an issue.
+Show that package in `list` as
+`broken("metadataUnreadable")` with an unknown version code, and reject
+import/install/uninstall/forget for that package. Continue serving healthy
+records. Allow `EmbeddedPackageService` to receive a `RuntimeSessionService`;
+when a `DevelopmentRuntimeContext` has a native display, provide a service
+attached to that display and its Guest Agent so RuntimeAPI `launch` and
+`terminate` reach the same window session as development launch.
+
+**Reason.** Silently skipping a damaged record makes its package appear new
+and can lead to overwriting data that needs a newer APKRun binary to read.
+Isolating the issue to its validated package ID preserves safe operations for
+unrelated apps. The existing display and Guest Agent session path avoids
+inventing a second app-launch implementation, while the injected protocol
+also makes API routing testable without a Mac window.
+
+**Verification.** Focused PackageStore and RuntimeHost tests cover corrupt and
+future-schema records, per-package write rejection, continued healthy-package
+operations, visible broken summaries, typed `packageInfo` failure, and
+launch/terminate routing through a fake session service. No real guest or
+window-backed launch was performed, and #027 acceptance remains unchecked.
+
+**Risk.** An ID that cannot be recovered from either record data or a valid
+directory name cannot be surfaced as a package row. For a conflicting identity,
+the directory name is treated as the package identity and the metadata ID is
+ignored. Maintainers should review this precedence and the conditional
+display-backed route.
+
+## IR-1375: Cache the last Android package inventory for stopped-runtime listing
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #027 |
+| Affected documents | [package-store.md](../02-design/package-store.md) §§3.1, 9.3, 11.1; [cli.md](../02-design/cli.md) §4; [error-catalog.md](../03-reference/error-catalog.md) §10.5; [runtime-api.md](../03-reference/runtime-api.md) §§8.3, 8.5; [M03](issues/M03-input-and-basic-runtime.md) #027 |
+
+**Choice.** Persist each successful live `listPackages(.all)` inventory as
+an atomically replaced, schema-versioned `Packages/android-inventory.json`.
+Refresh it when an embedded runtime attaches and after successful package
+installs or uninstalls. When Android is stopped, `.all` combines the saved
+inventory with current managed package records. The CLI does not boot Android
+to run `list --all`. `RuntimePackageListResult` reports the source and
+observation time; unmanaged rows report `updateAuthority = external`. A
+managed record still marked `installed` but absent from the available full
+inventory is projected as `broken("removedInAndroid")` in the list result.
+This remains a read-only query and does not persist a state transition. The
+development `boot` and `launch` commands treat store attach or recovery
+failures as warnings so a damaged package journal does not prevent Android
+from starting or an already installed app from opening. Package-management
+operations continue to fail with the store error.
+
+**Reason.** The design promises that package listing works with the runtime
+stopped, and listing should not incur a VM boot just to show information
+already observed. Keeping the snapshot under PackageStore preserves the
+single-writer boundary and atomic file-writing behavior.
+
+**Verification.** A focused RuntimeHost test writes an unmanaged inventory,
+reopens the service with no runtime attached, and checks that `list --all`
+returns the saved package, version, managed flag, external update authority,
+source, and observation time. Another focused test checks that an installed
+managed record missing from a cached full inventory is reported as
+`removedInAndroid`; a corrupt inventory returns the typed
+`store.androidInventoryUnreadable` error. The Android package integration test
+checks a live inventory after package operations and terminates an app through
+RuntimeAPI. Runtime attach refresh and real Android inventory freshness were
+not exercised on the shared Mac.
+
+**Risk.** Unmanaged rows and removed-app projections can be stale while Android
+is stopped; they refresh on the next runtime attach or successful package
+operation. If attachment or refresh fails, the prior snapshot remains and its
+timestamp exposes its age. Maintainers should review the cache lifetime,
+schema migration policy, read-only missing-package projection, and best-effort
+development boot/launch behavior when the package store is damaged.
 
 ## IR-1368: Proceed with the independent #067 geometry resolver
 

@@ -147,6 +147,7 @@ public enum Installer: String, Codable, Sendable { case apkrun, external }
 ```text
 Packages/
 ├── journal.jsonl
+├── android-inventory.json                # last PackageManager inventory returned by the Guest Agent
 ├── .trash/                               # directories moved out by committed transactions; purged in the background
 │   └── <txn>-<slot>/
 └── <dir>/                                # usually the package ID (§3.2)
@@ -169,6 +170,7 @@ Packages/
 - At most one set per slot. A newer staged update replaces the older staged set (§5.2, kind `stage`).
 - `incoming/<ticket>/` is scratch space. The importer creates it, and an install or `stage` transaction renames it into a slot. Tickets that no transaction references are deleted at `open()` and after 24 h.
 - `failed/` is deleted after 7 days or when the package is uninstalled. It is included in diagnostics bundles as metadata only (names, sizes, digests), never the APKs.
+- `android-inventory.json` is an atomically replaced, schema-versioned snapshot owned by `PackageStore`. It records the most recent full Android package list and is used by `listPackages(.all)` while Android is stopped.
 
 ### 3.2 Directory names
 
@@ -420,7 +422,7 @@ Rules:
 5. Delete orphaned `incoming/<ticket>/` directories, purge `.trash/`, and delete `failed/` sets older than 7 days.
 6. Publish the records. Packages with pending post-boot work show `lastOperation.pending = true`, so the UI can say "Finishing install of ‹App›…".
 
-A `metadata.json` or `settings.json` with a newer `schemaVersion` than the binary supports makes the store read-only for that package (`metadataUnreadable`), not the whole store. The file is never written. A journal with a newer `v` makes the whole store read-only, and the host startup step reports it as degraded ([runtime-daemon.md](runtime-daemon.md) §2.2).
+A `metadata.json` or `settings.json` with a newer `schemaVersion` than the binary supports makes the store read-only for that package (`metadataUnreadable`), not the whole store. When the package ID can be recovered from the record or its canonical directory name, the package remains visible as broken and import, install, uninstall, and forget operations for that package fail with `store.metadataUnreadable`. Healthy packages remain available. The file is never written. A journal with a newer `v` makes the whole store read-only, and the host startup step reports it as degraded ([runtime-daemon.md](runtime-daemon.md) §2.2).
 
 ### 5.5 Recovery rules
 
@@ -641,6 +643,8 @@ Reinstalls triggered by reconciliation are queued in the one-at-a-time Android q
 ### 9.3 Unmanaged packages and adoption
 
 - Packages installed by `adb install` (developer mode) or, post-v1, by Google Play have no record. `listPackages(.all)` returns them with `managed = false`.
+- A live `listPackages(.all)` refreshes `android-inventory.json`; while Android is stopped, the operation returns the last saved inventory together with managed package records. The result is explicitly last-known Android state until a later live query refreshes it.
+- In `listPackages(.all)`, a managed record still marked `installed` but absent from the available full inventory is reported as `broken(.removedInAndroid)`. This is a read-only projection; `source` and `observedAt` identify whether the evidence came from a live query or an older snapshot.
 - **Adopt** (Home → Other Android apps → "Manage with APKRun", or creating a wrapper for such a package) creates a record with `installer: external`, `updateAuthority: external`, no artifact, and `source: adopted`. Such a package can have a wrapper, settings, and integrations. APKRun never updates it. It cannot be restored after Reset Android, because APKRun has no copy, and the adopt sheet says so. After a reset its record becomes `broken(.removedInAndroid)` instead of `needsReinstall`, with the Remove action.
 - Post-v1 Google Play support (#097) builds on the same record shape with `updateAuthority: googlePlay`.
 
@@ -677,7 +681,7 @@ The XPC operations are listed with their DTOs in [../03-reference/runtime-api.md
 | `installImported(ticket, InstallOptions{authority, provider, updateChoice, createWrapper})` | §6.2, or hands the ticket to UpdateCore when `relation == .update`. `updateChoice` (`.automatic` or `.notifyOnly`, from `apkrun install --updates`) is the first update choice of an `apkrun` package ([update-system.md](update-system.md) §2.3). nil keeps the default | yes |
 | `cancelImport(ticket)` | deletes the ticket | no |
 | `inspectFile(files)` | the same as `importPackage` but deletes the ticket afterwards. For `apkrun inspect` | yes |
-| `listPackages(filter: .managed / .all)` | records plus unmanaged packages from the last reconcile. Works while the runtime is stopped (last known Android facts) | no |
+| `listPackages(filter: .managed / .all)` | records plus unmanaged packages from the last PackageManager inventory. A live runtime refreshes the inventory; a stopped runtime uses the saved last-known facts | no |
 | `packageInfo(id)` | `PackageDetails`: record, settings summary, slots, sizes, wrapper count (from WrapperCore), last operation | no |
 | `uninstallPackage(id, UninstallOptions{keepData, trashWrappers, forget})` | §8 | yes |
 | `repairPackage(id)` | `broken` → `reinstall` of `current/`, or `forget` if the user chose it | yes |

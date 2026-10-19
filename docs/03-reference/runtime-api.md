@@ -1149,7 +1149,7 @@ Store semantics: [../02-design/package-store.md](../02-design/package-store.md) 
 | `installImported` | `InstallImportedRequest` → `OperationHandle` (`install`, or `update` for `relation == .update`) → `.package(PackageSummary)` (`.update(UpdateOutcome)` for kind `update`) | C | L | `packages.installed`, `.updated`, `.stateChanged`, `.operationProgress`; `updates.*` for updates | package-store §6.2 |
 | `cancelImport` | `CancelImportRequest { ticket }` → `Empty` | C | U | — | package-store §11.1 |
 | `inspectFile` | `ImportPackageRequest` + files → `OperationHandle` (`inspect`) → `.importPreview(ImportPreview)` | C | L | `operations.*` | package-store §4.3 |
-| `listPackages` | `ListPackagesRequest { filter }` → `[PackageSummary]` | C | Q | — | package-store §9 |
+| `listPackages` | `ListPackagesRequest { filter }` → `PackageListResult` | C | Q | — | package-store §9 |
 | `packageInfo` | `PackageRequest { packageID }` → `PackageDetails` | C, L, W | Q | — | package-store §11.1 |
 | `packageIcon` | `PackageIconRequest { packageID, sizePx }` → `PackageIcon` | C, L, W | Q | `packages.iconChanged` | package-store §10 |
 | `uninstallPackage` | `UninstallPackageRequest` → `OperationHandle` (`uninstall`) | C | L | `packages.stateChanged`, `.removed`; `wrappers.removed`; `sessions.ended(.packageUninstalled)` | package-store §8 |
@@ -1200,10 +1200,23 @@ public struct CancelImportRequest: Codable, Sendable { public var ticket: Import
 public struct ListPackagesRequest: Codable, Sendable { public var filter: PackageFilter }   // .managed, .all
 public struct PackageRequest: Codable, Sendable { public var packageID: PackageID }
 
+public enum PackageListSource: String, Codable, Sendable {
+    case managedRecords       // only APKRun's package records
+    case liveAndroid          // queried from the running Android guest
+    case cachedAndroid        // last saved Android inventory
+    case noAndroidInventory   // Android has not yet been observed
+}
+
+public struct PackageListResult: Codable, Sendable {
+    public var packages: [PackageSummary]
+    public var source: PackageListSource
+    public var observedAt: Date?          // nil when no Android inventory is available
+}
+
 public struct PackageSummary: Codable, Sendable {
     public var packageID: PackageID
     public var displayName: String
-    public var versionCode: VersionCode
+    public var versionCode: VersionCode?         // nil when the package record is unreadable
     public var versionName: String?
     public var state: WirePackageState
     public var managed: Bool                  // false: installed in Android by something else, no record
@@ -1220,7 +1233,7 @@ public enum WirePackageState: Codable, Sendable, Equatable {   // state-machines
     case updating(WireUpdatePhase)
     case uninstalling, uninstalledKeepingData
     case needsReinstall(ReinstallReason)      // .userdataReset, .userdataRestored
-    case broken(WireBrokenReason)             // .removedInAndroid, .signerChanged, .artifactMissing, .reinstallFailed(WireError)
+    case broken(WireBrokenReason)             // includes .metadataUnreadable as well as .removedInAndroid, .signerChanged, .artifactMissing, .reinstallFailed(WireError)
     case unknown
 }
 
@@ -1261,7 +1274,8 @@ public struct PackageIcon: Codable, Sendable {
 }
 ```
 
-- `listPackages` and `packageInfo` work while Android is stopped. They show the last known Android facts.
+- `listPackages` and `packageInfo` work while Android is stopped. A `.all` result identifies whether Android facts came from a live query, a saved snapshot, or no inventory; `observedAt` timestamps live and cached inventory. `.managed` results use `managedRecords`. A managed record marked `installed` but absent from an available full inventory is listed as `broken("removedInAndroid")`; this does not write the record during a query.
+- `listPackages(.all)` does not start Android. A successful live query, runtime attachment, or successful install/uninstall refreshes the saved inventory for later stopped-runtime listings. Cached unmanaged rows can be stale until that refresh.
 - A wrapper's `packageInfo` returns the same `PackageDetails`. The wrapper uses `summary` and the per-app window settings in `settings.window` (§14.2).
 - `ImportPreview.compatibility` (package-store §4.7) and `PackageDetails.compatibility` come from the compatibility database in APKRun.app. `apkrun inspect` and `apkrun info <package>` print them. An app without an entry has `nil`, and the clients show nothing.
 
@@ -1296,7 +1310,7 @@ public struct RollbackPackageRequest: Codable, Sendable {
 | `importPackage`, `inspectFile` | the import and inspection cases of `StoreFailure` ([../02-design/package-store.md](../02-design/package-store.md) §12): `store.unsupportedContainer` … `store.insufficientHostSpace`; `integration.tooManyFiles` is not used here, more than 20 files is `runtime.malformedRequest` |
 | `installImported` | `store.importExpired`, `store.alreadyInstalled`, `store.downgradeRefused`, `store.signerMismatch`, `store.operationInProgress`, `store.guestInstallFailed`, `store.guestStorageFull`, `store.userActionRequired`, `store.runtimeUnavailable`, `store.capabilityMissing`, `update.*` for manual updates |
 | `cancelImport` | `store.importExpired` |
-| `listPackages`, `packageInfo`, `packageIcon` | `store.packageNotFound`, `store.metadataUnreadable` |
+| `listPackages`, `packageInfo`, `packageIcon` | `store.packageNotFound`, `store.metadataUnreadable`, `store.androidInventoryUnreadable` |
 | `uninstallPackage` | `store.packageNotFound`, `store.operationInProgress`, `store.uninstallFailed`, `store.runtimeUnavailable` |
 | `repairPackage` | `store.packageNotFound`, `store.guestInstallFailed`, `store.runtimeUnavailable` |
 | `rollbackPackage` | `store.rollbackUnavailable`, `store.rollbackFailed`, `store.packageInUse`, `store.operationInProgress` |

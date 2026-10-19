@@ -47,6 +47,8 @@ public enum DeveloperDisplayResizeFailure: Error, Equatable, Sendable {
     case geometry(DisplayGeometryResolverFailure)
     /// The guest display or its render pool could not be reconfigured.
     case displayUnavailable
+    /// The prior host or guest mode could not be restored after a rejected resize.
+    case modeRestoreFailed(hostModeRestored: Bool, guestModeRestored: Bool)
 }
 
 /// The counters of the developer display (graphics.md §7), as the CLI reads them.
@@ -167,10 +169,18 @@ public final class DeveloperDisplay: @unchecked Sendable {
         guard mode != self.mode || backingScale != self.backingScale else {
             return
         }
-        do {
+        do throws(DevelopmentDisplayReconfigurationFailure) {
             try await core.reconfigure(to: mode)
         } catch {
-            throw .displayUnavailable
+            switch error {
+            case .modeRestorationFailed(let hostModeRestored, let guestModeRestored):
+                throw .modeRestoreFailed(
+                    hostModeRestored: hostModeRestored,
+                    guestModeRestored: guestModeRestored
+                )
+            case .graphics, .guestRejectedMode:
+                throw .displayUnavailable
+            }
         }
         windowFrameLock.withLock {
             backingScaleValue = backingScale

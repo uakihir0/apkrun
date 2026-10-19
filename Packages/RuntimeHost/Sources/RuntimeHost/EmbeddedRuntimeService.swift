@@ -371,6 +371,55 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
                 message: "Display 0 is already in use by \(packageID).",
                 remediation: "Close that app before launching another one."
             )
+        case .sessionAlreadyExists(let packageID):
+            return .runtime(
+                "sessionAlreadyExists",
+                message: "\(packageID) already has a live app session on another display.",
+                remediation: "Close its current window before requesting another display."
+            )
+        case .displayPool(.exhausted):
+            return .runtime(
+                "displayPoolExhausted",
+                message: "APKRun could not allocate an Android app display.",
+                remediation: "Close another Android app window and retry."
+            )
+        case .displayPool(.attachFailed):
+            return .runtime(
+                "displayAttachFailed",
+                message: "Android couldn't create a window for the app.",
+                remediation: "Restart Android. If it happens again, create a diagnostics report."
+            )
+        case .displayPool(.staleLease):
+            return .runtime("internal", message: "The Android display lease is no longer current.")
+        case .displayPool(.invalidGeometry):
+            return .runtime("displayGeometryInvalid", message: "The requested app window size is invalid.")
+        case .displayPool(.reconfigureFailed(let stateUncertain)):
+            return .runtime(
+                "displayReconfigureFailed",
+                message: "Android did not confirm the requested app window size.",
+                remediation: stateUncertain
+                    ? "Restart Android before reusing this display."
+                    : "The previous display mode was restored. Try resizing again."
+            )
+        case .displayPool(.guest(.unavailable)):
+            return .runtime(
+                "guestAgentUnavailable",
+                message: "The Android Guest Agent is unavailable.",
+                remediation: "Boot Android with the development Guest Agent, then retry."
+            )
+        case .displayPool(.guest(.operationFailed)):
+            return .runtime(
+                "guestAgentOperationFailed",
+                message: "The Android Guest Agent could not apply the display policy.",
+                remediation: "Restart Android and try again."
+            )
+        case .displayPool(.graphics(let failure)):
+            return RuntimeWireError(
+                domain: "graphics",
+                code: "graphics.\(failure.code)",
+                message: "APKRun couldn't prepare the graphics display.",
+                remediation: "Restart Android. If the problem continues, create a diagnostics report."
+            )
         case .sessionNotFound:
             return .runtime("internal", message: "The app session no longer exists.")
         case .invalidTransition:

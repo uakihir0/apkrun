@@ -170,6 +170,17 @@ public struct DevelopmentRuntimeContext: Sendable {
         await service.attachGuestAgent(guestAgent)
         return service
     }
+
+    /// Creates a CLI-facing controller for the VM's secondary Android displays.
+    ///
+    /// This requires a ready boot with both a GraphicsCore device and a Guest Agent connection. RuntimeCore lease
+    /// types stay inside RuntimeHost so command-line clients depend only on this facade.
+    public func makeDisplayControl() async -> DevelopmentDisplayControl? {
+        guard let pool = await supervisor.makeDisplayPool() else {
+            return nil
+        }
+        return DevelopmentDisplayControl(pool: pool)
+    }
 }
 
 /// Boots the Android image of a development bundle inside the embedded CLI process.

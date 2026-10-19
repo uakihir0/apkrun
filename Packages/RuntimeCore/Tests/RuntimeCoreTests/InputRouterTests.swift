@@ -554,6 +554,24 @@ func theOrderOfEventsIsKeptWhenMerging() async {
 // MARK: - Session end
 
 @Test(.timeLimit(.minutes(1)))
+func cancelAllRegisteredDisplaysSendsOneCancellationPerCurrentLease() async {
+    let channel = RecordingInputChannel()
+    let router = InputRouter(channel: channel, clock: { 1 })
+    let first = SessionID.app(UUID())
+    let second = SessionID.app(UUID())
+    await router.register(session: first, displayID: 7, state: .running)
+    await router.register(session: second, displayID: 8, state: .launching)
+
+    await router.cancelAllRegisteredDisplays()
+    await router.sessionEnded(second)
+    await router.cancelAllRegisteredDisplays()
+
+    let batches = await channel.batches
+    #expect(batches.map(\.displayID) == [7, 8, 7])
+    #expect(batches.allSatisfy { kinds($0) == [.cancelAll(GPCancelAll())] })
+}
+
+@Test(.timeLimit(.minutes(1)))
 func sessionEndedSendsCancelAllAndRemovesTheSession() async {
     let channel = RecordingInputChannel()
     let clock = TestClock()

@@ -21605,3 +21605,16 @@ connection and before awaiting its close, so an actor scheduling delay cannot
 leave the supervisor reporting `.ready` after the transport is gone. The
 catalog trigger description and references also retain the existing restart
 budget and repeated protocol-violation cases that share this error code.
+
+**Input reconnect choice.** When `DevInputBinding` replaces an unusable input
+channel, it creates a new router, rebinds the current routes, then sends one
+`cancelAll` to every display registered on that new router. Cancellation sent
+by the old router only reaches the dead channel and cannot release gestures on
+the replacement connection.
+
+**Verification.** `InputRouterTests` checks that cancellation covers each
+current display lease and follows the router's serialized send path. The
+RuntimeHost `DevInputRoute` filter built successfully, but hit the same eight
+existing route-delivery expectation failures seen in the earlier broader
+RuntimeHost run; that suite is not a reliable gate for this change.
+

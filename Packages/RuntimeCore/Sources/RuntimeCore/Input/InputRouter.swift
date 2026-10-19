@@ -349,6 +349,24 @@ public actor InputRouter {
         return nil
     }
 
+    /// Cancels open input on every display registered when this operation takes the send turn.
+    ///
+    /// This is used after the input channel reconnects: Android may still have keys or gestures open from the previous
+    /// channel, so each live display receives a `cancelAll` on the new one. The display IDs are sent in sorted order.
+    public func cancelAllRegisteredDisplays() async {
+        await takeTurn()
+        defer { releaseTurn() }
+
+        let displayIDs = displayOwners.keys.sorted()
+        guard !displayIDs.isEmpty else {
+            return
+        }
+        let now = clock()
+        for displayID in displayIDs where displayOwners[displayID] != nil {
+            await send([.cancelAll(InputTimestamp(hostNanos: now))], displayID: displayID, at: now)
+        }
+    }
+
     /// Changes the state of a registered session. A session that is not registered is left alone.
     public func setState(_ state: AppSessionState, for session: SessionID) {
         sessions[session]?.state = state

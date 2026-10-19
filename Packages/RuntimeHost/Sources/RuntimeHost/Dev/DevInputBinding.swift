@@ -56,6 +56,7 @@ struct DevInputBinding: Sendable {
                                 report(.warning("input route could not claim its display (\(failure))"))
                             }
                         }
+                        await router.cancelAllRegisteredDisplays()
                         channel = next
                         boundToken = token
                         reportedFailure = false

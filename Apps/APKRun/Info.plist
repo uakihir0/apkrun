@@ -24,6 +24,8 @@
 	<string>APKRUN_GIT_COMMIT</string>
 	<key>APKRunConfiguration</key>
 	<string>$(CONFIGURATION)</string>
+	<key>APKRunLaunchAgentPlistName</key>
+	<string>$(APKRUN_LAUNCH_AGENT_PLIST_FILE)</string>
 	<key>APKRunEmbeddedRuntime</key>
 	<false/>
 </dict>

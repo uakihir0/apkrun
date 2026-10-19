@@ -73,6 +73,7 @@ public struct ResolvedDisplayMode: Sendable, Equatable {    // output of Display
     public var pixelSize: PixelSize
     public var densityDpi: Int
     public var renderScale: Double            // ≤ backingScale
+    public var zoom: Double                   // effective, within the stored preference range
     public var refreshHz: Int                 // 60
 }
 
@@ -271,24 +272,27 @@ on frameReady(gen, i, seq, t):
 ```text
 renderScale = min(backingScale, 4095 / pointWidth, 4095 / pointHeight)        // EDID DTD limit, graphics.md §6.4
 pixelSize   = (round(pointWidth × renderScale), round(pointHeight × renderScale)) rounded down to even numbers
-densityDpi  = round(160 × renderScale × zoom)
+preferenceZoom = clamp(requestedZoom, 0.75...2.0)
+effectiveZoom  = preferenceZoom adjusted only as needed for 120...640 dpi
+densityDpi     = round(160 × renderScale × effectiveZoom)
 refreshHz   = 60
 ```
 
 Consequences:
 
 - At `zoom = 1.0`, **one Android dp is one macOS point**. A 480 × 850 pt window on a Retina Mac is a 960 × 1700 px display at 320 dpi (`xhdpi`), and the app sees a 480 × 850 dp screen, the same as a mid-size phone.
-- `zoom > 1` enlarges the Android UI (fewer dp in the same window). `zoom < 1` shows more content. View menu: Zoom In (⌘=), Zoom Out (⌘−), Actual Size (⌘0). The value is stored per package in `settings.json` (`window.zoom`, [../03-reference/package-metadata-json.md](../03-reference/package-metadata-json.md)). The write path is the `resize` that carries the new zoom: apkrund stores it and posts `packages.settingsChanged` ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §14.3).
+- `zoom > 1` enlarges the Android UI (fewer dp in the same window). `zoom < 1` shows more content. View menu: Zoom In (⌘=), Zoom Out (⌘−), Actual Size (⌘0). The requested value is stored per package in `settings.json` (`window.zoom`, [../03-reference/package-metadata-json.md](../03-reference/package-metadata-json.md)); the resolved effective value is returned with the mode. The write path is the `resize` that carries the new zoom: apkrund stores it and posts `packages.settingsChanged` ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §14.3).
 - If the backing pixel size would exceed 4095 px (for example a fullscreen window on a 5K or 6K display), `renderScale` drops below `backingScale`. Android renders fewer pixels, the layer upscales them (`contentsScale = renderScale`), and the dp size stays the same. A DisplayID extension for larger modes is post-v1 ([graphics.md](graphics.md) §6.4).
 - The EDID physical size is derived from `densityDpi`, so the DPI reported to Android is consistent with the forced density. Android's `xdpi`/`ydpi` values follow the EDID. `densityDpi` follows the forced density (§4).
+- If the requested zoom and capped render scale would produce a density outside 120–640 dpi, the resolver adjusts the effective zoom within 0.75–2.0. It returns a typed failure when the range cannot be met. Windows below 320 × 400 dp at the effective zoom are rejected so the resolver does not silently change the requested geometry.
 
 ### 6.2 Limits
 
 | Item | Value | Reason |
 |---|---|---|
-| Minimum content size | 320 × 400 dp → points = dp × zoom | Android phone UI assumptions (smallest width ≥ 320 dp) |
+| Minimum content size | 320 × 400 dp → points = dp × effective zoom | Android phone UI assumptions (smallest width ≥ 320 dp) |
 | Maximum content size | the screen's visible frame; pixel size capped by §6.1 | EDID limit |
-| Density range | 120–640 dpi | outside this, `zoom` is clamped |
+| Density range | 120–640 dpi | the effective zoom is adjusted within the stored 0.75–2.0 range; impossible geometry fails |
 | Default window size | from the package settings `window.defaultWidth/defaultHeight` (initially copied from `wrapper.json`, [wrapper.md](wrapper.md) §3; points, default 480 × 850 portrait; 850 × 480 if the launcher activity requests landscape), clamped to 90 % of the screen's visible frame | Initial preference copied from the generated app |
 
 ### 6.3 Display 0 geometry

@@ -4,8 +4,8 @@
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// Version 1.0 introduces the authenticated control endpoint; 1.1 adds Guest Agent status fields;
     /// 1.2 adds control-endpoint launch and terminate operations; 1.3 adds bounded endpoint admission;
-    /// 1.4 adds control-endpoint package listing and package details; 1.5 adds control-endpoint runtime reset.
-    public static let current = APIVersion(major: 1, minor: 5)
+    /// 1.4 adds package queries; 1.5 adds runtime reset; 1.6 adds one-request runtime restart.
+    public static let current = APIVersion(major: 1, minor: 6)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -294,6 +294,17 @@ public struct StopRuntimeRequest: Codable, Equatable, Sendable {
     }
 }
 
+/// Stops and starts Android within one authenticated control request.
+public struct RestartRuntimeRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+
+    /// Creates a runtime-restart request.
+    public init(header: APIRequestHeader) {
+        self.header = header
+    }
+}
+
 /// Clears the runtime failure and boot-loop guard through the authenticated control endpoint.
 public struct RuntimeResetControlRequest: Codable, Equatable, Sendable {
     /// The request metadata.
@@ -491,6 +502,8 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func startRuntime(_ request: Data, reply: @escaping (Data) -> Void)
     /// Stops Android but leaves the daemon running.
     func stopRuntime(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Restarts Android in one request and returns its final runtime status.
+    func restartRuntime(_ request: Data, reply: @escaping (Data) -> Void)
     /// Clears a runtime failure and boot-loop guard without deleting Android data.
     func resetRuntime(_ request: Data, reply: @escaping (Data) -> Void)
     /// Lists managed or all known packages.

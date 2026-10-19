@@ -298,75 +298,131 @@ private actor CompletionFlag {
     #expect(await channel.lastKeepData == false)
 }
 
-@Test func packageStoreRecoveryKeepsArtifactsWhenInterruptedUninstallOutcomeIsUnknown() async throws {
+@Test func packageStoreLeavesAmbiguousUninstallInspectableAndForgetResolvesItWithoutClaimingDataOutcome() async throws {
     for keepData in [true, false] {
-        let temporary = try makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        let channel = FakeStoreChannel()
-        let runtime = FakeStoreRuntime(channel: channel)
-        let input = temporary.appendingPathComponent("HelloText.apk")
-        try Data("base apk bytes".utf8).write(to: input)
-        let packages = temporary.appendingPathComponent("Packages", isDirectory: true)
-        let crashingStore = PackageStore(
-            packagesDirectory: packages,
-            runtimeAccess: runtime,
-            inspector: { _ in facts() },
-            faultInjector: { kind, step in
-                if kind == "uninstall", step == "guestUninstallRequested" {
-                    throw InjectedStoreCrash()
+        for forgetCrashStep in ["begin", "uninstallOutcomesResolved", "filesRemoved", "recordRemoved"] {
+            let temporary = try makeTemporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: temporary) }
+            let channel = FakeStoreChannel()
+            let runtime = FakeStoreRuntime(channel: channel)
+            let input = temporary.appendingPathComponent("HelloText.apk")
+            try Data("base apk bytes".utf8).write(to: input)
+            let packages = temporary.appendingPathComponent("Packages", isDirectory: true)
+            let forgettingStore = PackageStore(
+                packagesDirectory: packages,
+                inspector: { _ in facts() },
+                faultInjector: { kind, step in
+                    if kind == "forget", step == forgetCrashStep {
+                        throw InjectedStoreCrash()
+                    }
                 }
-            }
-        )
-        try await crashingStore.open()
-        let preview = try await crashingStore.importPackage(files: [input])
-        let installed = try await crashingStore.installImported(ticket: preview.ticket)
-        do {
-            try await crashingStore.uninstall(packageID: installed.packageId, keepData: keepData)
-            Issue.record("Expected an interruption after the guest uninstall request.")
-        } catch is InjectedStoreCrash {
-            // The guest removed the package, but the host did not record its result.
-        }
-
-        let recoveredStore = PackageStore(
-            packagesDirectory: packages,
-            runtimeAccess: runtime,
-            inspector: { _ in facts() }
-        )
-        try await recoveredStore.open()
-        await #expect(
-            throws: PackageStoreFailure.uninstallDataUnverified(installed.packageId)
-        ) {
-            try await recoveredStore.recoverPendingTransactions()
-        }
-
-        let record = try #require(try await recoveredStore.listManagedPackages().first)
-        #expect(record.state == .installed)
-        #expect(
-            FileManager.default.fileExists(
-                atPath: packages.appendingPathComponent("\(installed.packageId.rawValue)/current/base.apk").path
             )
-        )
-        let journal = try String(contentsOf: packages.appendingPathComponent("journal.jsonl"), encoding: .utf8)
-        let entries =
-            try journal
-            .split(separator: "\n")
-            .map { line -> [String: Any] in
-                try #require(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+            try await forgettingStore.open()
+            let crashingStore = PackageStore(
+                packagesDirectory: packages,
+                runtimeAccess: runtime,
+                inspector: { _ in facts() },
+                faultInjector: { kind, step in
+                    if kind == "uninstall", step == "guestUninstallRequested" {
+                        throw InjectedStoreCrash()
+                    }
+                }
+            )
+            try await crashingStore.open()
+            let preview = try await crashingStore.importPackage(files: [input])
+            let installed = try await crashingStore.installImported(ticket: preview.ticket)
+            do {
+                try await crashingStore.uninstall(packageID: installed.packageId, keepData: keepData)
+                Issue.record("Expected an interruption after the guest uninstall request.")
+            } catch is InjectedStoreCrash {
+                // The guest removed the package, but the host did not record its result.
             }
-        let uninstallBegin = try #require(
-            entries.first { $0["kind"] as? String == "uninstall" && $0["op"] as? String == "begin" }
-        )
-        let uninstallTransaction = try #require(uninstallBegin["txn"] as? String)
-        #expect(
-            !entries.contains {
-                $0["txn"] as? String == uninstallTransaction && ["commit", "abort"].contains($0["op"] as? String ?? "")
+
+            let recoveredStore = PackageStore(
+                packagesDirectory: packages,
+                runtimeAccess: runtime,
+                inspector: { _ in facts() }
+            )
+            try await recoveredStore.open()
+            try await recoveredStore.recoverPendingTransactions()
+
+            let record = try #require(try await recoveredStore.listManagedPackages().first)
+            #expect(record.state == .installed)
+            #expect(try await channel.listPackages(.all).allSatisfy { $0.packageID != installed.packageId })
+            #expect(
+                FileManager.default.fileExists(
+                    atPath: packages.appendingPathComponent("\(installed.packageId.rawValue)/current/base.apk").path
+                )
+            )
+            let journal = try String(contentsOf: packages.appendingPathComponent("journal.jsonl"), encoding: .utf8)
+            let entries =
+                try journal
+                .split(separator: "\n")
+                .map { line -> [String: Any] in
+                    try #require(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+                }
+            let uninstallBegin = try #require(
+                entries.first { $0["kind"] as? String == "uninstall" && $0["op"] as? String == "begin" }
+            )
+            let uninstallTransaction = try #require(uninstallBegin["txn"] as? String)
+            #expect(
+                !entries.contains {
+                    $0["txn"] as? String == uninstallTransaction
+                        && ["commit", "abort"].contains($0["op"] as? String ?? "")
+                }
+            )
+            #expect(
+                !entries.contains {
+                    $0["txn"] as? String == uninstallTransaction && $0["step"] as? String == "guestUninstalled"
+                }
+            )
+
+            do {
+                try await forgettingStore.forget(packageID: installed.packageId)
+                Issue.record("Expected an interruption during the host-side forget.")
+            } catch is InjectedStoreCrash {
+                // The persisted forget intent must finish on the next open.
             }
-        )
-        #expect(
-            !entries.contains {
-                $0["txn"] as? String == uninstallTransaction && $0["step"] as? String == "guestUninstalled"
-            }
-        )
+
+            let finalStore = PackageStore(
+                packagesDirectory: packages,
+                inspector: { _ in facts() }
+            )
+            try await finalStore.open()
+            #expect(try await finalStore.listManagedPackages().isEmpty)
+            #expect(
+                !FileManager.default.fileExists(
+                    atPath: packages.appendingPathComponent("\(installed.packageId.rawValue)/current/base.apk").path
+                )
+            )
+
+            let resolvedJournal = try String(
+                contentsOf: packages.appendingPathComponent("journal.jsonl"),
+                encoding: .utf8
+            )
+            let resolvedEntries =
+                try resolvedJournal
+                .split(separator: "\n")
+                .map { line -> [String: Any] in
+                    try #require(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+                }
+            let resolvedUninstall = try #require(
+                resolvedEntries.first {
+                    $0["txn"] as? String == uninstallTransaction && $0["op"] as? String == "abort"
+                }
+            )
+            #expect(resolvedUninstall["reason"] as? String == "userChoseForgetWithUnverifiedUninstallOutcome")
+            let resolvedForgetBegin = try #require(
+                resolvedEntries.first { $0["kind"] as? String == "forget" && $0["op"] as? String == "begin" }
+            )
+            #expect(resolvedForgetBegin["reason"] as? String == "resolvesUnverifiedUninstall")
+            let forgetTransaction = try #require(resolvedForgetBegin["txn"] as? String)
+            #expect(
+                resolvedEntries.contains {
+                    $0["txn"] as? String == forgetTransaction && $0["op"] as? String == "commit"
+                }
+            )
+        }
     }
 }
 

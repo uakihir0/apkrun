@@ -625,7 +625,8 @@ public actor EmbeddedPackageService: RuntimeService {
                 return .store(
                     "uninstallDataUnverified",
                     message: "APKRun couldn't confirm the requested app-data outcome for \(packageID.rawValue).",
-                    remediation: "Check whether the app's data is present in Android before retrying or reinstalling."
+                    remediation:
+                        "Inspect Android's installed-package list with `apkrun list --all`. To discard APKRun's record and stored APKs without asserting an Android app-data outcome, run `apkrun uninstall \(packageID.rawValue) --forget`."
                 )
             case .operationInProgress:
                 return .store(

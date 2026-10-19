@@ -530,8 +530,13 @@ public actor PackageStore {
 
         let mutationLock = try await acquireLock(at: mutationLockURL)
         defer { _ = Darwin.close(mutationLock) }
+        try reloadJournalState()
+        guard !isReadOnly else { throw PackageStoreFailure.journalUnreadable }
         try reloadRecordsPreservingImportDirectories()
         guard records[packageID] != nil else { throw PackageStoreFailure.packageNotFound }
+
+        let resolvesUnverifiedUninstall = !ambiguousUninstallTransactionIDs(for: packageID).isEmpty
+
         let transaction = Self.makeTransactionID(at: clock())
         let directory = directories[packageID] ?? directoryName(for: packageID)
         try append(
@@ -550,23 +555,15 @@ public actor PackageStore {
                 ticket: nil,
                 keepData: nil,
                 step: nil,
-                reason: nil
+                reason: resolvesUnverifiedUninstall ? Self.forgetResolutionIntent : nil
             )
         )
         try injectFault(kind: "forget", step: "begin")
-        let source = packagesDirectory.appendingPathComponent(directory, isDirectory: true)
-        let target = trashDirectory.appendingPathComponent("\(transaction)-package", isDirectory: true)
-        if fileManager.fileExists(atPath: source.path) {
-            try moveItem(source, to: target)
+        if resolvesUnverifiedUninstall {
+            try resolveAmbiguousUninstallTransactions(for: packageID)
+            try injectFault(kind: "forget", step: "uninstallOutcomesResolved")
         }
-        try appendStep(transaction, kind: "forget", step: "filesRemoved")
-        try injectFault(kind: "forget", step: "filesRemoved")
-        try appendStep(transaction, kind: "forget", step: "recordRemoved")
-        records[packageID] = nil
-        directories[packageID] = nil
-        try injectFault(kind: "forget", step: "recordRemoved")
-        try appendTerminal(transaction, op: "commit")
-        try purgeTrash()
+        try finishForget(transaction: transaction, packageID: packageID, directory: directory, injectFaults: true)
     }
 
     /// Resolves guest-dependent transactions left by an interrupted process.
@@ -577,11 +574,7 @@ public actor PackageStore {
         try requireWritable()
         let mutationLock = try await acquireLock(at: mutationLockURL)
         defer { _ = Darwin.close(mutationLock) }
-        let journal = try withJournalLock { try readJournal() }
-        sequence = journal.entries.last?.seq ?? 0
-        journalIssue = journal.issue
-        isReadOnly = journal.isReadOnly
-        transactions = Self.transactions(from: journal.entries)
+        try reloadJournalState()
         try reloadRecordsPreservingImportDirectories()
         guard !isReadOnly else { throw PackageStoreFailure.journalUnreadable }
         guard let runtimeAccess else {
@@ -650,9 +643,11 @@ public actor PackageStore {
                     try appendAbort(transactionID, reason: "packageStillInstalled")
                 } else {
                     // PackageManager absence cannot establish whether app data survived an
-                    // interrupted uninstall. Keep the transaction, record, and APKs intact
-                    // until the user can inspect Android and resolve the ambiguous outcome.
-                    throw PackageStoreFailure.uninstallDataUnverified(packageID)
+                    // interrupted uninstall. Keep the transaction, record, and APKs intact.
+                    // Continue other recovery so PackageManager inventory remains inspectable;
+                    // an explicit host-side forget can close this transaction without claiming
+                    // the app-data outcome.
+                    continue
                 }
 
             case ("uninstall", "guestUninstalled"):
@@ -1279,24 +1274,87 @@ public actor PackageStore {
                     try appendTerminal(transaction, op: "commit")
                 }
             case "forget":
-                let trash = trashDirectory.appendingPathComponent("\(transaction)-package", isDirectory: true)
-                if fileManager.fileExists(atPath: trash.path) || state.lastStep != nil {
-                    if state.lastStep != "filesRemoved" && state.lastStep != "recordRemoved" {
-                        try appendStep(transaction, kind: kind, step: "filesRemoved")
-                    }
-                    records[packageID] = nil
-                    directories[packageID] = nil
-                    if state.lastStep != "recordRemoved" {
-                        try appendStep(transaction, kind: kind, step: "recordRemoved")
-                    }
-                    try appendTerminal(transaction, op: "commit")
+                if state.begin.reason == Self.forgetResolutionIntent {
+                    // The durable begin records the user's host-side choice before earlier
+                    // ambiguous uninstall transactions are closed. Resume either half after a
+                    // crash, then finish removing the APKRun record and artifacts.
+                    try resolveAmbiguousUninstallTransactions(for: packageID)
+                    try finishForget(
+                        transaction: transaction,
+                        packageID: packageID,
+                        directory: directory,
+                        injectFaults: false
+                    )
                 } else {
-                    try appendAbort(transaction, reason: "interruptedBeforeFileMove")
+                    let trash = trashDirectory.appendingPathComponent("\(transaction)-package", isDirectory: true)
+                    if fileManager.fileExists(atPath: trash.path) || state.lastStep != nil {
+                        try finishForget(
+                            transaction: transaction,
+                            packageID: packageID,
+                            directory: directory,
+                            injectFaults: false
+                        )
+                    } else {
+                        try appendAbort(transaction, reason: "interruptedBeforeFileMove")
+                    }
                 }
             default:
                 continue
             }
         }
+        try purgeTrash()
+    }
+
+    private func ambiguousUninstallTransactionIDs(for packageID: PackageID) -> [String] {
+        transactions
+            .filter { _, transaction in
+                transaction.begin.kind == "uninstall"
+                    && transaction.begin.package == packageID.rawValue
+                    && transaction.lastStep == "guestUninstallRequested"
+            }
+            .sorted { lhs, rhs in lhs.value.begin.seq < rhs.value.begin.seq }
+            .map(\.key)
+    }
+
+    private func resolveAmbiguousUninstallTransactions(for packageID: PackageID) throws {
+        for transaction in ambiguousUninstallTransactionIDs(for: packageID) {
+            // Forget is an explicit host-side choice. Aborting the incomplete transaction
+            // records that choice without claiming whether Android retained the app data.
+            try appendAbort(transaction, reason: "userChoseForgetWithUnverifiedUninstallOutcome")
+        }
+    }
+
+    private func finishForget(
+        transaction: String,
+        packageID: PackageID,
+        directory: String,
+        injectFaults: Bool
+    ) throws {
+        let source = packagesDirectory.appendingPathComponent(directory, isDirectory: true)
+        let target = trashDirectory.appendingPathComponent("\(transaction)-package", isDirectory: true)
+        let sourceExists = fileManager.fileExists(atPath: source.path)
+        let targetExists = fileManager.fileExists(atPath: target.path)
+        guard !(sourceExists && targetExists) else { throw PackageStoreFailure.io }
+        if sourceExists {
+            try moveItem(source, to: target)
+        }
+
+        let lastStep = transactions[transaction]?.lastStep
+        if lastStep != "filesRemoved" && lastStep != "recordRemoved" {
+            try appendStep(transaction, kind: "forget", step: "filesRemoved")
+            if injectFaults {
+                try injectFault(kind: "forget", step: "filesRemoved")
+            }
+        }
+        records[packageID] = nil
+        directories[packageID] = nil
+        if transactions[transaction]?.lastStep != "recordRemoved" {
+            try appendStep(transaction, kind: "forget", step: "recordRemoved")
+            if injectFaults {
+                try injectFault(kind: "forget", step: "recordRemoved")
+            }
+        }
+        try appendTerminal(transaction, op: "commit")
         try purgeTrash()
     }
 
@@ -1370,6 +1428,14 @@ public actor PackageStore {
         try withJournalLock {
             try appendLocked(entry)
         }
+    }
+
+    private func reloadJournalState() throws {
+        let journal = try withJournalLock { try readJournal() }
+        sequence = journal.entries.last?.seq ?? 0
+        journalIssue = journal.issue
+        isReadOnly = journal.isReadOnly
+        transactions = Self.transactions(from: journal.entries)
     }
 
     private func appendLocked(_ entry: JournalEntry) throws {
@@ -2064,6 +2130,7 @@ public actor PackageStore {
     private static let importSpaceReserve: Int64 = 2 * 1_024 * 1_024 * 1_024
     private static let importTicketLifetime: TimeInterval = 60 * 60
     private static let copyChunkSize = 1_024 * 1_024
+    private static let forgetResolutionIntent = "resolvesUnverifiedUninstall"
 
     private static func availableHostSpace(_ directory: URL) -> Int64 {
         guard let attributes = try? FileManager.default.attributesOfFileSystem(forPath: directory.path),

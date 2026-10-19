@@ -428,14 +428,15 @@ For each unfinished transaction, the last journaled step decides the action.
 
 | Kind | Last step | Recovery |
 |---|---|---|
-| any | `begin` only | abort. Files were not moved yet (guest kinds), or check the target slot's `setDigest` (host kinds: if the move happened, roll forward) |
+| any | `begin` only | abort. Files were not moved yet (guest kinds), or check the target slot's `setDigest` (host kinds: if the move happened, roll forward). Exception: a `forget` begin with `reason=resolvesUnverifiedUninstall` records a durable user choice and always rolls forward |
+| `forget` with `reason=resolvesUnverifiedUninstall` | any step | abort matching pending uninstall requests with reason `userChoseForgetWithUnverifiedUninstallOutcome`, then finish moving the package directory, removing the record, and committing. The begin is written before resolving the uninstall requests, so recovery can complete after a crash at either point |
 | `firstInstall`, `reinstall`, `update` | `guestCommitRequested` | **post-boot**: read the installed version from Android (`GetPackageMetadata`, or `QueryPackage` on stock images). If it equals the target versionCode (and, for `reinstall`, `lastUpdateTime` is after `begin`) → continue as if `guestInstalled`. Otherwise → abort, keep `staged/` for a later retry, delete the `incoming/` set of a first install, and tell the user "Installing ‹App› was interrupted" with a Retry action |
 | `firstInstall`, `reinstall`, `update` | `guestInstalled` | roll forward now: promote files (idempotent, see below), write metadata, commit. Android facts are refreshed after boot |
 | `update` | `filesPromoted` or partway | finish the renames. Identify slots by `setDigest`: the set with digest `to` belongs in `current/`, the set with digest `from` in `previous/`. Any other set in these slots goes to `.trash` |
 | `rollback` | `guestRollbackRequested` | post-boot: read the installed version. `from` version still installed → abort and report "Rollback of ‹App› did not happen" (the package stays in the failed-update state, [update-system.md](update-system.md) §8). Previous version installed → continue |
 | `rollback` | `guestRolledBack` | finish `filesRestored` by `setDigest`, then metadata and commit |
 | `rollback` (confirmed data-loss fallback, §7.3) | `guestUninstallRequested` or later, before `guestRolledBack` | post-boot: query Android. The package is absent → continue with the first install of `previous/`, because the user already confirmed the data loss. The `from` version is still installed → abort as above |
-| `uninstall` | `guestUninstallRequested` | post-boot: query Android. Still installed → abort (the package is `installed` again). Absent → continue |
+| `uninstall` | `guestUninstallRequested` | post-boot: query Android. Still installed → abort (the package is `installed` again). Absent → keep the transaction pending; PackageManager absence cannot establish the requested app-data outcome. Continue recovering other transactions and allow Android inventory inspection |
 | `uninstall` | `guestUninstalled` | roll forward host cleanup: finish `filesRemoved`, write `metadataWritten` when keeping data or `recordRemoved` otherwise, then commit. Android has already confirmed removal, so do not issue another uninstall request |
 | `uninstall`, `forget`, `discardStaged` | a file step | roll forward |
 | `stage` | `begin` | if `staged/` has the new digest → roll forward, else abort and delete the `incoming/` set |
@@ -600,6 +601,9 @@ uninstall(id, options)
 ```
 
 - `Uninstall` answers `NOT_FOUND` when Android no longer has the package. The store treats that as success.
+- On the stock ADB channel, a failed uninstall followed by `QueryPackage == absent` does not establish whether Android kept or deleted app data. Abort the host transaction, keep its package record, and report `store.uninstallDataUnverified` for either requested outcome.
+- If the host crashes after the uninstall request but before recording `guestUninstalled`, the same ambiguity applies when the package is absent at recovery. Keep the journal request pending and retain the record and APK slots. Recovery continues so `apkrun list --all` can inspect PackageManager inventory.
+- To discard APKRun's host record and APKs after inspecting Android, run `apkrun uninstall <package> --forget`. This writes a durable forget intent before closing any pending ambiguous uninstall with an abort reason that records the user's host-side choice. If APKRun crashes during this sequence, the next store open finishes the forget; it does not claim or change whether Android retained app data.
 - If the runtime cannot start (for example it is not provisioned, or it is in a boot loop), the dialog offers **Remove from APKRun**, which runs `forget`. The package may stay installed in Android, and it shows up as unmanaged after the next successful boot. `apkrun uninstall --forget` does the same.
 - `uninstalledKeepingData` records are listed under "Apps with kept data" in Settings → Storage with the actions **Reinstall…** (asks for the APK, and must match the recorded signer) and **Delete data** (`Uninstall` without `keep_data` for the leftover data, then `forget`).
 
@@ -757,6 +761,7 @@ public enum StoreFailure: APKRunError {
     case signerMismatch
     // operations
     case packageNotFound(PackageID)
+    case uninstallDataUnverified(PackageID)
     case operationInProgress(PackageID)
     case packageInUse(PackageID)
     case guestInstallFailed(InstallFailureKind, androidStatus: Int32, legacyStatus: String?, message: String)

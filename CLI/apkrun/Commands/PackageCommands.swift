@@ -86,7 +86,12 @@
         @Flag(name: .long, help: "Keep the app's Android data for a later reinstall.")
         var keepData = false
 
-        @Flag(name: .long, help: "Forget APKRun's package record without contacting Android.")
+        @Flag(
+            name: .long,
+            help:
+                "Forget APKRun's record and stored APKs without contacting Android or "
+                + "determining the app-data outcome."
+        )
         var forget = false
 
         @Flag(name: .long, help: "Uninstall without asking for confirmation.")
@@ -105,7 +110,7 @@
             let request = RuntimeUninstallPackageRequest(packageID: packageID, options: options)
             try PackageCommandSupport.confirm(
                 forget
-                    ? "Forget APKRun's record and stored APKs for \(packageID.rawValue)?"
+                    ? "Forget APKRun's record and stored APKs for \(packageID.rawValue)? This does not determine or change Android app data."
                     : "Uninstall \(packageID.rawValue)\(keepData ? " and keep its data" : " and delete its data")?",
                 yes: yes
             )

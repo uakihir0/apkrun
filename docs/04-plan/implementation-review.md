@@ -21903,3 +21903,47 @@ clear after its cleanup path. If RuntimeSupervisor later retains a failed
 state, reset must clear that state too. Full XPC acceptance and live Android
 checks remain outstanding.
 
+## IR-1385: Send runtime restart as one control request
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #032 |
+| Affected documents | [runtime-api.md](../03-reference/runtime-api.md) §§2, 5; [cli.md](../02-design/cli.md) §4.1; [M04](issues/M04-daemon-and-guest-protocol.md) #032 |
+
+**Choices.** Add `restartRuntime` in API 1.6 as one authenticated request.
+RuntimeHost reserves the transition before its first suspension, stops the
+current runtime, and starts it again before returning the final status.
+Concurrent start, stop, or reset requests are rejected while the restart is
+reserved. Concurrent start requests still join the existing boot path.
+Keep the CLI confirmation prompt because status does not report active
+sessions. Do not automatically replay a transport failure.
+
+**Reason.** The previous CLI implementation made separate stop and start
+requests. A client disconnect or interruption after stop left Android down.
+Moving both phases into the daemon removes that client-side gap and keeps
+other lifecycle requests from interleaving between the phases. A complete
+operation store and event hub do not exist yet, so this increment returns
+status synchronously and updates the current API reference to describe the
+implemented first cut. The eventual `OperationHandle`, progress/result
+events, and cancellation behavior remain required by #032 and are not claimed
+as complete.
+
+**Verification.** Focused RuntimeAPI tests cover API 1.6 and request
+round-tripping. RuntimeClient tests assert exactly one restart request, no
+stop/start requests, no replay after transport failure, and timeout plus
+connection invalidation. RuntimeHost tests verify that the daemon reaches the
+restart start phase and reports its startup failure with Android stopped when
+no image is installed. Authorization tests cover the control-client allowlist.
+Swift format lint and `git diff --check` pass.
+
+**Risk for review.** The synchronous reply waits for Android boot and does not
+provide progress, operation history, or cancellation. The client uses the
+largest supported first-boot deadline as a hard upper bound because the
+daemon does not expose the effective timeout; a normal runtime timeout should
+finish the request much earlier. The host test cannot exercise a successful
+VM restart without a configured image, so the ready-to-ready path remains
+unverified locally. The prompt is unconditional until active session state is
+exposed. Full anonymous-XPC acceptance and a live Android restart remain
+outstanding.
+

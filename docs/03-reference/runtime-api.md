@@ -98,7 +98,7 @@ apkrund sets the requirement on each anonymous listener with `NSXPCListener.setC
 
 ```swift
 public enum RuntimeAPI {
-    public static let version = APIVersion(major: 1, minor: 5)       // the control and wrapper protocols
+    public static let version = APIVersion(major: 1, minor: 6)       // the control and wrapper protocols
     public static let wrapperMajors: [Int] = [1]                     // served on the wrapper endpoint: N and N−1
     public static let brokerRevision = 2                              // additive-only broker protocol
     public static let maintenanceRevision = 1                         // additive-only MaintenanceControl
@@ -113,6 +113,7 @@ public struct APIVersion: Codable, Sendable, Comparable { public var major: Int;
 - Version `1.3` bounds control admission to 8 live connections and 64 requests in flight per connection. A broker that cannot issue a control connection rejects the request with `busy`; an over-limit operation returns `runtime.busy`. Requests from API 1.0–1.2 clients use the already-defined `hostShuttingDown` rejection when the control connection limit is reached, because those clients cannot decode the 1.3 `busy` case.
 - Version `1.4` adds `listPackages` and `packageInfo` to the authenticated control endpoint. Both requests carry the standard versioned header and return typed result-or-error replies. Package queries never start Android; `.all` uses a live inventory only when Android is already ready, otherwise the saved inventory.
 - Version `1.5` adds `resetRuntime` to the authenticated control endpoint. Its versioned request clears a runtime failure and the boot-loop guard, returns the current runtime status, and does not delete Android data.
+- Version `1.6` adds `restartRuntime` to the authenticated control endpoint. One versioned request stops and starts Android and returns the final runtime status.
 - `components.json` of a release records `"runtimeAPI": { "current": "M.m", "wrapperMajors": [N−1, N] }` ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.3). A major is dropped only as that section allows.
 - The #031 `RuntimeHostStatus` includes optional `guestAgentState` and `guestAgentProtocolVersion` fields. Clients accept their absence as `nil`.
 
@@ -506,6 +507,7 @@ Exceptions to the default deadlines:
 | `hello`, `requestEndpoint` | 5 s |
 | `requestApproval` | 10 min |
 | `startRuntime` | the request's `timeoutMs`, default `runtime.bootTimeoutSeconds` + 30 s |
+| `restartRuntime` | the §3.5 stop deadline, then the configured start deadline. RuntimeClient caps its wait at the maximum supported first-boot timeout + 30 s + 40 s stop + 5 s grace (3675 s) when the effective timeout is unknown |
 | `openSession` | 30 s after `acquiringDisplay` is reached; a wait for the runtime or a package transaction is reported through session states, not by the reply (§6.2) |
 | `launch` | the launcher must connect within 20 s; then the session's own timeouts |
 | `checkSelfUpdate` | 30 s |
@@ -516,7 +518,7 @@ Exceptions to the default deadlines:
 | `prepareForHostUpdate` | 3 min (apkrund waits up to 2 min for store transactions) |
 | `restartForUpdate`, `stopRuntime` in `restartPending` | 60 s |
 
-The client waits the deadline plus 5 s. Then it fails the call with `runtime.requestTimedOut(operation:)` and invalidates the connection (§3.5).
+The client waits the deadline plus 5 s. Then it fails the call with `runtime.requestTimedOut(operation:)` and invalidates the connection (§3.5). For `restartRuntime`, the current client does not know the daemon's effective boot timeout, so it uses the maximum supported first-boot timeout, stop deadline, and 5 s grace as a hard upper bound. The daemon's own boot timeout normally ends the request sooner. A client timeout does not cancel the daemon-side restart; check `runtimeStatus` before retrying.
 
 ### 4.7 Long operations and cancellation
 
@@ -541,6 +543,7 @@ public enum OperationKind: String, Codable, Sendable {
 - Progress and the result arrive on the `operations` topic: `OperationEvent.started`, `.progress`, `.finished` (§16.3). Domain topics carry their own events too (for example `PackageChange.operationProgress`).
 - Operations survive the connection that started them. The CLI sends `cancel` on `SIGINT` ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §8.3). A dropped connection cancels nothing.
 - `apkrund` keeps running operations and the last 50 finished ones in memory. They are not persisted.
+- `runtimeRestart` remains reserved in `OperationKind` for the eventual long-operation form. API 1.6's current `restartRuntime` request is synchronous and does not create an `OperationHandle`.
 
 **Operation tracking** (control and wrapper endpoints):
 
@@ -667,7 +670,7 @@ Topics, payloads, coalescing, and ordering are in §16. Summary:
 | `runtimeInfo` | `RuntimeInfoRequest` → `RuntimeInfo` | C | Q (15 s with `resources`) | — | [../02-design/cli.md](../02-design/cli.md) §4.1 (`apkrun info`), runtime-daemon §8.6 |
 | `startRuntime` | `StartRuntimeRequest` → `RuntimeStatus` | C | W | `runtime.stateChanged`, `runtime.bootProgress` | [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.1, §3.2 |
 | `stopRuntime` | `StopRuntimeRequest` → `OperationHandle` (`runtimeStop`) | C | L | `runtime.stateChanged`, `sessions.ended`, `operations.*` | [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.5 |
-| `restartRuntime` | `RestartRuntimeRequest` → `OperationHandle` (`runtimeRestart`) | C | L | as `stopRuntime`, then as `startRuntime` | [../02-design/cli.md](../02-design/cli.md) §4.1 |
+| `restartRuntime` | `RestartRuntimeRequest` → `RuntimeStatus` | C | W | — (event delivery remains outstanding under #032) | [../02-design/cli.md](../02-design/cli.md) §4.1 |
 | `resetRuntime` | `RuntimeResetControlRequest` → `RuntimeStatus` | C | U | `runtime.stateChanged`, `runtime.bootLoopGuardChanged` | [../01-architecture/state-machines.md](../01-architecture/state-machines.md) §2, [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.6 |
 | `resetAndroid` | `ResetAndroidRequest` → `OperationHandle` (`resetAndroid`) | C | L | `runtime.*`, `packages.stateChanged` (`needsReinstall(.userdataReset)`), `operations.*` | [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §9.5 |
 | `setup` | `SetupRequest` → `OperationHandle` (`setup`) | C | L | `runtime.provisioningChanged`, `operations.*` | [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §9 |
@@ -691,7 +694,7 @@ public struct StopRuntimeRequest: Codable, Sendable {
 }
 
 public struct RestartRuntimeRequest: Codable, Sendable {
-    public var force: Bool
+    public let header: APIRequestHeader
 }
 ```
 
@@ -700,7 +703,7 @@ public struct RestartRuntimeRequest: Codable, Sendable {
 - Progress arrives on the `runtime` topic (`bootProgress`, coalesced). The reply carries the final `RuntimeStatus`. A boot failure returns the `RuntimeFailure` of the boot (`runtime.bootTimedOut`, `runtime.bootStalled`, …).
 - `stopRuntime` without `force` refuses at once, before a handle, with `runtime.busy(activities:)` when sessions are open or activities other than idle-neutral ones exist. The client asks the user ("Stop Android and close 2 apps?", "Android is installing ‹App›. Stop anyway?") and repeats with `force = true`. With `force`, sessions end with `.runtimeStopped` and the stop reason is `.user`.
 - `stopRuntime` in the host state `restartPending` has a 60 s deadline. When the stop is the last activity, apkrund exits 0 after the reply ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.6).
-- `restartRuntime` is `stopRuntime` followed by `ensureReady` (reason as for `startRuntime`) under one operation ID. Its result is the final `RuntimeStatus` (`OperationOutput.runtime`). A cancel during the stop is `notCancellable`. A cancel after the stop leaves Android stopped.
+- The current `restartRuntime` implementation stops Android and calls `ensureReady` (reason as for `startRuntime`) within one daemon lifecycle reservation, then returns the final `RuntimeStatus`. The CLI confirms before sending the request. This first cut is a synchronous control request; it does not emit progress or result events. The long-running `OperationHandle`, event delivery, and cancellation contract described by the eventual API remain outstanding under #032.
 - `resetRuntime` carries the standard API-version and client-kind header. It clears a `failed` runtime state and the boot-loop guard, returns the current `RuntimeStatus`, and is a no-op when neither condition is present.
 
 ### 5.3 Status DTOs

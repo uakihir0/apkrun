@@ -1,9 +1,287 @@
-import Foundation
+@preconcurrency import Foundation
 
-/// The in-process and XPC-facing runtime operations used by clients.
-///
-/// RuntimeAPI intentionally owns wire-compatible value types instead of importing package-store
-/// or runtime implementation modules. RuntimeHost adapts these values to its internal models.
+/// The major and minor version used by RuntimeAPI compatibility checks.
+public struct APIVersion: Codable, Comparable, Equatable, Sendable {
+    /// Version 1.0 introduces the authenticated control endpoint.
+    public static let current = APIVersion(major: 1, minor: 0)
+
+    /// The incompatible protocol generation.
+    public let major: Int
+    /// An additive change within the generation.
+    public let minor: Int
+
+    /// Creates a protocol version.
+    public init(major: Int, minor: Int) {
+        self.major = major
+        self.minor = minor
+    }
+
+    /// Orders versions by major generation, then by additive minor version.
+    public static func < (lhs: Self, rhs: Self) -> Bool {
+        lhs.major == rhs.major ? lhs.minor < rhs.minor : lhs.major < rhs.major
+    }
+}
+
+/// The kind of APKRun process requesting an XPC endpoint.
+public enum RuntimeClientKind: String, Codable, Equatable, Sendable {
+    /// APKRun.app.
+    case app
+    /// The menu bar app.
+    case menuBar
+    /// The `apkrun` command line tool.
+    case cli
+    /// The generic APKRun launcher.
+    case launcher
+    /// A generated wrapper launcher.
+    case wrapper
+}
+
+/// A version and identity announcement sent to the public broker.
+public struct RuntimeHelloRequest: Codable, Equatable, Sendable {
+    /// The client class used to choose the capability endpoint.
+    public let clientKind: RuntimeClientKind
+    /// The client's bundle or code identifier. This claim does not authorize access.
+    public let claimedIdentity: String
+    /// The client's RuntimeAPI version.
+    public let apiVersion: APIVersion
+    /// The client marketing version, when present.
+    public let clientVersion: String?
+    /// The client build number, when present.
+    public let clientBuild: Int?
+
+    /// Creates a broker hello request.
+    public init(
+        clientKind: RuntimeClientKind,
+        claimedIdentity: String,
+        apiVersion: APIVersion,
+        clientVersion: String? = nil,
+        clientBuild: Int? = nil
+    ) {
+        self.clientKind = clientKind
+        self.claimedIdentity = claimedIdentity
+        self.apiVersion = apiVersion
+        self.clientVersion = clientVersion
+        self.clientBuild = clientBuild
+    }
+}
+
+/// The server facts returned by the broker before it grants an endpoint.
+public struct RuntimeHelloReply: Codable, Equatable, Sendable {
+    /// The APKRun marketing version.
+    public let runtimeVersion: String
+    /// The APKRun build number.
+    public let runtimeBuild: Int
+    /// The RuntimeAPI version implemented by the server.
+    public let apiVersion: APIVersion
+    /// The daemon state at the time of the request.
+    public let hostState: String
+
+    /// Creates a hello reply.
+    public init(runtimeVersion: String, runtimeBuild: Int, apiVersion: APIVersion, hostState: String) {
+        self.runtimeVersion = runtimeVersion
+        self.runtimeBuild = runtimeBuild
+        self.apiVersion = apiVersion
+        self.hostState = hostState
+    }
+}
+
+/// The first daemon version exposes only the authenticated control endpoint.
+public enum RuntimeEndpointKind: String, Codable, Equatable, Sendable {
+    /// APKRun.app, menu bar, CLI, and launcher control surface.
+    case control
+}
+
+/// Requests one authenticated endpoint from the broker.
+public struct RuntimeEndpointRequest: Codable, Equatable, Sendable {
+    /// The endpoint requested.
+    public let kind: RuntimeEndpointKind
+    /// The client type, checked again on the endpoint request.
+    public let clientKind: RuntimeClientKind
+    /// The client's code identifier, used only to select an allowed endpoint.
+    public let claimedIdentity: String
+    /// The client's RuntimeAPI version.
+    public let apiVersion: APIVersion
+
+    /// Creates an endpoint request.
+    public init(
+        kind: RuntimeEndpointKind = .control,
+        clientKind: RuntimeClientKind,
+        claimedIdentity: String,
+        apiVersion: APIVersion
+    ) {
+        self.kind = kind
+        self.clientKind = clientKind
+        self.claimedIdentity = claimedIdentity
+        self.apiVersion = apiVersion
+    }
+}
+
+/// A public broker rejection reason. The protected endpoint is the authorization boundary.
+public enum RuntimeEndpointRejection: String, Codable, Equatable, Sendable {
+    /// The broker does not serve this client identity.
+    case unknownClient
+    /// The endpoint request was malformed or unsupported.
+    case malformedRequest
+    /// The daemon is draining requests before shutdown.
+    case hostShuttingDown
+}
+
+/// The broker's JSON response; the endpoint travels in the adjacent XPC reply argument.
+public enum RuntimeEndpointReply: Codable, Equatable, Sendable {
+    /// The broker returned the requested protected endpoint.
+    case granted
+    /// No endpoint was returned.
+    case rejected(RuntimeEndpointRejection)
+}
+
+/// The RuntimeHost status snapshot served by the control endpoint.
+public struct RuntimeHostStatus: Codable, Equatable, Sendable {
+    /// `starting`, `running`, `degraded`, `shuttingDown`, or `stopped`.
+    public let hostState: String
+    /// `stopped`, `booting(<phase>)`, `ready`, `stopping`, or `failed`.
+    public let runtimeState: String
+    /// The estimated boot progress, from 0 to 0.95 while booting.
+    public let bootProgress: Double?
+    /// The startup step that failed, when the daemon is serving in a degraded state.
+    public let startupFailureStep: Int?
+    /// The stable error-catalog code for the degraded startup step.
+    public let startupFailureCode: String?
+    /// Whether recent daemon exits activate the automatic boot guard.
+    public let crashLoopActive: Bool
+    /// The current daemon process ID.
+    public let daemonPID: Int32
+    /// The installed image version, when available.
+    public let imageVersion: String?
+
+    /// Creates a status snapshot.
+    public init(
+        hostState: String,
+        runtimeState: String,
+        bootProgress: Double?,
+        startupFailureStep: Int?,
+        startupFailureCode: String?,
+        crashLoopActive: Bool,
+        daemonPID: Int32,
+        imageVersion: String?
+    ) {
+        self.hostState = hostState
+        self.runtimeState = runtimeState
+        self.bootProgress = bootProgress
+        self.startupFailureStep = startupFailureStep
+        self.startupFailureCode = startupFailureCode
+        self.crashLoopActive = crashLoopActive
+        self.daemonPID = daemonPID
+        self.imageVersion = imageVersion
+    }
+}
+
+/// Identifies and versions a control request.
+public struct APIRequestHeader: Codable, Equatable, Sendable {
+    /// The client's RuntimeAPI version.
+    public let apiVersion: APIVersion
+    /// A stable ID for log correlation.
+    public let operationID: UUID
+    /// The client identity established by its endpoint listener.
+    public let clientKind: RuntimeClientKind
+
+    /// Creates a request header.
+    public init(
+        apiVersion: APIVersion = .current,
+        operationID: UUID = UUID(),
+        clientKind: RuntimeClientKind
+    ) {
+        self.apiVersion = apiVersion
+        self.operationID = operationID
+        self.clientKind = clientKind
+    }
+}
+
+/// A status request.
+public struct RuntimeStatusRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+
+    /// Creates a status request.
+    public init(header: APIRequestHeader) {
+        self.header = header
+    }
+}
+
+/// Starts Android on demand.
+public struct StartRuntimeRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+
+    /// Creates a start request.
+    public init(header: APIRequestHeader) {
+        self.header = header
+    }
+}
+
+/// Stops Android while leaving the daemon available.
+public struct StopRuntimeRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+
+    /// Creates a stop request.
+    public init(header: APIRequestHeader) {
+        self.header = header
+    }
+}
+
+/// A safe, catalog-backed error summary for the first control operations.
+public struct RuntimeControlError: Codable, Equatable, Sendable {
+    /// The qualified error-catalog code.
+    public let code: String
+    /// A short user-facing summary.
+    public let message: String
+
+    /// Creates a control error.
+    public init(code: String, message: String) {
+        self.code = code
+        self.message = message
+    }
+}
+
+/// A control endpoint reply. Exactly one of `status` and `error` is present.
+public struct RuntimeControlReply: Codable, Equatable, Sendable {
+    /// The runtime snapshot for a successful operation.
+    public let status: RuntimeHostStatus?
+    /// A safe error summary for a rejected or failed operation.
+    public let error: RuntimeControlError?
+
+    /// Creates a successful control reply.
+    public init(status: RuntimeHostStatus) {
+        self.status = status
+        error = nil
+    }
+
+    /// Creates an error control reply.
+    public init(error: RuntimeControlError) {
+        status = nil
+        self.error = error
+    }
+}
+
+/// The public broker interface. It does not expose runtime capabilities.
+@objc public protocol RuntimeBrokerXPC {
+    /// Identifies the daemon without rejecting a version mismatch.
+    func hello(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns only an anonymous endpoint protected by a code-signing requirement.
+    func requestEndpoint(_ request: Data, reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void)
+}
+
+/// The first authenticated control endpoint operations implemented by apkrund.
+@objc public protocol RuntimeControlXPC {
+    /// Returns runtime and daemon status.
+    func runtimeStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Starts Android and waits for it to become ready.
+    func startRuntime(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Stops Android but leaves the daemon running.
+    func stopRuntime(_ request: Data, reply: @escaping (Data) -> Void)
+}
+
+/// Runtime package operations. Package identity is resolved by the runtime before launch.
 public protocol RuntimePackageService: Sendable {
     /// Copies and inspects APK files, returning a preview ticket without starting Android.
     func importPackage(

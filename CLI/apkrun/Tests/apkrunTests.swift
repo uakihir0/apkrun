@@ -76,6 +76,47 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
     }
 }
 
+#if APKRUN_EMBEDDED_RUNTIME
+    @Test func developmentDisplayCommandsParseAddInEitherOptionOrder() throws {
+        #expect(
+            try DevDisplaysInputParser.parse("add --size 960x1700 --dpi 320")
+                == .add(width: 960, height: 1700, dpi: 320)
+        )
+        #expect(
+            try DevDisplaysInputParser.parse("add --dpi 240 --size 800x1200")
+                == .add(width: 800, height: 1200, dpi: 240)
+        )
+    }
+
+    @Test func developmentDisplayCommandsParseListRemoveHelpAndExit() throws {
+        #expect(try DevDisplaysInputParser.parse("list") == .list)
+        #expect(try DevDisplaysInputParser.parse("remove 15") == .remove(scanout: 15))
+        #expect(try DevDisplaysInputParser.parse("help") == .help)
+        #expect(try DevDisplaysInputParser.parse("quit") == .quit)
+        #expect(try DevDisplaysInputParser.parse("exit") == .quit)
+        #expect(try DevDisplaysInputParser.parse("  ") == .empty)
+    }
+
+    @Test func developmentDisplayCommandsRejectMalformedInput() {
+        for input in [
+            "add",
+            "add --size 640x800",
+            "add --size 500x800 --dpi 320",
+            "add --size 640x800 --dpi 119",
+            "add --size 640x800 --dpi 320 --dpi 320",
+            "list extra",
+            "remove 0",
+            "remove 16",
+            "remove one",
+            "unknown",
+        ] {
+            #expect(throws: (any Error).self) {
+                try DevDisplaysInputParser.parse(input)
+            }
+        }
+    }
+#endif
+
 @Test func builtInOutputRequestsAreLimitedToSupportedCompletionShells() {
     #expect(APKRunCommand.isBuiltInOutputRequest(["--help"]))
     #expect(APKRunCommand.isBuiltInOutputRequest(["-help"]))

@@ -138,8 +138,11 @@
                     do {
                         try await packageService.attachRuntime(context: context)
                         return packageService
-                    } catch {
+                    } catch let error as RuntimeWireError {
                         onEvent(.warning("package inventory refresh failed (\(error.code)); continuing Android boot"))
+                        return nil
+                    } catch {
+                        onEvent(.warning("package inventory refresh failed; continuing Android boot"))
                         return nil
                     }
                 },

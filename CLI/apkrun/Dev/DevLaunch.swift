@@ -2,6 +2,7 @@
     import ArgumentParser
     import Dispatch
     import Foundation
+    import RuntimeAPI
     import RuntimeHost
 
     /// `apkrun dev launch <apk|package>`: boots Android, starts the Guest Agent, launches the package on display 0
@@ -52,6 +53,29 @@
                     options.developerDisplay = session.display
                     options.inputRoute = session.inputRoute
                 }
+                let onRuntimeReady:
+                    (
+                        @Sendable (DevelopmentRuntimeContext) async throws -> (
+                            any RuntimeSessionService
+                        )?
+                    )?
+                if session == nil {
+                    onRuntimeReady = nil
+                } else {
+                    let service = EmbeddedPackageService()
+                    onRuntimeReady = { context in
+                        do {
+                            try await service.attachRuntime(context: context)
+                            return service
+                        } catch {
+                            Output.writeLogLine(
+                                "warning: package store is unavailable; continuing with the window session",
+                                toStandardError: true
+                            )
+                            return await context.makeSessionService()
+                        }
+                    }
+                }
                 // The session holds stop requests because its window close also sends one.
                 let stops = session?.stops ?? AsyncStream.makeStream(of: Void.self)
                 signal(SIGINT, SIG_IGN)
@@ -72,21 +96,7 @@
                     stopRequests: stops.stream,
                     appCloseRequests: session?.appCloseRequests.stream,
                     preserveWindowOnError: session != nil,
-                    onRuntimeReady: session == nil
-                        ? nil
-                        : { context in
-                            let service = EmbeddedPackageService()
-                            do {
-                                try await service.attachRuntime(context: context)
-                                return service
-                            } catch {
-                                Output.writeLogLine(
-                                    "warning: package store is unavailable; continuing with the window session",
-                                    toStandardError: true
-                                )
-                                return await context.makeSessionService()
-                            }
-                        }
+                    onRuntimeReady: onRuntimeReady
                 ) { event in
                     switch event {
                     case .state(let state):

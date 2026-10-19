@@ -62,8 +62,10 @@ public actor RuntimeHost {
     private var isShuttingDown = false
     private var shutdownCompleted = false
     private var activeLifecycleOperations = 0
+    private var activeRuntimeStarts = 0
     private var isRuntimeStopping = false
     private var isRuntimeResetting = false
+    private var isRuntimeRestarting = false
     private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
     private var shutdownWaiters: [CheckedContinuation<Void, Never>] = []
 
@@ -228,6 +230,15 @@ public actor RuntimeHost {
 
     /// Boots Android on demand. An explicit start is allowed after the crash-loop guard activates.
     public func startRuntime(reason: StartReason = .user) async throws(RuntimeHostError) {
+        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
+            throw .invalidTransition
+        }
+        activeRuntimeStarts += 1
+        defer { activeRuntimeStarts -= 1 }
+        try await startRuntimeBody(reason: reason)
+    }
+
+    private func startRuntimeBody(reason: StartReason) async throws(RuntimeHostError) {
         try await waitForStartupCompletion()
         try beginLifecycleOperation()
         defer { finishLifecycleOperation() }
@@ -308,11 +319,26 @@ public actor RuntimeHost {
 
     /// Stops Android but keeps the daemon available for a later request.
     public func stopRuntime() async throws(RuntimeHostError) {
-        guard !isRuntimeStopping, !isRuntimeResetting else {
+        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, activeRuntimeStarts == 0 else {
             throw .invalidTransition
         }
         isRuntimeStopping = true
         defer { isRuntimeStopping = false }
+        try await stopRuntimeBody()
+    }
+
+    /// Restarts Android under one reserved lifecycle transition.
+    public func restartRuntime(reason: StartReason) async throws(RuntimeHostError) {
+        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, activeRuntimeStarts == 0 else {
+            throw .invalidTransition
+        }
+        isRuntimeRestarting = true
+        defer { isRuntimeRestarting = false }
+        try await stopRuntimeBody()
+        try await startRuntimeBody(reason: reason)
+    }
+
+    private func stopRuntimeBody() async throws(RuntimeHostError) {
         try await waitForStartupCompletion()
         try beginLifecycleOperation()
         defer { finishLifecycleOperation() }
@@ -327,7 +353,7 @@ public actor RuntimeHost {
 
     /// Clears the automatic boot-loop guard without starting Android or deleting user data.
     public func resetRuntime() async throws(RuntimeHostError) -> RuntimeHostStatus {
-        guard !isRuntimeStopping, !isRuntimeResetting else {
+        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, activeRuntimeStarts == 0 else {
             throw .invalidTransition
         }
         isRuntimeResetting = true

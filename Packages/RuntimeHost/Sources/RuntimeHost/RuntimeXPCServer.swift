@@ -1025,6 +1025,7 @@ private protocol VersionedControlRequest: Decodable {
 extension RuntimeStatusRequest: VersionedControlRequest {}
 extension StartRuntimeRequest: VersionedControlRequest {}
 extension StopRuntimeRequest: VersionedControlRequest {}
+extension RestartRuntimeRequest: VersionedControlRequest {}
 extension RuntimeResetControlRequest: VersionedControlRequest {}
 extension RuntimeListPackagesControlRequest: VersionedControlRequest {}
 extension RuntimePackageInfoControlRequest: VersionedControlRequest {}
@@ -1035,6 +1036,7 @@ enum RuntimeControlOperation {
     case runtimeStatus
     case startRuntime
     case stopRuntime
+    case restartRuntime
     case resetRuntime
     case listPackages
     case packageInfo
@@ -1050,7 +1052,7 @@ enum RuntimeControlOperation {
             case .wrapper:
                 false
             }
-        case .startRuntime, .stopRuntime, .resetRuntime:
+        case .startRuntime, .stopRuntime, .restartRuntime, .resetRuntime:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -1169,6 +1171,33 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             }
             do {
                 try await host.stopRuntime()
+                response.send(Self.encode(RuntimeControlReply(status: await host.status())))
+            } catch {
+                response.send(Self.errorReply(for: Self.controlError(for: error)))
+            }
+        }
+    }
+
+    func restartRuntime(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = XPCDataReply(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(Self.errorReply(for: Self.rejection(for: admission).controlError))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .restartRuntime,
+                as: RestartRuntimeRequest.self
+            ) {
+                response.send(Self.errorReply(for: failure))
+                return
+            }
+            do {
+                try await host.restartRuntime(reason: clientKind == .cli ? .cli : .user)
                 response.send(Self.encode(RuntimeControlReply(status: await host.status())))
             } catch {
                 response.send(Self.errorReply(for: Self.controlError(for: error)))

@@ -162,10 +162,13 @@ public final class IOSurfaceLayerView: NSView {
 
     /// The window lost key status. The open gesture, the buttons, the hover, and the keys end on the guest (input.md §4.2,
     /// §7.3). The `cancelAll` that the pointer translator sends releases the keys on the guest.
-    public func focusLost() {
+    public func focusLost(sendCancellation: Bool = true) {
         cancelPending()
         keyTranslator.reset()
-        deliver(translator.focusLost(at: Self.now()))
+        let events = translator.focusLost(at: Self.now())
+        if sendCancellation {
+            deliver(events)
+        }
     }
 
     /// The window is closing. Everything that is open ends on the guest, as with `focusLost` (input.md §4.2).

@@ -15,6 +15,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     private let window: NSWindow
     private let layerView: IOSurfaceLayerView
     private let inputSink: PointerInputSink?
+    private let onFocusChanged: (@MainActor (Bool) -> Void)?
     private let allowsResize: Bool
     private var placeholderView: SessionWindowPlaceholderView?
     private var errorView: SessionWindowErrorView?
@@ -39,6 +40,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         inputSink: PointerInputSink? = nil,
         allowsResize: Bool = true,
         appIcon: NSImage? = nil,
+        onFocusChanged: (@MainActor (Bool) -> Void)? = nil,
         onGeometryChanged:
             ((CGSize, CGFloat, Double, @escaping @MainActor (DisplayResizeOutcome) -> Void) -> Void)? = nil
     ) {
@@ -54,6 +56,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         )
         self.onGeometryChanged = onGeometryChanged
         self.allowsResize = allowsResize
+        self.onFocusChanged = onFocusChanged
         layerView.setInputEnabled(false)
         self.inputSink = inputSink
         let placeholderView = SessionWindowPlaceholderView(
@@ -169,7 +172,15 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
 
     /// The window lost key status, so the open gesture ends on the guest (input.md §4.2).
     public func windowDidResignKey(_ notification: Notification) {
-        layerView.focusLost()
+        // InputRouter owns guest cancellation when this window gives up focus. Reset local event state here without
+        // sending a second cancel batch through the input stream.
+        layerView.focusLost(sendCancellation: false)
+        onFocusChanged?(false)
+    }
+
+    /// The window became key, so Android must focus the task on this window's display.
+    public func windowDidBecomeKey(_ notification: Notification) {
+        onFocusChanged?(true)
     }
 
     /// Applies the new Android mode once the user's resize settles.
@@ -189,7 +200,8 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
 
     /// Ends the input, then stops the frames, and tells the owner that the user closed the window.
     public func windowWillClose(_ notification: Notification) {
-        layerView.cancelAll()
+        // The session route sends cancelAll before its display lease is released.
+        layerView.focusLost(sendCancellation: false)
         geometryDebounce?.cancel()
         geometryDebounce = nil
         consumer?.cancel()

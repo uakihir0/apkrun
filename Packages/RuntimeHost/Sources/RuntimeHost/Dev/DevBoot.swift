@@ -111,6 +111,9 @@ public struct DevelopmentRuntimeContext: Sendable {
     public let supervisor: RuntimeSupervisor
     /// The diagnostics context for this embedded run.
     public let diagnostics: DiagnosticsContext
+    private let developerDisplay: DeveloperDisplay?
+    private let stopSignal: DevBootStopSignal?
+    private let existingSession: EmbeddedRuntimeService?
 
     /// Creates the context passed to one embedded runtime operation.
     public init(
@@ -123,6 +126,49 @@ public struct DevelopmentRuntimeContext: Sendable {
         self.instanceStore = instanceStore
         self.supervisor = supervisor
         self.diagnostics = diagnostics
+        developerDisplay = nil
+        stopSignal = nil
+        existingSession = nil
+    }
+
+    init(
+        image: InstalledImage,
+        instanceStore: InstanceStore,
+        supervisor: RuntimeSupervisor,
+        diagnostics: DiagnosticsContext,
+        developerDisplay: DeveloperDisplay?,
+        stopSignal: DevBootStopSignal,
+        existingSession: EmbeddedRuntimeService?
+    ) {
+        self.image = image
+        self.instanceStore = instanceStore
+        self.supervisor = supervisor
+        self.diagnostics = diagnostics
+        self.developerDisplay = developerDisplay
+        self.stopSignal = stopSignal
+        self.existingSession = existingSession
+    }
+
+    /// Creates a display-backed session service when this embedded runtime owns a native window.
+    ///
+    /// Package operations can use this service to implement RuntimeAPI `launch` and `terminate`
+    /// through the same Guest Agent and window session as `apkrun dev launch`.
+    public func makeSessionService() async -> EmbeddedRuntimeService? {
+        guard let guestAgent = await supervisor.developmentGuestAgent else {
+            return nil
+        }
+        if let existingSession {
+            await existingSession.attachGuestAgent(guestAgent)
+            return existingSession
+        }
+        guard let developerDisplay, let stopSignal else { return nil }
+        let service = EmbeddedRuntimeService(
+            logSink: diagnostics.logSink,
+            developerDisplay: developerDisplay,
+            stopSignal: stopSignal
+        )
+        await service.attachGuestAgent(guestAgent)
+        return service
     }
 }
 
@@ -144,7 +190,7 @@ public struct DevBoot: Sendable {
         stopRequests: AsyncStream<Void>,
         appCloseRequests: AsyncStream<Void>? = nil,
         preserveWindowOnError: Bool = false,
-        onRuntimeReady: (@Sendable (DevelopmentRuntimeContext) async throws -> Void)? = nil,
+        onRuntimeReady: (@Sendable (DevelopmentRuntimeContext) async throws -> (any RuntimeSessionService)?)? = nil,
         onEvent: @escaping @Sendable (DevBootEvent) -> Void
     ) async throws {
         // Every log line of the boot carries one operation ID (AGENTS §8).
@@ -167,7 +213,7 @@ public struct DevBoot: Sendable {
         stopRequests: AsyncStream<Void>,
         appCloseRequests: AsyncStream<Void>?,
         preserveWindowOnError: Bool,
-        onRuntimeReady: (@Sendable (DevelopmentRuntimeContext) async throws -> Void)?,
+        onRuntimeReady: (@Sendable (DevelopmentRuntimeContext) async throws -> (any RuntimeSessionService)?)?,
         onEvent: @escaping @Sendable (DevBootEvent) -> Void
     ) async throws {
         var returnedNormally = false
@@ -269,6 +315,7 @@ public struct DevBoot: Sendable {
             signal: stopSignal
         )
         var taskEventMonitor: Task<Void, Never>?
+        var runtimeSessionService: (any RuntimeSessionService)?
         defer {
             stopRequestMonitor.cancel()
             taskEventMonitor?.cancel()
@@ -287,12 +334,15 @@ public struct DevBoot: Sendable {
                         onEvent(.windowStatus("Preparing app…"))
                     }
                     if let onRuntimeReady {
-                        try await onRuntimeReady(
+                        runtimeSessionService = try await onRuntimeReady(
                             DevelopmentRuntimeContext(
                                 image: image,
                                 instanceStore: store,
                                 supervisor: supervisor,
-                                diagnostics: diagnostics
+                                diagnostics: diagnostics,
+                                developerDisplay: options.developerDisplay,
+                                stopSignal: stopSignal,
+                                existingSession: embeddedSession
                             )
                         )
                     }
@@ -370,7 +420,13 @@ public struct DevBoot: Sendable {
                                 remediation: "Check the package name and try again."
                             )
                         }
-                        let result = try await embeddedSession.launch(RuntimeLaunchRequest(packageID: packageID))
+                        let request = RuntimeLaunchRequest(packageID: packageID)
+                        let result: RuntimeLaunchResult
+                        if let runtimeSessionService {
+                            result = try await runtimeSessionService.launch(request)
+                        } else {
+                            result = try await embeddedSession.launch(request)
+                        }
                         if await embeddedSession.currentSession()?.state == .ended(.appExited) {
                             await stopSignal.signal(.appExited)
                         }

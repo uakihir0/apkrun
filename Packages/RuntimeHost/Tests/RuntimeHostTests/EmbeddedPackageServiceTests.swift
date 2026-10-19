@@ -7,6 +7,161 @@ import Testing
 @testable import RuntimeHost
 
 @Test(.timeLimit(.minutes(1)))
+func embeddedPackageServiceListsUnreadablePackagesAndReturnsTheirTypedError() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-package-service-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": root.path])
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let packageDirectory = paths.packagesDirectory.appendingPathComponent(packageID.rawValue, isDirectory: true)
+    try FileManager.default.createDirectory(at: packageDirectory, withIntermediateDirectories: true)
+    try Data("{invalid".utf8).write(to: packageDirectory.appendingPathComponent("metadata.json"))
+
+    let service = EmbeddedPackageService(paths: paths)
+    try await service.open()
+
+    let packages = try await service.listPackages(RuntimeListPackagesRequest())
+    #expect(packages.packages.count == 1)
+    #expect(packages.packages[0].packageID.rawValue == packageID.rawValue)
+    #expect(packages.packages[0].versionCode == nil)
+    #expect(packages.packages[0].managed)
+    #expect(packages.packages[0].state == .broken("metadataUnreadable"))
+    #expect(packages.source == .managedRecords)
+    do {
+        _ = try await service.packageInfo(
+            RuntimePackageRequest(packageID: try #require(RuntimePackageID(rawValue: packageID.rawValue)))
+        )
+        Issue.record("An unreadable package record must surface its integrity error.")
+    } catch {
+        let wireError = try #require(error as? RuntimeWireError)
+        #expect(wireError.code == "store.metadataUnreadable")
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func embeddedPackageServiceListsLastKnownUnmanagedPackagesWhileRuntimeIsStopped() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-package-service-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": root.path])
+    let packageID = try #require(PackageID(rawValue: "com.example.outside"))
+    let store = PackageStore(packagesDirectory: paths.packagesDirectory)
+    try await store.open()
+    _ = try await store.saveLastKnownAndroidInventory([
+        StorePackageSummary(
+            packageID: packageID,
+            displayName: "Outside app",
+            versionCode: 42,
+            launchable: true,
+            userInstalled: true
+        )
+    ])
+
+    let service = EmbeddedPackageService(paths: paths)
+    try await service.open()
+    let packages = try await service.listPackages(RuntimeListPackagesRequest(filter: .all))
+
+    #expect(packages.packages.count == 1)
+    #expect(packages.packages[0].packageID.rawValue == packageID.rawValue)
+    #expect(packages.packages[0].displayName == "Outside app")
+    #expect(packages.packages[0].versionCode == 42)
+    #expect(!packages.packages[0].managed)
+    #expect(packages.packages[0].updateAuthority == .external)
+    #expect(packages.source == .cachedAndroid)
+    #expect(packages.observedAt != nil)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func embeddedPackageServiceReportsUnreadableCachedAndroidInventory() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-package-service-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": root.path])
+    try FileManager.default.createDirectory(at: paths.packagesDirectory, withIntermediateDirectories: true)
+    try Data("{invalid".utf8).write(to: paths.packagesDirectory.appendingPathComponent("android-inventory.json"))
+
+    let service = EmbeddedPackageService(paths: paths)
+    try await service.open()
+    do {
+        _ = try await service.listPackages(RuntimeListPackagesRequest(filter: .all))
+        Issue.record("A corrupt Android inventory must not be presented as a valid empty cache.")
+    } catch {
+        #expect(error.code == "store.androidInventoryUnreadable")
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func embeddedPackageServiceMarksManagedPackagesMissingFromCachedInventory() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-package-service-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": root.path])
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let packageDirectory = paths.packagesDirectory.appendingPathComponent(packageID.rawValue, isDirectory: true)
+    try FileManager.default.createDirectory(at: packageDirectory, withIntermediateDirectories: true)
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let record = PackageRecord(
+        packageId: packageID,
+        displayName: "HelloText",
+        versionCode: 1,
+        signingCertificates: [],
+        installer: .apkrun,
+        state: .installed,
+        artifacts: ArtifactSlots(currentMatchesAndroid: true),
+        android: AndroidPackageFacts(
+            minSdk: 24,
+            targetSdk: 35,
+            nativeAbis: [],
+            userdataGeneration: UUID(),
+            lastSyncedAt: now
+        ),
+        source: PackageSource(kind: .file, at: now, origin: .cli, fileNames: ["HelloText.apk"], container: .apk),
+        createdAt: now,
+        updatedAt: now
+    )
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    try encoder.encode(record).write(to: packageDirectory.appendingPathComponent("metadata.json"))
+
+    let store = PackageStore(packagesDirectory: paths.packagesDirectory)
+    try await store.open()
+    _ = try await store.saveLastKnownAndroidInventory([])
+
+    let service = EmbeddedPackageService(paths: paths)
+    try await service.open()
+    let result = try await service.listPackages(RuntimeListPackagesRequest(filter: .all))
+
+    #expect(result.source == .cachedAndroid)
+    #expect(result.packages.count == 1)
+    #expect(result.packages[0].managed)
+    #expect(result.packages[0].state == .broken("removedInAndroid"))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func embeddedPackageServiceRoutesLaunchAndTerminateThroughRuntimeSessionService() async throws {
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let sessionService = FakePackageRuntimeSessionService()
+    let service = EmbeddedPackageService(sessionService: sessionService)
+
+    let launch = try await service.launch(RuntimeLaunchRequest(packageID: package))
+    #expect(launch.packageID == package)
+    #expect(launch.state == .running)
+    let terminate = try await service.terminate(RuntimeTerminateRequest(packageID: package))
+    #expect(terminate.packageID == package)
+    #expect(terminate.hadSession)
+    #expect(await sessionService.launchedPackageIDs == [package])
+    #expect(await sessionService.terminatedPackageIDs == [package])
+}
+
+@Test(.timeLimit(.minutes(1)))
 func embeddedPackageServiceImportsIndexedFileHandlesWithoutStartingAndroid() async throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("apkrun-package-service-\(UUID().uuidString)", isDirectory: true)
@@ -50,9 +205,24 @@ func embeddedPackageServiceImportsIndexedFileHandlesWithoutStartingAndroid() asy
     #expect(preview.displayName == "Hello Text")
     #expect(preview.relation == .newPackage)
     #expect(preview.files.count == 1)
-    #expect(try await service.listPackages(RuntimeListPackagesRequest()) == [])
+    #expect(try await service.listPackages(RuntimeListPackagesRequest()).packages == [])
     let stagingRoot = paths.packagesDirectory.appendingPathComponent(".client-imports", isDirectory: true)
     #expect(try FileManager.default.contentsOfDirectory(at: stagingRoot, includingPropertiesForKeys: nil).isEmpty)
+}
+
+private actor FakePackageRuntimeSessionService: RuntimeSessionService {
+    private(set) var launchedPackageIDs: [RuntimePackageID] = []
+    private(set) var terminatedPackageIDs: [RuntimePackageID] = []
+
+    func launch(_ request: RuntimeLaunchRequest) async throws(RuntimeWireError) -> RuntimeLaunchResult {
+        launchedPackageIDs.append(request.packageID)
+        return RuntimeLaunchResult(sessionID: UUID(), packageID: request.packageID, state: .running)
+    }
+
+    func terminate(_ request: RuntimeTerminateRequest) async throws(RuntimeWireError) -> RuntimeTerminateResult {
+        terminatedPackageIDs.append(request.packageID)
+        return RuntimeTerminateResult(packageID: request.packageID, hadSession: true)
+    }
 }
 
 @Test(.timeLimit(.minutes(1)))

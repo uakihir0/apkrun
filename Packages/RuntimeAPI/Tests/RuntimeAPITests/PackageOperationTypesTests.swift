@@ -142,8 +142,13 @@ private struct TestRuntimeService: RuntimeService {
 
     func uninstallPackage(_ request: RuntimeUninstallPackageRequest) async throws(RuntimeWireError) {}
 
-    func listPackages(_ request: RuntimeListPackagesRequest) async throws(RuntimeWireError) -> [RuntimePackageSummary] {
-        [RuntimePackageSummary(packageID: packageID, displayName: "Test", versionCode: 1)]
+    func listPackages(
+        _ request: RuntimeListPackagesRequest
+    ) async throws(RuntimeWireError) -> RuntimePackageListResult {
+        RuntimePackageListResult(
+            packages: [RuntimePackageSummary(packageID: packageID, displayName: "Test", versionCode: 1)],
+            source: .managedRecords
+        )
     }
 
     func packageInfo(_ request: RuntimePackageRequest) async throws(RuntimeWireError) -> RuntimePackageDetails {
@@ -174,7 +179,7 @@ private struct TestRuntimeService: RuntimeService {
     let file = FileHandle.nullDevice
     let preview = try await service.importPackage(request, files: [file])
     #expect(preview.packageID == packageID)
-    #expect(try await service.listPackages(RuntimeListPackagesRequest()).count == 1)
+    #expect(try await service.listPackages(RuntimeListPackagesRequest()).packages.count == 1)
     #expect(try await service.packageInfo(RuntimePackageRequest(packageID: packageID)).summary.packageID == packageID)
     #expect(try await service.launch(RuntimeLaunchRequest(packageID: packageID)).state == .running)
 }

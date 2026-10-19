@@ -24,7 +24,7 @@ public protocol RuntimePackageService: Sendable {
     /// Lists the most recently reconciled packages. This may work while Android is stopped.
     func listPackages(
         _ request: RuntimeListPackagesRequest
-    ) async throws(RuntimeWireError) -> [RuntimePackageSummary]
+    ) async throws(RuntimeWireError) -> RuntimePackageListResult
 
     /// Returns the package record and the Android facts known to the host.
     func packageInfo(

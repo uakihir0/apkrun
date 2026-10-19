@@ -14,7 +14,7 @@ public actor EmbeddedPackageService: RuntimeService {
     private let inspector: PackageStore.Inspector
     private let runtimeAccess: AttachedStoreRuntimeAccess
     private let store: PackageStore
-    private let sessionService: EmbeddedRuntimeService
+    private var sessionService: any RuntimeSessionService
     private let hostFreeSpace: @Sendable (URL) -> Int64
 
     private var isOpen = false
@@ -26,14 +26,15 @@ public actor EmbeddedPackageService: RuntimeService {
     public init(
         paths: APKRunPaths = APKRunPaths(allowingHomeOverride: true),
         inspector: @escaping PackageStore.Inspector = { apk in try await APKInspector().inspect(apk) },
-        hostFreeSpace: (@Sendable (URL) -> Int64)? = nil
+        hostFreeSpace: (@Sendable (URL) -> Int64)? = nil,
+        sessionService: (any RuntimeSessionService)? = nil
     ) {
         self.paths = paths
         self.inspector = inspector
         self.hostFreeSpace = hostFreeSpace ?? Self.availableHostSpace
+        self.sessionService = sessionService ?? EmbeddedRuntimeService()
         let runtimeAccess = AttachedStoreRuntimeAccess()
         self.runtimeAccess = runtimeAccess
-        sessionService = EmbeddedRuntimeService()
         store = PackageStore(
             packagesDirectory: paths.packagesDirectory,
             runtimeAccess: runtimeAccess,
@@ -71,10 +72,15 @@ public actor EmbeddedPackageService: RuntimeService {
             guard let guestAgent = await context.supervisor.developmentGuestAgent else {
                 throw DevelopmentStoreRuntimeAccessFailure.guestAgentUnavailable
             }
+            if let windowSessionService = await context.makeSessionService() {
+                sessionService = windowSessionService
+            } else if let embeddedSessionService = sessionService as? EmbeddedRuntimeService {
+                await embeddedSessionService.attachGuestAgent(guestAgent)
+            }
             await runtimeAccess.attach(access)
             runtimeAttached = true
-            await sessionService.attachGuestAgent(guestAgent)
             try await store.recoverPendingTransactions()
+            try? await refreshAndroidInventory()
         } catch {
             throw Self.wireError(for: error)
         }
@@ -160,6 +166,7 @@ public actor EmbeddedPackageService: RuntimeService {
                 record = try await store.installImported(ticket: ticket)
             }
             importPreviews[ticket] = nil
+            try? await refreshAndroidInventory()
             return try Self.summary(from: record)
         } catch {
             throw Self.wireError(for: error)
@@ -180,6 +187,7 @@ public actor EmbeddedPackageService: RuntimeService {
             } else {
                 try await store.uninstall(packageID: packageID, keepData: request.options.keepData)
             }
+            try? await refreshAndroidInventory()
         } catch {
             throw Self.wireError(for: error)
         }
@@ -188,7 +196,7 @@ public actor EmbeddedPackageService: RuntimeService {
     /// Lists managed records, optionally merging Android's current PackageManager inventory.
     public func listPackages(
         _ request: RuntimeListPackagesRequest
-    ) async throws(RuntimeWireError) -> [RuntimePackageSummary] {
+    ) async throws(RuntimeWireError) -> RuntimePackageListResult {
         do {
             try await ensureOpen()
             let records = try await store.listManagedPackages()
@@ -196,23 +204,52 @@ public actor EmbeddedPackageService: RuntimeService {
             for record in records {
                 packages[record.packageId.rawValue] = try Self.summary(from: record)
             }
+            let recordIssues = try await store.listPackageRecordIssues()
+            let issuesByPackage = Dictionary(
+                uniqueKeysWithValues: recordIssues.map { ($0.packageID.rawValue, $0) }
+            )
+            for issue in recordIssues {
+                guard let wireID = RuntimePackageID(rawValue: issue.packageID.rawValue) else { continue }
+                packages[issue.packageID.rawValue] = RuntimePackageSummary(
+                    packageID: wireID,
+                    displayName: issue.packageID.rawValue,
+                    versionCode: nil,
+                    state: .broken("metadataUnreadable"),
+                    managed: true
+                )
+            }
 
+            var source: RuntimePackageListSource = .managedRecords
+            var observedAt: Date?
             if request.filter == .all {
-                guard runtimeAttached else {
-                    throw EmbeddedPackageServiceFailure.runtimeNotAttached
+                let guestPackages: [StorePackageSummary]
+                if runtimeAttached {
+                    guestPackages = try await runtimeAccess.withStoreAgent(UUID()) { channel in
+                        try await channel.listPackages(.all)
+                    }
+                    let savedSnapshot = try? await store.saveLastKnownAndroidInventory(guestPackages)
+                    source = .liveAndroid
+                    observedAt = savedSnapshot?.observedAt ?? Date()
+                } else {
+                    if let snapshot = try await store.lastKnownAndroidInventory() {
+                        guestPackages = snapshot.packages
+                        observedAt = snapshot.observedAt
+                        source = .cachedAndroid
+                    } else {
+                        guestPackages = []
+                        source = .noAndroidInventory
+                    }
                 }
-                let managedPackages = packages
-                packages.removeAll(keepingCapacity: true)
-                let guestPackages = try await runtimeAccess.withStoreAgent(UUID()) { channel in
-                    try await channel.listPackages(.all)
-                }
+                let observedPackageIDs = Set(guestPackages.map { $0.packageID.rawValue })
                 for guest in guestPackages {
                     let packageID = guest.packageID.rawValue
-                    if var managed = managedPackages[packageID] {
+                    if var managed = packages[packageID] {
                         // Android is authoritative for the current installed version and label.
                         managed.displayName = guest.displayName
-                        managed.versionCode = guest.versionCode
-                        managed.state = .installed
+                        if issuesByPackage[packageID] == nil {
+                            managed.versionCode = guest.versionCode
+                            managed.state = .installed
+                        }
                         packages[packageID] = managed
                     } else if let wireID = RuntimePackageID(rawValue: packageID) {
                         packages[packageID] = RuntimePackageSummary(
@@ -220,12 +257,30 @@ public actor EmbeddedPackageService: RuntimeService {
                             displayName: guest.displayName,
                             versionCode: guest.versionCode,
                             state: .installed,
-                            managed: false
+                            managed: false,
+                            updateAuthority: .external
                         )
                     }
                 }
+                if source != .noAndroidInventory {
+                    for packageID in Array(packages.keys) {
+                        guard var managed = packages[packageID],
+                            managed.managed,
+                            managed.state == .installed,
+                            !observedPackageIDs.contains(packageID)
+                        else {
+                            continue
+                        }
+                        managed.state = .broken("removedInAndroid")
+                        packages[packageID] = managed
+                    }
+                }
             }
-            return packages.values.sorted { $0.packageID < $1.packageID }
+            return RuntimePackageListResult(
+                packages: packages.values.sorted { $0.packageID < $1.packageID },
+                source: source,
+                observedAt: observedAt
+            )
         } catch {
             throw Self.wireError(for: error)
         }
@@ -239,6 +294,9 @@ public actor EmbeddedPackageService: RuntimeService {
             try await ensureOpen()
             guard let packageID = PackageID(rawValue: request.packageID.rawValue) else {
                 throw EmbeddedPackageServiceFailure.invalidPackageID
+            }
+            if let issue = try await store.packageRecordIssue(for: packageID) {
+                throw PackageStoreFailure.metadataUnreadable(packageID, detail: issue.detail)
             }
             guard let record = try await store.listManagedPackages().first(where: { $0.packageId == packageID }) else {
                 throw PackageStoreFailure.packageNotFound
@@ -533,6 +591,14 @@ public actor EmbeddedPackageService: RuntimeService {
         )
     }
 
+    private func refreshAndroidInventory() async throws {
+        guard runtimeAttached else { return }
+        let packages = try await runtimeAccess.withStoreAgent(UUID()) { channel in
+            try await channel.listPackages(.all)
+        }
+        _ = try await store.saveLastKnownAndroidInventory(packages)
+    }
+
     private static func summary(from record: PackageRecord) throws -> RuntimePackageSummary {
         return RuntimePackageSummary(
             packageID: try runtimePackageID(record.packageId),
@@ -653,6 +719,19 @@ public actor EmbeddedPackageService: RuntimeService {
                     "journalUnreadable",
                     message: "APKRun's package history is damaged; package changes are disabled.",
                     remediation: "Run `apkrun doctor` and report the store journal problem."
+                )
+            case .metadataUnreadable(let packageID, _):
+                return .store(
+                    "metadataUnreadable",
+                    message: "APKRun can't read its records for \(packageID.rawValue).",
+                    remediation:
+                        "If a newer version of APKRun was used before, install that version again. Otherwise report the problem."
+                )
+            case .androidInventoryUnreadable:
+                return .store(
+                    "androidInventoryUnreadable",
+                    message: "APKRun can't read its last-known Android package list.",
+                    remediation: "Start Android to refresh the package list. If the problem continues, report it."
                 )
             case .unsupportedJournalVersion(let version):
                 return .store(

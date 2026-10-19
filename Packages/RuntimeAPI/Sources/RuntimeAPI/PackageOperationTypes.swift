@@ -442,8 +442,8 @@ public struct RuntimePackageSummary: Codable, Sendable, Equatable {
     public var packageID: RuntimePackageID
     /// The package label known to the host.
     public var displayName: String
-    /// Android's `longVersionCode`.
-    public var versionCode: RuntimeVersionCode
+    /// Android's `longVersionCode`, or `nil` when package metadata is unreadable.
+    public var versionCode: RuntimeVersionCode?
     /// The display-only version string, if present.
     public var versionName: String?
     /// The known store state.
@@ -457,7 +457,7 @@ public struct RuntimePackageSummary: Codable, Sendable, Equatable {
     public init(
         packageID: RuntimePackageID,
         displayName: String,
-        versionCode: RuntimeVersionCode,
+        versionCode: RuntimeVersionCode?,
         versionName: String? = nil,
         state: RuntimePackageState = .installed,
         managed: Bool = true,
@@ -600,6 +600,39 @@ public struct RuntimeListPackagesRequest: Codable, Sendable, Equatable {
     /// Creates a list request.
     public init(filter: RuntimePackageFilter = .managed) {
         self.filter = filter
+    }
+}
+
+/// Where the package inventory in a list result came from.
+public enum RuntimePackageListSource: String, Codable, Sendable, Equatable {
+    /// Only APKRun's local managed records were available.
+    case managedRecords
+    /// Android PackageManager was queried for this result.
+    case liveAndroid
+    /// The Android inventory is the most recent saved snapshot.
+    case cachedAndroid
+    /// No Android inventory has been observed yet.
+    case noAndroidInventory
+}
+
+/// A package list and the freshness of its Android inventory.
+public struct RuntimePackageListResult: Codable, Sendable, Equatable {
+    /// The package rows selected by the request.
+    public var packages: [RuntimePackageSummary]
+    /// The source of Android package facts.
+    public var source: RuntimePackageListSource
+    /// When the Android inventory was observed, or `nil` if none is saved.
+    public var observedAt: Date?
+
+    /// Creates a package list result.
+    public init(
+        packages: [RuntimePackageSummary],
+        source: RuntimePackageListSource,
+        observedAt: Date? = nil
+    ) {
+        self.packages = packages
+        self.source = source
+        self.observedAt = observedAt
     }
 }
 

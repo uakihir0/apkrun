@@ -312,23 +312,27 @@ Product display 0 boots with the image's default mode and `androidboot.lcd_densi
 wrapper                                  apkrund                                    guest
 windowWillStartLiveResize: gravity=.resizeAspect (last frame scaled, letterboxed black)
 ... user drags ...
-windowDidEndLiveResize (+150 ms quiet)
-resize(DisplayGeometry) ─────────────▶ SessionRegistry → DisplayPool.reconfigure(lease, geometry)
-                                        resolve mode (§6.1); ScanoutController.configure(scanout, mode)
-                                                              ─── new EDID + display event ───▶ HWC / SurfaceFlinger
-                                        ◀─────────── GuestDisplayEvent.changed(displayID, newMode) (≤ 3 s)
-                                        setDisplayPolicy(displayID, density) ─────────────────▶ app gets config change
-                                        new SurfacePool (generation+1), attach to scanout
+windowDidResize (+150 ms quiet)
+resize(DisplayGeometry) ─────────────▶ embedded RuntimeCore (display 0)
+                                        advertise mode + new EDID; raise display event
+                                                              ──────────────────────────────▶ HWC / SurfaceFlinger
+                                        ◀─────────── display 0 reports new size (≤ 3 s)
+                                        setDisplayPolicy(display 0, density) ───────────────▶ app gets config change
+                                        create pool g+1; drain old present fence; swap scanout
 ◀────────────── surfacesReplaced(SurfaceSet g+1)
-gravity=.resize; frames of g+1 ...
+first frame of g+1 commits to Core Animation; then switch geometry and input mapper
 ```
 
-- During live resize the input mapping uses the letterboxed content rect of the old frame ([input.md](input.md)).
-- Between the mode change and the app's re-layout, the guest may still flush old-size frames. The blit scales them into the new pool ([graphics.md](graphics.md) §6.2), so the window never shows garbage.
+- The embedded development path advertises the new scanout mode and waits for Android display 0 to report that size before applying its density policy and publishing a replacement pool. If confirmation or policy application fails, it restores the prior scanout mode and density policy where possible and leaves the old pool active.
+- During a resize request, input is disabled. The previous IOSurface remains letterboxed at its old aspect ratio until the first frame from the new generation commits. At that commit, the view updates the layer geometry and `CoordinateMapper` together, then resumes input.
+- The old presenter is quiesced before its replacement accepts guest flushes. It drains queued renderer work and waits up to 3 s for its current fence; a timeout aborts the pool swap. This preserves one in-flight blit per scanout.
+- Old surface sets remain available until the first new-generation frame commits, with a 1 s cleanup deadline when the guest does not produce one. Because frame streams are bounded, the embedded CLI reconciles the current pool after each successful resize and can recover a pool from a later frame event.
 - Resizing makes Android deliver `screenSize`/`smallestScreenSize`/`orientation` (and, with zoom, `density`) configuration changes. Apps that do not handle them are recreated. This is normal Android behavior (like freeform windows on tablets and ChromeOS).
 - Resize requests are coalesced: while a reconfigure is in flight, only the latest geometry is kept and applied next.
 
-**Open point for #067 (R-04):** does a mode change keep the same Android display ID? The ranchu HWC may report a mode change as disconnect + connect. SurfaceFlinger derives the physical display ID from the EDID (manufacturer, product, port), so it stays stable, but DisplayManager could still allocate a new logical display. #067 tests this first. Fallbacks, in order:
+**Embedded implementation status for #067:** the development path currently waits for display ID 0 to report the requested size. If that display does not confirm within 3 s, it restores the old mode and rejects the resize. The ID-stability test has not run on the Android guest, so the current `window.resizable = true` default still assumes ID 0 remains stable. If a guest run shows that the ID changes, use a stable product-info match and update the display ID used by density, launch, and input, or use fallback B until that path is implemented.
+
+**Open point for #067 (R-04):** does a mode change keep the same Android display ID? The ranchu HWC may report a mode change as disconnect + connect. SurfaceFlinger derives the physical display ID from the EDID (manufacturer, product, port), so it stays stable, but DisplayManager could still allocate a new logical display. Fallbacks, in order:
 
 - **A.** Re-home the task: acquire a new slot at the new size, move the task with `IActivityTaskManager.moveRootTaskToDisplay(taskId, newDisplayID)`, and release the old slot. The app keeps running (with a configuration change), and the window gets new surfaces as in a resize.
 - **B.** Fixed-size windows: `window.resizable` defaults to false. Only zoom and backing-scale changes remain, and they apply at the next session start.
@@ -414,7 +418,7 @@ When the app itself leaves its display (Back from the root activity, or the app 
 | Accessibility | window title and role only. Android's accessibility tree is not bridged in v1 ([../00-product/scope.md](../00-product/scope.md)) |
 | Frame statistics overlay | developer mode only: View → Show Frame Statistics (fps, latency, drops, readbacks from [graphics.md](graphics.md) §7). While the overlay is shown, the launcher sends the session channel request `frameStatistics` once per second. apkrund answers with the session's `SessionGraphicsStatistics` from `ScanoutController.statistics` ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §6.3). Built in #070 |
 | Screenshots | macOS window screenshots work, because the layer holds real pixels |
-| Orientation requests | Android letterboxes fixed-orientation apps that do not match the window aspect. The wrapper does not rotate the window in v1. Whether to swap width and height automatically is decided in #067 |
+| Orientation requests | Android owns app orientation and letterboxing. The window does not rotate, and the host does not swap its width and height when an app requests another orientation |
 
 ---
 
@@ -473,8 +477,8 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 |---|---|---|
 | Does a config-space update raise a display event in Linux and Android? | #019, #028 | Linux: positive (#019, 2026-10-08, macOS 27.0.1 build 26A434; [graphics.md](graphics.md) §16, IR-256). Android: pending (#028) |
 | Does `Display.getDeviceProductInfo()` expose the EDID product code on pool displays? | #028 | pending |
-| Does a mode change keep the Android display ID? | #067 (display 0), #028 (pool displays) | pending (§7.1) |
-| Density: does the forced density replace the default density (display 0) and the fallback 213 (pool displays) without side effects? | #067 (display 0), #028 (pool displays) | pending (§4, OQ-39) |
+| Does a mode change keep the Android display ID? | #067 (display 0), #028 (pool displays) | Partial (#067, 2026-10-19): the host waits for display 0's requested dimensions and rolls back on timeout; Android mode-change and ID stability tests remain pending (§7.1, IR-1372) |
+| Density: does the forced density replace the default density (display 0) and the fallback 213 (pool displays) without side effects? | #067 (display 0), #028 (pool displays) | Partial (#067, 2026-10-19): boot and resize paths send `SetDisplayPolicy`; guest density readback and OQ-39 remain pending (§4, IR-1372) |
 | IME policy `LOCAL` on pool displays works with the APKRun IME | #071 | pending |
 | Fixture and sample apps on secondary displays | #029 | pending (§8) |
 | `IOSurfaceIsInUse` reflects WindowServer use of layer contents | #068 | pending (§5.2) |

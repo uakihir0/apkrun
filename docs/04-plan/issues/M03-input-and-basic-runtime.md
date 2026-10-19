@@ -778,7 +778,7 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 
 ### Progress
 
-- **Implementation in progress (2026-10-19, IR-1368–IR-1371).** Step 1 resolves even pixel dimensions and checks the generated 60 Hz EDID timing, lowering render scale when the pixel-clock limit requires it. Step 2 extends vertical blanking for minimum-size modes to satisfy the 20 kHz EDID range and wires the visible-frame-clamped development window geometry through boot density, scanout 0, EDID physical size, and Guest Agent `SetDisplayPolicy` before runtime readiness. Focused T0 checks cover resolver timing support, undersized geometry queries, and EDID fields. Real-guest density, window resize, display-ID stability, orientation, and Mac acceptance remain open; no acceptance criterion is checked.
+- **Implementation in progress (2026-10-19, IR-1368–IR-1372).** Steps 1–2 resolve even pixel dimensions against expressible 60 Hz EDID timings, apply the resolved boot density, and advertise the visible-frame-clamped initial window geometry through scanout 0 and EDID. Step 3 wires debounced window resize, backing-scale changes, fullscreen, zoom, Android display-mode confirmation, density policy, presenter replacement, generation-aware frames, and input remapping. A rejected or unconfirmed guest mode restores the previous host mode and density policy where the Guest Agent is available. Focused T0 checks cover timing support, invalid geometry, and presenter replacement while a GPU fence is pending; the embedded CLI builds. Guest density and resize behavior, display-ID stability, orientation on Android, and Mac acceptance remain open; no acceptance criterion is checked.
 
 ### Notes
 

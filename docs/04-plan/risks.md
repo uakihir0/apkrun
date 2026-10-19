@@ -85,7 +85,7 @@ A risk is something that could make a planned design fail or cost much more than
 - **Mitigation.** `DisplayPool` owns all allocation ([../02-design/display-and-windowing.md](../02-design/display-and-windowing.md) §3); EDID-derived stable display IDs; `primaryDisplayCompatibility` window mode for apps that fail on secondary displays (FR-DSP-06).
 - **Fallback.** Fixed pool size per boot (R-01 fallback C); for resize, fallback A or B in [../02-design/display-and-windowing.md](../02-design/display-and-windowing.md) §7.1 (move the task to a new display, or fixed window size).
 - **Settled by.** #028 (hotplug), #067 (mode change keeps the display ID), #029, #030 (gate G5).
-- **Result.** Not yet run.
+- **Result.** Partial (#067, 2026-10-19, IR-1372): the embedded development resize waits for display 0 to report the requested dimensions and attempts to restore the advertised mode and density policy on timeout. This rejects a resize if display 0 changes ID, but does not identify the replacement display. No Android guest mode-change test has run, so ID stability and pool-display behavior remain unverified.
 
 ### R-05 Input and IME on secondary displays
 

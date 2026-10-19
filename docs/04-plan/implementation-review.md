@@ -20943,3 +20943,50 @@ consumer. If a screen's visible frame is smaller than the minimum Android
 content size, the 90% clamp and minimum-size rule cannot both be satisfied.
 The generated window still uses the fixed compatibility density if geometry
 resolution fails.
+
+## IR-1372: Apply display geometry only after Android confirms the resize
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #067 |
+| Affected documents | [display-and-windowing.md](../02-design/display-and-windowing.md) §§6.3, 7.1, 7.2, 7.7, 11; [graphics.md](../02-design/graphics.md) §§6.4, 16; [risks.md](risks.md) R-04; [M03](issues/M03-input-and-basic-runtime.md) #067 |
+
+**Choice.** The embedded development window advertises a new scanout-0 mode,
+waits up to 3 s for Android display 0 to report the requested pixel size, and
+applies its density and IME policy before publishing a replacement surface
+set. On failure it attempts to restore the prior host mode and guest policy and
+keeps the current pool. Presenter replacement serializes guest replies with the
+host swap, drains queued renderer work, and waits up to 3 s for the old scanout
+fence. The window keeps its previous layer geometry until a new-generation
+IOSurface commits, disables input during the transition, and switches the
+coordinate mapper at commit. Retired surface sets are released on the first
+new-generation commit or after 1 s. The bounded frame stream is reconciled with
+the current pool after each successful resize. Android owns orientation
+behavior: the host does not rotate the window or swap width and height.
+
+**Reason.** Publishing a host generation before Android accepts the mode or
+density can make the visible image and input coordinates describe different
+displays. Letting two presenter generations run concurrently can overlap
+scanout blits and retain large IOSurface pools indefinitely. Waiting for the
+guest first, draining the old fence, and switching the view only at the
+Core Animation commit keeps the transition on one display geometry. The
+embedded path currently identifies the primary display as ID 0; if Android
+reassigns its logical ID, the requested size is not confirmed, so the resize is
+rejected and rollback is attempted rather than guessing which display to
+control.
+
+**Verification.** `swift build --product apkrun --traits EmbeddedRuntime`
+passed. The focused `livePresenterReplacement` GraphicsCore tests passed,
+including a held-fence case that confirms replacement waits for the old blit,
+generation and target retirement checks, and invalid mode handling.
+`git diff --check` passed. No Android guest mode-change/density readback,
+display-ID stability run, or visual window test was performed; those T2/T3
+checks and all #067 acceptance criteria remain open.
+
+**Risk.** Display ID 0 stability, real Android density behavior, and orientation
+handling remain unverified. If a guest mode change replaces ID 0, resize
+currently fails and attempts rollback; maintainers must either validate this
+fallback or implement stable product-info matching and update launch, density,
+and input routing together. OQ-39 remains open for the effect of EDID physical
+size on Android density.

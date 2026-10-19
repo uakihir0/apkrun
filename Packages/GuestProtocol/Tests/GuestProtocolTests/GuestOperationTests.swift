@@ -47,6 +47,7 @@ private enum EnvelopeSchema {
         ("clear_display", GuestClearDisplay.number),
         ("launch_application", GuestLaunchApplication.number),
         ("stop_application", GuestStopApplication.number),
+        ("stop_application", GuestForceStopApplication.number),
         ("focus_display", GuestFocusDisplay.number),
         ("query_package", GuestQueryPackage.number),
         ("list_packages", GuestListPackages.number),
@@ -93,6 +94,17 @@ private enum EnvelopeSchema {
         #expect(stop.mode == .finishTasks)
     } else {
         Issue.record("GuestStopApplication does not build the finish-tasks request")
+    }
+    let forceStopRequest: GPRequest.OneOf_Op? = GuestForceStopApplication(
+        package: "io.apkrun.fixture.hellotext"
+    ).request()
+    #expect(GuestForceStopApplication(package: "io.apkrun.fixture.hellotext").timeout == .seconds(5))
+    #expect(GuestForceStopApplication(package: "io.apkrun.fixture.hellotext").capability == .launch)
+    if case .stopApplication(let stop)? = forceStopRequest {
+        #expect(stop.package == "io.apkrun.fixture.hellotext")
+        #expect(stop.mode == .forceStop)
+    } else {
+        Issue.record("GuestForceStopApplication does not build the force-stop request")
     }
 
     let packageRequest: GPRequest.OneOf_Op? = GuestQueryPackage(package: "io.apkrun.fixture.hellotext").request()

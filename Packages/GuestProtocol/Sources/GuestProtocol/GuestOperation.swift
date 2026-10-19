@@ -225,7 +225,7 @@ public struct GuestStopApplication: GuestOperation {
     /// The package whose tasks should finish.
     public let package: String
 
-    /// Creates the #026 finish-tasks operation. Force-stop remains outside this API.
+    /// Creates the finish-tasks operation used when an app window closes.
     public init(package: String) {
         self.package = package
     }
@@ -242,6 +242,42 @@ public struct GuestStopApplication: GuestOperation {
         var stop = GPStopApplication()
         stop.package = package
         stop.mode = .finishTasks
+        return .stopApplication(stop)
+    }
+
+    /// Decodes the agent's answer into the result of the operation.
+    public static func decode(_ result: GPResponse.OneOf_Result) -> GPEmpty? {
+        if case .stopApplication(let empty) = result { return empty }
+        return nil
+    }
+}
+
+/// `StopApplication` with `FORCE_STOP`: stops every task and process for a package (#032).
+public struct GuestForceStopApplication: GuestOperation {
+    /// The decoded result of the operation.
+    public typealias Result = GPEmpty
+    /// The operation number of guest-protocol.md §7.1.
+    public static let number = 15
+    /// The package whose tasks and process should stop.
+    public let package: String
+
+    /// Creates the package force-stop operation used by explicit terminate requests.
+    public init(package: String) {
+        self.package = package
+    }
+
+    /// The name that errors report for the operation.
+    public var operationName: String { "StopApplication" }
+    /// The capability that the operation needs.
+    public var capability: GuestCapability { .launch }
+    /// The time the agent has to answer.
+    public var timeout: Duration { .seconds(5) }
+
+    /// The request that carries the operation.
+    public func request() -> GPRequest.OneOf_Op {
+        var stop = GPStopApplication()
+        stop.package = package
+        stop.mode = .forceStop
         return .stopApplication(stop)
     }
 

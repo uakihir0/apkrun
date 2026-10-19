@@ -77,6 +77,13 @@ public struct ResolvedDisplayMode: Sendable, Equatable {    // output of Display
     public var refreshHz: Int                 // 60
 }
 
+public struct DisplayPoolLimits: Sendable, Equatable {
+    public var attachTimeout: Duration         // default 5 s
+    public var clearTimeout: Duration          // default 5 s
+    public var removalTimeout: Duration        // default 3 s
+    public var reconfigureTimeout: Duration    // default 3 s
+}
+
 /// Who holds a display. App sessions have windows. System uses have no window and no client.
 public enum SessionID: Sendable, Hashable, Codable {
     case app(UUID)                                   // an AppSession (runtime-daemon.md §7)
@@ -102,7 +109,7 @@ public actor DisplayPool {
     public init(scanouts: ScanoutController, guest: any DisplayControlChannel, limits: DisplayPoolLimits)
     public func acquire(for session: SessionID, configuration: DisplayConfiguration) async throws(RuntimeFailure) -> DisplayLease
     public func reconfigure(_ lease: DisplayLease, geometry: DisplayGeometry) async throws(RuntimeFailure) -> DisplayLease
-    public func release(_ lease: DisplayLease) async                  // never throws; faults are recorded
+    public func release(_ lease: DisplayLease) async -> DisplayReleaseResult // never throws; faults are recorded
     public func snapshot() -> [DisplaySlotSnapshot]                   // diagnostics, `apkrun info --displays`
     public nonisolated var events: AsyncStream<DisplayPoolEvent> { get }   // slot state changes, faults
 }
@@ -127,7 +134,7 @@ The states are defined in [../01-architecture/state-machines.md](../01-architect
 | attached | `allocated(SessionID)` | bound to an Android display ID and to a session's window |
 | releasing | `releasing` | tasks being cleared, scanout being disabled |
 | available | `free` | ready for reuse |
-| — | `faulted(DisplayFault)` | attach or release failed (`.attachTimedOut`, `.releaseTimedOut`, `.graphics(GraphicsFailure)`); the slot is quarantined until reset |
+| — | `faulted(DisplayFault)` | attach, release, or resize rollback failed (`.attachTimedOut`, `.releaseTimedOut`, `.graphics(GraphicsFailure)`, `.reconfigurationUncertain`); uncertain resize state stays quarantined until Android restarts |
 
 Per slot the pool also keeps `reservedBy: SessionID?`, `androidDisplayID: Int32?`, `mode`, `generation` (incremented on every acquire), and timestamps for diagnostics.
 
@@ -148,13 +155,25 @@ Failure handling:
 
 - A timeout in step 4 marks the slot `faulted(.attachTimedOut)`. The pool disables that scanout, retries the acquire **once** on the next free slot, and then fails with `RuntimeFailure.displayAttachFailed`. A faulted slot is reset in the background: disable, wait for `removed` or 3 s, then `free`. After three faults in a boot, the slot stays `faulted` until the next Android restart.
 - If the Guest Agent disconnects during an acquire, the operation fails with `.guestAgentUnavailable`, and the slot is released.
+- If a release times out waiting for `DisplayRemoved`, keep its Android display ID with the faulted slot. A background reset may free the slot only after that ID is confirmed removed; if the event remains missing, quarantine the slot until Android restarts.
+
+When Android omits product information, the pool accepts only one new display
+added during that serialized attach window. A different reported pixel mode is
+logged, and the pool uses Android's actual dimensions. Multiple new
+product-less displays remain ambiguous and fail attachment.
+
+An uncertain resize keeps its owning session and lease counted against the
+session limit until that owner releases it. Across Guest Agent reconnects, the
+supervisor compares Android's monotonic uptime from consecutive snapshots. A
+decrease reports an Android restart, and `RuntimeSupervisor` asks the pool to
+reset boot-local fault quarantines after the restarted agent has resynchronized.
 
 ### 3.4 Release sequence
 
 1. Mark the slot `releasing`. `ScanoutController.detachPool(from:)` runs **first**, so no frame of this scanout reaches the wrapper from this point (invariant 2).
 2. `clearDisplay(displayID)`. The Guest Agent finishes or moves every task on the display according to the close policy (§7.6), then reports `tasksCleared`.
 3. `ScanoutController.disable(scanout)`. Android removes the display.
-4. Wait for `GuestDisplayEvent.removed(displayID)` (timeout 3 s). The slot becomes `free`. The old pool is released when the wrapper's session connection closes, or at the latest 1 s after detach.
+4. Wait for `GuestDisplayEvent.removed(displayID)` (timeout 3 s). On confirmation the slot becomes `free` and release returns `.released`; on timeout it remains quarantined with the Android display ID and release returns `.quarantined(displayID)`. The old pool is released when the wrapper's session connection closes, or at the latest 1 s after detach.
 
 If step 2 times out (5 s), the scanout is disabled anyway. Android moves the remaining tasks to the default display when a display is removed, which is acceptable for a closing session.
 
@@ -324,6 +343,7 @@ first frame of g+1 commits to Core Animation; then switch geometry and input map
 ```
 
 - The embedded development path advertises the new scanout mode and waits for Android display 0 to report that size before applying its density policy and publishing a replacement pool. If confirmation or policy application fails, it restores the prior scanout mode and density policy where possible and leaves the old pool active.
+- For pool displays, a resize event is confirmed against the latest Guest Agent display snapshot before the presenter pool is replaced; a queued event for a mode Android has already left cannot confirm the resize.
 - During a resize request, input is disabled. The previous IOSurface remains letterboxed at its old aspect ratio until the first frame from the new generation commits. At that commit, the view updates the layer geometry and `CoordinateMapper` together, then resumes input.
 - The old presenter is quiesced before its replacement accepts guest flushes. It drains queued renderer work and waits up to 3 s for its current fence; a timeout aborts the pool swap. This preserves one in-flight blit per scanout.
 - Old surface sets remain available until the first new-generation frame commits, with a 1 s cleanup deadline when the guest does not produce one. Because frame streams are bounded, the embedded CLI reconciles the current pool after each successful resize and can recover a pool from a later frame event.
@@ -492,9 +512,9 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 | Question | Task | Result |
 |---|---|---|
 | Does a config-space update raise a display event in Linux and Android? | #019, #028 | Linux: positive (#019, 2026-10-08, macOS 27.0.1 build 26A434; [graphics.md](graphics.md) §16, IR-256). Android: pending (#028) |
-| Does `Display.getDeviceProductInfo()` expose the EDID product code on pool displays? | #028 | pending |
-| Does a mode change keep the Android display ID? | #067 (display 0), #028 (pool displays) | Partial (#067, 2026-10-19): the host waits for display 0's requested dimensions and rolls back on timeout; Android mode-change and ID stability tests remain pending (§7.1, IR-1372) |
-| Density: does the forced density replace the default density (display 0) and the fallback 213 (pool displays) without side effects? | #067 (display 0), #028 (pool displays) | Partial (#067, 2026-10-19): boot and resize paths send `SetDisplayPolicy`; guest density readback and OQ-39 remain pending (§4, IR-1372) |
+| Does `Display.getDeviceProductInfo()` expose the EDID product code on pool displays? | #028 | Host correlation by `APK` product code and a unique exact-mode fallback is implemented; Android behavior remains pending |
+| Does a mode change keep the Android display ID? | #067 (display 0), #028 (pool displays) | Partial (#067, 2026-10-19): the host waits for display 0's requested dimensions and rolls back on timeout; pool reconfiguration is implemented but Android mode-change and ID stability tests remain pending (§7.1, IR-1372, IR-1376) |
+| Density: does the forced density replace the default density (display 0) and the fallback 213 (pool displays) without side effects? | #067 (display 0), #028 (pool displays) | Partial (#067, 2026-10-19): boot and resize paths send `SetDisplayPolicy`; pool acquire sends the resolved density and the Guest Agent checks readback, but Android execution and OQ-39 remain pending (§4, IR-1372, IR-1376) |
 | IME policy `LOCAL` on pool displays works with the APKRun IME | #071 | pending |
 | Fixture and sample apps on secondary displays | #029 | pending (§8) |
 | `IOSurfaceIsInUse` reflects WindowServer use of layer contents | #068 | pending (§5.2) |
@@ -522,7 +542,7 @@ Embedded development mode, display 0, before DisplayPool.
 
 1. `DisplayPool` actor with slot states, the serialized acquire (§3.3), release (§3.4), and fault handling, against `FakeScanoutController` and `FakeDisplayControlChannel`. Add the T0 property test for invariant 2 (§3.5). It uses `DisplayGeometryResolver` (§6.1), which #067 builds; #028 depends on #067.
 2. The Guest Agent's display messages ([guest-protocol.md](guest-protocol.md)): `DisplayAdded/Changed/Removed`, `SetDisplayPolicy`, `ClearDisplay`, task events.
-3. Integration: `ScanoutController` + Guest Agent on Android. `apkrun dev displays add|remove|list` exercises the pool without apps.
+3. Integration: `ScanoutController` + Guest Agent on Android. `apkrun dev displays` starts one development guest and accepts `add`, `remove`, and `list` commands in that live session.
 4. Acceptance: 50 cycles of acquire → release across slots with no stale frames (checked by the T2 test via the first-frame rule), no duplicate Android display IDs, and every slot `free` at the end. Record the hotplug findings in §11.
 
 ### #029 App on a secondary display (M3)

@@ -21131,3 +21131,88 @@ appearance. The development error panel intentionally has no launcher-level
 **Try Again** or **Open APKRun** buttons; the CLI error provides the
 remediation, and rerunning the command retries. Maintainers should review this
 development-only behavior and the bounded status stream.
+
+## IR-1376: Implement the DisplayPool and interactive display controls
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #028 |
+| Affected documents | [display-and-windowing.md](../02-design/display-and-windowing.md) §§3, 4, 11, 12; [graphics.md](../02-design/graphics.md) §§4.3, 16; [guest-protocol.md](../02-design/guest-protocol.md) §§7.1, 8.1; [error-catalog.md](../03-reference/error-catalog.md) §7.3; [M03](issues/M03-input-and-basic-runtime.md) #028 |
+
+**Choice.** `DisplayPool` owns scanouts 1–15 in RuntimeCore, while the
+`ScanoutController` adapter in GraphicsCore owns the device operations. One
+ordered relay in `DevelopmentGuestAgent` fans out task and display events, so
+the pool does not create a second consumer of the Guest Agent stream. Acquire
+and release are serialized. The pool correlates `APK` product IDs to scanouts;
+if product data is absent, it accepts only one new display after the serialized
+attach window, even if its reported mode differs from the requested mode.
+Multiple product-less candidates remain ambiguous and fail attachment. A
+product match is also accepted at Android's reported dimensions. Removed
+product-less candidates are discarded before fallback evaluation. Guest
+`SetDisplayPolicy` applies the resolved density and `LOCAL` IME policy and
+checks density readback. Release finishes display tasks before disabling the
+scanout. If `DisplayRemoved` is missing, the slot retains its Android ID and
+remains quarantined until removal is confirmed or Android restarts; the CLI
+reports this outcome instead of claiming success.
+
+`SessionID.system` may hold a display without consuming the app limit.
+`SessionRegistry.requestLeased` acquires and releases app leases on terminal
+session paths, but the existing app-launch flow stays on display 0 until #029
+adds launch-on-secondary-display. The development CLI runs as one interactive
+`apkrun dev displays` process with `add`, `list`, `remove`, and `quit`; separate
+invocations could not share an embedded VM. The reported memory is an estimate
+of three 4-byte-per-pixel surfaces, not a measured footprint.
+
+Resize restores the previous host mode and guest density on failure. If
+rollback itself fails, the pool detaches the prior surface pool, disables the
+scanout, marks it `reconfigurationUncertain`, and lets only the owning lease
+disable it on release. It stays quarantined until Android restarts because the
+guest may have replaced its display ID during the failed resize. The pool
+retains that lease's owner identity for duplicate-session and active-session
+limit checks. The supervisor compares Android uptime across `GetSnapshot`
+resynchronization; a decrease emits a restart event that `RuntimeSupervisor`
+routes to `DisplayPool.guestRestarted()`.
+Before replacing a presenter after a matching resize event, the pool confirms
+that the latest Guest Agent snapshot still reports the requested mode. A
+stale queued event cannot confirm a mode that Android has already left. The
+mode-confirmation timeout is configurable for tests and remains 3 s in
+production.
+
+Fallback A/B/C has not been selected because Android hotplug behavior has not
+been observed. Fallback A needs a privileged DRM re-probe path; enabling B or C
+without evidence would change boot-time memory or product display capacity.
+
+**Reason.** The module split keeps display policy out of GraphicsCore and
+device ownership out of RuntimeCore. Serializing topology changes preserves
+scanout/display correlation. Requiring confirmed removal before reuse prevents
+an old Android display event from being attributed to a new lease. The
+interactive CLI keeps the VM alive for multiple display operations without
+adding a second runtime-lifetime mechanism.
+
+**Verification.** Focused `DisplayPoolTests` and
+`SessionRegistryDisplayPoolTests` pass, including stale-lease protection,
+density selection, failure cleanup, release-timeout quarantine, product-mode
+mismatch handling, product-less actual-mode fallback, removed fallback-candidate
+handling, superseded resize-event rejection, and uncertain resize rollback.
+`swift test --filter DisplayPoolTests` passed 14 tests after these regression
+cases were added, including owner retention across an uncertain resize.
+`swift test --filter GuestAgentSupervisorTests` passed 17 tests; the reconnect
+case confirms that Android uptime rollback emits a restart event while a Guest
+Agent-only restart does not.
+`GuestOperationTests` pass; the Guest Agent JVM suite passes 101 tests.
+The EmbeddedRuntime CLI build and three command-parser tests pass. Focused
+WindowingCore tests pass for #067. No Android pool hotplug, 50-cycle T2 run,
+Android pool reconfiguration, real density readback, memory measurement, or
+live display CLI session was performed. All #028 acceptance criteria remain
+unchecked.
+
+**Risk.** Product-info correlation, Android's config interrupt, the unique
+product-less fallback, and uptime-based restart detection are not verified on
+the Android image. The reconfigure path has only fake-backed coverage and does
+not choose fallback A if Android replaces the display ID. The
+`RuntimeSupervisor` restart monitor is not covered by a full runtime test.
+`requestLeased` is not called by the current #026 launch flow. Maintainers
+should review the no-product fallback, the interactive CLI lifetime, the
+decision to leave hotplug fallback pending, the two new runtime error entries,
+and the release-timeout quarantine behavior.

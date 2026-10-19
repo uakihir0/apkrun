@@ -816,7 +816,7 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 - Hotplug on Android with the fallbacks of [../../02-design/graphics.md](../../02-design/graphics.md) §4.3 (R-01).
 - `reconfigure` with the #067 resize sequence. The #067 display-ID test and the density check (OQ-39) are repeated on pool displays, and fallback A is available.
 - `SessionRegistry` sessions acquire a lease from `DisplayPool`.
-- `apkrun dev displays add|remove|list`.
+- One interactive `apkrun dev displays` process with `add`, `remove`, and `list` commands, so multiple operations share the same embedded guest.
 - Out of scope:
   - Launching apps on pool displays (#029).
   - Two sessions and input routing (#030).
@@ -843,8 +843,8 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
    - If no event arrives, apply fallback A, then B, then C ([../../02-design/graphics.md](../../02-design/graphics.md) §4.3).
    - Check: T2 sees the display, and the result is recorded.
 4. **Integration.**
-   - Connect `DisplayPool` to `ScanoutController` and the Guest Agent. `SessionRegistry` uses `acquire` and `release`. Add `apkrun dev displays add|remove|list`.
-   - Check: `apkrun-dev dev displays add --size 960x1700 --dpi 320` adds a display that `list` shows, and `remove` frees it.
+   - Connect `DisplayPool` to `ScanoutController` and the Guest Agent. `SessionRegistry` uses `acquire` and `release`. Add the interactive `apkrun dev displays` command.
+   - Check: in one `apkrun dev displays` session, `add --size 960x1700 --dpi 320` creates a display shown by `list`, and `remove <scanout>` frees it.
 5. **Pool-display checks.**
    - Run `reconfigure` with the #067 sequence. Repeat the display-ID test and the density check on a pool display.
    - Check: the results are recorded.
@@ -867,6 +867,11 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 - [ ] A request beyond `display.maxSessions` fails with `displayPoolExhausted` and its remediation.
 - [ ] The hotplug result is recorded, and the chosen fallback, if any, is implemented.
 - [ ] The host memory per display is measured.
+
+### Progress
+
+- **Implementation in progress (2026-10-19, IR-1376).** RuntimeCore now owns scanouts 1–15, serializes attach and release, correlates Guest Agent display events, applies density and IME policy, creates a fresh IOSurface pool per lease, supports resize with rollback and quarantine, and keeps a release timeout unavailable until Android removal is confirmed. Resize confirmation checks the latest Guest Agent snapshot; an uncertain resize remains quarantined until Android restarts because its display ID may have changed. Product matches and a sole product-less candidate are accepted at Android's reported mode; removed product-less candidates are discarded and ambiguous candidates still fail. `SessionRegistry.requestLeased` acquires and releases leases on terminal session paths; app launch remains on display 0 until #029. The interactive `apkrun dev displays` command starts one embedded Guest Agent session and accepts `add`, `list`, `remove`, and `quit`; `remove` reports quarantined scanouts instead of claiming success. Focused DisplayPool and SessionRegistry Swift tests, Guest Agent JVM tests, and CLI build/parser checks pass. Android hotplug/product-info behavior, fallback A/B/C, mode-change ID stability, pool density readback, 50 real guest cycles, and measured IOSurface memory remain pending; no acceptance criterion is checked.
+- **Implementation in progress (2026-10-19, IR-1376).** RuntimeCore now owns scanouts 1–15, serializes attach and release, correlates Guest Agent display events, applies density and IME policy, creates a fresh IOSurface pool per lease, supports resize with rollback and quarantine, and keeps a release timeout unavailable until Android removal is confirmed. Resize confirmation checks the latest Guest Agent snapshot; an uncertain resize remains quarantined until Android restarts because its display ID may have changed. Such a lease retains its owner identity for duplicate-session and limit checks; Android uptime rollback during Guest Agent resynchronization resets boot-local quarantines. Product matches and a sole product-less candidate are accepted at Android's reported mode; removed product-less candidates are discarded and ambiguous candidates still fail. `SessionRegistry.requestLeased` acquires and releases leases on terminal session paths; app launch remains on display 0 until #029. The interactive `apkrun dev displays` command starts one embedded Guest Agent session and accepts `add`, `list`, `remove`, and `quit`; `remove` reports quarantined scanouts instead of claiming success. Focused DisplayPool, SessionRegistry, and Guest Agent supervisor Swift tests, Guest Agent JVM tests, and CLI build/parser checks pass. Android hotplug/product-info behavior, fallback A/B/C, mode-change ID stability, pool density readback, 50 real guest cycles, and measured IOSurface memory remain pending; no acceptance criterion is checked.
 
 ### Notes
 

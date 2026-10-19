@@ -70,6 +70,16 @@ public enum BootRecordLog {
         lines.count > limit ? Array(lines.suffix(limit)) : lines
     }
 
+    /// Reads valid JSONL records from the bounded boot log.
+    public static func read(from url: URL) -> [BootRecord] {
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return String(decoding: data, as: UTF8.self)
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { try? decoder.decode(BootRecord.self, from: Data($0.utf8)) }
+    }
+
     /// Appends `record` to `url` and keeps the newest records, replacing the file atomically.
     public static func append(_ record: BootRecord, to url: URL) throws {
         let directory = url.deletingLastPathComponent()

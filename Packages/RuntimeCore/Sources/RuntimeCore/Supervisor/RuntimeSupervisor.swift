@@ -19,10 +19,14 @@ public enum RuntimeState: Equatable, Sendable {
     case failed(RuntimeBootFailure)
 }
 
-/// Why a client asked for the runtime (runtime-daemon.md §3.1). The M1 cut knows the CLI only.
+/// Why a client asked for the runtime (runtime-daemon.md §3.1).
 public enum StartReason: Sendable {
     /// `apkrun dev boot`.
     case cli
+    /// APKRun.app, a wrapper, or another product client.
+    case user
+    /// A registered package session or other automatic launch request.
+    case automatic
 }
 
 /// The boot deadlines of runtime-daemon.md §3.2.
@@ -99,6 +103,7 @@ public actor RuntimeSupervisor {
     private let diagnostics: DiagnosticsContext
     private let planner: AndroidBootPlanner
     private let timeouts: BootTimeouts
+    private let guestAgentTimeout: Duration
     private let eventContinuation: AsyncStream<RuntimeEvent>.Continuation
     private let logger: APKLogger
     private let bootLogger: APKLogger
@@ -152,6 +157,7 @@ public actor RuntimeSupervisor {
         timeouts: BootTimeouts = .standard,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         guestAgentBundle: GuestAgentBundle? = nil,
+        guestAgentTimeout: Duration = .seconds(5),
         developmentDisplay: DevelopmentDisplay? = nil
     ) {
         self.guestAgentBundle = guestAgentBundle
@@ -162,6 +168,7 @@ public actor RuntimeSupervisor {
         self.diagnostics = diagnostics
         planner = AndroidBootPlanner(platform: platform, paths: diagnostics.paths)
         self.timeouts = timeouts
+        self.guestAgentTimeout = guestAgentTimeout
         self.environment = environment
         let stream = AsyncStream.makeStream(of: RuntimeEvent.self, bufferingPolicy: .bufferingNewest(4096))
         events = stream.stream
@@ -192,6 +199,11 @@ public actor RuntimeSupervisor {
             let outcome = stopRequested ? "stopped" : "failed:\(error.qualifiedCode)"
             await fail(error)
             writeBootRecord(outcome: outcome)
+            if !stopRequested {
+                // Preserve the failure event and boot record for diagnostics, then make a later
+                // explicit start retry possible without requiring a daemon restart.
+                transition(to: .stopped)
+            }
             throw error
         }
         writeBootRecord(outcome: "ready")
@@ -382,10 +394,11 @@ public actor RuntimeSupervisor {
                 throw .guestAgent(.startFailed)
             }
             do throws(GuestAgentFailure) {
-                try await agent.start(connectTimeout: .seconds(5))
+                try await agent.start(connectTimeout: guestAgentTimeout)
             } catch {
                 throw .guestAgent(error)
             }
+            Perf.mark(.agentConnected, timeline: diagnostics.perfTimeline)
             if let developmentDisplay {
                 do throws(GuestProtocolFailure) {
                     _ = try await agent.supervisor.send(
@@ -805,7 +818,7 @@ public actor RuntimeSupervisor {
 
     /// The markers of `perf/boots.jsonl` (diagnostics.md §4.3).
     private static let recordedMarkers: Set<PerfMarker> = [
-        .vmStart, .kernelStart, .androidInit, .systemServerReady, .bootCompleted, .runtimeReady,
+        .vmStart, .kernelStart, .androidInit, .systemServerReady, .bootCompleted, .agentConnected, .runtimeReady,
     ]
 
     private func fail(_ failure: RuntimeBootFailure) async {

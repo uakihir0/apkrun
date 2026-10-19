@@ -20,6 +20,19 @@ private final class PresenterEngineRef: @unchecked Sendable {
     }
 }
 
+private final class ReplacementCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didComplete = false
+
+    func markCompleted() {
+        lock.withLock { didComplete = true }
+    }
+
+    var completed: Bool {
+        lock.withLock { didComplete }
+    }
+}
+
 /// A `drmVirgl` device with a fake renderer, and a control queue that delivers guest requests to it.
 private struct PresenterHarness {
     let device: VirtioGPUDevice
@@ -279,6 +292,88 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
     #expect(throws: GraphicsFailure.self) {
         _ = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)
     }
+}
+
+@Test func livePresenterReplacementAdvancesGenerationAndClosesTheOldPresenterAfterItsBlit() async throws {
+    let harness = try PresenterHarness()
+    let oldPresenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)
+    harness.device.deviceDidStart(context: harness.context, negotiatedFeatures: 0)
+    var oldFrames = oldPresenter.frames.makeAsyncIterator()
+
+    let first = harness.send(
+        bindAndFlush(resource: 3, rect: fullRect) + [flushRequest(resource: 3, rect: fullRect)]
+    )
+    try await eventually { first.completionCounts == [1, 1, 1] && oldPresenter.statistics.framesPresented == 1 }
+    #expect(await oldFrames.next() == .frameReady(generation: 1, bufferIndex: 0, sequence: 1))
+
+    let mode = DisplayMode(widthPixels: 800, heightPixels: 600, refreshHz: 60, dotsPerInch: 160)
+    let newPresenter = try harness.device.reconfigurePresenter(
+        scanoutZero, mode: mode, width: mode.widthPixels, height: mode.heightPixels)
+    #expect(newPresenter.generation == 2)
+    #expect(newPresenter.surfaces.first?.width == 800)
+    #expect(newPresenter.surfaces.first?.height == 600)
+    #expect(harness.engine.calls.filter { if case .presentTargetDestroy = $0 { true } else { false } }.count == 3)
+
+    var newFrames = newPresenter.frames.makeAsyncIterator()
+    let second = harness.send([flushRequest(resource: 3, rect: fullRect)])
+    try await eventually { second.completionCounts == [1] && newPresenter.statistics.framesPresented == 1 }
+    #expect(await newFrames.next() == .frameReady(generation: 2, bufferIndex: 0, sequence: 2))
+
+    harness.device.frameDisplayed(scanout: scanoutZero, generation: 2, sequence: 2)
+    harness.device.deviceWillStop()
+}
+
+@Test func livePresenterReplacementWaitsForTheOldScanoutFence() async throws {
+    let harness = try PresenterHarness()
+    let oldPresenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)
+    harness.device.deviceDidStart(context: harness.context, negotiatedFeatures: 0)
+    harness.engine.autoCompletePresentFences = false
+    let first = harness.send(
+        bindAndFlush(resource: 3, rect: fullRect) + [flushRequest(resource: 3, rect: fullRect)]
+    )
+    try await eventually { first.completionCounts == [1, 1, 1] && blitCalls(harness.engine).count == 1 }
+
+    let completion = ReplacementCompletion()
+    let mode = DisplayMode(widthPixels: 800, heightPixels: 600, refreshHz: 60, dotsPerInch: 160)
+    let device = harness.device
+    let replacement = Task.detached {
+        defer { completion.markCompleted() }
+        return try? device.reconfigurePresenter(
+            scanoutZero, mode: mode, width: mode.widthPixels, height: mode.heightPixels)
+    }
+    try await Task.sleep(for: .milliseconds(20))
+    #expect(!completion.completed)
+    #expect(blitCalls(harness.engine).count == 1)
+    #expect(harness.engine.calls.filter { if case .presentTargetDestroy = $0 { true } else { false } }.isEmpty)
+
+    harness.engine.completePresentFences()
+    let newPresenter = await replacement.value
+    #expect(completion.completed)
+    #expect(newPresenter?.generation == 2)
+    #expect(oldPresenter.statistics.framesPresented == 1)
+    #expect(harness.engine.calls.filter { if case .presentTargetDestroy = $0 { true } else { false } }.count == 3)
+    harness.device.deviceWillStop()
+}
+
+@Test func failedLivePresenterReplacementLeavesTheCurrentModeAndPoolAttached() throws {
+    let harness = try PresenterHarness()
+    let presenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)
+    harness.device.deviceDidStart(context: harness.context, negotiatedFeatures: 0)
+    let invalid = DisplayMode(widthPixels: 4096, heightPixels: 600, refreshHz: 60, dotsPerInch: 160)
+
+    #expect(throws: GraphicsFailure.self) {
+        _ = try harness.device.reconfigurePresenter(scanoutZero, mode: invalid, width: 4096, height: 600)
+    }
+    #expect(harness.device.scanoutTable.state(of: scanoutZero).mode == .testDefault)
+    #expect(presenter.generation == 1)
+
+    let mismatched = DisplayMode(widthPixels: 800, heightPixels: 600, refreshHz: 60, dotsPerInch: 160)
+    #expect(throws: GraphicsFailure.self) {
+        _ = try harness.device.reconfigurePresenter(scanoutZero, mode: mismatched, width: 640, height: 600)
+    }
+    #expect(harness.device.scanoutTable.state(of: scanoutZero).mode == .testDefault)
+    #expect(presenter.generation == 1)
+    harness.device.deviceWillStop()
 }
 
 @Test func onlyTheVirGLDeviceCanAttachAPresenter() throws {

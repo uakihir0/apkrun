@@ -40,7 +40,7 @@ final class GuestGPUSession {
     private var scanoutBindings: [Int: UInt32] = [:]
     /// The source rectangle that each scanout's `SET_SCANOUT` named. A present copies it (graphics.md §6.2 step 2).
     private var scanoutRects: [Int: VirtioGPURect] = [:]
-    /// The presenter of each scanout that presents (#023). The device attaches them before the guest starts.
+    /// The presenter of each scanout that presents (#023). The device swaps these during display reconfiguration.
     private var presenters: [Int: ScanoutPresenter] = [:]
 
     /// - Parameters:
@@ -71,6 +71,19 @@ final class GuestGPUSession {
     /// Attaches the presenter of its scanout. The device calls it before the guest starts (#023).
     func attachPresenter(_ presenter: ScanoutPresenter) {
         presenters[Int(presenter.scanout.rawValue)] = presenter
+    }
+
+    /// Replaces a scanout's presenter and returns the previous pool.
+    @discardableResult
+    func replacePresenter(_ presenter: ScanoutPresenter) -> ScanoutPresenter? {
+        let scanout = Int(presenter.scanout.rawValue)
+        let previous = presenters.updateValue(presenter, forKey: scanout)
+        return previous
+    }
+
+    /// The current presenter for `scanout`, if one is attached.
+    func presenter(for scanout: ScanoutID) -> ScanoutPresenter? {
+        presenters[scanout.rawValue]
     }
 
     /// The attached presenters, so the device can close them before the renderer is destroyed.

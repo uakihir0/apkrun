@@ -40,12 +40,19 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
     private let clock: @Sendable () -> UInt64
     private let traceObserver: (@Sendable (TraceRecord) -> Void)?
     private let lock = NSLock()
+    /// Serializes guest-session commands with presenter replacement and shutdown.
+    private let sessionLock = NSLock()
+    /// Serializes host mode changes and presenter replacement.
+    private let presenterMutationLock = NSLock()
+    /// Prevents a late frame acknowledgement from queuing target destruction after renderer shutdown.
+    private let presenterLifecycleLock = NSLock()
     private var scanouts: ScanoutTable
     /// The display generation that the last `GET_DISPLAY_INFO` answered.
     private var reportedGeneration: UInt64
     private var negotiatedEDID = false
     /// Set by DRIVER_OK. A presenter attaches only before the guest starts (#023).
     private var hasStarted = false
+    private var isShuttingDown = false
     /// The `events_read` value the device wants the guest to see.
     private var eventsReadDesired: UInt32 = 0
     /// The `events_read` value the last successful configuration update wrote.
@@ -286,18 +293,30 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
 
     /// Clears the guest session and resets the renderer. Host scanout configuration is kept.
     public func deviceWillReset() {
+        presenterMutationLock.lock()
+        defer { presenterMutationLock.unlock() }
+        presenterLifecycleLock.lock()
+        defer { presenterLifecycleLock.unlock() }
         clearGuestSession()
-        session.reset()
+        sessionLock.withLock { session.reset() }
         backend?.reset()
         logger.info("virtio-gpu reset: guest session cleared, host scanout configuration kept")
     }
 
     /// Clears the guest session and destroys the renderer at VM stop. Host scanout configuration is kept.
     public func deviceWillStop() {
+        presenterMutationLock.lock()
+        defer { presenterMutationLock.unlock() }
+        presenterLifecycleLock.lock()
+        defer { presenterLifecycleLock.unlock() }
         clearGuestSession()
-        session.reset()
+        lock.withLock { isShuttingDown = true }
+        let presenters = sessionLock.withLock { () -> [ScanoutPresenter] in
+            session.reset()
+            return session.attachedPresenters
+        }
         // The presenters release their targets on the render thread, so they close before the renderer is shut down.
-        for presenter in session.attachedPresenters {
+        for presenter in presenters {
             presenter.close()
         }
         backend?.shutdown()
@@ -321,13 +340,15 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
                 detail: "Only the drmVirgl device has a renderer to present with."
             )
         }
-        guard !lock.withLock({ hasStarted }) else {
+        presenterMutationLock.lock()
+        defer { presenterMutationLock.unlock() }
+        guard !lock.withLock({ hasStarted || isShuttingDown }) else {
             throw .configUpdateFailed(detail: "A presenter must be attached before the guest starts.")
         }
         // The targets are made on the render thread, so the device lock is not held while they are.
         let presenter = try ScanoutPresenter(scanout: scanout, width: width, height: height, backend: backend)
-        let started = lock.withLock { () -> Bool in
-            guard !hasStarted else { return true }
+        let started = sessionLock.withLock { () -> Bool in
+            guard !lock.withLock({ hasStarted || isShuttingDown }) else { return true }
             session.attachPresenter(presenter)
             return false
         }
@@ -336,6 +357,95 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
             throw .configUpdateFailed(detail: "A presenter must be attached before the guest starts.")
         }
         return presenter
+    }
+
+    /// Replaces the active pool of a running scanout and emits a display-change event.
+    ///
+    /// The candidate surfaces and render targets are ready before the guest sees the new mode. Before the swap, the
+    /// old presenter drains its one in-flight blit so two generations never present to the same scanout concurrently.
+    public func reconfigurePresenter(
+        _ scanout: ScanoutID,
+        mode: DisplayMode,
+        width: Int,
+        height: Int
+    ) throws(GraphicsFailure) -> ScanoutPresenter {
+        guard let backend else {
+            throw .rendererOperationFailed(
+                operation: "reconfigurePresenter",
+                detail: "Only the drmVirgl device has a renderer to present with."
+            )
+        }
+        presenterMutationLock.lock()
+        defer { presenterMutationLock.unlock() }
+
+        guard lock.withLock({ hasStarted && !isShuttingDown }) else {
+            throw .configUpdateFailed(detail: "A presenter can be reconfigured only while the guest is running.")
+        }
+        guard mode.isSupported else {
+            throw .modeUnsupported(mode: mode)
+        }
+        guard width == mode.widthPixels, height == mode.heightPixels else {
+            throw .configUpdateFailed(detail: "The presenter dimensions must match the advertised scanout mode.")
+        }
+        guard let current = sessionLock.withLock({ session.presenter(for: scanout) }) else {
+            throw .configUpdateFailed(detail: "The scanout has no attached presenter.")
+        }
+        let candidate = try ScanoutPresenter(
+            scanout: scanout,
+            width: width,
+            height: height,
+            generation: current.generation &+ 1,
+            sequenceSource: current.sequenceSource,
+            backend: backend
+        )
+
+        var failure: GraphicsFailure?
+        let replaced = sessionLock.withLock { () -> ScanoutPresenter? in
+            guard !lock.withLock({ isShuttingDown }) else {
+                failure = .configUpdateFailed(detail: "The graphics device is shutting down.")
+                return nil
+            }
+            guard current.quiesceForReplacement() else {
+                failure = .configUpdateFailed(
+                    detail:
+                        "The current scanout blit did not finish within \(ScanoutPresenter.replacementWaitSeconds) seconds; the existing display mode was kept."
+                )
+                return nil
+            }
+            do throws(GraphicsFailure) {
+                try enableScanout(scanout, mode: mode)
+            } catch {
+                current.resumeAfterFailedReplacement()
+                failure = error
+                return nil
+            }
+            let old = session.replacePresenter(candidate)
+            old?.close()
+            return old
+        }
+        guard replaced === current else {
+            candidate.close()
+            throw failure
+                ?? .configUpdateFailed(detail: "The scanout presenter changed while it was being reconfigured.")
+        }
+        logger.info(
+            "virtio-gpu presenter replaced scanout=\(scanout.rawValue, .public) mode=\(mode.description, .public) generation=\(candidate.generation, .public)"
+        )
+        return candidate
+    }
+
+    /// Acknowledges a frame only when it belongs to the active generation.
+    public func frameDisplayed(scanout: ScanoutID, generation: UInt64, sequence: UInt64) {
+        presenterLifecycleLock.lock()
+        defer { presenterLifecycleLock.unlock() }
+        guard !lock.withLock({ isShuttingDown }) else {
+            return
+        }
+        let presenter = sessionLock.withLock {
+            let current = session.presenter(for: scanout)
+            return current?.generation == generation ? current : nil
+        }
+        presenter?.frameDisplayed(upTo: sequence)
     }
 
     /// Enables `scanout` with `mode` and tells the guest about the change.
@@ -410,12 +520,14 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
             reportGuestError("request could not be copied from guest memory", command: nil)
         }
         let header = try? VirtioGPUControlHeader(decodingFrom: request)
+        sessionLock.lock()
         let reply = makeReply(for: request, header: header, queueIndex: queueIndex, context: context)
         if let bytes = reply.bytes, let header {
             deliver(bytes, answering: header, to: element)
         }
         traceObserver?(TraceRecord(queueIndex: queueIndex, request: request, response: reply.bytes))
         finish(element, header: header, work: reply.work)
+        sessionLock.unlock()
     }
 
     /// Completes an element that the device has answered. With a renderer, the element waits in the queue

@@ -9,16 +9,17 @@ final class SurfacePool {
     /// The number of buffers. Three buffers give the steady state of one displayed, one offered, and one rendering.
     static let bufferCount = 3
 
-    /// The pool's generation. It changes on every reallocation, which #023 never does.
-    let generation: UInt64 = 1
+    /// The pool's generation. It changes on every reallocation.
+    let generation: UInt64
     let pixelWidth: Int
     let pixelHeight: Int
     let surfaces: [IOSurface]
     private(set) var states: PresentBufferStates
 
-    private init(pixelWidth: Int, pixelHeight: Int, surfaces: [IOSurface]) {
+    private init(pixelWidth: Int, pixelHeight: Int, generation: UInt64, surfaces: [IOSurface]) {
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
+        self.generation = generation
         self.surfaces = surfaces
         states = PresentBufferStates(bufferCount: surfaces.count)
     }
@@ -29,7 +30,7 @@ final class SurfacePool {
     }
 
     /// Allocates the surfaces. Returns `nil` when the system refuses one.
-    static func make(pixelWidth: Int, pixelHeight: Int) -> SurfacePool? {
+    static func make(pixelWidth: Int, pixelHeight: Int, generation: UInt64 = 1) -> SurfacePool? {
         guard pixelWidth > 0, pixelHeight > 0 else {
             return nil
         }
@@ -52,7 +53,7 @@ final class SurfacePool {
             }
             surfaces.append(surface)
         }
-        return SurfacePool(pixelWidth: pixelWidth, pixelHeight: pixelHeight, surfaces: surfaces)
+        return SurfacePool(pixelWidth: pixelWidth, pixelHeight: pixelHeight, generation: generation, surfaces: surfaces)
     }
 
     /// Takes a free buffer for rendering. WindowServer may still read a buffer, so `IOSurfaceIsInUse` skips it.

@@ -23,6 +23,19 @@ public enum ScanoutFrame: Equatable, Sendable {
     case frameReady(generation: UInt64, bufferIndex: Int, sequence: UInt64)
 }
 
+/// A sequence shared by successive pools of one scanout, so late frame acknowledgements remain unambiguous.
+final class ScanoutFrameSequence: @unchecked Sendable {
+    private let lock = NSLock()
+    private var nextValue: UInt64 = 1
+
+    func take() -> UInt64 {
+        lock.withLock {
+            defer { nextValue &+= 1 }
+            return nextValue
+        }
+    }
+}
+
 /// Presents one scanout into a pool of IOSurfaces (graphics.md §6.1 to §6.3, #023).
 ///
 /// A flush of the resource bound to the scanout becomes one blit into a free buffer. Only one blit is in flight at a
@@ -37,6 +50,8 @@ public final class ScanoutPresenter: @unchecked Sendable {
     private static let pollIntervalSeconds: TimeInterval = 0.001
     /// How long `close()` waits for the waiter before it proceeds. The waiter stops within one poll of `close()`.
     private static let closeWaitSeconds: Int = 2
+    /// How long a display resize waits for the current GPU blit to finish before it keeps the existing mode.
+    static let replacementWaitSeconds: Int = 3
 
     /// The scanout that the presenter shows.
     public let scanout: ScanoutID
@@ -52,13 +67,14 @@ public final class ScanoutPresenter: @unchecked Sendable {
     private let continuation: AsyncStream<ScanoutFrame>.Continuation
     private let backend: VirGLBackend
     private let pool: SurfacePool
+    let sequenceSource: ScanoutFrameSequence
     /// The present target of each buffer, created on the render thread. Read on the device queue and the waiter.
     private let targets: [any PresentTarget]
     private let lock = NSLock()
     private var scheduler = LatestFrameScheduler<PresentRequest>()
-    private var nextSequence: UInt64 = 1
     private var statisticsValue = PresentStatistics()
     private var isClosed = false
+    private var isReconfiguring = false
     private let waiter = DispatchQueue(label: "io.apkrun.graphics.present-waiter")
     private let waits = DispatchGroup()
     private let logger = APKLogger(category: GraphicsLogCategory.present)
@@ -66,12 +82,19 @@ public final class ScanoutPresenter: @unchecked Sendable {
     /// Creates a presenter of `width` x `height` pixels, with its three IOSurfaces and their present targets.
     ///
     /// The targets are made on the render thread. The call fails when a surface or a target cannot be made.
-    init(scanout: ScanoutID, width: Int, height: Int, backend: VirGLBackend) throws(GraphicsFailure) {
+    init(
+        scanout: ScanoutID,
+        width: Int,
+        height: Int,
+        generation: UInt64 = 1,
+        sequenceSource: ScanoutFrameSequence = ScanoutFrameSequence(),
+        backend: VirGLBackend
+    ) throws(GraphicsFailure) {
         guard width > 0, height > 0, width <= 4095, height <= 4095 else {
             throw .modeUnsupported(
                 mode: DisplayMode(widthPixels: width, heightPixels: height, refreshHz: 60, dotsPerInch: 160))
         }
-        guard let pool = SurfacePool.make(pixelWidth: width, pixelHeight: height) else {
+        guard let pool = SurfacePool.make(pixelWidth: width, pixelHeight: height, generation: generation) else {
             throw .rendererOperationFailed(
                 operation: "presentPoolCreate",
                 detail: "IOSurface refused a \(width)x\(height) BGRA surface."
@@ -108,6 +131,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
         self.pixelHeight = height
         self.surfaces = pool.surfaces
         self.pool = pool
+        self.sequenceSource = sequenceSource
         self.targets = targets
         self.backend = backend
         let (stream, continuation) = AsyncStream<ScanoutFrame>.makeStream(bufferingPolicy: .bufferingNewest(8))
@@ -118,7 +142,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
         )
     }
 
-    /// The generation of the pool. It is fixed for the life of the presenter, because #023 has no reallocation.
+    /// The generation of the pool.
     public var generation: UInt64 {
         pool.generation
     }
@@ -135,7 +159,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
     /// because the guest's vsync paces it, not the host (graphics.md §6.2 step 3).
     func flush(resource: UInt32, source: VirtioGPURect) -> VirGLRenderWork? {
         lock.withLock {
-            guard !isClosed else { return nil }
+            guard !isClosed, !isReconfiguring else { return nil }
             let request = PresentRequest(resource: resource, source: source)
             guard let runnable = scheduler.submit(request) else {
                 return nil
@@ -154,9 +178,39 @@ public final class ScanoutPresenter: @unchecked Sendable {
         lock.withLock {
             pool.consumerDisplayed(upTo: sequence)
             // Submitted under the lock, so a close that follows queues its target release after this blit.
-            if let work = startPendingLocked() {
+            if !isReconfiguring, let work = startPendingLocked() {
                 backend.submitRenderWork(work)
             }
+        }
+    }
+
+    /// Stops scheduling frames and waits for every already submitted blit before a new pool is installed.
+    ///
+    /// `backend.drain()` first places a barrier after work already submitted by the guest. The wait group is then
+    /// authoritative: each render closure has entered its fence wait, and each waiter leaves only after the fence is
+    /// released on the render thread. A timeout reopens the presenter so a failed resize leaves the current mode usable.
+    func quiesceForReplacement() -> Bool {
+        let shouldWait = lock.withLock { () -> Bool in
+            guard !isClosed, !isReconfiguring else { return false }
+            isReconfiguring = true
+            scheduler.discardPending()
+            return true
+        }
+        guard shouldWait else { return false }
+
+        backend.drain()
+        let drained = waits.wait(timeout: .now() + .seconds(Self.replacementWaitSeconds)) == .success
+        if !drained {
+            lock.withLock { isReconfiguring = false }
+        }
+        return drained
+    }
+
+    /// Reopens the current generation when the host rejected a replacement after quiescing it.
+    func resumeAfterFailedReplacement() {
+        lock.withLock {
+            guard !isClosed else { return }
+            isReconfiguring = false
         }
     }
 
@@ -173,6 +227,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
         let shouldClose = lock.withLock { () -> Bool in
             guard !isClosed else { return false }
             isClosed = true
+            isReconfiguring = true
             scheduler.discardPending()
             continuation.finish()
             return true
@@ -197,8 +252,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
         guard let index = pool.acquire() else {
             return nil
         }
-        let sequence = nextSequence
-        nextSequence &+= 1
+        let sequence = sequenceSource.take()
         scheduler.beginBlit()
         let target = targets[index]
         return { [self] engine in
@@ -219,7 +273,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
 
     /// Starts the held flush, if one is waiting and a buffer is free. The caller holds the lock.
     private func startPendingLocked() -> VirGLRenderWork? {
-        guard !isClosed, let request = scheduler.takePending() else {
+        guard !isClosed, !isReconfiguring, let request = scheduler.takePending() else {
             return nil
         }
         if let work = startBlitLocked(request) {

@@ -59,6 +59,8 @@ extension RuntimeControlClientError: LocalizedError {
 /// The first RuntimeAPI control client. It authenticates the daemon, obtains an anonymous control
 /// endpoint through the broker, then reuses that endpoint for status, start, and stop requests.
 public actor RuntimeControlClient {
+    private static let maximumEndpointAdmissionRetries = 22
+
     private let configuration: RuntimeControlClientConfiguration
     private let connectionFactory: any RuntimeXPCConnectionFactory
     private var openedControl: OpenedControlConnection?
@@ -133,6 +135,48 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Launches the requested package once and returns the session result.
+    ///
+    /// A transport failure is returned to the caller without replaying this side-effecting request.
+    public func launch(_ request: RuntimeLaunchRequest) async throws(RuntimeControlClientError)
+        -> RuntimeLaunchResult
+    {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeLaunchControlRequest(
+                header: makeHeader(),
+                packageID: request.packageID
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.launch(data)
+            return try Self.decodeLaunchReply(from: response)
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
+    /// Terminates the requested package once and returns the termination result.
+    ///
+    /// A transport failure is returned to the caller without replaying this side-effecting request.
+    public func terminate(_ request: RuntimeTerminateRequest) async throws(RuntimeControlClientError)
+        -> RuntimeTerminateResult
+    {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeTerminateControlRequest(
+                header: makeHeader(),
+                packageID: request.packageID
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.terminate(data)
+            return try Self.decodeTerminateReply(from: response)
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
     private func makeHeader() -> APIRequestHeader {
         APIRequestHeader(clientKind: configuration.clientKind)
     }
@@ -179,6 +223,50 @@ public actor RuntimeControlClient {
     }
 
     private func openControlEndpoint() async throws(RuntimeControlClientError) -> OpenedControlConnection {
+        var lastError: RuntimeControlClientError = .endpointRejected(.busy)
+        for attempt in 0...Self.maximumEndpointAdmissionRetries {
+            do {
+                switch try await openControlEndpointAttempt() {
+                case .rejected(let rejection, let hostState):
+                    guard
+                        Self.shouldRetryEndpointAdmission(rejection, hostState: hostState),
+                        attempt < Self.maximumEndpointAdmissionRetries
+                    else {
+                        throw RuntimeControlClientError.endpointRejected(rejection)
+                    }
+                    lastError = .endpointRejected(rejection)
+                case .opened(let opened):
+                    let probe = RuntimeStatusRequest(header: APIRequestHeader(clientKind: configuration.clientKind))
+                    do {
+                        _ = try await opened.channel.runtimeStatus(Self.encode(probe))
+                    } catch {
+                        opened.channel.invalidate()
+                        throw error
+                    }
+                    return opened
+                }
+            } catch {
+                guard let clientError = error as? RuntimeControlClientError else {
+                    throw Self.transportFailure(error)
+                }
+                guard case .transportFailure = clientError,
+                    attempt < Self.maximumEndpointAdmissionRetries
+                else {
+                    throw clientError
+                }
+                lastError = clientError
+            }
+
+            do {
+                try await Task.sleep(for: Self.endpointAdmissionRetryDelay(attempt: attempt))
+            } catch {
+                throw lastError
+            }
+        }
+        throw lastError
+    }
+
+    private func openControlEndpointAttempt() async throws(RuntimeControlClientError) -> ControlEndpointAttempt {
         let broker = try connectionFactory.makeBroker(
             serviceName: configuration.serviceName,
             signingRequirement: configuration.daemonCodeSigningRequirement
@@ -193,7 +281,7 @@ public actor RuntimeControlClient {
             clientBuild: configuration.clientBuild
         )
         let helloData = try Self.encode(helloRequest)
-        let helloReply = try Self.decode(RuntimeHelloReply.self, from: await broker.hello(helloData))
+        let helloReply = try Self.decodeHelloReply(from: await broker.hello(helloData))
         guard helloReply.apiVersion.major == APIVersion.current.major,
             helloReply.apiVersion.minor >= APIVersion.current.minor
         else {
@@ -210,7 +298,7 @@ public actor RuntimeControlClient {
         let disposition = try Self.decode(RuntimeEndpointReply.self, from: endpointReply.data)
         switch disposition {
         case .rejected(let rejection):
-            throw .endpointRejected(rejection)
+            return .rejected(rejection, hostState: helloReply.hostState)
         case .granted:
             guard let endpoint = endpointReply.endpoint else {
                 throw .endpointMissing
@@ -219,8 +307,28 @@ public actor RuntimeControlClient {
                 endpoint: endpoint,
                 signingRequirement: configuration.daemonCodeSigningRequirement
             )
-            return OpenedControlConnection(hello: helloReply, channel: control)
+            return .opened(OpenedControlConnection(hello: helloReply, channel: control))
         }
+    }
+
+    private static func endpointAdmissionRetryDelay(attempt: Int) -> Duration {
+        let milliseconds = min(25 * (1 << min(attempt, 4)), 250)
+        return .milliseconds(milliseconds)
+    }
+
+    private static func shouldRetryEndpointAdmission(
+        _ rejection: RuntimeEndpointRejection,
+        hostState: String
+    ) -> Bool {
+        if rejection == .busy {
+            return true
+        }
+        // API 1.0–1.2 servers encode a transient busy response as
+        // `hostShuttingDown`; retry only while hello did not report shutdown.
+        return rejection == .hostShuttingDown
+            && APIVersion.current.minor < 3
+            && hostState != "shuttingDown"
+            && hostState != "stopped"
     }
 
     private static func decodeControlReply(from data: Data) throws(RuntimeControlClientError) -> RuntimeHostStatus {
@@ -235,6 +343,36 @@ public actor RuntimeControlClient {
             throw .malformedReply
         }
         return status
+    }
+
+    private static func decodeLaunchReply(from data: Data) throws(RuntimeControlClientError) -> RuntimeLaunchResult {
+        let reply = try Self.decode(RuntimeLaunchControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
+    private static func decodeTerminateReply(from data: Data) throws(RuntimeControlClientError)
+        -> RuntimeTerminateResult
+    {
+        let reply = try Self.decode(RuntimeTerminateControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
     }
 
     private static func encode<Value: Encodable>(_ value: Value) throws(RuntimeControlClientError) -> Data {
@@ -256,6 +394,17 @@ public actor RuntimeControlClient {
         }
     }
 
+    private static func decodeHelloReply(from data: Data) throws(RuntimeControlClientError) -> RuntimeHelloReply {
+        do {
+            return try JSONDecoder().decode(RuntimeHelloReply.self, from: data)
+        } catch {
+            if let brokerError = try? JSONDecoder().decode(RuntimeBrokerErrorReply.self, from: data) {
+                throw .remoteFailure(code: brokerError.error.code, message: brokerError.error.message)
+            }
+            throw .malformedReply
+        }
+    }
+
     private static func transportFailure(_ error: any Error) -> RuntimeControlClientError {
         let error = error as NSError
         return .transportFailure(domain: error.domain, code: error.code)
@@ -265,6 +414,15 @@ public actor RuntimeControlClient {
 private struct OpenedControlConnection: Sendable {
     let hello: RuntimeHelloReply
     let channel: any RuntimeControlChannel
+}
+
+private enum ControlEndpointAttempt {
+    case opened(OpenedControlConnection)
+    case rejected(RuntimeEndpointRejection, hostState: String)
+}
+
+private struct RuntimeBrokerErrorReply: Decodable {
+    let error: RuntimeControlError
 }
 
 struct RuntimeControlClientConfiguration: Equatable, Sendable {
@@ -409,6 +567,8 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func runtimeStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func startRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func stopRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func terminate(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func invalidate()
 }
 
@@ -575,6 +735,34 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.stopRuntime(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.launch(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func terminate(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.terminate(request) { response in finish(.success(response)) }
         }
     }
 

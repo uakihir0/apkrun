@@ -55,13 +55,142 @@ import Testing
     #expect(endpointRequest.clientKind == RuntimeClientKind.cli)
     #expect(endpointRequest.claimedIdentity == "io.apkrun.cli.dev")
 
-    #expect(snapshot.statusRequests.count == 1)
+    #expect(snapshot.statusRequests.count == 2)
     #expect(snapshot.startRequests.count == 1)
     #expect(snapshot.stopRequests.count == 1)
     for data in snapshot.statusRequests + snapshot.startRequests + snapshot.stopRequests {
         let request = try JSONDecoder().decode(ControlRequestHeader.self, from: data)
         #expect(request.header.apiVersion == APIVersion.current)
         #expect(request.header.clientKind == RuntimeClientKind.cli)
+    }
+}
+
+@Test func controlClientLaunchesAndTerminatesWithVersionedRequests() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let launchResult = RuntimeLaunchResult(
+        sessionID: UUID(uuidString: "CF9204EA-C7B5-4C34-A8D9-6D7CD6742501")!,
+        packageID: packageID,
+        state: .running
+    )
+    let terminateResult = RuntimeTerminateResult(packageID: packageID, hadSession: true)
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        launchReply: RuntimeLaunchControlReply(result: launchResult),
+        terminateReply: RuntimeTerminateControlReply(result: terminateResult)
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    #expect(try await client.launch(RuntimeLaunchRequest(packageID: packageID)) == launchResult)
+    #expect(try await client.terminate(RuntimeTerminateRequest(packageID: packageID)) == terminateResult)
+
+    let snapshot = transport.snapshot()
+    #expect(snapshot.launchRequests.count == 1)
+    #expect(snapshot.terminateRequests.count == 1)
+    let launchRequest = try JSONDecoder().decode(RuntimeLaunchControlRequest.self, from: snapshot.launchRequests[0])
+    let terminateRequest = try JSONDecoder().decode(
+        RuntimeTerminateControlRequest.self,
+        from: snapshot.terminateRequests[0]
+    )
+    #expect(launchRequest.packageID == packageID)
+    #expect(terminateRequest.packageID == packageID)
+    for header in [launchRequest.header, terminateRequest.header] {
+        #expect(header.apiVersion == APIVersion.current)
+        #expect(header.clientKind == RuntimeClientKind.cli)
+    }
+}
+
+@Test func controlClientDoesNotReplaySessionMutationsAfterTransportFailure() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let transport = try MockRuntimeTransport(hello: hello, status: nil)
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    transport.failNextLaunch()
+
+    do {
+        _ = try await client.launch(RuntimeLaunchRequest(packageID: packageID))
+        Issue.record("The mock transport failure was not returned to the caller.")
+    } catch {
+        #expect(error == .transportFailure(domain: "NSCocoaErrorDomain", code: 4099))
+    }
+
+    let failedSnapshot = transport.snapshot()
+    #expect(failedSnapshot.launchRequests.count == 1)
+    #expect(failedSnapshot.controlConnections == 1)
+    #expect(failedSnapshot.brokerConnections == 1)
+
+    // A new explicit call can open a fresh connection; the failed launch itself was sent once.
+    _ = try await client.launch(RuntimeLaunchRequest(packageID: packageID))
+    let retriedSnapshot = transport.snapshot()
+    #expect(retriedSnapshot.launchRequests.count == 2)
+    #expect(retriedSnapshot.controlConnections == 2)
+    #expect(retriedSnapshot.brokerConnections == 2)
+
+    transport.failNextTerminate()
+    do {
+        _ = try await client.terminate(RuntimeTerminateRequest(packageID: packageID))
+        Issue.record("The mock terminate transport failure was not returned to the caller.")
+    } catch {
+        #expect(error == .transportFailure(domain: "NSCocoaErrorDomain", code: 4099))
+    }
+    let terminateSnapshot = transport.snapshot()
+    #expect(terminateSnapshot.terminateRequests.count == 1)
+    #expect(terminateSnapshot.controlConnections == 2)
+    #expect(terminateSnapshot.brokerConnections == 2)
+}
+
+@Test func controlClientPreservesTypedSessionErrors() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let failure = RuntimeWireError.runtime(
+        "packageNotInstalled",
+        message: "This app is not installed.",
+        remediation: "Install the app, then retry."
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        launchReply: RuntimeLaunchControlReply(error: failure)
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    do {
+        _ = try await client.launch(RuntimeLaunchRequest(packageID: packageID))
+        Issue.record("The remote package failure was not returned to the caller.")
+    } catch {
+        #expect(error == .remoteFailure(code: failure.code, message: failure.message))
+        #expect(error.errorDescription == failure.message)
     }
 }
 
@@ -125,6 +254,89 @@ import Testing
     #expect(snapshot.brokerInvalidations == 1)
 }
 
+@Test func controlClientRetriesTransientEndpointAdmissionBeforeConnecting() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        endpointBusyRejections: 2
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    try await client.connect()
+
+    let snapshot = transport.snapshot()
+    #expect(snapshot.endpointRequests.count == 3)
+    #expect(snapshot.controlConnections == 1)
+}
+
+@Test func controlClientRetriesTransportRefusedEndpointBeforeReturningConnection() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let transport = try MockRuntimeTransport(hello: hello, status: nil)
+    transport.failNextStatus()
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    try await client.connect()
+
+    let snapshot = transport.snapshot()
+    #expect(snapshot.brokerConnections == 2)
+    #expect(snapshot.controlConnections == 2)
+    #expect(snapshot.endpointRequests.count == 2)
+    #expect(snapshot.statusRequests.count == 2)
+}
+
+@Test func controlClientDecodesBrokerAdmissionErrors() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let failure = RuntimeControlError(
+        code: "runtime.busy",
+        message: "The runtime daemon is handling the maximum number of requests."
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let transport = try MockRuntimeTransport(hello: hello, status: nil, helloFailure: failure)
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    do {
+        _ = try await client.connect()
+        Issue.record("The client accepted a broker admission error as a hello reply.")
+    } catch {
+        #expect(error == .remoteFailure(code: failure.code, message: failure.message))
+    }
+
+    let snapshot = transport.snapshot()
+    #expect(snapshot.endpointRequests.isEmpty)
+    #expect(snapshot.controlConnections == 0)
+    #expect(snapshot.brokerInvalidations == 1)
+}
+
 @Test func controlClientReconnectsAfterAControlTransportFailureWithoutReplayingIt() async throws {
     let configuration = try RuntimeControlClientConfiguration(
         clientKind: .cli,
@@ -164,7 +376,7 @@ import Testing
     #expect(snapshot.brokerConnections == 2)
     #expect(snapshot.controlConnections == 2)
     #expect(snapshot.brokerInvalidations == 3)
-    #expect(snapshot.statusRequests.count == 3)
+    #expect(snapshot.statusRequests.count == 5)
 }
 
 @Test func clientConfigurationsBindReleaseDaemonToTeamAndIdentifier() throws {
@@ -195,13 +407,20 @@ private struct ControlRequestHeader: Decodable {
     let header: APIRequestHeader
 }
 
+private struct BrokerErrorEnvelope: Encodable {
+    let error: RuntimeControlError
+}
+
 private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBrokerChannel, RuntimeControlChannel,
     @unchecked Sendable
 {
     private let helloData: Data
     private let endpointData: Data
+    private let endpointBusyData: Data
     private let endpoint: RuntimeXPCListenerEndpoint?
     private let statusData: Data
+    private let launchData: Data
+    private let terminateData: Data
     private let lock = NSLock()
     private var serviceNameValue: String?
     private var brokerRequirementValue: String?
@@ -211,17 +430,30 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var statusRequestsValue: [Data] = []
     private var startRequestsValue: [Data] = []
     private var stopRequestsValue: [Data] = []
+    private var launchRequestsValue: [Data] = []
+    private var terminateRequestsValue: [Data] = []
     private var brokerConnectionsValue = 0
     private var controlConnectionsValue = 0
     private var brokerInvalidationsValue = 0
     private var failNextStatusValue = false
+    private var failNextLaunchValue = false
+    private var failNextTerminateValue = false
+    private var endpointBusyRejectionsValue: Int
 
     init(
         hello: RuntimeHelloReply,
         status: RuntimeHostStatus?,
-        endpointRejection: RuntimeEndpointRejection? = nil
+        endpointRejection: RuntimeEndpointRejection? = nil,
+        endpointBusyRejections: Int = 0,
+        helloFailure: RuntimeControlError? = nil,
+        launchReply: RuntimeLaunchControlReply? = nil,
+        terminateReply: RuntimeTerminateControlReply? = nil
     ) throws {
-        helloData = try JSONEncoder().encode(hello)
+        if let helloFailure {
+            helloData = try JSONEncoder().encode(BrokerErrorEnvelope(error: helloFailure))
+        } else {
+            helloData = try JSONEncoder().encode(hello)
+        }
         if let endpointRejection {
             endpointData = try JSONEncoder().encode(RuntimeEndpointReply.rejected(endpointRejection))
             endpoint = nil
@@ -229,6 +461,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
             endpointData = try JSONEncoder().encode(RuntimeEndpointReply.granted)
             endpoint = RuntimeXPCListenerEndpoint(value: NSObject())
         }
+        endpointBusyData = try JSONEncoder().encode(RuntimeEndpointReply.rejected(.busy))
+        endpointBusyRejectionsValue = endpointBusyRejections
         if let status {
             statusData = try JSONEncoder().encode(RuntimeControlReply(status: status))
         } else {
@@ -236,6 +470,19 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 RuntimeControlReply(error: RuntimeControlError(code: "runtime.test", message: "test failure"))
             )
         }
+        let packageID = RuntimePackageID(rawValue: "com.example.app")!
+        let defaultLaunchReply = RuntimeLaunchControlReply(
+            result: RuntimeLaunchResult(
+                sessionID: UUID(uuidString: "B1D9C07C-E76A-446F-B849-0C9E5FC7B1C7")!,
+                packageID: packageID,
+                state: .running
+            )
+        )
+        let defaultTerminateReply = RuntimeTerminateControlReply(
+            result: RuntimeTerminateResult(packageID: packageID, hadSession: true)
+        )
+        launchData = try JSONEncoder().encode(launchReply ?? defaultLaunchReply)
+        terminateData = try JSONEncoder().encode(terminateReply ?? defaultTerminateReply)
     }
 
     func makeBroker(
@@ -270,9 +517,16 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     }
 
     func requestEndpoint(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeBrokerEndpointReply {
-        lock.withLock { endpointRequestsValue.append(request) }
+        let (data, endpoint) = lock.withLock {
+            endpointRequestsValue.append(request)
+            guard endpointBusyRejectionsValue > 0 else {
+                return (endpointData, endpoint)
+            }
+            endpointBusyRejectionsValue -= 1
+            return (endpointBusyData, nil)
+        }
         return RuntimeBrokerEndpointReply(
-            data: endpointData,
+            data: data,
             endpoint: endpoint
         )
     }
@@ -303,6 +557,30 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return statusData
     }
 
+    func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        let shouldFail = lock.withLock {
+            launchRequestsValue.append(request)
+            defer { failNextLaunchValue = false }
+            return failNextLaunchValue
+        }
+        if shouldFail {
+            throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+        }
+        return launchData
+    }
+
+    func terminate(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        let shouldFail = lock.withLock {
+            terminateRequestsValue.append(request)
+            defer { failNextTerminateValue = false }
+            return failNextTerminateValue
+        }
+        if shouldFail {
+            throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+        }
+        return terminateData
+    }
+
     func snapshot() -> Snapshot {
         lock.withLock {
             Snapshot(
@@ -314,6 +592,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 statusRequests: statusRequestsValue,
                 startRequests: startRequestsValue,
                 stopRequests: stopRequestsValue,
+                launchRequests: launchRequestsValue,
+                terminateRequests: terminateRequestsValue,
                 brokerConnections: brokerConnectionsValue,
                 controlConnections: controlConnectionsValue,
                 brokerInvalidations: brokerInvalidationsValue
@@ -325,6 +605,14 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         lock.withLock { failNextStatusValue = true }
     }
 
+    func failNextLaunch() {
+        lock.withLock { failNextLaunchValue = true }
+    }
+
+    func failNextTerminate() {
+        lock.withLock { failNextTerminateValue = true }
+    }
+
     struct Snapshot {
         let serviceName: String?
         let brokerRequirement: String?
@@ -334,6 +622,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let statusRequests: [Data]
         let startRequests: [Data]
         let stopRequests: [Data]
+        let launchRequests: [Data]
+        let terminateRequests: [Data]
         let brokerConnections: Int
         let controlConnections: Int
         let brokerInvalidations: Int

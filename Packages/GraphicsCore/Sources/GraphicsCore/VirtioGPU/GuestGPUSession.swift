@@ -81,6 +81,17 @@ final class GuestGPUSession {
         return previous
     }
 
+    /// Removes a presenter only when it is still the pool generation being released.
+    func detachPresenter(_ scanout: ScanoutID, generation: UInt64?) -> ScanoutPresenter? {
+        guard let current = presenters[scanout.rawValue],
+            generation == nil || current.generation == generation
+        else {
+            return nil
+        }
+        presenters[scanout.rawValue] = nil
+        return current
+    }
+
     /// The current presenter for `scanout`, if one is attached.
     func presenter(for scanout: ScanoutID) -> ScanoutPresenter? {
         presenters[scanout.rawValue]

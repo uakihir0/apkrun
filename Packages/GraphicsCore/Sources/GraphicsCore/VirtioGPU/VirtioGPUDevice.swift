@@ -327,7 +327,7 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
 
     /// Attaches a presenter that shows `scanout` in a pool of `width` x `height` IOSurfaces (graphics.md §6.1 to §6.3, #023).
     ///
-    /// Call it before the guest starts, and only on the virgl device, which has the renderer. Once attached, the
+    /// Call it before the guest starts for scanout 0, or after a pool scanout is enabled and Android reports it. The
     /// presenter's frames carry the flushes of the scanout's resource. Close the device to release the targets.
     public func attachPresenter(
         _ scanout: ScanoutID,
@@ -342,21 +342,48 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
         }
         presenterMutationLock.lock()
         defer { presenterMutationLock.unlock() }
-        guard !lock.withLock({ hasStarted || isShuttingDown }) else {
-            throw .configUpdateFailed(detail: "A presenter must be attached before the guest starts.")
+        guard !lock.withLock({ isShuttingDown }) else {
+            throw .configUpdateFailed(
+                detail: "A presenter cannot be attached while the graphics device is shutting down.")
         }
         // The targets are made on the render thread, so the device lock is not held while they are.
         let presenter = try ScanoutPresenter(scanout: scanout, width: width, height: height, backend: backend)
-        let started = sessionLock.withLock { () -> Bool in
-            guard !lock.withLock({ hasStarted || isShuttingDown }) else { return true }
+        let attached = sessionLock.withLock { () -> Bool in
+            guard !lock.withLock({ isShuttingDown }), session.presenter(for: scanout) == nil else { return false }
             session.attachPresenter(presenter)
-            return false
+            return true
         }
-        guard !started else {
+        guard attached else {
             presenter.close()
-            throw .configUpdateFailed(detail: "A presenter must be attached before the guest starts.")
+            throw .configUpdateFailed(
+                detail: "The scanout already has a presenter or the graphics device is shutting down."
+            )
         }
         return presenter
+    }
+
+    /// Detaches one presenter's pool without disabling its scanout.
+    ///
+    /// Pool release calls this before clearing Android tasks and disabling the connector. A generation check prevents
+    /// a delayed release from detaching a newer lease of the same scanout.
+    @discardableResult
+    public func detachPresenter(
+        _ scanout: ScanoutID,
+        generation: UInt64? = nil
+    ) -> Bool {
+        presenterMutationLock.lock()
+        defer { presenterMutationLock.unlock() }
+        presenterLifecycleLock.lock()
+        defer { presenterLifecycleLock.unlock() }
+        let presenter = sessionLock.withLock {
+            session.detachPresenter(scanout, generation: generation)
+        }
+        guard let presenter else { return false }
+        presenter.close()
+        logger.info(
+            "virtio-gpu presenter detached scanout=\(scanout.rawValue, .public) generation=\(presenter.generation, .public)"
+        )
+        return true
     }
 
     /// Replaces the active pool of a running scanout and emits a display-change event.

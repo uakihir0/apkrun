@@ -57,18 +57,29 @@ public enum DisplayGeometry {
 public struct LayerFrameGate: Equatable, Sendable {
     /// The generation whose frames are accepted.
     public private(set) var generation: UInt64
+    /// The newest generation announced by the display, even before its first frame arrives.
+    public private(set) var newestAnnouncedGeneration: UInt64
     /// The sequence of the last frame accepted. Zero before the first.
     public private(set) var lastShownSequence: UInt64 = 0
 
     /// Creates a gate that accepts the frames of `generation`.
     public init(generation: UInt64) {
         self.generation = generation
+        newestAnnouncedGeneration = generation
+    }
+
+    /// Records that the display replaced its surfaces with a newer generation.
+    public mutating func announce(generation: UInt64) {
+        newestAnnouncedGeneration = max(newestAnnouncedGeneration, generation)
     }
 
     /// Records a frame and returns `true` when the layer should show it. Returns `false` for a stale generation, or for
     /// a sequence that is not newer than the last one accepted.
     public mutating func accept(generation: UInt64, sequence: UInt64) -> Bool {
-        guard generation == self.generation, sequence > lastShownSequence else {
+        guard generation == self.generation,
+            generation >= newestAnnouncedGeneration,
+            sequence > lastShownSequence
+        else {
             return false
         }
         lastShownSequence = sequence
@@ -77,8 +88,40 @@ public struct LayerFrameGate: Equatable, Sendable {
 
     /// Moves to a new generation. Frames of the old one are refused from now on.
     public mutating func switchTo(generation: UInt64) {
-        guard generation != self.generation else { return }
+        guard generation >= newestAnnouncedGeneration, generation != self.generation else { return }
         self.generation = generation
         lastShownSequence = 0
+    }
+}
+
+/// The result of applying a native window geometry change to Android and its display surfaces.
+public enum DisplayResizeOutcome: Equatable, Sendable {
+    /// Android and the host now use the new geometry.
+    case applied
+    /// The request failed and the previous geometry was restored.
+    case rejected
+    /// The request completed without replacing the surface generation.
+    case unchanged
+    /// Restoring the previous geometry failed; input must stay disabled until a newer frame commits.
+    case stateUncertain
+
+    /// Combines a coalesced resize result with a later result in the same window update.
+    ///
+    /// A later rejection cannot erase an earlier uncertain rollback or a successful resize that installed a new
+    /// generation. A later successful resize supersedes earlier uncertainty because the window waits for its new frame.
+    public func accumulating(_ later: Self) -> Self {
+        switch later {
+        case .stateUncertain:
+            .stateUncertain
+        case .applied:
+            .applied
+        case .unchanged:
+            self
+        case .rejected:
+            switch self {
+            case .applied, .stateUncertain: self
+            case .rejected, .unchanged: .rejected
+            }
+        }
     }
 }

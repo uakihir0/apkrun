@@ -22,7 +22,7 @@
         private var failureWindow: SessionFailureWindowController?
         private var tasks: [Task<Void, Never>] = []
         private var pendingGeometry: (pointSize: CGSize, backingScale: CGFloat, zoom: Double)?
-        private var resizeCompletions: [@MainActor (Bool) -> Void] = []
+        private var resizeCompletions: [@MainActor (DisplayResizeOutcome) -> Void] = []
         private var resizeTask: Task<Void, Never>?
         private var isShowingFailure = false
         #if APKRUN_TEST_READBACK
@@ -117,7 +117,7 @@
                     inputSink: inputSink
                 ) { [weak self] pointSize, backingScale, zoom, completion in
                     guard let self else {
-                        completion(false)
+                        completion(.rejected)
                         return
                     }
                     requestResize(
@@ -146,10 +146,10 @@
             pointSize: CGSize,
             backingScale: CGFloat,
             zoom: Double,
-            completion: @escaping @MainActor (Bool) -> Void
+            completion: @escaping @MainActor (DisplayResizeOutcome) -> Void
         ) {
             guard !isShowingFailure else {
-                completion(false)
+                completion(.rejected)
                 return
             }
             pendingGeometry = (pointSize, backingScale, zoom)
@@ -158,12 +158,13 @@
                 return
             }
             resizeTask = Task { @MainActor [weak self] in
-                var lastResizeSucceeded = true
+                var lastResizeOutcome = DisplayResizeOutcome.unchanged
                 while let self, !Task.isCancelled {
                     guard let geometry = pendingGeometry else {
                         break
                     }
                     pendingGeometry = nil
+                    let previousGeneration = display.currentSurfaceSet?.generation
                     do {
                         try await display.resize(
                             pointSize: geometry.pointSize,
@@ -171,11 +172,30 @@
                             zoom: geometry.zoom
                         )
                         if let surfaceSet = display.currentSurfaceSet {
-                            source?.ingest(.surfacesReplaced(surfaceSet: surfaceSet))
+                            if previousGeneration != surfaceSet.generation {
+                                source?.ingest(.surfacesReplaced(surfaceSet: surfaceSet))
+                                lastResizeOutcome = lastResizeOutcome.accumulating(.applied)
+                            } else {
+                                lastResizeOutcome = lastResizeOutcome.accumulating(.unchanged)
+                            }
                         }
-                        lastResizeSucceeded = true
+                    } catch let error as DeveloperDisplayResizeFailure {
+                        switch error {
+                        case .modeRestoreFailed(let hostModeRestored, let guestModeRestored):
+                            lastResizeOutcome = lastResizeOutcome.accumulating(.stateUncertain)
+                            Output.writeLogLine(
+                                "error: display resize rollback failed (hostModeRestored=\(hostModeRestored), guestModeRestored=\(guestModeRestored)); input remains disabled until a newer display frame is committed",
+                                toStandardError: true
+                            )
+                        case .geometry, .displayUnavailable:
+                            lastResizeOutcome = lastResizeOutcome.accumulating(.rejected)
+                            Output.writeLogLine(
+                                "warning: display resize could not be applied (\(String(describing: error)))",
+                                toStandardError: true
+                            )
+                        }
                     } catch {
-                        lastResizeSucceeded = false
+                        lastResizeOutcome = lastResizeOutcome.accumulating(.rejected)
                         Output.writeLogLine(
                             "warning: display resize could not be applied (\(String(describing: error)))",
                             toStandardError: true
@@ -189,7 +209,7 @@
                 resizeCompletions.removeAll()
                 resizeTask = nil
                 for completion in completions {
-                    completion(lastResizeSucceeded)
+                    completion(lastResizeOutcome)
                 }
             }
         }
@@ -201,7 +221,7 @@
             let completions = resizeCompletions
             resizeCompletions.removeAll()
             for completion in completions {
-                completion(false)
+                completion(.rejected)
             }
         }
 

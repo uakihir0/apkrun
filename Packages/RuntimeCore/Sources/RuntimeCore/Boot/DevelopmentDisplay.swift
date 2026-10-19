@@ -56,6 +56,16 @@ public struct DevelopmentDisplayStatistics: Equatable, Sendable {
     public var cpuPixelCopies: UInt64
 }
 
+/// A development display resize failure, including whether restoring the prior mode failed.
+public enum DevelopmentDisplayReconfigurationFailure: Error, Equatable, Sendable {
+    /// A graphics operation failed before the display mode could be changed.
+    case graphics(GraphicsFailure)
+    /// Android did not accept the requested mode, and the prior mode was restored.
+    case guestRejectedMode
+    /// The requested mode failed and at least one prior-mode restoration operation failed.
+    case modeRestorationFailed(hostModeRestored: Bool, guestModeRestored: Bool)
+}
+
 /// Presents scanout 0 of a development boot in the caller's process (graphics.md §6.2, #023).
 ///
 /// The boot attaches the display to its GPU device before the guest starts, so the first frame is not missed. The
@@ -149,31 +159,45 @@ public final class DevelopmentDisplay: @unchecked Sendable {
     }
 
     /// Advertises scanout 0's mode, waits for Android to apply the matching policy, then replaces its surfaces.
-    public func reconfigure(to mode: ResolvedDisplayMode) async throws(GraphicsFailure) {
+    public func reconfigure(to mode: ResolvedDisplayMode) async throws(DevelopmentDisplayReconfigurationFailure) {
         guard let scanout = ScanoutID(rawValue: 0) else {
-            throw .modeUnsupported(mode: .testDefault)
+            throw .graphics(.modeUnsupported(mode: .testDefault))
         }
         let (device, densityUpdater, previousMode) = lock.withLock {
             (self.device, self.densityUpdater, modeValue)
         }
         guard let device, let densityUpdater else {
-            throw .configUpdateFailed(detail: "The development display is not ready to be resized.")
+            throw .graphics(
+                .configUpdateFailed(detail: "The development display is not ready to be resized.")
+            )
         }
         let displayMode = Self.graphicsMode(for: mode)
         let previousDisplayMode = Self.graphicsMode(for: previousMode)
 
         // Let Android observe the requested mode before exposing a new host pool or input geometry to the window.
-        try device.enableScanout(scanout, mode: displayMode)
+        do throws(GraphicsFailure) {
+            try device.enableScanout(scanout, mode: displayMode)
+        } catch {
+            throw .graphics(error)
+        }
         guard await densityUpdater(mode) else {
-            try? device.enableScanout(scanout, mode: previousDisplayMode)
-            let restored = await densityUpdater(previousMode)
+            let restoration = await restoreMode(
+                device: device,
+                scanout: scanout,
+                displayMode: previousDisplayMode,
+                mode: previousMode,
+                densityUpdater: densityUpdater
+            )
             logger.warning(
-                "display resize was rejected because Android did not apply mode \(displayMode.description, .public); prior display policy restoration \(restored ? "succeeded" : "failed", .public)"
+                "display resize was rejected because Android did not apply mode \(displayMode.description, .public); prior display policy restoration host=\(restoration.hostModeRestored, .public) guest=\(restoration.guestModeRestored, .public)"
             )
-            throw .configUpdateFailed(
-                detail:
-                    "Android did not confirm the requested display mode and density. The previous host display mode was kept."
-            )
+            guard restoration.hostModeRestored, restoration.guestModeRestored else {
+                throw .modeRestorationFailed(
+                    hostModeRestored: restoration.hostModeRestored,
+                    guestModeRestored: restoration.guestModeRestored
+                )
+            }
+            throw .guestRejectedMode
         }
 
         let presenter: ScanoutPresenter
@@ -185,12 +209,23 @@ public final class DevelopmentDisplay: @unchecked Sendable {
                 height: mode.pixelSize.height
             )
         } catch {
-            try? device.enableScanout(scanout, mode: previousDisplayMode)
-            let restored = await densityUpdater(previousMode)
-            logger.warning(
-                "display pool replacement failed after Android applied the requested mode; prior display policy restoration \(restored ? "succeeded" : "failed", .public)"
+            let restoration = await restoreMode(
+                device: device,
+                scanout: scanout,
+                displayMode: previousDisplayMode,
+                mode: previousMode,
+                densityUpdater: densityUpdater
             )
-            throw error
+            logger.warning(
+                "display pool replacement failed after Android applied the requested mode; prior display policy restoration host=\(restoration.hostModeRestored, .public) guest=\(restoration.guestModeRestored, .public)"
+            )
+            guard restoration.hostModeRestored, restoration.guestModeRestored else {
+                throw .modeRestorationFailed(
+                    hostModeRestored: restoration.hostModeRestored,
+                    guestModeRestored: restoration.guestModeRestored
+                )
+            }
+            throw .graphics(error)
         }
         let surfaceSet = DevelopmentSurfaceSet(
             generation: presenter.generation,
@@ -205,6 +240,24 @@ public final class DevelopmentDisplay: @unchecked Sendable {
         continuation.yield(.surfacesReplaced(surfaceSet: surfaceSet))
         relayFrames(from: presenter)
         retireOldSurfaceSets(after: presenter.generation)
+    }
+
+    private func restoreMode(
+        device: VirtioGPUDevice,
+        scanout: ScanoutID,
+        displayMode: DisplayMode,
+        mode: ResolvedDisplayMode,
+        densityUpdater: @escaping @Sendable (ResolvedDisplayMode) async -> Bool
+    ) async -> (hostModeRestored: Bool, guestModeRestored: Bool) {
+        let hostModeRestored: Bool
+        do throws(GraphicsFailure) {
+            try device.enableScanout(scanout, mode: displayMode)
+            hostModeRestored = true
+        } catch {
+            hostModeRestored = false
+        }
+        let guestModeRestored = await densityUpdater(mode)
+        return (hostModeRestored, guestModeRestored)
     }
 
     /// Returns a pool set while its generation is still in use by a window frame.

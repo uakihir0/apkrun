@@ -35,3 +35,17 @@ import Testing
     #expect(state.hasFailed)
     #expect(!state.acceptsInput)
 }
+
+@Test func failedModeRestorationKeepsInputDisabledUntilANewerGenerationCommits() {
+    var state = SessionWindowPresentationState()
+    state.markFramePresented()
+    state.markGeometryUncertain(after: 2)
+
+    #expect(!state.acceptsInput)
+
+    state.markGeometrySynchronized(generation: 2)
+    #expect(!state.acceptsInput)
+
+    state.markGeometrySynchronized(generation: 3)
+    #expect(state.acceptsInput)
+}

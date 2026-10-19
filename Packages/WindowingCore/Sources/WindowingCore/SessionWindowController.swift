@@ -21,7 +21,8 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     private var gate: LayerFrameGate
     private var consumer: Task<Void, Never>?
     private var presentationState = SessionWindowPresentationState()
-    private let onGeometryChanged: ((CGSize, CGFloat, Double, @escaping @MainActor (Bool) -> Void) -> Void)?
+    private let onGeometryChanged:
+        ((CGSize, CGFloat, Double, @escaping @MainActor (DisplayResizeOutcome) -> Void) -> Void)?
     private var geometryDebounce: Task<Void, Never>?
     private var geometryUpdatePending = false
     private var pendingSurfaceGeneration: UInt64?
@@ -36,7 +37,8 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         backingScale: CGFloat,
         inputSink: PointerInputSink? = nil,
         appIcon: NSImage? = nil,
-        onGeometryChanged: ((CGSize, CGFloat, Double, @escaping @MainActor (Bool) -> Void) -> Void)? = nil
+        onGeometryChanged:
+            ((CGSize, CGFloat, Double, @escaping @MainActor (DisplayResizeOutcome) -> Void) -> Void)? = nil
     ) {
         self.source = source
         let surfaceSet = source.currentSurfaceSet
@@ -190,6 +192,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         switch event {
         case .surfacesReplaced(let generation):
             guard generation > gate.generation else { return }
+            gate.announce(generation: generation)
             pendingSurfaceGeneration = max(pendingSurfaceGeneration ?? generation, generation)
             generationHasCommittedFrame = false
             layerView.setInputEnabled(false)
@@ -201,6 +204,9 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
             let replacesGeometry = generation > gate.generation
             if replacesGeometry {
                 gate.switchTo(generation: generation)
+                guard gate.generation == generation else {
+                    return
+                }
                 if let pendingSurfaceGeneration, pendingSurfaceGeneration <= generation {
                     self.pendingSurfaceGeneration = nil
                 }
@@ -227,6 +233,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
                 if replacesGeometry {
                     layerView.commitGeometry(generation: generation)
                 }
+                presentationState.markGeometrySynchronized(generation: generation)
                 if pendingSurfaceGeneration.map({ $0 <= generation }) ?? true {
                     generationHasCommittedFrame = true
                 }
@@ -260,19 +267,33 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
                 return
             }
             guard let onGeometryChanged else {
-                geometryUpdateDidFinish(success: false)
+                geometryUpdateDidFinish(outcome: .rejected)
                 return
             }
-            onGeometryChanged(contentSize, window.backingScaleFactor, requestedZoom) { [weak self] success in
-                self?.geometryUpdateDidFinish(success: success)
+            onGeometryChanged(contentSize, window.backingScaleFactor, requestedZoom) { [weak self] outcome in
+                self?.geometryUpdateDidFinish(outcome: outcome)
             }
         }
     }
 
-    private func geometryUpdateDidFinish(success: Bool) {
+    private func geometryUpdateDidFinish(outcome: DisplayResizeOutcome) {
         geometryUpdatePending = false
-        if !success, pendingSurfaceGeneration == nil {
-            generationHasCommittedFrame = generationHasCommittedFrame || presentationState.hasPresentedFrame
+        switch outcome {
+        case .applied:
+            let newestGeneration = source.currentSurfaceSet.generation
+            if newestGeneration > gate.generation {
+                gate.announce(generation: newestGeneration)
+                pendingSurfaceGeneration = max(pendingSurfaceGeneration ?? newestGeneration, newestGeneration)
+                generationHasCommittedFrame = false
+            }
+        case .rejected:
+            if pendingSurfaceGeneration == nil {
+                generationHasCommittedFrame = generationHasCommittedFrame || presentationState.hasPresentedFrame
+            }
+        case .unchanged:
+            break
+        case .stateUncertain:
+            presentationState.markGeometryUncertain(after: source.currentSurfaceSet.generation)
         }
         updateInputAvailability()
     }
@@ -292,17 +313,33 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
 struct SessionWindowPresentationState: Equatable {
     private(set) var hasPresentedFrame = false
     private(set) var hasFailed = false
+    private(set) var uncertainAfterGeneration: UInt64?
 
     var showsPlaceholder: Bool {
         !hasPresentedFrame
     }
 
     var acceptsInput: Bool {
-        hasPresentedFrame && !hasFailed
+        hasPresentedFrame && !hasFailed && geometryIsCertain
+    }
+
+    var geometryIsCertain: Bool {
+        uncertainAfterGeneration == nil
     }
 
     mutating func markFramePresented() {
         hasPresentedFrame = true
+    }
+
+    mutating func markGeometryUncertain(after generation: UInt64) {
+        uncertainAfterGeneration = max(uncertainAfterGeneration ?? generation, generation)
+    }
+
+    mutating func markGeometrySynchronized(generation: UInt64) {
+        guard let uncertainAfterGeneration, generation > uncertainAfterGeneration else {
+            return
+        }
+        self.uncertainAfterGeneration = nil
     }
 
     mutating func markFailed() {

@@ -775,11 +775,11 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 - [ ] Moving the window to a non-Retina screen switches to 160 dpi and 480 × 850 px.
 - [ ] The resize policy is defined and documented (FR-DSP-05): the §7.1 sequence, or fallback B, recorded under R-04.
 - [ ] Input hits the right point after a resize.
-- [ ] The orientation decision is written into §7.7.
+- [x] The orientation decision is written into §7.7.
 
 ### Progress
 
-- **Implementation in progress (2026-10-19, IR-1368–IR-1372).** Steps 1–2 resolve even pixel dimensions against expressible 60 Hz EDID timings, apply the resolved boot density, and advertise the visible-frame-clamped initial window geometry through scanout 0 and EDID. Step 3 wires debounced window resize, backing-scale changes, fullscreen, zoom, Android display-mode confirmation, density policy, presenter replacement, generation-aware frames, and input remapping. A rejected or unconfirmed guest mode restores the previous host mode and density policy where the Guest Agent is available. Focused T0 checks cover timing support, invalid geometry, and presenter replacement while a GPU fence is pending; the embedded CLI builds. Guest density and resize behavior, display-ID stability, orientation on Android, and Mac acceptance remain open; no acceptance criterion is checked.
+- **Implementation in progress (2026-10-19, IR-1368–IR-1372).** Steps 1–2 resolve even pixel dimensions against expressible 60 Hz EDID timings, apply the resolved boot density, and advertise the visible-frame-clamped initial window geometry through scanout 0 and EDID. Step 3 wires debounced window resize, backing-scale changes, fullscreen, zoom, Android display-mode confirmation, density policy, presenter replacement, generation-aware frames, and input remapping. A rejected or unconfirmed guest mode restores the previous host mode and density policy where the Guest Agent is available. Focused T0 checks cover timing support, invalid geometry, and presenter replacement while a GPU fence is pending; the embedded CLI builds. The orientation policy is decided: Android owns app orientation and letterboxing, while the Mac window keeps its orientation and dimensions. Guest density and resize behavior, display-ID stability, actual app orientation behavior, and Mac acceptance remain unverified; the remaining acceptance criteria are unchecked.
 
 ### Notes
 

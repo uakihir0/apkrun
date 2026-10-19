@@ -149,6 +149,14 @@ public final class IOSurfaceLayerView: NSView {
 
     /// Enables event translation after the owner is ready to route input to the guest.
     func setInputEnabled(_ enabled: Bool) {
+        guard inputEnabled != enabled else {
+            return
+        }
+        if !enabled {
+            // The window may not receive the matching up events while input is disabled. End every guest-side
+            // pointer and key state before dropping further host events.
+            cancelAll()
+        }
         inputEnabled = enabled
     }
 

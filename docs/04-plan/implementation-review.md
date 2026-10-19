@@ -21072,6 +21072,10 @@ generation and target retirement checks, and invalid mode handling.
 display-ID stability run, or visual window test was performed; those T2/T3
 checks and all #067 acceptance criteria remain open.
 
+Coalesced resize callbacks preserve an uncertain rollback across later
+rejections and no-op requests. A genuine later resize installs a newer surface
+generation, and input stays disabled until that generation commits.
+
 **Risk.** Display ID 0 stability, real Android density behavior, and orientation
 handling remain unverified. If a guest mode change replaces ID 0, resize
 currently fails and attempts rollback; maintainers must either validate this

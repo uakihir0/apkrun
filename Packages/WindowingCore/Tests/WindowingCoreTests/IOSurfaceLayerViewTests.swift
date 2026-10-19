@@ -83,3 +83,46 @@ private func pointerEvent(_ type: NSEvent.EventType) -> NSEvent {
 
     #expect(sink.events.isEmpty)
 }
+
+@MainActor
+@Test func disablingInputCancelsAnOpenPointerGestureAndHeldKey() {
+    let view = IOSurfaceLayerView(
+        frame: NSRect(x: 0, y: 0, width: 100, height: 100),
+        contentSize: CGSize(width: 100, height: 100),
+        contentScale: 1
+    )
+    view.update(
+        pixelWidth: 100,
+        pixelHeight: 100,
+        generation: 1,
+        contentSize: CGSize(width: 100, height: 100),
+        contentsScale: 1
+    )
+    let sink = RecordingInputSink()
+    view.inputSink = sink
+
+    view.mouseDown(with: pointerEvent(.leftMouseDown))
+    view.keyDown(with: keyEvent(.keyDown, code: 0x00))
+    view.setInputEnabled(false)
+
+    #expect(sink.events.count == 3)
+    guard case .touch(let touch) = sink.events[0] else {
+        Issue.record("Expected the pointer press before input was disabled.")
+        return
+    }
+    #expect(touch.phase == .down)
+    guard case .key(let key) = sink.events[1] else {
+        Issue.record("Expected the key press before input was disabled.")
+        return
+    }
+    #expect(key.action == .down)
+    guard case .cancelAll = sink.events[2] else {
+        Issue.record("Disabling input must cancel the guest's open pointer and key states.")
+        return
+    }
+
+    view.setInputEnabled(true)
+    view.keyUp(with: keyEvent(.keyUp, code: 0x00))
+    view.mouseUp(with: pointerEvent(.leftMouseUp))
+    #expect(sink.events.count == 3)
+}

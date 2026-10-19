@@ -75,6 +75,33 @@ import Testing
     #expect(gate.generation == 2)
 }
 
+@Test func theGateDropsFramesOlderThanTheNewestAnnouncedGeneration() {
+    var gate = LayerFrameGate(generation: 1)
+    gate.announce(generation: 2)
+    gate.switchTo(generation: 2)
+    let current = gate.accept(generation: 2, sequence: 1)
+    #expect(gate.generation == 2)
+    #expect(current)
+
+    gate.announce(generation: 3)
+    let lateFrame = gate.accept(generation: 2, sequence: 2)
+    #expect(!lateFrame)
+
+    gate.switchTo(generation: 3)
+    let replacement = gate.accept(generation: 3, sequence: 1)
+    #expect(gate.generation == 3)
+    #expect(replacement)
+}
+
+@Test func coalescedResizeResultsPreserveUncertaintyAndSuccessfulGenerations() {
+    #expect(DisplayResizeOutcome.stateUncertain.accumulating(.rejected) == .stateUncertain)
+    #expect(DisplayResizeOutcome.applied.accumulating(.rejected) == .applied)
+    #expect(DisplayResizeOutcome.stateUncertain.accumulating(.unchanged) == .stateUncertain)
+    #expect(DisplayResizeOutcome.stateUncertain.accumulating(.applied) == .applied)
+    #expect(DisplayResizeOutcome.rejected.accumulating(.rejected) == .rejected)
+    #expect(DisplayResizeOutcome.unchanged.accumulating(.unchanged) == .unchanged)
+}
+
 @Test func switchingToTheSameGenerationKeepsTheLastFrame() {
     var gate = LayerFrameGate(generation: 3)
     let shown = gate.accept(generation: 3, sequence: 4)

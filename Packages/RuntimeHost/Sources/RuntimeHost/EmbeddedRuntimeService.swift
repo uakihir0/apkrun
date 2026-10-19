@@ -277,6 +277,15 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
                 remediation: "Boot Android with the development Guest Agent, then retry."
             )
         }
+        let isInstalled: Bool
+        do throws(GuestAgentFailure) {
+            isInstalled = try await guestAgent.isInstalled(requestedPackage)
+        } catch {
+            throw Self.wireError(for: error)
+        }
+        guard isInstalled else {
+            throw Self.packageNotInstalledError
+        }
         let current = await registry.session(packageID: requestedPackage)
         let hadSession = current != nil
         if let current, current.state != .closing {
@@ -290,7 +299,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
                 }
             }
         }
-        switch await Self.stopApplication(package: requestedPackage, using: guestAgent) {
+        switch await Self.forceStopApplication(package: requestedPackage, using: guestAgent) {
         case .success(true):
             if hadSession {
                 _ = await registry.stopCompleted(packageID: requestedPackage)
@@ -746,6 +755,25 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         }
     }
 
+    private static func forceStopApplication(
+        package: String,
+        using guestAgent: any EmbeddedSessionGuestAgent
+    ) async -> Result<Bool, GuestAgentFailure> {
+        do {
+            return .success(try await guestAgent.forceStopApplication(package: package))
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private static var packageNotInstalledError: RuntimeWireError {
+        .runtime(
+            "packageNotInstalled",
+            message: "This app is not installed in Android.",
+            remediation: "Install the app first, then try again."
+        )
+    }
+
     private static func wireError(for failure: SessionRegistryFailure) -> RuntimeWireError {
         switch failure {
         case .invalidPackageIdentifier:
@@ -861,6 +889,7 @@ protocol EmbeddedSessionGuestAgent: Sendable {
     func isInstalled(_ package: String) async throws(GuestAgentFailure) -> Bool
     func launch(package: String, displayID: Int32) async throws(GuestAgentFailure) -> GuestLaunchReport
     func stopApplication(package: String) async throws(GuestAgentFailure) -> Bool
+    func forceStopApplication(package: String) async throws(GuestAgentFailure) -> Bool
     func addResynchronizationHandler(
         _ handler: @escaping @Sendable (GuestSnapshotState) async -> Void
     ) async -> UUID

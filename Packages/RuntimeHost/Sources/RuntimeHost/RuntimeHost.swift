@@ -336,14 +336,19 @@ public actor RuntimeHost {
     public func terminate(_ request: RuntimeTerminateRequest) async throws(RuntimeWireError)
         -> RuntimeTerminateResult
     {
-        guard headlessLaunchHookIsEnabled else {
-            throw Self.launchUnavailableError
-        }
-        guard await supervisor?.state == .ready else {
+        guard let supervisor, await supervisor.state == .ready else {
             return RuntimeTerminateResult(packageID: request.packageID, hadSession: false)
         }
-        let service = try await makeHeadlessSessionService()
-        return try await service.terminate(request)
+        if let headlessSessionService {
+            return try await headlessSessionService.terminate(request)
+        }
+        guard let guestAgent = await supervisor.developmentGuestAgent else {
+            throw Self.guestAgentUnavailableError
+        }
+        return try await DaemonHeadlessSessionService.terminateWithoutSession(
+            request,
+            using: guestAgent
+        )
     }
 
     /// Returns a point-in-time view for the control endpoint.
@@ -678,6 +683,11 @@ public actor RuntimeHost {
         "windowUnavailable",
         message: "APKRun can't open an Android app window in this build.",
         remediation: "Use a Debug headless launch or update APKRun when native app windows are available."
+    )
+    private static let guestAgentUnavailableError = RuntimeWireError.runtime(
+        "guestAgentUnavailable",
+        message: "The Android Guest Agent is unavailable.",
+        remediation: "Start Android and try again."
     )
 
     private static func sessionWireError(for error: RuntimeHostError) -> RuntimeWireError {

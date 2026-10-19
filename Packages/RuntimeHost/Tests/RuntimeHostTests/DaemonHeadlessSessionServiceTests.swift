@@ -40,8 +40,45 @@ func daemonHeadlessSessionUsesSecondaryDisplayDiscardsFramesAndReleasesLease() a
     let terminated = try await fixture.service.terminate(RuntimeTerminateRequest(packageID: package))
 
     #expect(terminated.hadSession)
-    #expect(await fixture.agent.stoppedPackages == [package.rawValue])
+    #expect(await fixture.agent.forceStoppedPackages == [package.rawValue])
     #expect(await fixture.registry.session(.app(launched.sessionID))?.state == .ended(.userClosed))
+    #expect((await fixture.displayPool.snapshot())[0].state == .free)
+}
+
+@Test
+func daemonTerminateWithoutSessionForceStopsWithoutAllocatingADisplay() async throws {
+    let fixture = makeHeadlessServiceFixture()
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    let result = try await DaemonHeadlessSessionService.terminateWithoutSession(
+        RuntimeTerminateRequest(packageID: package),
+        using: fixture.agent
+    )
+
+    #expect(result.packageID == package)
+    #expect(!result.hadSession)
+    #expect(await fixture.agent.forceStoppedPackages == [package.rawValue])
+    #expect(fixture.scanouts.configuredScanouts.isEmpty)
+    #expect((await fixture.displayPool.snapshot())[0].state == .free)
+}
+
+@Test
+func daemonTerminateWithoutSessionRejectsAnUninstalledPackage() async throws {
+    let fixture = makeHeadlessServiceFixture(isInstalled: false)
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    do {
+        _ = try await DaemonHeadlessSessionService.terminateWithoutSession(
+            RuntimeTerminateRequest(packageID: package),
+            using: fixture.agent
+        )
+        Issue.record("Terminate must reject a package that Android does not have installed.")
+    } catch {
+        #expect(error.code == "runtime.packageNotInstalled")
+    }
+
+    #expect(await fixture.agent.forceStoppedPackages.isEmpty)
+    #expect(fixture.scanouts.configuredScanouts.isEmpty)
     #expect((await fixture.displayPool.snapshot())[0].state == .free)
 }
 
@@ -215,6 +252,7 @@ private actor FakeDaemonHeadlessGuestAgent: DaemonHeadlessGuestAgent {
     private let snapshotOnRegistration: GuestSnapshotState?
     private(set) var launchCalls: [HeadlessLaunchCall] = []
     private(set) var stoppedPackages: [String] = []
+    private(set) var forceStoppedPackages: [String] = []
     private let taskEventContinuation: AsyncStream<DevelopmentGuestTaskEvent>.Continuation
     private var resynchronizationHandlerID: UUID?
     private var resynchronizationHandler: (@Sendable (GuestSnapshotState) async -> Void)?
@@ -251,6 +289,11 @@ private actor FakeDaemonHeadlessGuestAgent: DaemonHeadlessGuestAgent {
 
     func stopApplication(package: String) async throws(GuestAgentFailure) -> Bool {
         stoppedPackages.append(package)
+        return stopResults.isEmpty ? true : stopResults.removeFirst()
+    }
+
+    func forceStopApplication(package: String) async throws(GuestAgentFailure) -> Bool {
+        forceStoppedPackages.append(package)
         return stopResults.isEmpty ? true : stopResults.removeFirst()
     }
 

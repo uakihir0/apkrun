@@ -159,7 +159,7 @@ func embeddedRuntimeServiceImplementsRuntimeLaunchAndTerminate() async throws {
     let unmanaged = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellocompose"))
     let stoppedWithoutSession = try await runtime.terminate(RuntimeTerminateRequest(packageID: unmanaged))
     #expect(!stoppedWithoutSession.hadSession)
-    #expect(await guest.stoppedPackages == [package.rawValue, unmanaged.rawValue])
+    #expect(await guest.forceStoppedPackages == [package.rawValue, unmanaged.rawValue])
     display.finish()
 }
 
@@ -181,6 +181,24 @@ func embeddedRuntimeServiceRejectsLaunchWithoutAWindow() async throws {
     }
 
     #expect(await guest.launchedPackages.isEmpty)
+    #expect(await service.currentSession() == nil)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceDoesNotClaimToStopAnUninstalledPackage() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent(isInstalled: false)
+    let service = EmbeddedRuntimeService()
+    await service.attachGuestAgent(guest)
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    do {
+        _ = try await service.terminate(RuntimeTerminateRequest(packageID: package))
+        Issue.record("Terminate must reject a package that Android does not have installed.")
+    } catch {
+        #expect(error.code == "runtime.packageNotInstalled")
+    }
+
+    #expect(await guest.forceStoppedPackages.isEmpty)
     #expect(await service.currentSession() == nil)
 }
 
@@ -567,7 +585,7 @@ func embeddedMultiSessionServiceTerminatesOnlyTheOwningWindow() async throws {
     #expect(await first.currentSession()?.state == .waitingForRuntime)
     #expect(await second.currentSession()?.state == .ended(.userClosed))
     #expect(await firstGuest.stoppedPackages.isEmpty)
-    #expect(await secondGuest.stoppedPackages == [package.rawValue])
+    #expect(await secondGuest.forceStoppedPackages == [package.rawValue])
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -775,6 +793,7 @@ private actor FakeEmbeddedSessionGuestAgent: EmbeddedSessionGuestAgent {
     private var launchFailures: [GuestAgentFailure]
     private(set) var launchedPackages: [String] = []
     private(set) var stoppedPackages: [String] = []
+    private(set) var forceStoppedPackages: [String] = []
     private var resynchronizationHandlerID: UUID?
     private var resynchronizationHandler: (@Sendable (GuestSnapshotState) async -> Void)?
 
@@ -802,6 +821,11 @@ private actor FakeEmbeddedSessionGuestAgent: EmbeddedSessionGuestAgent {
 
     func stopApplication(package: String) async throws(GuestAgentFailure) -> Bool {
         stoppedPackages.append(package)
+        return stopResult
+    }
+
+    func forceStopApplication(package: String) async throws(GuestAgentFailure) -> Bool {
+        forceStoppedPackages.append(package)
         return stopResult
     }
 

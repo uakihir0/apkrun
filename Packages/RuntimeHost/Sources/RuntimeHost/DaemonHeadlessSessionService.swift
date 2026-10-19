@@ -210,8 +210,19 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService {
         }
 
         let packageID = request.packageID.rawValue
-        let current = await registry.session(packageID: packageID)
-        if let current, current.state != .closing {
+        guard let current = await registry.session(packageID: packageID) else {
+            return try await Self.terminateWithoutSession(request, using: guestAgent)
+        }
+        let isInstalled: Bool
+        do throws(GuestAgentFailure) {
+            isInstalled = try await guestAgent.isInstalled(packageID)
+        } catch {
+            throw Self.wireError(for: error)
+        }
+        guard isInstalled else {
+            throw Self.packageNotInstalledError
+        }
+        if current.state != .closing {
             do throws(SessionRegistryFailure) {
                 _ = try await registry.transition(current.id, to: .closing)
             } catch {
@@ -221,30 +232,45 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService {
 
         let stopped: Bool
         do throws(GuestAgentFailure) {
-            stopped = try await guestAgent.stopApplication(package: packageID)
+            stopped = try await guestAgent.forceStopApplication(package: packageID)
         } catch {
-            if current != nil {
-                _ = await registry.stopFailed(packageID: packageID)
-            }
+            _ = await registry.stopFailed(packageID: packageID)
             throw Self.wireError(for: error)
         }
         guard stopped else {
-            if current != nil {
-                _ = await registry.stopFailed(packageID: packageID)
-            }
-            throw .runtime(
-                "guestAgentOperationFailed",
-                message: "Android still reports tasks for this app.",
-                remediation: "Wait for the app to close, then try again."
-            )
+            _ = await registry.stopFailed(packageID: packageID)
+            throw Self.guestTasksStillRunningError
         }
 
-        if let current {
-            await stopDrainingFrames(for: current.id)
-            _ = await registry.stopCompleted(packageID: packageID)
-            forgetSession(packageID: packageID, sessionID: current.id)
+        await stopDrainingFrames(for: current.id)
+        _ = await registry.stopCompleted(packageID: packageID)
+        forgetSession(packageID: packageID, sessionID: current.id)
+        return RuntimeTerminateResult(packageID: request.packageID, hadSession: true)
+    }
+
+    static func terminateWithoutSession(
+        _ request: RuntimeTerminateRequest,
+        using guestAgent: any DaemonHeadlessGuestAgent
+    ) async throws(RuntimeWireError) -> RuntimeTerminateResult {
+        let isInstalled: Bool
+        do throws(GuestAgentFailure) {
+            isInstalled = try await guestAgent.isInstalled(request.packageID.rawValue)
+        } catch {
+            throw Self.wireError(for: error)
         }
-        return RuntimeTerminateResult(packageID: request.packageID, hadSession: current != nil)
+        guard isInstalled else {
+            throw Self.packageNotInstalledError
+        }
+        let stopped: Bool
+        do throws(GuestAgentFailure) {
+            stopped = try await guestAgent.forceStopApplication(package: request.packageID.rawValue)
+        } catch {
+            throw Self.wireError(for: error)
+        }
+        guard stopped else {
+            throw Self.guestTasksStillRunningError
+        }
+        return RuntimeTerminateResult(packageID: request.packageID, hadSession: false)
     }
 
     private func launchExisting(_ session: AppSessionSnapshot) async throws(RuntimeWireError) -> RuntimeLaunchResult {
@@ -785,7 +811,19 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService {
         }
     }
 
-    private static func wireError(for failure: GuestAgentFailure) -> RuntimeWireError {
+    static let guestTasksStillRunningError = RuntimeWireError.runtime(
+        "guestAgentOperationFailed",
+        message: "Android still reports tasks for this app.",
+        remediation: "Wait for the app to close, then try again."
+    )
+
+    static let packageNotInstalledError = RuntimeWireError.runtime(
+        "packageNotInstalled",
+        message: "This app is not installed in Android.",
+        remediation: "Install the app first, then try again."
+    )
+
+    static func wireError(for failure: GuestAgentFailure) -> RuntimeWireError {
         switch failure {
         case .bundleMissing:
             .runtime(

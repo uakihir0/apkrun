@@ -21861,4 +21861,8 @@ and restart with `--yes`. Swift format lint and `git diff --check` pass.
 
 **Risk for review.** A confirmation is shown even when Android has no active
 sessions. `--yes` skips it for scripts and other non-interactive use.
+The current command makes two control requests; if the CLI is interrupted
+after the stop completes, Android stays stopped. RuntimeAPI's single
+`runtimeRestart` operation handle, operation ID, and cancellation semantics
+remain outstanding in #032.
 

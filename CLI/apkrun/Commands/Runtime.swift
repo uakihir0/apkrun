@@ -94,8 +94,7 @@ struct RuntimeRestartCommand: AsyncParsableCommand {
         try CLIConfirmation.confirm("Restart the Android runtime?", yes: yes)
         do {
             let client = try RuntimeControlClient(clientKind: .cli)
-            _ = try await client.stopRuntime()
-            let status = try await client.startRuntime()
+            let status = try await client.restartRuntime()
             Output.write("Android is \(status.runtimeState).")
         } catch {
             throw await RuntimeStatusOutput.commandFailure(error)
@@ -205,6 +204,19 @@ enum RuntimeStatusOutput {
             )
         case .remoteFailure(let code, let message):
             return fromCatalog(code, fallbackMessage: message)
+        case .requestTimedOut(let operation):
+            let failure = fromCatalog(
+                "runtime.requestTimedOut",
+                fallbackMessage: "APKRun's background service didn't answer in time.",
+                fallbackRemediation: "Try again."
+            )
+            guard operation == "runtimeRestart" else { return failure }
+            return RuntimeWireError(
+                domain: failure.domain,
+                code: failure.code,
+                message: failure.message,
+                remediation: "Check `apkrun runtime status` before retrying; the daemon may still finish the restart."
+            )
         case .endpointRejected(.busy):
             return fromCatalog(
                 "runtime.busy",

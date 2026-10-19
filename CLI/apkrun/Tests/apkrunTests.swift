@@ -154,6 +154,16 @@ private let sampleRuntimeInfoStatus = RuntimeHostStatus(
     #expect(ExitCodes.code(for: approval) == ExitCodes.unavailable)
 }
 
+@Test func runtimeRestartTimeoutSuggestsCheckingBeforeRetrying() {
+    let failure = RuntimeStatusOutput.failure(
+        RuntimeControlClientError.requestTimedOut(operation: "runtimeRestart")
+    )
+
+    #expect(failure.code == "runtime.requestTimedOut")
+    #expect(failure.remediation?.contains("apkrun runtime status") == true)
+    #expect(failure.remediation?.contains("may still finish") == true)
+}
+
 private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent("Golden")
 
 @Test func versionHumanOutputMatchesGolden() {

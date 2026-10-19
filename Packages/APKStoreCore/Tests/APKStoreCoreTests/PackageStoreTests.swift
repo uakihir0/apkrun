@@ -194,6 +194,114 @@ private actor CompletionFlag {
     #expect(storedAPK != input)
 }
 
+@Test func packageStoreKeepsUnreadableRecordsVisibleAndProtectsOnlyThosePackages() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let packages = temporary.appendingPathComponent("Packages", isDirectory: true)
+    let corruptPackageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let futurePackageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellocompose"))
+    let missingPackageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellogl"))
+    let mismatchDirectoryID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellonotification"))
+    let mismatchMetadataID = try #require(PackageID(rawValue: "com.example.identityclaim"))
+    let healthyPackageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellowebview"))
+
+    let corruptDirectory = packages.appendingPathComponent(corruptPackageID.rawValue, isDirectory: true)
+    try FileManager.default.createDirectory(at: corruptDirectory, withIntermediateDirectories: true)
+    try Data("{invalid".utf8).write(to: corruptDirectory.appendingPathComponent("metadata.json"))
+    let futureDirectory = packages.appendingPathComponent(futurePackageID.rawValue, isDirectory: true)
+    try FileManager.default.createDirectory(at: futureDirectory, withIntermediateDirectories: true)
+    try Data(
+        """
+        {"packageId":"\(futurePackageID.rawValue)","schemaVersion":2}
+        """.utf8
+    ).write(to: futureDirectory.appendingPathComponent("metadata.json"))
+    let missingDirectory = packages.appendingPathComponent(missingPackageID.rawValue, isDirectory: true)
+    try FileManager.default.createDirectory(
+        at: missingDirectory.appendingPathComponent("current", isDirectory: true),
+        withIntermediateDirectories: true
+    )
+    let mismatchDirectory = packages.appendingPathComponent(mismatchDirectoryID.rawValue, isDirectory: true)
+    try FileManager.default.createDirectory(at: mismatchDirectory, withIntermediateDirectories: true)
+    try Data(
+        """
+        {"packageId":"\(mismatchMetadataID.rawValue)","schemaVersion":"invalid"}
+        """.utf8
+    ).write(to: mismatchDirectory.appendingPathComponent("metadata.json"))
+
+    let channel = FakeStoreChannel()
+    let runtime = FakeStoreRuntime(channel: channel)
+    let store = PackageStore(
+        packagesDirectory: packages,
+        runtimeAccess: runtime,
+        inspector: { apk in
+            let contents = try Data(contentsOf: apk)
+            let packageID: PackageID
+            switch contents {
+            case Data("healthy".utf8):
+                packageID = healthyPackageID
+            case Data("unblocked".utf8):
+                packageID = mismatchMetadataID
+            default:
+                packageID = corruptPackageID
+            }
+            return APKFacts(
+                packageID: packageID,
+                versionCode: 1,
+                versionName: "1.0",
+                splitName: nil,
+                displayName: packageID.rawValue,
+                minSDK: 24,
+                targetSDK: 35,
+                nativeABIs: []
+            )
+        }
+    )
+    try await store.open()
+
+    let issues = try await store.listPackageRecordIssues()
+    #expect(
+        issues
+            == [
+                PackageRecordIssue(packageID: futurePackageID, detail: "unsupportedSchemaVersion"),
+                PackageRecordIssue(packageID: corruptPackageID, detail: "invalidMetadata"),
+                PackageRecordIssue(packageID: missingPackageID, detail: "missingMetadata"),
+                PackageRecordIssue(packageID: mismatchDirectoryID, detail: "identityMismatch"),
+            ].sorted { $0.packageID < $1.packageID })
+    #expect(try await store.listManagedPackages().isEmpty)
+    #expect(try await store.packageRecordIssue(for: corruptPackageID)?.detail == "invalidMetadata")
+
+    let corruptAPK = temporary.appendingPathComponent("corrupt.apk")
+    try Data("corrupt".utf8).write(to: corruptAPK)
+    await #expect(
+        throws: PackageStoreFailure.metadataUnreadable(corruptPackageID, detail: "invalidMetadata")
+    ) {
+        try await store.importPackage(files: [corruptAPK])
+    }
+    await #expect(
+        throws: PackageStoreFailure.metadataUnreadable(corruptPackageID, detail: "invalidMetadata")
+    ) {
+        try await store.uninstall(packageID: corruptPackageID)
+    }
+    await #expect(
+        throws: PackageStoreFailure.metadataUnreadable(corruptPackageID, detail: "invalidMetadata")
+    ) {
+        try await store.forget(packageID: corruptPackageID)
+    }
+
+    let healthyAPK = temporary.appendingPathComponent("healthy.apk")
+    try Data("healthy".utf8).write(to: healthyAPK)
+    let preview = try await store.importPackage(files: [healthyAPK])
+    let installed = try await store.installImported(ticket: preview.ticket)
+    #expect(installed.packageId == healthyPackageID)
+    #expect(try await store.listPackageRecordIssues() == issues)
+
+    let unblockedAPK = temporary.appendingPathComponent("unblocked.apk")
+    try Data("unblocked".utf8).write(to: unblockedAPK)
+    let unblockedPreview = try await store.importPackage(files: [unblockedAPK])
+    let unblockedRecord = try await store.installImported(ticket: unblockedPreview.ticket)
+    #expect(unblockedRecord.packageId == mismatchMetadataID)
+}
+
 @Test func packageStoresOpenedBeforeAnotherWriteKeepJournalSequencesMonotonic() async throws {
     let temporary = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: temporary) }

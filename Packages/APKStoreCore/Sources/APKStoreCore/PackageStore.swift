@@ -46,6 +46,8 @@ public enum PackageStoreFailure: Error, Equatable, Sendable {
     case downgradeReinstallUnavailable
     case unsupportedJournalVersion(Int)
     case journalUnreadable
+    case metadataUnreadable(PackageID, detail: String)
+    case androidInventoryUnreadable
     case unreadablePackageRecord
     case io
 }
@@ -67,6 +69,16 @@ public actor PackageStore {
         var createdAt: Date
         var facts: [PersistedAPKFacts]
         var origin: ImportOrigin?
+    }
+
+    private struct PackageIDEnvelope: Decodable {
+        var packageId: PackageID
+    }
+
+    private struct AndroidInventorySnapshot: Codable, Sendable {
+        var schemaVersion: Int
+        var observedAt: Date
+        var packages: [StorePackageSummary]
     }
 
     private struct PersistedAPKFacts: Codable, Sendable {
@@ -154,6 +166,7 @@ public actor PackageStore {
 
     private var records: [PackageID: PackageRecord] = [:]
     private var directories: [PackageID: String] = [:]
+    private var unreadableRecords: [PackageID: String] = [:]
     private var tickets: [UUID: TicketManifest] = [:]
     private var activeTickets = Set<UUID>()
     private var transactions: [String: JournalTransaction] = [:]
@@ -298,6 +311,9 @@ public actor PackageStore {
         let mutationLock = try await acquireLock(at: mutationLockURL)
         defer { _ = Darwin.close(mutationLock) }
         try reloadRecordsPreservingImportDirectories()
+        if let detail = unreadableRecords[baseFacts.packageID] {
+            throw PackageStoreFailure.metadataUnreadable(baseFacts.packageID, detail: detail)
+        }
         let packageDirectoryName = directoryName(for: baseFacts.packageID)
         let packageDirectory = packagesDirectory.appendingPathComponent(packageDirectoryName, isDirectory: true)
         let incoming =
@@ -461,6 +477,9 @@ public actor PackageStore {
         let mutationLock = try await acquireLock(at: mutationLockURL)
         defer { _ = Darwin.close(mutationLock) }
         try reloadRecordsPreservingImportDirectories()
+        if let detail = unreadableRecords[packageID] {
+            throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
+        }
         guard let record = records[packageID] else { throw PackageStoreFailure.packageNotFound }
 
         let operation = UUID()
@@ -533,6 +552,9 @@ public actor PackageStore {
         try reloadJournalState()
         guard !isReadOnly else { throw PackageStoreFailure.journalUnreadable }
         try reloadRecordsPreservingImportDirectories()
+        if let detail = unreadableRecords[packageID] {
+            throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
+        }
         guard records[packageID] != nil else { throw PackageStoreFailure.packageNotFound }
 
         let resolvesUnverifiedUninstall = !ambiguousUninstallTransactionIDs(for: packageID).isEmpty
@@ -680,8 +702,79 @@ public actor PackageStore {
         return records.values.sorted { $0.packageId < $1.packageId }
     }
 
+    /// Returns unreadable package metadata without making healthy records unavailable.
+    public func listPackageRecordIssues() async throws -> [PackageRecordIssue] {
+        try requireOpen()
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        return unreadableRecords.map { PackageRecordIssue(packageID: $0.key, detail: $0.value) }
+            .sorted { $0.packageID < $1.packageID }
+    }
+
+    /// Returns the metadata issue for one package, if its record is unreadable.
+    public func packageRecordIssue(for packageID: PackageID) async throws -> PackageRecordIssue? {
+        try requireOpen()
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard let detail = unreadableRecords[packageID] else { return nil }
+        return PackageRecordIssue(packageID: packageID, detail: detail)
+    }
+
+    /// Returns the last Android package inventory observed by a live runtime.
+    public func lastKnownAndroidInventory() async throws -> StoreAndroidInventorySnapshot? {
+        try requireOpen()
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        guard fileManager.fileExists(atPath: androidInventoryURL.path) else { return nil }
+        do {
+            let data = try Data(contentsOf: androidInventoryURL)
+            let snapshot = try Self.decoder().decode(AndroidInventorySnapshot.self, from: data)
+            guard snapshot.schemaVersion == 1 else {
+                throw PackageStoreFailure.androidInventoryUnreadable
+            }
+            return StoreAndroidInventorySnapshot(observedAt: snapshot.observedAt, packages: snapshot.packages)
+        } catch let failure as PackageStoreFailure {
+            throw failure
+        } catch {
+            throw PackageStoreFailure.androidInventoryUnreadable
+        }
+    }
+
+    /// Persists a live Android package inventory for use while the runtime is stopped.
+    public func saveLastKnownAndroidInventory(
+        _ packages: [StorePackageSummary]
+    ) async throws -> StoreAndroidInventorySnapshot {
+        try requireOpen()
+        var uniquePackages: [PackageID: StorePackageSummary] = [:]
+        for package in packages {
+            uniquePackages[package.packageID] = package
+        }
+        let snapshot = StoreAndroidInventorySnapshot(
+            observedAt: clock(),
+            packages: uniquePackages.values.sorted { $0.packageID < $1.packageID }
+        )
+        guard !isReadOnly else { return snapshot }
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try writeJSON(
+            AndroidInventorySnapshot(
+                schemaVersion: 1,
+                observedAt: snapshot.observedAt,
+                packages: snapshot.packages
+            ),
+            to: androidInventoryURL
+        )
+        return snapshot
+    }
+
     private var journalURL: URL {
         packagesDirectory.appendingPathComponent("journal.jsonl")
+    }
+
+    private var androidInventoryURL: URL {
+        packagesDirectory.appendingPathComponent("android-inventory.json")
     }
 
     private var journalLockURL: URL {
@@ -708,6 +801,9 @@ public actor PackageStore {
         let mutationLock = try await acquireLock(at: mutationLockURL)
         defer { _ = Darwin.close(mutationLock) }
         try reloadRecordsPreservingImportDirectories()
+        if let detail = unreadableRecords[packageID] {
+            throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
+        }
         let directory = directories[packageID] ?? directoryName(for: packageID)
         let incoming = incomingDirectory(packageID: packageID, directory: directory, ticket: preview.ticket)
         let current =
@@ -1153,6 +1249,7 @@ public actor PackageStore {
     private func loadRecords() throws {
         records.removeAll(keepingCapacity: true)
         directories.removeAll(keepingCapacity: true)
+        unreadableRecords.removeAll(keepingCapacity: true)
         let children = try fileManager.contentsOfDirectory(
             at: packagesDirectory,
             includingPropertiesForKeys: [.isDirectoryKey],
@@ -1160,17 +1257,55 @@ public actor PackageStore {
         )
         for child in children where (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
             let metadataURL = child.appendingPathComponent("metadata.json")
-            guard fileManager.fileExists(atPath: metadataURL.path) else { continue }
+            let directoryName = child.lastPathComponent
+            let directoryPackageID = Self.packageID(fromDirectoryName: directoryName)
+            guard fileManager.fileExists(atPath: metadataURL.path) else {
+                if let packageID = directoryPackageID, Self.hasPersistedPackageData(in: child, fileManager: fileManager)
+                {
+                    unreadableRecords[packageID] = "missingMetadata"
+                    directories[packageID] = directoryName
+                }
+                continue
+            }
+            let data: Data
             do {
-                let data = try Data(contentsOf: metadataURL)
+                data = try Data(contentsOf: metadataURL)
+            } catch {
+                if let packageID = directoryPackageID {
+                    unreadableRecords[packageID] = "unreadableMetadata"
+                    directories[packageID] = directoryName
+                }
+                continue
+            }
+
+            let metadataPackageID =
+                try? Self.decoder().decode(PackageIDEnvelope.self, from: data).packageId
+            do {
                 let record = try Self.decoder().decode(PackageRecord.self, from: data)
+                if let directoryPackageID, directoryPackageID != record.packageId {
+                    unreadableRecords[directoryPackageID] = "identityMismatch"
+                    directories[directoryPackageID] = directoryName
+                    continue
+                }
                 guard record.schemaVersion == 1, record.versionCode >= 0 else {
-                    throw PackageStoreFailure.unreadablePackageRecord
+                    unreadableRecords[record.packageId] = Self.metadataIssueDetail(data)
+                    directories[record.packageId] = directoryName
+                    continue
                 }
                 records[record.packageId] = record
-                directories[record.packageId] = child.lastPathComponent
+                directories[record.packageId] = directoryName
             } catch {
-                // A corrupt record stays in place. It must not be mistaken for a new package.
+                // Preserve package identity when possible so writes cannot take the first-install
+                // path or allocate a second directory over a record that needs a newer binary.
+                if let packageID = directoryPackageID ?? metadataPackageID {
+                    let detail =
+                        directoryPackageID != nil && metadataPackageID != nil
+                            && directoryPackageID != metadataPackageID
+                        ? "identityMismatch"
+                        : Self.metadataIssueDetail(data)
+                    unreadableRecords[packageID] = detail
+                    directories[packageID] = directoryName
+                }
                 continue
             }
         }
@@ -1846,6 +1981,39 @@ public actor PackageStore {
     private static func safeSourceFileName(_ name: String) -> String {
         let leaf = URL(fileURLWithPath: name).lastPathComponent
         return leaf.isEmpty || leaf == "." || leaf == ".." ? "package.apk" : leaf
+    }
+
+    private static func packageID(fromDirectoryName name: String) -> PackageID? {
+        if let packageID = PackageID(rawValue: name) {
+            return packageID
+        }
+        guard let separator = name.range(of: "~", options: .backwards) else { return nil }
+        let rawPackageID = String(name[..<separator.lowerBound])
+        let suffix = String(name[separator.upperBound...])
+        guard suffix.utf8.count == 8,
+            suffix.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+            let packageID = PackageID(rawValue: rawPackageID),
+            SHA256Digest(data: Data(rawPackageID.utf8)).hexValue.hasPrefix(suffix)
+        else {
+            return nil
+        }
+        return packageID
+    }
+
+    private static func hasPersistedPackageData(in directory: URL, fileManager: FileManager) -> Bool {
+        ["settings.json", "current", "previous", "staged", "failed"].contains { name in
+            fileManager.fileExists(atPath: directory.appendingPathComponent(name).path)
+        }
+    }
+
+    private static func metadataIssueDetail(_ data: Data) -> String {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let schemaVersion = object["schemaVersion"] as? Int,
+            schemaVersion != 1
+        else {
+            return "invalidMetadata"
+        }
+        return "unsupportedSchemaVersion"
     }
 
     private static func hashFile(at url: URL) throws -> (Int64, SHA256Digest) {

@@ -58,7 +58,7 @@ public struct StorePackageInfo: Sendable, Equatable {
 }
 
 /// One installed package returned by the Guest Agent.
-public struct StorePackageSummary: Sendable, Equatable {
+public struct StorePackageSummary: Codable, Sendable, Equatable {
     /// The Android package name.
     public var packageID: PackageID
     /// The label reported by Android.
@@ -83,6 +83,20 @@ public struct StorePackageSummary: Sendable, Equatable {
         self.versionCode = versionCode
         self.launchable = launchable
         self.userInstalled = userInstalled
+    }
+}
+
+/// A last-known Android package inventory and the time it was observed.
+public struct StoreAndroidInventorySnapshot: Sendable, Equatable {
+    /// The time at which PackageManager produced this inventory.
+    public var observedAt: Date
+    /// Packages returned by the Guest Agent at that time.
+    public var packages: [StorePackageSummary]
+
+    /// Creates an inventory snapshot.
+    public init(observedAt: Date, packages: [StorePackageSummary]) {
+        self.observedAt = observedAt
+        self.packages = packages
     }
 }
 

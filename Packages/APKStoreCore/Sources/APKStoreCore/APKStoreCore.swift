@@ -1020,3 +1020,20 @@ public struct PackageRecord: Codable, Sendable, Equatable {
         self.updatedAt = updatedAt
     }
 }
+
+/// Identifies a package directory whose persisted metadata cannot be read safely.
+///
+/// `detail` is a stable, non-sensitive reason code. It never contains decoded package
+/// contents or file paths.
+public struct PackageRecordIssue: Sendable, Equatable {
+    /// The package identity recovered from the record or its directory name.
+    public let packageID: PackageID
+    /// A stable reason such as `invalidMetadata` or `unsupportedSchemaVersion`.
+    public let detail: String
+
+    /// Creates a package record issue.
+    public init(packageID: PackageID, detail: String) {
+        self.packageID = packageID
+        self.detail = detail
+    }
+}

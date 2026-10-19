@@ -23,6 +23,7 @@ private struct DecodedEDID {
     var vSyncPositive: Bool
     var name: String?
     var verticalRangeHz: ClosedRange<Int>?
+    var horizontalRangeKHz: ClosedRange<Int>?
     var maximumPixelClockMHz: Int?
 
     var refreshHz: Double {
@@ -57,6 +58,7 @@ private struct DecodedEDID {
         let range = Array(bytes[72..<90])
         if range[3] == 0xFD {
             verticalRangeHz = Int(range[5])...Int(range[6])
+            horizontalRangeKHz = Int(range[7])...Int(range[8])
             maximumPixelClockMHz = Int(range[9]) * 10
         }
         let text = Array(bytes[90..<108])
@@ -111,7 +113,36 @@ private func checksumIsZero(_ bytes: [UInt8]) -> Bool {
     #expect(!edid.vSyncPositive)
     #expect(abs(edid.refreshHz - 60) < 0.5)
     #expect(edid.verticalRangeHz == 24...120)
+    #expect(edid.horizontalRangeKHz == 20...255)
     #expect(edid.maximumPixelClockMHz == 660)
+}
+
+@Test(arguments: [
+    DisplayMode(widthPixels: 960, heightPixels: 1700, refreshHz: 60, dotsPerInch: 320),
+    DisplayMode(widthPixels: 480, heightPixels: 850, refreshHz: 60, dotsPerInch: 160),
+])
+func retinaAndNonRetinaWindowModesAdvertiseTheSamePhysicalSize(_ mode: DisplayMode) throws {
+    let scanout = try #require(ScanoutID(rawValue: 0))
+    let edid = DecodedEDID(try EDIDGenerator.make(scanout: scanout, mode: mode))
+
+    #expect(mode.isSupported)
+    #expect(edid.activeWidth == mode.widthPixels)
+    #expect(edid.activeHeight == mode.heightPixels)
+    #expect(edid.widthMM == 76)
+    #expect(edid.heightMM == 135)
+}
+
+@Test
+func reducedBlankingExtendsVerticalBlankToMeetTheAdvertisedHorizontalRange() throws {
+    let mode = DisplayMode(widthPixels: 240, heightPixels: 300, refreshHz: 60, dotsPerInch: 120)
+    let timing = try EDIDGenerator.reducedBlankingTiming(for: mode, widthMM: 51, heightMM: 64)
+    let horizontalHertz = timing.pixelClock10kHz * 10_000 / (timing.hActive + timing.hBlank)
+    let legacyLowRefreshMode = DisplayMode(widthPixels: 1024, heightPixels: 768, refreshHz: 24, dotsPerInch: 160)
+
+    #expect(mode.isSupported)
+    #expect(timing.vBlank == 34)
+    #expect(horizontalHertz >= 20_000)
+    #expect(!legacyLowRefreshMode.isSupported)
 }
 
 @Test func reducedBlankingTimingUsesTheFixedHorizontalBlank() throws {

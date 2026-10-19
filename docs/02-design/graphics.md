@@ -533,7 +533,8 @@ public final class SurfacePool: Sendable {
 - Manufacturer `APK`, product code = scanout index, serial = scanout index. The name descriptor is `APKRun <index>`.
 - One detailed timing descriptor with the preferred mode (`widthPixels × heightPixels` at `refreshHz`, CVT reduced-blanking timings). Detailed timings have 12-bit active fields, so the limit is 4095 pixels per dimension. [display-and-windowing.md](display-and-windowing.md) keeps display modes within that limit (it renders at a lower scale when a window's backing size is larger). A DisplayID extension block for larger modes is post-v1.
 - Physical size in mm (the base block in cm, and the detailed timing in mm), computed from `dotsPerInch`. Android derives the per-display DPI from it through the HWC. The exact effect on the density of secondary displays is verified in #067.
-- A range-limits descriptor and the checksum. Unit tests compare against golden EDIDs and decode them with a reference decoder (edid-decode output committed as test data).
+- A range-limits descriptor (24–120 Hz vertical, 20–255 kHz horizontal, 660 MHz maximum pixel clock) and the checksum. The 20 kHz lower bound admits the 240 × 300 px mode for 320 × 400 dp at zoom 0.75; the timing generator extends vertical blanking for short modes to meet it while still rejecting the 1024 × 768 mode at 24 Hz. This is an APKRun timing adjustment on top of CVT reduced blanking and needs maintainer review. Unit tests compare against golden EDIDs and decode them with a reference decoder (edid-decode output committed as test data).
+- The geometry resolver checks the resulting detailed timing, not only its 4095-pixel active-field limit. When the 60 Hz timing exceeds the pixel-clock or horizontal-frequency range, it lowers `renderScale` to the largest expressible mode.
 
 ---
 

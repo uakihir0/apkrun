@@ -96,7 +96,7 @@ enum EDIDGenerator {
     /// The pixel clock steps down to 250 kHz, which is 25 units of 10 kHz.
     private static let pixelClockStep10kHz = 25
     /// The horizontal frequency range in the range limits descriptor, in kHz.
-    private static let horizontalRangeKHz = 30...255
+    private static let horizontalRangeKHz = 20...255
 
     static func reducedBlankingTiming(
         for mode: DisplayMode,
@@ -108,15 +108,28 @@ enum EDIDGenerator {
             (1_000_000.0 / Double(mode.refreshHz) - reducedMinimumVerticalBlankMicroseconds)
             / Double(mode.heightPixels)
         let blankLines = Int(reducedMinimumVerticalBlankMicroseconds / horizontalPeriodEstimate) + 1
-        let vBlank = max(blankLines, verticalMinimum)
+        var vBlank = max(blankLines, verticalMinimum)
         let hTotal = mode.widthPixels + reducedHorizontalBlank
-        let vTotal = mode.heightPixels + vBlank
-        let hertz = hTotal * vTotal * mode.refreshHz
-        let steps = hertz / 250_000
-        let pixelClock10kHz = steps * pixelClockStep10kHz
-        // The detailed timing holds the clock in 16 bits of 10 kHz units.
-        guard pixelClock10kHz >= 1, pixelClock10kHz <= Int(UInt16.max) else {
-            throw .modeUnsupported(mode: mode)
+        var pixelClock10kHz = 0
+        while true {
+            let vTotal = mode.heightPixels + vBlank
+            let hertz = hTotal * vTotal * mode.refreshHz
+            let steps = hertz / 250_000
+            pixelClock10kHz = steps * pixelClockStep10kHz
+            // The detailed timing holds the clock in 16 bits of 10 kHz units.
+            guard pixelClock10kHz >= 1, pixelClock10kHz <= Int(UInt16.max) else {
+                throw .modeUnsupported(mode: mode)
+            }
+
+            let horizontalHertz = pixelClock10kHz * 10_000 / hTotal
+            if horizontalHertz >= horizontalRangeKHz.lowerBound * 1_000 || mode.refreshHz < 60 {
+                break
+            }
+            // Short, low-resolution product modes can fall below the range
+            // descriptor's minimum. Extra vertical blanking preserves 60 Hz while
+            // making their quantized timing agree with that advertised minimum.
+            // Lower-refresh modes retain the original timing and can be rejected.
+            vBlank += 1
         }
         return Timing(
             pixelClock10kHz: pixelClock10kHz,

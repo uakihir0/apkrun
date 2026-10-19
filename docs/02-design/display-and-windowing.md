@@ -186,7 +186,18 @@ If step 2 times out (5 s), the scanout is disabled anyway. Android moves the rem
 
 ### 3.6 Display 0
 
-Scanout 0 is always enabled. `DisplayPool` does not lease it in `secondaryDisplay` mode. In `primaryDisplayCompatibility` mode it is leased like a pool slot, but only one session at a time can hold it (§8). Its lease skips steps 3–4 of §3.3: the display already exists, so the pool reconfigures its mode instead, as in §6.3.
+Scanout 0 is always enabled. `DisplayPool` does not lease it in `secondaryDisplay` mode. In `primaryDisplayCompatibility` mode it reserves display 0 for one session at a time (§8). The embedded M3 development path configures its primary presenter before boot and verifies that Android reports the requested mode; it does not attach a second presenter or disable scanout 0. A runtime path that changes the primary mode must use the resize and rollback sequence in §6.3.
+
+In the embedded M3 development path, `dev launch --display 0` resolves the
+window geometry before boot and the primary presenter is already attached.
+`DisplayPool` verifies Android reports the requested mode, applies the
+compatibility density policy, and grants an exclusive lease over that existing
+presenter. Releasing the lease restores the previous density and leaves the
+always-enabled primary scanout intact. A secondary-display lease owns a fresh
+pool and its window relays that pool's frames and acknowledgements. The M3
+secondary development window is fixed-size because its resize path must update
+the session's lease generation before release; lease-aware resizing remains
+for a follow-up.
 
 ---
 
@@ -467,7 +478,7 @@ When the app itself leaves its display (Back from the root activity, or the app 
 
 - The mode is a per-package setting (`window.mode`) with the default from the compatibility database (#090) or the user (Settings → App → Window mode, #079). It changes at the next session start.
 - A second compatibility session while display 0 is taken fails with `RuntimeFailure.primaryDisplayBusy` and the remediation "Close ‹other app› or switch one of them to the standard window mode".
-- While display 0 is leased, the launcher is behind the app. When the session ends, the Guest Agent brings the launcher to the front, and the pool detaches scanout 0 again.
+- While display 0 is leased, the launcher is behind the app. In the embedded development path, the primary scanout remains enabled and its presenter stays with the development window; ending the session restores its prior density before the VM stops.
 - Display 0 shows Android's status bar and navigation bar in compatibility mode. The custom image (#035) hides the navigation bar (`config_showNavigationBar = false` overlay). The status bar stays visible in v1 ([../04-plan/open-questions.md](../04-plan/open-questions.md)).
 - #029 establishes which of the fixture apps and the popular app sample run correctly on secondary displays. The results go to §11 and to the compatibility database seed (#090).
 
@@ -516,7 +527,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 | Does a mode change keep the Android display ID? | #067 (display 0), #028 (pool displays) | Partial (#067, 2026-10-19): the host waits for display 0's requested dimensions and rolls back on timeout; pool reconfiguration is implemented but Android mode-change and ID stability tests remain pending (§7.1, IR-1372, IR-1376) |
 | Density: does the forced density replace the default density (display 0) and the fallback 213 (pool displays) without side effects? | #067 (display 0), #028 (pool displays) | Partial (#067, 2026-10-19): boot and resize paths send `SetDisplayPolicy`; pool acquire sends the resolved density and the Guest Agent checks readback, but Android execution and OQ-39 remain pending (§4, IR-1372, IR-1376) |
 | IME policy `LOCAL` on pool displays works with the APKRun IME | #071 | pending |
-| Fixture and sample apps on secondary displays | #029 | pending (§8) |
+| Fixture and sample apps on secondary displays | #029 | Launch, lease-to-window, and input routing are implemented. Android rendering, input, IME, dialog, and pointer observations remain pending (§8, IR-1377) |
 | `IOSurfaceIsInUse` reflects WindowServer use of layer contents | #068 | pending (§5.2) |
 | Gate G4: HelloText renders and accepts input in a native Mac window ([../04-plan/roadmap.md](../04-plan/roadmap.md) §2) | #026 | pending (§12 #026) |
 | First-frame placeholder and startup input gate | #026 (partial, IR-1345) | WindowingCore T0: 50 tests passed; embedded CLI build passed. Screenshot T1 and the rest of #026 remain pending |

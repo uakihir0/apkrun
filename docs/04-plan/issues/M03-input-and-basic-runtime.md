@@ -956,6 +956,36 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 - **Record:** row 6 of §11, the #090 seed list, OQ-31, and the partial R-04 and R-05 results.
 - **Pitfall:** if the task does not appear on the target display, the agent answers `TIMEOUT` after 2 s ([../../02-design/guest-components.md](../../02-design/guest-components.md) §6.4). An app that ignores the launch display appears on display 0; record such apps in §11 row 6.
 
+**Implementation in progress (2026-10-19, IR-1377).** `LaunchApplication`
+passes the selected display to Android with fullscreen launch options and
+reports negative versus unknown display IDs separately. `dev launch` accepts
+`--display 0|secondary`; the secondary path acquires a DisplayPool lease,
+relays its IOSurface frames into the existing native window, directs input to
+the leased Android display, and launches through the session service. Display
+0 uses an exclusive compatibility lease over the already configured
+development presenter. The lease is released before Android stops so its
+display policy can be restored; Ctrl-C during display acquisition or launch
+waits for that cleanup, while an early boot interruption still stops promptly.
+Secondary development windows are fixed-size until resize updates can safely
+replace the session's lease generation; the input binding status reports the
+selected Android display. The HelloWebView
+fixture is registered and builds with the repository fixture signer. Focused
+lease/session tests, Guest Agent JVM tests, fixture build/signature
+verification, and the embedded CLI build are the implementation checks.
+Android drawing, typing, IME/dialog behavior, pointer appearance, and real
+guest mode confirmation have not been observed; the acceptance criteria remain
+unchecked.
+
+Compatibility seed candidates for #090 (results are intentionally not inferred
+from build success):
+
+| Package | Secondary rendering | Input | IME | Dialogs | Recommended mode |
+|---|---|---|---|---|---|
+| `io.apkrun.fixture.hellotext` | pending | pending | pending | pending | pending |
+| `io.apkrun.fixture.hellocompose` | pending | pending | pending | pending | pending |
+| `io.apkrun.fixture.hellogl` | pending | pending | pending | pending | pending |
+| `io.apkrun.fixture.hellowebview` | pending | pending | pending | pending | pending |
+
 ---
 
 ## #030 Two APKs in two native windows

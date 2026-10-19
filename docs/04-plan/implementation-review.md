@@ -21216,3 +21216,61 @@ not choose fallback A if Android replaces the display ID. The
 should review the no-product fallback, the interactive CLI lifetime, the
 decision to leave hotplug fallback pending, the two new runtime error entries,
 and the release-timeout quarantine behavior.
+
+## IR-1377: Launch an app on a selected Android display
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #029 |
+| Affected documents | [display-and-windowing.md](../02-design/display-and-windowing.md) §§3.6, 4, 8, 11, 12; [guest-components.md](../02-design/guest-components.md) §6.4; [cli.md](../02-design/cli.md) §5; [M03](issues/M03-input-and-basic-runtime.md) #029; [open-questions.md](open-questions.md) OQ-31 |
+
+**Choices.** `apkrun dev launch` keeps display 0 as its default so existing
+development launches keep their behavior; `--display secondary` opts into a
+pooled display. The primary compatibility path leases the already configured
+display-0 presenter, verifies Android's mode, applies the resolved density, and
+restores the previous density on release. It keeps scanout 0 enabled and does
+not create a second presenter. Pool-display sessions attach their lease's
+IOSurface stream to the existing development window, acknowledge each
+committed frame through that lease, and bind input to the leased Android
+display ID. Those windows are fixed-size until resizing can update the lease
+generation that the session releases. Until #030, one embedded window service
+remains bound to one package; a request for another package fails instead of
+reusing the first package's display. `LaunchApplication` rejects a negative ID
+as `INVALID_ARGUMENT`, while an unknown nonnegative ID is `NOT_FOUND`. Android
+launches use fullscreen windowing options as specified in §4.
+
+**Reason.** Keeping the old default avoids changing existing development
+launch behavior. Reusing the primary presenter respects scanout ownership and
+prevents the development window and `DisplayPool` from each presenting
+scanout 0. Passing the leased Android ID through launch and input keeps the
+task, pixels, and user events on the same display. The resize restriction
+avoids exposing a window geometry that the current session lease cannot
+release safely. The error split distinguishes malformed requests from valid
+IDs that are not currently available.
+
+**Verification.** An adversarial review found and the implementation corrected
+three lifecycle/usability gaps: the primary lease now restores density before
+the Guest Agent stops, pool-backed windows cannot be resized until lease-aware
+resize exists, and input binding reports the selected display ID. A follow-up
+found that Ctrl-C could stop the supervisor before lease cleanup; once display
+acquisition begins, runtime stop now waits for the common teardown path. A
+Ctrl-C before display acquisition still stops a boot immediately.
+`swift test --package-path Packages/RuntimeCore --filter
+DisplayPoolTests` passed, including primary-lease exclusivity and density
+restore coverage. `swift test --package-path Packages/RuntimeHost --filter
+DevInputRouteTests` and the focused
+`embeddedRuntimeServiceRejectsAnotherPackageWhileTheWindowSessionIsOwned`
+test passed, as did the focused
+`devBootStopSignalDefersStoppingUntilAnActiveDisplaySessionCanReleaseItsLease`
+test. `swift build --product apkrun --traits EmbeddedRuntime` passed.
+The Guest Agent launch-options JVM tests passed (3 tests), and the HelloWebView
+fixture built and passed APK signer and package/activity checks. No live
+Android launch was run in this pass.
+
+**Review items and risk.** HelloText rendering and input, the four fixture
+observations, IME/dialog behavior, and the pool-display OQ-31 pointer check
+remain pending until a guest run; the corresponding acceptance criteria stay
+unchecked. Maintainers should review primary-presenter reuse, the fixed-size
+secondary window, stop-time lease cleanup, the one-package guard, fullscreen
+launch options, and invalid versus unknown display errors.

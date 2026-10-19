@@ -178,6 +178,12 @@ Each entry names the task that finds the answer and what changes for each result
 
 **OQ-31, answer for display 0 (2026-10-12 UTC, #024; build 16373615, one device).** Android draws no pointer for an injected `SOURCE_MOUSE` hover on display 0. The screenshot shows the plain background at the hover point, the SurfaceFlinger layer list has no child of the pointer overlay layer, and `dumpsys input` lists no mouse pointer controller. So the "nothing to do" answer applies on display 0, and `input.hover` stays `true` by default. The status stays `open`: the pool-display check is #029, and this answer comes from one device on one image. See [../02-design/input.md](../02-design/input.md) §15 and [issues/M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md#024-pointer-input).
 
+**OQ-31, pool displays (2026-10-19, #029 implementation).** The input route now
+uses the leased Android display ID, but Android's pointer appearance on that
+display has not been observed. Keep the display-0 behavior as the working
+default and leave OQ-31 open until a guest run can distinguish a duplicated
+pointer from the Mac cursor.
+
 ---
 
 ## 5. Deferred

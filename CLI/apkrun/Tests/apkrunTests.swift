@@ -187,6 +187,16 @@ private let sampleRuntimeInfoStatus = RuntimeHostStatus(
     #expect(failure.remediation?.contains("may still finish") == true)
 }
 
+@Test func runtimeCancellationUsesInterruptedExitCode() {
+    let failure = RuntimeStatusOutput.failure(
+        RuntimeControlClientError.requestCancelled(operation: "runtimeRestart")
+    )
+
+    #expect(failure.code == "runtime.cancelled")
+    #expect(failure.message == "The operation was cancelled.")
+    #expect(ExitCodes.code(for: failure) == ExitCodes.interrupted)
+}
+
 private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent("Golden")
 
 @Test func versionHumanOutputMatchesGolden() {

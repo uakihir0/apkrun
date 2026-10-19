@@ -217,6 +217,11 @@ enum RuntimeStatusOutput {
                 message: failure.message,
                 remediation: "Check `apkrun runtime status` before retrying; the daemon may still finish the restart."
             )
+        case .requestCancelled:
+            return fromCatalog(
+                "runtime.cancelled",
+                fallbackMessage: "The operation was cancelled."
+            )
         case .endpointRejected(.busy):
             return fromCatalog(
                 "runtime.busy",

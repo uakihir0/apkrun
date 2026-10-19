@@ -20,6 +20,8 @@ public enum RuntimeControlClientError: Error, Equatable, Sendable {
     case invalidXPCInterface
     /// An XPC operation failed.
     case transportFailure(domain: String, code: Int)
+    /// The daemon did not reply before the operation deadline plus the client grace period.
+    case requestTimedOut(operation: String)
     /// The control endpoint returned a catalog-backed error.
     case remoteFailure(code: String, message: String)
     /// JSON encoding failed.
@@ -48,6 +50,8 @@ extension RuntimeControlClientError: LocalizedError {
             "This APKRun client could not configure its runtime connection safely."
         case .transportFailure:
             "The runtime daemon could not be reached."
+        case .requestTimedOut:
+            "APKRun's background service didn't answer in time."
         case .remoteFailure(_, let message):
             message
         case .encodingFailure:
@@ -129,6 +133,29 @@ public actor RuntimeControlClient {
             let request = StopRuntimeRequest(header: makeHeader())
             let data = try Self.encode(request)
             return try Self.decodeControlReply(from: await opened.channel.stopRuntime(data))
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
+    /// Restarts Android with one request so the client cannot be interrupted between stop and start.
+    ///
+    /// A transport failure is returned to the caller without replaying this state-changing request.
+    public func restartRuntime() async throws(RuntimeControlClientError) -> RuntimeHostStatus {
+        let opened = try await ensureControl()
+        do {
+            let request = RestartRuntimeRequest(header: makeHeader())
+            let data = try Self.encode(request)
+            let run: @Sendable () async throws(RuntimeControlClientError) -> Data = {
+                try await opened.channel.restartRuntime(data)
+            }
+            let response = try await Self.withTimeout(
+                configuration.restartRequestTimeout,
+                operation: "runtimeRestart",
+                run: run
+            )
+            return try Self.decodeControlReply(from: response)
         } catch {
             invalidateAfterTransportFailure(opened.channel, error: error)
             throw error
@@ -238,7 +265,14 @@ public actor RuntimeControlClient {
         _ failedChannel: any RuntimeControlChannel,
         error: RuntimeControlClientError
     ) {
-        guard case .transportFailure = error,
+        let shouldInvalidate: Bool
+        switch error {
+        case .transportFailure, .requestTimedOut:
+            shouldInvalidate = true
+        default:
+            shouldInvalidate = false
+        }
+        guard shouldInvalidate,
             let openedControl,
             openedControl.channel === failedChannel
         else {
@@ -246,6 +280,47 @@ public actor RuntimeControlClient {
         }
         openedControl.channel.invalidate()
         self.openedControl = nil
+    }
+
+    private static func withTimeout<Value: Sendable>(
+        _ timeout: Duration,
+        operation: String,
+        run: @escaping @Sendable () async throws(RuntimeControlClientError) -> Value
+    ) async throws(RuntimeControlClientError) -> Value {
+        let result = await withTaskGroup(
+            of: Result<Value, RuntimeControlClientError>.self,
+            returning: Result<Value, RuntimeControlClientError>.self
+        ) { group in
+            group.addTask {
+                do {
+                    return .success(try await run())
+                } catch let error as RuntimeControlClientError {
+                    return .failure(error)
+                } catch {
+                    return .failure(Self.transportFailure(error))
+                }
+            }
+            group.addTask {
+                do {
+                    try await Task.sleep(for: timeout)
+                } catch {
+                    return .failure(.requestTimedOut(operation: operation))
+                }
+                return .failure(.requestTimedOut(operation: operation))
+            }
+            guard let result = await group.next() else {
+                group.cancelAll()
+                return .failure(.requestTimedOut(operation: operation))
+            }
+            group.cancelAll()
+            return result
+        }
+        switch result {
+        case .success(let value):
+            return value
+        case .failure(let error):
+            throw error
+        }
     }
 
     private func ensureControl() async throws(RuntimeControlClientError) -> OpenedControlConnection {
@@ -511,6 +586,8 @@ private struct RuntimeBrokerErrorReply: Decodable {
 }
 
 struct RuntimeControlClientConfiguration: Equatable, Sendable {
+    static let maximumRestartRequestTimeout = Duration.seconds(3_675)
+
     enum BuildIdentity: Equatable, Sendable {
         case development
         case release(teamIdentifier: String)
@@ -523,13 +600,15 @@ struct RuntimeControlClientConfiguration: Equatable, Sendable {
     let daemonCodeSigningRequirement: String
     let clientVersion: String?
     let clientBuild: Int?
+    let restartRequestTimeout: Duration
 
     init(
         clientKind: RuntimeClientKind,
         claimedIdentity: String,
         buildIdentity: BuildIdentity,
         clientVersion: String? = nil,
-        clientBuild: Int? = nil
+        clientBuild: Int? = nil,
+        restartRequestTimeout: Duration = Self.maximumRestartRequestTimeout
     ) throws(RuntimeControlClientError) {
         guard !claimedIdentity.isEmpty else {
             throw .invalidClientIdentity
@@ -538,6 +617,7 @@ struct RuntimeControlClientConfiguration: Equatable, Sendable {
         self.claimedIdentity = claimedIdentity
         self.clientVersion = clientVersion
         self.clientBuild = clientBuild
+        self.restartRequestTimeout = restartRequestTimeout
         switch buildIdentity {
         case .development:
             serviceName = "io.apkrun.apkrund.dev.xpc"
@@ -652,6 +732,7 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func runtimeStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func startRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func stopRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func restartRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func resetRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func listPackages(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func packageInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data
@@ -823,6 +904,30 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.stopRuntime(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func restartRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try await withTaskCancellationHandler {
+                try await withXPCReply { finish in
+                    let proxy =
+                        connection.remoteObjectProxyWithErrorHandler { error in
+                            finish(.failure(Self.transportFailure(error)))
+                        } as? any RuntimeControlXPC
+                    guard let proxy else {
+                        finish(.failure(.invalidRemoteProxy))
+                        return
+                    }
+                    proxy.restartRuntime(request) { response in finish(.success(response)) }
+                }
+            } onCancel: {
+                connection.invalidate()
+            }
+        } catch let error as RuntimeControlClientError {
+            throw error
+        } catch {
+            throw Self.transportFailure(error)
         }
     }
 

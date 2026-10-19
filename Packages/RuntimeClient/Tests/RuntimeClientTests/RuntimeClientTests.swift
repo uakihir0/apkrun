@@ -73,6 +73,70 @@ import Testing
     }
 }
 
+@Test func controlClientRestartsWithOneVersionedRequestAndDoesNotReplayFailures() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development,
+        restartRequestTimeout: .milliseconds(10)
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let status = RuntimeHostStatus(
+        hostState: "running",
+        runtimeState: "ready",
+        bootProgress: nil,
+        startupFailureStep: nil,
+        startupFailureCode: nil,
+        crashLoopActive: false,
+        daemonPID: 42,
+        imageVersion: "test-image"
+    )
+    let transport = try MockRuntimeTransport(hello: hello, status: status)
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    #expect(try await client.restartRuntime() == status)
+
+    let snapshot = transport.snapshot()
+    #expect(snapshot.restartRequests.count == 1)
+    #expect(snapshot.stopRequests.isEmpty)
+    #expect(snapshot.startRequests.isEmpty)
+    let request = try JSONDecoder().decode(RestartRuntimeRequest.self, from: snapshot.restartRequests[0])
+    #expect(request.header.apiVersion == APIVersion.current)
+    #expect(request.header.clientKind == .cli)
+
+    transport.failNextRestart()
+    do {
+        _ = try await client.restartRuntime()
+        Issue.record("The mock restart transport failure was not returned to the caller.")
+    } catch {
+        #expect(error == .transportFailure(domain: "NSCocoaErrorDomain", code: 4099))
+    }
+    let failedSnapshot = transport.snapshot()
+    #expect(failedSnapshot.restartRequests.count == 2)
+    #expect(failedSnapshot.controlConnections == 1)
+
+    transport.delayNextRestart(for: .seconds(1))
+    do {
+        _ = try await client.restartRuntime()
+        Issue.record("The delayed restart did not time out.")
+    } catch {
+        #expect(error == .requestTimedOut(operation: "runtimeRestart"))
+    }
+    let timedOutSnapshot = transport.snapshot()
+    #expect(timedOutSnapshot.restartRequests.count == 3)
+    #expect(timedOutSnapshot.startRequests.isEmpty)
+    #expect(timedOutSnapshot.stopRequests.isEmpty)
+    #expect(timedOutSnapshot.controlConnections == 2)
+
+    _ = try await client.runtimeStatus()
+    #expect(transport.snapshot().controlConnections == 3)
+}
+
 @Test func controlClientLaunchesAndTerminatesWithVersionedRequests() async throws {
     let configuration = try RuntimeControlClientConfiguration(
         clientKind: .cli,
@@ -555,6 +619,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var statusRequestsValue: [Data] = []
     private var startRequestsValue: [Data] = []
     private var stopRequestsValue: [Data] = []
+    private var restartRequestsValue: [Data] = []
     private var packageListRequestsValue: [Data] = []
     private var packageInfoRequestsValue: [Data] = []
     private var launchRequestsValue: [Data] = []
@@ -566,6 +631,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var failNextStatusValue = false
     private var failNextLaunchValue = false
     private var failNextTerminateValue = false
+    private var failNextRestartValue = false
+    private var restartDelayValue: Duration?
     private var failNextResetValue = false
     private var endpointBusyRejectionsValue: Int
 
@@ -701,6 +768,27 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return statusData
     }
 
+    func restartRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        let (shouldFail, delay) = lock.withLock {
+            restartRequestsValue.append(request)
+            defer { failNextRestartValue = false }
+            let delay = restartDelayValue
+            restartDelayValue = nil
+            return (failNextRestartValue, delay)
+        }
+        if let delay {
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                throw .requestTimedOut(operation: "runtimeRestart")
+            }
+        }
+        if shouldFail {
+            throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+        }
+        return statusData
+    }
+
     func resetRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         let shouldFail = lock.withLock {
             resetRequestsValue.append(request)
@@ -758,6 +846,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 statusRequests: statusRequestsValue,
                 startRequests: startRequestsValue,
                 stopRequests: stopRequestsValue,
+                restartRequests: restartRequestsValue,
                 packageListRequests: packageListRequestsValue,
                 packageInfoRequests: packageInfoRequestsValue,
                 launchRequests: launchRequestsValue,
@@ -782,6 +871,14 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         lock.withLock { failNextTerminateValue = true }
     }
 
+    func failNextRestart() {
+        lock.withLock { failNextRestartValue = true }
+    }
+
+    func delayNextRestart(for duration: Duration) {
+        lock.withLock { restartDelayValue = duration }
+    }
+
     func failNextReset() {
         lock.withLock { failNextResetValue = true }
     }
@@ -795,6 +892,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let statusRequests: [Data]
         let startRequests: [Data]
         let stopRequests: [Data]
+        let restartRequests: [Data]
         let packageListRequests: [Data]
         let packageInfoRequests: [Data]
         let launchRequests: [Data]

@@ -118,6 +118,13 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
         #expect(unavailableError.remediation == "Open APKRun once, or restart its background service.")
         #expect(ExitCodes.code(for: unavailableError) == 69)
 
+        let unauthorizedError = RuntimeStatusOutput.failure(
+            RuntimeControlClientError.invalidClientIdentity
+        )
+        #expect(unauthorizedError.code == "runtime.notAuthorized")
+        #expect(unauthorizedError.message == "This part of APKRun isn't allowed to control the runtime.")
+        #expect(ExitCodes.code(for: unauthorizedError) == 5)
+
         let bootTimeout = RuntimeStatusOutput.failure(
             RuntimeControlClientError.remoteFailure(
                 code: "runtime.bootTimedOut",

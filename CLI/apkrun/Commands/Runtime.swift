@@ -109,7 +109,13 @@ enum RuntimeStatusOutput {
             return .runtime("internal", message: "APKRun couldn't control the Android runtime.")
         }
         switch error {
-        case .invalidClientIdentity, .transportFailure:
+        case .invalidClientIdentity:
+            return fromCatalog(
+                "runtime.notAuthorized",
+                fallbackMessage: "This APKRun client can't verify its identity.",
+                fallbackRemediation: "Report the problem."
+            )
+        case .transportFailure:
             return fromCatalog(
                 "runtime.serviceUnavailable",
                 fallbackMessage: "APKRun's background service isn't running.",

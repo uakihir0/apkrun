@@ -1,0 +1,625 @@
+@preconcurrency import Foundation
+import RuntimeAPI
+import Security
+
+/// Errors returned by the first RuntimeAPI control client.
+public enum RuntimeControlClientError: Error, Equatable, Sendable {
+    /// The process has no supported APKRun build identity or signing identity.
+    case invalidClientIdentity
+    /// A reply could not be decoded or was internally inconsistent.
+    case malformedReply
+    /// The daemon and client use incompatible RuntimeAPI versions.
+    case apiVersionMismatch(client: APIVersion, server: APIVersion)
+    /// The broker refused to issue a control endpoint.
+    case endpointRejected(RuntimeEndpointRejection)
+    /// The broker granted access but did not return an endpoint.
+    case endpointMissing
+    /// An XPC remote object did not implement its declared interface.
+    case invalidRemoteProxy
+    /// The local broker interface could not be configured to decode its endpoint reply safely.
+    case invalidXPCInterface
+    /// An XPC operation failed.
+    case transportFailure(domain: String, code: Int)
+    /// The control endpoint returned a catalog-backed error.
+    case remoteFailure(code: String, message: String)
+    /// JSON encoding failed.
+    case encodingFailure
+}
+
+extension RuntimeControlClientError: LocalizedError {
+    /// A user-readable explanation of the client error.
+    public var errorDescription: String? {
+        switch self {
+        case .invalidClientIdentity:
+            "This APKRun client cannot verify the runtime daemon's signing identity."
+        case .malformedReply:
+            "The runtime daemon returned an invalid reply."
+        case .apiVersionMismatch:
+            "The runtime daemon and this APKRun client use incompatible API versions. Update APKRun."
+        case .endpointRejected(.hostShuttingDown):
+            "APKRun's background service is stopping. Try again in a moment."
+        case .endpointRejected:
+            "The runtime daemon refused this client's control endpoint request."
+        case .endpointMissing:
+            "The runtime daemon granted control access without returning its endpoint."
+        case .invalidRemoteProxy:
+            "The runtime daemon did not provide the expected XPC interface."
+        case .invalidXPCInterface:
+            "This APKRun client could not configure its runtime connection safely."
+        case .transportFailure:
+            "The runtime daemon could not be reached."
+        case .remoteFailure(_, let message):
+            message
+        case .encodingFailure:
+            "The runtime request could not be encoded."
+        }
+    }
+}
+
+/// The first RuntimeAPI control client. It authenticates the daemon, obtains an anonymous control
+/// endpoint through the broker, then reuses that endpoint for status, start, and stop requests.
+public actor RuntimeControlClient {
+    private let configuration: RuntimeControlClientConfiguration
+    private let connectionFactory: any RuntimeXPCConnectionFactory
+    private var openedControl: OpenedControlConnection?
+    private var openingControl: Task<OpenedControlConnection, any Error>?
+
+    /// Creates a client for the current signed APKRun process.
+    ///
+    /// The expected daemon identifier and signing requirement are derived from the client bundle.
+    /// The requirement is applied to both the broker and anonymous control connections before
+    /// either connection is resumed.
+    public init(
+        clientKind: RuntimeClientKind,
+        claimedIdentity: String? = nil
+    ) throws(RuntimeControlClientError) {
+        configuration = try RuntimeControlClientConfiguration.current(
+            clientKind: clientKind,
+            claimedIdentity: claimedIdentity
+        )
+        connectionFactory = SystemRuntimeXPCConnectionFactory()
+    }
+
+    init(
+        configuration: RuntimeControlClientConfiguration,
+        connectionFactory: any RuntimeXPCConnectionFactory
+    ) {
+        self.configuration = configuration
+        self.connectionFactory = connectionFactory
+    }
+
+    /// Completes broker hello and control-endpoint authentication, returning the daemon facts.
+    @discardableResult
+    public func connect() async throws(RuntimeControlClientError) -> RuntimeHelloReply {
+        try await ensureControl().hello
+    }
+
+    /// Returns a daemon and Android runtime status snapshot.
+    public func runtimeStatus() async throws(RuntimeControlClientError) -> RuntimeHostStatus {
+        let opened = try await ensureControl()
+        do {
+            let request = RuntimeStatusRequest(header: makeHeader())
+            let data = try Self.encode(request)
+            return try Self.decodeControlReply(from: await opened.channel.runtimeStatus(data))
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
+    /// Starts Android and waits until the daemon reports it ready.
+    public func startRuntime() async throws(RuntimeControlClientError) -> RuntimeHostStatus {
+        let opened = try await ensureControl()
+        do {
+            let request = StartRuntimeRequest(header: makeHeader())
+            let data = try Self.encode(request)
+            return try Self.decodeControlReply(from: await opened.channel.startRuntime(data))
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
+    /// Stops Android while leaving the daemon available for another request.
+    public func stopRuntime() async throws(RuntimeControlClientError) -> RuntimeHostStatus {
+        let opened = try await ensureControl()
+        do {
+            let request = StopRuntimeRequest(header: makeHeader())
+            let data = try Self.encode(request)
+            return try Self.decodeControlReply(from: await opened.channel.stopRuntime(data))
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
+    private func makeHeader() -> APIRequestHeader {
+        APIRequestHeader(clientKind: configuration.clientKind)
+    }
+
+    private func invalidateAfterTransportFailure(
+        _ failedChannel: any RuntimeControlChannel,
+        error: RuntimeControlClientError
+    ) {
+        guard case .transportFailure = error,
+            let openedControl,
+            openedControl.channel === failedChannel
+        else {
+            return
+        }
+        openedControl.channel.invalidate()
+        self.openedControl = nil
+    }
+
+    private func ensureControl() async throws(RuntimeControlClientError) -> OpenedControlConnection {
+        if let openedControl {
+            return openedControl
+        }
+
+        let task: Task<OpenedControlConnection, any Error>
+        if let openingControl {
+            task = openingControl
+        } else {
+            task = Task { try await self.openControlEndpoint() }
+            openingControl = task
+        }
+
+        do {
+            let opened = try await task.value
+            openedControl = opened
+            openingControl = nil
+            return opened
+        } catch {
+            openingControl = nil
+            if let clientError = error as? RuntimeControlClientError {
+                throw clientError
+            }
+            throw Self.transportFailure(error)
+        }
+    }
+
+    private func openControlEndpoint() async throws(RuntimeControlClientError) -> OpenedControlConnection {
+        let broker = try connectionFactory.makeBroker(
+            serviceName: configuration.serviceName,
+            signingRequirement: configuration.daemonCodeSigningRequirement
+        )
+        defer { broker.invalidate() }
+
+        let helloRequest = RuntimeHelloRequest(
+            clientKind: configuration.clientKind,
+            claimedIdentity: configuration.claimedIdentity,
+            apiVersion: APIVersion.current,
+            clientVersion: configuration.clientVersion,
+            clientBuild: configuration.clientBuild
+        )
+        let helloData = try Self.encode(helloRequest)
+        let helloReply = try Self.decode(RuntimeHelloReply.self, from: await broker.hello(helloData))
+        guard helloReply.apiVersion.major == APIVersion.current.major,
+            helloReply.apiVersion.minor >= APIVersion.current.minor
+        else {
+            throw .apiVersionMismatch(client: APIVersion.current, server: helloReply.apiVersion)
+        }
+
+        let endpointRequest = RuntimeEndpointRequest(
+            kind: .control,
+            clientKind: configuration.clientKind,
+            claimedIdentity: configuration.claimedIdentity,
+            apiVersion: APIVersion.current
+        )
+        let endpointReply = try await broker.requestEndpoint(Self.encode(endpointRequest))
+        let disposition = try Self.decode(RuntimeEndpointReply.self, from: endpointReply.data)
+        switch disposition {
+        case .rejected(let rejection):
+            throw .endpointRejected(rejection)
+        case .granted:
+            guard let endpoint = endpointReply.endpoint else {
+                throw .endpointMissing
+            }
+            let control = try connectionFactory.makeControl(
+                endpoint: endpoint,
+                signingRequirement: configuration.daemonCodeSigningRequirement
+            )
+            return OpenedControlConnection(hello: helloReply, channel: control)
+        }
+    }
+
+    private static func decodeControlReply(from data: Data) throws(RuntimeControlClientError) -> RuntimeHostStatus {
+        let reply = try Self.decode(RuntimeControlReply.self, from: data)
+        guard (reply.status != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let error = reply.error {
+            throw .remoteFailure(code: error.code, message: error.message)
+        }
+        guard let status = reply.status else {
+            throw .malformedReply
+        }
+        return status
+    }
+
+    private static func encode<Value: Encodable>(_ value: Value) throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(value)
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    private static func decode<Value: Decodable>(
+        _ type: Value.Type,
+        from data: Data
+    ) throws(RuntimeControlClientError) -> Value {
+        do {
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            throw .malformedReply
+        }
+    }
+
+    private static func transportFailure(_ error: any Error) -> RuntimeControlClientError {
+        let error = error as NSError
+        return .transportFailure(domain: error.domain, code: error.code)
+    }
+}
+
+private struct OpenedControlConnection: Sendable {
+    let hello: RuntimeHelloReply
+    let channel: any RuntimeControlChannel
+}
+
+struct RuntimeControlClientConfiguration: Equatable, Sendable {
+    enum BuildIdentity: Equatable, Sendable {
+        case development
+        case release(teamIdentifier: String)
+        case releaseUpdateTest(teamIdentifier: String)
+    }
+
+    let clientKind: RuntimeClientKind
+    let claimedIdentity: String
+    let serviceName: String
+    let daemonCodeSigningRequirement: String
+    let clientVersion: String?
+    let clientBuild: Int?
+
+    init(
+        clientKind: RuntimeClientKind,
+        claimedIdentity: String,
+        buildIdentity: BuildIdentity,
+        clientVersion: String? = nil,
+        clientBuild: Int? = nil
+    ) throws(RuntimeControlClientError) {
+        guard !claimedIdentity.isEmpty else {
+            throw .invalidClientIdentity
+        }
+        self.clientKind = clientKind
+        self.claimedIdentity = claimedIdentity
+        self.clientVersion = clientVersion
+        self.clientBuild = clientBuild
+        switch buildIdentity {
+        case .development:
+            serviceName = "io.apkrun.apkrund.dev.xpc"
+            daemonCodeSigningRequirement = "identifier \"io.apkrun.apkrund.dev\""
+        case .release(let teamIdentifier):
+            guard !teamIdentifier.isEmpty,
+                teamIdentifier.utf8.allSatisfy({ ($0 >= 65 && $0 <= 90) || ($0 >= 48 && $0 <= 57) })
+            else {
+                throw .invalidClientIdentity
+            }
+            serviceName = "io.apkrun.apkrund.xpc"
+            daemonCodeSigningRequirement =
+                "anchor apple generic and certificate leaf[subject.OU] = \"\(teamIdentifier)\" "
+                + "and identifier \"io.apkrun.apkrund\""
+        case .releaseUpdateTest(let teamIdentifier):
+            guard !teamIdentifier.isEmpty,
+                teamIdentifier.utf8.allSatisfy({ ($0 >= 65 && $0 <= 90) || ($0 >= 48 && $0 <= 57) })
+            else {
+                throw .invalidClientIdentity
+            }
+            serviceName = "io.apkrun.apkrund.updatetest.xpc"
+            daemonCodeSigningRequirement =
+                "anchor apple generic and certificate leaf[subject.OU] = \"\(teamIdentifier)\" "
+                + "and identifier \"io.apkrun.apkrund.updatetest\""
+        }
+    }
+
+    static func current(
+        clientKind: RuntimeClientKind,
+        claimedIdentity: String?,
+        bundle: Bundle = .main
+    ) throws(RuntimeControlClientError) -> Self {
+        guard let bundleIdentifier = bundle.bundleIdentifier,
+            let buildIdentityValue = bundle.object(forInfoDictionaryKey: "APKRunBuildIdentity") as? String
+        else {
+            throw .invalidClientIdentity
+        }
+        let buildIdentity: BuildIdentity
+        switch buildIdentityValue {
+        case "dev":
+            buildIdentity = .development
+        case "release":
+            buildIdentity = .release(teamIdentifier: try currentTeamIdentifier())
+        case "updatetest":
+            buildIdentity = .releaseUpdateTest(teamIdentifier: try currentTeamIdentifier())
+        default:
+            throw .invalidClientIdentity
+        }
+        let info = bundle.infoDictionary ?? [:]
+        return try Self(
+            clientKind: clientKind,
+            claimedIdentity: claimedIdentity ?? bundleIdentifier,
+            buildIdentity: buildIdentity,
+            clientVersion: info["CFBundleShortVersionString"] as? String,
+            clientBuild: (info["CFBundleVersion"] as? String).flatMap(Int.init)
+        )
+    }
+
+    private static func currentTeamIdentifier() throws(RuntimeControlClientError) -> String {
+        guard let executableURL = Bundle.main.executableURL else {
+            throw .invalidClientIdentity
+        }
+        var staticCode: SecStaticCode?
+        guard
+            SecStaticCodeCreateWithPath(
+                executableURL as CFURL,
+                SecCSFlags(rawValue: 0),
+                &staticCode
+            ) == errSecSuccess,
+            let staticCode,
+            SecStaticCodeCheckValidity(
+                staticCode,
+                SecCSFlags(rawValue: kSecCSStrictValidate),
+                nil
+            ) == errSecSuccess
+        else {
+            throw .invalidClientIdentity
+        }
+        var signingInformation: CFDictionary?
+        guard
+            SecCodeCopySigningInformation(
+                staticCode,
+                SecCSFlags(rawValue: kSecCSSigningInformation),
+                &signingInformation
+            ) == errSecSuccess,
+            let signingInformation,
+            let teamIdentifier =
+                (signingInformation as NSDictionary)[kSecCodeInfoTeamIdentifier as String] as? String
+        else {
+            throw .invalidClientIdentity
+        }
+        return teamIdentifier
+    }
+}
+
+struct RuntimeXPCListenerEndpoint: @unchecked Sendable {
+    let value: AnyObject
+}
+
+struct RuntimeBrokerEndpointReply: Sendable {
+    let data: Data
+    let endpoint: RuntimeXPCListenerEndpoint?
+}
+
+protocol RuntimeBrokerChannel: Sendable {
+    func hello(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func requestEndpoint(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeBrokerEndpointReply
+    func invalidate()
+}
+
+protocol RuntimeControlChannel: AnyObject, Sendable {
+    func runtimeStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func startRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func stopRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func invalidate()
+}
+
+extension RuntimeControlChannel {
+    func invalidate() {}
+}
+
+protocol RuntimeXPCConnectionFactory: Sendable {
+    func makeBroker(
+        serviceName: String,
+        signingRequirement: String
+    ) throws(RuntimeControlClientError) -> any RuntimeBrokerChannel
+    func makeControl(
+        endpoint: RuntimeXPCListenerEndpoint,
+        signingRequirement: String
+    ) throws(RuntimeControlClientError) -> any RuntimeControlChannel
+}
+
+private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
+    func makeBroker(
+        serviceName: String,
+        signingRequirement: String
+    ) throws(RuntimeControlClientError) -> any RuntimeBrokerChannel {
+        let connection = configuredConnection(
+            NSXPCConnection(machServiceName: serviceName, options: []),
+            interface: try brokerInterface(),
+            signingRequirement: signingRequirement
+        )
+        return XPCBrokerChannel(connection: connection)
+    }
+
+    func makeControl(
+        endpoint: RuntimeXPCListenerEndpoint,
+        signingRequirement: String
+    ) throws(RuntimeControlClientError) -> any RuntimeControlChannel {
+        guard let listenerEndpoint = endpoint.value as? NSXPCListenerEndpoint else {
+            throw .malformedReply
+        }
+        let connection = configuredConnection(
+            NSXPCConnection(listenerEndpoint: listenerEndpoint),
+            interface: NSXPCInterface(with: RuntimeControlXPC.self),
+            signingRequirement: signingRequirement
+        )
+        return XPCControlChannel(connection: connection)
+    }
+
+    private func configuredConnection(
+        _ connection: NSXPCConnection,
+        interface: NSXPCInterface,
+        signingRequirement: String
+    ) -> NSXPCConnection {
+        connection.remoteObjectInterface = interface
+        connection.setCodeSigningRequirement(signingRequirement)
+        connection.resume()
+        return connection
+    }
+
+    private func brokerInterface() throws(RuntimeControlClientError) -> NSXPCInterface {
+        let interface = NSXPCInterface(with: RuntimeBrokerXPC.self)
+        guard let endpointClasses = NSSet(object: NSXPCListenerEndpoint.self) as? Set<AnyHashable> else {
+            throw .invalidXPCInterface
+        }
+        interface.setClasses(
+            endpointClasses,
+            for: #selector(RuntimeBrokerXPC.requestEndpoint(_:reply:)),
+            argumentIndex: 1,
+            ofReply: true
+        )
+        return interface
+    }
+}
+
+private final class XPCBrokerChannel: RuntimeBrokerChannel, @unchecked Sendable {
+    private let connection: NSXPCConnection
+
+    init(connection: NSXPCConnection) {
+        self.connection = connection
+    }
+
+    func hello(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeBrokerXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.hello(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func requestEndpoint(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeBrokerEndpointReply {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeBrokerXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.requestEndpoint(request) { response, endpoint in
+                let wrappedEndpoint = endpoint.map { RuntimeXPCListenerEndpoint(value: $0) }
+                finish(.success(RuntimeBrokerEndpointReply(data: response, endpoint: wrappedEndpoint)))
+            }
+        }
+    }
+
+    func invalidate() {
+        connection.invalidate()
+    }
+
+    private static func transportFailure(_ error: any Error) -> RuntimeControlClientError {
+        let error = error as NSError
+        return .transportFailure(domain: error.domain, code: error.code)
+    }
+}
+
+private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendable {
+    private let connection: NSXPCConnection
+
+    init(connection: NSXPCConnection) {
+        self.connection = connection
+    }
+
+    func runtimeStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.runtimeStatus(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func startRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.startRuntime(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func stopRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.stopRuntime(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func invalidate() {
+        connection.invalidate()
+    }
+
+    private static func transportFailure(_ error: any Error) -> RuntimeControlClientError {
+        let error = error as NSError
+        return .transportFailure(domain: error.domain, code: error.code)
+    }
+}
+
+private final class XPCReplyGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didComplete = false
+
+    func complete<Value: Sendable>(
+        _ result: Result<Value, RuntimeControlClientError>,
+        continuation: CheckedContinuation<Value, any Error>
+    ) {
+        let shouldComplete = lock.withLock {
+            guard !didComplete else { return false }
+            didComplete = true
+            return true
+        }
+        guard shouldComplete else { return }
+        continuation.resume(with: result)
+    }
+}
+
+private func withXPCReply<Value: Sendable>(
+    _ invoke: (@escaping (Result<Value, RuntimeControlClientError>) -> Void) -> Void
+) async throws(RuntimeControlClientError) -> Value {
+    do {
+        return try await withCheckedThrowingContinuation { continuation in
+            let gate = XPCReplyGate()
+            invoke { result in
+                gate.complete(result, continuation: continuation)
+            }
+        }
+    } catch let error as RuntimeControlClientError {
+        throw error
+    } catch {
+        let error = error as NSError
+        throw .transportFailure(domain: error.domain, code: error.code)
+    }
+}

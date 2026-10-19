@@ -1,8 +1,29 @@
+import CoreGraphics
 import RuntimeAPI
 import RuntimeCore
 import Testing
 
 @testable import RuntimeHost
+
+@Test
+func developerDisplayResolvesTheInitialRetinaAndNonRetinaModes() throws {
+    let retina = try DeveloperDisplay(
+        pointSize: CGSize(width: 480, height: 850),
+        backingScale: 2
+    )
+    let nonRetina = try DeveloperDisplay(
+        pointSize: CGSize(width: 480, height: 850),
+        backingScale: 1
+    )
+
+    #expect(retina.pixelWidth == 960)
+    #expect(retina.pixelHeight == 1700)
+    #expect(retina.mode.densityDpi == 320)
+    #expect(retina.backingScale == 2)
+    #expect(nonRetina.pixelWidth == 480)
+    #expect(nonRetina.pixelHeight == 850)
+    #expect(nonRetina.mode.densityDpi == 160)
+}
 
 @Test(.timeLimit(.minutes(1)))
 func embeddedRuntimeServiceTracksLaunchFrameCloseAndTaskVanished() async throws {

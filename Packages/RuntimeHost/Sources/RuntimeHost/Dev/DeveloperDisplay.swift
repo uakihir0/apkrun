@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import IOSurface
 import RuntimeCore
@@ -31,10 +32,14 @@ public struct DeveloperDisplayStatistics: Equatable, Sendable {
 /// The CLI reads display 0 through this type, because it may not import RuntimeCore or GraphicsCore. The events are
 /// the frames of the boot's presenter, and the window reports each displayed frame back through `frameDisplayed`.
 public final class DeveloperDisplay: @unchecked Sendable {
+    /// The resolved geometry of display 0.
+    public let mode: ResolvedDisplayMode
+    /// The backing scale used to size the initial native window.
+    public let backingScale: CGFloat
     /// The display's pixel width, which is the scanout's mode.
-    public let pixelWidth: Int
+    public var pixelWidth: Int { mode.pixelSize.width }
     /// The display's pixel height.
-    public let pixelHeight: Int
+    public var pixelHeight: Int { mode.pixelSize.height }
     /// The events, in order, until the boot ends.
     public let events: AsyncStream<DeveloperDisplayEvent>
 
@@ -43,11 +48,34 @@ public final class DeveloperDisplay: @unchecked Sendable {
     private let windowFrameLock = NSLock()
     private var windowFrameCommitCountValue: UInt64 = 0
 
-    /// Creates the display for `pixelWidth` x `pixelHeight` pixels. The boot attaches it when it starts.
-    public init(pixelWidth: Int, pixelHeight: Int) {
-        self.pixelWidth = pixelWidth
-        self.pixelHeight = pixelHeight
-        let core = DevelopmentDisplay(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+    /// Creates a display from the initial native window geometry.
+    public convenience init(
+        pointSize: CGSize,
+        backingScale: CGFloat,
+        zoom: Double = 1
+    ) throws(DisplayGeometryResolverFailure) {
+        let mode = try DisplayGeometryResolver.resolve(
+            DisplayGeometry(pointSize: pointSize, backingScale: Double(backingScale), zoom: zoom)
+        )
+        self.init(mode: mode, backingScale: backingScale)
+    }
+
+    /// Creates a fixed-density display for existing embedded test clients.
+    public convenience init(pixelWidth: Int, pixelHeight: Int) {
+        let mode = ResolvedDisplayMode(
+            pixelSize: PixelSize(width: pixelWidth, height: pixelHeight),
+            densityDpi: 160,
+            renderScale: 1,
+            zoom: 1,
+            refreshHz: 60
+        )
+        self.init(mode: mode, backingScale: 1)
+    }
+
+    private init(mode: ResolvedDisplayMode, backingScale: CGFloat) {
+        self.mode = mode
+        self.backingScale = backingScale
+        let core = DevelopmentDisplay(mode: mode)
         self.core = core
         let (stream, continuation) = AsyncStream<DeveloperDisplayEvent>.makeStream(
             bufferingPolicy: .bufferingNewest(16)

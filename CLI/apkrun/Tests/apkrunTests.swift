@@ -92,6 +92,18 @@ import Testing
     #expect(result["runtimeDetails"] == nil)
 }
 
+@Test func runtimeStatusJSONReportsDaemonOwnership() throws {
+    let data = Data(try RuntimeStatusOutput.json(sampleRuntimeInfoStatus).utf8)
+    let envelope = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let result = try #require(envelope["result"] as? [String: Any])
+
+    #expect(envelope["schemaVersion"] as? Int == 1)
+    #expect(result["owner"] as? String == "apkrund")
+    #expect(result["hostState"] as? String == "running")
+    #expect(result["runtimeState"] as? String == "ready")
+    #expect(result["daemonPID"] as? Int32 == 123)
+}
+
 @Test func packageQueryHumanOutputStripsTerminalControlCharacters() {
     let unsafe = RuntimePackageSummary(
         packageID: RuntimePackageID(rawValue: "io.example.app")!,

@@ -135,7 +135,7 @@ enum RuntimeStatusOutput {
     static func json(_ status: RuntimeHostStatus) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(RuntimeStatusEnvelope(result: status))
+        let data = try encoder.encode(RuntimeStatusEnvelope(status: status))
         return String(decoding: data, as: UTF8.self)
     }
 
@@ -267,5 +267,36 @@ enum RuntimeStatusOutput {
 
 private struct RuntimeStatusEnvelope: Encodable {
     let schemaVersion = 1
-    let result: RuntimeHostStatus
+    let result: RuntimeStatusResult
+
+    init(status: RuntimeHostStatus) {
+        result = RuntimeStatusResult(status: status)
+    }
+}
+
+private struct RuntimeStatusResult: Encodable {
+    let owner = "apkrund"
+    let hostState: String
+    let runtimeState: String
+    let bootProgress: Double?
+    let startupFailureStep: Int?
+    let startupFailureCode: String?
+    let crashLoopActive: Bool
+    let daemonPID: Int32
+    let imageVersion: String?
+    let guestAgentState: GuestAgentConnectionState?
+    let guestAgentProtocolVersion: String?
+
+    init(status: RuntimeHostStatus) {
+        hostState = status.hostState
+        runtimeState = status.runtimeState
+        bootProgress = status.bootProgress
+        startupFailureStep = status.startupFailureStep
+        startupFailureCode = status.startupFailureCode
+        crashLoopActive = status.crashLoopActive
+        daemonPID = status.daemonPID
+        imageVersion = status.imageVersion
+        guestAgentState = status.guestAgentState
+        guestAgentProtocolVersion = status.guestAgentProtocolVersion
+    }
 }

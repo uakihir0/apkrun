@@ -32,10 +32,12 @@ public struct DevelopmentDisplayStatistics: Equatable, Sendable {
 /// frames reach the window through `events`, and the window reports each displayed frame through `frameDisplayed`. It
 /// exists only in development builds, with `apkrun dev boot --window`.
 public final class DevelopmentDisplay: @unchecked Sendable {
+    /// The resolved mode advertised through scanout 0 and its EDID.
+    public let mode: ResolvedDisplayMode
     /// The width of the scanout in pixels. It is the mode that the scanout offers.
-    public let pixelWidth: Int
+    public var pixelWidth: Int { mode.pixelSize.width }
     /// The height of the scanout in pixels.
-    public let pixelHeight: Int
+    public var pixelHeight: Int { mode.pixelSize.height }
     /// The events, in order. The stream keeps the newest sixteen frames, since the window only needs the latest.
     public let events: AsyncStream<DevelopmentDisplayEvent>
 
@@ -44,10 +46,25 @@ public final class DevelopmentDisplay: @unchecked Sendable {
     private var presenter: ScanoutPresenter?
     private var device: VirtioGPUDevice?
 
-    /// Creates a display of `pixelWidth` x `pixelHeight` pixels for scanout 0.
+    /// Creates a display using a mode resolved from the window geometry.
+    public init(mode: ResolvedDisplayMode) {
+        self.mode = mode
+        let (stream, continuation) = AsyncStream<DevelopmentDisplayEvent>.makeStream(
+            bufferingPolicy: .bufferingNewest(16)
+        )
+        events = stream
+        self.continuation = continuation
+    }
+
+    /// Creates a fixed-density display for existing embedded test clients.
     public init(pixelWidth: Int, pixelHeight: Int) {
-        self.pixelWidth = pixelWidth
-        self.pixelHeight = pixelHeight
+        mode = ResolvedDisplayMode(
+            pixelSize: PixelSize(width: pixelWidth, height: pixelHeight),
+            densityDpi: 160,
+            renderScale: 1,
+            zoom: 1,
+            refreshHz: 60
+        )
         let (stream, continuation) = AsyncStream<DevelopmentDisplayEvent>.makeStream(
             bufferingPolicy: .bufferingNewest(16)
         )
@@ -60,6 +77,13 @@ public final class DevelopmentDisplay: @unchecked Sendable {
         guard let scanout = ScanoutID(rawValue: 0) else {
             throw .modeUnsupported(mode: DisplayMode.testDefault)
         }
+        let graphicsMode = DisplayMode(
+            widthPixels: mode.pixelSize.width,
+            heightPixels: mode.pixelSize.height,
+            refreshHz: mode.refreshHz,
+            dotsPerInch: mode.densityDpi
+        )
+        try device.enableScanout(scanout, mode: graphicsMode)
         let presenter = try device.attachPresenter(scanout, width: pixelWidth, height: pixelHeight)
         lock.withLock {
             self.presenter = presenter

@@ -1,6 +1,7 @@
 import DiagnosticsCore
 import Foundation
 import GraphicsCore
+import GuestProtocol
 import ImageCore
 import VirtualMachineCore
 
@@ -271,7 +272,11 @@ public actor RuntimeSupervisor {
 
         let plan: AndroidBootPlan
         do {
-            plan = try planner.prepareBoot(image: image, instance: instance, options: options)
+            var bootOptions = options
+            if let developmentDisplay {
+                bootOptions.displayDensity = developmentDisplay.mode.densityDpi
+            }
+            plan = try planner.prepareBoot(image: image, instance: instance, options: bootOptions)
         } catch {
             throw .image(error)
         }
@@ -345,6 +350,22 @@ public actor RuntimeSupervisor {
                 try await agent.start(connectTimeout: .seconds(5))
             } catch {
                 throw .guestAgent(error)
+            }
+            if let developmentDisplay {
+                do throws(GuestProtocolFailure) {
+                    _ = try await agent.supervisor.send(
+                        GuestSetDisplayPolicy(
+                            displayID: 0,
+                            densityDPI: Int32(developmentDisplay.mode.densityDpi),
+                            imePolicy: .local
+                        )
+                    )
+                } catch {
+                    throw .guestAgent(.operation(error))
+                }
+                bootLogger.info(
+                    "Applied display 0 policy at \(developmentDisplay.mode.densityDpi, .public) dpi for boot \(plan.bootRecordID.uuidString, .public)"
+                )
             }
         }
         try throwIfStopped()

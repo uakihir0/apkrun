@@ -35,6 +35,11 @@ import Testing
     #expect((command as? RuntimeRestartCommand)?.yes == true)
 }
 
+@Test func runtimeResetCommandParses() async throws {
+    let command = try await APKRunCommand.asyncParseAsRoot(["runtime", "reset"])
+    #expect(command is RuntimeResetCommand)
+}
+
 @Test func packageInfoRejectsTheDisplayOptionWithAnActionableCatalogError() async throws {
     let command = try await APKRunCommand.asyncParseAsRoot(["info", "--displays"])
     guard var infoCommand = command as? PackageInfoCommand else {

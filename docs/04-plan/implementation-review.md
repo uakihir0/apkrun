@@ -21866,3 +21866,40 @@ after the stop completes, Android stays stopped. RuntimeAPI's single
 `runtimeRestart` operation handle, operation ID, and cancellation semantics
 remain outstanding in #032.
 
+## IR-1384: Add runtime boot-loop reset
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #032 |
+| Affected documents | [runtime-api.md](../03-reference/runtime-api.md) §2, §5; [cli.md](../02-design/cli.md) §4.1; [M04](issues/M04-daemon-and-guest-protocol.md) #032 |
+
+**Choices.** Add `apkrun runtime reset` as an authenticated API 1.5 control
+operation for app, menu bar, and CLI clients. It clears the persisted
+automatic boot-loop guard only when active, returns the current runtime
+status, and does not start or stop Android. Do not clear a degraded daemon
+startup failure. Omit `--yes`, since this operation cannot erase data or
+interrupt a running runtime. Reserve stop/reset synchronously before their
+first suspension, reject overlap, and abort reset if daemon shutdown begins.
+
+**Reason.** RuntimeHost currently owns the persistent guard and exposes no
+stable failed runtime state: a failed VM boot is cleaned up and returned to
+`stopped`, while missing images and similar host startup issues remain
+`degraded`. Resetting only the guard matches the recovery the current daemon
+can safely perform and avoids hiding unrelated startup failures. The
+operation is non-destructive, so it does not prompt for confirmation.
+Reserving the lifecycle transition before the first `await` prevents a stop
+from starting between reset's state check and guard clear; the shutdown check
+handles the daemon's separate teardown path.
+
+**Verification.** Focused RuntimeAPI, RuntimeClient, RuntimeHost, and CLI
+tests cover the versioned request, authenticated client path, active-guard
+clear, inactive-guard no-op, preserved startup failure, and CLI parsing.
+Focused package tests and formatting checks pass.
+
+**Risk for review.** The API reference describes clearing a failed runtime
+state as well as the guard; the current daemon has no stable failed state to
+clear after its cleanup path. If RuntimeSupervisor later retains a failed
+state, reset must clear that state too. Full XPC acceptance and live Android
+checks remain outstanding.
+

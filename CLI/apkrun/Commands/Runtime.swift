@@ -13,6 +13,7 @@ struct RuntimeCommand: AsyncParsableCommand {
             RuntimeStartCommand.self,
             RuntimeStopCommand.self,
             RuntimeRestartCommand.self,
+            RuntimeResetCommand.self,
         ],
         defaultSubcommand: RuntimeStatusCommand.self
     )
@@ -96,6 +97,23 @@ struct RuntimeRestartCommand: AsyncParsableCommand {
             _ = try await client.stopRuntime()
             let status = try await client.startRuntime()
             Output.write("Android is \(status.runtimeState).")
+        } catch {
+            throw await RuntimeStatusOutput.commandFailure(error)
+        }
+    }
+}
+
+struct RuntimeResetCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "reset",
+        abstract: "Clear the automatic boot-loop guard without deleting Android data."
+    )
+
+    mutating func run() async throws {
+        do {
+            let client = try RuntimeControlClient(clientKind: .cli)
+            let status = try await client.resetRuntime()
+            Output.write("Android is \(status.runtimeState). No Android data was deleted.")
         } catch {
             throw await RuntimeStatusOutput.commandFailure(error)
         }

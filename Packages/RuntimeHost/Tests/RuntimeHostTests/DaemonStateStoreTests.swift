@@ -123,7 +123,7 @@ import Testing
         executableURL: URL(fileURLWithPath: "/Applications/APKRun.app/Contents/Helpers/apkrund")
     )
 
-    try await host.start()
+    try await host.start { ContinuousClock.now }
     let status = await host.status()
     #expect(status.hostState == "degraded")
     #expect(status.runtimeState == "stopped")

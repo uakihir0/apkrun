@@ -21332,7 +21332,7 @@ input, IME behavior, and R-03 measurements remain unverified.
 |---|---|
 | Status | Needs maintainer review |
 | Task | #031 |
-| Affected documents | [runtime-daemon.md](../02-design/runtime-daemon.md) §§2, 3, 8, 13, 16; [runtime-api.md](../03-reference/runtime-api.md) §§1–3; [cli.md](../02-design/cli.md) §4.1; [M04](issues/M04-daemon-and-guest-protocol.md) #031–#032 |
+| Affected documents | [runtime-daemon.md](../02-design/runtime-daemon.md) §§2, 3, 8, 13, 16; [filesystem-layout.md](../01-architecture/filesystem-layout.md); [runtime-api.md](../03-reference/runtime-api.md) §§1–3; [error-catalog.md](../03-reference/error-catalog.md) §7; [cli.md](../02-design/cli.md) §4.1; [M04](issues/M04-daemon-and-guest-protocol.md) #031–#032 |
 
 **Choices.** Define RuntimeAPI 1.0 with #031's broker handshake and three
 control operations (`runtimeStatus`, `runtime start`, `runtime stop`), and keep
@@ -21359,7 +21359,13 @@ and return a typed endpoint rejection after shutdown stops lifecycle admission.
 Make concurrent shutdown callers wait for the same cleanup. Add the documented
 `runtime.hostShuttingDown` catalog entry so CLI shutdown errors keep retry exit
 code 75. Align the development installer with the documented
-`build/Build/Products/Debug` output.
+`build/Build/Products/Debug` output. Add the missing runtime control codes to
+the error-catalog source and map daemon/client failures through that catalog
+so their messages and exit codes follow the documented values. Treat a local
+client-identity failure as `runtime.notAuthorized`, while transport failures
+use `runtime.serviceUnavailable`. Keep the daemon-provided fallback message
+when a catalog template has parameters, because the current control error DTO
+does not carry parameter values.
 
 **Reason.** The first three commands make daemon ownership usable and provide
 the smallest practical way to operate and inspect it before #032's larger
@@ -21380,6 +21386,11 @@ during lengthy startup, while tracking XPC replies avoids closing channels
 before clients receive lifecycle errors or status. The error-catalog source
 listed the retry behavior but did not contain its JSON entry; restoring that
 entry keeps generated CLI exit handling consistent with the documented code.
+The other runtime control cases were likewise present in the API design but
+absent from the catalog source, which made CLI error output fall back to exit
+code 1. Catalog-backed messages now cover non-parameterized cases. Preserving
+the transmitted message for parameterized entries avoids exposing unresolved
+placeholders until the wire DTO carries their values.
 
 **Verification.** The Debug EmbeddedRuntime `apkrun` product and apkrund
 Debug Xcode scheme build. `APKRunApp.swift` passes a direct Swift typecheck.
@@ -21403,7 +21414,68 @@ cleanup to finish, and endpoint requests arriving after request draining
 receive a typed retryable rejection. The development installer follows the
 documented `build/Build/Products/Debug` output and permits an alternate
 products directory.
-The 300 ms listener readiness target is not yet measured, and the current
-startup sequence still performs image recovery before creating the listener.
-T2 crash recovery, launchd restart, and G6 interactivity remain unverified on
-the reference Mac.
+
+**Listener publication choice.** Resume the authenticated Mach broker after
+the instance lock and daemon run record are established, before image-store
+recovery. Capture `ContinuousClock.Instant` immediately after listener resume
+and use it for the `DAEMON_READY` event.
+
+**Reason.** The lock prevents a second daemon from claiming the Mach service,
+and diagnostics are ready to record the event. Image recovery can take much
+longer than listener setup, so clients can connect and inspect startup state
+while recovery proceeds.
+
+**Risk.** The 300 ms listener readiness target remains unmeasured. Signing
+requirement construction, diagnostics setup, lock acquisition, and run-record
+recovery still happen before publication. Lifecycle start and stop requests
+wait for image and service initialization to finish; a failed initialization
+returns its recorded startup failure instead of an early unavailable-image
+error. T2 crash recovery, launchd restart, and G6 interactivity remain
+unverified on the reference Mac.
+
+**Unclean-exit recovery choice.** After the instance lock confirms the prior
+daemon is gone, record the newest regular `apkrund-*.ips` file by modification
+time in `$APKRUN_HOME/Diagnostics/index.json`. Keep at most 20 unique absolute
+paths. In Debug builds, list ADB forwards for `127.0.0.1:6520` and remove
+only TCP forwards whose serial matches that endpoint and whose remote endpoint
+begins `localabstract:apkrun-`, then disconnect `127.0.0.1:6520`. Each
+recovery dependency is injectable; tests use a temporary DiagnosticReports
+directory and an in-memory ADB runner.
+
+**Reason.** The lock makes recovery safe to perform once per new daemon after
+an abnormal exit. The report index keeps the system crash report discoverable
+without copying a potentially sensitive report into APKRun's application
+support data. Restricting forward removal to this daemon's ADB serial and the
+APKRun namespace preserves other devices' forwards. Production builds do not
+run ADB cleanup.
+
+**Risk.** A missing or malformed ADB listing can leave stale development
+forwards; failures are logged and do not prevent the broker from serving.
+The index stores paths rather than report contents, so diagnostics bundle
+collection still needs to read and redact the referenced report. Crash
+recovery and ADB cleanup were not exercised against the live LaunchAgent or
+Android guest.
+
+**Startup gate choice.** Keep `runtimeStatus` available as soon as the
+authenticated listener is resumed after step 3, while `startRuntime` and
+`stopRuntime` wait until all remaining host initialization and unclean-exit
+recovery have completed. On completion they receive the recorded startup
+failure, if any. A RuntimeHost instance consumes one startup attempt, including
+an early duplicate-instance-lock failure; launchd retry creates a fresh host.
+
+**Reason.** Publishing the listener early meets the status availability and
+readiness goals, while the gate prevents lifecycle work from racing image-store
+recovery and reporting a misleading `image.noCurrentImage` result.
+Making a failed attempt terminal keeps its completed gate and startup failure
+consistent; resetting only `hasStarted` could otherwise let a retry bypass the
+gate with stale startup state.
+
+**Verification.** `swift test --filter DiagnosticsIndexTests` passed (2
+tests), and `swift test --filter DaemonUncleanExitRecoveryTests` passed (6
+tests). Coverage includes newest-report selection, private index writes,
+Debug-only targeted ADB cleanup and disconnect through a fake runner, recovery
+invocation after unclean exit, and lifecycle gating while status remains
+available, including the terminal duplicate-lock startup path. Focused
+`swift-format lint --strict` passed for the changed production and test Swift
+files, and `git diff --check` passed. No Xcode app build or live LaunchAgent,
+ADB command, or Android VM was started.

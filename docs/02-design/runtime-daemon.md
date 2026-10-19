@@ -75,6 +75,13 @@ The order is fixed. Each step logs `host.startup.<step>` with its duration. Targ
 | 11 | Resume the XPC listener (§8) | RuntimeHost | yes |
 | 12 | Apply `runtime.startPolicy` (§5.4). Skipped while the host state is not `normal` | RuntimeCore | no |
 
+The listener is published immediately after steps 1–3, before steps 4–10, so
+clients can inspect host status while slower recovery runs. `runtimeStatus`
+remains available during this interval. Lifecycle start and stop requests wait
+for host initialization to finish; if initialization fails, they receive the
+recorded startup failure. Step 11 records the listener's actual resume time
+even though it is performed early.
+
 "Degraded" means: apkrund keeps running and serves the broker, but `runtimeStatus` returns `RuntimeFailure.hostStartupFailed(step:)`, and operations that need the failed component return the same error. The GUI and `apkrun doctor` show it with the remediation from the error catalog. apkrund never crash-loops because of bad data on disk.
 
 In #031, failure to load the Guest Agent bundle before constructing
@@ -129,7 +136,7 @@ If the deadline passes, the VM is force-stopped (`VMController.stop()`), which i
 On startup, after the new process acquires the exclusive instance lock, `cleanExit == false` means the previous apkrund crashed or was killed. Lock ownership establishes that the prior daemon no longer owns the runtime; do not infer this from the recorded PID, which may have been reused:
 
 - Log `host.previousExitUnclean` (fault level) and append the time to `recentUncleanExits` (last 10 kept).
-- Record the newest `~/Library/Logs/DiagnosticReports/apkrund-*.ips` path in the diagnostics index, so `apkrun diagnostics` includes it ([diagnostics.md](diagnostics.md)).
+- Record the newest `~/Library/Logs/DiagnosticReports/apkrund-*.ips` path in `$APKRUN_HOME/Diagnostics/index.json`, retaining the latest 20 paths, so `apkrun diagnostics` can include it ([diagnostics.md](diagnostics.md)).
 - The VM died with the process (the Virtualization.framework helper processes exit with their owner). Nothing of the VM needs cleanup. Android repairs userdata on the next boot (f2fs checkpoint and fsck) like after a power loss.
 - Remove stale ADB forwards (`localabstract:apkrun-*`, [guest-protocol.md](guest-protocol.md) §13.2) and run `adb disconnect 127.0.0.1:6520` in development builds.
 - Steps 5 and 6 of §2.2 recover image migrations and package transactions.

@@ -37,6 +37,7 @@ public actor RuntimeHost {
     private let buildInfo: BuildInfo
     private let environment: [String: String]
     private let executableURL: URL
+    private let uncleanExitRecoveryOverride: (any DaemonUncleanExitRecovering)?
     private var diagnostics: DiagnosticsContext?
     private var logger: APKLogger?
     private var instanceLock: InstanceLock?
@@ -51,6 +52,8 @@ public actor RuntimeHost {
     private var hostState = "starting"
     private var startupFailure: (step: Int, code: String)?
     private var hasStarted = false
+    private var startupCompleted = false
+    private var startupWaiters: [CheckedContinuation<Void, Never>] = []
     private var isShuttingDown = false
     private var shutdownCompleted = false
     private var activeLifecycleOperations = 0
@@ -62,17 +65,22 @@ public actor RuntimeHost {
         paths: APKRunPaths = APKRunPaths(),
         buildInfo: BuildInfo = .current,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        executableURL: URL = URL(fileURLWithPath: CommandLine.arguments.first ?? "apkrund")
+        executableURL: URL = URL(fileURLWithPath: CommandLine.arguments.first ?? "apkrund"),
+        uncleanExitRecovery: (any DaemonUncleanExitRecovering)? = nil
     ) {
         self.paths = paths
         self.buildInfo = buildInfo
         self.environment = environment
         self.executableURL = executableURL
+        uncleanExitRecoveryOverride = uncleanExitRecovery
     }
 
-    /// Performs daemon startup. Missing image or Guest Agent data leaves the daemon degraded so
-    /// it can still report a useful status to clients.
-    public func start() async throws(RuntimeHostError) {
+    /// Performs daemon startup. The LaunchAgent listener is published after the instance lock and
+    /// run record are ready, but before image-store recovery. Missing image or Guest Agent data
+    /// leaves the daemon degraded so it can still report a useful status to clients.
+    public func start(
+        publishListener: @Sendable () throws(RuntimeHostError) -> ContinuousClock.Instant
+    ) async throws(RuntimeHostError) {
         guard !hasStarted else {
             throw .alreadyStarted
         }
@@ -81,7 +89,18 @@ public actor RuntimeHost {
         }
         hasStarted = true
         activeLifecycleOperations += 1
-        defer { finishLifecycleOperation() }
+        defer {
+            if !startupCompleted {
+                if hostState == "starting" {
+                    hostState = "degraded"
+                    if startupFailure == nil {
+                        startupFailure = (step: 11, code: "runtime.serviceUnavailable")
+                    }
+                }
+                completeStartup()
+            }
+            finishLifecycleOperation()
+        }
 
         // Startup step 1: create the shared diagnostics dependencies before module construction.
         let diagnostics = DiagnosticsContext.live(paths: paths)
@@ -101,7 +120,6 @@ public actor RuntimeHost {
             )
         } catch let failure {
             if case .instanceLocked(owner: .apkrund) = failure {
-                hasStarted = false
                 throw .runtimeFailure(failure)
             }
             recordDegradedStartup(step: 2, code: failure.qualifiedCode)
@@ -118,13 +136,37 @@ public actor RuntimeHost {
                 )
                 startupAssessment = assessment
                 if assessment.previousExitWasUnclean {
-                    logger.fault("The previous daemon process did not record a clean exit")
+                    logger.fault("host.previousExitUnclean")
                 }
                 if assessment.crashLoopActive {
                     logger.error("Three unclean daemon exits occurred within ten minutes")
                 }
             } catch {
                 recordDegradedStartup(step: 3, code: "hostStartupFailed")
+            }
+        }
+
+        // The broker must be available while image recovery runs. Preserve the time captured
+        // immediately after NSXPCListener.resume() even though diagnostics were initialized first.
+        let listenerReadyAt = try publishListener()
+        markDaemonReady(at: listenerReadyAt)
+
+        if startupAssessment?.previousExitWasUnclean == true {
+            let recovery =
+                uncleanExitRecoveryOverride
+                ?? DaemonUncleanExitRecovery.live(
+                    paths: paths,
+                    buildInfo: buildInfo,
+                    environment: environment
+                )
+            let result = await recovery.recover()
+            if result.indexedCrashReport != nil {
+                logger.notice("Indexed the previous apkrund crash report")
+            }
+            for issue in result.issues {
+                logger.warning(
+                    "Unclean-exit recovery step failed: \(issue.rawValue, .public)"
+                )
             }
         }
 
@@ -168,17 +210,22 @@ public actor RuntimeHost {
             }
         }
 
-        guard !isShuttingDown else { return }
+        guard !isShuttingDown else {
+            completeStartup()
+            return
+        }
         hostState = startupFailure == nil ? "running" : "degraded"
         logger.notice("Daemon startup completed with host state \(hostState, .public)")
+        completeStartup()
     }
 
     /// Boots Android on demand. An explicit start is allowed after the crash-loop guard activates.
     public func startRuntime(reason: StartReason = .user) async throws(RuntimeHostError) {
+        try await waitForStartupCompletion()
         try beginLifecycleOperation()
         defer { finishLifecycleOperation() }
 
-        if let startupFailure, startupFailure.step == 2 || startupFailure.step == 3 {
+        if let startupFailure {
             throw .startupFailed(step: startupFailure.step, code: startupFailure.code)
         }
         let crashLoopActive: Bool
@@ -254,6 +301,7 @@ public actor RuntimeHost {
 
     /// Stops Android but keeps the daemon available for a later request.
     public func stopRuntime() async throws(RuntimeHostError) {
+        try await waitForStartupCompletion()
         try beginLifecycleOperation()
         defer { finishLifecycleOperation() }
         await supervisor?.stop()
@@ -306,10 +354,10 @@ public actor RuntimeHost {
             && (runtimeState == nil || runtimeState == .stopped)
     }
 
-    /// Records the daemon-ready marker once its authenticated XPC endpoint is serving.
-    public func markDaemonReady() {
+    /// Records the marker at the time the authenticated XPC endpoint began serving.
+    private func markDaemonReady(at time: ContinuousClock.Instant) {
         guard let diagnostics else { return }
-        Perf.mark(.daemonReady, timeline: diagnostics.perfTimeline)
+        Perf.mark(.daemonReady, at: time, timeline: diagnostics.perfTimeline)
         logger?.notice("Daemon control endpoint is ready")
     }
 
@@ -374,6 +422,37 @@ public actor RuntimeHost {
         guard activeLifecycleOperations > 0 else { return }
         await withCheckedContinuation { continuation in
             lifecycleWaiters.append(continuation)
+        }
+    }
+
+    private func waitForStartupCompletion() async throws(RuntimeHostError) {
+        guard hasStarted else {
+            throw .notStarted
+        }
+        if !startupCompleted {
+            await withCheckedContinuation { continuation in
+                if startupCompleted {
+                    continuation.resume()
+                } else {
+                    startupWaiters.append(continuation)
+                }
+            }
+        }
+        guard !isShuttingDown else {
+            throw .shuttingDown
+        }
+        if hostState == "starting" {
+            throw .startupFailed(step: 11, code: "runtime.serviceUnavailable")
+        }
+    }
+
+    private func completeStartup() {
+        guard !startupCompleted else { return }
+        startupCompleted = true
+        let waiters = startupWaiters
+        startupWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
         }
     }
 

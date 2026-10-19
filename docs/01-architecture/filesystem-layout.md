@@ -15,6 +15,8 @@ All paths are resolved through a single `APKRunPaths` value in `DiagnosticsCore`
 APKRun/
 ├── state.json                         # global schema version, instance ID, lastRuntimeVersion + lastRuntimeBuild, selfUpdate probe state (runtime-maintenance.md §3.8, §9)
 ├── settings.json                      # global settings (see configuration.md)
+├── Diagnostics/
+│   └── index.json                     # indexed host crash-report paths (runtime-daemon.md §2.5)
 │
 ├── Images/                            # runtime images (read-only once installed)
 │   ├── <imageVersion>/                # e.g. 2026.10.0-cf16373615-arm64 (naming: 03-reference/runtime-image-manifest.md)

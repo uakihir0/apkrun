@@ -43,31 +43,6 @@ enum APKRunDaemon {
             return source
         }
 
-        do {
-            try await host.start()
-        } catch RuntimeHostError.runtimeFailure(.instanceLocked(owner: .apkrund)) {
-            // Launchd can race with the existing daemon after a quick logout/login.
-            return
-        } catch {
-            writeStandardError("apkrund: startup failed: \(String(describing: error))")
-            await host.shutdown()
-            if termination.wasRequested {
-                withExtendedLifetime((host, termination, terminationSources)) {
-                    dispatchMain()
-                }
-            }
-            // A persistent bundle/configuration failure is not a process crash. Exiting
-            // successfully prevents KeepAlive.SuccessfulExit=false from restart-looping;
-            // a later Mach-service request or StartInterval will try again.
-            exit(EXIT_SUCCESS)
-        }
-
-        guard !termination.wasRequested else {
-            withExtendedLifetime((host, termination, terminationSources)) {
-                dispatchMain()
-            }
-        }
-
         guard let appBundleURL = containingAppBundle() else {
             writeStandardError("apkrund: couldn't locate the containing APKRun.app bundle")
             await host.shutdown()
@@ -92,8 +67,6 @@ enum APKRunDaemon {
                     dispatchMain()
                 }
             }
-            try server.start()
-            await host.markDaemonReady()
         } catch {
             writeStandardError("apkrund: couldn't start the control endpoint: \(String(describing: error))")
             await host.shutdown()
@@ -105,6 +78,45 @@ enum APKRunDaemon {
             // launchd retries when the service is requested again; avoid an automatic
             // KeepAlive loop for a deterministic signature or bundle-layout problem.
             exit(EXIT_SUCCESS)
+        }
+
+        let publishListener: @Sendable () throws(RuntimeHostError) -> ContinuousClock.Instant = {
+            do {
+                try server.start()
+            } catch {
+                writeStandardError("apkrund: couldn't start the control endpoint: \(String(describing: error))")
+                throw RuntimeHostError.startupFailed(step: 11, code: "hostStartupFailed")
+            }
+            return ContinuousClock.now
+        }
+
+        do {
+            try await host.start(publishListener: publishListener)
+        } catch RuntimeHostError.runtimeFailure(.instanceLocked(owner: .apkrund)) {
+            // A prior daemon owns the instance; discard the unpublished endpoint listeners.
+            server.invalidate()
+            return
+        } catch {
+            writeStandardError("apkrund: startup failed: \(String(describing: error))")
+            server.stopAcceptingNewConnections()
+            await host.shutdown()
+            await server.waitForPendingRequestsToDrain()
+            server.invalidate()
+            if termination.wasRequested {
+                withExtendedLifetime((host, server, termination, terminationSources)) {
+                    dispatchMain()
+                }
+            }
+            // A persistent bundle/configuration failure is not a process crash. Exiting
+            // successfully prevents KeepAlive.SuccessfulExit=false from restart-looping;
+            // a later Mach-service request or StartInterval will try again.
+            exit(EXIT_SUCCESS)
+        }
+
+        guard !termination.wasRequested else {
+            withExtendedLifetime((host, server, termination, terminationSources)) {
+                dispatchMain()
+            }
         }
 
         let idleMonitor = Task.detached {

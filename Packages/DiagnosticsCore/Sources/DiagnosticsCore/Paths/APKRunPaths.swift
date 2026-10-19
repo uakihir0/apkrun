@@ -127,6 +127,12 @@ public struct APKRunPaths: Sendable {
     /// The runtime state directory.
     public var runtimeDirectory: URL { dataRoot.appendingPathComponent("Runtime", isDirectory: true) }
 
+    /// The diagnostics directory.
+    public var diagnosticsDirectory: URL { dataRoot.appendingPathComponent("Diagnostics", isDirectory: true) }
+
+    /// The index of diagnostic crash reports discovered by APKRun.
+    public var diagnosticsIndexFile: URL { diagnosticsDirectory.appendingPathComponent("index.json") }
+
     /// The runtime instance lock file.
     public var instanceLockFile: URL { runtimeDirectory.appendingPathComponent("instance.lock") }
 

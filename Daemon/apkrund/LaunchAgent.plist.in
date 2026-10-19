@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>@LAUNCH_AGENT_LABEL@</string>
+	<key>BundleProgram</key>
+	<string>Contents/Helpers/apkrund</string>
+	<key>MachServices</key>
+	<dict>
+		<key>@MACH_SERVICE_NAME@</key>
+		<true/>
+	</dict>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StartInterval</key>
+	<integer>3600</integer>
+	<key>ExitTimeOut</key>
+	<integer>45</integer>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>@APP_BUNDLE_IDENTIFIER@</string>
+	</array>
+</dict>
+</plist>

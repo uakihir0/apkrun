@@ -20990,3 +20990,52 @@ currently fails and attempts rollback; maintainers must either validate this
 fallback or implement stable product-info matching and update launch, density,
 and input routing together. OQ-39 remains open for the effect of EDID physical
 size on Android density.
+
+## IR-1373: Keep development launch status and close handling with the window
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #026 |
+| Affected documents | [display-and-windowing.md](../02-design/display-and-windowing.md) §§7.3, 7.6; [M03](issues/M03-input-and-basic-runtime.md) #026 |
+
+**Choice.** `apkrun dev launch` sends ordered status and title updates to its
+window. The title comes from the Guest Agent's PackageManager label, with the
+package identifier as fallback. A launch error leaves the window open with
+the catalog message, remediation, and a Close action; the complete error is
+also printed in Terminal. Rerunning the CLI command is the development-mode
+retry. Closing before APK installation begins prevents it; closing during an
+active PackageInstaller operation waits for installation to finish, skips app
+launch, and then stops Android. The AppKit event loop is not started for
+`help launch` or launch help output.
+
+**Reason.** The fixed placeholder concealed whether Android was booting,
+installing, or launching, and the immediate CLI exit removed the only useful
+error context from the native window. A close during installation previously
+stopped the VM while PackageInstaller was still using it. Holding the error
+window until the user closes it and deferring only an already-started install
+keeps the development workflow observable without launching into a half-run
+system. A failure-only window also covers failures before the first Android
+display attaches, and the presentation state keeps a resize completion from
+reenabling input beneath an error panel. The error state also disables window
+resizing so it cannot issue more display changes after the VM has stopped. A
+separate in-process retry would require rebuilding the embedded VM and display
+session; the CLI retry is the smallest reliable behavior here.
+
+**Verification.** `swift build --product apkrun --traits EmbeddedRuntime`
+passed. Focused RuntimeHost tests cover a window close during an active
+installation and a close before installation begins. The CLI argument test
+covers normal launch, `--no-window`, help requests, and `launch`/`boot` option
+values so they cannot change the window mode. The installation test blocks a
+fake installer, requests close, verifies no runtime stop is scheduled until
+installation completes, and confirms app launch is skipped. WindowingCore T0
+also confirms a later frame cannot re-enable input after a launch failure.
+Strict `swift-format` lint passed. No live HelloText smoke test, error-window
+screenshot, NativeWindowTests, or G4 run was performed.
+
+**Risk.** The PackageManager label query and persistent error panel are only
+build-verified; a real Guest Agent and window run should confirm their
+appearance. The development error panel intentionally has no launcher-level
+**Try Again** or **Open APKRun** buttons; the CLI error provides the
+remediation, and rerunning the command retries. Maintainers should review this
+development-only behavior and the bounded status stream.

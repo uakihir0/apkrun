@@ -363,6 +363,20 @@ window's Core Animation transaction completion (`frameDisplayed`). The GPU
 `framesPresented` counter records completed blits and does not prove that the
 window has committed the frame.
 
+`apkrun dev launch` updates its placeholder as Android boots, an APK installs,
+and the app starts. It uses the installed package's Android label for the
+window title. On failure, the development window stays open with the catalog
+message and remediation plus a **Close** button; the CLI also prints the full
+error. Rerunning the command retries the launch. The development command does
+not offer the launcher's **Try Again** or **Open APKRun** actions.
+If the failure happens before the Android display attaches, a failure-only
+native window shows the same message and remediation. A failed window keeps
+input disabled and rejects new resize requests, including after any resize
+callback already in flight.
+The pre-parser window decision uses the `dev boot` or `dev launch` command
+path, so option values such as `--guest-dir launch` do not select app-launch
+close handling.
+
 The window is a standard titled window: title = app display name, a black background, `collectionBehavior = [.fullScreenPrimary]`, and `tabbingMode = .disallowed` (one window per app). There is no emulator frame, toolbar, or navigation buttons. Android navigation uses keyboard mappings (Esc → Back, [input.md](input.md)).
 
 ### 7.4 Fullscreen
@@ -396,10 +410,12 @@ closes the window and stops the embedded runtime as well.
 The Guest Agent's task-removal wait is bounded to 4 s within the operation's
 5 s deadline. If task removal fails or times out, the CLI reports a warning
 and still shuts down the embedded runtime. `FORCE_STOP` is not used.
-The CLI observes close and Ctrl-C while Android boots. Closing before
-`LaunchApplication` starts stops the boot without installing or launching the
-APK. Once launch begins, the CLI keeps the Guest Agent available long enough
-to finish package tasks before stopping Android.
+The CLI observes close and Ctrl-C while Android boots. Closing before an APK
+installation starts stops the boot without installing or launching the APK.
+If the user closes during installation, the CLI waits for PackageInstaller to
+finish, skips `LaunchApplication`, then stops Android. Once launch begins, the
+CLI keeps the Guest Agent available long enough to finish package tasks before
+stopping Android.
 Ctrl-C stops the runtime without first stopping the app, and `--no-window`
 keeps its one-shot launch behavior. This development-only lifecycle does not
 change the daemon-backed wrapper policy above.

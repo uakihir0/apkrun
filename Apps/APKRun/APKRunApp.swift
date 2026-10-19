@@ -88,11 +88,13 @@ private enum RuntimeRegistrationCommand {
             .map { String(format: "%02x", $0) }
             .joined()
         let service = SMAppService.agent(plistName: plistName)
+        let serviceStatus = service.status
         let previousHash = UserDefaults.standard.string(forKey: registeredPlistHashKey)
 
+        // Re-registering a pending service discards the user's outstanding approval request.
         let registrationNeeded =
-            (service.status != .enabled && service.status != .requiresApproval)
-            || previousHash != plistHash
+            serviceStatus != .requiresApproval
+            && (serviceStatus != .enabled || previousHash != plistHash)
         if registrationNeeded {
             try service.unregister()
             try service.register()

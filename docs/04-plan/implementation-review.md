@@ -21618,3 +21618,23 @@ RuntimeHost `DevInputRoute` filter built successfully, but hit the same eight
 existing route-delivery expectation failures seen in the earlier broader
 RuntimeHost run; that suite is not a reliable gate for this change.
 
+**Pending LaunchAgent approval choice.** Preserve `.requiresApproval` even
+when the bundled plist hash changes. Re-registering that state cancels the
+user's pending approval request; the updated plist is applied on a later
+registration after approval. Continue to register missing services and
+re-register `.enabled` services whose plist hash is stale.
+
+**Reason.** The user's outstanding System Settings approval is the required
+next step for a service already awaiting approval. Replacing that registration
+silently discards the request and prevents the user's action from completing.
+
+**Risk for review.** If the embedded plist changes while approval is pending,
+the next launch after approval detects the stale hash and re-registers the
+updated plist; macOS may request approval again. This accepts a possible
+second approval prompt to preserve the user's in-flight approval request.
+
+**Verification.** Swift format lint and `swiftc -typecheck -parse-as-library`
+pass for `APKRunApp.swift`. There is no APKRun unit-test target, and the full
+app build enters the third-party VirGL build, so this change uses source
+typechecking rather than adding an unexecuted test target.
+

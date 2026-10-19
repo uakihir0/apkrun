@@ -22,6 +22,8 @@ public enum RuntimeControlClientError: Error, Equatable, Sendable {
     case transportFailure(domain: String, code: Int)
     /// The daemon did not reply before the operation deadline plus the client grace period.
     case requestTimedOut(operation: String)
+    /// The caller cancelled while waiting for a state-changing operation.
+    case requestCancelled(operation: String)
     /// The control endpoint returned a catalog-backed error.
     case remoteFailure(code: String, message: String)
     /// JSON encoding failed.
@@ -52,6 +54,8 @@ extension RuntimeControlClientError: LocalizedError {
             "The runtime daemon could not be reached."
         case .requestTimedOut:
             "APKRun's background service didn't answer in time."
+        case .requestCancelled:
+            "The operation was cancelled."
         case .remoteFailure(_, let message):
             message
         case .encodingFailure:
@@ -267,7 +271,7 @@ public actor RuntimeControlClient {
     ) {
         let shouldInvalidate: Bool
         switch error {
-        case .transportFailure, .requestTimedOut:
+        case .transportFailure, .requestTimedOut, .requestCancelled:
             shouldInvalidate = true
         default:
             shouldInvalidate = false
@@ -314,6 +318,9 @@ public actor RuntimeControlClient {
             }
             group.cancelAll()
             return result
+        }
+        if Task.isCancelled {
+            throw .requestCancelled(operation: operation)
         }
         switch result {
         case .success(let value):

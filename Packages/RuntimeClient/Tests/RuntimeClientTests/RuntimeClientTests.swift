@@ -137,6 +137,59 @@ import Testing
     #expect(transport.snapshot().controlConnections == 3)
 }
 
+@Test func controlClientPreservesCallerCancellationSeparatelyFromTimeout() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development,
+        restartRequestTimeout: .seconds(5)
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let status = RuntimeHostStatus(
+        hostState: "running",
+        runtimeState: "ready",
+        bootProgress: nil,
+        startupFailureStep: nil,
+        startupFailureCode: nil,
+        crashLoopActive: false,
+        daemonPID: 42,
+        imageVersion: "test-image"
+    )
+    let transport = try MockRuntimeTransport(hello: hello, status: status)
+    transport.delayNextRestart(for: .seconds(1))
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let restart = Task {
+        try await client.restartRuntime()
+    }
+
+    for _ in 0..<1_000 {
+        if transport.snapshot().restartRequests.count == 1 {
+            break
+        }
+        await Task.yield()
+    }
+    #expect(transport.snapshot().restartRequests.count == 1)
+    restart.cancel()
+
+    do {
+        _ = try await restart.value
+        Issue.record("The cancelled restart wait unexpectedly succeeded.")
+    } catch {
+        let clientError = error as? RuntimeControlClientError
+        #expect(clientError == .requestCancelled(operation: "runtimeRestart"))
+    }
+    #expect(transport.snapshot().restartRequests.count == 1)
+    #expect(transport.snapshot().controlConnections == 1)
+
+    _ = try await client.runtimeStatus()
+    #expect(transport.snapshot().controlConnections == 2)
+}
+
 @Test func controlClientLaunchesAndTerminatesWithVersionedRequests() async throws {
     let configuration = try RuntimeControlClientConfiguration(
         clientKind: .cli,

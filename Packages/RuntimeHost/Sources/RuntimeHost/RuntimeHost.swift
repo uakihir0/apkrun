@@ -46,6 +46,8 @@ public actor RuntimeHost {
     private var image: InstalledImage?
     private var instanceStore: InstanceStore?
     private var supervisor: RuntimeSupervisor?
+    private var headlessSessionService: (any RuntimeSessionService)?
+    private var runtimeSessionGeneration: UInt64 = 0
     private var bootProgressEstimator: BootProgressEstimator?
     private var bootStartedAt: ContinuousClock.Instant?
     private var recordedBootOperationIDs = Set<UUID>()
@@ -304,7 +306,44 @@ public actor RuntimeHost {
         try await waitForStartupCompletion()
         try beginLifecycleOperation()
         defer { finishLifecycleOperation() }
+        runtimeSessionGeneration &+= 1
+        if let service = headlessSessionService as? DaemonHeadlessSessionService {
+            await service.shutdown()
+        }
         await supervisor?.stop()
+        headlessSessionService = nil
+    }
+
+    /// Launches an app through the daemon-owned Guest Agent session path.
+    ///
+    /// Until the native launcher endpoint is available, this operation is enabled only by the
+    /// Debug-only headless acceptance hook. The headless session owns a DisplayPool lease and
+    /// leaves frame surfaces unconsumed.
+    public func launch(_ request: RuntimeLaunchRequest) async throws(RuntimeWireError) -> RuntimeLaunchResult {
+        guard headlessLaunchHookIsEnabled else {
+            throw Self.launchUnavailableError
+        }
+        do {
+            try await startRuntime(reason: .automatic)
+        } catch {
+            throw Self.sessionWireError(for: error)
+        }
+        let service = try await makeHeadlessSessionService()
+        return try await service.launch(request)
+    }
+
+    /// Stops a package session through the daemon-owned Guest Agent.
+    public func terminate(_ request: RuntimeTerminateRequest) async throws(RuntimeWireError)
+        -> RuntimeTerminateResult
+    {
+        guard headlessLaunchHookIsEnabled else {
+            throw Self.launchUnavailableError
+        }
+        guard await supervisor?.state == .ready else {
+            return RuntimeTerminateResult(packageID: request.packageID, hadSession: false)
+        }
+        let service = try await makeHeadlessSessionService()
+        return try await service.terminate(request)
     }
 
     /// Returns a point-in-time view for the control endpoint.
@@ -386,12 +425,17 @@ public actor RuntimeHost {
             return
         }
         isShuttingDown = true
+        runtimeSessionGeneration &+= 1
         hostState = "shuttingDown"
         guard hasStarted else {
             hostState = "stopped"
             completeShutdown()
             return
         }
+        if let service = headlessSessionService as? DaemonHeadlessSessionService {
+            await service.shutdown()
+        }
+        headlessSessionService = nil
         // Mark an in-flight VM start for cancellation before waiting for any storage work to finish.
         await supervisor?.stop()
         await waitForLifecycleOperations()
@@ -581,6 +625,89 @@ public actor RuntimeHost {
                 logger?.warning("Could not update daemon boot history", errorCode: String(describing: error))
             }
         }
+    }
+
+    private var headlessLaunchHookIsEnabled: Bool {
+        #if DEBUG
+            buildInfo.configuration == .debug && environment["APKRUN_TEST_HEADLESS_LAUNCH"] == "1"
+        #else
+            false
+        #endif
+    }
+
+    private func makeHeadlessSessionService() async throws(RuntimeWireError) -> any RuntimeSessionService {
+        if let headlessSessionService {
+            return headlessSessionService
+        }
+        guard let supervisor else {
+            throw RuntimeWireError.runtime(
+                "guestAgentUnavailable",
+                message: "The Android Guest Agent or app display pool isn't ready.",
+                remediation: "Start Android and try again."
+            )
+        }
+        let generation = runtimeSessionGeneration
+        guard let guestAgent = await supervisor.developmentGuestAgent,
+            runtimeSessionGeneration == generation,
+            await supervisor.state == .ready,
+            let displayPool = await supervisor.makeDisplayPool(),
+            runtimeSessionGeneration == generation,
+            await supervisor.state == .ready,
+            runtimeSessionGeneration == generation,
+            !isShuttingDown
+        else {
+            throw RuntimeWireError.runtime(
+                "guestAgentUnavailable",
+                message: "The Android Guest Agent or app display pool isn't ready.",
+                remediation: "Start Android and try again."
+            )
+        }
+        if let headlessSessionService {
+            return headlessSessionService
+        }
+        let service = DaemonHeadlessSessionService(
+            guestAgent: guestAgent,
+            displayPool: displayPool,
+            logSink: diagnostics?.logSink
+        )
+        headlessSessionService = service
+        return service
+    }
+
+    private static let launchUnavailableError = RuntimeWireError.runtime(
+        "windowUnavailable",
+        message: "APKRun can't open an Android app window in this build.",
+        remediation: "Use a Debug headless launch or update APKRun when native app windows are available."
+    )
+
+    private static func sessionWireError(for error: RuntimeHostError) -> RuntimeWireError {
+        let code: String
+        switch error {
+        case .notStarted, .alreadyStarted, .crashLoopActive, .stateStore:
+            code = "runtime.hostStartupFailed"
+        case .startupFailed(_, let startupCode):
+            code = startupCode.contains(".") ? startupCode : "runtime.hostStartupFailed"
+        case .runtimeFailure(let failure):
+            code = failure.qualifiedCode
+        case .image(let failure):
+            code = failure.qualifiedCode
+        case .shuttingDown:
+            code = "runtime.hostShuttingDown"
+        case .guestAgentBundle:
+            code = "runtime.guestAgentBundleMissing"
+        case .runtimeBoot(let failure):
+            code = failure.qualifiedCode
+        }
+        let entry = ErrorCatalog.entry(for: code)
+        let domain = String(code.split(separator: ".", maxSplits: 1).first ?? "runtime")
+        return RuntimeWireError(
+            domain: domain,
+            code: code,
+            message: entry?.parameters.isEmpty == true
+                ? entry?.message?["en"] ?? "APKRun couldn't start Android."
+                : "APKRun couldn't start Android.",
+            remediation: entry?.parameters.isEmpty == true ? entry?.remediation?["en"] : nil
+        )
     }
 
     private func recordLatestFailedBootIfPresent() {

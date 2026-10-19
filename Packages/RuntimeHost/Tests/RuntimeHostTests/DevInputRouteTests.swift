@@ -356,6 +356,24 @@ func aRebindKeepsTheCountsOfTheRouterItReplaces() async {
     #expect(counters.batchesSent == 3)
 }
 
+@Test(.timeLimit(.minutes(1)))
+func aTerminalRouteCannotRebindAfterGuestReconciliation() async {
+    let oldChannel = CollectingInputChannel()
+    let newChannel = CollectingInputChannel()
+    let route = DevInputRoute()
+    await route.bind(router: InputRouter(channel: oldChannel))
+    await route.focusChanged(true, generation: 1)
+    let cleanupTask = await route.detachForGuestReconciliation()
+
+    #expect(!(await route.canBind()))
+    #expect(await route.bind(router: InputRouter(channel: newChannel), session: .app(UUID())) == nil)
+    await route.reapplyFocusIfNeeded()
+    await cleanupTask?.value
+
+    #expect(await oldChannel.batches.count == 1)
+    #expect(await newChannel.batches.isEmpty)
+}
+
 // MARK: - The warning of an unbound route
 
 /// The warning that `apkrun dev boot --window` and `apkrun dev launch` print when the input is not bound. The warning is

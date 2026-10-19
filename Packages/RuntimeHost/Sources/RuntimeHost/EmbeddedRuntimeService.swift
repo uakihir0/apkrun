@@ -516,21 +516,8 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         if result.session.state.isEnded {
             pendingLaunchFrameCount = nil
             frameReconciliationSessionID = nil
-            await inputRoute?.unbind()
-            if let onTerminalSessionReconciled {
-                await onTerminalSessionReconciled(result.session)
-            } else {
-                switch result.session.state {
-                case .ended(.appExited):
-                    // A single-window dev command owns the VM and stops it when its app exits.
-                    await stopSignal?.signal(.appExited)
-                case .ended(.error(.displayLost)):
-                    // Do not leave a single-window command waiting after Android loses its display.
-                    await stopSignal?.signal(.appWindowCloseFailed)
-                default:
-                    break
-                }
-            }
+            let inputCleanupTask = await inputRoute?.detachForGuestReconciliation()
+            scheduleTerminalSessionReconciliation(result.session, inputCleanupTask: inputCleanupTask)
         }
 
         if result.session.state == .launching,
@@ -547,6 +534,34 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         // the newly ready connection, and serialize it with any launch or close already in progress.
         Task { [weak self] in
             await self?.relaunchAfterResynchronization(sessionID: sessionID)
+        }
+    }
+
+    private func scheduleTerminalSessionReconciliation(
+        _ session: AppSessionSnapshot,
+        inputCleanupTask: Task<Void, Never>?
+    ) {
+        Task { [weak self, registry = self.registry] in
+            await inputCleanupTask?.value
+            await registry.waitForPendingDisplayReleases()
+            await self?.finishTerminalSessionReconciliation(session)
+        }
+    }
+
+    private func finishTerminalSessionReconciliation(_ session: AppSessionSnapshot) async {
+        if let onTerminalSessionReconciled {
+            await onTerminalSessionReconciled(session)
+        } else {
+            switch session.state {
+            case .ended(.appExited):
+                // A single-window dev command owns the VM and stops it when its app exits.
+                await stopSignal?.signal(.appExited)
+            case .ended(.error(.displayLost)):
+                // Do not leave a single-window command waiting after Android loses its display.
+                await stopSignal?.signal(.appWindowCloseFailed)
+            default:
+                break
+            }
         }
     }
 

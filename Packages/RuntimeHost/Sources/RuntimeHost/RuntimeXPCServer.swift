@@ -30,20 +30,14 @@ public enum RuntimeXPCServerError: Error, Equatable, Sendable {
 /// The authenticated broker and transitional runtime-control XPC listeners.
 ///
 /// The public Mach service exposes only identity/version discovery and endpoint
-/// brokerage. Each control listener is anonymous and bound to one official
-/// client executable's code requirement before its endpoint is returned.
+/// brokerage. Each control grant gets a one-use anonymous listener bound to
+/// that official client executable's code requirement.
 public final class RuntimeXPCServer: @unchecked Sendable {
-    private struct ControlListener {
-        let listener: NSXPCListener
-        let delegate: ControlListenerDelegate
-    }
-
     /// The LaunchAgent Mach service exposed by this server.
     public let machServiceName: String
 
     private let brokerListener: NSXPCListener
     private let brokerDelegate: BrokerListenerDelegate
-    private let controlListeners: [String: ControlListener]
     private let connectionRegistry: RuntimeXPCConnectionRegistry
     private let startLock = NSLock()
     private var hasStarted = false
@@ -81,27 +75,16 @@ public final class RuntimeXPCServer: @unchecked Sendable {
             requirements.append((kind, requirement))
         }
 
-        var listeners: [String: ControlListener] = [:]
-        var endpoints: [String: NSXPCListenerEndpoint] = [:]
-        let connectionRegistry = RuntimeXPCConnectionRegistry()
+        var clientRequirements: [String: String] = [:]
         for item in requirements {
-            let delegate = ControlListenerDelegate(
-                host: host,
-                clientKind: item.kind,
-                connectionRegistry: connectionRegistry
-            )
-            let listener = NSXPCListener.anonymous()
-            listener.setConnectionCodeSigningRequirement(item.requirement)
-            listener.delegate = delegate
-            listener.resume()
-            listeners[item.kind.rawValue] = ControlListener(listener: listener, delegate: delegate)
-            endpoints[item.kind.rawValue] = listener.endpoint
+            clientRequirements[item.kind.rawValue] = item.requirement
         }
 
+        let connectionRegistry = RuntimeXPCConnectionRegistry()
         let brokerDelegate = BrokerListenerDelegate(
             host: host,
             buildInfo: buildInfo,
-            endpoints: endpoints,
+            clientRequirements: clientRequirements,
             connectionRegistry: connectionRegistry
         )
         let brokerListener = NSXPCListener(machServiceName: identity.machServiceName)
@@ -110,7 +93,6 @@ public final class RuntimeXPCServer: @unchecked Sendable {
         machServiceName = identity.machServiceName
         self.brokerListener = brokerListener
         self.brokerDelegate = brokerDelegate
-        controlListeners = listeners
         self.connectionRegistry = connectionRegistry
     }
 
@@ -190,9 +172,6 @@ public final class RuntimeXPCServer: @unchecked Sendable {
 
     private func invalidateListeners() {
         brokerListener.invalidate()
-        for listener in controlListeners.values {
-            listener.listener.invalidate()
-        }
     }
 
     /// Whether the stopped runtime has had no connected clients for the requested grace period.
@@ -201,26 +180,139 @@ public final class RuntimeXPCServer: @unchecked Sendable {
     }
 }
 
+private enum RuntimeXPCConnectionKind: Equatable {
+    case broker
+    case control
+}
+
+private struct RuntimeXPCConnectionRecord {
+    let connection: NSXPCConnection
+    let kind: RuntimeXPCConnectionKind
+    let controlListener: RuntimeXPCControlListener?
+    var activeRequests = 0
+}
+
+private struct RuntimeXPCControlReservation {
+    let brokerConnectionID: ObjectIdentifier
+    let controlListener: RuntimeXPCControlListener
+    let expiresAt: ContinuousClock.Instant
+}
+
+private final class RuntimeXPCControlListener: @unchecked Sendable {
+    let listener: NSXPCListener
+    let delegate: ControlListenerDelegate
+
+    init(
+        host: RuntimeHost,
+        clientKind: RuntimeClientKind,
+        requirement: String,
+        reservationID: UUID,
+        connectionRegistry: RuntimeXPCConnectionRegistry
+    ) {
+        delegate = ControlListenerDelegate(
+            host: host,
+            clientKind: clientKind,
+            reservationID: reservationID,
+            connectionRegistry: connectionRegistry
+        )
+        listener = NSXPCListener.anonymous()
+        listener.setConnectionCodeSigningRequirement(requirement)
+        listener.delegate = delegate
+        listener.resume()
+    }
+}
+
+private enum RuntimeXPCRequestRejection {
+    case busy
+    case hostShuttingDown
+
+    var errorCode: String {
+        switch self {
+        case .busy: "runtime.busy"
+        case .hostShuttingDown: "runtime.hostShuttingDown"
+        }
+    }
+
+    var endpointRejection: RuntimeEndpointRejection {
+        switch self {
+        case .busy: .busy
+        case .hostShuttingDown: .hostShuttingDown
+        }
+    }
+
+    var wireError: RuntimeWireError {
+        switch self {
+        case .busy:
+            .runtime(
+                "busy",
+                message: safeMessage(for: "runtime.busy"),
+                remediation: "Try again when the other requests have finished."
+            )
+        case .hostShuttingDown:
+            .runtime("hostShuttingDown", message: safeMessage(for: "runtime.hostShuttingDown"))
+        }
+    }
+
+    var controlError: RuntimeControlError {
+        RuntimeControlError(code: errorCode, message: safeMessage(for: errorCode))
+    }
+}
+
+private enum RuntimeXPCRequestAdmission {
+    case accepted(RuntimeXPCRequest)
+    case rejected(RuntimeXPCRequestRejection)
+}
+
 private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
     private let lock = NSLock()
-    private var connections: [ObjectIdentifier: NSXPCConnection] = [:]
+    private var connections: [ObjectIdentifier: RuntimeXPCConnectionRecord] = [:]
     private var acceptingNewConnections = true
     private var acceptingLifecycleRequests = true
     private var acceptingReadOnlyRequests = true
     private var isDrainingRequests = false
     private var closed = false
+    private var reservedControlConnections: [String: [UUID: RuntimeXPCControlReservation]] = [:]
     private var lastActivity = ContinuousClock.now
     private var activeRequests = 0
     private var requestDrainWaiters: [CheckedContinuation<Void, Never>] = []
 
-    func register(_ connection: NSXPCConnection) -> Bool {
+    func register(
+        _ connection: NSXPCConnection,
+        kind: RuntimeXPCConnectionKind,
+        clientKind: RuntimeClientKind? = nil,
+        reservationID: UUID? = nil
+    ) -> Bool {
         let identifier = ObjectIdentifier(connection)
         lock.lock()
-        guard acceptingNewConnections, !closed else {
+        expireControlReservations()
+        let controlListener: RuntimeXPCControlListener?
+        if kind == .control {
+            guard let clientKind, let reservationID,
+                let reservation = reservedControlConnections[clientKind.rawValue]?.removeValue(forKey: reservationID)
+            else {
+                lock.unlock()
+                return false
+            }
+            controlListener = reservation.controlListener
+        } else {
+            controlListener = nil
+        }
+        let currentKindCount = connections.values.reduce(into: 0) { count, record in
+            if record.kind == kind {
+                count += 1
+            }
+        }
+        let kindLimit = kind == .control ? 8 : 32
+        guard acceptingNewConnections, !closed, currentKindCount < kindLimit else {
+            controlListener?.listener.invalidate()
             lock.unlock()
             return false
         }
-        connections[identifier] = connection
+        connections[identifier] = RuntimeXPCConnectionRecord(
+            connection: connection,
+            kind: kind,
+            controlListener: controlListener
+        )
         lastActivity = ContinuousClock.now
         lock.unlock()
 
@@ -230,6 +322,56 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         return true
     }
 
+    func reserveControlConnection(
+        for clientKind: RuntimeClientKind,
+        on brokerConnectionID: ObjectIdentifier,
+        reservationID: UUID,
+        controlListener: RuntimeXPCControlListener
+    ) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        expireControlReservations()
+        guard acceptingNewConnections, !closed else {
+            return false
+        }
+        guard
+            !reservedControlConnections.values.contains(where: { reservations in
+                reservations.values.contains { $0.brokerConnectionID == brokerConnectionID }
+            })
+        else {
+            return false
+        }
+        let reserved = reservedControlConnections.values.reduce(0) { $0 + $1.count }
+        // Endpoint grants do not consume the eight live-control-connection slots. Bound their
+        // temporary listener state by the independent broker-connection limit instead.
+        guard reserved < 32 else {
+            return false
+        }
+        reservedControlConnections[clientKind.rawValue, default: [:]][reservationID] = RuntimeXPCControlReservation(
+            brokerConnectionID: brokerConnectionID,
+            controlListener: controlListener,
+            expiresAt: ContinuousClock.now.advanced(by: .seconds(5))
+        )
+        lastActivity = ContinuousClock.now
+        return true
+    }
+
+    private func expireControlReservations() {
+        let now = ContinuousClock.now
+        for clientKind in Array(reservedControlConnections.keys) {
+            guard let reservations = reservedControlConnections[clientKind] else {
+                continue
+            }
+            for (reservationID, reservation) in reservations where reservation.expiresAt <= now {
+                reservedControlConnections[clientKind]?.removeValue(forKey: reservationID)
+                reservation.controlListener.listener.invalidate()
+            }
+            if reservedControlConnections[clientKind]?.isEmpty == true {
+                reservedControlConnections[clientKind] = nil
+            }
+        }
+    }
+
     func stopAcceptingNewConnections() {
         lock.lock()
         acceptingNewConnections = false
@@ -237,19 +379,28 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         lock.unlock()
     }
 
-    func beginRequest(allowDuringShutdown: Bool = false) -> RuntimeXPCRequest? {
+    func beginRequest(
+        on connectionID: ObjectIdentifier,
+        allowDuringShutdown: Bool = false
+    ) -> RuntimeXPCRequestAdmission {
         lock.lock()
         let isAdmitted =
             !closed
             && !isDrainingRequests
             && (acceptingLifecycleRequests || (allowDuringShutdown && acceptingReadOnlyRequests))
-        guard isAdmitted else {
+        guard isAdmitted, var record = connections[connectionID] else {
             lock.unlock()
-            return nil
+            return .rejected(.hostShuttingDown)
         }
+        guard record.activeRequests < 64 else {
+            lock.unlock()
+            return .rejected(.busy)
+        }
+        record.activeRequests += 1
+        connections[connectionID] = record
         activeRequests += 1
         lock.unlock()
-        return RuntimeXPCRequest(registry: self)
+        return .accepted(RuntimeXPCRequest(registry: self, connectionID: connectionID))
     }
 
     func waitForRequestsToDrain() async {
@@ -267,9 +418,13 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         }
     }
 
-    fileprivate func endRequest() {
+    fileprivate func endRequest(on connectionID: ObjectIdentifier) {
         lock.lock()
         activeRequests -= 1
+        if var record = connections[connectionID] {
+            record.activeRequests -= 1
+            connections[connectionID] = record
+        }
         let waiters: [CheckedContinuation<Void, Never>]
         if activeRequests == 0, isDrainingRequests {
             waiters = requestDrainWaiters
@@ -286,10 +441,18 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
     func close() {
         lock.lock()
         closed = true
-        let connections = Array(self.connections.values)
+        let records = Array(self.connections.values)
+        let reservedListeners = reservedControlConnections.values.flatMap { reservations in
+            reservations.values.map(\.controlListener)
+        }
+        let connections = records.map(\.connection)
         self.connections.removeAll()
+        reservedControlConnections.removeAll()
         lastActivity = ContinuousClock.now
         lock.unlock()
+        for controlListener in records.compactMap(\.controlListener) + reservedListeners {
+            controlListener.listener.invalidate()
+        }
         for connection in connections {
             connection.invalidate()
         }
@@ -298,9 +461,11 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
     func closeIfIdle(for gracePeriod: Duration) -> Bool {
         lock.lock()
         defer { lock.unlock() }
+        expireControlReservations()
         guard !closed,
             connections.isEmpty,
             activeRequests == 0,
+            reservedControlConnections.isEmpty,
             lastActivity.duration(to: ContinuousClock.now) >= gracePeriod
         else {
             return false
@@ -313,26 +478,33 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
     func isIdle(for gracePeriod: Duration) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard !closed, connections.isEmpty, activeRequests == 0 else { return false }
+        expireControlReservations()
+        guard !closed, connections.isEmpty, activeRequests == 0, reservedControlConnections.isEmpty else {
+            return false
+        }
         return lastActivity.duration(to: ContinuousClock.now) >= gracePeriod
     }
 
     private func remove(_ identifier: ObjectIdentifier) {
         lock.lock()
-        if connections.removeValue(forKey: identifier) != nil {
+        let record = connections.removeValue(forKey: identifier)
+        if record != nil {
             lastActivity = ContinuousClock.now
         }
         lock.unlock()
+        record?.controlListener?.listener.invalidate()
     }
 }
 
 private final class RuntimeXPCRequest: @unchecked Sendable {
     private let registry: RuntimeXPCConnectionRegistry
+    private let connectionID: ObjectIdentifier
     private let lock = NSLock()
     private var isFinished = false
 
-    init(registry: RuntimeXPCConnectionRegistry) {
+    init(registry: RuntimeXPCConnectionRegistry, connectionID: ObjectIdentifier) {
         self.registry = registry
+        self.connectionID = connectionID
     }
 
     func finish() {
@@ -343,7 +515,7 @@ private final class RuntimeXPCRequest: @unchecked Sendable {
         }
         isFinished = true
         lock.unlock()
-        registry.endRequest()
+        registry.endRequest(on: connectionID)
     }
 
     deinit {
@@ -569,23 +741,24 @@ private enum CodeRequirementFactory {
 private final class BrokerListenerDelegate: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
     private let host: RuntimeHost
     private let buildInfo: BuildInfo
-    private let endpoints: [String: NSXPCListenerEndpoint]
+    private let clientRequirements: [String: String]
     private let connectionRegistry: RuntimeXPCConnectionRegistry
 
     init(
         host: RuntimeHost,
         buildInfo: BuildInfo,
-        endpoints: [String: NSXPCListenerEndpoint],
+        clientRequirements: [String: String],
         connectionRegistry: RuntimeXPCConnectionRegistry
     ) {
         self.host = host
         self.buildInfo = buildInfo
-        self.endpoints = endpoints
+        self.clientRequirements = clientRequirements
         self.connectionRegistry = connectionRegistry
     }
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
-        guard connectionRegistry.register(connection) else { return false }
+        guard connectionRegistry.register(connection, kind: .broker) else { return false }
+        let connectionID = ObjectIdentifier(connection)
         let interface = NSXPCInterface(with: RuntimeBrokerXPC.self)
         guard let endpointClasses = NSSet(object: NSXPCListenerEndpoint.self) as? Set<AnyHashable> else {
             return false
@@ -600,8 +773,9 @@ private final class BrokerListenerDelegate: NSObject, NSXPCListenerDelegate, @un
         connection.exportedObject = BrokerService(
             host: host,
             buildInfo: buildInfo,
-            endpoints: endpoints,
-            connectionRegistry: connectionRegistry
+            clientRequirements: clientRequirements,
+            connectionRegistry: connectionRegistry,
+            connectionID: connectionID
         )
         connection.resume()
         return true
@@ -611,25 +785,30 @@ private final class BrokerListenerDelegate: NSObject, NSXPCListenerDelegate, @un
 private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendable {
     private let host: RuntimeHost
     private let buildInfo: BuildInfo
-    private let endpoints: [String: NSXPCListenerEndpoint]
+    private let clientRequirements: [String: String]
     private let connectionRegistry: RuntimeXPCConnectionRegistry
+    private let connectionID: ObjectIdentifier
 
     init(
         host: RuntimeHost,
         buildInfo: BuildInfo,
-        endpoints: [String: NSXPCListenerEndpoint],
-        connectionRegistry: RuntimeXPCConnectionRegistry
+        clientRequirements: [String: String],
+        connectionRegistry: RuntimeXPCConnectionRegistry,
+        connectionID: ObjectIdentifier
     ) {
         self.host = host
         self.buildInfo = buildInfo
-        self.endpoints = endpoints
+        self.clientRequirements = clientRequirements
         self.connectionRegistry = connectionRegistry
+        self.connectionID = connectionID
     }
 
     func hello(_ request: Data, reply: @escaping (Data) -> Void) {
         let replyHandler = XPCDataReply(reply)
-        guard let pending = connectionRegistry.beginRequest(allowDuringShutdown: true) else {
-            replyHandler.send(Self.encodeBrokerError(code: "runtime.hostShuttingDown"))
+        let admission = connectionRegistry.beginRequest(on: connectionID, allowDuringShutdown: true)
+        guard case .accepted(let pending) = admission else {
+            let rejection = Self.rejection(for: admission)
+            replyHandler.send(Self.encodeBrokerError(code: rejection.errorCode))
             return
         }
         guard
@@ -662,8 +841,17 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
     }
 
     func requestEndpoint(_ request: Data, reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void) {
-        guard let pending = connectionRegistry.beginRequest() else {
-            reply(Self.encode(RuntimeEndpointReply.rejected(.hostShuttingDown)), nil)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            let rejection = Self.rejection(for: admission)
+            reply(
+                Self.encode(
+                    RuntimeEndpointReply.rejected(
+                        Self.endpointRejection(rejection.endpointRejection, compatibleWithRequest: request)
+                    )
+                ),
+                nil
+            )
             return
         }
         defer { pending.finish() }
@@ -684,17 +872,67 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
             let identifier = Self.expectedIdentifier(
                 for: endpointRequest.clientKind,
                 buildIdentity: buildInfo.buildIdentity
-            ),
-            endpointRequest.claimedIdentity == identifier,
-            let endpoint = endpoints[endpointRequest.clientKind.rawValue]
+            ), endpointRequest.claimedIdentity == identifier,
+            let requirement = clientRequirements[endpointRequest.clientKind.rawValue]
         else {
             reply(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
             return
         }
-        reply(Self.encode(RuntimeEndpointReply.granted), endpoint)
+        let reservationID = UUID()
+        let controlListener = RuntimeXPCControlListener(
+            host: host,
+            clientKind: endpointRequest.clientKind,
+            requirement: requirement,
+            reservationID: reservationID,
+            connectionRegistry: connectionRegistry
+        )
+        guard
+            connectionRegistry.reserveControlConnection(
+                for: endpointRequest.clientKind,
+                on: connectionID,
+                reservationID: reservationID,
+                controlListener: controlListener
+            )
+        else {
+            controlListener.listener.invalidate()
+            reply(
+                Self.encode(
+                    RuntimeEndpointReply.rejected(
+                        Self.endpointRejection(.busy, requestedVersion: endpointRequest.apiVersion)
+                    )
+                ),
+                nil
+            )
+            return
+        }
+        reply(Self.encode(RuntimeEndpointReply.granted), controlListener.listener.endpoint)
     }
 
     private static let maximumRequestSize = 16 * 1024
+
+    private static func endpointRejection(
+        _ rejection: RuntimeEndpointRejection,
+        requestedVersion: APIVersion
+    ) -> RuntimeEndpointRejection {
+        guard rejection == .busy, requestedVersion.minor < 3 else {
+            return rejection
+        }
+        // API 1.0–1.2 clients do not know the additive 1.3 `.busy` rejection.
+        return .hostShuttingDown
+    }
+
+    private static func endpointRejection(
+        _ rejection: RuntimeEndpointRejection,
+        compatibleWithRequest request: Data
+    ) -> RuntimeEndpointRejection {
+        guard rejection == .busy,
+            request.count <= maximumRequestSize,
+            let endpointRequest = try? JSONDecoder().decode(RuntimeEndpointRequest.self, from: request)
+        else {
+            return rejection
+        }
+        return endpointRejection(rejection, requestedVersion: endpointRequest.apiVersion)
+    }
 
     private static func expectedIdentifier(
         for kind: RuntimeClientKind,
@@ -723,6 +961,13 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
     private static func encodeBrokerError(code: String) -> Data {
         encode(BrokerErrorReply(error: RuntimeControlError(code: code, message: safeMessage(for: code))))
     }
+
+    private static func rejection(for admission: RuntimeXPCRequestAdmission) -> RuntimeXPCRequestRejection {
+        guard case .rejected(let rejection) = admission else {
+            return .hostShuttingDown
+        }
+        return rejection
+    }
 }
 
 private struct BrokerErrorReply: Codable {
@@ -732,27 +977,43 @@ private struct BrokerErrorReply: Codable {
 private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
     private let host: RuntimeHost
     private let clientKind: RuntimeClientKind
+    private let reservationID: UUID
     private let connectionRegistry: RuntimeXPCConnectionRegistry
 
     init(
         host: RuntimeHost,
         clientKind: RuntimeClientKind,
+        reservationID: UUID,
         connectionRegistry: RuntimeXPCConnectionRegistry
     ) {
         self.host = host
         self.clientKind = clientKind
+        self.reservationID = reservationID
         self.connectionRegistry = connectionRegistry
     }
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
-        guard connectionRegistry.register(connection) else { return false }
+        guard
+            connectionRegistry.register(
+                connection,
+                kind: .control,
+                clientKind: clientKind,
+                reservationID: reservationID
+            )
+        else {
+            listener.invalidate()
+            return false
+        }
+        let connectionID = ObjectIdentifier(connection)
         connection.exportedInterface = NSXPCInterface(with: RuntimeControlXPC.self)
         connection.exportedObject = ControlService(
             host: host,
             clientKind: clientKind,
-            connectionRegistry: connectionRegistry
+            connectionRegistry: connectionRegistry,
+            connectionID: connectionID
         )
         connection.resume()
+        listener.invalidate()
         return true
     }
 }
@@ -764,31 +1025,76 @@ private protocol VersionedControlRequest: Decodable {
 extension RuntimeStatusRequest: VersionedControlRequest {}
 extension StartRuntimeRequest: VersionedControlRequest {}
 extension StopRuntimeRequest: VersionedControlRequest {}
+extension RuntimeLaunchControlRequest: VersionedControlRequest {}
+extension RuntimeTerminateControlRequest: VersionedControlRequest {}
+
+enum RuntimeControlOperation {
+    case runtimeStatus
+    case startRuntime
+    case stopRuntime
+    case launch
+    case terminate
+
+    func allows(_ clientKind: RuntimeClientKind) -> Bool {
+        switch self {
+        case .runtimeStatus:
+            switch clientKind {
+            case .app, .menuBar, .cli, .launcher:
+                true
+            case .wrapper:
+                false
+            }
+        case .startRuntime, .stopRuntime:
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
+                false
+            }
+        case .launch, .terminate:
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
+                false
+            }
+        }
+    }
+}
 
 private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Sendable {
     private let host: RuntimeHost
     private let clientKind: RuntimeClientKind
     private let connectionRegistry: RuntimeXPCConnectionRegistry
+    private let connectionID: ObjectIdentifier
 
     init(
         host: RuntimeHost,
         clientKind: RuntimeClientKind,
-        connectionRegistry: RuntimeXPCConnectionRegistry
+        connectionRegistry: RuntimeXPCConnectionRegistry,
+        connectionID: ObjectIdentifier
     ) {
         self.host = host
         self.clientKind = clientKind
         self.connectionRegistry = connectionRegistry
+        self.connectionID = connectionID
     }
 
     func runtimeStatus(_ request: Data, reply: @escaping (Data) -> Void) {
         let response = XPCDataReply(reply)
-        guard let pending = connectionRegistry.beginRequest(allowDuringShutdown: true) else {
-            response.send(Self.errorReply(for: Self.hostShuttingDownError))
+        let admission = connectionRegistry.beginRequest(on: connectionID, allowDuringShutdown: true)
+        guard case .accepted(let pending) = admission else {
+            response.send(Self.errorReply(for: Self.rejection(for: admission).controlError))
             return
         }
         Task {
             defer { pending.finish() }
-            if let failure = Self.validate(request, clientKind: clientKind, as: RuntimeStatusRequest.self) {
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .runtimeStatus,
+                as: RuntimeStatusRequest.self
+            ) {
                 response.send(Self.errorReply(for: failure))
                 return
             }
@@ -798,13 +1104,19 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
 
     func startRuntime(_ request: Data, reply: @escaping (Data) -> Void) {
         let response = XPCDataReply(reply)
-        guard let pending = connectionRegistry.beginRequest() else {
-            response.send(Self.errorReply(for: Self.hostShuttingDownError))
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(Self.errorReply(for: Self.rejection(for: admission).controlError))
             return
         }
         Task {
             defer { pending.finish() }
-            if let failure = Self.validate(request, clientKind: clientKind, as: StartRuntimeRequest.self) {
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .startRuntime,
+                as: StartRuntimeRequest.self
+            ) {
                 response.send(Self.errorReply(for: failure))
                 return
             }
@@ -819,13 +1131,19 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
 
     func stopRuntime(_ request: Data, reply: @escaping (Data) -> Void) {
         let response = XPCDataReply(reply)
-        guard let pending = connectionRegistry.beginRequest() else {
-            response.send(Self.errorReply(for: Self.hostShuttingDownError))
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(Self.errorReply(for: Self.rejection(for: admission).controlError))
             return
         }
         Task {
             defer { pending.finish() }
-            if let failure = Self.validate(request, clientKind: clientKind, as: StopRuntimeRequest.self) {
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .stopRuntime,
+                as: StopRuntimeRequest.self
+            ) {
                 response.send(Self.errorReply(for: failure))
                 return
             }
@@ -838,16 +1156,97 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         }
     }
 
+    func launch(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = XPCDataReply(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            let error = Self.rejection(for: admission).wireError
+            response.send(Self.encode(RuntimeLaunchControlReply(error: error)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .launch,
+                as: RuntimeLaunchControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeLaunchControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimeLaunchControlRequest.self, from: request) else {
+                response.send(Self.encode(RuntimeLaunchControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let result = try await host.launch(RuntimeLaunchRequest(packageID: decoded.packageID))
+                response.send(Self.encode(RuntimeLaunchControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeLaunchControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func terminate(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = XPCDataReply(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(Self.encode(RuntimeTerminateControlReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .terminate,
+                as: RuntimeTerminateControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeTerminateControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimeTerminateControlRequest.self, from: request) else {
+                response.send(Self.encode(RuntimeTerminateControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let result = try await host.terminate(RuntimeTerminateRequest(packageID: decoded.packageID))
+                response.send(Self.encode(RuntimeTerminateControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeTerminateControlReply(error: wireError)))
+            }
+        }
+    }
+
     private static let maximumRequestSize = 1024 * 1024
 
-    private static let hostShuttingDownError = RuntimeControlError(
-        code: "runtime.hostShuttingDown",
-        message: safeMessage(for: "runtime.hostShuttingDown")
+    private static let malformedWireError = RuntimeWireError.runtime(
+        "malformedRequest",
+        message: safeMessage(for: "runtime.malformedRequest")
     )
+    private static let internalWireError = RuntimeWireError.runtime(
+        "internal",
+        message: safeMessage(for: "runtime.internal")
+    )
+
+    private static func rejection(for admission: RuntimeXPCRequestAdmission) -> RuntimeXPCRequestRejection {
+        guard case .rejected(let rejection) = admission else {
+            return .hostShuttingDown
+        }
+        return rejection
+    }
 
     private static func validate<Request: VersionedControlRequest>(
         _ data: Data,
         clientKind: RuntimeClientKind,
+        operation: RuntimeControlOperation,
         as requestType: Request.Type
     ) -> RuntimeControlError? {
         guard data.count <= maximumRequestSize,
@@ -873,6 +1272,12 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             )
         }
         guard request.header.clientKind == clientKind else {
+            return RuntimeControlError(
+                code: "runtime.notAuthorized",
+                message: "This part of APKRun isn't allowed to do that."
+            )
+        }
+        guard operation.allows(clientKind) else {
             return RuntimeControlError(
                 code: "runtime.notAuthorized",
                 message: "This part of APKRun isn't allowed to do that."
@@ -912,6 +1317,14 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
 
     private static func errorReply(for error: RuntimeControlError) -> Data {
         return encode(RuntimeControlReply(error: error))
+    }
+
+    private static func wireError(for error: RuntimeControlError) -> RuntimeWireError {
+        RuntimeWireError(
+            domain: String(error.code.split(separator: ".", maxSplits: 1).first ?? "runtime"),
+            code: error.code,
+            message: error.message
+        )
     }
 
     private static func encode<T: Encodable>(_ value: T) -> Data {

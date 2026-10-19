@@ -50,17 +50,23 @@ struct DevInputBinding: Sendable {
                             },
                             logSink: logSink
                         )
+                        var boundRoutes: [DevInputRoute] = []
                         for (index, route) in routes.enumerated() {
+                            guard await route.canBind() else {
+                                continue
+                            }
                             let session = index == 0 ? DevInputRoute.developmentSession : .app(UUID())
                             if let failure = await route.bind(router: router, session: session) {
                                 report(.warning("input route could not claim its display (\(failure))"))
+                            } else if await route.canBind() {
+                                boundRoutes.append(route)
                             }
                         }
                         await router.cancelAllRegisteredDisplays()
                         channel = next
                         boundToken = token
                         reportedFailure = false
-                        let displayIDs = await routes.asyncMap { await $0.targetDisplayIDForDiagnostics() }
+                        let displayIDs = await boundRoutes.asyncMap { await $0.targetDisplayIDForDiagnostics() }
                         report(.message("input is bound to display\(displayIDs.count == 1 ? "" : "s") \(displayIDs)"))
                         report(.message("ADB shell invocations so far: \(await agent.adbShellInvocationCount)"))
                     } catch {

@@ -20,6 +20,7 @@ public actor DevInputRoute {
     private var session: SessionID?
     private var targetDisplayID = DevInputRoute.displayID
     private var isFocused = false
+    private var isTerminal = false
     private var focusGeneration: UInt64 = 0
     /// The drops that happen before the router sees the events: the events of an unbound route, and the events cut
     /// from a long batch.
@@ -30,10 +31,14 @@ public actor DevInputRoute {
 
     /// Selects the Android display before the route is bound to the guest input router.
     public func setDisplayID(_ displayID: Int32) {
-        guard router == nil, displayID >= 0 else {
+        guard !isTerminal, router == nil, displayID >= 0 else {
             return
         }
         targetDisplayID = displayID
+    }
+
+    func canBind() -> Bool {
+        !isTerminal
     }
 
     /// The selected Android display, for the development binding status message.
@@ -47,22 +52,35 @@ public actor DevInputRoute {
         router: InputRouter,
         session: SessionID = DevInputRoute.developmentSession
     ) async -> InputRouterRegistrationFailure? {
-        await unbind()
-        guard let failure = await router.register(session: session, displayID: targetDisplayID, state: .running) else {
-            self.router = router
-            self.session = session
-            if isFocused {
-                await router.focusChanged(session, focused: true, generation: focusGeneration)
-            }
+        guard !isTerminal else {
             return nil
         }
-        localCounters.droppedInvalid += 1
-        return failure
+        await unbind()
+        guard !isTerminal else {
+            return nil
+        }
+        let failure = await router.register(session: session, displayID: targetDisplayID, state: .running)
+        guard !isTerminal else {
+            if failure == nil {
+                await router.sessionEnded(session)
+            }
+            return failure
+        }
+        guard failure == nil else {
+            localCounters.droppedInvalid += 1
+            return failure
+        }
+        self.router = router
+        self.session = session
+        if isFocused {
+            await router.focusChanged(session, focused: true, generation: focusGeneration)
+        }
+        return nil
     }
 
     /// Applies a window's key-focus change. The shared router serializes focus with routed events.
     public func focusChanged(_ focused: Bool, generation: UInt64) async {
-        guard generation > focusGeneration else {
+        guard !isTerminal, generation > focusGeneration else {
             return
         }
         focusGeneration = generation
@@ -78,7 +96,7 @@ public actor DevInputRoute {
     /// AppKit can make a window key before its Android task exists. In that case `FocusDisplay` fails
     /// closed; a task-appearance event is the first reliable point at which the Guest Agent can focus it.
     public func reapplyFocusIfNeeded() async {
-        guard isFocused, let router, let session else {
+        guard !isTerminal, isFocused, let router, let session else {
             return
         }
         await router.focusChanged(session, focused: true, generation: focusGeneration)
@@ -94,6 +112,26 @@ public actor DevInputRoute {
         self.session = nil
         await router.sessionEnded(session)
         localCounters.add(await router.counters)
+    }
+
+    /// Detaches local input state immediately and finishes guest cancellation asynchronously after reconnect.
+    public func detachForGuestReconciliation() -> Task<Void, Never>? {
+        isTerminal = true
+        isFocused = false
+        guard let router, let session else {
+            return nil
+        }
+        self.router = nil
+        self.session = nil
+        return Task { [weak self] in
+            await router.sessionEnded(session)
+            let counters = await router.counters
+            await self?.addRouterCounters(counters)
+        }
+    }
+
+    private func addRouterCounters(_ counters: InputCounters) {
+        localCounters.add(counters)
     }
 
     /// Routes a wire batch. The events beyond ``maximumEventsPerBatch`` are dropped and counted as invalid. The rest

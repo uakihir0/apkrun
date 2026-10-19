@@ -54,9 +54,11 @@ targets:
         ENABLE_APP_SANDBOX: NO
         INFOPLIST_FILE: Apps/APKRun/Info.plist
         CODE_SIGN_ENTITLEMENTS: Apps/APKRun/APKRun.entitlements
+        APKRUN_LAUNCH_AGENT_PLIST_FILE: io.apkrun.apkrund.plist
       configs:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.APKRun.dev
+          APKRUN_LAUNCH_AGENT_PLIST_FILE: io.apkrun.apkrund.dev.plist
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.APKRun
     dependencies:
@@ -109,6 +111,16 @@ targets:
           - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Frameworks/VirGLRuntime/libepoxy.0.dylib"
           - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Frameworks/VirGLRuntime/libEGL.dylib"
           - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Frameworks/VirGLRuntime/libGLESv2.dylib"
+      - name: Embed Guest Agent
+        basedOnDependencyAnalysis: false
+        script: "$SRCROOT/scripts/build/embed-guest.sh"
+        inputFiles:
+          - "$(SRCROOT)/scripts/build/embed-guest.sh"
+          - "$(SRCROOT)/Guest/build/out/apkrun-guest.apk"
+          - "$(SRCROOT)/Guest/build/out/apkrun-guest.json"
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/guest/apkrun-guest.apk"
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/guest/apkrun-guest.json"
       - name: Embed Helpers
         basedOnDependencyAnalysis: false
         script: |
@@ -120,6 +132,14 @@ targets:
         outputFiles:
           - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Helpers/apkrund"
           - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Helpers/APKRunLauncher.app"
+      - name: Write LaunchAgent
+        basedOnDependencyAnalysis: false
+        script: "$SRCROOT/scripts/build/write-launch-agent.sh"
+        inputFiles:
+          - "$(SRCROOT)/scripts/build/write-launch-agent.sh"
+          - "$(SRCROOT)/Daemon/apkrund/LaunchAgent.plist.in"
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/LaunchAgents/$(APKRUN_LAUNCH_AGENT_PLIST_FILE)"
       - name: Embed Login Items
         basedOnDependencyAnalysis: false
         script: |

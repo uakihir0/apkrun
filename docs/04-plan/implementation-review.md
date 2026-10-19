@@ -21917,7 +21917,9 @@ current runtime, and starts it again before returning the final status.
 Concurrent start, stop, or reset requests are rejected while the restart is
 reserved. Concurrent start requests still join the existing boot path.
 Keep the CLI confirmation prompt because status does not report active
-sessions. Do not automatically replay a transport failure.
+sessions. Do not automatically replay a transport failure. Distinguish a
+caller-cancelled wait from a timeout with `runtime.cancelled`, invalidate the
+cancelled XPC channel, and leave the daemon-owned restart running.
 
 **Reason.** The previous CLI implementation made separate stop and start
 requests. A client disconnect or interruption after stop left Android down.
@@ -21925,23 +21927,29 @@ Moving both phases into the daemon removes that client-side gap and keeps
 other lifecycle requests from interleaving between the phases. A complete
 operation store and event hub do not exist yet, so this increment returns
 status synchronously and updates the current API reference to describe the
-implemented first cut. The eventual `OperationHandle`, progress/result
-events, and cancellation behavior remain required by #032 and are not claimed
-as complete.
+implemented first cut. A caller can stop waiting without evidence that the
+daemon stopped processing the request; a distinct cancellation result avoids
+reporting Ctrl-C as a timeout, while channel invalidation lets the next status
+request reconnect. The eventual `OperationHandle`, progress/result events,
+and daemon-side cancellation behavior remain required by #032 and are not
+claimed as complete.
 
 **Verification.** Focused RuntimeAPI tests cover API 1.6 and request
 round-tripping. RuntimeClient tests assert exactly one restart request, no
 stop/start requests, no replay after transport failure, and timeout plus
-connection invalidation. RuntimeHost tests verify that the daemon reaches the
-restart start phase and reports its startup failure with Android stopped when
-no image is installed. Authorization tests cover the control-client allowlist.
-Swift format lint and `git diff --check` pass.
+connection invalidation. A caller-cancellation test checks the distinct error,
+no replay, and reconnect; a CLI test checks the interrupted exit code.
+RuntimeHost tests verify that the daemon reaches the restart start phase and
+reports its startup failure with Android stopped when no image is installed.
+Authorization tests cover the control-client allowlist. Swift format lint and
+`git diff --check` pass.
 
 **Risk for review.** The synchronous reply waits for Android boot and does not
-provide progress, operation history, or cancellation. The client uses the
-largest supported first-boot deadline as a hard upper bound because the
-daemon does not expose the effective timeout; a normal runtime timeout should
-finish the request much earlier. The host test cannot exercise a successful
+provide progress, operation history, or daemon-side cancellation. The client
+uses the largest supported first-boot deadline as a hard upper bound because
+the daemon does not expose the effective timeout; a normal runtime timeout
+should finish the request much earlier. Caller cancellation only ends the
+client wait, so the restart may still finish. The host test cannot exercise a successful
 VM restart without a configured image, so the ready-to-ready path remains
 unverified locally. The prompt is unconditional until active session state is
 exposed. Full anonymous-XPC acceptance and a live Android restart remain
@@ -21971,4 +21979,60 @@ populated status field, and the output key set in the encoded JSON. The full
 **Risk for review.** The current status path has no embedded-runtime owner.
 If a future command uses this output for `apkrun-dev`, it must provide the
 actual owner instead of reusing the daemon-only constant.
+
+## IR-1387: Place the idle policy in RuntimeCore
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #069, step 1 |
+| Affected documents | [modules.md](../01-architecture/modules.md) RuntimeCore ownership; [runtime-daemon.md](../02-design/runtime-daemon.md) §§2.2, 5.1–5.2; [M04](issues/M04-daemon-and-guest-protocol.md) #069 |
+
+**Choices.** Implement `IdleController` and `RuntimeActivityAssertion` in
+RuntimeCore, following the design and module ownership table. Update the #069
+task path and T0 test location from RuntimeHost to RuntimeCore to resolve the
+contradictory plan entry. Represent each documented activity source with an
+`ActivityKind`; the controller emits an `activityBegan` action before returning
+its assertion, and one-shot `suspend` and `stop` actions at their deadlines.
+Use an injected monotonic clock backed by Swift's `SuspendingClock` in
+production and a manual suspending clock in T0 tests. Validate timer settings
+against 0–1440 minutes. A settings update replaces the one-shot timer while
+preserving the idle start instant. Serialize lifecycle action delivery,
+discard queued idle actions when activity begins, and make every assertion
+acquired during that transition wait for its `activityBegan` action to finish.
+Do not permit an action handler to acquire an assertion, directly or through a
+child task. Supporting reentrant acquisition would require unsafe inline
+delivery or return before the runtime is ready; both can allow an idle suspend
+or stop to race work that has started. If suspend and stop deadlines coincide,
+deliver suspend first.
+
+**Reason.** The detailed design assigns IdleController to RuntimeCore, which
+owns runtime state and will coordinate VM pause/resume. The milestone task's
+module/path table and T0 test directory named RuntimeHost, but that conflicts
+with both the design's component ownership and the architecture table. RuntimeHost
+remains the composition root and will connect the controller to concrete
+activity sources in subsequent work. Preserving the idle start time follows
+configuration.md §2 and keeps `idleStopMinutes` measured from when idleness
+began; the new timer reflects a changed setting immediately without granting
+extra idle time.
+
+**Verification.** Focused RuntimeCore T0 tests cover defaults and range
+validation, each activity kind holding the runtime, release behavior, suspend
+then stop, `0` disabling each timer independently, stop-before-suspend
+behavior, settings updates without resetting idle time, and simulated host
+sleep not advancing the manual clock. Gated handler tests verify activity
+assertions wait for in-flight suspend and stop actions, concurrent assertions
+share the same readiness action, and a queued stop is removed when activity
+begins. Equal deadlines are also checked. Swift format lint passes.
+
+**Risk for review.** This is the step 1 foundation only. RuntimeHost does not
+yet instantiate the controller or wire live sessions, store operations,
+diagnostics, migration, provisioning, ADB connections, and `--hold` to
+assertions. The `suspend` and `stop` actions are not yet applied to a VM;
+step 2 supplies that lifecycle integration. The host-sleep clock behavior is
+tested with a manual clock and still needs a real sleep/wake check later in
+#069. Lifecycle action handlers must acquire no activity assertions; callers
+must acquire their hold before starting work that may invoke a lifecycle
+action. Review this callback restriction when the live activity sources and
+`RuntimeSupervisor` action handler are composed.
 

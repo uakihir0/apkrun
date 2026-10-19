@@ -260,7 +260,7 @@ By tier ([../test-strategy.md](../test-strategy.md) §6.5):
 - **Partial progress (2026-10-19, IR-1382).** API 1.4 package-list and package-info queries now flow through RuntimeClient and the daemon-owned package store. The CLI `list` and `info` commands use control XPC; `info` without a package prints the runtime fields currently exposed by RuntimeHost. Package queries do not start Android: `list --all` and unmanaged `info` use live PackageManager inventory only when the daemon is already ready, otherwise they use the saved inventory. The generic launcher may query one package but cannot enumerate the package list; wrappers remain denied on the control endpoint. CLI-focused tests pass in normal and EmbeddedRuntime builds, and focused RuntimeHost tests cover authorization, cache-only queries, and typed not-found. Full #032 remains incomplete: several control operations, event and operation APIs, full application details, real XPC acceptance, and launch through the native window are outstanding. Acceptance criteria stay unchecked.
 - **Partial progress (2026-10-19, IR-1383).** `apkrun runtime restart [--yes]` stops and starts Android through two existing control requests. It asks before every restart because the currently available status API cannot report whether app sessions are active; `--yes` skips the prompt. The single `runtimeRestart` operation handle, ID, and cancellation behavior from RuntimeAPI §5 remain outstanding under #032.
 - **Partial progress (2026-10-19, IR-1384).** `apkrun runtime reset` is available through API 1.5 and RuntimeClient. It clears the persisted automatic boot-loop guard without starting Android or erasing Android data, and returns the current runtime status. An inactive guard is a no-op; an unrelated daemon startup failure remains visible. The full #032 event/operation API and real XPC acceptance remain outstanding.
-- **Partial progress (2026-10-19, IR-1385).** API 1.6 adds one authenticated `restartRuntime` request. RuntimeHost reserves the lifecycle transition, stops Android, then starts it again; the CLI no longer has a disconnect or interruption point between separate stop and start requests. It keeps the confirmation prompt because active sessions are not exposed. This first cut waits for the final status synchronously; the normative `OperationHandle`, progress events, and cancellation behavior remain outstanding. Full #032 acceptance criteria stay unchecked.
+- **Partial progress (2026-10-19, IR-1385).** API 1.6 adds one authenticated `restartRuntime` request. RuntimeHost reserves the lifecycle transition, stops Android, then starts it again; the CLI no longer has a disconnect or interruption point between separate stop and start requests. It keeps the confirmation prompt because active sessions are not exposed. This first cut waits for the final status synchronously; caller cancellation returns `runtime.cancelled`, invalidates that client connection, and may leave the daemon restart running, so the user should check status before retrying. The normative `OperationHandle`, progress events, and daemon-side cancellation remain outstanding. Full #032 acceptance criteria stay unchecked.
 - **Partial progress (2026-10-19, IR-1386).** `apkrun runtime status --json` now includes `result.owner: "apkrund"` while preserving the existing `RuntimeHostStatus` wire DTO. A focused CLI test checks the owner, every populated status field, and the output key set; the full #032 acceptance criteria stay unchecked.
 
 ---
@@ -615,7 +615,7 @@ By tier ([../test-strategy.md](../test-strategy.md) §6.5):
 | Depends on | #031 |
 | Requirements | FR-VM-10, FR-VM-11, NFR-PERF-06 |
 | Design | [../../02-design/runtime-daemon.md](../../02-design/runtime-daemon.md) §5, §6, §13 #069, §15; [../../02-design/desktop-integration.md](../../02-design/desktop-integration.md) §9; [../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §7.1 (op 48); [../../01-architecture/state-machines.md](../../01-architecture/state-machines.md) §2; [../../03-reference/configuration.md](../../03-reference/configuration.md) |
-| Modules / paths | RuntimeHost (`IdleController`, `RuntimeActivityAssertion`, `PowerObserver`, preboot, memory pressure); RuntimeCore (pause and resume, `SyncTime` client, the development ADB time fallback); `Guest/guestd/` (`SyncTime` handler); `CLI/apkrun/Commands/Dev/Power.swift`; `Tests/IntegrationTests/DaemonTests/` |
+| Modules / paths | RuntimeCore (`IdleController`, `RuntimeActivityAssertion`, pause and resume); RuntimeHost (`PowerObserver`, preboot, memory pressure, and composition); `Guest/guestd/` (`SyncTime` handler); `CLI/apkrun/Commands/Dev/Power.swift`; `Tests/IntegrationTests/DaemonTests/` |
 | Risks / questions | OQ-32, OQ-33 |
 
 ### Goal
@@ -624,7 +624,7 @@ When no app has been open for a while, the runtime suspends, and later stops, by
 
 ### Scope
 
-- `IdleController` with the activity sources of §5.1 (sessions, background tasks with `keepRunning`, store operations, diagnostics, migration and provisioning, ADB clients, and `apkrun runtime start --hold`) and `RuntimeActivityAssertion`.
+- `IdleController` in RuntimeCore with the activity sources of §5.1 (sessions, background tasks with `keepRunning`, store operations, diagnostics, migration and provisioning, ADB clients, and `apkrun runtime start --hold`) and `RuntimeActivityAssertion`.
 - The timers and settings of §5.2: `runtime.idleSuspendMinutes` (default 10), `runtime.idleStopMinutes` (default 60), `0` meaning never, and `runtime.startPolicy`. The timers use a `SuspendingClock`, so host sleep does not count.
 - Suspend and resume (§5.3): pause the agents, pause the VM (`VM_PAUSED`); resume the VM (`VM_RESUMED`), `Ping` within 2 s, `SyncTime`, then `ready`.
 - Preboot (§5.4): `startPolicy = atLogin` boots 60 s after login, skipped on battery below 30 % and while the boot-loop guard blocks boots.
@@ -640,7 +640,7 @@ When no app has been open for a while, the runtime suspends, and later stops, by
 
 ### Deliverables
 
-- `IdleController`, `RuntimeActivityAssertion`, `PowerObserver`, preboot, and the memory-pressure handler in RuntimeHost.
+- `IdleController` and `RuntimeActivityAssertion` in RuntimeCore; `PowerObserver`, preboot, and the memory-pressure handler in RuntimeHost.
 - Pause and resume, the `SyncTime` client, and the development ADB time fallback in RuntimeCore. The `SyncTime` handler in `Guest/guestd/`.
 - `apkrun dev power sleep|wake`.
 - The settings keys in [../../03-reference/configuration.md](../../03-reference/configuration.md), if they are not there yet.
@@ -670,7 +670,7 @@ When no app has been open for a while, the runtime suspends, and later stops, by
 
 By tier ([../test-strategy.md](../test-strategy.md) §6.5):
 
-- **T0** (`Packages/RuntimeHost/Tests/RuntimeHostTests/`): `IdleController` with a manual clock.
+- **T0** (`Packages/RuntimeCore/Tests/RuntimeCoreTests/`): `IdleController` with a manual clock.
 - **T1**: none.
 - **T2** (`Tests/IntegrationTests/DaemonTests/`, AndroidStock suite, stock image): suspended after 1 minute; resume p50 ≤ 500 ms over 20 runs; the idle stop; `keepRunning`, a connected `adb shell`, and a running install each prevent the suspend; injected sleep and wake with time sync.
 - **T3**: the nightly real sleep with `pmset sleepnow`; the `idle-cpu` scenario of #070; checklist C02-4 and C10-9 (lid close) of [../test-strategy.md](../test-strategy.md) §8.
@@ -685,7 +685,8 @@ By tier ([../test-strategy.md](../test-strategy.md) §6.5):
 
 ### Notes
 
-- `apkrun dev power sleep|wake` is a request to the running `apkrun dev boot`, sent on `$APKRUN_HOME/Runtime/dev-console/control.sock` (mode 0600, removed at stop, like the console sockets of #014). It does not take the instance lock, so the exit-75 rule for `dev` commands ([../../02-design/cli.md](../../02-design/cli.md) §5) does not apply to it. `PowerObserver` and `IdleController` are RuntimeHost code, so `SleepWakeTests` exercise the same code as apkrund. The real sleep in T3 (`pmset sleepnow`) runs against apkrund.
+- **Partial progress (2026-10-19, IR-1387).** RuntimeCore now provides `IdleController`, `RuntimeActivityAssertion`, the documented activity kinds, serialized lifecycle actions, the suspend/stop one-shot deadlines, validated settings, and a `SuspendingClock` implementation. Equal deadlines suspend before stopping. All assertions acquired during the idle-to-active transition wait until the lifecycle owner's `activityBegan` action completes; lifecycle action handlers must not acquire assertions, directly or through child tasks. T0 tests use an injected manual suspending clock. Wiring assertions to live session, store, ADB, diagnostics, migration, provisioning, and CLI sources, plus applying suspend/stop actions to the VM, remains for later steps; this foundation does not complete #069.
+- `apkrun dev power sleep|wake` is a request to the running `apkrun dev boot`, sent on `$APKRUN_HOME/Runtime/dev-console/control.sock` (mode 0600, removed at stop, like the console sockets of #014). It does not take the instance lock, so the exit-75 rule for `dev` commands ([../../02-design/cli.md](../../02-design/cli.md) §5) does not apply to it. `PowerObserver` is RuntimeHost code, and `IdleController` is RuntimeCore code composed by RuntimeHost, so `SleepWakeTests` exercise the same modules as apkrund. The real sleep in T3 (`pmset sleepnow`) runs against apkrund.
 - On the stock image, `SyncTime` answers `UNSUPPORTED`, so the time check runs through the Debug ADB fallback in M4. It runs again with `SyncTime` in the AndroidCustom suite after #035.
 - Record in [../../02-design/runtime-daemon.md](../../02-design/runtime-daemon.md) §16: the CPU while suspended, the resume p50, the clock after wake, the balloon measurement (OQ-32, with #070), and the pause and resume churn during dark wakes (OQ-33). Record the `cmd time_detector` result in [../../02-design/desktop-integration.md](../../02-design/desktop-integration.md) §17.
 

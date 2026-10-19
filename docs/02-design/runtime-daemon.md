@@ -380,6 +380,19 @@ public final class RuntimeActivityAssertion: Sendable {
 }
 ```
 
+In RuntimeCore, `IdleController.assertActivity(_:)` emits an `activityBegan`
+action before returning the assertion so the lifecycle owner can make the
+runtime ready. Lifecycle actions are delivered serially; pending idle actions
+are discarded when activity begins, and every assertion acquired during the
+idle-to-active transition waits for the same `activityBegan` action to finish.
+Action handlers must not acquire activity assertions, directly or through
+child tasks: waiting for an assertion from inside the serialized action handler
+would wait on the handler's own queue. Activity owners acquire assertions
+before requesting lifecycle work. Explicit release and deinitialization both
+drop the hold. The concrete session, store, ADB, diagnostics, migration,
+provisioning, and CLI owners acquire these assertions as they are integrated
+in #069.
+
 Not activity: open GUI, menu bar, or CLI connections that only observe; update checks and downloads (UpdateCore works while the runtime is stopped; installs take a `storeOperation` assertion when they run).
 
 Consequence: an Android app closed with `stop` receives no notifications while the runtime is suspended. Messaging and music apps need `keepRunning`. The Settings UI says so next to the option.
@@ -394,7 +407,9 @@ Consequence: an Android app closed with `stop` receives no notifications while t
 
 - Idle time is measured with `SuspendingClock`, which does not advance while the Mac sleeps. A lid closed overnight does not count as 8 hours of idleness.
 - `idleStopMinutes` below `idleSuspendMinutes` is treated as "stop without suspending first".
+- If both deadlines are equal, the suspend action is delivered before the stop action.
 - Settings changes apply immediately: the controller recomputes its deadline.
+- RuntimeCore's `IdleController` keeps one one-shot clock sleep for the next enabled deadline. It emits `suspend` and `stop` actions to the lifecycle owner rather than polling. A settings update replaces that one-shot sleep while preserving the idle start instant.
 
 ### 5.3 Suspend and resume
 

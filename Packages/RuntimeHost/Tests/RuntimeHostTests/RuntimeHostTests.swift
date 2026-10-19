@@ -5,10 +5,6 @@ import Testing
 
 @testable import RuntimeHost
 
-@Test func placeholderCanBeConstructed() {
-    _ = RuntimeHostPlaceholder()
-}
-
 @Test(.timeLimit(.minutes(1)))
 func consoleInputWriterKeepsEnqueueResponsiveDuringBlockedGuestWrite() async {
     let firstWriteStarted = AsyncStream.makeStream(of: Bool.self)

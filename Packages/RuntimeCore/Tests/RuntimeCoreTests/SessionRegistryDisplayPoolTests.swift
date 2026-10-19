@@ -167,6 +167,34 @@ func snapshotReconciliationReplacesRunningTasksAndEndsExitedBackgroundSession() 
 }
 
 @Test
+func snapshotReconciliationReleasesLostDisplayBeforeReturning() async throws {
+    let guest = FakeDisplayControlChannel()
+    let scanouts = FakeScanoutController(guest: guest)
+    let displayPool = DisplayPool(scanouts: scanouts, guest: guest)
+    let registry = SessionRegistry()
+    let session = try await registry.requestLeased(
+        packageID: "io.apkrun.fixture.hellotext",
+        configuration: DisplayConfiguration(
+            geometry: DisplayGeometry(pointSize: CGSize(width: 480, height: 850), backingScale: 1)
+        ),
+        displayPool: displayPool
+    )
+    _ = try await registry.transition(session.id, to: .launching)
+    _ = await registry.launchCompleted(packageID: session.packageID, taskID: 41)
+    _ = try await registry.transition(session.id, to: .running)
+
+    let result = try await registry.reconcile(
+        sessionID: session.id,
+        against: reconciliationGuestState(displays: [0])
+    )
+    await registry.waitForPendingDisplayReleases()
+
+    #expect(result.session.state == .ended(.error(.displayLost)))
+    #expect((await displayPool.snapshot())[0].state == .free)
+    #expect(scanouts.disabledScanouts == [1])
+}
+
+@Test
 func snapshotReconciliationKeepsLaunchingSessionAndRequestsIdempotentRelaunch() async throws {
     let registry = SessionRegistry()
     let session = try await registry.request(packageID: "io.apkrun.fixture.hellotext")

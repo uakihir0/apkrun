@@ -80,6 +80,8 @@ public actor SessionRegistry {
     }
 
     private var entries: [SessionID: Entry] = [:]
+    private var pendingDisplayReleaseIDs = Set<UUID>()
+    private var displayReleaseWaiters: [CheckedContinuation<Void, Never>] = []
     private let logSink: (any LogSink)?
 
     /// Creates an empty registry for embedded and leased-display sessions.
@@ -383,9 +385,7 @@ public actor SessionRegistry {
             entries[entry.id] = entry
             log("session state \(String(describing: previous)) -> \(String(describing: entry.state))", entry: entry)
             if let allocationToRelease {
-                Task {
-                    await allocationToRelease.pool.release(allocationToRelease.lease)
-                }
+                releaseDisplayAfterReconciliation(allocationToRelease)
             }
             return SessionReconciliationResult(session: entry.snapshot, action: .none)
         }
@@ -419,9 +419,7 @@ public actor SessionRegistry {
                 entries[entry.id] = entry
                 log("session state \(String(describing: previous)) -> \(String(describing: entry.state))", entry: entry)
                 if let allocationToRelease {
-                    Task {
-                        await allocationToRelease.pool.release(allocationToRelease.lease)
-                    }
+                    releaseDisplayAfterReconciliation(allocationToRelease)
                 }
             } else {
                 entries[entry.id] = entry
@@ -429,6 +427,40 @@ public actor SessionRegistry {
             return SessionReconciliationResult(session: entry.snapshot, action: .none)
         case .requested, .waitingForRuntime, .acquiringDisplay, .closing, .ended:
             return SessionReconciliationResult(session: entry.snapshot, action: .none)
+        }
+    }
+
+    /// Waits for display releases deferred from guest snapshot reconciliation.
+    ///
+    /// The snapshot handler must return before waiting when the guest agent holds a reconnect barrier.
+    public func waitForPendingDisplayReleases() async {
+        while !pendingDisplayReleaseIDs.isEmpty {
+            await withCheckedContinuation { continuation in
+                displayReleaseWaiters.append(continuation)
+            }
+        }
+    }
+
+    private func releaseDisplayAfterReconciliation(
+        _ allocation: (pool: DisplayPool, lease: DisplayLease)
+    ) {
+        let releaseID = UUID()
+        pendingDisplayReleaseIDs.insert(releaseID)
+        Task { [weak self] in
+            await allocation.pool.release(allocation.lease)
+            await self?.finishDisplayRelease(releaseID)
+        }
+    }
+
+    private func finishDisplayRelease(_ releaseID: UUID) {
+        pendingDisplayReleaseIDs.remove(releaseID)
+        guard pendingDisplayReleaseIDs.isEmpty else {
+            return
+        }
+        let waiters = displayReleaseWaiters
+        displayReleaseWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
         }
     }
 

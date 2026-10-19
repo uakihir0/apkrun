@@ -57,7 +57,10 @@ public actor EmbeddedPackageService: RuntimeService {
     /// ADB is resolved here so CLI clients do not need to import RuntimeCore or locate tools.
     public func attachRuntime(
         context: DevelopmentRuntimeContext,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        startRuntimeIfNeeded: Bool = true,
+        recoverPendingTransactions: Bool = true,
+        refreshInventoryAfterAttach: Bool = true
     ) async throws(RuntimeWireError) {
         do {
             try await ensureOpen()
@@ -67,7 +70,8 @@ public actor EmbeddedPackageService: RuntimeService {
                 adbExecutable: adbExecutable,
                 instanceStore: context.instanceStore,
                 image: context.image,
-                logSink: context.diagnostics.logSink
+                logSink: context.diagnostics.logSink,
+                startRuntimeIfNeeded: startRuntimeIfNeeded
             )
             guard let guestAgent = await context.supervisor.developmentGuestAgent else {
                 throw DevelopmentStoreRuntimeAccessFailure.guestAgentUnavailable
@@ -79,11 +83,21 @@ public actor EmbeddedPackageService: RuntimeService {
             }
             await runtimeAccess.attach(access)
             runtimeAttached = true
-            try await store.recoverPendingTransactions()
-            try? await refreshAndroidInventory()
+            if recoverPendingTransactions {
+                try await store.recoverPendingTransactions()
+            }
+            if refreshInventoryAfterAttach {
+                try? await refreshAndroidInventory()
+            }
         } catch {
             throw Self.wireError(for: error)
         }
+    }
+
+    /// Detaches the live guest channel while preserving cached package inventory.
+    public func detachRuntime() async {
+        await runtimeAccess.detach()
+        runtimeAttached = false
     }
 
     /// Launches an installed package in the embedded runtime through the Guest Agent.
@@ -224,21 +238,20 @@ public actor EmbeddedPackageService: RuntimeService {
             if request.filter == .all {
                 let guestPackages: [StorePackageSummary]
                 if runtimeAttached {
-                    guestPackages = try await runtimeAccess.withStoreAgent(UUID()) { channel in
-                        try await channel.listPackages(.all)
+                    do {
+                        guestPackages = try await runtimeAccess.withStoreAgent(UUID()) { channel in
+                            try await channel.listPackages(.all)
+                        }
+                        let savedSnapshot = try? await store.saveLastKnownAndroidInventory(guestPackages)
+                        source = .liveAndroid
+                        observedAt = savedSnapshot?.observedAt ?? Date()
+                    } catch let failure as DevelopmentStoreRuntimeAccessFailure
+                        where failure == .runtimeNotReady
+                    {
+                        (guestPackages, source, observedAt) = try await cachedAndroidInventory()
                     }
-                    let savedSnapshot = try? await store.saveLastKnownAndroidInventory(guestPackages)
-                    source = .liveAndroid
-                    observedAt = savedSnapshot?.observedAt ?? Date()
                 } else {
-                    if let snapshot = try await store.lastKnownAndroidInventory() {
-                        guestPackages = snapshot.packages
-                        observedAt = snapshot.observedAt
-                        source = .cachedAndroid
-                    } else {
-                        guestPackages = []
-                        source = .noAndroidInventory
-                    }
+                    (guestPackages, source, observedAt) = try await cachedAndroidInventory()
                 }
                 let observedPackageIDs = Set(guestPackages.map { $0.packageID.rawValue })
                 for guest in guestPackages {
@@ -298,8 +311,12 @@ public actor EmbeddedPackageService: RuntimeService {
             if let issue = try await store.packageRecordIssue(for: packageID) {
                 throw PackageStoreFailure.metadataUnreadable(packageID, detail: issue.detail)
             }
-            guard let record = try await store.listManagedPackages().first(where: { $0.packageId == packageID }) else {
-                throw PackageStoreFailure.packageNotFound
+            let records = try await store.listManagedPackages()
+            guard let record = records.first(where: { $0.packageId == packageID }) else {
+                guard let summary = try await unmanagedPackageSummary(for: packageID) else {
+                    throw PackageStoreFailure.packageNotFound
+                }
+                return RuntimePackageDetails(summary: summary, files: [], artifactBytes: 0)
             }
 
             let artifactSet: ArtifactSet?
@@ -352,6 +369,43 @@ public actor EmbeddedPackageService: RuntimeService {
             openTask = nil
             throw error
         }
+    }
+
+    private func cachedAndroidInventory() async throws
+        -> (packages: [StorePackageSummary], source: RuntimePackageListSource, observedAt: Date?)
+    {
+        if let snapshot = try await store.lastKnownAndroidInventory() {
+            return (snapshot.packages, .cachedAndroid, snapshot.observedAt)
+        }
+        return ([], .noAndroidInventory, nil)
+    }
+
+    private func unmanagedPackageSummary(for packageID: PackageID) async throws -> RuntimePackageSummary? {
+        let packages: [StorePackageSummary]
+        if runtimeAttached {
+            do {
+                packages = try await runtimeAccess.withStoreAgent(UUID()) { channel in
+                    try await channel.listPackages(.all)
+                }
+                _ = try? await store.saveLastKnownAndroidInventory(packages)
+            } catch let failure as DevelopmentStoreRuntimeAccessFailure where failure == .runtimeNotReady {
+                packages = try await store.lastKnownAndroidInventory()?.packages ?? []
+            }
+        } else {
+            packages = try await store.lastKnownAndroidInventory()?.packages ?? []
+        }
+
+        guard let package = packages.first(where: { $0.packageID == packageID }) else {
+            return nil
+        }
+        return RuntimePackageSummary(
+            packageID: try Self.runtimePackageID(package.packageID),
+            displayName: package.displayName,
+            versionCode: package.versionCode,
+            state: .installed,
+            managed: false,
+            updateAuthority: .external
+        )
     }
 
     private func stage(
@@ -772,6 +826,12 @@ public actor EmbeddedPackageService: RuntimeService {
         }
         if let failure = error as? DevelopmentStoreRuntimeAccessFailure {
             switch failure {
+            case .runtimeNotReady:
+                return .runtime(
+                    "runtimeNotReady",
+                    message: "Android is not ready for a live package query.",
+                    remediation: "Start Android and retry if you need a current package inventory."
+                )
             case .guestAgentUnavailable:
                 return .runtime(
                     "guestAgentUnavailable", message: "The Android Guest Agent is unavailable.",
@@ -896,6 +956,10 @@ private actor AttachedStoreRuntimeAccess: StoreRuntimeAccess {
 
     func attach(_ access: any StoreRuntimeAccess) {
         self.access = access
+    }
+
+    func detach() {
+        access = nil
     }
 
     func withStoreAgent<T: Sendable>(

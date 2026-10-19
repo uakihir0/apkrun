@@ -20,10 +20,15 @@ public actor DevelopmentStoreRuntimeAccess: StoreRuntimeAccess {
         adbExecutable: URL,
         instanceStore: InstanceStore,
         image: InstalledImage,
-        logSink: (any LogSink)? = nil
+        logSink: (any LogSink)? = nil,
+        startRuntimeIfNeeded: Bool = true
     ) {
         makeChannel = {
-            try await supervisor.ensureReady(.cli)
+            if startRuntimeIfNeeded {
+                try await supervisor.ensureReady(.cli)
+            } else if await supervisor.state != .ready {
+                throw DevelopmentStoreRuntimeAccessFailure.runtimeNotReady
+            }
 
             guard let agent = await supervisor.developmentGuestAgent else {
                 throw DevelopmentStoreRuntimeAccessFailure.guestAgentUnavailable
@@ -73,6 +78,8 @@ public actor DevelopmentStoreRuntimeAccess: StoreRuntimeAccess {
 
 /// A development runtime that cannot provide the guest package channel.
 public enum DevelopmentStoreRuntimeAccessFailure: Error, Sendable, Equatable {
+    /// The caller requested a live package query without allowing Android to start.
+    case runtimeNotReady
     /// The boot completed without a Guest Agent.
     case guestAgentUnavailable
     /// The development ADB loopback forwarder is not active.

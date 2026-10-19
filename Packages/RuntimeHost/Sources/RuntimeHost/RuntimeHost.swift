@@ -46,6 +46,7 @@ public actor RuntimeHost {
     private var image: InstalledImage?
     private var instanceStore: InstanceStore?
     private var supervisor: RuntimeSupervisor?
+    private var packageQueryService: EmbeddedPackageService?
     private var headlessSessionService: (any RuntimeSessionService)?
     private var runtimeSessionGeneration: UInt64 = 0
     private var bootProgressEstimator: BootProgressEstimator?
@@ -311,6 +312,7 @@ public actor RuntimeHost {
             await service.shutdown()
         }
         await supervisor?.stop()
+        await packageQueryService?.detachRuntime()
         headlessSessionService = nil
     }
 
@@ -349,6 +351,30 @@ public actor RuntimeHost {
             request,
             using: guestAgent
         )
+    }
+
+    /// Lists daemon-owned package records and, when requested, merges a live or cached Android inventory.
+    ///
+    /// The query never starts Android. A live inventory is used only while the supervisor is already ready.
+    public func listPackages(
+        _ request: RuntimeListPackagesRequest
+    ) async throws(RuntimeWireError) -> RuntimePackageListResult {
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        if request.filter == .all {
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+        }
+        return try await service.listPackages(request)
+    }
+
+    /// Reads package metadata from the daemon-owned store without starting Android.
+    public func packageInfo(
+        _ request: RuntimePackageRequest
+    ) async throws(RuntimeWireError) -> RuntimePackageDetails {
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        try await attachPackageQueriesIfRuntimeIsReady(to: service)
+        return try await service.packageInfo(request)
     }
 
     /// Returns a point-in-time view for the control endpoint.
@@ -677,6 +703,44 @@ public actor RuntimeHost {
         )
         headlessSessionService = service
         return service
+    }
+
+    private func packageQueryServiceInstance() -> EmbeddedPackageService {
+        if let packageQueryService {
+            return packageQueryService
+        }
+        let service = EmbeddedPackageService(paths: paths)
+        packageQueryService = service
+        return service
+    }
+
+    private func attachPackageQueriesIfRuntimeIsReady(
+        to service: EmbeddedPackageService
+    ) async throws(RuntimeWireError) {
+        guard let supervisor, await supervisor.state == .ready else {
+            await service.detachRuntime()
+            return
+        }
+        guard let image, let instanceStore, let diagnostics else {
+            throw RuntimeWireError.runtime(
+                "serviceUnavailable",
+                message: "The Android package service is not ready.",
+                remediation: "Restart the APKRun background service and retry."
+            )
+        }
+        let context = DevelopmentRuntimeContext(
+            image: image,
+            instanceStore: instanceStore,
+            supervisor: supervisor,
+            diagnostics: diagnostics
+        )
+        try await service.attachRuntime(
+            context: context,
+            environment: environment,
+            startRuntimeIfNeeded: false,
+            recoverPendingTransactions: false,
+            refreshInventoryAfterAttach: false
+        )
     }
 
     private static let launchUnavailableError = RuntimeWireError.runtime(

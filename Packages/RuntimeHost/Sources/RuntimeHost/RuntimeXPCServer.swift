@@ -1025,6 +1025,8 @@ private protocol VersionedControlRequest: Decodable {
 extension RuntimeStatusRequest: VersionedControlRequest {}
 extension StartRuntimeRequest: VersionedControlRequest {}
 extension StopRuntimeRequest: VersionedControlRequest {}
+extension RuntimeListPackagesControlRequest: VersionedControlRequest {}
+extension RuntimePackageInfoControlRequest: VersionedControlRequest {}
 extension RuntimeLaunchControlRequest: VersionedControlRequest {}
 extension RuntimeTerminateControlRequest: VersionedControlRequest {}
 
@@ -1032,6 +1034,8 @@ enum RuntimeControlOperation {
     case runtimeStatus
     case startRuntime
     case stopRuntime
+    case listPackages
+    case packageInfo
     case launch
     case terminate
 
@@ -1049,6 +1053,20 @@ enum RuntimeControlOperation {
             case .app, .menuBar, .cli:
                 true
             case .launcher, .wrapper:
+                false
+            }
+        case .listPackages:
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
+                false
+            }
+        case .packageInfo:
+            switch clientKind {
+            case .app, .menuBar, .cli, .launcher:
+                true
+            case .wrapper:
                 false
             }
         case .launch, .terminate:
@@ -1152,6 +1170,86 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 response.send(Self.encode(RuntimeControlReply(status: await host.status())))
             } catch {
                 response.send(Self.errorReply(for: Self.controlError(for: error)))
+            }
+        }
+    }
+
+    func listPackages(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = XPCDataReply(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeListPackagesControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .listPackages,
+                as: RuntimeListPackagesControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeListPackagesControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimeListPackagesControlRequest.self, from: request) else {
+                response.send(
+                    Self.encode(RuntimeListPackagesControlReply(error: Self.malformedWireError))
+                )
+                return
+            }
+            do {
+                let result = try await host.listPackages(
+                    RuntimeListPackagesRequest(filter: decoded.filter)
+                )
+                response.send(Self.encode(RuntimeListPackagesControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeListPackagesControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func packageInfo(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = XPCDataReply(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimePackageInfoControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .packageInfo,
+                as: RuntimePackageInfoControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimePackageInfoControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimePackageInfoControlRequest.self, from: request) else {
+                response.send(
+                    Self.encode(RuntimePackageInfoControlReply(error: Self.malformedWireError))
+                )
+                return
+            }
+            do {
+                let details = try await host.packageInfo(
+                    RuntimePackageRequest(packageID: decoded.packageID)
+                )
+                response.send(Self.encode(RuntimePackageInfoControlReply(result: details)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimePackageInfoControlReply(error: wireError)))
             }
         }
     }

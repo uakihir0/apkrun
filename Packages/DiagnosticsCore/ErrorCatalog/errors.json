@@ -1791,6 +1791,26 @@
       }
     },
     {
+      "code": "cli.displayStatusUnavailable",
+      "parameters": [],
+      "message": {
+        "en": "Android display details aren't available from the runtime service yet.",
+        "ja": "Android ディスプレイの詳細は、まだランタイムサービスから取得できません。"
+      },
+      "remediation": {
+        "en": "Run `apkrun runtime status` for available runtime details. Display reporting is tracked in #028.",
+        "ja": "取得可能なランタイム情報は `apkrun runtime status` で確認できます。ディスプレイ情報の対応は #028 で管理されています。"
+      },
+      "action": "none",
+      "cliExit": 69,
+      "doc": {
+        "case": "displayStatusUnavailable",
+        "when": "`apkrun info --displays` is used before the daemon exposes display snapshots",
+        "raisedBy": "CLI",
+        "ref": "[../02-design/cli.md](../02-design/cli.md) §4.1"
+      }
+    },
+    {
       "code": "cli.devConsoleRequiresTerminal",
       "parameters": [],
       "message": {

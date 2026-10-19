@@ -137,95 +137,6 @@
         }
     }
 
-    struct ListPackagesCommand: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(
-            commandName: "list",
-            abstract: "List installed Android apps."
-        )
-
-        @Flag(name: .long, help: "Include packages installed outside APKRun that were last seen in Android.")
-        var all = false
-
-        @Flag(name: .long, help: "Print the result as JSON.")
-        var json = false
-
-        mutating func run() async throws {
-            let service = EmbeddedPackageService()
-            let request = RuntimeListPackagesRequest(filter: all ? .all : .managed)
-            let result = try await service.listPackages(request)
-
-            if json {
-                PackageCommandSupport.writeJSON(result)
-            } else {
-                if all {
-                    switch result.source {
-                    case .managedRecords:
-                        break
-                    case .liveAndroid:
-                        Output.write(
-                            "Android inventory: live (observed \(result.observedAt.map(ISO8601DateFormatter().string(from:)) ?? "unknown"))."
-                        )
-                    case .cachedAndroid:
-                        Output.write(
-                            "Android inventory: cached from \(result.observedAt.map(ISO8601DateFormatter().string(from:)) ?? "unknown")."
-                        )
-                    case .noAndroidInventory:
-                        Output.write(
-                            "No Android inventory is saved yet. Run `apkrun dev boot` to discover installed apps."
-                        )
-                    }
-                }
-                if result.packages.isEmpty {
-                    if !all || result.source != .noAndroidInventory {
-                        Output.write("No apps installed.")
-                    } else {
-                        Output.write("No managed apps are recorded.")
-                    }
-                } else {
-                    for package in result.packages {
-                        Output.write(PackageCommandSupport.packageListLine(package))
-                    }
-                }
-            }
-        }
-    }
-
-    struct PackageInfoCommand: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(
-            commandName: "info",
-            abstract: "Show stored and last-known Android details for an app."
-        )
-
-        @Argument(help: "The Android package name.")
-        var package: String
-
-        @Flag(name: .long, help: "Print the result as JSON.")
-        var json = false
-
-        mutating func run() async throws {
-            let packageID = try PackageCommandSupport.packageID(package)
-            let service = EmbeddedPackageService()
-            let details = try await service.packageInfo(RuntimePackageRequest(packageID: packageID))
-            if json {
-                PackageCommandSupport.writeJSON(details)
-            } else {
-                let summary = details.summary
-                Output.write(
-                    "\(PackageCommandSupport.safeTerminalText(summary.displayName)) "
-                        + "(\(summary.packageID.rawValue))"
-                )
-                Output.write(
-                    "Version: \(summary.versionName.map(PackageCommandSupport.safeTerminalText) ?? "unknown") "
-                        + "(\(summary.versionCode.map(String.init) ?? "unknown"))"
-                )
-                Output.write("State: \(PackageCommandSupport.stateName(summary.state))")
-                Output.write("Managed: \(summary.managed ? "yes" : "no")")
-                Output.write("Update authority: \(summary.updateAuthority.rawValue)")
-                Output.write("Stored APKs: \(details.files.count), \(details.artifactBytes) bytes")
-            }
-        }
-    }
-
     enum PackageCommandSupport {
         static func packageID(_ rawValue: String) throws -> RuntimePackageID {
             guard let packageID = RuntimePackageID(rawValue: rawValue) else {
@@ -312,17 +223,6 @@
             }
         }
 
-        static func stateName(_ state: RuntimePackageState) -> String {
-            switch state {
-            case .installing: "installing"
-            case .installed: "installed"
-            case .uninstalling: "uninstalling"
-            case .uninstalledKeepingData: "uninstalled, data kept"
-            case .broken(let reason): "broken: \(reason)"
-            case .unknown: "unknown"
-            }
-        }
-
         static func safeTerminalText(_ text: String) -> String {
             let replacementCharacter = "\u{FFFD}".unicodeScalars.first
             let sanitized = text.unicodeScalars.map { scalar in
@@ -337,12 +237,6 @@
                 }
             }
             return String(String.UnicodeScalarView(sanitized))
-        }
-
-        static func packageListLine(_ package: RuntimePackageSummary) -> String {
-            let ownership = package.managed ? "managed" : "unmanaged"
-            return "\(safeTerminalText(package.displayName))\t\(package.packageID.rawValue)"
-                + "\t\(package.versionCode.map(String.init) ?? "unknown")\t\(ownership)\t\(stateName(package.state))"
         }
 
         static func installConfirmationPrompt(for preview: RuntimeImportPreview) -> String {

@@ -24,6 +24,7 @@ import Testing
                 "confirmationRequired", "declined", "invalidPackageName", "invalidSourceSpec",
                 "invalidArgument", "fileNotAccessible", "developerModeRequired", "logsUnavailable",
                 "malformedReply", "versionSkew", "invalidArguments", "devConsoleRequiresTerminal",
+                "displayStatusUnavailable",
             ].map { "cli.\($0)" }
             + [
                 "instanceLocked", "instanceLockFailed", "hostShuttingDown", "hostStartupFailed",

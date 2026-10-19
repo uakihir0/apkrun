@@ -1,6 +1,7 @@
 import DiagnosticsCore
 import DiagnosticsCoreTestSupport
 import Foundation
+import RuntimeAPI
 import RuntimeClient
 import Testing
 
@@ -8,8 +9,106 @@ import Testing
 
 #if APKRUN_EMBEDDED_RUNTIME
     import Darwin
-    import RuntimeAPI
 #endif
+
+@Test func packageQueryAndRuntimeInfoCommandsParse() async throws {
+    let list = try await APKRunCommand.asyncParseAsRoot(["list", "--all", "--json"])
+    #expect((list as? ListPackagesCommand)?.all == true)
+    #expect((list as? ListPackagesCommand)?.json == true)
+
+    let packageInfo = try await APKRunCommand.asyncParseAsRoot([
+        "info", "io.apkrun.fixture.hellotext", "--json",
+    ])
+    #expect((packageInfo as? PackageInfoCommand)?.package == "io.apkrun.fixture.hellotext")
+    #expect((packageInfo as? PackageInfoCommand)?.json == true)
+
+    let overview = try await APKRunCommand.asyncParseAsRoot(["info"])
+    #expect((overview as? PackageInfoCommand)?.package == nil)
+
+    let runtimeInfo = try await APKRunCommand.asyncParseAsRoot(["info", "--runtime"])
+    #expect((runtimeInfo as? PackageInfoCommand)?.package == nil)
+    #expect((runtimeInfo as? PackageInfoCommand)?.runtime == true)
+}
+
+@Test func packageInfoRejectsTheDisplayOptionWithAnActionableCatalogError() async throws {
+    let command = try await APKRunCommand.asyncParseAsRoot(["info", "--displays"])
+    guard var infoCommand = command as? PackageInfoCommand else {
+        Issue.record("info --displays did not parse as PackageInfoCommand")
+        return
+    }
+    do {
+        try await infoCommand.run()
+        Issue.record("--displays unexpectedly returned without display snapshots")
+    } catch let failure as CLIFailure {
+        #expect(failure.code == "displayStatusUnavailable")
+        #expect(ExitCodes.code(for: failure) == ExitCodes.unavailable)
+    }
+}
+
+@Test func runtimeInfoHumanOutputIncludesAvailableDaemonAndBuildDetails() {
+    let status = sampleRuntimeInfoStatus
+    let output = RuntimeInfoOutput.human(
+        status,
+        buildInfo: releaseBuildInfo,
+        includeRuntimeDetails: true
+    )
+
+    #expect(output.contains("APKRun: 0.1.0 (1)"))
+    #expect(output.contains("Background service: running"))
+    #expect(output.contains("Android: ready"))
+    #expect(output.contains("Image: android-17"))
+    #expect(output.contains("Guest Agent: connected"))
+    #expect(output.contains("Guest Agent protocol: 1.4"))
+}
+
+@Test func runtimeInfoJSONIncludesStableCoreFieldsAndOptionalRuntimeDetails() throws {
+    let data = Data(
+        try RuntimeInfoOutput.json(
+            sampleRuntimeInfoStatus,
+            buildInfo: releaseBuildInfo,
+            includeRuntimeDetails: false
+        ).utf8
+    )
+    let envelope = try #require(
+        JSONSerialization.jsonObject(with: data) as? [String: Any]
+    )
+    let result = try #require(envelope["result"] as? [String: Any])
+
+    #expect(envelope["schemaVersion"] as? Int == 1)
+    #expect((result["buildInfo"] as? [String: Any])?["marketingVersion"] as? String == "0.1.0")
+    #expect(result["hostState"] as? String == "running")
+    #expect(result["runtimeState"] as? String == "ready")
+    #expect(result["imageVersion"] as? String == "android-17")
+    #expect(result["runtimeDetails"] == nil)
+}
+
+@Test func packageQueryHumanOutputStripsTerminalControlCharacters() {
+    let unsafe = RuntimePackageSummary(
+        packageID: RuntimePackageID(rawValue: "io.example.app")!,
+        displayName: "Bad\u{1B}[2J app",
+        versionCode: 1,
+        state: .broken("bad\nreason"),
+        managed: true
+    )
+
+    #expect(
+        PackageQueryOutput.packageListLine(unsafe)
+            == "Bad\u{FFFD}[2J app\tio.example.app\t1\tmanaged\tbroken: bad\u{FFFD}reason")
+    #expect(!PackageQueryOutput.packageListLine(unsafe).contains("\n"))
+}
+
+private let sampleRuntimeInfoStatus = RuntimeHostStatus(
+    hostState: "running",
+    runtimeState: "ready",
+    bootProgress: nil,
+    startupFailureStep: nil,
+    startupFailureCode: nil,
+    crashLoopActive: false,
+    daemonPID: 123,
+    imageVersion: "android-17",
+    guestAgentState: .connected,
+    guestAgentProtocolVersion: "1.4"
+)
 
 @Test func launchAndStopCommandsParsePackageArguments() async throws {
     let launch = try await APKRunCommand.asyncParseAsRoot([
@@ -497,7 +596,7 @@ private final class CLIOutputRecorder: @unchecked Sendable {
         )
 
         #expect(
-            PackageCommandSupport.packageListLine(summary)
+            PackageQueryOutput.packageListLine(summary)
                 == "App�Name\tcom.example.app\t42\tmanaged\tuninstalled, data kept"
         )
     }

@@ -44,6 +44,7 @@ private enum EnvelopeSchema {
         ("ping", GuestPing.number),
         ("get_snapshot", GuestGetSnapshot.number),
         ("set_display_policy", GuestSetDisplayPolicy.number),
+        ("clear_display", GuestClearDisplay.number),
         ("launch_application", GuestLaunchApplication.number),
         ("stop_application", GuestStopApplication.number),
         ("focus_display", GuestFocusDisplay.number),
@@ -77,6 +78,14 @@ private enum EnvelopeSchema {
         #expect(launch.package == "io.apkrun.fixture.hellotext")
     } else {
         Issue.record("GuestLaunchApplication does not build the launch request")
+    }
+    let clearRequest: GPRequest.OneOf_Op? = GuestClearDisplay(displayID: 4).request()
+    #expect(GuestClearDisplay(displayID: 4).timeout == .seconds(5))
+    if case .clearDisplay_p(let clear)? = clearRequest {
+        #expect(clear.displayID == 4)
+        #expect(clear.policy == .finishTasks)
+    } else {
+        Issue.record("GuestClearDisplay does not build the clear-display request")
     }
     let stopRequest: GPRequest.OneOf_Op? = GuestStopApplication(package: "io.apkrun.fixture.hellotext").request()
     if case .stopApplication(let stop)? = stopRequest {

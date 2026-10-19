@@ -133,6 +133,45 @@ public struct GuestSetDisplayPolicy: GuestOperation {
     }
 }
 
+/// `ClearDisplay`: clears tasks from one display before a scanout is released (guest-protocol.md §7.1 #13).
+public struct GuestClearDisplay: GuestOperation {
+    /// The decoded result of the operation.
+    public typealias Result = GPEmpty
+    /// The operation number of guest-protocol.md §7.1.
+    public static let number = 13
+    /// The display to clear.
+    public let displayID: Int32
+    /// How tasks are removed from the display.
+    public let policy: GPClearPolicy
+
+    /// Creates the operation.
+    public init(displayID: Int32, policy: GPClearPolicy = .finishTasks) {
+        self.displayID = displayID
+        self.policy = policy
+    }
+
+    /// The name that errors report.
+    public var operationName: String { "ClearDisplay" }
+    /// The capability that the operation needs.
+    public var capability: GuestCapability { .display }
+    /// The time the agent has to complete task clearing.
+    public var timeout: Duration { .seconds(5) }
+
+    /// The request that carries the operation.
+    public func request() -> GPRequest.OneOf_Op {
+        var clear = GPClearDisplay()
+        clear.displayID = displayID
+        clear.policy = policy
+        return .clearDisplay_p(clear)
+    }
+
+    /// Decodes the agent's answer.
+    public static func decode(_ result: GPResponse.OneOf_Result) -> GPEmpty? {
+        if case .clearDisplay_p(let empty) = result { return empty }
+        return nil
+    }
+}
+
 /// `LaunchApplication`: starts a package on a display (guest-protocol.md §7.1 #14, guest-components.md §6.4).
 public struct GuestLaunchApplication: GuestOperation {
     /// The decoded result of the operation.

@@ -1,13 +1,13 @@
 import DiagnosticsCore
 import Foundation
 
-/// A snapshot of one embedded app session on primary display 0.
+/// A snapshot of one app session and its Android display.
 public struct AppSessionSnapshot: Sendable, Equatable {
     /// The stable identity used by the input router.
     public let id: SessionID
     /// The Android package owned by this session.
     public let packageID: String
-    /// The Android display used by this session. #026 supports display 0 only.
+    /// The Android display used by this session. Legacy #026 requests use display 0.
     public let displayID: Int32
     /// Current lifecycle state.
     public let state: AppSessionState
@@ -16,67 +16,132 @@ public struct AppSessionSnapshot: Sendable, Equatable {
 
 }
 
-/// Errors returned by the embedded display-0 session registry.
+/// Errors returned by the embedded and leased-display session registry.
 public enum SessionRegistryFailure: Error, Sendable, Equatable {
     /// The request did not name a package.
     case invalidPackageIdentifier
     /// A different live app already owns primary display 0.
     case displayInUse(packageID: String)
+    /// The package already has a session on another display or is still acquiring one.
+    case sessionAlreadyExists(packageID: String)
+    /// DisplayPool could not allocate or reconfigure the requested display.
+    case displayPool(DisplayPoolFailure)
     /// The session is no longer registered.
     case sessionNotFound
     /// The requested state change is not in the AppSessionState transition table.
     case invalidTransition(from: AppSessionState, to: AppSessionState)
 }
 
-/// Owns app-session lifecycle and package/task mapping for the embedded #026 path on display 0.
+/// Owns app-session lifecycle and package/task mapping for embedded and leased-display sessions.
 ///
-/// The registry is intentionally limited to one primary display. #028 introduces display leases and #030 allows
-/// concurrent sessions. The same package request reuses its live session so repeated launch requests do not create
-/// duplicate windows or Android tasks.
+/// The legacy `request(packageID:)` API remains limited to one primary display. The explicit
+/// `requestLeased(packageID:configuration:displayPool:)` API acquires a secondary display for #028. The same package
+/// request reuses its live session so repeated launch requests do not create duplicate windows or Android tasks.
 public actor SessionRegistry {
     private struct Entry {
         let id: SessionID
         let packageID: String
+        var displayID: Int32
         var state: AppSessionState
         var taskIDs: Set<Int32>
+        var displayLease: DisplayLease?
+        var displayPool: DisplayPool?
+        var displayAcquisitionPending = false
         var stateBeforeClosing: AppSessionState?
         var launchReplyPending = false
         var vanishedDuringLaunch: Set<Int32> = []
 
         var snapshot: AppSessionSnapshot {
-            AppSessionSnapshot(id: id, packageID: packageID, displayID: 0, state: state, taskIDs: taskIDs)
+            AppSessionSnapshot(id: id, packageID: packageID, displayID: displayID, state: state, taskIDs: taskIDs)
         }
     }
 
     private var entries: [SessionID: Entry] = [:]
     private let logSink: (any LogSink)?
 
-    /// Creates an empty registry for embedded display-0 sessions.
+    /// Creates an empty registry for embedded and leased-display sessions.
     public init(logSink: (any LogSink)? = nil) {
         self.logSink = logSink
     }
 
-    /// Requests a session, reusing the existing live session for the same package.
+    /// Requests a legacy session on primary display 0, reusing the existing live primary session for the package.
     public func request(packageID: String) throws(SessionRegistryFailure) -> AppSessionSnapshot {
         guard Self.isPackageIdentifier(packageID) else {
             throw .invalidPackageIdentifier
         }
         if let existing = entries.values.first(where: { $0.packageID == packageID && !$0.state.isEnded }) {
+            guard existing.displayID == 0, existing.displayLease == nil, !existing.displayAcquisitionPending else {
+                throw .sessionAlreadyExists(packageID: packageID)
+            }
             return existing.snapshot
         }
-        if let occupied = entries.values.first(where: { $0.state.isLive }) {
+        if let occupied = entries.values.first(where: {
+            $0.displayID == 0 && $0.displayLease == nil && !$0.displayAcquisitionPending && $0.state.isLive
+        }) {
             throw .displayInUse(packageID: occupied.packageID)
         }
         let id = SessionID.app(UUID())
-        let entry = Entry(id: id, packageID: packageID, state: .requested, taskIDs: [])
+        let entry = Entry(id: id, packageID: packageID, displayID: 0, state: .requested, taskIDs: [])
         entries[id] = entry
         log("session requested", entry: entry)
         return entry.snapshot
     }
 
+    /// Requests a session backed by a DisplayPool lease on one of scanouts 1...15.
+    ///
+    /// The lease is released automatically when the session enters any terminal state. Repeated requests for a
+    /// package that already owns a leased display reuse that session.
+    public func requestLeased(
+        packageID: String,
+        configuration: DisplayConfiguration,
+        displayPool: DisplayPool
+    ) async throws(SessionRegistryFailure) -> AppSessionSnapshot {
+        guard Self.isPackageIdentifier(packageID) else {
+            throw .invalidPackageIdentifier
+        }
+        if let existing = entries.values.first(where: { $0.packageID == packageID && !$0.state.isEnded }) {
+            guard existing.displayLease != nil else {
+                throw .sessionAlreadyExists(packageID: packageID)
+            }
+            return existing.snapshot
+        }
+
+        let id = SessionID.app(UUID())
+        let entry = Entry(
+            id: id,
+            packageID: packageID,
+            displayID: 0,
+            state: .acquiringDisplay,
+            taskIDs: [],
+            displayAcquisitionPending: true
+        )
+        entries[id] = entry
+        log("leased session requested", entry: entry)
+
+        let lease: DisplayLease
+        do throws(DisplayPoolFailure) {
+            lease = try await displayPool.acquire(for: id, configuration: configuration)
+        } catch {
+            entries[id] = nil
+            throw .displayPool(error)
+        }
+
+        guard var current = entries[id], !current.state.isEnded, current.state == .acquiringDisplay else {
+            await displayPool.release(lease)
+            throw .sessionNotFound
+        }
+        current.displayID = lease.androidDisplayID
+        current.displayLease = lease
+        current.displayPool = displayPool
+        current.displayAcquisitionPending = false
+        entries[id] = current
+        log("leased display acquired", entry: current)
+        return current.snapshot
+    }
+
     /// Advances a session through the documented lifecycle.
     @discardableResult
-    public func transition(_ id: SessionID, to next: AppSessionState) throws(SessionRegistryFailure)
+    public func transition(_ id: SessionID, to next: AppSessionState) async throws(SessionRegistryFailure)
         -> AppSessionSnapshot
     {
         guard var entry = entries[id] else {
@@ -96,14 +161,18 @@ public actor SessionRegistry {
             entry.launchReplyPending = true
             entry.vanishedDuringLaunch.removeAll()
         }
+        let allocationToRelease = Self.takeDisplayAllocationIfEnded(from: &entry)
         entries[id] = entry
         log("session state \(String(describing: previous)) -> \(String(describing: next))", entry: entry)
+        if let allocationToRelease {
+            await allocationToRelease.pool.release(allocationToRelease.lease)
+        }
         return entry.snapshot
     }
 
     /// Completes a close after the Guest Agent confirms that the package has no remaining tasks.
     @discardableResult
-    public func stopCompleted(packageID: String) -> AppSessionSnapshot? {
+    public func stopCompleted(packageID: String) async -> AppSessionSnapshot? {
         guard var entry = entries.values.first(where: { $0.packageID == packageID && $0.state == .closing }) else {
             return nil
         }
@@ -113,8 +182,12 @@ public actor SessionRegistry {
         entry.vanishedDuringLaunch.removeAll()
         entry.stateBeforeClosing = nil
         entry.state = .ended(.userClosed)
+        let allocationToRelease = Self.takeDisplayAllocationIfEnded(from: &entry)
         entries[entry.id] = entry
         log("session state \(String(describing: previous)) -> \(String(describing: entry.state))", entry: entry)
+        if let allocationToRelease {
+            await allocationToRelease.pool.release(allocationToRelease.lease)
+        }
         return entry.snapshot
     }
 
@@ -152,7 +225,7 @@ public actor SessionRegistry {
 
     /// Reconciles the task ID returned by `LaunchApplication` with events received while the call was in flight.
     @discardableResult
-    public func launchCompleted(packageID: String, taskID: Int32) -> AppSessionSnapshot? {
+    public func launchCompleted(packageID: String, taskID: Int32) async -> AppSessionSnapshot? {
         guard taskID >= 0,
             var entry = entries.values.first(where: { $0.packageID == packageID && $0.state.isLive }),
             entry.state == .launching,
@@ -167,8 +240,12 @@ public actor SessionRegistry {
         if taskAlreadyVanished, !entry.taskIDs.contains(taskID), entry.taskIDs.isEmpty {
             let previous = entry.state
             entry.state = .ended(.appExited)
+            let allocationToRelease = Self.takeDisplayAllocationIfEnded(from: &entry)
             entries[entry.id] = entry
             log("session state \(String(describing: previous)) -> \(String(describing: entry.state))", entry: entry)
+            if let allocationToRelease {
+                await allocationToRelease.pool.release(allocationToRelease.lease)
+            }
             return entry.snapshot
         }
 
@@ -182,7 +259,7 @@ public actor SessionRegistry {
 
     /// Removes a vanished task from its package session, retaining launch-period IDs for reply reconciliation.
     @discardableResult
-    public func taskVanished(packageID: String, taskID: Int32) -> AppSessionSnapshot? {
+    public func taskVanished(packageID: String, taskID: Int32) async -> AppSessionSnapshot? {
         guard taskID >= 0,
             var entry = entries.values.first(where: { $0.packageID == packageID && $0.state.isLive })
         else {
@@ -219,7 +296,11 @@ public actor SessionRegistry {
                 log("session state \(String(describing: previous)) -> \(String(describing: next))", entry: entry)
             }
         }
+        let allocationToRelease = Self.takeDisplayAllocationIfEnded(from: &entry)
         entries[entry.id] = entry
+        if let allocationToRelease {
+            await allocationToRelease.pool.release(allocationToRelease.lease)
+        }
         return entry.snapshot
     }
 
@@ -237,7 +318,20 @@ public actor SessionRegistry {
     public func snapshot() -> [AppSessionSnapshot] {
         entries.values
             .map(\.snapshot)
-            .sorted { Self.uuid(of: $0.id).uuidString < Self.uuid(of: $1.id).uuidString }
+            .sorted { Self.identifier(of: $0.id) < Self.identifier(of: $1.id) }
+    }
+
+    private static func takeDisplayAllocationIfEnded(
+        from entry: inout Entry
+    ) -> (pool: DisplayPool, lease: DisplayLease)? {
+        guard entry.state.isEnded else {
+            return nil
+        }
+        entry.displayAcquisitionPending = false
+        guard let displayPool = entry.displayPool, let displayLease = entry.displayLease else { return nil }
+        entry.displayPool = nil
+        entry.displayLease = nil
+        return (displayPool, displayLease)
     }
 
     private static func canTransition(from current: AppSessionState, to next: AppSessionState) -> Bool {
@@ -276,9 +370,10 @@ public actor SessionRegistry {
             }
     }
 
-    private static func uuid(of id: SessionID) -> UUID {
+    private static func identifier(of id: SessionID) -> String {
         switch id {
-        case .app(let uuid): uuid
+        case .app(let uuid): uuid.uuidString
+        case .system(let use): "system:\(String(describing: use))"
         }
     }
 
@@ -288,8 +383,8 @@ public actor SessionRegistry {
             sink: logSink,
             context: LogContext(
                 packageID: entry.packageID,
-                displayID: "0",
-                sessionID: Self.uuid(of: entry.id).uuidString
+                displayID: String(entry.displayID),
+                sessionID: Self.identifier(of: entry.id)
             )
         )
         logger.info("\(event, .public) state=\(String(describing: entry.state), .public)")

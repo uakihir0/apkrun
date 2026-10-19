@@ -25,6 +25,8 @@ public struct GuestAgentRestartBudget: Sendable {
 
 /// The state of the Guest Agent that the host keeps from its events (guest-protocol.md §6, §7.2).
 public struct GuestSnapshotState: Equatable, Sendable {
+    /// Android uptime from the latest complete snapshot, when available.
+    public private(set) var androidUptimeMillis: UInt64?
     /// The displays of the guest, by display ID.
     public private(set) var displays: [Int32: GPDisplayInfo] = [:]
     /// The tasks of the guest, by task ID.
@@ -37,6 +39,10 @@ public struct GuestSnapshotState: Equatable, Sendable {
 
     /// Replaces the state with a snapshot. Events that were buffered for the snapshot are applied after this.
     public mutating func replace(with snapshot: GPSnapshot) {
+        androidUptimeMillis =
+            snapshot.hasSystem && snapshot.system.androidUptimeMs > 0
+            ? snapshot.system.androidUptimeMs
+            : nil
         displays = Dictionary(snapshot.displays.map { ($0.displayID, $0) }, uniquingKeysWith: { _, last in last })
         tasks = Dictionary(snapshot.tasks.map { ($0.taskID, $0) }, uniquingKeysWith: { _, last in last })
         focusedDisplayID = snapshot.focusedDisplayID
@@ -62,6 +68,20 @@ public struct GuestSnapshotState: Equatable, Sendable {
         default:
             break
         }
+    }
+}
+
+/// A reboot of Android observed while its VirtualMachine remained alive.
+public struct GuestAndroidRestart: Equatable, Sendable {
+    /// Android uptime from the snapshot before the reboot.
+    public let previousUptimeMillis: UInt64
+    /// Android uptime from the snapshot after the reboot.
+    public let currentUptimeMillis: UInt64
+
+    /// Creates a restart event from two consecutive snapshots.
+    public init(previousUptimeMillis: UInt64, currentUptimeMillis: UInt64) {
+        self.previousUptimeMillis = previousUptimeMillis
+        self.currentUptimeMillis = currentUptimeMillis
     }
 }
 
@@ -108,6 +128,8 @@ public actor GuestAgentSupervisor {
     public private(set) var snapshot = GuestSnapshotState()
     /// The applied events, in order, for the consumers that act on them (for example a launch waiting for its task).
     public nonisolated let updates: AsyncStream<GPEvent>
+    /// Guest Android restarts detected from a decrease in its monotonic uptime.
+    public nonisolated let androidRestartEvents: AsyncStream<GuestAndroidRestart>
 
     private let transport: any GuestTransport
     private let restartAgent: @Sendable (GuestAgentLoss) async -> Bool
@@ -120,6 +142,7 @@ public actor GuestAgentSupervisor {
     private let logger: APKLogger
     private let logSink: (any LogSink)?
     private let updateContinuation: AsyncStream<GPEvent>.Continuation
+    private let androidRestartContinuation: AsyncStream<GuestAndroidRestart>.Continuation
     private var connection: GuestConnection?
     private var consumer: Task<Void, Never>?
     private var maintenance: Task<Void, Never>?
@@ -158,6 +181,12 @@ public actor GuestAgentSupervisor {
         let stream = AsyncStream.makeStream(of: GPEvent.self, bufferingPolicy: .bufferingNewest(1024))
         updates = stream.stream
         updateContinuation = stream.continuation
+        let restartStream = AsyncStream.makeStream(
+            of: GuestAndroidRestart.self,
+            bufferingPolicy: .bufferingNewest(16)
+        )
+        androidRestartEvents = restartStream.stream
+        androidRestartContinuation = restartStream.continuation
     }
 
     /// Connects and resynchronises. A refused version or a refused Hello ends the attempts at once. Other failures
@@ -228,6 +257,7 @@ public actor GuestAgentSupervisor {
         buffered = []
         await closing?.close()
         state = .stopped
+        androidRestartContinuation.finish()
     }
 
     /// Sends one operation through the current connection. Without a connection the call fails with
@@ -298,7 +328,19 @@ public actor GuestAgentSupervisor {
             guard generation == started, connection === next else {
                 throw GuestProtocolFailure.disconnected
             }
+            let previousUptimeMillis = snapshot.androidUptimeMillis
             snapshot.replace(with: fresh)
+            if let previousUptimeMillis,
+                let currentUptimeMillis = snapshot.androidUptimeMillis,
+                currentUptimeMillis < previousUptimeMillis
+            {
+                androidRestartContinuation.yield(
+                    GuestAndroidRestart(
+                        previousUptimeMillis: previousUptimeMillis,
+                        currentUptimeMillis: currentUptimeMillis
+                    )
+                )
+            }
             awaitingSnapshot = false
             for event in buffered {
                 snapshot.apply(event)

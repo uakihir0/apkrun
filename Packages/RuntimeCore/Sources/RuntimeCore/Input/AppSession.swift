@@ -1,10 +1,11 @@
 import Foundation
 
-/// The identifier of a session (display-and-windowing.md §3.1). The design also has `.system` uses of a display,
-/// which come with the display pool (#028). Only app sessions take input, so only `.app` exists here.
+/// The identifier of an app or bounded system display session (display-and-windowing.md §3.1).
 public enum SessionID: Sendable, Hashable {
     /// An app session, whose identifier is the session's UUID (runtime-daemon.md §7).
     case app(UUID)
+    /// A bounded system operation that temporarily needs a display (#028).
+    case system(SystemDisplayUse)
 }
 
 /// The states of an app session (state-machines.md §3). The input path accepts events only while the session is

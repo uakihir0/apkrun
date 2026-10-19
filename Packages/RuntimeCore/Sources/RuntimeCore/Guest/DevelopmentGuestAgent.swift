@@ -53,6 +53,12 @@ public actor DevelopmentGuestAgent {
     public nonisolated let supervisor: GuestAgentSupervisor
     /// Task lifecycle changes from the control connection, narrowed to the RuntimeCore API.
     public nonisolated let taskEvents: AsyncStream<DevelopmentGuestTaskEvent>
+    /// Display lifecycle changes from the same sequenced Guest Agent event relay.
+    public nonisolated let displayEvents: AsyncStream<GuestDisplayEvent>
+    /// Android reboot notifications inferred from consecutive supervisor snapshots.
+    public nonisolated var androidRestartEvents: AsyncStream<GuestAndroidRestart> {
+        supervisor.androidRestartEvents
+    }
 
     private let adb: AdbClient
     private let provisioner: GuestAgentProvisioner
@@ -70,6 +76,7 @@ public actor DevelopmentGuestAgent {
     private var inputConnection: GuestConnection?
     private var inputConnectionToken: Data?
     private let taskEventContinuation: AsyncStream<DevelopmentGuestTaskEvent>.Continuation
+    private let displayEventContinuation: AsyncStream<GuestDisplayEvent>.Continuation
     private var taskEventRelay: Task<Void, Never>?
 
     /// Creates the coordinator for `bundle`, reached through `adb`.
@@ -101,6 +108,12 @@ public actor DevelopmentGuestAgent {
         )
         self.taskEvents = taskEvents
         self.taskEventContinuation = taskEventContinuation
+        let (displayEvents, displayEventContinuation) = AsyncStream.makeStream(
+            of: GuestDisplayEvent.self,
+            bufferingPolicy: .bufferingNewest(1024)
+        )
+        self.displayEvents = displayEvents
+        self.displayEventContinuation = displayEventContinuation
         relay.set { [weak self] loss in
             guard let self else {
                 return false
@@ -169,6 +182,7 @@ public actor DevelopmentGuestAgent {
         taskEventRelay?.cancel()
         taskEventRelay = nil
         taskEventContinuation.finish()
+        displayEventContinuation.finish()
         // The input connection belongs to the control session, so it ends with it.
         await inputConnection?.close()
         inputConnection = nil
@@ -243,6 +257,7 @@ public actor DevelopmentGuestAgent {
         }
         let updates = supervisor.updates
         let continuation = taskEventContinuation
+        let displayContinuation = displayEventContinuation
         taskEventRelay = Task {
             for await event in updates {
                 guard let kind = event.kind else {
@@ -253,6 +268,14 @@ public actor DevelopmentGuestAgent {
                     continuation.yield(.appeared(packageID: task.package, taskID: task.taskID))
                 case .taskVanished(let task):
                     continuation.yield(.vanished(packageID: task.package, taskID: task.taskID))
+                case .displayAdded(let display):
+                    displayContinuation.yield(.added(Self.displaySnapshot(display)))
+                case .displayChanged(let display):
+                    displayContinuation.yield(.changed(Self.displaySnapshot(display)))
+                case .displayRemoved(let display):
+                    displayContinuation.yield(.removed(displayID: display.displayID))
+                case .tasksCleared(let tasks):
+                    displayContinuation.yield(.tasksCleared(displayID: tasks.displayID))
                 default:
                     break
                 }
@@ -444,6 +467,71 @@ public actor DevelopmentGuestAgent {
             }
         } catch {
             throw .adb(error)
+        }
+    }
+
+    private static func displaySnapshot(_ display: GPDisplayInfo) -> GuestDisplaySnapshot {
+        let product =
+            display.hasProduct
+            ? GuestDisplayProductInfo(
+                manufacturerPnpID: display.product.manufacturerPnpID,
+                productID: display.product.productID
+            )
+            : nil
+        return GuestDisplaySnapshot(
+            displayID: display.displayID,
+            uniqueID: display.uniqueID,
+            mode: GuestDisplaySize(width: Int(display.mode.widthPx), height: Int(display.mode.heightPx)),
+            densityDPI: Int(display.densityDpi),
+            product: product
+        )
+    }
+}
+
+extension DevelopmentGuestAgent: DisplayControlChannel {
+    /// Returns the current Android display inventory from the Guest Agent supervisor.
+    public func displaySnapshot() async -> [GuestDisplaySnapshot] {
+        let snapshot = await supervisor.snapshot
+        return snapshot.displays.values.map(Self.displaySnapshot)
+    }
+
+    /// Applies density and input-method placement policy to one Android display.
+    public func setDisplayPolicy(
+        _ displayID: Int32,
+        densityDPI: Int,
+        imePolicy: GuestDisplayIMEPolicy
+    ) async throws(DisplayControlFailure) {
+        guard await supervisor.state == .ready else {
+            throw .unavailable
+        }
+        let guestIMEPolicy: GPImePolicy
+        switch imePolicy {
+        case .local: guestIMEPolicy = .local
+        case .fallbackDisplay: guestIMEPolicy = .fallbackDisplay
+        case .hide: guestIMEPolicy = .hide
+        }
+        do throws(GuestProtocolFailure) {
+            _ = try await supervisor.send(
+                GuestSetDisplayPolicy(
+                    displayID: displayID,
+                    densityDPI: Int32(densityDPI),
+                    imePolicy: guestIMEPolicy
+                )
+            )
+        } catch {
+            throw .operationFailed
+        }
+    }
+
+    /// Finishes the tasks on one display before the host disables its scanout.
+    public func clearDisplay(_ displayID: Int32) async throws(DisplayControlFailure) {
+        guard await supervisor.state == .ready else {
+            throw .unavailable
+        }
+        do throws(GuestProtocolFailure) {
+            _ = try await supervisor.send(GuestClearDisplay(displayID: displayID, policy: .finishTasks))
+        } catch {
+            throw .operationFailed
         }
     }
 }

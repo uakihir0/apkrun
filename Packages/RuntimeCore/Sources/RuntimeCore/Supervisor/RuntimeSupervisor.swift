@@ -104,6 +104,10 @@ public actor RuntimeSupervisor {
     private let bootLogger: APKLogger
     private let environment: [String: String]
     private var controller: VMController?
+    /// The boot's GPU device while the VM can still accept host display operations.
+    private var graphicsDevice: VirtioGPUDevice?
+    /// The lazily created pool-display coordinator for this running boot.
+    private var displayPool: DisplayPool?
     private var tasks: [Task<Void, Never>] = []
     /// The loopback forwarder of developer ADB (`127.0.0.1:<port>` to guest vsock 5555), while Android runs.
     private var forwarder: VsockLoopbackForwarder?
@@ -224,6 +228,8 @@ public actor RuntimeSupervisor {
         await controller.waitForConsoleLogDrain()
         finishTasks()
         await closeDevelopmentChannels()
+        displayPool = nil
+        graphicsDevice = nil
         shell = nil
         transition(to: .stopped)
     }
@@ -240,6 +246,33 @@ public actor RuntimeSupervisor {
         }
     }
 
+    /// Creates or returns the display pool for this running VM.
+    ///
+    /// The pool is available only when this boot has a GraphicsCore device and a connected Guest Agent. It is created
+    /// lazily so boots that use only display 0 do not allocate pool state.
+    public func makeDisplayPool() -> DisplayPool? {
+        guard state == .ready, let graphicsDevice, let developmentGuestAgent else { return nil }
+        if let displayPool { return displayPool }
+        let pool = DisplayPool(
+            scanouts: VirtioGPUScanoutController(device: graphicsDevice),
+            guest: developmentGuestAgent
+        )
+        displayPool = pool
+        let restartEvents = developmentGuestAgent.androidRestartEvents
+        tasks.append(
+            Task {
+                for await restart in restartEvents {
+                    guard !Task.isCancelled else { return }
+                    logger.notice(
+                        "Android restarted while the VM remained active; resetting display quarantine from uptime \(restart.previousUptimeMillis, .public) ms to \(restart.currentUptimeMillis, .public) ms"
+                    )
+                    await pool.guestRestarted()
+                }
+            }
+        )
+        return pool
+    }
+
     private func boot() async throws(RuntimeBootFailure) {
         // The whole-boot limit counts from the start of the boot (runtime-daemon.md §3.2), VM start included.
         let bootStarted = ContinuousClock.now
@@ -249,6 +282,7 @@ public actor RuntimeSupervisor {
             for: options.gpuProfile,
             requiredHostCapabilities: image.manifest.gpuProfiles[options.gpuProfile.rawValue]?.requiredHostCapabilities
         )
+        graphicsDevice = gpuDevices.first
         // The display attaches before the guest starts, so the first scanout flush is presented (graphics.md §6.1).
         if let developmentDisplay, let device = gpuDevices.first {
             do throws(GraphicsFailure) {
@@ -795,6 +829,8 @@ public actor RuntimeSupervisor {
         finishTasks()
         await closeDevelopmentChannels()
         controller = nil
+        displayPool = nil
+        graphicsDevice = nil
         shell = nil
     }
 

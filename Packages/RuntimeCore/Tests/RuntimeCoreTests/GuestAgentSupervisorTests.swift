@@ -21,9 +21,15 @@ private func display(_ id: Int32) -> GPDisplayInfo {
     return info
 }
 
-private func snapshot(displays: [Int32]) -> GPSnapshot {
+private func snapshot(displays: [Int32], uptimeMillis: UInt64? = nil) -> GPSnapshot {
     var snapshot = GPSnapshot()
     snapshot.displays = displays.map(display)
+    if let uptimeMillis {
+        var system = GPSystemState()
+        system.androidUptimeMs = uptimeMillis
+        system.bootCompleted = true
+        snapshot.system = system
+    }
     return snapshot
 }
 
@@ -60,6 +66,20 @@ private final class LossLog: @unchecked Sendable {
     }
 
     var all: [GuestAgentLoss] {
+        lock.withLock { values }
+    }
+}
+
+/// Records Android reboot notifications from a supervisor stream.
+private final class AndroidRestartLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [GuestAndroidRestart] = []
+
+    func record(_ restart: GuestAndroidRestart) {
+        lock.withLock { values.append(restart) }
+    }
+
+    var all: [GuestAndroidRestart] {
         lock.withLock { values }
     }
 }
@@ -178,6 +198,50 @@ func aClosedConnectionIsReconnectedAndResynchronised() async throws {
     let displays = await supervisor.snapshot.displays.keys.sorted()
     #expect(displays == [3])
     await supervisor.stop()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func androidRestartIsDetectedByAnUptimeRollbackButAgentRestartIsNot() async throws {
+    let transport = InMemoryTransport { _, agent, number in
+        agent.sendHello()
+        agent.answer = { request in
+            guard isGetSnapshot(request) else { return pongResult(for: request) }
+            let uptimeMillis: UInt64 =
+                switch number {
+                case 1: 5_000
+                case 2: 6_000
+                default: 1_000
+                }
+            return .getSnapshot(snapshot(displays: [0], uptimeMillis: uptimeMillis))
+        }
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: transport,
+        keepaliveInterval: .seconds(60),
+        restartAgent: { _ in true }
+    )
+    let restartLog = AndroidRestartLog()
+    let restartEvents = supervisor.androidRestartEvents
+    let monitor = Task {
+        for await restart in restartEvents {
+            restartLog.record(restart)
+        }
+    }
+
+    try await supervisor.start(connectTimeout: .seconds(2))
+    transport.agents[0].hangUp()
+    try await eventually { await supervisor.state == .ready && transport.agents.count >= 2 }
+    #expect(restartLog.all.isEmpty)
+
+    transport.agents[1].hangUp()
+    try await eventually { !restartLog.all.isEmpty }
+    #expect(
+        restartLog.all == [
+            GuestAndroidRestart(previousUptimeMillis: 6_000, currentUptimeMillis: 1_000)
+        ]
+    )
+    await supervisor.stop()
+    monitor.cancel()
 }
 
 @Test(.timeLimit(.minutes(1)))

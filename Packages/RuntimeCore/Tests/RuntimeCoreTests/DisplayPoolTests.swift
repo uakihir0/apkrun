@@ -61,6 +61,63 @@ func displayPoolEnforcesTheSoftAppSessionLimit() async throws {
 }
 
 @Test
+func displayPoolLeasesPrimaryCompatibilityDisplayExclusivelyAndRestoresDensity() async throws {
+    let guest = FakeDisplayControlChannel()
+    guest.emit(
+        .changed(
+            GuestDisplaySnapshot(
+                displayID: 0,
+                mode: GuestDisplaySize(width: 960, height: 1700),
+                densityDPI: 420
+            )
+        )
+    )
+    let scanouts = FakeScanoutController(guest: guest)
+    let (frames, _) = AsyncStream<ScanoutFrame>.makeStream()
+    let primaryPool = ScanoutPoolHandle(generation: 1, surfaces: [], frames: frames)
+    let pool = DisplayPool(
+        scanouts: scanouts,
+        guest: guest,
+        primaryPool: primaryPool,
+        limits: DisplayPoolLimits(maxSessions: 1)
+    )
+    let primaryConfiguration = DisplayConfiguration(
+        geometry: DisplayGeometry(pointSize: CGSize(width: 480, height: 850), backingScale: 2),
+        mode: .primaryDisplayCompatibility
+    )
+    let primary = try await pool.acquire(for: .app(UUID()), configuration: primaryConfiguration)
+
+    #expect(primary.scanout.rawValue == 0)
+    #expect(primary.androidDisplayID == 0)
+    #expect(primary.pool.generation == primaryPool.generation)
+    #expect(scanouts.configuredScanouts.isEmpty)
+    #expect(guest.policySnapshot() == [DisplayPolicyCall(displayID: 0, densityDPI: 320, imePolicy: .local)])
+
+    await #expect(throws: DisplayPoolFailure.primaryDisplayBusy) {
+        try await pool.acquire(for: .app(UUID()), configuration: primaryConfiguration)
+    }
+    await #expect(
+        throws: DisplayPoolFailure.exhausted(maxSessions: 1)
+    ) {
+        try await pool.acquire(
+            for: .app(UUID()),
+            configuration: DisplayConfiguration(
+                geometry: DisplayGeometry(pointSize: CGSize(width: 480, height: 850), backingScale: 1)
+            )
+        )
+    }
+
+    #expect(await pool.release(primary) == .released)
+    #expect(
+        guest.policySnapshot()
+            == [
+                DisplayPolicyCall(displayID: 0, densityDPI: 320, imePolicy: .local),
+                DisplayPolicyCall(displayID: 0, densityDPI: 420, imePolicy: .local),
+            ]
+    )
+}
+
+@Test
 func displayPoolSerializesConcurrentAttachesAndKeepsDisplayIDsDistinct() async throws {
     let guest = FakeDisplayControlChannel()
     let scanouts = FakeScanoutController(guest: guest)
@@ -380,7 +437,7 @@ final class FakeDisplayControlChannel: DisplayControlChannel, @unchecked Sendabl
         emit(.tasksCleared(displayID: displayID))
     }
 
-    fileprivate func policySnapshot() -> [DisplayPolicyCall] {
+    func policySnapshot() -> [DisplayPolicyCall] {
         lock.withLock { policies }
     }
 
@@ -399,7 +456,7 @@ final class FakeDisplayControlChannel: DisplayControlChannel, @unchecked Sendabl
     }
 }
 
-private struct DisplayPolicyCall: Equatable, Sendable {
+struct DisplayPolicyCall: Equatable, Sendable {
     let displayID: Int32
     let densityDPI: Int
     let imePolicy: GuestDisplayIMEPolicy

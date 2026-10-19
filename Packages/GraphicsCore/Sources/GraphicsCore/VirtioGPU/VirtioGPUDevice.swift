@@ -362,6 +362,17 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
         return presenter
     }
 
+    /// Returns a frame handle for the currently attached presenter, if one exists.
+    ///
+    /// This lets RuntimeCore represent the already-presented primary display as an exclusive compatibility lease
+    /// without attaching a second presenter or duplicating frame acknowledgement.
+    public func poolHandle(for scanout: ScanoutID) -> ScanoutPoolHandle? {
+        guard let presenter = sessionLock.withLock({ session.presenter(for: scanout) }) else {
+            return nil
+        }
+        return ScanoutPoolHandle(presenter: presenter, device: self)
+    }
+
     /// Detaches one presenter's pool without disabling its scanout.
     ///
     /// Pool release calls this before clearing Android tasks and disabling the connector. A generation check prevents

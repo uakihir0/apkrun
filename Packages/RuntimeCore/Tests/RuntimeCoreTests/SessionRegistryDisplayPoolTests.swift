@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import GraphicsCore
 import Testing
 
 @testable import RuntimeCore
@@ -73,4 +74,60 @@ func leasedSessionReleasesOnLastTaskExit() async throws {
     #expect(ended?.state == .ended(.appExited))
     #expect((await displayPool.snapshot())[0].state == .free)
     #expect(scanouts.disabledScanouts == [1])
+}
+
+@Test
+func primaryCompatibilityLeaseReservesDisplayZeroBeforeTheGuestOperationCompletes() async throws {
+    let guest = FakeDisplayControlChannel()
+    guest.emit(
+        .changed(
+            GuestDisplaySnapshot(
+                displayID: 0,
+                mode: GuestDisplaySize(width: 480, height: 850),
+                densityDPI: 420
+            )
+        )
+    )
+    let scanouts = FakeScanoutController(guest: guest)
+    let (frames, _) = AsyncStream<ScanoutFrame>.makeStream()
+    let displayPool = DisplayPool(
+        scanouts: scanouts,
+        guest: guest,
+        primaryPool: ScanoutPoolHandle(generation: 1, surfaces: [], frames: frames)
+    )
+    let registry = SessionRegistry()
+    let configuration = DisplayConfiguration(
+        geometry: DisplayGeometry(pointSize: CGSize(width: 480, height: 850), backingScale: 1),
+        mode: .primaryDisplayCompatibility
+    )
+    let session = try await registry.requestLeased(
+        packageID: "io.apkrun.fixture.hellotext",
+        configuration: configuration,
+        displayPool: displayPool
+    )
+
+    #expect(session.displayID == 0)
+    #expect(await registry.displayLease(session.id)?.scanout.rawValue == 0)
+    await #expect(throws: SessionRegistryFailure.displayInUse(packageID: session.packageID)) {
+        try await registry.request(packageID: "io.apkrun.fixture.hellocompose")
+    }
+    await #expect(throws: SessionRegistryFailure.displayInUse(packageID: session.packageID)) {
+        try await registry.requestLeased(
+            packageID: "io.apkrun.fixture.hellocompose",
+            configuration: configuration,
+            displayPool: displayPool
+        )
+    }
+
+    _ = try await registry.transition(session.id, to: .ended(.runtimeStopped))
+    #expect(await registry.displayLease(session.id) == nil)
+    #expect(
+        guest.policySnapshot()
+            == [
+                DisplayPolicyCall(displayID: 0, densityDPI: 160, imePolicy: .local),
+                DisplayPolicyCall(displayID: 0, densityDPI: 420, imePolicy: .local),
+            ]
+    )
+    #expect(scanouts.configuredScanouts.isEmpty)
+    #expect(scanouts.disabledScanouts.isEmpty)
 }

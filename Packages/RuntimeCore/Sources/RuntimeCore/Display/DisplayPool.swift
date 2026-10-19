@@ -224,6 +224,10 @@ public enum DisplayPoolFailure: Error, Sendable, Equatable {
     case guest(DisplayControlFailure)
     /// GraphicsCore failed to configure a scanout or create a surface pool.
     case graphics(GraphicsFailure)
+    /// Display 0 is already reserved by another compatibility session.
+    case primaryDisplayBusy
+    /// Display 0 has no presenter that can back a compatibility window.
+    case primaryDisplayUnavailable
 
     /// The stable runtime error code used by diagnostics and API adapters.
     public var code: String {
@@ -233,6 +237,8 @@ public enum DisplayPoolFailure: Error, Sendable, Equatable {
         case .staleLease: "internal"
         case .invalidGeometry: "displayGeometryInvalid"
         case .reconfigureFailed: "displayReconfigureFailed"
+        case .primaryDisplayBusy: "primaryDisplayBusy"
+        case .primaryDisplayUnavailable: "displayAttachFailed"
         case .guest(.unavailable): "guestAgentUnavailable"
         case .guest(.operationFailed): "guestAgentOperationFailed"
         case .graphics(let failure): failure.code
@@ -332,10 +338,13 @@ public actor DisplayPool {
     private let scanouts: any ScanoutController
     private let guest: any DisplayControlChannel
     private let limits: DisplayPoolLimits
+    private let primaryPool: ScanoutPoolHandle?
     private let logger = APKLogger(category: RuntimeLogCategory.sessions)
     private let displayEvents: DisplayEventInbox
     private let eventContinuation: AsyncStream<DisplayPoolEvent>.Continuation
     private var slots: [Slot]
+    private var primaryLease: DisplayLease?
+    private var primaryPreviousDensityDPI: Int?
     private var operationActive = false
     private var operationWaiters: [CheckedContinuation<Void, Never>] = []
 
@@ -346,10 +355,12 @@ public actor DisplayPool {
     public init(
         scanouts: any ScanoutController,
         guest: any DisplayControlChannel,
+        primaryPool: ScanoutPoolHandle? = nil,
         limits: DisplayPoolLimits = DisplayPoolLimits()
     ) {
         self.scanouts = scanouts
         self.guest = guest
+        self.primaryPool = primaryPool
         self.limits = limits
         displayEvents = DisplayEventInbox(guest.displayEvents)
         slots = (1..<16).compactMap { value in
@@ -369,11 +380,13 @@ public actor DisplayPool {
         await acquireOperationPermit()
         defer { releaseOperationPermit() }
 
-        if case .primaryDisplayCompatibility = configuration.mode {
-            throw .exhausted(maxSessions: limits.maxSessions)
-        }
-        guard !slots.contains(where: { $0.leaseID != nil && $0.ownerSession == session }) else {
+        guard !slots.contains(where: { $0.leaseID != nil && $0.ownerSession == session }),
+            primaryLease?.session != session
+        else {
             throw .staleLease
+        }
+        if case .primaryDisplayCompatibility = configuration.mode, primaryLease != nil {
+            throw .primaryDisplayBusy
         }
         if case .app = session,
             activeAppSessionCount >= limits.maxSessions
@@ -385,6 +398,10 @@ public actor DisplayPool {
             resolvedMode = try DisplayGeometryResolver.resolve(configuration.geometry)
         } catch {
             throw .invalidGeometry(error)
+        }
+
+        if case .primaryDisplayCompatibility = configuration.mode {
+            return try await acquirePrimary(for: session, mode: resolvedMode)
         }
 
         let before = await guest.displaySnapshot()
@@ -474,7 +491,8 @@ public actor DisplayPool {
                     fault = .guestAgentUnavailable
                 case .graphics(let failure):
                     fault = .graphics(failure)
-                case .exhausted, .staleLease, .invalidGeometry:
+                case .exhausted, .staleLease, .invalidGeometry, .primaryDisplayBusy,
+                    .primaryDisplayUnavailable:
                     fault = .attachTimedOut
                 case .reconfigureFailed(let stateUncertain):
                     fault = stateUncertain ? .reconfigurationUncertain : .attachTimedOut
@@ -598,6 +616,28 @@ public actor DisplayPool {
     public func release(_ lease: DisplayLease) async -> DisplayReleaseResult {
         await acquireOperationPermit()
         defer { releaseOperationPermit() }
+        if lease.scanout.rawValue == 0 {
+            guard let current = primaryLease, current.leaseID == lease.leaseID,
+                current.session == lease.session
+            else {
+                logger.warning("ignored a stale primary display lease release")
+                return .staleLease
+            }
+            if let previousDensity = primaryPreviousDensityDPI {
+                do throws(DisplayControlFailure) {
+                    try await guest.setDisplayPolicy(0, densityDPI: previousDensity, imePolicy: .local)
+                } catch {
+                    logger.warning("primary display policy could not be restored after compatibility mode")
+                    return .quarantined(androidDisplayID: 0)
+                }
+            }
+            primaryLease = nil
+            primaryPreviousDensityDPI = nil
+            logger.info(
+                "released primary compatibility display lease=\(lease.leaseID.uuidString, .public) session=\(String(describing: lease.session), .public)"
+            )
+            return .released
+        }
         guard let slotIndex = slotIndex(for: lease, allowingUncertainReconfiguration: true),
             let displayID = slots[slotIndex].androidDisplayID
         else {
@@ -662,6 +702,8 @@ public actor DisplayPool {
     public func guestRestarted() async {
         await acquireOperationPermit()
         defer { releaseOperationPermit() }
+        primaryLease = nil
+        primaryPreviousDensityDPI = nil
         for index in slots.indices {
             guard case .faulted = slots[index].state else { continue }
             slots[index].faultsThisBoot = 0
@@ -677,11 +719,60 @@ public actor DisplayPool {
     }
 
     private var activeAppSessionCount: Int {
-        slots.reduce(into: 0) { count, slot in
+        let secondaryCount = slots.reduce(into: 0) { count, slot in
             if slot.leaseID != nil, case .app? = slot.ownerSession {
                 count += 1
             }
         }
+        let primaryCount: Int
+        if let primaryLease, case .app = primaryLease.session {
+            primaryCount = 1
+        } else {
+            primaryCount = 0
+        }
+        return secondaryCount + primaryCount
+    }
+
+    private func acquirePrimary(
+        for session: SessionID,
+        mode: ResolvedDisplayMode
+    ) async throws(DisplayPoolFailure) -> DisplayLease {
+        guard case .app = session else {
+            throw .primaryDisplayUnavailable
+        }
+        guard primaryLease == nil else {
+            throw .primaryDisplayBusy
+        }
+        guard let primaryPool,
+            let scanout = ScanoutID(rawValue: 0)
+        else {
+            throw .primaryDisplayUnavailable
+        }
+        guard let display = await guest.displaySnapshot().first(where: { $0.displayID == 0 }) else {
+            throw .primaryDisplayUnavailable
+        }
+        guard display.mode.width == mode.pixelSize.width, display.mode.height == mode.pixelSize.height else {
+            throw .primaryDisplayUnavailable
+        }
+        do throws(DisplayControlFailure) {
+            try await guest.setDisplayPolicy(0, densityDPI: mode.densityDpi, imePolicy: .local)
+        } catch {
+            throw .guest(error)
+        }
+        let lease = DisplayLease(
+            leaseID: UUID(),
+            session: session,
+            scanout: scanout,
+            androidDisplayID: 0,
+            mode: mode,
+            pool: primaryPool
+        )
+        primaryPreviousDensityDPI = display.densityDPI
+        primaryLease = lease
+        logger.info(
+            "leased primary compatibility display session=\(String(describing: session), .public) density=\(mode.densityDpi, .public) dpi"
+        )
+        return lease
     }
 
     private func slotIndex(for lease: DisplayLease) -> Int? {

@@ -7,7 +7,7 @@ public struct AppSessionSnapshot: Sendable, Equatable {
     public let id: SessionID
     /// The Android package owned by this session.
     public let packageID: String
-    /// The Android display used by this session. Legacy #026 requests use display 0.
+    /// The Android display used by this session.
     public let displayID: Int32
     /// Current lifecycle state.
     public let state: AppSessionState
@@ -35,13 +35,15 @@ public enum SessionRegistryFailure: Error, Sendable, Equatable {
 /// Owns app-session lifecycle and package/task mapping for embedded and leased-display sessions.
 ///
 /// The legacy `request(packageID:)` API remains limited to one primary display. The explicit
-/// `requestLeased(packageID:configuration:displayPool:)` API acquires a secondary display for #028. The same package
-/// request reuses its live session so repeated launch requests do not create duplicate windows or Android tasks.
+/// `requestLeased(packageID:configuration:displayPool:)` API acquires either a secondary display or the exclusive
+/// primary compatibility lease. The same package request reuses its live session so repeated launch requests do not
+/// create duplicate windows or Android tasks.
 public actor SessionRegistry {
     private struct Entry {
         let id: SessionID
         let packageID: String
         var displayID: Int32
+        var displayMode: AndroidWindowMode?
         var state: AppSessionState
         var taskIDs: Set<Int32>
         var displayLease: DisplayLease?
@@ -76,18 +78,25 @@ public actor SessionRegistry {
             return existing.snapshot
         }
         if let occupied = entries.values.first(where: {
-            $0.displayID == 0 && $0.displayLease == nil && !$0.displayAcquisitionPending && $0.state.isLive
+            $0.displayID == 0 && $0.displayMode == .primaryDisplayCompatibility && $0.state.isLive
         }) {
             throw .displayInUse(packageID: occupied.packageID)
         }
         let id = SessionID.app(UUID())
-        let entry = Entry(id: id, packageID: packageID, displayID: 0, state: .requested, taskIDs: [])
+        let entry = Entry(
+            id: id,
+            packageID: packageID,
+            displayID: 0,
+            displayMode: .primaryDisplayCompatibility,
+            state: .requested,
+            taskIDs: []
+        )
         entries[id] = entry
         log("session requested", entry: entry)
         return entry.snapshot
     }
 
-    /// Requests a session backed by a DisplayPool lease on one of scanouts 1...15.
+    /// Requests a session backed by a DisplayPool lease.
     ///
     /// The lease is released automatically when the session enters any terminal state. Repeated requests for a
     /// package that already owns a leased display reuse that session.
@@ -100,10 +109,18 @@ public actor SessionRegistry {
             throw .invalidPackageIdentifier
         }
         if let existing = entries.values.first(where: { $0.packageID == packageID && !$0.state.isEnded }) {
-            guard existing.displayLease != nil else {
+            guard existing.displayLease != nil, existing.displayMode == configuration.mode else {
                 throw .sessionAlreadyExists(packageID: packageID)
             }
             return existing.snapshot
+        }
+        if case .primaryDisplayCompatibility = configuration.mode,
+            let occupied = entries.values.first(where: {
+                $0.packageID != packageID && $0.displayID == 0
+                    && $0.displayMode == .primaryDisplayCompatibility && $0.state.isLive
+            })
+        {
+            throw .displayInUse(packageID: occupied.packageID)
         }
 
         let id = SessionID.app(UUID())
@@ -111,6 +128,7 @@ public actor SessionRegistry {
             id: id,
             packageID: packageID,
             displayID: 0,
+            displayMode: configuration.mode,
             state: .acquiringDisplay,
             taskIDs: [],
             displayAcquisitionPending: true
@@ -307,6 +325,11 @@ public actor SessionRegistry {
     /// Returns a session by ID, including its terminal snapshot.
     public func session(_ id: SessionID) -> AppSessionSnapshot? {
         entries[id]?.snapshot
+    }
+
+    /// Returns the current display lease for one session, if it owns one.
+    public func displayLease(_ id: SessionID) -> DisplayLease? {
+        entries[id]?.displayLease
     }
 
     /// Returns the live session for a package, if any.

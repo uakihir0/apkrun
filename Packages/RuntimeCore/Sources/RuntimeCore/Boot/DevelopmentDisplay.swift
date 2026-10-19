@@ -79,9 +79,19 @@ public final class DevelopmentDisplay: @unchecked Sendable {
     /// The latest presenter and the geometry it represents.
     public var currentSurfaceSet: DevelopmentSurfaceSet? {
         lock.withLock {
-            guard let presenter else { return nil }
-            return surfaceSets[presenter.generation]
+            guard let generation = presenter?.generation ?? poolHandle?.generation else { return nil }
+            return surfaceSets[generation]
         }
+    }
+    /// A frame handle for the currently attached primary presenter, when one exists.
+    public var currentPoolHandle: ScanoutPoolHandle? {
+        let device = lock.withLock { self.device }
+        guard let device, let scanout = ScanoutID(rawValue: 0) else { return nil }
+        return device.poolHandle(for: scanout)
+    }
+    /// Whether this window is backed by a directly attached presenter with the display-0 resize path.
+    public var supportsWindowResize: Bool {
+        lock.withLock { device != nil }
     }
     /// The width of the scanout in pixels. It is the mode that the scanout offers.
     public var pixelWidth: Int { mode.pixelSize.width }
@@ -96,6 +106,7 @@ public final class DevelopmentDisplay: @unchecked Sendable {
     private var modeValue: ResolvedDisplayMode
     private var presenter: ScanoutPresenter?
     private var device: VirtioGPUDevice?
+    private var poolHandle: ScanoutPoolHandle?
     private var surfaceSets: [UInt64: DevelopmentSurfaceSet] = [:]
     private var densityUpdater: (@Sendable (ResolvedDisplayMode) async -> Bool)?
 
@@ -147,10 +158,46 @@ public final class DevelopmentDisplay: @unchecked Sendable {
         lock.withLock {
             self.presenter = presenter
             self.device = device
+            poolHandle = nil
             surfaceSets[presenter.generation] = surfaceSet
         }
         continuation.yield(.attached(surfaceSet: surfaceSet))
         relayFrames(from: presenter)
+    }
+
+    /// Attaches a lease's existing scanout pool to the development window.
+    ///
+    /// The pool remains owned by DisplayPool. This display only relays its frames and acknowledges them after the
+    /// native window commits the corresponding IOSurface.
+    public func attach(lease: DisplayLease) throws(GraphicsFailure) {
+        guard !lease.pool.surfaces.isEmpty else {
+            throw .configUpdateFailed(detail: "The leased display has no IOSurface buffers.")
+        }
+        guard
+            lease.pool.surfaces.allSatisfy({
+                IOSurfaceGetWidth($0) == lease.mode.pixelSize.width
+                    && IOSurfaceGetHeight($0) == lease.mode.pixelSize.height
+            })
+        else {
+            throw .configUpdateFailed(detail: "The leased IOSurface dimensions do not match its display mode.")
+        }
+        let surfaceSet = DevelopmentSurfaceSet(
+            generation: lease.pool.generation,
+            surfaces: lease.pool.surfaces,
+            mode: lease.mode
+        )
+        let installed = lock.withLock { () -> Bool in
+            guard presenter == nil, poolHandle == nil else { return false }
+            modeValue = lease.mode
+            poolHandle = lease.pool
+            surfaceSets[lease.pool.generation] = surfaceSet
+            return true
+        }
+        guard installed else {
+            throw .configUpdateFailed(detail: "A display pool is already attached to this window.")
+        }
+        continuation.yield(.attached(surfaceSet: surfaceSet))
+        relayFrames(from: lease.pool)
     }
 
     /// Installs the Guest Agent path used to wait for Android's mode change and apply its density.
@@ -267,10 +314,17 @@ public final class DevelopmentDisplay: @unchecked Sendable {
 
     /// The window displayed a frame, so its presenter may reuse the buffer.
     public func frameDisplayed(generation: UInt64, sequence: UInt64) {
-        let (device, scanout) = lock.withLock { (self.device, ScanoutID(rawValue: 0)) }
-        guard let device, let scanout else {
+        let (device, scanout, poolHandle) = lock.withLock {
+            (self.device, ScanoutID(rawValue: 0), self.poolHandle)
+        }
+        if let poolHandle, poolHandle.generation == generation {
+            poolHandle.frameDisplayed(sequence: sequence)
+            lock.withLock {
+                surfaceSets = surfaceSets.filter { $0.key >= generation }
+            }
             return
         }
+        guard let device, let scanout else { return }
         device.frameDisplayed(scanout: scanout, generation: generation, sequence: sequence)
         if let activeGeneration = lock.withLock({ presenter?.generation }), activeGeneration == generation {
             lock.withLock {
@@ -330,6 +384,19 @@ public final class DevelopmentDisplay: @unchecked Sendable {
         let continuation = continuation
         Task {
             for await frame in presenter.frames {
+                if case .frameReady(let generation, let bufferIndex, let sequence) = frame {
+                    continuation.yield(
+                        .frameReady(generation: generation, bufferIndex: bufferIndex, sequence: sequence)
+                    )
+                }
+            }
+        }
+    }
+
+    private func relayFrames(from pool: ScanoutPoolHandle) {
+        let continuation = continuation
+        Task {
+            for await frame in pool.frames {
                 if case .frameReady(let generation, let bufferIndex, let sequence) = frame {
                     continuation.yield(
                         .frameReady(generation: generation, bufferIndex: bufferIndex, sequence: sequence)

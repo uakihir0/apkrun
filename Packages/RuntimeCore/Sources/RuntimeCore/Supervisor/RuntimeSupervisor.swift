@@ -255,7 +255,8 @@ public actor RuntimeSupervisor {
         if let displayPool { return displayPool }
         let pool = DisplayPool(
             scanouts: VirtioGPUScanoutController(device: graphicsDevice),
-            guest: developmentGuestAgent
+            guest: developmentGuestAgent,
+            primaryPool: developmentDisplay?.currentPoolHandle
         )
         displayPool = pool
         let restartEvents = developmentGuestAgent.androidRestartEvents

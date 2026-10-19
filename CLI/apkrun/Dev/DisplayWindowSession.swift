@@ -108,6 +108,40 @@
             inputSink = EmbeddedInputSink(route: route)
         }
 
+        /// Creates another independently presented development window with matching initial geometry.
+        func makeAdditionalWindow() -> DisplayWindowSession {
+            let mode = display.mode
+            let scale = display.backingScale
+            let pointSize = CGSize(
+                width: Double(mode.pixelSize.width) / max(mode.renderScale, 0.01),
+                height: Double(mode.pixelSize.height) / max(mode.renderScale, 0.01)
+            )
+            let session = DisplayWindowSession(
+                showStatistics: showStatistics,
+                stopsAppOnClose: true,
+                backingScale: scale,
+                pointSize: pointSize
+            )
+            Task { @MainActor in
+                session.startPump()
+            }
+            return session
+        }
+
+        /// Schedules a newly created native window's pump on the AppKit main actor.
+        func startPumpWhenReady() {
+            Task { @MainActor in
+                startPump()
+            }
+        }
+
+        /// Closes this window after its Android app task exits, without treating that as a user close.
+        func closeForAppExit() {
+            Task { @MainActor in
+                pump?.closeForAppExit()
+            }
+        }
+
         /// Runs `command` on a detached task, and the window's event loop on this thread, until the command ends.
         ///
         /// Call it on the main thread, from a context that is not an actor job: nothing is awaited before the loop starts.
@@ -154,14 +188,25 @@
             guard earlyFailureWindow == nil else {
                 return
             }
-            let pump = DisplayPump(display: display, showStatistics: showStatistics, inputSink: inputSink) {
-                [stops, appCloseRequests, stopsAppOnClose] in
-                if stopsAppOnClose {
-                    appCloseRequests.continuation.yield(())
-                } else {
-                    stops.continuation.yield(())
+            let pump = DisplayPump(
+                display: display,
+                showStatistics: showStatistics,
+                inputSink: inputSink,
+                onFocusChanged: { [inputSink] focused in
+                    inputSink.focusChanged(focused)
+                },
+                onWindowClosed: { [weak self, stops, appCloseRequests] in
+                    guard let self else {
+                        stops.continuation.yield(())
+                        return
+                    }
+                    if self.stopsAppOnClose {
+                        appCloseRequests.continuation.yield(())
+                    } else {
+                        stops.continuation.yield(())
+                    }
                 }
-            }
+            )
             pump.start()
             self.pump = pump
             let updates = windowUpdates

@@ -75,7 +75,8 @@
                     switch event {
                     case .state(let state):
                         Output.writeLogLine("state: \(state)", toStandardError: true)
-                    case .console, .windowStatus, .windowTitle:
+                    case .console, .windowStatus, .windowTitle,
+                        .appWindowStatus, .appWindowTitle, .appWindowExited:
                         break
                     case .message(let text):
                         Output.writeLogLine(text, toStandardError: true)

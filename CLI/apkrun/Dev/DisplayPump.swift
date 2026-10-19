@@ -14,6 +14,7 @@
         private let display: DeveloperDisplay
         private let showStatistics: Bool
         private let inputSink: PointerInputSink
+        private let onFocusChanged: @Sendable (Bool) -> Void
         private let onWindowClosed: @MainActor () -> Void
         private var windowTitle = "APKRun display 0"
         private var placeholderStatus = "Starting Android…"
@@ -33,11 +34,13 @@
             display: DeveloperDisplay,
             showStatistics: Bool,
             inputSink: PointerInputSink,
+            onFocusChanged: @escaping @Sendable (Bool) -> Void = { _ in },
             onWindowClosed: @escaping @MainActor () -> Void
         ) {
             self.display = display
             self.showStatistics = showStatistics
             self.inputSink = inputSink
+            self.onFocusChanged = onFocusChanged
             self.onWindowClosed = onWindowClosed
         }
 
@@ -72,6 +75,13 @@
             window?.close()
             failureWindow?.close()
             failureWindow = nil
+        }
+
+        /// Closes the native window after Android reports that its app task has exited.
+        func closeForAppExit() {
+            window?.onClose = nil
+            failureWindow?.onClose = nil
+            stop()
         }
 
         func setWindowTitle(_ title: String) {
@@ -115,19 +125,21 @@
                     title: windowTitle,
                     backingScale: display.backingScale,
                     inputSink: inputSink,
-                    allowsResize: display.supportsWindowResize
-                ) { [weak self] pointSize, backingScale, zoom, completion in
-                    guard let self else {
-                        completion(.rejected)
-                        return
+                    allowsResize: display.supportsWindowResize,
+                    onFocusChanged: { [onFocusChanged] focused in onFocusChanged(focused) },
+                    onGeometryChanged: { [weak self] pointSize, backingScale, zoom, completion in
+                        guard let self else {
+                            completion(.rejected)
+                            return
+                        }
+                        requestResize(
+                            pointSize: pointSize,
+                            backingScale: backingScale,
+                            zoom: zoom,
+                            completion: completion
+                        )
                     }
-                    requestResize(
-                        pointSize: pointSize,
-                        backingScale: backingScale,
-                        zoom: zoom,
-                        completion: completion
-                    )
-                }
+                )
                 window.onClose = onWindowClosed
                 window.setPlaceholderStatus(placeholderStatus)
                 window.show()

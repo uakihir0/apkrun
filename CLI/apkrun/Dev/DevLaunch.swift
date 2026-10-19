@@ -5,35 +5,48 @@
     import RuntimeAPI
     import RuntimeHost
 
-    /// `apkrun dev launch <apk|package>`: boots Android, starts the Guest Agent, and launches on the selected display
-    /// through `LaunchApplication`, and prints the result (cli.md §5, #072). With the development window (the default,
-    /// decision D13) the boot goes on until the window closes or Ctrl-C, and the window sends its pointer events to the
-    /// app. With `--no-window` Android stops once the launch is done, as #072 did.
+    /// `apkrun dev launch <apk|package> [apk|package]`: boots Android, starts the Guest Agent, and launches one app on
+    /// the selected display or two apps in primary and secondary windows (#030). With the development window (the
+    /// default, decision D13) the boot goes on until the app windows close or Ctrl-C. With `--no-window` Android stops
+    /// once the one-package launch is done, as #072 did.
     struct DevLaunchCommand: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "launch",
-            abstract: "Boot Android, launch a package on the selected display, and show it in a development window."
+            abstract: "Boot Android, launch one or two packages, and show them in development windows."
         )
 
         @Argument(
-            help: "A readable APK file or Android package ID, for example HelloText.apk or io.apkrun.fixture.hellotext."
+            help: "A readable APK file or Android package ID. Pass two to open one app in each display window."
         )
-        var package: String
+        var packages: [String] = []
 
         @Option(
             name: .long,
             help: "The Guest Agent bundle directory (default: APKRUN_GUEST_DIR, then the app's Resources/guest).")
         var guestDir: String?
 
-        @Option(name: .long, help: "The Android display to use: 0 for compatibility, or secondary for a pooled window.")
+        @Option(
+            name: .long,
+            help:
+                "The display for one package: 0 for compatibility or secondary for a pooled window. Two packages use primary then secondary."
+        )
         var display = "0"
 
-        @Flag(name: .long, help: "Launch without the window, and stop Android when the launch is done.")
+        @Flag(name: .long, help: "Launch one package without a window, and stop Android when the launch is done.")
         var noWindow = false
 
         mutating func run() async throws {
+            guard (1...2).contains(packages.count) else {
+                throw CLIFailure.invalidArgument(argument: "package", reason: "count")
+            }
             guard display == "0" || display == "secondary" else {
                 throw CLIFailure.invalidArgument(argument: "--display", reason: "name")
+            }
+            guard packages.count == 1 || display == "0" else {
+                throw CLIFailure.invalidArgument(argument: "--display", reason: "multipleApps")
+            }
+            guard packages.count == 1 || !noWindow else {
+                throw CLIFailure.invalidArgument(argument: "--no-window", reason: "multipleApps")
             }
             guard !noWindow || display == "0" else {
                 throw CLIFailure.invalidArgument(argument: "--display", reason: "entry")
@@ -43,10 +56,48 @@
             guard noWindow || session != nil else {
                 throw CLIFailure.invalidArgument(argument: "--no-window", reason: "entry")
             }
-            let displayName = Self.displayName(for: package)
+            let displayName = Self.displayName(for: packages[0])
             session?.publishWindowTitle(displayName)
+            var additionalWindows: [DisplayWindowSession] = []
             do {
-                let (launchPackage, launchAPKURL) = try await resolveTarget(package)
+                var targets: [ResolvedTarget] = []
+                for package in packages {
+                    let (resolvedPackage, apkURL) = try await resolveTarget(package)
+                    targets.append(ResolvedTarget(packageID: resolvedPackage, apkURL: apkURL))
+                }
+                guard Set(targets.map(\.packageID)).count == targets.count else {
+                    throw CLIFailure.invalidArgument(argument: "package", reason: "duplicate")
+                }
+
+                var appLaunches: [DevBootAppLaunch] = []
+                var packageWindows: [String: DisplayWindowSession] = [:]
+                if let session {
+                    packageWindows[targets[0].packageID] = session
+                }
+                if targets.count == 2, let session {
+                    let secondarySession = session.makeAdditionalWindow()
+                    additionalWindows.append(secondarySession)
+                    secondarySession.publishWindowTitle(Self.displayName(for: packages[1]))
+                    packageWindows[targets[1].packageID] = secondarySession
+                    appLaunches = [
+                        DevBootAppLaunch(
+                            packageID: targets[0].packageID,
+                            apkURL: targets[0].apkURL,
+                            display: session.display,
+                            displayMode: .primaryDisplayCompatibility,
+                            inputRoute: session.inputRoute,
+                            closeRequests: session.appCloseRequests.stream
+                        ),
+                        DevBootAppLaunch(
+                            packageID: targets[1].packageID,
+                            apkURL: targets[1].apkURL,
+                            display: secondarySession.display,
+                            displayMode: .secondaryDisplay,
+                            inputRoute: secondarySession.inputRoute,
+                            closeRequests: secondarySession.appCloseRequests.stream
+                        ),
+                    ]
+                }
                 // The window is the default (decision D13). It needs the drmVirgl device, which the session attaches.
                 var options = DevBootOptions(
                     gpu: session == nil ? .none : .virgl,
@@ -56,12 +107,13 @@
                         environment: ProcessInfo.processInfo.environment,
                         executable: Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
                     ),
-                    launchPackage: launchPackage,
-                    launchAPKURL: launchAPKURL
+                    launchPackage: appLaunches.isEmpty ? targets[0].packageID : nil,
+                    launchAPKURL: appLaunches.isEmpty ? targets[0].apkURL : nil,
+                    appLaunches: appLaunches
                 )
                 if let session {
                     options.developerDisplay = usesSecondaryDisplay ? nil : session.display
-                    options.inputRoute = session.inputRoute
+                    options.inputRoute = appLaunches.isEmpty ? session.inputRoute : nil
                     options.windowDisplay = session.display
                     options.windowDisplayMode =
                         usesSecondaryDisplay ? .secondaryDisplay : .primaryDisplayCompatibility
@@ -91,6 +143,7 @@
                 }
                 // The session holds stop requests because its window close also sends one.
                 let stops = session?.stops ?? AsyncStream.makeStream(of: Void.self)
+                let eventWindows = packageWindows
                 signal(SIGINT, SIG_IGN)
                 signal(SIGTERM, SIG_IGN)
                 let sources = [SIGINT, SIGTERM].map { number in
@@ -107,7 +160,7 @@
                 try await DevBoot().run(
                     options: options,
                     stopRequests: stops.stream,
-                    appCloseRequests: session?.appCloseRequests.stream,
+                    appCloseRequests: appLaunches.isEmpty ? session?.appCloseRequests.stream : nil,
                     preserveWindowOnError: session != nil,
                     onRuntimeReady: onRuntimeReady
                 ) { event in
@@ -118,6 +171,12 @@
                         session?.publishPlaceholderStatus(status)
                     case .windowTitle(let title):
                         session?.publishWindowTitle(title)
+                    case .appWindowStatus(let packageID, let status):
+                        eventWindows[packageID]?.publishPlaceholderStatus(status)
+                    case .appWindowTitle(let packageID, let title):
+                        eventWindows[packageID]?.publishWindowTitle(title)
+                    case .appWindowExited(let packageID):
+                        eventWindows[packageID]?.closeForAppExit()
                     case .console:
                         break
                     case .message(let text):
@@ -129,6 +188,9 @@
                     }
                 }
             } catch {
+                for window in additionalWindows {
+                    window.closeForAppExit()
+                }
                 if let session {
                     let failure = Self.windowFailure(for: error)
                     if await session.showFailure(
@@ -141,6 +203,11 @@
                 }
                 throw error
             }
+        }
+
+        private struct ResolvedTarget {
+            let packageID: String
+            let apkURL: URL?
         }
 
         private static func windowFailure(for error: any Error) -> (message: String, remediation: String) {

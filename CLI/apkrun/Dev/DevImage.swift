@@ -30,7 +30,8 @@
                     Output.writeLogLine("warning: \(text)", toStandardError: true)
                 case .catalogWarning(let error):
                     ErrorOutput.write(error, json: false)
-                case .state, .console, .windowStatus, .windowTitle:
+                case .state, .console, .windowStatus, .windowTitle,
+                    .appWindowStatus, .appWindowTitle, .appWindowExited:
                     break
                 }
             }

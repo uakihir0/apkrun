@@ -12,25 +12,39 @@
     /// wire types of runtime-api.md §7.2 here, and RuntimeHost converts them back before `InputRouter`. The conversion
     /// tables of the two sides are the same, and `EmbeddedInputSinkTests` and `DevInputRouteTests` check both.
     final class EmbeddedInputSink: PointerInputSink {
-        private let queue: AsyncStream<[InputCore.InputEvent]>.Continuation
+        private enum Event: Sendable {
+            case input([InputCore.InputEvent])
+            case focusChanged(Bool, generation: UInt64)
+        }
+
+        private let queue: AsyncStream<Event>.Continuation
+        private let focusGeneration = InputFocusGeneration.shared
 
         /// Creates a sink that sends to `route`. The task that sends runs for the life of the process.
         init(route: DevInputRoute) {
             // Unbounded: a dropped press or release would leave a gesture open on the guest.
-            let (stream, continuation) = AsyncStream.makeStream(
-                of: [InputCore.InputEvent].self, bufferingPolicy: .unbounded)
+            let (stream, continuation) = AsyncStream.makeStream(of: Event.self, bufferingPolicy: .unbounded)
             queue = continuation
             Task {
-                for await events in stream {
-                    for batch in EmbeddedInputSink.batches(events) {
-                        await route.send(batch)
+                for await event in stream {
+                    switch event {
+                    case .input(let events):
+                        for batch in EmbeddedInputSink.batches(events) {
+                            await route.send(batch)
+                        }
+                    case .focusChanged(let focused, let generation):
+                        await route.focusChanged(focused, generation: generation)
                     }
                 }
             }
         }
 
         func deliver(_ events: [InputCore.InputEvent]) {
-            queue.yield(events)
+            queue.yield(.input(events))
+        }
+
+        func focusChanged(_ focused: Bool) {
+            queue.yield(.focusChanged(focused, generation: focusGeneration.next()))
         }
 
         /// The wire batches of `events`, in order. A list longer than the route accepts in one batch is cut into
@@ -123,6 +137,21 @@
 
         static func wirePoint(_ point: InputCore.DisplayPoint) -> RuntimeAPI.DisplayPoint {
             RuntimeAPI.DisplayPoint(x: point.x, y: point.y)
+        }
+    }
+
+    /// Assigns one process-wide order to native focus notifications from all app windows.
+    private final class InputFocusGeneration: @unchecked Sendable {
+        static let shared = InputFocusGeneration()
+
+        private let lock = NSLock()
+        private var value: UInt64 = 0
+
+        func next() -> UInt64 {
+            lock.withLock {
+                value &+= 1
+                return value
+            }
         }
     }
 #endif

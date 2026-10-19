@@ -1,6 +1,7 @@
 import DiagnosticsCore
 import DiagnosticsCoreTestSupport
 import Foundation
+import RuntimeClient
 import Testing
 
 @testable import apkrun
@@ -8,8 +9,41 @@ import Testing
 #if APKRUN_EMBEDDED_RUNTIME
     import Darwin
     import RuntimeAPI
-    import RuntimeClient
 #endif
+
+@Test func launchAndStopCommandsParsePackageArguments() async throws {
+    let launch = try await APKRunCommand.asyncParseAsRoot([
+        "launch", "io.apkrun.fixture.hellotext", "--json",
+    ])
+    #expect((launch as? LaunchCommand)?.package == "io.apkrun.fixture.hellotext")
+    #expect((launch as? LaunchCommand)?.json == true)
+
+    let stop = try await APKRunCommand.asyncParseAsRoot(["stop", "io.apkrun.fixture.hellotext"])
+    #expect((stop as? StopCommand)?.package == "io.apkrun.fixture.hellotext")
+}
+
+@Test func runtimeStatusExplainsMissingAndUnapprovedDaemonRegistration() {
+    let transportFailure = RuntimeControlClientError.transportFailure(
+        domain: "NSCocoaErrorDomain",
+        code: 4099
+    )
+    let missing = RuntimeStatusOutput.failure(
+        transportFailure,
+        runtimeRegistration: .notRegistered
+    )
+    #expect(missing.code == "runtime.serviceUnavailable")
+    #expect(missing.message == "APKRun's background service is not set up.")
+    #expect(missing.remediation == "Open APKRun once, or run: apkrun setup")
+    #expect(ExitCodes.code(for: missing) == ExitCodes.unavailable)
+
+    let approval = RuntimeStatusOutput.failure(
+        transportFailure,
+        runtimeRegistration: .requiresApproval
+    )
+    #expect(approval.message == "APKRun's background service needs approval.")
+    #expect(approval.remediation == "Allow APKRun in System Settings under Login Items.")
+    #expect(ExitCodes.code(for: approval) == ExitCodes.unavailable)
+}
 
 private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent("Golden")
 

@@ -36,7 +36,7 @@ struct RuntimeStatusCommand: AsyncParsableCommand {
                 Output.write(RuntimeStatusOutput.human(status))
             }
         } catch {
-            throw RuntimeStatusOutput.failure(error)
+            throw await RuntimeStatusOutput.commandFailure(error)
         }
     }
 }
@@ -53,7 +53,7 @@ struct RuntimeStartCommand: AsyncParsableCommand {
             let status = try await client.startRuntime()
             Output.write("Android is \(status.runtimeState).")
         } catch {
-            throw RuntimeStatusOutput.failure(error)
+            throw await RuntimeStatusOutput.commandFailure(error)
         }
     }
 }
@@ -70,12 +70,24 @@ struct RuntimeStopCommand: AsyncParsableCommand {
             let status = try await client.stopRuntime()
             Output.write("Android is \(status.runtimeState).")
         } catch {
-            throw RuntimeStatusOutput.failure(error)
+            throw await RuntimeStatusOutput.commandFailure(error)
         }
     }
 }
 
 enum RuntimeStatusOutput {
+    static func commandFailure(_ error: any Error) async -> RuntimeWireError {
+        guard let clientError = error as? RuntimeControlClientError,
+            case .transportFailure = clientError
+        else {
+            return failure(error)
+        }
+        let registration = await SystemHostProbe().runtimeRegistration(
+            label: BuildInfo.current.launchAgentLabel
+        )
+        return failure(error, runtimeRegistration: registration)
+    }
+
     static func json(_ status: RuntimeHostStatus) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -104,7 +116,10 @@ enum RuntimeStatusOutput {
         return lines.joined(separator: "\n")
     }
 
-    static func failure(_ error: any Error) -> RuntimeWireError {
+    static func failure(
+        _ error: any Error,
+        runtimeRegistration: HostRuntimeRegistration? = nil
+    ) -> RuntimeWireError {
         guard let error = error as? RuntimeControlClientError else {
             return .runtime("internal", message: "APKRun couldn't control the Android runtime.")
         }
@@ -116,6 +131,22 @@ enum RuntimeStatusOutput {
                 fallbackRemediation: "Report the problem."
             )
         case .transportFailure:
+            if case .notRegistered? = runtimeRegistration {
+                return RuntimeWireError(
+                    domain: "runtime",
+                    code: "runtime.serviceUnavailable",
+                    message: "APKRun's background service is not set up.",
+                    remediation: "Open APKRun once, or run: apkrun setup"
+                )
+            }
+            if case .requiresApproval? = runtimeRegistration {
+                return RuntimeWireError(
+                    domain: "runtime",
+                    code: "runtime.serviceUnavailable",
+                    message: "APKRun's background service needs approval.",
+                    remediation: "Allow APKRun in System Settings under Login Items."
+                )
+            }
             return fromCatalog(
                 "runtime.serviceUnavailable",
                 fallbackMessage: "APKRun's background service isn't running.",
@@ -129,6 +160,12 @@ enum RuntimeStatusOutput {
             )
         case .remoteFailure(let code, let message):
             return fromCatalog(code, fallbackMessage: message)
+        case .endpointRejected(.busy):
+            return fromCatalog(
+                "runtime.busy",
+                fallbackMessage: "Android is busy with another task.",
+                fallbackRemediation: "Try again when the other requests have finished."
+            )
         case .endpointRejected(.hostShuttingDown):
             return fromCatalog(
                 "runtime.hostShuttingDown",

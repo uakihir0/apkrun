@@ -387,7 +387,7 @@ let package = Package(
         ),
         .testTarget(
             name: "apkrunTests",
-            dependencies: ["apkrun", "DiagnosticsCore", "DiagnosticsCoreTestSupport"],
+            dependencies: ["apkrun", "RuntimeClient", "DiagnosticsCore", "DiagnosticsCoreTestSupport"],
             path: "CLI/apkrun/Tests",
             resources: [
                 .copy("Golden")

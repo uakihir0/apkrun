@@ -494,6 +494,21 @@ public actor DevelopmentGuestAgent {
         } catch {
             throw .operation(error)
         }
+        return await packageTasksDisappeared(package: package)
+    }
+
+    /// Force-stops every task and process of a package for explicit terminate requests (#032).
+    public func forceStopApplication(package: String) async throws(GuestAgentFailure) -> Bool {
+        try requireAvailable()
+        do {
+            _ = try await supervisor.send(GuestForceStopApplication(package: package))
+        } catch {
+            throw .operation(error)
+        }
+        return await packageTasksDisappeared(package: package)
+    }
+
+    private func packageTasksDisappeared(package: String) async -> Bool {
         let deadline = ContinuousClock.now + .seconds(4)
         while ContinuousClock.now < deadline {
             let stillRunning = await supervisor.snapshot.tasks.values.contains { $0.package == package }

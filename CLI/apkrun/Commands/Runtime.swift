@@ -8,7 +8,12 @@ struct RuntimeCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "runtime",
         abstract: "Inspect and control the Android runtime.",
-        subcommands: [RuntimeStatusCommand.self, RuntimeStartCommand.self, RuntimeStopCommand.self],
+        subcommands: [
+            RuntimeStatusCommand.self,
+            RuntimeStartCommand.self,
+            RuntimeStopCommand.self,
+            RuntimeRestartCommand.self,
+        ],
         defaultSubcommand: RuntimeStatusCommand.self
     )
 
@@ -68,6 +73,28 @@ struct RuntimeStopCommand: AsyncParsableCommand {
         do {
             let client = try RuntimeControlClient(clientKind: .cli)
             let status = try await client.stopRuntime()
+            Output.write("Android is \(status.runtimeState).")
+        } catch {
+            throw await RuntimeStatusOutput.commandFailure(error)
+        }
+    }
+}
+
+struct RuntimeRestartCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "restart",
+        abstract: "Restart Android."
+    )
+
+    @Flag(name: .long, help: "Restart without asking for confirmation.")
+    var yes = false
+
+    mutating func run() async throws {
+        try CLIConfirmation.confirm("Restart the Android runtime?", yes: yes)
+        do {
+            let client = try RuntimeControlClient(clientKind: .cli)
+            _ = try await client.stopRuntime()
+            let status = try await client.startRuntime()
             Output.write("Android is \(status.runtimeState).")
         } catch {
             throw await RuntimeStatusOutput.commandFailure(error)

@@ -108,6 +108,20 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     #expect(try roundTrip(launch) == launch)
     #expect(try roundTrip(terminate) == terminate)
 
+    let header = APIRequestHeader(
+        operationID: UUID(),
+        clientKind: .cli
+    )
+    let launchRequest = RuntimeLaunchControlRequest(header: header, packageID: packageID)
+    let terminateRequest = RuntimeTerminateControlRequest(header: header, packageID: packageID)
+    #expect(try roundTrip(launchRequest) == launchRequest)
+    #expect(try roundTrip(terminateRequest) == terminateRequest)
+
+    let launchReply = RuntimeLaunchControlReply(result: launch)
+    let terminateReply = RuntimeTerminateControlReply(result: terminate)
+    #expect(try roundTrip(launchReply) == launchReply)
+    #expect(try roundTrip(terminateReply) == terminateReply)
+
     let failure = RuntimeWireError.store(
         "packageNotFound",
         message: "Package is not installed.",
@@ -115,6 +129,8 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     )
     #expect(failure.code == "store.packageNotFound")
     #expect(try roundTrip(failure) == failure)
+    #expect(try roundTrip(RuntimeLaunchControlReply(error: failure)).error == failure)
+    #expect(try roundTrip(RuntimeTerminateControlReply(error: failure)).error == failure)
 }
 
 private struct TestRuntimeService: RuntimeService {

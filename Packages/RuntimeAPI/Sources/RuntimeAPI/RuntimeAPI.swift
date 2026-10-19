@@ -2,8 +2,9 @@
 
 /// The major and minor version used by RuntimeAPI compatibility checks.
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
-    /// Version 1.0 introduces the authenticated control endpoint; 1.1 adds Guest Agent status fields.
-    public static let current = APIVersion(major: 1, minor: 1)
+    /// Version 1.0 introduces the authenticated control endpoint; 1.1 adds Guest Agent status fields;
+    /// 1.2 adds control-endpoint launch and terminate operations; 1.3 adds bounded endpoint admission.
+    public static let current = APIVersion(major: 1, minor: 3)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -124,6 +125,28 @@ public enum RuntimeEndpointRejection: String, Codable, Equatable, Sendable {
     case malformedRequest
     /// The daemon is draining requests before shutdown.
     case hostShuttingDown
+    /// The daemon has reached its control connection or request limit.
+    case busy
+    /// A newer broker returned a rejection reason this client does not know.
+    case unknown
+
+    /// Decodes known rejection reasons and preserves forward compatibility.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self = Self(rawValue: try container.decode(String.self)) ?? .unknown
+    }
+
+    /// Encodes a stable broker rejection reason.
+    public func encode(to encoder: any Encoder) throws {
+        guard self != .unknown else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath, debugDescription: "Unknown rejection reasons cannot be encoded.")
+            )
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 /// The broker's JSON response; the endpoint travels in the adjacent XPC reply argument.
@@ -270,6 +293,74 @@ public struct StopRuntimeRequest: Codable, Equatable, Sendable {
     }
 }
 
+/// Starts an installed package session through the authenticated control endpoint.
+public struct RuntimeLaunchControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The Android package to launch.
+    public let packageID: RuntimePackageID
+
+    /// Creates a launch request.
+    public init(header: APIRequestHeader, packageID: RuntimePackageID) {
+        self.header = header
+        self.packageID = packageID
+    }
+}
+
+/// Terminates an installed package session through the authenticated control endpoint.
+public struct RuntimeTerminateControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The Android package to terminate.
+    public let packageID: RuntimePackageID
+
+    /// Creates a terminate request.
+    public init(header: APIRequestHeader, packageID: RuntimePackageID) {
+        self.header = header
+        self.packageID = packageID
+    }
+}
+
+/// The result or typed error returned by a control launch request.
+public struct RuntimeLaunchControlReply: Codable, Equatable, Sendable {
+    /// The launched session result, present on success.
+    public let result: RuntimeLaunchResult?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: RuntimeLaunchResult) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// The result or typed error returned by a control terminate request.
+public struct RuntimeTerminateControlReply: Codable, Equatable, Sendable {
+    /// The termination result, present on success.
+    public let result: RuntimeTerminateResult?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: RuntimeTerminateResult) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
 /// A safe, catalog-backed error summary for the first control operations.
 public struct RuntimeControlError: Codable, Equatable, Sendable {
     /// The qualified error-catalog code.
@@ -312,7 +403,7 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func requestEndpoint(_ request: Data, reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void)
 }
 
-/// The first authenticated control endpoint operations implemented by apkrund.
+/// Authenticated control endpoint operations implemented by apkrund.
 @objc public protocol RuntimeControlXPC {
     /// Returns runtime and daemon status.
     func runtimeStatus(_ request: Data, reply: @escaping (Data) -> Void)
@@ -320,6 +411,10 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func startRuntime(_ request: Data, reply: @escaping (Data) -> Void)
     /// Stops Android but leaves the daemon running.
     func stopRuntime(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Launches an installed package session.
+    func launch(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Terminates an installed package session.
+    func terminate(_ request: Data, reply: @escaping (Data) -> Void)
 }
 
 /// Runtime package operations. Package identity is resolved by the runtime before launch.

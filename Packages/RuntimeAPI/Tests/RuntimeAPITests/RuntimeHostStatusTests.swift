@@ -3,8 +3,19 @@ import Testing
 
 @testable import RuntimeAPI
 
-@Test func guestAgentStatusFieldsAdvanceAPIMinorVersion() {
-    #expect(APIVersion.current == APIVersion(major: 1, minor: 1))
+@Test func runtimeSessionControlAdvancesAPIMinorVersion() {
+    #expect(APIVersion.current == APIVersion(major: 1, minor: 3))
+}
+
+@Test func endpointRejectionsPreserveUnknownBrokerReasons() throws {
+    let data = try JSONEncoder().encode(RuntimeEndpointRejection.busy)
+    #expect(try JSONDecoder().decode(RuntimeEndpointRejection.self, from: data) == .busy)
+    #expect(
+        try JSONDecoder().decode(
+            RuntimeEndpointRejection.self,
+            from: Data("\"futureBrokerRejection\"".utf8)
+        ) == .unknown
+    )
 }
 
 private func status(

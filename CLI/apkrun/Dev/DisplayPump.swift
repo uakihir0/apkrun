@@ -18,6 +18,9 @@
         private var source: SurfacePoolFrameSource?
         private var window: SessionWindowController?
         private var tasks: [Task<Void, Never>] = []
+        private var pendingGeometry: (pointSize: CGSize, backingScale: CGFloat, zoom: Double)?
+        private var resizeCompletions: [@MainActor (Bool) -> Void] = []
+        private var resizeTask: Task<Void, Never>?
         #if APKRUN_TEST_READBACK
             private let tearing = TearingSampler()
         #endif
@@ -61,24 +64,93 @@
                 task.cancel()
             }
             tasks.removeAll()
+            resizeTask?.cancel()
+            resizeTask = nil
+            pendingGeometry = nil
+            resizeCompletions.removeAll()
             window?.close()
         }
 
         private func handle(_ event: DeveloperDisplayEvent) {
             switch event {
-            case .attached(let surfaces):
-                let source = SurfacePoolFrameSource(surfaces: surfaces, generation: 1, display: display)
+            case .attached(let surfaceSet):
+                let source = SurfacePoolFrameSource(surfaceSet: surfaceSet, display: display)
                 let window = SessionWindowController(
-                    source: source, title: "APKRun display 0", backingScale: display.backingScale, inputSink: inputSink)
+                    source: source,
+                    title: "APKRun display 0",
+                    backingScale: display.backingScale,
+                    inputSink: inputSink
+                ) { [weak self] pointSize, backingScale, zoom, completion in
+                    guard let self else {
+                        completion(false)
+                        return
+                    }
+                    requestResize(
+                        pointSize: pointSize,
+                        backingScale: backingScale,
+                        zoom: zoom,
+                        completion: completion
+                    )
+                }
                 window.onClose = onWindowClosed
                 window.show()
                 self.source = source
                 self.window = window
+            case .surfacesReplaced(let surfaceSet):
+                source?.ingest(.surfacesReplaced(surfaceSet: surfaceSet))
             case .frameReady:
                 #if APKRUN_TEST_READBACK
                     tearing.observe(event, surfaces: source?.surfaces ?? [])
                 #endif
                 source?.ingest(event)
+            }
+        }
+
+        private func requestResize(
+            pointSize: CGSize,
+            backingScale: CGFloat,
+            zoom: Double,
+            completion: @escaping @MainActor (Bool) -> Void
+        ) {
+            pendingGeometry = (pointSize, backingScale, zoom)
+            resizeCompletions.append(completion)
+            guard resizeTask == nil else {
+                return
+            }
+            resizeTask = Task { @MainActor [weak self] in
+                var lastResizeSucceeded = true
+                while let self, !Task.isCancelled {
+                    guard let geometry = pendingGeometry else {
+                        break
+                    }
+                    pendingGeometry = nil
+                    do {
+                        try await display.resize(
+                            pointSize: geometry.pointSize,
+                            backingScale: geometry.backingScale,
+                            zoom: geometry.zoom
+                        )
+                        if let surfaceSet = display.currentSurfaceSet {
+                            source?.ingest(.surfacesReplaced(surfaceSet: surfaceSet))
+                        }
+                        lastResizeSucceeded = true
+                    } catch {
+                        lastResizeSucceeded = false
+                        Output.writeLogLine(
+                            "warning: display resize could not be applied (\(String(describing: error)))",
+                            toStandardError: true
+                        )
+                    }
+                }
+                guard let self else {
+                    return
+                }
+                let completions = resizeCompletions
+                resizeCompletions.removeAll()
+                resizeTask = nil
+                for completion in completions {
+                    completion(lastResizeSucceeded)
+                }
             }
         }
 

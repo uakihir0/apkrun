@@ -108,7 +108,9 @@
             Task { @MainActor in
                 session.startPump()
             }
-            DisplayApplication.run()
+            MainActor.assumeIsolated {
+                DisplayApplication.run()
+            }
         }
 
         /// Starts the pump that makes the window when the display is attached. It runs on the main actor.

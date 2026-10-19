@@ -1036,6 +1036,126 @@
       }
     },
     {
+      "code": "runtime.hostStartupFailed",
+      "parameters": [],
+      "message": {
+        "en": "Part of APKRun's background service couldn't start.",
+        "ja": "APKRun のバックグラウンドサービスの一部を起動できませんでした。"
+      },
+      "remediation": {
+        "en": "Run apkrun runtime status for details, then follow the reported error's instructions.",
+        "ja": "詳細を確認するには apkrun runtime status を実行し、表示されたエラーの指示に従ってください。"
+      },
+      "action": "openTroubleshooting",
+      "cliExit": 69,
+      "doc": {
+        "case": "hostStartupFailed(step:underlying:)",
+        "when": "a degraded startup step fails, or the runtime is unavailable because startup is degraded",
+        "raisedBy": "RuntimeHost",
+        "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §2.2"
+      }
+    },
+    {
+      "code": "runtime.serviceUnavailable",
+      "parameters": [],
+      "message": {
+        "en": "APKRun's background service isn't running.",
+        "ja": "APKRun のバックグラウンドサービスが起動していません。"
+      },
+      "remediation": {
+        "en": "Open APKRun once, or restart its background service.",
+        "ja": "APKRun を一度開くか、バックグラウンドサービスを再起動してください。"
+      },
+      "action": "openTroubleshooting",
+      "cliExit": 69,
+      "doc": {
+        "case": "serviceUnavailable(reason:)",
+        "when": "RuntimeClient cannot reach the broker or a protected endpoint",
+        "raisedBy": "RuntimeClient",
+        "ref": "[runtime-api.md](runtime-api.md) §3.6"
+      }
+    },
+    {
+      "code": "runtime.apiVersionMismatch",
+      "parameters": [],
+      "message": {
+        "en": "APKRun needs to be restarted.",
+        "ja": "APKRun を再起動してください。"
+      },
+      "remediation": {
+        "en": "Quit and reopen APKRun.",
+        "ja": "APKRun を終了してから再度開いてください。"
+      },
+      "action": "retry",
+      "cliExit": 69,
+      "doc": {
+        "case": "apiVersionMismatch(client:server:)",
+        "when": "the broker or control endpoint does not support the client's RuntimeAPI major version",
+        "raisedBy": "RuntimeClient, XPC server",
+        "ref": "[runtime-api.md](runtime-api.md) §2.2, §3.6"
+      }
+    },
+    {
+      "code": "runtime.notAuthorized",
+      "parameters": [],
+      "message": {
+        "en": "This part of APKRun isn't allowed to control the runtime.",
+        "ja": "この APKRun コンポーネントにはランタイムを操作する権限がありません。"
+      },
+      "remediation": {
+        "en": "Report the problem.",
+        "ja": "問題を報告してください。"
+      },
+      "action": "reportProblem",
+      "cliExit": 5,
+      "doc": {
+        "case": "notAuthorized",
+        "when": "the endpoint refuses a client identity or request header",
+        "raisedBy": "XPC server",
+        "ref": "[runtime-api.md](runtime-api.md) §2.2"
+      }
+    },
+    {
+      "code": "runtime.malformedRequest",
+      "parameters": [],
+      "message": {
+        "en": "APKRun's background service couldn't read the request.",
+        "ja": "APKRun のバックグラウンドサービスがリクエストを読み取れませんでした。"
+      },
+      "remediation": {
+        "en": "Report the problem.",
+        "ja": "問題を報告してください。"
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "case": "malformedRequest",
+        "when": "an XPC control request cannot be decoded or exceeds its size limit",
+        "raisedBy": "XPC server",
+        "ref": "[runtime-api.md](runtime-api.md) §4.10"
+      }
+    },
+    {
+      "code": "runtime.internal",
+      "parameters": [],
+      "message": {
+        "en": "Something went wrong in APKRun's background service.",
+        "ja": "APKRun のバックグラウンドサービスで予期しない問題が発生しました。"
+      },
+      "remediation": {
+        "en": "Try again. If it happens again, report the problem.",
+        "ja": "もう一度お試しください。再発する場合は問題を報告してください。"
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "case": "internal",
+        "when": "a control request encounters an unexpected server error or invalid reply",
+        "raisedBy": "RuntimeHost, RuntimeClient, XPC server",
+        "ref": "[runtime-api.md](runtime-api.md) §3.6"
+      }
+    },
+    {
       "code": "runtime.devConsoleGuestFailed",
       "parameters": [],
       "message": {

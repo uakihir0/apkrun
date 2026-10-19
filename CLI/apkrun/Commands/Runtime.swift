@@ -1,4 +1,5 @@
 import ArgumentParser
+import DiagnosticsCore
 import Foundation
 import RuntimeAPI
 import RuntimeClient
@@ -109,34 +110,58 @@ enum RuntimeStatusOutput {
         }
         switch error {
         case .invalidClientIdentity, .transportFailure:
-            return .runtime(
-                "serviceUnavailable",
-                message: "APKRun's background service isn't running.",
-                remediation: "Open APKRun once, or restart its background service."
+            return fromCatalog(
+                "runtime.serviceUnavailable",
+                fallbackMessage: "APKRun's background service isn't running.",
+                fallbackRemediation: "Open APKRun once, or restart its background service."
             )
         case .apiVersionMismatch:
-            return .runtime(
-                "apiVersionMismatch",
-                message: "APKRun needs to be restarted.",
-                remediation: "Quit and reopen APKRun."
+            return fromCatalog(
+                "runtime.apiVersionMismatch",
+                fallbackMessage: "APKRun needs to be restarted.",
+                fallbackRemediation: "Quit and reopen APKRun."
             )
         case .remoteFailure(let code, let message):
-            return RuntimeWireError(
-                domain: String(code.split(separator: ".", maxSplits: 1).first ?? "runtime"),
-                code: code,
-                message: message
-            )
+            return fromCatalog(code, fallbackMessage: message)
         case .endpointRejected(.hostShuttingDown):
-            return .runtime(
-                "hostShuttingDown",
-                message: "APKRun's background service is stopping.",
-                remediation: "Try again in a moment."
+            return fromCatalog(
+                "runtime.hostShuttingDown",
+                fallbackMessage: "APKRun's background service is stopping.",
+                fallbackRemediation: "Try again in a moment."
+            )
+        case .endpointRejected(.malformedRequest):
+            return fromCatalog(
+                "runtime.malformedRequest",
+                fallbackMessage: "APKRun's background service couldn't read the request.",
+                fallbackRemediation: "Report the problem."
             )
         case .endpointRejected:
-            return .runtime("notAuthorized", message: "This APKRun client isn't allowed to control the runtime.")
+            return fromCatalog(
+                "runtime.notAuthorized",
+                fallbackMessage: "This part of APKRun isn't allowed to control the runtime.",
+                fallbackRemediation: "Report the problem."
+            )
         case .malformedReply, .endpointMissing, .invalidRemoteProxy, .encodingFailure, .invalidXPCInterface:
-            return .runtime("internal", message: "APKRun's background service returned an invalid reply.")
+            return fromCatalog(
+                "runtime.internal",
+                fallbackMessage: "APKRun's background service returned an invalid reply."
+            )
         }
+    }
+
+    private static func fromCatalog(
+        _ code: String,
+        fallbackMessage: String,
+        fallbackRemediation: String? = nil
+    ) -> RuntimeWireError {
+        let entry = ErrorCatalog.entry(for: code)
+        let catalogMessage = entry?.parameters.isEmpty == true ? entry?.message?["en"] : nil
+        return RuntimeWireError(
+            domain: String(code.split(separator: ".", maxSplits: 1).first ?? "runtime"),
+            code: code,
+            message: catalogMessage ?? fallbackMessage,
+            remediation: entry?.remediation?["en"] ?? fallbackRemediation
+        )
     }
 }
 

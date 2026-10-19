@@ -100,6 +100,36 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
         #expect(ExitCodes.code(for: error) == 75)
     }
 
+    @Test func runtimeStatusUsesCatalogMessagesForDaemonFailures() {
+        let startupError = RuntimeStatusOutput.failure(
+            RuntimeControlClientError.remoteFailure(
+                code: "runtime.hostStartupFailed",
+                message: "server fallback"
+            )
+        )
+        #expect(startupError.message == "Part of APKRun's background service couldn't start.")
+        #expect(startupError.remediation?.contains("apkrun runtime status") == true)
+        #expect(ExitCodes.code(for: startupError) == 69)
+
+        let unavailableError = RuntimeStatusOutput.failure(
+            RuntimeControlClientError.transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+        )
+        #expect(unavailableError.message == "APKRun's background service isn't running.")
+        #expect(unavailableError.remediation == "Open APKRun once, or restart its background service.")
+        #expect(ExitCodes.code(for: unavailableError) == 69)
+
+        let bootTimeout = RuntimeStatusOutput.failure(
+            RuntimeControlClientError.remoteFailure(
+                code: "runtime.bootTimedOut",
+                message: "Something went wrong in APKRun's background service."
+            )
+        )
+        #expect(bootTimeout.message == "Something went wrong in APKRun's background service.")
+        #expect(!bootTimeout.message.contains("{phase}"))
+        #expect(bootTimeout.remediation == "Restart Android. If it happens again, create a diagnostics report.")
+        #expect(ExitCodes.code(for: bootTimeout) == 1)
+    }
+
     @Test func developmentDisplayCommandsParseAddInEitherOptionOrder() throws {
         #expect(
             try DevDisplaysInputParser.parse("add --size 960x1700 --dpi 320")

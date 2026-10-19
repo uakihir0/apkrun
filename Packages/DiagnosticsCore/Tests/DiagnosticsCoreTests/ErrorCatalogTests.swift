@@ -26,7 +26,9 @@ import Testing
                 "malformedReply", "versionSkew", "invalidArguments", "devConsoleRequiresTerminal",
             ].map { "cli.\($0)" }
             + [
-                "instanceLocked", "instanceLockFailed", "hostShuttingDown", "devLinuxTimedOut",
+                "instanceLocked", "instanceLockFailed", "hostShuttingDown", "hostStartupFailed",
+                "serviceUnavailable", "apiVersionMismatch", "notAuthorized", "malformedRequest",
+                "internal", "devLinuxTimedOut",
                 "devLinuxInvalidOptions", "devLinuxArtifactDirectoryMustBeAbsolute",
                 "devLinuxCheckFailed", "devLinuxDidNotFinish",
                 "adbExecutableMissing", "adbLaunchFailed", "adbConnectionUnavailable",
@@ -62,6 +64,12 @@ import Testing
         }
     )
     #expect(ErrorCatalog.cliExit(for: "runtime.hostShuttingDown") == 75)
+    #expect(ErrorCatalog.cliExit(for: "runtime.hostStartupFailed") == 69)
+    #expect(ErrorCatalog.cliExit(for: "runtime.serviceUnavailable") == 69)
+    #expect(ErrorCatalog.cliExit(for: "runtime.apiVersionMismatch") == 69)
+    #expect(ErrorCatalog.cliExit(for: "runtime.notAuthorized") == 5)
+    #expect(ErrorCatalog.cliExit(for: "runtime.malformedRequest") == 70)
+    #expect(ErrorCatalog.cliExit(for: "runtime.internal") == 70)
 
     let healthCheckIDs: Set<String> = [
         "vm.state",

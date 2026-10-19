@@ -41,6 +41,11 @@
             "enabled" : true
           },
           {
+            "key" : "APKRUN_GUEST_DIR",
+            "value" : "/tmp/apkrun-test-guest",
+            "enabled" : true
+          },
+          {
             "key" : "ANDROID_ADB_SERVER_PORT",
             "value" : "15037",
             "enabled" : true

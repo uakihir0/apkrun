@@ -2,6 +2,7 @@ import DiagnosticsCore
 import Foundation
 import ImageCore
 import RuntimeCore
+import RuntimeHost
 import XCTest
 
 /// The environment and adb of the Android T2 suites (#015, #016, #017).
@@ -33,12 +34,23 @@ enum AndroidTestEnvironment {
 final class AndroidBootSession: @unchecked Sendable {
     let supervisor: RuntimeSupervisor
     let capture: ConsoleCapture
+    let paths: APKRunPaths
+    let runtimeContext: DevelopmentRuntimeContext
     private let home: URL
     private let captureTask: Task<Void, Never>
 
-    private init(supervisor: RuntimeSupervisor, capture: ConsoleCapture, home: URL, captureTask: Task<Void, Never>) {
+    private init(
+        supervisor: RuntimeSupervisor,
+        capture: ConsoleCapture,
+        paths: APKRunPaths,
+        runtimeContext: DevelopmentRuntimeContext,
+        home: URL,
+        captureTask: Task<Void, Never>
+    ) {
         self.supervisor = supervisor
         self.capture = capture
+        self.paths = paths
+        self.runtimeContext = runtimeContext
         self.home = home
         self.captureTask = captureTask
     }
@@ -79,7 +91,19 @@ final class AndroidBootSession: @unchecked Sendable {
                 }
             }
         }
-        return AndroidBootSession(supervisor: supervisor, capture: capture, home: home, captureTask: captureTask)
+        return AndroidBootSession(
+            supervisor: supervisor,
+            capture: capture,
+            paths: paths,
+            runtimeContext: DevelopmentRuntimeContext(
+                image: image,
+                instanceStore: store,
+                supervisor: supervisor,
+                diagnostics: diagnostics
+            ),
+            home: home,
+            captureTask: captureTask
+        )
     }
 
     /// Runs `body` on a fresh boot, and stops Android and removes the instance afterwards, also when `body` throws.

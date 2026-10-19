@@ -17,6 +17,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
     private let displayPool: DisplayPool?
     private let inputRoute: DevInputRoute?
     private let stopSignal: DevBootStopSignal?
+    private let windowState: DevBootAppWindowState?
     private var sessionOperationInFlight = false
     private var sessionOperationWaiters: [CheckedContinuation<Void, Never>] = []
 
@@ -27,6 +28,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         displayPool = nil
         inputRoute = nil
         stopSignal = nil
+        windowState = nil
     }
 
     init(
@@ -35,17 +37,77 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         developerDisplay: DeveloperDisplay,
         stopSignal: DevBootStopSignal,
         displayPool: DisplayPool? = nil,
-        inputRoute: DevInputRoute? = nil
+        inputRoute: DevInputRoute? = nil,
+        windowState: DevBootAppWindowState? = nil
     ) {
         self.registry = registry ?? SessionRegistry(logSink: logSink)
         self.developerDisplay = developerDisplay
         self.displayPool = displayPool
         self.inputRoute = inputRoute
         self.stopSignal = stopSignal
+        self.windowState = windowState
     }
 
     func attachGuestAgent(_ guestAgent: any EmbeddedSessionGuestAgent) {
         self.guestAgent = guestAgent
+    }
+
+    /// Closes this window's app without touching sessions owned by sibling windows.
+    ///
+    /// A window can close while `launch` is still waiting for its first frame. The operation lock
+    /// makes that close wait for the launch reply, so any returned task is known before deciding
+    /// whether Android needs a package stop.
+    func closeForWindow() async throws(RuntimeWireError) {
+        await acquireSessionOperation()
+        defer { releaseSessionOperation() }
+
+        guard let packageID,
+            let sessionID,
+            let current = await registry.session(sessionID),
+            !current.state.isEnded
+        else {
+            return
+        }
+        await inputRoute?.unbind()
+        guard !current.taskIDs.isEmpty else {
+            _ = try? await registry.transition(sessionID, to: .ended(.runtimeStopped))
+            return
+        }
+        guard let guestAgent else {
+            throw .runtime(
+                "guestAgentUnavailable",
+                message: "The Android Guest Agent is unavailable.",
+                remediation: "Restart Android before closing this app window."
+            )
+        }
+        if current.state != .closing {
+            do throws(SessionRegistryFailure) {
+                _ = try await registry.transition(sessionID, to: .closing)
+            } catch {
+                throw Self.wireError(for: error)
+            }
+        }
+        switch await Self.stopApplication(package: packageID, using: guestAgent) {
+        case .success(true):
+            _ = await registry.stopCompleted(packageID: packageID)
+            taskID = nil
+        case .success(false):
+            _ = await registry.stopFailed(packageID: packageID)
+            throw .runtime(
+                "guestAgentOperationFailed",
+                message: "Android still reports tasks for this app.",
+                remediation: "Wait for the app to close, then close its window again."
+            )
+        case .failure(let failure):
+            _ = await registry.stopFailed(packageID: packageID)
+            throw Self.wireError(for: failure)
+        }
+    }
+
+    /// Unbinds input and releases this window's lease as the shared VM is stopping.
+    func closeForRuntimeStop() async {
+        await inputRoute?.unbind()
+        _ = try? await runtimeStopped()
     }
 
     /// Starts the package on primary display 0 after confirming Android reports it installed.
@@ -54,6 +116,13 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         defer { releaseSessionOperation() }
 
         let requestedPackage = request.packageID.rawValue
+        guard await windowState?.isClosed() != true else {
+            throw .runtime(
+                "cancelled",
+                message: "The app window closed before Android could launch the app.",
+                remediation: "Open another app window and try again."
+            )
+        }
         guard let guestAgent else {
             throw .runtime(
                 "guestAgentUnavailable",
@@ -143,7 +212,8 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         switch await DevBoot.waitForFrame(
             after: frameCountBeforeLaunch,
             on: developerDisplay,
-            stopSignal: stopSignal
+            stopSignal: stopSignal,
+            windowState: windowState
         ) {
         case .presented:
             do throws(SessionRegistryFailure) {
@@ -166,6 +236,12 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
                 message: "The app launch was interrupted because Android is stopping.",
                 remediation: "Start Android and try again."
             )
+        case .windowClosed:
+            throw .runtime(
+                "cancelled",
+                message: "The app window closed before Android displayed its first frame.",
+                remediation: "Open the app again with `apkrun dev launch`."
+            )
         }
     }
 
@@ -185,6 +261,8 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         let current = await registry.session(packageID: requestedPackage)
         let hadSession = current != nil
         if let current, current.state != .closing {
+            // Cancel host input and its open Android gestures before the terminal transition releases the lease.
+            await inputRoute?.unbind()
             do {
                 _ = try await windowClosed()
             } catch {
@@ -331,8 +409,16 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         }
         switch event {
         case .appeared(let eventPackage, let eventTaskID) where eventPackage == packageID:
+            await inputRoute?.reapplyFocusIfNeeded()
             return await registry.taskAppeared(packageID: eventPackage, taskID: eventTaskID)
         case .vanished(let eventPackage, let eventTaskID) where eventPackage == packageID:
+            if let snapshot = await currentSession(),
+                snapshot.taskIDs.isEmpty
+                    || (snapshot.taskIDs.count == 1 && snapshot.taskIDs.contains(eventTaskID))
+            {
+                // A last-task event releases the display lease below. End the router registration first.
+                await inputRoute?.unbind()
+            }
             return await registry.taskVanished(packageID: eventPackage, taskID: eventTaskID)
         default:
             return nil

@@ -250,6 +250,192 @@ func embeddedRuntimeServiceRestoresSessionWhenGuestCannotStopTasks() async throw
     #expect(await service.currentSession()?.state == .waitingForRuntime)
 }
 
+@Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceClosesAnUnlaunchedWindowWithoutStoppingItsPackage() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent()
+    let service = EmbeddedRuntimeService()
+    await service.attachGuestAgent(guest)
+    _ = try await service.requestSession(packageID: "io.apkrun.fixture.hellotext")
+
+    try await service.closeForWindow()
+
+    #expect(await service.currentSession()?.state == .ended(.runtimeStopped))
+    #expect(await guest.stoppedPackages.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func embeddedMultiSessionServiceTerminatesOnlyTheOwningWindow() async throws {
+    let firstGuest = FakeEmbeddedSessionGuestAgent()
+    let secondGuest = FakeEmbeddedSessionGuestAgent()
+    let first = EmbeddedRuntimeService()
+    let second = EmbeddedRuntimeService()
+    await first.attachGuestAgent(firstGuest)
+    await second.attachGuestAgent(secondGuest)
+    _ = try await first.requestSession(packageID: "io.apkrun.fixture.hellotext")
+    _ = try await second.requestSession(packageID: "io.apkrun.fixture.hellocompose")
+    let sessions = EmbeddedMultiSessionService(
+        sessions: [
+            "io.apkrun.fixture.hellotext": first,
+            "io.apkrun.fixture.hellocompose": second,
+        ]
+    )
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellocompose"))
+
+    let result = try await sessions.terminate(RuntimeTerminateRequest(packageID: package))
+
+    #expect(result.hadSession)
+    #expect(await first.currentSession()?.state == .waitingForRuntime)
+    #expect(await second.currentSession()?.state == .ended(.userClosed))
+    #expect(await firstGuest.stoppedPackages.isEmpty)
+    #expect(await secondGuest.stoppedPackages == [package.rawValue])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func devBootMultiWindowCoordinatorStopsOnlyAfterEveryWindowCloses() async throws {
+    let firstDisplay = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let secondDisplay = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let (firstCloseRequests, firstCloseContinuation) = AsyncStream.makeStream(of: Void.self)
+    let (secondCloseRequests, secondCloseContinuation) = AsyncStream.makeStream(of: Void.self)
+    let firstPackage = "io.apkrun.fixture.hellotext"
+    let secondPackage = "io.apkrun.fixture.hellocompose"
+    let first = DevBootAppLaunch(
+        packageID: firstPackage,
+        apkURL: nil,
+        display: firstDisplay,
+        displayMode: .primaryDisplayCompatibility,
+        inputRoute: DevInputRoute(),
+        closeRequests: firstCloseRequests
+    )
+    let second = DevBootAppLaunch(
+        packageID: secondPackage,
+        apkURL: nil,
+        display: secondDisplay,
+        displayMode: .secondaryDisplay,
+        inputRoute: DevInputRoute(),
+        closeRequests: secondCloseRequests
+    )
+    let signal = DevBootStopSignal()
+    let coordinator = DevBootMultiWindowCoordinator(
+        launches: [first, second],
+        stopSignal: signal,
+        report: { _ in }
+    )
+    defer {
+        firstCloseContinuation.finish()
+        secondCloseContinuation.finish()
+        firstDisplay.finish()
+        secondDisplay.finish()
+    }
+
+    await coordinator.closeWindow(for: firstPackage)
+    #expect(await first.windowState.isClosed())
+    #expect(!(await second.windowState.isClosed()))
+    #expect(await signal.current() == nil)
+
+    await coordinator.closeWindow(for: secondPackage)
+    #expect(await second.windowState.isClosed())
+    #expect(await signal.current() == .appWindowClosed)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func devBootObservesWindowClosesBeforeAndroidIsReady() async throws {
+    let firstDisplay = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let secondDisplay = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let (firstCloseRequests, firstCloseContinuation) = AsyncStream.makeStream(of: Void.self)
+    let (secondCloseRequests, secondCloseContinuation) = AsyncStream.makeStream(of: Void.self)
+    let first = DevBootAppLaunch(
+        packageID: "io.apkrun.fixture.hellotext",
+        apkURL: nil,
+        display: firstDisplay,
+        displayMode: .primaryDisplayCompatibility,
+        inputRoute: DevInputRoute(),
+        closeRequests: firstCloseRequests
+    )
+    let second = DevBootAppLaunch(
+        packageID: "io.apkrun.fixture.hellocompose",
+        apkURL: nil,
+        display: secondDisplay,
+        displayMode: .secondaryDisplay,
+        inputRoute: DevInputRoute(),
+        closeRequests: secondCloseRequests
+    )
+    let signal = DevBootStopSignal()
+    let coordinator = DevBootMultiWindowCoordinator(
+        launches: [first, second],
+        stopSignal: signal,
+        report: { _ in }
+    )
+    let monitors = DevBoot.observeAppWindowCloseRequests(
+        launches: [first, second],
+        coordinator: coordinator
+    )
+    defer {
+        for monitor in monitors {
+            monitor.cancel()
+        }
+        firstCloseContinuation.finish()
+        secondCloseContinuation.finish()
+        firstDisplay.finish()
+        secondDisplay.finish()
+    }
+
+    firstCloseContinuation.yield(())
+    secondCloseContinuation.yield(())
+
+    #expect(await signal.wait() == .appWindowClosed)
+    #expect(await first.windowState.isClosed())
+    #expect(await second.windowState.isClosed())
+}
+
+@Test(.timeLimit(.minutes(1)))
+func devBootStopsTheRuntimeWhenAClosedWindowCannotStopItsApp() async throws {
+    let package = "io.apkrun.fixture.hellotext"
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let (closeRequests, closeContinuation) = AsyncStream.makeStream(of: Void.self)
+    let launch = DevBootAppLaunch(
+        packageID: package,
+        apkURL: nil,
+        display: display,
+        displayMode: .primaryDisplayCompatibility,
+        inputRoute: DevInputRoute(),
+        closeRequests: closeRequests
+    )
+    let signal = DevBootStopSignal()
+    let stopProbe = DevBootStopProbe()
+    await signal.attachStopHandler {
+        await stopProbe.record("stop")
+    }
+    #expect(await signal.beginDisplayAcquisition())
+    let coordinator = DevBootMultiWindowCoordinator(
+        launches: [launch],
+        stopSignal: signal,
+        report: { _ in }
+    )
+    let guest = FakeEmbeddedSessionGuestAgent(stopResult: false)
+    let service = EmbeddedRuntimeService(developerDisplay: display, stopSignal: signal)
+    await service.attachGuestAgent(guest)
+    _ = try await service.requestSession(packageID: package)
+    _ = try await service.displayReady()
+    _ = try await service.beginLaunch()
+    _ = try await service.launched(taskID: 23)
+    _ = try await service.firstFramePresented()
+    #expect(await coordinator.register(service, for: package))
+    defer {
+        closeContinuation.finish()
+        display.finish()
+    }
+
+    await coordinator.closeWindow(for: package)
+    #expect(!(await signal.hasScheduledRuntimeStop()))
+    #expect(await service.currentSession()?.state == .running)
+    await coordinator.stopAllWindows()
+    await signal.stopRuntime()
+
+    #expect(await signal.current() == .appWindowCloseFailed)
+    #expect(await stopProbe.events == ["stop"])
+    #expect(await service.currentSession()?.state == .ended(.runtimeStopped))
+}
+
 private actor FakeEmbeddedSessionGuestAgent: EmbeddedSessionGuestAgent {
     private let installed: Bool
     private let stopResult: Bool

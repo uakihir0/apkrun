@@ -12,9 +12,21 @@ struct DevInputBinding: Sendable {
     /// How often the control session is looked at.
     static let pollInterval: Duration = .milliseconds(250)
 
-    let route: DevInputRoute
+    let routes: [DevInputRoute]
     let agent: DevelopmentGuestAgent
     let logSink: (any LogSink)?
+
+    init(route: DevInputRoute, agent: DevelopmentGuestAgent, logSink: (any LogSink)?) {
+        routes = [route]
+        self.agent = agent
+        self.logSink = logSink
+    }
+
+    init(routes: [DevInputRoute], agent: DevelopmentGuestAgent, logSink: (any LogSink)?) {
+        self.routes = routes
+        self.agent = agent
+        self.logSink = logSink
+    }
 
     /// Binds the route now, and again after each restart of the agent, until the task is cancelled. A failure is
     /// reported once, and the binding tries again at the next look.
@@ -31,12 +43,24 @@ struct DevInputBinding: Sendable {
                 if token != boundToken || !usable {
                     do {
                         let next = try await agent.inputChannel()
-                        await route.bind(router: InputRouter(channel: next, logSink: logSink))
+                        let router = InputRouter(
+                            channel: next,
+                            focusDisplay: { displayID in
+                                try await agent.focusDisplay(displayID: displayID)
+                            },
+                            logSink: logSink
+                        )
+                        for (index, route) in routes.enumerated() {
+                            let session = index == 0 ? DevInputRoute.developmentSession : .app(UUID())
+                            if let failure = await route.bind(router: router, session: session) {
+                                report(.warning("input route could not claim its display (\(failure))"))
+                            }
+                        }
                         channel = next
                         boundToken = token
                         reportedFailure = false
-                        let displayID = await route.targetDisplayIDForDiagnostics()
-                        report(.message("input is bound to display \(displayID)"))
+                        let displayIDs = await routes.asyncMap { await $0.targetDisplayIDForDiagnostics() }
+                        report(.message("input is bound to display\(displayIDs.count == 1 ? "" : "s") \(displayIDs)"))
                         report(.message("ADB shell invocations so far: \(await agent.adbShellInvocationCount)"))
                     } catch {
                         if !reportedFailure {
@@ -48,5 +72,18 @@ struct DevInputBinding: Sendable {
             }
             try? await Task.sleep(for: Self.pollInterval)
         }
+        for route in routes {
+            await route.unbind()
+        }
+    }
+}
+
+extension Sequence where Element == DevInputRoute {
+    fileprivate func asyncMap<T>(_ transform: (Element) async -> T) async -> [T] {
+        var values: [T] = []
+        for element in self {
+            values.append(await transform(element))
+        }
+        return values
     }
 }

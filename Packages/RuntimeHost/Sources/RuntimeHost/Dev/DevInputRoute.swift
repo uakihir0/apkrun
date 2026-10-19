@@ -2,11 +2,10 @@ import Foundation
 import RuntimeAPI
 import RuntimeCore
 
-/// The development input route of the embedded runtime (#024, decision D10): one input session on display 0.
+/// The development input route of one embedded app window (#024, #030, decision D10).
 ///
-/// It converts the wire batches of its session to InputCore values, and routes them through an ``InputRouter``. Until
-/// #026 it is the only input session. The route holds no router until ``bind(router:session:)``, and events that arrive
-/// before that are dropped and counted.
+/// It converts wire batches to InputCore values and routes them through the shared ``InputRouter``. Focus can arrive
+/// before the Guest Agent input stream is ready, so the desired focus is retained and applied when the router binds.
 public actor DevInputRoute {
     /// The development session. Its identifier is fixed, so that a caller and its tests name the same session.
     /// The identifier, as the UUID string 0024a2d0-0000-4000-8000-0000000024d0.
@@ -20,6 +19,8 @@ public actor DevInputRoute {
     private var router: InputRouter?
     private var session: SessionID?
     private var targetDisplayID = DevInputRoute.displayID
+    private var isFocused = false
+    private var focusGeneration: UInt64 = 0
     /// The drops that happen before the router sees the events: the events of an unbound route, and the events cut
     /// from a long batch.
     private var localCounters = InputCounters()
@@ -40,13 +41,47 @@ public actor DevInputRoute {
         targetDisplayID
     }
 
-    /// Binds the route to `router` for `session`, which is registered on display 0 in the running state. A route that
-    /// was bound before is unbound first.
-    public func bind(router: InputRouter, session: SessionID = DevInputRoute.developmentSession) async {
+    /// Binds the route to the shared router for `session`, registered on its selected display.
+    @discardableResult
+    public func bind(
+        router: InputRouter,
+        session: SessionID = DevInputRoute.developmentSession
+    ) async -> InputRouterRegistrationFailure? {
         await unbind()
-        await router.register(session: session, displayID: targetDisplayID, state: .running)
-        self.router = router
-        self.session = session
+        guard let failure = await router.register(session: session, displayID: targetDisplayID, state: .running) else {
+            self.router = router
+            self.session = session
+            if isFocused {
+                await router.focusChanged(session, focused: true, generation: focusGeneration)
+            }
+            return nil
+        }
+        localCounters.droppedInvalid += 1
+        return failure
+    }
+
+    /// Applies a window's key-focus change. The shared router serializes focus with routed events.
+    public func focusChanged(_ focused: Bool, generation: UInt64) async {
+        guard generation > focusGeneration else {
+            return
+        }
+        focusGeneration = generation
+        isFocused = focused
+        guard let router, let session else {
+            return
+        }
+        await router.focusChanged(session, focused: focused, generation: generation)
+    }
+
+    /// Reapplies key-window focus when Android reports a task after the initial focus event.
+    ///
+    /// AppKit can make a window key before its Android task exists. In that case `FocusDisplay` fails
+    /// closed; a task-appearance event is the first reliable point at which the Guest Agent can focus it.
+    public func reapplyFocusIfNeeded() async {
+        guard isFocused, let router, let session else {
+            return
+        }
+        await router.focusChanged(session, focused: true, generation: focusGeneration)
     }
 
     /// Unbinds the route. The session ends on the router, so that the guest cancels its open gestures and keys. The

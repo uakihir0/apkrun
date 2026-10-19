@@ -1016,6 +1016,26 @@
       }
     },
     {
+      "code": "runtime.hostShuttingDown",
+      "parameters": [],
+      "message": {
+        "en": "APKRun's background service is stopping.",
+        "ja": "APKRun のバックグラウンドサービスを停止しています。"
+      },
+      "remediation": {
+        "en": "Try again in a moment.",
+        "ja": "少し待ってからもう一度お試しください。"
+      },
+      "action": "retry",
+      "cliExit": 75,
+      "doc": {
+        "case": "hostShuttingDown",
+        "when": "apkrund is exiting (logout, `SIGTERM`, or idle exit) and answers a pending lifecycle request",
+        "raisedBy": "RuntimeHost",
+        "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §2.4"
+      }
+    },
+    {
       "code": "runtime.devConsoleGuestFailed",
       "parameters": [],
       "message": {

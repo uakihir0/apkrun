@@ -74,7 +74,7 @@ struct RuntimeStopCommand: AsyncParsableCommand {
     }
 }
 
-private enum RuntimeStatusOutput {
+enum RuntimeStatusOutput {
     static func json(_ status: RuntimeHostStatus) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -125,6 +125,12 @@ private enum RuntimeStatusOutput {
                 domain: String(code.split(separator: ".", maxSplits: 1).first ?? "runtime"),
                 code: code,
                 message: message
+            )
+        case .endpointRejected(.hostShuttingDown):
+            return .runtime(
+                "hostShuttingDown",
+                message: "APKRun's background service is stopping.",
+                remediation: "Try again in a moment."
             )
         case .endpointRejected:
             return .runtime("notAuthorized", message: "This APKRun client isn't allowed to control the runtime.")

@@ -26,7 +26,7 @@ import Testing
                 "malformedReply", "versionSkew", "invalidArguments", "devConsoleRequiresTerminal",
             ].map { "cli.\($0)" }
             + [
-                "instanceLocked", "instanceLockFailed", "devLinuxTimedOut",
+                "instanceLocked", "instanceLockFailed", "hostShuttingDown", "devLinuxTimedOut",
                 "devLinuxInvalidOptions", "devLinuxArtifactDirectoryMustBeAbsolute",
                 "devLinuxCheckFailed", "devLinuxDidNotFinish",
                 "adbExecutableMissing", "adbLaunchFailed", "adbConnectionUnavailable",
@@ -61,6 +61,7 @@ import Testing
             $0.transparent || $0.message?["en"] != nil
         }
     )
+    #expect(ErrorCatalog.cliExit(for: "runtime.hostShuttingDown") == 75)
 
     let healthCheckIDs: Set<String> = [
         "vm.state",

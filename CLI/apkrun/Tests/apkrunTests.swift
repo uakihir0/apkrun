@@ -8,6 +8,7 @@ import Testing
 #if APKRUN_EMBEDDED_RUNTIME
     import Darwin
     import RuntimeAPI
+    import RuntimeClient
 #endif
 
 private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent("Golden")
@@ -86,6 +87,17 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
 
         let stop = try await APKRunCommand.asyncParseAsRoot(["runtime", "stop"])
         #expect(stop is RuntimeStopCommand)
+    }
+
+    @Test func runtimeStatusExplainsRetryableDaemonShutdown() {
+        let error = RuntimeStatusOutput.failure(
+            RuntimeControlClientError.endpointRejected(.hostShuttingDown)
+        )
+
+        #expect(error.code == "runtime.hostShuttingDown")
+        #expect(error.message == "APKRun's background service is stopping.")
+        #expect(error.remediation == "Try again in a moment.")
+        #expect(ExitCodes.code(for: error) == 75)
     }
 
     @Test func developmentDisplayCommandsParseAddInEitherOptionOrder() throws {

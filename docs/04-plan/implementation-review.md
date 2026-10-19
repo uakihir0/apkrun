@@ -21775,9 +21775,11 @@ list, info, install, event, operation, authorization, and real-XPC acceptance
 work remains. The broker's one-use endpoint grants have only been compiled
 and exercised through host tests, not a live installed app. The integration
 path has only been exercised with focused host and Guest Agent tests, not a
-live Android guest. Android's hidden
-`IActivityManager.forceStopPackage` method and shell permission still need
-verification under R-18 on the reference image. Since the broker is
+live Android guest. The Guest Agent requests privileged
+`FORCE_STOP_PACKAGES`; #035 must grant it through the custom image's privileged
+permission allowlist. Android's hidden `IActivityManager.forceStopPackage`
+method and the shell permission still need verification under R-18 on the
+reference image. Since the broker is
 intentionally reachable by every process of the logged-in user, a local
 process can temporarily consume the bounded pool of 32 pending grants and
 cause endpoint requests to return `busy` until grants expire after five

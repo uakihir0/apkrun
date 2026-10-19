@@ -88,9 +88,9 @@
 
         @Flag(
             name: .long,
-            help:
-                "Forget APKRun's record and stored APKs without contacting Android or "
-                + "determining the app-data outcome."
+            help: ArgumentHelp(
+                "Forget APKRun's record and stored APKs without contacting Android or determining the app-data outcome."
+            )
         )
         var forget = false
 

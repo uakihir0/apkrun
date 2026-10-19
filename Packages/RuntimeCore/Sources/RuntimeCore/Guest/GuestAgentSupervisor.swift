@@ -100,6 +100,11 @@ public enum GuestAgentLoss: Equatable, Sendable {
 /// budget, and the supervisor only reconnects after a restart that it allows. Five protocol violations within ten
 /// minutes stop the reconnection (guest-protocol.md §12.2).
 public actor GuestAgentSupervisor {
+    private struct SendWaiter {
+        let continuation: CheckedContinuation<Void, Never>
+        let timeoutTask: Task<Void, Never>
+    }
+
     /// The state of the connection.
     public enum State: Equatable, Sendable {
         /// Not started, or stopped.
@@ -158,6 +163,7 @@ public actor GuestAgentSupervisor {
     private let missLimit: Int
     private let backoffMinimum: Duration
     private let backoffMaximum: Duration
+    private let requestReconnectTimeout: Duration
     private let hostVersion: String
     private let logger: APKLogger
     private let logSink: (any LogSink)?
@@ -173,6 +179,10 @@ public actor GuestAgentSupervisor {
     private var pingNonce: UInt64 = 0
     /// Counts the stops, so that a start or a recovery in flight can tell that it was stopped.
     private var generation: UInt64 = 0
+    /// Whether this generation reached a usable, resynchronised connection.
+    private var hasConnected = false
+    /// Requests waiting for the connection to finish reconnecting.
+    private var sendWaiters: [UUID: SendWaiter] = [:]
     /// When the recent protocol violations happened.
     private var violations: [ContinuousClock.Instant] = []
 
@@ -185,6 +195,7 @@ public actor GuestAgentSupervisor {
         missLimit: Int = 3,
         backoffMinimum: Duration = .milliseconds(100),
         backoffMaximum: Duration = .seconds(2),
+        requestReconnectTimeout: Duration = .seconds(5),
         logSink: (any LogSink)? = nil,
         restartAgent: @escaping @Sendable (GuestAgentLoss) async -> Bool
     ) {
@@ -197,6 +208,7 @@ public actor GuestAgentSupervisor {
         self.missLimit = missLimit
         self.backoffMinimum = backoffMinimum
         self.backoffMaximum = backoffMaximum
+        self.requestReconnectTimeout = requestReconnectTimeout
         self.restartAgent = restartAgent
         let stream = AsyncStream.makeStream(of: GPEvent.self, bufferingPolicy: .bufferingNewest(1024))
         updates = stream.stream
@@ -214,13 +226,18 @@ public actor GuestAgentSupervisor {
     /// ``stop()`` during the start throws `stopped`. After the first connection, the keepalive loop runs until
     /// ``stop()``.
     public func start(connectTimeout: Duration) async throws(GuestAgentFailure) {
+        try await start(until: ContinuousClock.now + connectTimeout)
+    }
+
+    /// Connects before the supplied absolute deadline.
+    func start(until deadline: ContinuousClock.Instant) async throws(GuestAgentFailure) {
         guard maintenance == nil else {
             return
         }
-        state = .connecting
+        hasConnected = false
+        updateState(.connecting)
         protocolVersion = nil
         let started = generation
-        let deadline = ContinuousClock.now + connectTimeout
         var delay = backoffMinimum
         while true {
             let remaining = deadline - ContinuousClock.now
@@ -228,7 +245,14 @@ public actor GuestAgentSupervisor {
                 guard remaining > .zero else {
                     throw GuestProtocolFailure.handshakeTimedOut
                 }
-                try await establish(limit: min(GuestConnection.defaultHandshakeTimeout, remaining))
+                let attemptDeadline = min(deadline, ContinuousClock.now + GuestConnection.defaultHandshakeTimeout)
+                try await establish(until: attemptDeadline)
+                guard ContinuousClock.now < attemptDeadline else {
+                    if let expired = connection {
+                        await discardConnection(expired, generation: started)
+                    }
+                    throw GuestProtocolFailure.handshakeTimedOut
+                }
                 break
             } catch {
                 guard generation == started else {
@@ -239,7 +263,7 @@ public actor GuestAgentSupervisor {
                     throw Self.startFailure(error)
                 }
                 if recordViolation(error) {
-                    state = .unavailable
+                    updateState(.unavailable)
                     logger.error(
                         "The Guest Agent broke the protocol too often, so the agent stays down",
                         errorCode: "runtime.requiredAgentUnavailable")
@@ -247,7 +271,7 @@ public actor GuestAgentSupervisor {
                 }
                 let left = deadline - ContinuousClock.now
                 if left <= .zero {
-                    state = .unavailable
+                    updateState(.unavailable)
                     throw Self.startFailure(error)
                 }
                 try? await Task.sleep(for: min(delay, left))
@@ -257,7 +281,8 @@ public actor GuestAgentSupervisor {
                 delay = min(delay * 2, backoffMaximum)
             }
         }
-        state = .ready
+        hasConnected = true
+        updateState(.ready)
         maintenance = Task { await self.maintain() }
     }
 
@@ -277,8 +302,10 @@ public actor GuestAgentSupervisor {
         protocolVersion = nil
         awaitingSnapshot = false
         buffered = []
+        hasConnected = false
+        updateState(.stopped)
+        resumeSendWaiters()
         await closing?.close()
-        state = .stopped
         androidRestartContinuation.finish()
     }
 
@@ -287,16 +314,105 @@ public actor GuestAgentSupervisor {
         StatusSnapshot(state: state, protocolVersion: protocolVersion)
     }
 
-    /// Sends one operation through the current connection. Without a connection the call fails with
-    /// `agentUnavailable`.
+    /// Sends one operation through the current connection. During a reconnect it waits up to
+    /// ``requestReconnectTimeout`` for the new connection to finish its snapshot. Once submitted, an operation is
+    /// never retried because the connection may have delivered it before failing.
     public func send<Operation: GuestOperation>(
         _ operation: Operation,
         timeout: Duration? = nil
     ) async throws(GuestProtocolFailure) -> Operation.Result {
-        guard let connection, await connection.isUsable else {
-            throw .agentUnavailable(kind: .guestAgent)
+        let started = generation
+        let deadline = ContinuousClock.now + requestReconnectTimeout
+        while true {
+            guard !Task.isCancelled, generation == started else {
+                throw .agentUnavailable(kind: .guestAgent)
+            }
+            if state == .ready, let current = connection, await current.isUsable {
+                guard !Task.isCancelled, generation == started, state == .ready, connection === current else {
+                    continue
+                }
+                return try await current.send(operation, timeout: timeout)
+            }
+            guard canWaitForReconnect(generation: started), ContinuousClock.now < deadline else {
+                throw .agentUnavailable(kind: .guestAgent)
+            }
+            await waitForSendAvailability(until: deadline, generation: started)
         }
-        return try await connection.send(operation, timeout: timeout)
+    }
+
+    /// A state transition wakes queued requests so they can send, fail terminally, or keep waiting.
+    private func updateState(_ newState: State) {
+        guard state != newState else {
+            return
+        }
+        state = newState
+        resumeSendWaiters()
+    }
+
+    /// Returns whether this request belongs to a connected generation that is actively reconnecting.
+    private func canWaitForReconnect(generation expectedGeneration: UInt64) -> Bool {
+        guard generation == expectedGeneration, hasConnected else {
+            return false
+        }
+        switch state {
+        case .ready, .reconnecting, .unresponsive:
+            return true
+        case .stopped, .connecting, .incompatible, .unavailable:
+            return false
+        }
+    }
+
+    /// Suspends one request until connection state changes, the deadline passes, the supervisor stops, or its task is
+    /// cancelled. The caller rechecks all conditions after waking, so racing signals cannot submit twice.
+    private func waitForSendAvailability(
+        until deadline: ContinuousClock.Instant,
+        generation expectedGeneration: UInt64
+    ) async {
+        let waiterID = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled, canWaitForReconnect(generation: expectedGeneration) else {
+                    continuation.resume()
+                    return
+                }
+                let timeoutTask = Task { [weak self] in
+                    do {
+                        let remaining = deadline - ContinuousClock.now
+                        if remaining > .zero {
+                            try await Task.sleep(for: remaining)
+                        }
+                    } catch {
+                        return
+                    }
+                    await self?.finishSendWaiter(waiterID)
+                }
+                sendWaiters[waiterID] = SendWaiter(
+                    continuation: continuation,
+                    timeoutTask: timeoutTask
+                )
+            }
+        } onCancel: {
+            Task { await self.finishSendWaiter(waiterID) }
+        }
+    }
+
+    /// Removes and resumes one waiter. Multiple completion signals are safe.
+    private func finishSendWaiter(_ waiterID: UUID) {
+        guard let waiter = sendWaiters.removeValue(forKey: waiterID) else {
+            return
+        }
+        waiter.timeoutTask.cancel()
+        waiter.continuation.resume()
+    }
+
+    /// Resumes all waiting requests after a state transition or stop.
+    private func resumeSendWaiters() {
+        let waiters = Array(sendWaiters.values)
+        sendWaiters.removeAll()
+        for waiter in waiters {
+            waiter.timeoutTask.cancel()
+            waiter.continuation.resume()
+        }
     }
 
     /// Waits for the event consumer to observe the requested mode on one Android display.
@@ -327,12 +443,21 @@ public actor GuestAgentSupervisor {
     /// Opens a connection, reads its handshake, and resynchronises with `GetSnapshot` before anything else. The
     /// connection is kept only when all of that succeeds, and it is closed otherwise.
     private func establish(limit: Duration) async throws(GuestProtocolFailure) {
+        try await establish(until: ContinuousClock.now + limit)
+    }
+
+    /// Opens and resynchronises within an absolute attempt deadline.
+    private func establish(until deadline: ContinuousClock.Instant) async throws(GuestProtocolFailure) {
         let started = generation
+        let handshakeTimeout = min(GuestConnection.defaultHandshakeTimeout, deadline - ContinuousClock.now)
+        guard handshakeTimeout > .zero else {
+            throw .handshakeTimedOut
+        }
         let next = GuestConnection(
             endpoint: .guestControl,
             transport: transport,
             hostVersion: hostVersion,
-            handshakeTimeout: limit,
+            handshakeTimeout: handshakeTimeout,
             logSink: logSink
         )
         awaitingSnapshot = true
@@ -352,9 +477,16 @@ public actor GuestAgentSupervisor {
                 }
                 await self.connectionEnded(next)
             }
-            let fresh = try await next.send(GuestGetSnapshot())
+            let snapshotTimeout = deadline - ContinuousClock.now
+            guard snapshotTimeout > .zero else {
+                throw GuestProtocolFailure.handshakeTimedOut
+            }
+            let fresh = try await next.send(GuestGetSnapshot(), timeout: snapshotTimeout, grace: .zero)
             guard generation == started, connection === next else {
                 throw GuestProtocolFailure.disconnected
+            }
+            guard ContinuousClock.now < deadline else {
+                throw GuestProtocolFailure.handshakeTimedOut
             }
             let previousUptimeMillis = snapshot.androidUptimeMillis
             snapshot.replace(with: fresh)
@@ -387,6 +519,21 @@ public actor GuestAgentSupervisor {
             await next.close()
             throw error
         }
+    }
+
+    /// Closes a connection that finished after its startup attempt deadline.
+    private func discardConnection(_ expired: GuestConnection, generation expectedGeneration: UInt64) async {
+        guard generation == expectedGeneration, connection === expired else {
+            return
+        }
+        connection = nil
+        session = nil
+        protocolVersion = nil
+        awaitingSnapshot = false
+        buffered = []
+        consumer?.cancel()
+        consumer = nil
+        await expired.close()
     }
 
     /// Buffers the events that arrive before the snapshot response, and applies the others at once.
@@ -424,7 +571,7 @@ public actor GuestAgentSupervisor {
                     _ = try await current.send(GuestPing(nonce: pingNonce), timeout: pingTimeout, grace: .zero)
                     misses = 0
                     if state == .unresponsive {
-                        state = .ready
+                        updateState(.ready)
                     }
                 } catch {
                     misses += 1
@@ -433,7 +580,7 @@ public actor GuestAgentSupervisor {
                         await lost(.disconnected, cause: await current.closeReason, from: current)
                     } else if misses >= missLimit {
                         misses = 0
-                        state = .unresponsive
+                        updateState(.unresponsive)
                         await lost(.unresponsive, cause: nil, from: current)
                     }
                 }
@@ -467,9 +614,9 @@ public actor GuestAgentSupervisor {
         guard generation == started, !Task.isCancelled, maintenance != nil else {
             return
         }
-        state = .reconnecting
+        updateState(.reconnecting)
         if let cause, recordViolation(cause) {
-            state = .unavailable
+            updateState(.unavailable)
             logger.error(
                 "The Guest Agent broke the protocol too often, so the agent stays down",
                 errorCode: "runtime.requiredAgentUnavailable")
@@ -483,14 +630,15 @@ public actor GuestAgentSupervisor {
             logger.error(
                 "The Guest Agent restart budget is spent, so the agent stays down",
                 errorCode: "runtime.requiredAgentUnavailable")
-            state = .unavailable
+            updateState(.unavailable)
             return
         }
         var delay = backoffMinimum
         while generation == started, !Task.isCancelled {
             do throws(GuestProtocolFailure) {
                 try await establish(limit: GuestConnection.defaultHandshakeTimeout)
-                state = .ready
+                hasConnected = true
+                updateState(.ready)
                 return
             } catch {
                 guard generation == started else {
@@ -504,7 +652,7 @@ public actor GuestAgentSupervisor {
                     return
                 }
                 if recordViolation(error) {
-                    state = .unavailable
+                    updateState(.unavailable)
                     logger.error(
                         "The Guest Agent broke the protocol too often, so the agent stays down",
                         errorCode: "runtime.requiredAgentUnavailable")
@@ -518,7 +666,7 @@ public actor GuestAgentSupervisor {
                     logger.error(
                         "The Guest Agent restart budget is spent, so the agent stays down",
                         errorCode: "runtime.requiredAgentUnavailable")
-                    state = .unavailable
+                    updateState(.unavailable)
                     return
                 }
                 guard generation == started else {
@@ -546,9 +694,9 @@ public actor GuestAgentSupervisor {
     private func markTerminalState(for failure: GuestProtocolFailure) {
         if case .incompatibleVersion(_, let guest) = failure {
             protocolVersion = guest
-            state = .incompatible
+            updateState(.incompatible)
         } else {
-            state = .unavailable
+            updateState(.unavailable)
         }
     }
 

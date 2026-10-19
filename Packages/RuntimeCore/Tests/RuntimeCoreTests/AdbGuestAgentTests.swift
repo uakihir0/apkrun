@@ -29,11 +29,13 @@ private final class FakeGuestADB: @unchecked Sendable {
                 printf '127.0.0.1:6520 tcp:43001 localabstract:apkrun-guestd-control\\n'
                 printf '127.0.0.1:6520 tcp:5555 localabstract:other\\n'
                 exit 0 ;;
+              "-s 127.0.0.1:6520 get-state") echo device; exit 0 ;;
               "-s 127.0.0.1:6520 shell pm list packages --show-versioncode io.apkrun.guest")
                 v=$(cat "$dir/version" 2>/dev/null || echo 1000)
                 echo "package:io.apkrun.guest versionCode:$v"
                 exit 0 ;;
               "-s 127.0.0.1:6520 install -r -t "*)
+                if [ -f "$dir/slow-install" ]; then sleep 2; fi
                 if [ -f "$dir/refuse-all-installs" ]; then
                   echo "adb: failed to install: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package io.apkrun.guest signatures do not match newer version; ignoring !allowDowngrade]"
                   exit 1
@@ -48,7 +50,8 @@ private final class FakeGuestADB: @unchecked Sendable {
               "-s 127.0.0.1:6520 shell pidof apkrun_guestd")
                 if [ -f "$dir/running" ]; then echo 2121; exit 0; fi
                 exit 1 ;;
-              "-s 127.0.0.1:6520 shell kill 2121") rm -f "$dir/running"; exit 0 ;;
+              "-s 127.0.0.1:6520 shell kill 2121")
+                rm -f "$dir/running"; exit 0 ;;
               *"app_process"*)
                 if [ -f "$dir/block-start" ]; then
                   touch "$dir/start-entered"
@@ -101,6 +104,10 @@ private final class FakeGuestADB: @unchecked Sendable {
 
     func blockAgentStart() throws {
         try Data().write(to: directory.appendingPathComponent("block-start"))
+    }
+
+    func slowInstall() throws {
+        try Data().write(to: directory.appendingPathComponent("slow-install"))
     }
 
     var agentStartEntered: Bool {
@@ -318,6 +325,28 @@ func aFourthDeathWithinAMinuteIsRequiredAgentUnavailable() async throws {
         // The catalog code is the one that the host reports (error-catalog.md).
         #expect(error.qualifiedCode == "runtime.requiredAgentUnavailable")
     }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func theRequiredAgentDeadlineIncludesProvisioning() async throws {
+    let fake = try FakeGuestADB()
+    try fake.slowInstall()
+    let agent = DevelopmentGuestAgent(
+        adb: AdbClient(executable: fake.executable),
+        bundle: bundle(version: 1000)
+    )
+    let started = ContinuousClock.now
+    do {
+        try await agent.start(connectTimeout: .milliseconds(1_500))
+        Issue.record("the Guest Agent installed after its connection deadline")
+    } catch {
+        #expect(error == .connectTimedOut)
+    }
+    #expect(ContinuousClock.now - started < .seconds(5))
+    #expect(
+        fake.calls.contains { $0.hasPrefix("-s 127.0.0.1:6520 install -r -t ") },
+        "ADB calls were \(fake.calls)"
+    )
 }
 
 @Test(.timeLimit(.minutes(1)))

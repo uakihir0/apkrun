@@ -221,7 +221,7 @@ Timeouts:
 | Whole boot, normal | 180 s | `runtime.bootTimeoutSeconds` | `failed(.bootTimedOut(phase))` |
 | Whole boot, first boot of an instance or of a new image | 900 s | `runtime.firstBootTimeoutSeconds` | same. Android formats userdata and runs dexopt ([android-image.md](android-image.md) §5.2, §12.3) |
 | No phase progress (stall) | 90 s (first boot: 600 s) | — | `failed(.bootStalled(phase))` |
-| Required agent handshake after `.bootCompleted` | 30 s | — | `failed(.requiredAgentUnavailable(agent))` |
+| Required agent readiness after `.bootCompleted` (boot confirmation, first-boot settings, ADB, development provisioning, handshake, and initial snapshot) | 30 s | — | `failed(.requiredAgentUnavailable(agent))` |
 
 Immediate failures during boot: the console shows `Kernel panic - not syncing` (`failed(.kernelPanic)`), the console shows `VIRTUAL_DEVICE_BOOT_FAILED` (`failed(.androidBootFailed)`), `VMState → failed` (`failed(.vm(…))`), or GraphicsCore reports `rendererInitFailed` (`failed(.graphics(…))`).
 
@@ -331,7 +331,7 @@ Rule: **the host is the source of truth for configuration, the guest for Android
 
 - Frames keep flowing. The graphics path does not depend on the agent.
 - Input is dropped and counted (`input.droppedWhileDisconnected`). Text events are dropped too. The wrapper shows no error for gaps shorter than 2 s.
-- Requests that need the agent wait for the reconnect up to 5 s, then throw `RuntimeFailure.guestAgentUnavailable` ([display-and-windowing.md](display-and-windowing.md) §10).
+- Requests that need the agent wait for an in-progress reconnect for up to 5 s, then throw `RuntimeFailure.guestAgentUnavailable` ([display-and-windowing.md](display-and-windowing.md) §10). The request stays unsent while it waits. Once submitted to the connection, it is never replayed after a disconnect because the guest may already have performed it. Stopping the supervisor or cancelling the caller wakes a queued request promptly; RuntimeCore reports the existing typed `GuestProtocolFailure.agentUnavailable` for either case.
 - A required agent that stays unreachable for more than 30 s while `ready` moves the runtime to `failed(.requiredAgentUnavailable(agent))` (§3.6).
 - Hung guest watchdog: the agent misses pings, ADB is unreachable, and the console is silent, all for 60 s while `ready` → `failed(.guestUnresponsive)`.
 

@@ -159,7 +159,7 @@ public actor RuntimeSupervisor {
         timeouts: BootTimeouts = .standard,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         guestAgentBundle: GuestAgentBundle? = nil,
-        guestAgentTimeout: Duration = .seconds(5),
+        guestAgentTimeout: Duration = DevelopmentGuestAgent.defaultConnectTimeout,
         developmentDisplay: DevelopmentDisplay? = nil
     ) {
         self.guestAgentBundle = guestAgentBundle
@@ -389,23 +389,30 @@ public actor RuntimeSupervisor {
             startADBBridge(controller: controller, tracker: tracker, progress: progress.continuation)
         }
         try await waitForBootCompletion(progress.stream, firstBoot: isFirstBoot, started: bootStarted)
+        let requiredAgentDeadline: ContinuousClock.Instant? =
+            options.developerMode && guestAgentBundle != nil
+            ? ContinuousClock.now + guestAgentTimeout
+            : nil
         // The boot is complete: finish the progress stream so that the periodic ticks stop accumulating.
         bootProgress?.finish()
         adbPollTask?.cancel()
         bootProgress = nil
 
         if let shell {
-            try await confirmBootCompleted(shell)
+            try await confirmBootCompleted(shell, before: requiredAgentDeadline)
             if isFirstBoot {
-                await applyFirstBootSettings(shell)
+                await applyFirstBootSettings(shell, before: requiredAgentDeadline)
             }
         }
         if options.developerMode, guestAgentBundle != nil {
             guard let agent = developmentGuestAgent else {
                 throw .guestAgent(.startFailed)
             }
+            guard let requiredAgentDeadline else {
+                throw .guestAgent(.connectTimedOut)
+            }
             do throws(GuestAgentFailure) {
-                try await agent.start(connectTimeout: guestAgentTimeout)
+                try await agent.start(until: requiredAgentDeadline)
             } catch {
                 throw .guestAgent(error)
             }
@@ -772,31 +779,55 @@ public actor RuntimeSupervisor {
     }
 
     /// Reads `sys.boot_completed` over the serial shell (the M1 debug channel, #014).
-    private func confirmBootCompleted(_ shell: AndroidSerialShell) async throws(RuntimeBootFailure) {
-        let deadline = ContinuousClock.now + .seconds(30)
+    private func confirmBootCompleted(
+        _ shell: AndroidSerialShell,
+        before requiredAgentDeadline: ContinuousClock.Instant?
+    ) async throws(RuntimeBootFailure) {
+        let normalDeadline = ContinuousClock.now + .seconds(30)
+        let deadline = min(normalDeadline, requiredAgentDeadline ?? normalDeadline)
         while ContinuousClock.now < deadline {
             try throwIfStopped()
-            if let reply = try? await shell.run("getprop sys.boot_completed", timeout: .seconds(5)),
+            let remaining = deadline - ContinuousClock.now
+            if let reply = try? await shell.run(
+                "getprop sys.boot_completed",
+                timeout: min(.seconds(5), remaining)
+            ),
                 reply.output.split(whereSeparator: \.isNewline).last == "1"
             {
                 logger.notice("Android reports sys.boot_completed=1")
                 return
             }
-            try? await Task.sleep(for: .milliseconds(500))
+            let sleepDuration = min(.milliseconds(500), deadline - ContinuousClock.now)
+            if sleepDuration > .zero {
+                try? await Task.sleep(for: sleepDuration)
+            }
+        }
+        if let requiredAgentDeadline, ContinuousClock.now >= requiredAgentDeadline {
+            throw .guestAgent(.connectTimedOut)
         }
         throw .androidBootFailed(detail: "sys.boot_completed did not become 1 over the serial shell")
     }
 
-    private func applyFirstBootSettings(_ shell: AndroidSerialShell) async {
+    private func applyFirstBootSettings(
+        _ shell: AndroidSerialShell,
+        before requiredAgentDeadline: ContinuousClock.Instant?
+    ) async {
         for command in FirstBootSettings.commands {
+            let remaining = requiredAgentDeadline.map { $0 - ContinuousClock.now } ?? .seconds(30)
+            guard remaining > .zero else {
+                return
+            }
             do {
-                let reply = try await shell.run(command, timeout: .seconds(30))
+                let reply = try await shell.run(command, timeout: min(.seconds(30), remaining))
                 logger.info("First-boot setting '\(command, .public)' exited \(reply.status, .public)")
             } catch {
                 logger.warning(
                     "First-boot setting '\(command, .public)' did not finish: \(String(describing: error), .public)")
                 return
             }
+        }
+        if let requiredAgentDeadline, ContinuousClock.now >= requiredAgentDeadline {
+            return
         }
         do {
             try await instanceStore.markFirstBootSettingsApplied()

@@ -49,6 +49,9 @@ public enum DevelopmentGuestTaskEvent: Equatable, Sendable {
 /// The development Guest Agent of one boot (guest-components.md §3, §6.1): it installs and starts the agent, keeps
 /// the control connection, restarts a dead agent within the restart budget, and removes its forwards when it stops.
 public actor DevelopmentGuestAgent {
+    /// The required-agent connection budget from runtime-daemon.md §3.2.
+    public static let defaultConnectTimeout: Duration = .seconds(30)
+
     /// The control connection, with its keepalive and resync.
     public nonisolated let supervisor: GuestAgentSupervisor
     /// Task lifecycle changes from the control connection, narrowed to the RuntimeCore API.
@@ -126,52 +129,108 @@ public actor DevelopmentGuestAgent {
     /// forwards that an earlier boot left behind are removed first, because they would make the forward fail. A
     /// ``stop()`` during the start ends it with `stopped`. A start that is not running after its connection failed is
     /// `startFailed`.
-    public func start(connectTimeout: Duration = .seconds(5)) async throws(GuestAgentFailure) {
+    public func start(connectTimeout: Duration = DevelopmentGuestAgent.defaultConnectTimeout)
+        async throws(GuestAgentFailure)
+    {
+        try await start(until: ContinuousClock.now + connectTimeout)
+    }
+
+    /// Starts the development agent against an absolute deadline supplied by the boot sequence.
+    func start(until deadline: ContinuousClock.Instant) async throws(GuestAgentFailure) {
         let started = generation
+        let deviceWaitTimeout = try connectionTimeRemaining(until: deadline)
         do {
-            try await adb.awaitDevice(timeout: .seconds(30))
+            try await adb.awaitDevice(timeout: deviceWaitTimeout)
         } catch {
+            try requireStarted(started)
+            if ContinuousClock.now >= deadline {
+                throw .connectTimedOut
+            }
             logger.error("The Guest Agent failed at the device wait", errorCode: error.qualifiedCode)
             throw .adb(error)
         }
         try requireStarted(started)
+        _ = try connectionTimeRemaining(until: deadline)
         // The cleanup of forwards that an earlier boot left is best effort: a forward that cannot be listed does not
         // stop the agent from starting.
         do {
-            try await removeForwards()
+            try await removeForwards(until: deadline)
         } catch {
+            try requireStarted(started)
+            if ContinuousClock.now >= deadline {
+                throw .connectTimedOut
+            }
             logger.warning("The stale Guest Agent forwards could not be removed: \(error.qualifiedCode, .public)")
         }
         try requireStarted(started)
+        _ = try connectionTimeRemaining(until: deadline)
         do {
-            try await provisioner.install()
+            try await provisioner.install(until: deadline)
         } catch {
+            try requireStarted(started)
+            if ContinuousClock.now >= deadline {
+                throw .connectTimedOut
+            }
             logger.error("The Guest Agent failed at the install", errorCode: error.qualifiedCode)
             throw error
         }
         try requireStarted(started)
+        _ = try connectionTimeRemaining(until: deadline)
         do {
-            try await provisioner.startAgent()
+            try await provisioner.startAgent(until: deadline)
         } catch {
+            try requireStarted(started)
+            if ContinuousClock.now >= deadline {
+                throw .connectTimedOut
+            }
             logger.error("The Guest Agent failed at the start", errorCode: error.qualifiedCode)
             throw error
         }
         try requireStarted(started)
+        _ = try connectionTimeRemaining(until: deadline)
         startTaskEventRelay()
         do {
-            try await supervisor.start(connectTimeout: connectTimeout)
+            try await supervisor.start(until: deadline)
+            try requireStarted(started)
+            if ContinuousClock.now >= deadline {
+                await supervisor.stop()
+                throw GuestAgentFailure.connectTimedOut
+            }
         } catch GuestAgentFailure.stopped {
             throw .stopped
-        } catch {
-            if case .connectTimedOut = error, (try? await provisioner.isRunning()) == false {
+        } catch let failure as GuestAgentFailure {
+            if case .connectTimedOut = failure, ContinuousClock.now < deadline,
+                (try? await provisioner.isRunning(until: deadline)) == false
+            {
+                try requireStarted(started)
                 logger.error(
                     "The Guest Agent process is not running after the start",
                     errorCode: "runtime.guestAgentStartFailed")
                 throw .startFailed
             }
-            logger.error("The Guest Agent did not answer its handshake", errorCode: error.qualifiedCode)
-            throw error
+            try requireStarted(started)
+            if ContinuousClock.now >= deadline {
+                throw .connectTimedOut
+            }
+            logger.error("The Guest Agent did not answer its handshake", errorCode: failure.qualifiedCode)
+            throw failure
+        } catch {
+            try requireStarted(started)
+            if ContinuousClock.now >= deadline {
+                throw .connectTimedOut
+            }
+            logger.error("The Guest Agent failed at the handshake", errorCode: "runtime.guestAgentStartFailed")
+            throw .startFailed
         }
+    }
+
+    private func connectionTimeRemaining(until deadline: ContinuousClock.Instant) throws(GuestAgentFailure) -> Duration
+    {
+        let remaining = deadline - ContinuousClock.now
+        guard remaining > .zero else {
+            throw .connectTimedOut
+        }
+        return remaining
     }
 
     /// Stops the supervisor and removes the forwards of the agent. A start in flight ends with `stopped`. The agent
@@ -483,16 +542,27 @@ public actor DevelopmentGuestAgent {
     }
 
     /// Removes the forwards of the Guest Agent sockets (`localabstract:apkrun-`).
-    private func removeForwards() async throws(GuestAgentFailure) {
+    private func removeForwards(until deadline: ContinuousClock.Instant? = nil) async throws(GuestAgentFailure) {
         do {
-            for forward in try await adb.forwardList() where forward.remote.hasPrefix("localabstract:apkrun-") {
+            let timeout =
+                try deadline.map { try connectionTimeRemaining(until: $0) }
+                ?? .seconds(10)
+            for forward in try await adb.forwardList(timeout: timeout)
+            where forward.remote.hasPrefix("localabstract:apkrun-") {
                 let port = forward.local.dropFirst("tcp:".count)
                 if let number = UInt16(port) {
-                    try await adb.forwardRemove(port: number)
+                    let timeout =
+                        try deadline.map { try connectionTimeRemaining(until: $0) }
+                        ?? .seconds(10)
+                    try await adb.forwardRemove(port: number, timeout: timeout)
                 }
             }
+        } catch let failure as GuestAgentFailure {
+            throw failure
+        } catch let failure as AdbFailure {
+            throw .adb(failure)
         } catch {
-            throw .adb(error)
+            throw .adb(.connectionUnavailable)
         }
     }
 

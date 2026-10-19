@@ -58,6 +58,36 @@ private func snapshot(displays: [Int32], uptimeMillis: UInt64? = nil) -> GPSnaps
     return snapshot
 }
 
+@Test(.timeLimit(.minutes(1)))
+func snapshotResynchronisationUsesTheRemainingInitialConnectionDeadline() async throws {
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello()
+        agent.answer = { _ in nil }
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: DelayedTransport(inner: transport, delay: .milliseconds(200)),
+        restartAgent: { _ in true }
+    )
+    let started = ContinuousClock.now
+
+    do {
+        try await supervisor.start(connectTimeout: .milliseconds(300))
+        Issue.record("the connection succeeded without a snapshot")
+    } catch {
+        #expect(error == .connectTimedOut)
+    }
+    #expect(ContinuousClock.now - started < .seconds(1))
+    #expect(
+        transport.agents.first?.requests.contains { request in
+            if case .getSnapshot? = request.op {
+                return true
+            }
+            return false
+        } == true
+    )
+    await supervisor.stop()
+}
+
 private func isGetSnapshot(_ request: GPRequest) -> Bool {
     if case .getSnapshot? = request.op {
         return true

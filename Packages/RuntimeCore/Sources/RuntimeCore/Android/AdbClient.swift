@@ -335,7 +335,10 @@ public actor AdbClient {
     /// Lists the packages whose names contain `filter`, with their versionCode (`pm list packages --show-versioncode`).
     /// The filter must be a full package name or empty: a partial name is refused, so that the command line
     /// stays a package name. An empty filter lists every package.
-    public func listPackages(matching filter: String = "") async throws(AdbFailure) -> [AdbPackageListing] {
+    public func listPackages(
+        matching filter: String = "",
+        timeout: Duration? = nil
+    ) async throws(AdbFailure) -> [AdbPackageListing] {
         guard filter.isEmpty || Self.isPackageName(filter) else {
             throw .invalidArgument(command: "pm")
         }
@@ -343,7 +346,7 @@ public actor AdbClient {
             filter.isEmpty
             ? "pm list packages --show-versioncode"
             : "pm list packages --show-versioncode \(filter)"
-        let reply = try await runShell(label: "pm", command, timeout: commandTimeout)
+        let reply = try await runShell(label: "pm", command, timeout: timeout ?? commandTimeout)
         guard reply.status == 0 else {
             throw .commandFailed(command: "pm", status: reply.status)
         }
@@ -408,26 +411,35 @@ public actor AdbClient {
     public func awaitDevice(timeout: Duration) async throws(AdbFailure) {
         let deadline = ContinuousClock.now + timeout
         while true {
-            if let state = try? await runDeviceCommand("get-state", arguments: ["get-state"], timeout: .seconds(5)),
+            let remaining = deadline - ContinuousClock.now
+            guard remaining > .zero else {
+                throw .connectionUnavailable
+            }
+            if let state = try? await runDeviceCommand(
+                "get-state",
+                arguments: ["get-state"],
+                timeout: min(.seconds(5), remaining)
+            ),
                 state.status == 0,
                 state.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines) == "device"
             {
                 return
             }
-            guard ContinuousClock.now < deadline else {
+            let sleepDuration = min(.milliseconds(500), deadline - ContinuousClock.now)
+            guard sleepDuration > .zero else {
                 throw .connectionUnavailable
             }
-            try? await Task.sleep(for: .milliseconds(500))
+            try? await Task.sleep(for: sleepDuration)
         }
     }
 
     /// The process ID of the process named `name` (its `comm` name, as `pidof` matches it), or nil when none runs.
     /// The name is letters, digits, and underscores, so it cannot add shell syntax.
-    public func processID(named name: String) async throws(AdbFailure) -> Int? {
+    public func processID(named name: String, timeout: Duration? = nil) async throws(AdbFailure) -> Int? {
         guard Self.isProcessName(name) else {
             throw .invalidArgument(command: "pidof")
         }
-        let reply = try await runShell(label: "pidof", "pidof \(name)", timeout: commandTimeout)
+        let reply = try await runShell(label: "pidof", "pidof \(name)", timeout: timeout ?? commandTimeout)
         let silent =
             reply.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && reply.errorOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -446,14 +458,24 @@ public actor AdbClient {
     /// Sends SIGTERM to the process named `name`. The process is found with `pidof`, and `kill` sends the signal to
     /// that ID. `pkill -x` does not match the daemon on build 16373615, although `pidof` does, so the ID is used.
     /// Nothing is sent when no such process runs.
-    public func terminateProcess(named name: String) async throws(AdbFailure) {
+    public func terminateProcess(named name: String, timeout: Duration? = nil) async throws(AdbFailure) {
         guard Self.isProcessName(name) else {
             throw .invalidArgument(command: "kill")
         }
-        guard let pid = try await processID(named: name) else {
+        let deadline = timeout.map { ContinuousClock.now + $0 }
+        guard let pid = try await processID(named: name, timeout: timeout ?? commandTimeout) else {
             return
         }
-        let reply = try await runShell(label: "kill", "kill \(pid)", timeout: commandTimeout)
+        let killTimeout: Duration
+        if let deadline {
+            killTimeout = deadline - ContinuousClock.now
+            guard killTimeout > .zero else {
+                throw .commandTimedOut(command: "kill", seconds: 1)
+            }
+        } else {
+            killTimeout = commandTimeout
+        }
+        let reply = try await runShell(label: "kill", "kill \(pid)", timeout: killTimeout)
         guard reply.status == 0 else {
             throw .commandFailed(command: "kill", status: reply.status)
         }
@@ -461,7 +483,7 @@ public actor AdbClient {
 
     /// Starts the Guest Agent of `packageName` as the shell user with `app_process` (guest-components.md §3.2). The
     /// process detaches from this ADB session, so it survives the session's end. The command returns at once.
-    public func startGuestAgent(packageName: String) async throws(AdbFailure) {
+    public func startGuestAgent(packageName: String, timeout: Duration? = nil) async throws(AdbFailure) {
         guard Self.isPackageName(packageName) else {
             throw .invalidArgument(command: "app_process")
         }
@@ -469,7 +491,7 @@ public actor AdbClient {
             "CLASSPATH=$(pm path \(packageName) | sed \"s/^package://\") setsid nohup app_process "
             + "-Dapkrun.mode=development / --nice-name=apkrun_guestd io.apkrun.guest.daemon.Main "
             + ">/dev/null 2>&1 &"
-        let reply = try await runShell(label: "app_process", command, timeout: commandTimeout)
+        let reply = try await runShell(label: "app_process", command, timeout: timeout ?? commandTimeout)
         guard reply.status == 0 else {
             throw .commandFailed(command: "app_process", status: reply.status)
         }
@@ -493,11 +515,11 @@ public actor AdbClient {
     }
 
     /// Removes the forward of the loopback port `port` (`adb forward --remove tcp:<port>`).
-    public func forwardRemove(port: UInt16) async throws(AdbFailure) {
+    public func forwardRemove(port: UInt16, timeout: Duration? = nil) async throws(AdbFailure) {
         let result = try await runDeviceCommand(
             "forward",
             arguments: ["forward", "--remove", "tcp:\(port)"],
-            timeout: commandTimeout
+            timeout: timeout ?? commandTimeout
         )
         guard result.status == 0 else {
             throw .commandFailed(command: "forward", status: result.status)
@@ -505,8 +527,12 @@ public actor AdbClient {
     }
 
     /// The forwards of the device (`adb forward --list`).
-    public func forwardList() async throws(AdbFailure) -> [AdbForward] {
-        let result = try await runDeviceCommand("forward", arguments: ["forward", "--list"], timeout: commandTimeout)
+    public func forwardList(timeout: Duration? = nil) async throws(AdbFailure) -> [AdbForward] {
+        let result = try await runDeviceCommand(
+            "forward",
+            arguments: ["forward", "--list"],
+            timeout: timeout ?? commandTimeout
+        )
         guard result.status == 0 else {
             throw .commandFailed(command: "forward", status: result.status)
         }

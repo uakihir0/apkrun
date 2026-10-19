@@ -388,7 +388,7 @@ func aRebindKeepsTheCountsOfTheRouterItReplaces() async {
     let lines = text.split(separator: "\n").map(String.init)
     #expect(
         lines.first
-            == "warning: Pointer and keyboard input are not bound to Android. APKRun couldn't connect to the Guest Agent within 5 seconds."
+            == "warning: Pointer and keyboard input are not bound to Android. APKRun couldn't connect to the Guest Agent within 30 seconds."
     )
     #expect(
         lines.contains {

@@ -21516,3 +21516,47 @@ index writes, Debug-only targeted ADB cleanup through a fake runner, recovery
 after unclean exit, and listener lifecycle gating. Focused
 `swift-format lint --strict` and `git diff --check` passed for the combined
 changes. No live LaunchAgent, ADB command, or Android VM was started.
+
+**Required Guest Agent connection timeout choice.** Use the documented 30-second
+budget for the initial required-agent handshake, both for direct
+`DevelopmentGuestAgent.start()` calls and the RuntimeSupervisor default.
+
+**Reason.** The boot sequence explicitly gives the Guest Agent 30 seconds to
+become ready. The previous 5-second default could fail a valid slow startup
+before the design's budget elapsed. RuntimeSupervisor starts one absolute
+deadline immediately after `.bootCompleted`; boot confirmation, first-boot
+settings, ADB readiness, forward cleanup, package installation, process start,
+handshake, and initial snapshot resynchronization share that deadline. Each
+serial-shell command and ADB operation uses its remaining time. A handshake
+that returns at the deadline is closed instead of being left connected. Tests
+can still inject shorter durations so they remain fast and deterministic.
+
+**Verification.** The combined focused `swift test --package-path . --filter
+'GuestAgentSupervisorTests|RuntimeHostStatusTests|AdbGuestAgentTests|DevelopmentGuestAgentTimeoutTests|GuestAgentSendReconnectTests'`
+run passed all 45 tests (39 RuntimeCore tests and six RuntimeAPI status tests).
+`xcrun swift-format lint --strict` passed for the touched Swift files. No live
+guest was started.
+
+**Reconnect request wait choice.** Hold an operation locally while a previously
+connected Guest Agent is reconnecting, for up to the documented 5-second
+request window. Wake the wait on a synchronized reconnect, a terminal
+connection state, supervisor stop, caller cancellation, or deadline. Dispatch
+the operation once after `GetSnapshot`; never replay it after it has been
+submitted to a connection.
+
+**Reason.** A short Guest Agent disconnect should not immediately fail a
+request that can still succeed, but retrying an operation after a lost reply
+could perform a non-idempotent action twice. Waking pending requests during
+stop and cancellation avoids delaying shutdown or retaining abandoned work.
+`GuestProtocolFailure` has no cancellation case, so stop and cancellation of
+an unsent request use its existing typed `agentUnavailable` failure.
+
+**Risk.** A cancellation is surfaced as `agentUnavailable` at the protocol
+failure boundary, so callers that need to distinguish cancellation must also
+check their task's cancellation state. A request already sent may still have
+an unknown outcome if the connection closes before its reply; this change
+intentionally does not retry it.
+
+**Verification.** The combined focused run above includes tests for one-time
+dispatch after resynchronization, the 5-second wait deadline, prompt release
+on stop and caller cancellation, and no replay after an in-flight disconnect.

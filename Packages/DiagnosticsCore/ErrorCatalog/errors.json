@@ -2441,7 +2441,7 @@
       "code": "runtime.guestAgentConnectTimedOut",
       "parameters": [],
       "message": {
-        "en": "APKRun couldn't connect to the Guest Agent within 5 seconds."
+        "en": "APKRun couldn't connect to the Guest Agent within 30 seconds."
       },
       "remediation": {
         "en": "Restart Android with apkrun dev boot. If it happens again, create a diagnostics report."

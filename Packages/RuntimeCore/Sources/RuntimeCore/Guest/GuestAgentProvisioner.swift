@@ -69,19 +69,25 @@ public actor GuestAgentProvisioner {
     /// removed, and the bundled one is installed. A newer installed agent is removed first, because `install -r` does
     /// not downgrade. The agent keeps no user data in development mode, so the removal is safe. A refusal that is not
     /// recovered is `installFailed` with Android's reason (IR-423, IR-424, IR-425).
-    public func install() async throws(GuestAgentFailure) {
+    public func install(until deadline: ContinuousClock.Instant? = nil) async throws(GuestAgentFailure) {
         let installed: Int?
         do {
-            let listing = try await adb.listPackages(matching: bundle.packageName)
+            let listing = try await adb.listPackages(
+                matching: bundle.packageName,
+                timeout: try Self.timeout(until: deadline, fallback: .seconds(10))
+            )
             installed = listing.first { $0.name == bundle.packageName }?.versionCode
         } catch {
             throw .adb(error)
         }
         do {
             if let installed, installed > bundle.versionCode {
-                try await adb.uninstall(packageName: bundle.packageName)
+                try await adb.uninstall(
+                    packageName: bundle.packageName,
+                    timeout: try Self.timeout(until: deadline, fallback: .seconds(60))
+                )
             }
-            try await installBundle()
+            try await installBundle(until: deadline)
         } catch {
             if case .packageRejected(_, let reason) = error {
                 throw .installFailed(reason: reason)
@@ -91,22 +97,34 @@ public actor GuestAgentProvisioner {
     }
 
     /// Starts the agent. A copy that is still running is terminated first, so that the new one can bind its sockets.
-    public func startAgent() async throws(GuestAgentFailure) {
+    public func startAgent(until deadline: ContinuousClock.Instant? = nil) async throws(GuestAgentFailure) {
         do {
-            if try await adb.processID(named: Self.processName) != nil {
-                try await adb.terminateProcess(named: Self.processName)
-                try await waitForExit(attempts: 30)
+            if try await adb.processID(
+                named: Self.processName,
+                timeout: try Self.timeout(until: deadline, fallback: .seconds(10))
+            ) != nil {
+                try await adb.terminateProcess(
+                    named: Self.processName,
+                    timeout: try Self.timeout(until: deadline, fallback: .seconds(10))
+                )
+                try await waitForExit(attempts: 30, until: deadline)
             }
-            try await adb.startGuestAgent(packageName: bundle.packageName)
+            try await adb.startGuestAgent(
+                packageName: bundle.packageName,
+                timeout: try Self.timeout(until: deadline, fallback: .seconds(10))
+            )
         } catch {
             throw .adb(error)
         }
     }
 
     /// Whether an agent process runs (`pidof`).
-    public func isRunning() async throws(GuestAgentFailure) -> Bool {
+    public func isRunning(until deadline: ContinuousClock.Instant? = nil) async throws(GuestAgentFailure) -> Bool {
         do {
-            return try await adb.processID(named: Self.processName) != nil
+            return try await adb.processID(
+                named: Self.processName,
+                timeout: try Self.timeout(until: deadline, fallback: .seconds(10))
+            ) != nil
         } catch {
             throw .adb(error)
         }
@@ -117,22 +135,52 @@ public actor GuestAgentProvisioner {
         try? await adb.terminateProcess(named: Self.processName)
     }
 
-    private func installBundle() async throws(AdbFailure) {
+    private func installBundle(until deadline: ContinuousClock.Instant?) async throws(AdbFailure) {
         do {
-            try await adb.install(apk: bundle.apk, allowTestOnly: true)
+            try await adb.install(
+                apk: bundle.apk,
+                timeout: try Self.timeout(until: deadline, fallback: .seconds(180)),
+                allowTestOnly: true
+            )
         } catch AdbFailure.packageRejected(_, let reason) where reason == "INSTALL_FAILED_UPDATE_INCOMPATIBLE" {
-            try await adb.uninstall(packageName: bundle.packageName)
-            try await adb.install(apk: bundle.apk, allowTestOnly: true)
+            try await adb.uninstall(
+                packageName: bundle.packageName,
+                timeout: try Self.timeout(until: deadline, fallback: .seconds(60))
+            )
+            try await adb.install(
+                apk: bundle.apk,
+                timeout: try Self.timeout(until: deadline, fallback: .seconds(180)),
+                allowTestOnly: true
+            )
         }
     }
 
     /// Waits until no agent process is left, polling `pidof` every 100 ms.
-    private func waitForExit(attempts: Int) async throws(AdbFailure) {
+    private func waitForExit(attempts: Int, until deadline: ContinuousClock.Instant?) async throws(AdbFailure) {
         for _ in 0..<attempts {
-            if try await adb.processID(named: Self.processName) == nil {
+            if try await adb.processID(
+                named: Self.processName,
+                timeout: try Self.timeout(until: deadline, fallback: .seconds(10))
+            ) == nil {
                 return
             }
-            try? await Task.sleep(for: .milliseconds(100))
+            let remaining = deadline.map { $0 - ContinuousClock.now }
+            guard remaining.map({ $0 > .zero }) ?? true else {
+                throw .commandTimedOut(command: "pidof", seconds: 1)
+            }
+            try? await Task.sleep(for: min(.milliseconds(100), remaining ?? .milliseconds(100)))
         }
+    }
+
+    private static func timeout(
+        until deadline: ContinuousClock.Instant?,
+        fallback: Duration
+    ) throws(AdbFailure) -> Duration {
+        guard let deadline else { return fallback }
+        let remaining = deadline - ContinuousClock.now
+        guard remaining > .zero else {
+            throw .commandTimedOut(command: "guest-agent", seconds: 1)
+        }
+        return remaining
     }
 }

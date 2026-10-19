@@ -64,7 +64,13 @@ private func pointerEvent(_ type: NSEvent.EventType) -> NSEvent {
         contentSize: CGSize(width: 100, height: 100),
         contentScale: 1
     )
-    view.update(pixelWidth: 100, pixelHeight: 100, generation: 1)
+    view.update(
+        pixelWidth: 100,
+        pixelHeight: 100,
+        generation: 1,
+        contentSize: CGSize(width: 100, height: 100),
+        contentsScale: 1
+    )
     let sink = RecordingInputSink()
     view.setInputEnabled(false)
 

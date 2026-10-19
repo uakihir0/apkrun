@@ -17,7 +17,8 @@ public final class IOSurfaceLayerView: NSView {
     private static let flushInterval: TimeInterval = 1.0 / 120.0
 
     private let contentLayer = CALayer()
-    private let contentSize: CGSize
+    private var contentSize: CGSize
+    private var zoom: Double
     private var translator: EventTranslator
     /// The key events of key mode (input.md §5.1). The keys that are down end with `focusLost` and `cancelAll`.
     private var keyTranslator = KeyTranslator()
@@ -34,12 +35,21 @@ public final class IOSurfaceLayerView: NSView {
     /// Receives the pointer and key events, in order.
     public var inputSink: PointerInputSink?
 
+    /// Requests a new display geometry after a View menu zoom action.
+    public var onZoomChanged: ((Double) -> Void)?
+
+    /// The currently requested zoom.
+    public var currentZoom: Double {
+        zoom
+    }
+
     /// Observes raw pointer receipt for explicitly enabled diagnostics. The default input path does not call an observer.
     public var inputEventReceiptObserver: ((Int, UInt64) -> Void)?
 
     /// Creates a view whose content is `contentSize` points, shown at `contentScale` pixels per point.
-    public init(frame: NSRect, contentSize: CGSize, contentScale: CGFloat) {
+    public init(frame: NSRect, contentSize: CGSize, contentScale: CGFloat, zoom: Double = 1) {
         self.contentSize = contentSize
+        self.zoom = zoom
         // An empty mapper maps nothing, so no event leaves before `update` has set the surface.
         let unset = CoordinateMapper(
             contentRect: DisplayRect(x: 0, y: 0, width: 0, height: 0), pixelWidth: 0, pixelHeight: 0, generation: 0)
@@ -71,7 +81,11 @@ public final class IOSurfaceLayerView: NSView {
     }
 
     /// Shows `surface`. `displayed` runs on the main actor after Core Animation commits the contents.
-    public func show(_ surface: IOSurface, displayed: @escaping @MainActor @Sendable () -> Void) {
+    public func show(
+        _ surface: IOSurface,
+        replacingWith surfaceSet: FrameSurfaceSet? = nil,
+        displayed: @escaping @MainActor @Sendable () -> Void
+    ) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         CATransaction.setCompletionBlock {
@@ -79,15 +93,58 @@ public final class IOSurfaceLayerView: NSView {
                 displayed()
             }
         }
+        if let surfaceSet {
+            geometry = (
+                pixelWidth: surfaceSet.pixelWidth,
+                pixelHeight: surfaceSet.pixelHeight,
+                generation: surfaceSet.generation
+            )
+            contentSize = surfaceSet.contentSize
+            contentLayer.bounds = CGRect(origin: .zero, size: surfaceSet.contentSize)
+            contentLayer.contentsScale = surfaceSet.contentsScale
+            contentLayer.frame = contentRect
+        }
         contentLayer.contents = surface
         CATransaction.commit()
     }
 
     /// Sets the pixel size and the generation of the display that the content shows (input.md §3). The mapper is replaced
     /// at once. A new generation cancels the gesture that is open, so the guest ends it.
-    public func update(pixelWidth: Int, pixelHeight: Int, generation: UInt64) {
+    public func update(
+        pixelWidth: Int,
+        pixelHeight: Int,
+        generation: UInt64,
+        contentSize: CGSize,
+        contentsScale: CGFloat
+    ) {
         geometry = (pixelWidth: pixelWidth, pixelHeight: pixelHeight, generation: generation)
+        self.contentSize = contentSize
+        contentLayer.bounds = CGRect(origin: .zero, size: contentSize)
+        contentLayer.contentsScale = contentsScale
+        contentLayer.frame = contentRect
+        layoutSubtreeIfNeeded()
         replaceMapper()
+    }
+
+    /// Switches input mapping once the replacement surface's Core Animation transaction has committed.
+    public func commitGeometry(generation: UInt64) {
+        guard geometry?.generation == generation else { return }
+        replaceMapper()
+    }
+
+    /// The View menu's Zoom In command (⌘=).
+    @objc public func zoomIn(_ sender: Any?) {
+        setZoom(min(2, zoom + 0.1))
+    }
+
+    /// The View menu's Zoom Out command (⌘−).
+    @objc public func zoomOut(_ sender: Any?) {
+        setZoom(max(0.75, zoom - 0.1))
+    }
+
+    /// The View menu's Actual Size command (⌘0).
+    @objc public func actualSize(_ sender: Any?) {
+        setZoom(1)
     }
 
     /// Enables event translation after the owner is ready to route input to the guest.
@@ -181,6 +238,21 @@ public final class IOSurfaceLayerView: NSView {
     /// The ⌘ shortcuts of input.md §6 (⌘C, ⌘X, ⌘V, ⌘A, ⌘Z, and ⌘[) reach the guest before the menus can take them. The
     /// other key equivalents are left to the menus, so ⌘Q, ⌘W, and the rest keep their meaning.
     public override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.contains(.command), let characters = event.charactersIgnoringModifiers {
+            switch characters {
+            case "=":
+                zoomIn(nil)
+                return true
+            case "-":
+                zoomOut(nil)
+                return true
+            case "0":
+                actualSize(nil)
+                return true
+            default:
+                break
+            }
+        }
         guard inputEnabled,
             let sample = KeyEventAdapter.sample(for: event),
             KeyTranslator.forwardsCommandShortcut(sample)
@@ -194,6 +266,14 @@ public final class IOSurfaceLayerView: NSView {
     /// The content rectangle in the view's coordinates: the aspect fit of the content in the bounds.
     private var contentRect: CGRect {
         DisplayGeometry.aspectFit(contentSize: contentSize, in: bounds.size)
+    }
+
+    private func setZoom(_ value: Double) {
+        guard value != zoom else {
+            return
+        }
+        zoom = value
+        onZoomChanged?(value)
     }
 
     /// Replaces the tracking area with one over the content rectangle, so that the enter and exit events follow the

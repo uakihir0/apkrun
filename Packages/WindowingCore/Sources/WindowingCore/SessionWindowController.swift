@@ -20,8 +20,12 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     private var gate: LayerFrameGate
     private var consumer: Task<Void, Never>?
     private var presentationState = SessionWindowPresentationState()
-    /// The generation that the input mapper maps to. Nil until the first frame is shown.
-    private var inputGeneration: UInt64?
+    private let onGeometryChanged: ((CGSize, CGFloat, Double, @escaping @MainActor (Bool) -> Void) -> Void)?
+    private var geometryDebounce: Task<Void, Never>?
+    private var geometryUpdatePending = false
+    private var pendingSurfaceGeneration: UInt64?
+    private var generationHasCommittedFrame = false
+    private var isShown = false
 
     /// Creates the window for `source`, titled `title`, at the points of the source's pixel size divided by `backingScale`.
     /// The pointer events of the window go to `inputSink` (#024). Without a sink the window shows the frames only.
@@ -30,32 +34,40 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         title: String,
         backingScale: CGFloat,
         inputSink: PointerInputSink? = nil,
-        appIcon: NSImage? = nil
+        appIcon: NSImage? = nil,
+        onGeometryChanged: ((CGSize, CGFloat, Double, @escaping @MainActor (Bool) -> Void) -> Void)? = nil
     ) {
         self.source = source
-        gate = LayerFrameGate(generation: source.generation)
-        let size = DisplayGeometry.contentSize(
-            pixelWidth: source.pixelWidth,
-            pixelHeight: source.pixelHeight,
-            backingScale: backingScale
-        )
+        let surfaceSet = source.currentSurfaceSet
+        gate = LayerFrameGate(generation: surfaceSet.generation)
+        let size = surfaceSet.contentSize
         layerView = IOSurfaceLayerView(
             frame: NSRect(origin: .zero, size: size),
             contentSize: size,
-            contentScale: backingScale
+            contentScale: surfaceSet.contentsScale,
+            zoom: surfaceSet.zoom
         )
+        self.onGeometryChanged = onGeometryChanged
         layerView.setInputEnabled(false)
         self.inputSink = inputSink
         let placeholderView = SessionWindowPlaceholderView(
             appName: title, appIcon: appIcon, frame: NSRect(origin: .zero, size: size))
         window = NSWindow(
             contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.titled, .closable, .miniaturizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         super.init()
+        layerView.update(
+            pixelWidth: surfaceSet.pixelWidth,
+            pixelHeight: surfaceSet.pixelHeight,
+            generation: surfaceSet.generation,
+            contentSize: surfaceSet.contentSize,
+            contentsScale: surfaceSet.contentsScale
+        )
         window.title = title
+        window.contentMinSize = NSSize(width: 320 * surfaceSet.zoom, height: 400 * surfaceSet.zoom)
         window.isReleasedWhenClosed = false
         let contentView = NSView(frame: NSRect(origin: .zero, size: size))
         contentView.wantsLayer = true
@@ -75,11 +87,16 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         window.acceptsMouseMovedEvents = true
         window.setContentSize(size)
         window.center()
+        layerView.onZoomChanged = { [weak self] zoom in
+            self?.window.contentMinSize = NSSize(width: 320 * zoom, height: 400 * zoom)
+            self?.requestGeometryUpdate(zoom: zoom)
+        }
         self.placeholderView = placeholderView
     }
 
     /// Shows the window, and starts applying the frames of the source.
     public func show() {
+        isShown = true
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(layerView)
         consumer = Task { [source] in
@@ -109,9 +126,26 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         layerView.focusLost()
     }
 
+    /// Applies the new Android mode once the user's resize settles.
+    public func windowDidEndLiveResize(_ notification: Notification) {
+        requestGeometryUpdate()
+    }
+
+    /// A quiet-period resize also handles fullscreen transitions, which do not always send live-resize callbacks.
+    public func windowDidResize(_ notification: Notification) {
+        requestGeometryUpdate()
+    }
+
+    /// Moving to a display with another backing scale uses the same mode replacement path.
+    public func windowDidChangeBackingProperties(_ notification: Notification) {
+        requestGeometryUpdate()
+    }
+
     /// Ends the input, then stops the frames, and tells the owner that the user closed the window.
     public func windowWillClose(_ notification: Notification) {
         layerView.cancelAll()
+        geometryDebounce?.cancel()
+        geometryDebounce = nil
         consumer?.cancel()
         consumer = nil
         onClose?()
@@ -119,37 +153,103 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
 
     private func apply(_ event: FrameSourceEvent) {
         switch event {
+        case .surfacesReplaced(let generation):
+            guard generation > gate.generation else { return }
+            pendingSurfaceGeneration = max(pendingSurfaceGeneration ?? generation, generation)
+            generationHasCommittedFrame = false
+            layerView.setInputEnabled(false)
         case .frameReady(let generation, let bufferIndex, let sequence):
+            guard let surfaceSet = source.surfaceSet(generation: generation) else {
+                return
+            }
+            guard generation >= gate.generation else { return }
+            let replacesGeometry = generation > gate.generation
+            if replacesGeometry {
+                gate.switchTo(generation: generation)
+                if let pendingSurfaceGeneration, pendingSurfaceGeneration <= generation {
+                    self.pendingSurfaceGeneration = nil
+                }
+                generationHasCommittedFrame = false
+                layerView.setInputEnabled(false)
+            }
             guard gate.accept(generation: generation, sequence: sequence),
-                source.surfaces.indices.contains(bufferIndex)
+                surfaceSet.surfaces.indices.contains(bufferIndex)
             else {
                 return
             }
-            // A new generation changes the mapper, and an open gesture of the old one is cancelled (input.md §3).
-            if generation != inputGeneration {
-                inputGeneration = generation
-                layerView.update(
-                    pixelWidth: source.pixelWidth,
-                    pixelHeight: source.pixelHeight,
-                    generation: generation
-                )
-            }
             let source = source
-            layerView.show(source.surfaces[bufferIndex]) { [weak self] in
-                source.frameDisplayed(sequence: sequence)
+            layerView.show(
+                surfaceSet.surfaces[bufferIndex],
+                replacingWith: replacesGeometry ? surfaceSet : nil
+            ) { [weak self] in
+                source.frameDisplayed(generation: generation, sequence: sequence)
                 guard let self else {
                     return
                 }
+                guard generation == gate.generation else {
+                    return
+                }
+                if replacesGeometry {
+                    layerView.commitGeometry(generation: generation)
+                }
+                if pendingSurfaceGeneration.map({ $0 <= generation }) ?? true {
+                    generationHasCommittedFrame = true
+                }
                 presentationState.markFramePresented()
                 guard !presentationState.showsPlaceholder else {
+                    updateInputAvailability()
                     return
                 }
                 placeholderView?.removeFromSuperview()
                 placeholderView = nil
-                layerView.inputSink = inputSink
-                layerView.setInputEnabled(presentationState.acceptsInput)
+                updateInputAvailability()
             }
         }
+    }
+
+    private func requestGeometryUpdate(zoom: Double? = nil) {
+        guard isShown else {
+            return
+        }
+        geometryUpdatePending = true
+        layerView.setInputEnabled(false)
+        geometryDebounce?.cancel()
+        let requestedZoom = zoom ?? layerView.currentZoom
+        geometryDebounce = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard let self, !Task.isCancelled else {
+                return
+            }
+            geometryDebounce = nil
+            guard let contentSize = window.contentView?.bounds.size else {
+                return
+            }
+            guard let onGeometryChanged else {
+                geometryUpdateDidFinish(success: false)
+                return
+            }
+            onGeometryChanged(contentSize, window.backingScaleFactor, requestedZoom) { [weak self] success in
+                self?.geometryUpdateDidFinish(success: success)
+            }
+        }
+    }
+
+    private func geometryUpdateDidFinish(success: Bool) {
+        geometryUpdatePending = false
+        if !success, pendingSurfaceGeneration == nil {
+            generationHasCommittedFrame = generationHasCommittedFrame || presentationState.hasPresentedFrame
+        }
+        updateInputAvailability()
+    }
+
+    private func updateInputAvailability() {
+        layerView.inputSink = inputSink
+        layerView.setInputEnabled(
+            presentationState.acceptsInput
+                && generationHasCommittedFrame
+                && pendingSurfaceGeneration == nil
+                && !geometryUpdatePending
+        )
     }
 }
 
@@ -239,9 +339,11 @@ public enum DisplayApplication {
     private static let stopRequest = StopRequest()
 
     /// Runs the event loop on the calling thread until `stop()`.
+    @MainActor
     public static func run() {
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
+        application.mainMenu = makeMainMenu()
         application.activate(ignoringOtherApps: true)
         guard !stopRequest.isRequested else {
             return
@@ -269,6 +371,31 @@ public enum DisplayApplication {
                 NSApplication.shared.postEvent(event, atStart: true)
             }
         }
+    }
+
+    @MainActor
+    private static func makeMainMenu() -> NSMenu {
+        let mainMenu = NSMenu()
+        let viewItem = NSMenuItem()
+        let viewMenu = NSMenu(title: "View")
+        viewItem.submenu = viewMenu
+        mainMenu.addItem(viewItem)
+
+        let zoomIn = NSMenuItem(title: "Zoom In", action: #selector(IOSurfaceLayerView.zoomIn(_:)), keyEquivalent: "=")
+        zoomIn.keyEquivalentModifierMask = [.command]
+        viewMenu.addItem(zoomIn)
+        let zoomOut = NSMenuItem(
+            title: "Zoom Out", action: #selector(IOSurfaceLayerView.zoomOut(_:)), keyEquivalent: "-")
+        zoomOut.keyEquivalentModifierMask = [.command]
+        viewMenu.addItem(zoomOut)
+        let actualSize = NSMenuItem(
+            title: "Actual Size",
+            action: #selector(IOSurfaceLayerView.actualSize(_:)),
+            keyEquivalent: "0"
+        )
+        actualSize.keyEquivalentModifierMask = [.command]
+        viewMenu.addItem(actualSize)
+        return mainMenu
     }
 }
 

@@ -43,6 +43,10 @@ class TaskService(
     private val moveTaskById: (Int, Int) -> Unit = { taskId, displayId ->
         SystemServices.activityTask.call("moveRootTaskToDisplay", taskId, displayId)
     },
+    /** Focus adapter, replaceable by a fake in JVM tests. */
+    private val focusTaskById: (Int) -> Unit = { taskId ->
+        SystemServices.activityTask.call("setFocusedTask", taskId)
+    },
     private val nowMillis: () -> Long = { System.nanoTime() / NANOS_PER_MILLI },
     private val waitMillis: suspend (Long) -> Unit = { delay(it) },
 ) {
@@ -89,6 +93,13 @@ class TaskService(
 
     /** Moves the focus to the top task of [displayId] (`setFocusedTask`, input.md §7.2). */
     fun focus(displayId: Int) {
+        if (displayId < 0) {
+            throw GuestFailure(
+                GuestErrorCode.GUEST_ERROR_CODE_INVALID_ARGUMENT,
+                "the display ID is not valid",
+                mapOf("display_id" to displayId.toString()),
+            )
+        }
         val task =
             list().firstOrNull { it.getDisplayId() == displayId }
                 ?: throw GuestFailure(
@@ -96,7 +107,7 @@ class TaskService(
                     "no task is on the display",
                     mapOf("display_id" to displayId.toString()),
                 )
-        SystemServices.activityTask.call("setFocusedTask", task.getTaskId())
+        focusTaskById(task.getTaskId())
     }
 
     /** Moves a root task to [displayId] (`moveRootTaskToDisplay`). */

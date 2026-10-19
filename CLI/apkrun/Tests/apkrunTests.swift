@@ -101,7 +101,18 @@ import Testing
     #expect(result["owner"] as? String == "apkrund")
     #expect(result["hostState"] as? String == "running")
     #expect(result["runtimeState"] as? String == "ready")
+    #expect(result["crashLoopActive"] as? Bool == false)
     #expect(result["daemonPID"] as? Int32 == 123)
+    #expect(result["imageVersion"] as? String == "android-17")
+    #expect(result["guestAgentState"] as? String == "connected")
+    #expect(result["guestAgentProtocolVersion"] as? String == "1.4")
+    #expect(
+        Set(result.keys)
+            == [
+                "owner", "hostState", "runtimeState", "crashLoopActive", "daemonPID",
+                "imageVersion", "guestAgentState", "guestAgentProtocolVersion",
+            ]
+    )
 }
 
 @Test func packageQueryHumanOutputStripsTerminalControlCharacters() {

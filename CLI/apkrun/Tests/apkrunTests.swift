@@ -30,6 +30,11 @@ import Testing
     #expect((runtimeInfo as? PackageInfoCommand)?.runtime == true)
 }
 
+@Test func runtimeRestartCommandParsesConfirmationFlag() async throws {
+    let command = try await APKRunCommand.asyncParseAsRoot(["runtime", "restart", "--yes"])
+    #expect((command as? RuntimeRestartCommand)?.yes == true)
+}
+
 @Test func packageInfoRejectsTheDisplayOptionWithAnActionableCatalogError() async throws {
     let command = try await APKRunCommand.asyncParseAsRoot(["info", "--displays"])
     guard var infoCommand = command as? PackageInfoCommand else {
@@ -211,7 +216,7 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
 }
 
 #if APKRUN_EMBEDDED_RUNTIME
-    @Test func runtimeControlCommandsParseStatusStartStopAndRestart() async throws {
+    @Test func runtimeControlCommandsParseStatusStartAndStop() async throws {
         let status = try await APKRunCommand.asyncParseAsRoot(["runtime", "status", "--json"])
         #expect((status as? RuntimeStatusCommand)?.json == true)
 
@@ -221,8 +226,6 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
         let stop = try await APKRunCommand.asyncParseAsRoot(["runtime", "stop"])
         #expect(stop is RuntimeStopCommand)
 
-        let restart = try await APKRunCommand.asyncParseAsRoot(["runtime", "restart", "--yes"])
-        #expect((restart as? RuntimeRestartCommand)?.yes == true)
     }
 
     @Test func runtimeStatusExplainsRetryableDaemonShutdown() {

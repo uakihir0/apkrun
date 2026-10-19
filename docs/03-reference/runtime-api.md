@@ -980,7 +980,7 @@ public struct TerminateRequest: Codable, Sendable {
 ```
 
 - `launch` opens the registered wrapper when its `WrapperStatus.state` is `valid`, otherwise the generic launcher (`APKRun.app/Contents/Helpers/APKRunLauncher.app --package <id>`). A running wrapper is activated. The process must connect within 20 s, or the reply is `runtime.launchTimedOut`. Then the reply waits until the session is `running` or `ended`.
-- `terminate` sends `windowRequest(.close)` to the session's client, stops keep-running tasks of the package, and sends `StopApplication` to the Guest Agent. The session ends with `.userClosed`. Without a session, it only force-stops the app when Android is `ready`. It never starts Android.
+- `terminate` sends `windowRequest(.close)` to the session's client, stops keep-running tasks of the package, and sends `StopApplication(FORCE_STOP)` to the Guest Agent. The session ends with `.userClosed`. Without a session, it only force-stops the app when Android is `ready`. It never starts Android. Closing a window by itself uses `StopApplication(FINISH_TASKS)` so the app process may keep running.
 
 `SessionSummary` (also the payload of the `sessions` topic):
 

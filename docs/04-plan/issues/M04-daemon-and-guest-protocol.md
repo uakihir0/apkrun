@@ -190,6 +190,7 @@ APKRun.app, APKRunLauncher, and the CLI reach apkrund through one versioned XPC 
 - `launch`, `terminate`, and the session registry of §7 (queued sessions, orphaned sessions re-attached within 3 s).
 - RuntimeClient `XPCRuntimeService` with the reconnect behavior of [../../01-architecture/process-model-and-ipc.md](../../01-architecture/process-model-and-ipc.md) §2.5.
 - The CLI switch (§8.5, [../../02-design/cli.md](../../02-design/cli.md) §7): every command outside `dev` uses `XPCRuntimeService`. New commands: `status`, `runtime status|start|stop|restart|reset`, `launch`, `stop`, `config …`, `operations …`. When apkrund is not registered, the CLI prints the registration message and exits 69.
+- `terminate` sends `StopApplication(FORCE_STOP)` so explicit stops also terminate background processes; window-close remains `FINISH_TASKS` ([../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §7.1 #15).
 - Out of scope ([../../00-product/scope.md](../../00-product/scope.md) §5):
   - The launcher window and the frame messages of the session channel in APKRunLauncher (#068).
   - `WrapperIdentity` and the real wrapper authorization (#044). #032 uses the seam of Notes.
@@ -248,6 +249,7 @@ By tier ([../test-strategy.md](../test-strategy.md) §6.5):
 - [ ] A test binary signed with another identity is rejected at the control endpoint (NFR-SEC-07, ADR-0007 verification).
 - [ ] A wrapper connection that requests a session for another package gets `notAuthorized` (NFR-SEC-07).
 - [ ] A warm launch after the runtime is `ready` writes no boot markers (G6 condition 3).
+- [ ] `stop <package>` uses `StopApplication(FORCE_STOP)`; closing a window uses `FINISH_TASKS`.
 - [ ] When apkrund is not registered, every non-`dev` command prints the registration message and exits 69 (FR-CLI-01).
 
 ### Notes
@@ -453,7 +455,7 @@ The Guest Agent implements every control operation that the runtime needs, and R
 
 ### Scope
 
-- The remaining control operations of [../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §7.1: 15 `StopApplication` with `FORCE_STOP`, 16 `MoveTaskToDisplay`, 17 `ListTasks`, 21 `GetHealth`, and 70 `Shutdown`, with the remaining events of §8.1 up to #22 and the timeouts of §6. Already done in M3: 15 with `FINISH_TASKS` (#026), 19 `QueryPackage` and 20 `ListPackages` (#027), and 13 `ClearDisplay` with `TasksCleared` (#028) ([../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §15 #034 step 1).
+- The remaining control operations of [../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §7.1: 16 `MoveTaskToDisplay`, 17 `ListTasks`, 21 `GetHealth`, and 70 `Shutdown`, with the remaining events of §8.1 up to #22 and the timeouts of §6. Already implemented: 15 with `FINISH_TASKS` (#026) and `FORCE_STOP` (#032), 19 `QueryPackage` and 20 `ListPackages` (#027), and 13 `ClearDisplay` with `TasksCleared` (#028) ([../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §15 #034 step 1).
 - The guest services behind them and `HealthService` with `AppProcessEvent` and memory figures ([../../02-design/guest-components.md](../../02-design/guest-components.md) §11 #034).
 - `VsockGuestTransport`, validated on the stock image with `apkrun_vsockd` run as root if that image's policy lets the `su` domain use vsock ([../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §13.3, §15 #034 step 2).
 - `AndroidControlChannel` over GuestProtocol for every production control path in RuntimeCore. `AdbClient` counts `adb shell` invocations for tests.
@@ -465,7 +467,7 @@ The Guest Agent implements every control operation that the runtime needs, and R
 
 ### Deliverables
 
-- Guest services for operations 15 (`FORCE_STOP`), 16, 17, 21, and 70, and the remaining events up to #22, in `Guest/guestd/`, with the `SystemServices` wrappers they need in `Guest/agentruntime/`.
+- Guest services for operations 16, 17, 21, and 70, and the remaining events up to #22, in `Guest/guestd/`, with the `SystemServices` wrappers they need in `Guest/agentruntime/`.
 - Host handlers in RuntimeCore, `VsockGuestTransport`, and `AndroidControlChannel`.
 - The `adb shell` counter in `AdbClient`, and the raw-ADB lint allowlist updated so that no production path calls `adb shell` ([../test-strategy.md](../test-strategy.md) §3.3).
 - T0 `GuestConnectionTests`, T1 Kotlin server tests against a scripted host, and T2 `GuestProtocolLaunchTests` and `AgentReconnectTests` in `Tests/IntegrationTests/GuestAgentTests/` (plus `VsockTransportTests` when the stock image allows it).
@@ -473,7 +475,7 @@ The Guest Agent implements every control operation that the runtime needs, and R
 ### Implementation steps
 
 1. **Remaining operations and events** ([../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §7.1, §8.1, §15 #034 step 1; [../../02-design/guest-components.md](../../02-design/guest-components.md) §11 #034 step 1).
-   - Implement 15 (`FORCE_STOP`), 16, 17, 21, and 70 on both sides. Each operation checks its capability and uses its timeout from §6 (`Shutdown` 20 s).
+   - Implement 16, 17, 21, and 70 on both sides. Each operation checks its capability and uses its timeout from §6 (`Shutdown` 20 s). `StopApplication(FORCE_STOP)` was pulled forward to #032 for explicit termination.
    - Emit the events of §8.1 up to #22 from the agent.
    - A hidden API that is missing fails only its capability ([../../02-design/guest-components.md](../../02-design/guest-components.md) §6.2).
    - Check: T0 `GuestConnectionTests` with an in-memory fake agent: pipelining, out-of-order responses, timeouts, cancel, keepalive loss, and resync ordering. T1: the Kotlin server against a scripted host for every new operation.

@@ -494,7 +494,7 @@ Wrappers open sessions. Control clients (GUI, menu bar, CLI) do not own windows,
   1. the registered wrapper for the package (`Wrappers/registry.json`), if its bundle still exists and its cdhash matches;
   2. otherwise the generic launcher `APKRun.app/Contents/Helpers/APKRunLauncher.app` with the arguments `--package <id>` (#068). It is signed with APKRun's identity and uses the `.control` endpoint.
   The launched process calls `openSession`. `launch` returns when that session reaches `running` (or fails), so `apkrun launch` can print the result and the first-frame time.
-- `terminate(packageID)`: ends the session (the wrapper receives `windowRequest(.close)`), stops keep-running tasks, and sends `StopApplication` (force-stop) to the Guest Agent. The session ends with `.userClosed`.
+- `terminate(packageID)`: ends the session (the wrapper receives `windowRequest(.close)`), stops keep-running tasks, and sends `StopApplication(FORCE_STOP)` to the Guest Agent. The session ends with `.userClosed`. Without a session, it sends `StopApplication(FORCE_STOP)` only when Android is already ready; it never starts Android. Closing a window continues to use `StopApplication(FINISH_TASKS)`.
 
 #032's acceptance, "CLI launches HelloText through XPC without direct VM ownership", is tested with `apkrun launch io.apkrun.fixture.hellotext` (§13).
 

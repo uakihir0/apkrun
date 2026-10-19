@@ -20602,7 +20602,8 @@ the Guest Agent reports the package's tasks gone. A tracked task that exits
 before the first frame is also an app exit and ends the session. If the
 appeared and vanished events arrive before the `LaunchApplication` reply,
 buffer them by task ID and reconcile them with the returned ID. A different
-package task must not end the pending launch. Keep `FORCE_STOP` unsupported.
+package task must not end the pending launch. Keep window close on
+`FINISH_TASKS`; explicit `terminate` gains `FORCE_STOP` in #032.
 Bound guest task removal to 4 s inside the protocol's 5 s operation deadline;
 if removal fails, report a warning and stop the embedded runtime anyway.
 
@@ -21695,7 +21696,7 @@ The behavior has only been exercised with host tests, not a real guest.
 |---|---|
 | Status | Needs maintainer review |
 | Task | #032 |
-| Affected documents | [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2; [runtime-daemon.md](../02-design/runtime-daemon.md) §2.4; [runtime-api.md](../03-reference/runtime-api.md) §2; [cli.md](../02-design/cli.md) §3; [M04](issues/M04-daemon-and-guest-protocol.md) #032 |
+| Affected documents | [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2; [runtime-daemon.md](../02-design/runtime-daemon.md) §2.4; [runtime-api.md](../03-reference/runtime-api.md) §2; [guest-protocol.md](../02-design/guest-protocol.md) §§7.1, 15; [guest-components.md](../02-design/guest-components.md) §5; [cli.md](../02-design/cli.md) §3; [M03](issues/M03-input-and-basic-runtime.md) #026; [M04](issues/M04-daemon-and-guest-protocol.md) #032, #034 |
 
 **Choices.** Add versioned control-XPC launch and terminate requests, with
 typed replies, and expose `apkrun launch` and `apkrun stop`. The daemon starts
@@ -21703,16 +21704,22 @@ Android on demand, checks the installed package through Guest Agent, acquires
 a secondary display lease, drains and acknowledges frames, and tracks the
 session through `SessionRegistry`. Keep these two control operations limited
 to the app, menu bar, and CLI client kinds; the generic launcher receives its
-session channel in #068. Enable this headless path only in Debug builds with
-the #032 test hook. Limit control endpoints to eight, broker connections to
-32, and each connection to 64 in-flight requests. Create one anonymous
-control listener per grant, bind it to the selected client's code-signing
-requirement, and bind its reservation to that one-use listener and broker
-connection for at most five seconds. Bound pending grant state separately at
-32 without consuming any of the eight live-control slots. Probe the accepted
-control connection with the idempotent status operation and retry transport
-refusals before any side effect. Map the new `busy` rejection to the existing
-`hostShuttingDown` value for API 1.0–1.2 clients.
+session channel in #068. Gate only headless launch behind the Debug #032 test
+hook. Keep terminate available without that hook: it stops an existing daemon
+session or force-stops a package only when Android is already ready, without
+starting Android. Pull `StopApplication(FORCE_STOP)` forward from #034 because
+`terminate` promises to stop the package process, while preserving
+`FINISH_TASKS` for window-close behavior. Reuse the existing protobuf mode, so
+this does not change the wire schema or protocol version. Limit control
+endpoints to eight, broker connections to 32, and each connection to 64
+in-flight requests. Create one anonymous control listener per grant, bind it
+to the selected client's code-signing requirement, and bind its reservation to
+that one-use listener and broker connection for at most five seconds. Bound
+pending grant state separately at 32 without consuming any of the eight
+live-control slots. Probe the accepted control connection with the idempotent
+status operation and retry transport refusals before any side effect. Map the
+new `busy` rejection to the existing `hostShuttingDown` value for API 1.0–1.2
+clients.
 Retry transient endpoint admission with bounded backoff. Decode structured
 broker admission errors during hello. On service shutdown, reject new
 operations, remove observers, wait for snapshot reconciliation and in-flight
@@ -21730,7 +21737,11 @@ to reuse. A separate launcher session channel keeps package-window capability
 out of general control clients. Reserving capacity atomically prevents a
 granted endpoint from later failing as an unexplained transport error; version
 fallback preserves the documented minor-version compatibility rule. The
-one-use endpoint itself enforces the exact code requirement for the claimed
+force-stop mode is already specified in the Guest Protocol, and implementing
+it here makes `stop` meet its documented behavior before the remaining #034
+operations are complete. Window close remains a separate finish-tasks action
+so it does not unexpectedly kill a process. This avoids a new protocol field
+or version bump. The one-use endpoint itself enforces the exact code requirement for the claimed
 client kind, and the reservation ID prevents a delayed endpoint connection
 from consuming a different grant. Broker claims do not reserve live-control
 capacity before a signature-checked connection arrives, consistent with the
@@ -21744,27 +21755,34 @@ local route immediately and schedules its router cleanup after the barrier.
 A runtime
 generation check prevents reusing a stale Guest Agent after Android stops.
 Full daemon shutdown closes the session service before stopping Android. The
-headless hook is the specified temporary path before native app windows exist.
+headless hook is the specified temporary path for launch before native app
+windows exist; terminate has no window dependency.
 
 **Verification.** Focused RuntimeHost, RuntimeClient, RuntimeAPI, and CLI
 tests pass, including headless display lease cleanup, reconnect reconciliation,
 shutdown rejection, no replay of launch and terminate, broker error decoding,
 API versioning, immediate snapshot delivery during observer registration, and
-registration guidance. Swift format lint and `git diff --check` pass. Per the
-user's request, no GitHub Actions, dedicated login host, LaunchAgent, or live
-VM test was run.
+registration guidance. Focused Guest Protocol and RuntimeHost tests pass for
+force-stop request encoding, package-installed validation, and session
+cleanup. Kotlin Guest Agent coverage was added, but could not be run locally:
+the checkout has no Gradle wrapper and Gradle is not installed. Swift format
+lint and `git diff --check` pass. Per the user's request, no GitHub Actions,
+dedicated login host, LaunchAgent, or live VM test was run.
 
 **Risk for review.** This is a partial #032 implementation. Release builds do
 not enable headless launch, first-frame reporting awaits #068, and the broader
 list, info, install, event, operation, authorization, and real-XPC acceptance
 work remains. The broker's one-use endpoint grants have only been compiled
 and exercised through host tests, not a live installed app. The integration
-path has only been exercised with focused host tests, not a live Android
-guest. Since the broker is intentionally reachable by every process of the
-logged-in user, a local process can temporarily consume the bounded pool of 32
-pending grants and cause endpoint requests to return `busy` until grants
-expire after five seconds. The endpoint signing requirement still prevents
-that process from connecting to a granted control endpoint. This bounded
-availability tradeoff keeps the documented broker model and avoids using
-process IDs or audit tokens for authorization; it needs maintainer review.
+path has only been exercised with focused host and Guest Agent tests, not a
+live Android guest. Android's hidden
+`IActivityManager.forceStopPackage` method and shell permission still need
+verification under R-18 on the reference image. Since the broker is
+intentionally reachable by every process of the logged-in user, a local
+process can temporarily consume the bounded pool of 32 pending grants and
+cause endpoint requests to return `busy` until grants expire after five
+seconds. The endpoint signing requirement still prevents that process from
+connecting to a granted control endpoint. This bounded availability tradeoff
+keeps the documented broker model and avoids using process IDs or audit tokens
+for authorization; it needs maintainer review.
 

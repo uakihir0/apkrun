@@ -712,7 +712,7 @@ public actor GuestConnection {
 
 ### #034 Full Guest Agent protocol and vsock transport (M4)
 
-1. Remaining control operations: `StopApplication` with `FORCE_STOP`, `MoveTaskToDisplay`, `ListTasks`, `GetHealth`, `Shutdown`, and the remaining events of §8.1 up to #22. Earlier tasks pulled some operations forward: `StopApplication` with `FINISH_TASKS` (#026, the close policy), `QueryPackage` and `ListPackages` (#027), and `ClearDisplay` with `TasksCleared` (#028).
+1. Remaining control operations: `MoveTaskToDisplay`, `ListTasks`, `GetHealth`, `Shutdown`, and the remaining events of §8.1 up to #22. Earlier tasks pulled some operations forward: `StopApplication` with `FINISH_TASKS` (#026, the close policy) and `FORCE_STOP` (#032, explicit terminate), `QueryPackage` and `ListPackages` (#027), and `ClearDisplay` with `TasksCleared` (#028).
 2. `VsockGuestTransport`. Validate it on the stock userdebug image with `apkrun_vsockd` pushed and started as root (`adb root`), if that image's policy allows the `su` domain to use vsock. Otherwise defer the vsock validation to #035 and record that in the task.
 3. Switch every production control path in RuntimeCore from ADB to `AndroidControlChannel` over GuestProtocol. `AdbClient` (RuntimeCore, built in #015) keeps a counter of `adb shell` invocations for tests.
 4. Acceptance: HelloText can be launched through GuestProtocol without ADB shell commands. The T2 test asserts that the `adb shell` counter does not change between runtime ready and the first frame. ADB remains available for debugging (`adb -s 127.0.0.1:6520 shell` works in developer mode).

@@ -177,6 +177,44 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Lists managed packages or the Android inventory already known to the daemon.
+    public func listPackages(
+        filter: RuntimePackageFilter = .managed
+    ) async throws(RuntimeControlClientError) -> RuntimePackageListResult {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeListPackagesControlRequest(
+                header: makeHeader(),
+                filter: filter
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.listPackages(data)
+            return try Self.decodePackageListReply(from: response)
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
+    /// Returns the daemon's stored details for one package.
+    public func packageInfo(
+        packageID: RuntimePackageID
+    ) async throws(RuntimeControlClientError) -> RuntimePackageDetails {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimePackageInfoControlRequest(
+                header: makeHeader(),
+                packageID: packageID
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.packageInfo(data)
+            return try Self.decodePackageInfoReply(from: response)
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
     private func makeHeader() -> APIRequestHeader {
         APIRequestHeader(clientKind: configuration.clientKind)
     }
@@ -363,6 +401,38 @@ public actor RuntimeControlClient {
         -> RuntimeTerminateResult
     {
         let reply = try Self.decode(RuntimeTerminateControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
+    private static func decodePackageListReply(from data: Data) throws(RuntimeControlClientError)
+        -> RuntimePackageListResult
+    {
+        let reply = try Self.decode(RuntimeListPackagesControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
+    private static func decodePackageInfoReply(from data: Data) throws(RuntimeControlClientError)
+        -> RuntimePackageDetails
+    {
+        let reply = try Self.decode(RuntimePackageInfoControlReply.self, from: data)
         guard (reply.result != nil) != (reply.error != nil) else {
             throw .malformedReply
         }
@@ -567,6 +637,8 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func runtimeStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func startRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func stopRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func listPackages(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func packageInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func terminate(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func invalidate()
@@ -735,6 +807,34 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.stopRuntime(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func listPackages(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.listPackages(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func packageInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.packageInfo(request) { response in finish(.success(response)) }
         }
     }
 

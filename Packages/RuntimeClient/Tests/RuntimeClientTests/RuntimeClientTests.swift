@@ -111,6 +111,109 @@ import Testing
     }
 }
 
+@Test func controlClientListsPackagesAndReadsDetailsWithVersionedRequests() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let summary = RuntimePackageSummary(
+        packageID: packageID,
+        displayName: "Hello Text",
+        versionCode: 7,
+        versionName: "1.2.3",
+        state: .installed,
+        managed: true,
+        updateAuthority: .apkrun
+    )
+    let listResult = RuntimePackageListResult(
+        packages: [summary],
+        source: .cachedAndroid,
+        observedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let details = RuntimePackageDetails(
+        summary: summary,
+        files: [
+            RuntimeArtifactFile(
+                name: "base.apk",
+                size: 1024,
+                sha256: try #require(RuntimeSHA256Digest(rawValue: "sha256:" + String(repeating: "a", count: 64)))
+            )
+        ],
+        artifactBytes: 1024,
+        androidDataBytes: 2048
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        packageListReply: RuntimeListPackagesControlReply(result: listResult),
+        packageInfoReply: RuntimePackageInfoControlReply(result: details)
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    #expect(try await client.listPackages(filter: .all) == listResult)
+    #expect(try await client.packageInfo(packageID: packageID) == details)
+
+    let snapshot = transport.snapshot()
+    #expect(snapshot.packageListRequests.count == 1)
+    #expect(snapshot.packageInfoRequests.count == 1)
+    let listRequest = try JSONDecoder().decode(
+        RuntimeListPackagesControlRequest.self,
+        from: snapshot.packageListRequests[0]
+    )
+    let infoRequest = try JSONDecoder().decode(
+        RuntimePackageInfoControlRequest.self,
+        from: snapshot.packageInfoRequests[0]
+    )
+    #expect(listRequest.filter == .all)
+    #expect(infoRequest.packageID == packageID)
+    for header in [listRequest.header, infoRequest.header] {
+        #expect(header.apiVersion == APIVersion.current)
+        #expect(header.clientKind == RuntimeClientKind.cli)
+    }
+}
+
+@Test func controlClientPreservesTypedPackageQueryErrors() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let failure = RuntimeWireError.runtime(
+        "packageNotFound",
+        message: "APKRun has no stored details for this app.",
+        remediation: "List managed apps to see the packages APKRun can inspect."
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        packageInfoReply: RuntimePackageInfoControlReply(error: failure)
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.unknown"))
+
+    do {
+        _ = try await client.packageInfo(packageID: packageID)
+        Issue.record("The remote package-info error was not returned to the caller.")
+    } catch {
+        #expect(error == .remoteFailure(code: failure.code, message: failure.message))
+        #expect(error.errorDescription == failure.message)
+    }
+}
+
 @Test func controlClientDoesNotReplaySessionMutationsAfterTransportFailure() async throws {
     let configuration = try RuntimeControlClientConfiguration(
         clientKind: .cli,
@@ -419,6 +522,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private let endpointBusyData: Data
     private let endpoint: RuntimeXPCListenerEndpoint?
     private let statusData: Data
+    private let packageListData: Data
+    private let packageInfoData: Data
     private let launchData: Data
     private let terminateData: Data
     private let lock = NSLock()
@@ -430,6 +535,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var statusRequestsValue: [Data] = []
     private var startRequestsValue: [Data] = []
     private var stopRequestsValue: [Data] = []
+    private var packageListRequestsValue: [Data] = []
+    private var packageInfoRequestsValue: [Data] = []
     private var launchRequestsValue: [Data] = []
     private var terminateRequestsValue: [Data] = []
     private var brokerConnectionsValue = 0
@@ -446,6 +553,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         endpointRejection: RuntimeEndpointRejection? = nil,
         endpointBusyRejections: Int = 0,
         helloFailure: RuntimeControlError? = nil,
+        packageListReply: RuntimeListPackagesControlReply? = nil,
+        packageInfoReply: RuntimePackageInfoControlReply? = nil,
         launchReply: RuntimeLaunchControlReply? = nil,
         terminateReply: RuntimeTerminateControlReply? = nil
     ) throws {
@@ -471,6 +580,17 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
             )
         }
         let packageID = RuntimePackageID(rawValue: "com.example.app")!
+        let defaultSummary = RuntimePackageSummary(
+            packageID: packageID,
+            displayName: "Example",
+            versionCode: 1
+        )
+        let defaultListReply = RuntimeListPackagesControlReply(
+            result: RuntimePackageListResult(packages: [defaultSummary], source: .managedRecords)
+        )
+        let defaultPackageInfoReply = RuntimePackageInfoControlReply(
+            result: RuntimePackageDetails(summary: defaultSummary, files: [], artifactBytes: 0)
+        )
         let defaultLaunchReply = RuntimeLaunchControlReply(
             result: RuntimeLaunchResult(
                 sessionID: UUID(uuidString: "B1D9C07C-E76A-446F-B849-0C9E5FC7B1C7")!,
@@ -481,6 +601,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let defaultTerminateReply = RuntimeTerminateControlReply(
             result: RuntimeTerminateResult(packageID: packageID, hadSession: true)
         )
+        packageListData = try JSONEncoder().encode(packageListReply ?? defaultListReply)
+        packageInfoData = try JSONEncoder().encode(packageInfoReply ?? defaultPackageInfoReply)
         launchData = try JSONEncoder().encode(launchReply ?? defaultLaunchReply)
         terminateData = try JSONEncoder().encode(terminateReply ?? defaultTerminateReply)
     }
@@ -557,6 +679,16 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return statusData
     }
 
+    func listPackages(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { packageListRequestsValue.append(request) }
+        return packageListData
+    }
+
+    func packageInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { packageInfoRequestsValue.append(request) }
+        return packageInfoData
+    }
+
     func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         let shouldFail = lock.withLock {
             launchRequestsValue.append(request)
@@ -592,6 +724,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 statusRequests: statusRequestsValue,
                 startRequests: startRequestsValue,
                 stopRequests: stopRequestsValue,
+                packageListRequests: packageListRequestsValue,
+                packageInfoRequests: packageInfoRequestsValue,
                 launchRequests: launchRequestsValue,
                 terminateRequests: terminateRequestsValue,
                 brokerConnections: brokerConnectionsValue,
@@ -622,6 +756,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let statusRequests: [Data]
         let startRequests: [Data]
         let stopRequests: [Data]
+        let packageListRequests: [Data]
+        let packageInfoRequests: [Data]
         let launchRequests: [Data]
         let terminateRequests: [Data]
         let brokerConnections: Int

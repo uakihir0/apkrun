@@ -98,7 +98,7 @@ apkrund sets the requirement on each anonymous listener with `NSXPCListener.setC
 
 ```swift
 public enum RuntimeAPI {
-    public static let version = APIVersion(major: 1, minor: 3)       // the control and wrapper protocols
+    public static let version = APIVersion(major: 1, minor: 4)       // the control and wrapper protocols
     public static let wrapperMajors: [Int] = [1]                     // served on the wrapper endpoint: N and N−1
     public static let brokerRevision = 2                              // additive-only broker protocol
     public static let maintenanceRevision = 1                         // additive-only MaintenanceControl
@@ -111,6 +111,7 @@ public struct APIVersion: Codable, Sendable, Comparable { public var major: Int;
 - Version `1.1` adds the optional Guest Agent state and protocol-version fields to `RuntimeHostStatus`; older clients ignore the added JSON keys, and new clients decode older replies with both fields set to `nil`.
 - Version `1.2` adds the `launch` and `terminate` methods to `RuntimeControlXPC`, with versioned request headers and typed result-or-error replies. These operations are sent once; a transport failure is surfaced to the caller and is never automatically replayed.
 - Version `1.3` bounds control admission to 8 live connections and 64 requests in flight per connection. A broker that cannot issue a control connection rejects the request with `busy`; an over-limit operation returns `runtime.busy`. Requests from API 1.0–1.2 clients use the already-defined `hostShuttingDown` rejection when the control connection limit is reached, because those clients cannot decode the 1.3 `busy` case.
+- Version `1.4` adds `listPackages` and `packageInfo` to the authenticated control endpoint. Both requests carry the standard versioned header and return typed result-or-error replies. Package queries never start Android; `.all` uses a live inventory only when Android is already ready, otherwise the saved inventory.
 - `components.json` of a release records `"runtimeAPI": { "current": "M.m", "wrapperMajors": [N−1, N] }` ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.3). A major is dropped only as that section allows.
 - The #031 `RuntimeHostStatus` includes optional `guestAgentState` and `guestAgentProtocolVersion` fields. Clients accept their absence as `nil`.
 
@@ -1303,7 +1304,7 @@ public struct PackageIcon: Codable, Sendable {
 
 - `listPackages` and `packageInfo` work while Android is stopped. A `.all` result identifies whether Android facts came from a live query, a saved snapshot, or no inventory; `observedAt` timestamps live and cached inventory. `.managed` results use `managedRecords`. A managed record marked `installed` but absent from an available full inventory is listed as `broken("removedInAndroid")`; this does not write the record during a query.
 - `listPackages(.all)` does not start Android. A successful live query, runtime attachment, or successful install/uninstall refreshes the saved inventory for later stopped-runtime listings. Cached unmanaged rows can be stale until that refresh.
-- A wrapper's `packageInfo` returns the same `PackageDetails`. The wrapper uses `summary` and the per-app window settings in `settings.window` (§14.2).
+- The generic launcher can inspect any managed package or package present in the live or saved Android inventory. For an unmanaged package, `PackageDetails` has no stored APK files and reports `artifactBytes == 0`. A wrapper's package-specific `packageInfo` is served by its wrapper endpoint and is restricted to its own package; the control endpoint does not grant package queries to wrappers. The generic launcher cannot list packages.
 - `ImportPreview.compatibility` (package-store §4.7) and `PackageDetails.compatibility` come from the compatibility database in APKRun.app. `apkrun inspect` and `apkrun info <package>` print them. An app without an entry has `nil`, and the clients show nothing.
 
 ### 8.4 Uninstall, repair, rollback, adopt

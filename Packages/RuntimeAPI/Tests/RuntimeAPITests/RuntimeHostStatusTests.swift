@@ -3,8 +3,8 @@ import Testing
 
 @testable import RuntimeAPI
 
-@Test func runtimeSessionControlAdvancesAPIMinorVersion() {
-    #expect(APIVersion.current == APIVersion(major: 1, minor: 3))
+@Test func packageQueriesAdvanceAPIMinorVersion() {
+    #expect(APIVersion.current == APIVersion(major: 1, minor: 4))
 }
 
 @Test func endpointRejectionsPreserveUnknownBrokerReasons() throws {

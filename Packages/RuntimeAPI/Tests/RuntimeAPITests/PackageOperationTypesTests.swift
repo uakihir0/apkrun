@@ -114,13 +114,25 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     )
     let launchRequest = RuntimeLaunchControlRequest(header: header, packageID: packageID)
     let terminateRequest = RuntimeTerminateControlRequest(header: header, packageID: packageID)
+    let listRequest = RuntimeListPackagesControlRequest(header: header, filter: .all)
+    let packageInfoRequest = RuntimePackageInfoControlRequest(header: header, packageID: packageID)
     #expect(try roundTrip(launchRequest) == launchRequest)
     #expect(try roundTrip(terminateRequest) == terminateRequest)
+    #expect(try roundTrip(listRequest) == listRequest)
+    #expect(try roundTrip(packageInfoRequest) == packageInfoRequest)
+    #expect(RuntimeListPackagesControlRequest(header: header).filter == .managed)
 
     let launchReply = RuntimeLaunchControlReply(result: launch)
     let terminateReply = RuntimeTerminateControlReply(result: terminate)
+    let packageSummary = RuntimePackageSummary(packageID: packageID, displayName: "Example", versionCode: 7)
+    let packageList = RuntimePackageListResult(packages: [packageSummary], source: .managedRecords)
+    let packageDetails = RuntimePackageDetails(summary: packageSummary, files: [], artifactBytes: 0)
+    let listReply = RuntimeListPackagesControlReply(result: packageList)
+    let packageInfoReply = RuntimePackageInfoControlReply(result: packageDetails)
     #expect(try roundTrip(launchReply) == launchReply)
     #expect(try roundTrip(terminateReply) == terminateReply)
+    #expect(try roundTrip(listReply) == listReply)
+    #expect(try roundTrip(packageInfoReply) == packageInfoReply)
 
     let failure = RuntimeWireError.store(
         "packageNotFound",
@@ -131,6 +143,8 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     #expect(try roundTrip(failure) == failure)
     #expect(try roundTrip(RuntimeLaunchControlReply(error: failure)).error == failure)
     #expect(try roundTrip(RuntimeTerminateControlReply(error: failure)).error == failure)
+    #expect(try roundTrip(RuntimeListPackagesControlReply(error: failure)).error == failure)
+    #expect(try roundTrip(RuntimePackageInfoControlReply(error: failure)).error == failure)
 }
 
 private struct TestRuntimeService: RuntimeService {

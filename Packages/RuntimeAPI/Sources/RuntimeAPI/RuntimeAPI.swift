@@ -3,8 +3,9 @@
 /// The major and minor version used by RuntimeAPI compatibility checks.
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// Version 1.0 introduces the authenticated control endpoint; 1.1 adds Guest Agent status fields;
-    /// 1.2 adds control-endpoint launch and terminate operations; 1.3 adds bounded endpoint admission.
-    public static let current = APIVersion(major: 1, minor: 3)
+    /// 1.2 adds control-endpoint launch and terminate operations; 1.3 adds bounded endpoint admission;
+    /// 1.4 adds control-endpoint package listing and package details.
+    public static let current = APIVersion(major: 1, minor: 4)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -321,6 +322,34 @@ public struct RuntimeTerminateControlRequest: Codable, Equatable, Sendable {
     }
 }
 
+/// Lists packages through the authenticated control endpoint.
+public struct RuntimeListPackagesControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The package records to include.
+    public let filter: RuntimePackageFilter
+
+    /// Creates a package-list request.
+    public init(header: APIRequestHeader, filter: RuntimePackageFilter = .managed) {
+        self.header = header
+        self.filter = filter
+    }
+}
+
+/// Returns package details through the authenticated control endpoint.
+public struct RuntimePackageInfoControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The Android package to inspect.
+    public let packageID: RuntimePackageID
+
+    /// Creates a package-info request.
+    public init(header: APIRequestHeader, packageID: RuntimePackageID) {
+        self.header = header
+        self.packageID = packageID
+    }
+}
+
 /// The result or typed error returned by a control launch request.
 public struct RuntimeLaunchControlReply: Codable, Equatable, Sendable {
     /// The launched session result, present on success.
@@ -350,6 +379,46 @@ public struct RuntimeTerminateControlReply: Codable, Equatable, Sendable {
 
     /// Creates a successful reply.
     public init(result: RuntimeTerminateResult) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// The result or typed error returned by a control package-list request.
+public struct RuntimeListPackagesControlReply: Codable, Equatable, Sendable {
+    /// The package inventory, present on success.
+    public let result: RuntimePackageListResult?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: RuntimePackageListResult) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// The result or typed error returned by a control package-info request.
+public struct RuntimePackageInfoControlReply: Codable, Equatable, Sendable {
+    /// The package details, present on success.
+    public let result: RuntimePackageDetails?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: RuntimePackageDetails) {
         self.result = result
         error = nil
     }
@@ -411,6 +480,10 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func startRuntime(_ request: Data, reply: @escaping (Data) -> Void)
     /// Stops Android but leaves the daemon running.
     func stopRuntime(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Lists managed or all known packages.
+    func listPackages(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns details for one package.
+    func packageInfo(_ request: Data, reply: @escaping (Data) -> Void)
     /// Launches an installed package session.
     func launch(_ request: Data, reply: @escaping (Data) -> Void)
     /// Terminates an installed package session.

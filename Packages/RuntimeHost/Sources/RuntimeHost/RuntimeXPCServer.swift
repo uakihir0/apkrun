@@ -1025,6 +1025,7 @@ private protocol VersionedControlRequest: Decodable {
 extension RuntimeStatusRequest: VersionedControlRequest {}
 extension StartRuntimeRequest: VersionedControlRequest {}
 extension StopRuntimeRequest: VersionedControlRequest {}
+extension RuntimeResetControlRequest: VersionedControlRequest {}
 extension RuntimeListPackagesControlRequest: VersionedControlRequest {}
 extension RuntimePackageInfoControlRequest: VersionedControlRequest {}
 extension RuntimeLaunchControlRequest: VersionedControlRequest {}
@@ -1034,6 +1035,7 @@ enum RuntimeControlOperation {
     case runtimeStatus
     case startRuntime
     case stopRuntime
+    case resetRuntime
     case listPackages
     case packageInfo
     case launch
@@ -1048,7 +1050,7 @@ enum RuntimeControlOperation {
             case .wrapper:
                 false
             }
-        case .startRuntime, .stopRuntime:
+        case .startRuntime, .stopRuntime, .resetRuntime:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -1168,6 +1170,33 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             do {
                 try await host.stopRuntime()
                 response.send(Self.encode(RuntimeControlReply(status: await host.status())))
+            } catch {
+                response.send(Self.errorReply(for: Self.controlError(for: error)))
+            }
+        }
+    }
+
+    func resetRuntime(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = XPCDataReply(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(Self.errorReply(for: Self.rejection(for: admission).controlError))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .resetRuntime,
+                as: RuntimeResetControlRequest.self
+            ) {
+                response.send(Self.errorReply(for: failure))
+                return
+            }
+            do {
+                let status = try await host.resetRuntime()
+                response.send(Self.encode(RuntimeControlReply(status: status)))
             } catch {
                 response.send(Self.errorReply(for: Self.controlError(for: error)))
             }
@@ -1392,6 +1421,8 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 code = "runtime.serviceUnavailable"
             case .shuttingDown:
                 code = "runtime.hostShuttingDown"
+            case .invalidTransition:
+                code = "runtime.invalidTransition"
             case .alreadyStarted:
                 code = "runtime.internal"
             case .startupFailed(_, let startupCode):

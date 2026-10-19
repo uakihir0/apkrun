@@ -3,8 +3,21 @@ import Testing
 
 @testable import RuntimeAPI
 
-@Test func packageQueriesAdvanceAPIMinorVersion() {
-    #expect(APIVersion.current == APIVersion(major: 1, minor: 4))
+@Test func runtimeResetAdvancesAPIMinorVersion() {
+    #expect(APIVersion.current == APIVersion(major: 1, minor: 5))
+}
+
+@Test func runtimeResetControlRequestRoundTripsVersionedHeader() throws {
+    let header = APIRequestHeader(
+        operationID: UUID(),
+        clientKind: .cli
+    )
+    let request = RuntimeResetControlRequest(header: header)
+    let data = try JSONEncoder().encode(request)
+    let decoded = try JSONDecoder().decode(RuntimeResetControlRequest.self, from: data)
+
+    #expect(decoded == request)
+    #expect(decoded.header.apiVersion == APIVersion.current)
 }
 
 @Test func endpointRejectionsPreserveUnknownBrokerReasons() throws {

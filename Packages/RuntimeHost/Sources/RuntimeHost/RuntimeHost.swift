@@ -20,6 +20,8 @@ public enum RuntimeHostError: Error, Equatable, Sendable {
     case crashLoopActive
     /// The daemon is shutting down and no longer accepts lifecycle requests.
     case shuttingDown
+    /// The requested lifecycle change is not valid in the current runtime state.
+    case invalidTransition
     /// The Guest Agent bundle is missing or invalid.
     case guestAgentBundle(String)
     /// Runtime boot failed.
@@ -60,6 +62,8 @@ public actor RuntimeHost {
     private var isShuttingDown = false
     private var shutdownCompleted = false
     private var activeLifecycleOperations = 0
+    private var isRuntimeStopping = false
+    private var isRuntimeResetting = false
     private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
     private var shutdownWaiters: [CheckedContinuation<Void, Never>] = []
 
@@ -304,6 +308,11 @@ public actor RuntimeHost {
 
     /// Stops Android but keeps the daemon available for a later request.
     public func stopRuntime() async throws(RuntimeHostError) {
+        guard !isRuntimeStopping, !isRuntimeResetting else {
+            throw .invalidTransition
+        }
+        isRuntimeStopping = true
+        defer { isRuntimeStopping = false }
         try await waitForStartupCompletion()
         try beginLifecycleOperation()
         defer { finishLifecycleOperation() }
@@ -314,6 +323,49 @@ public actor RuntimeHost {
         await supervisor?.stop()
         await packageQueryService?.detachRuntime()
         headlessSessionService = nil
+    }
+
+    /// Clears the automatic boot-loop guard without starting Android or deleting user data.
+    public func resetRuntime() async throws(RuntimeHostError) -> RuntimeHostStatus {
+        guard !isRuntimeStopping, !isRuntimeResetting else {
+            throw .invalidTransition
+        }
+        isRuntimeResetting = true
+        defer { isRuntimeResetting = false }
+        try await waitForStartupCompletion()
+        try beginLifecycleOperation()
+        defer { finishLifecycleOperation() }
+
+        if await supervisor?.state == .stopping {
+            throw .invalidTransition
+        }
+        guard !isShuttingDown else {
+            throw .shuttingDown
+        }
+        let guardIsActive: Bool
+        do {
+            guardIsActive = try stateStore?.bootLoopGuardIsActive() ?? false
+        } catch {
+            throw .stateStore(error)
+        }
+        if guardIsActive {
+            guard let stateStore else { throw .notStarted }
+            do {
+                try stateStore.clearBootLoopGuard()
+                if let assessment = startupAssessment {
+                    let record = try stateStore.current() ?? assessment.record
+                    startupAssessment = DaemonStartupAssessment(
+                        previousExitWasUnclean: assessment.previousExitWasUnclean,
+                        crashLoopActive: false,
+                        record: record
+                    )
+                }
+            } catch {
+                throw .stateStore(error)
+            }
+            logger?.notice("The user explicitly cleared the runtime crash-loop guard")
+        }
+        return await status()
     }
 
     /// Launches an app through the daemon-owned Guest Agent session path.
@@ -767,6 +819,8 @@ public actor RuntimeHost {
             code = failure.qualifiedCode
         case .shuttingDown:
             code = "runtime.hostShuttingDown"
+        case .invalidTransition:
+            code = "runtime.invalidTransition"
         case .guestAgentBundle:
             code = "runtime.guestAgentBundleMissing"
         case .runtimeBoot(let failure):

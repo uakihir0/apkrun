@@ -4,8 +4,8 @@
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// Version 1.0 introduces the authenticated control endpoint; 1.1 adds Guest Agent status fields;
     /// 1.2 adds control-endpoint launch and terminate operations; 1.3 adds bounded endpoint admission;
-    /// 1.4 adds control-endpoint package listing and package details.
-    public static let current = APIVersion(major: 1, minor: 4)
+    /// 1.4 adds control-endpoint package listing and package details; 1.5 adds control-endpoint runtime reset.
+    public static let current = APIVersion(major: 1, minor: 5)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -294,6 +294,17 @@ public struct StopRuntimeRequest: Codable, Equatable, Sendable {
     }
 }
 
+/// Clears the runtime failure and boot-loop guard through the authenticated control endpoint.
+public struct RuntimeResetControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+
+    /// Creates a runtime-reset request.
+    public init(header: APIRequestHeader) {
+        self.header = header
+    }
+}
+
 /// Starts an installed package session through the authenticated control endpoint.
 public struct RuntimeLaunchControlRequest: Codable, Equatable, Sendable {
     /// The request metadata.
@@ -480,6 +491,8 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func startRuntime(_ request: Data, reply: @escaping (Data) -> Void)
     /// Stops Android but leaves the daemon running.
     func stopRuntime(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Clears a runtime failure and boot-loop guard without deleting Android data.
+    func resetRuntime(_ request: Data, reply: @escaping (Data) -> Void)
     /// Lists managed or all known packages.
     func listPackages(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns details for one package.

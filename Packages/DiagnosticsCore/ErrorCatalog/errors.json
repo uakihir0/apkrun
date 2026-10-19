@@ -1096,6 +1096,22 @@
       }
     },
     {
+      "code": "runtime.cancelled",
+      "parameters": [],
+      "message": {
+        "en": "The operation was cancelled.",
+        "ja": "操作をキャンセルしました。"
+      },
+      "action": "none",
+      "cliExit": 130,
+      "doc": {
+        "case": "cancelled",
+        "when": "the RuntimeClient caller cancels while waiting for a long-running daemon request",
+        "raisedBy": "RuntimeClient",
+        "ref": "[runtime-api.md](runtime-api.md) §4.6"
+      }
+    },
+    {
       "code": "runtime.notAuthorized",
       "parameters": [],
       "message": {

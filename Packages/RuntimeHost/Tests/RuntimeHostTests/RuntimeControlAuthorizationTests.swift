@@ -17,6 +17,8 @@ import Testing
         .packageInfo,
         .launch,
         .terminate,
+        .importPackage,
+        .installImported,
     ]
 
     #expect(fullControlClients.allSatisfy { RuntimeControlOperation.runtimeStatus.allows($0) })
@@ -28,6 +30,8 @@ import Testing
     #expect(fullControlClients.allSatisfy { RuntimeControlOperation.packageInfo.allows($0) })
     #expect(fullControlClients.allSatisfy { RuntimeControlOperation.launch.allows($0) })
     #expect(fullControlClients.allSatisfy { RuntimeControlOperation.terminate.allows($0) })
+    #expect(fullControlClients.allSatisfy { RuntimeControlOperation.importPackage.allows($0) })
+    #expect(fullControlClients.allSatisfy { RuntimeControlOperation.installImported.allows($0) })
 
     #expect(launcherOperations.allSatisfy { $0.allows(.launcher) })
     #expect(launcherPackageOperations.allSatisfy { $0.allows(.launcher) })
@@ -38,5 +42,7 @@ import Testing
     #expect(!RuntimeControlOperation.resetRuntime.allows(.launcher))
     #expect(!RuntimeControlOperation.launch.allows(.launcher))
     #expect(!RuntimeControlOperation.terminate.allows(.launcher))
+    #expect(!RuntimeControlOperation.importPackage.allows(.launcher))
+    #expect(!RuntimeControlOperation.installImported.allows(.launcher))
     #expect(allOperations.allSatisfy { !$0.allows(.wrapper) })
 }

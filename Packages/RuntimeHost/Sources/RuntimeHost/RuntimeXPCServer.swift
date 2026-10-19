@@ -1005,7 +1005,18 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
             return false
         }
         let connectionID = ObjectIdentifier(connection)
-        connection.exportedInterface = NSXPCInterface(with: RuntimeControlXPC.self)
+        let controlInterface = NSXPCInterface(with: RuntimeControlXPC.self)
+        guard let fileHandleClasses = NSSet(array: [NSArray.self, FileHandle.self]) as? Set<AnyHashable> else {
+            listener.invalidate()
+            return false
+        }
+        controlInterface.setClasses(
+            fileHandleClasses,
+            for: #selector(RuntimeControlXPC.importPackage(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
+        connection.exportedInterface = controlInterface
         connection.exportedObject = ControlService(
             host: host,
             clientKind: clientKind,
@@ -1031,6 +1042,8 @@ extension RuntimeListPackagesControlRequest: VersionedControlRequest {}
 extension RuntimePackageInfoControlRequest: VersionedControlRequest {}
 extension RuntimeLaunchControlRequest: VersionedControlRequest {}
 extension RuntimeTerminateControlRequest: VersionedControlRequest {}
+extension RuntimeImportPackageControlRequest: VersionedControlRequest {}
+extension RuntimeInstallImportedControlRequest: VersionedControlRequest {}
 
 enum RuntimeControlOperation {
     case runtimeStatus
@@ -1042,6 +1055,8 @@ enum RuntimeControlOperation {
     case packageInfo
     case launch
     case terminate
+    case importPackage
+    case installImported
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1052,7 +1067,8 @@ enum RuntimeControlOperation {
             case .wrapper:
                 false
             }
-        case .startRuntime, .stopRuntime, .restartRuntime, .resetRuntime:
+        case .startRuntime, .stopRuntime, .restartRuntime, .resetRuntime,
+            .importPackage, .installImported:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -1308,6 +1324,90 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimePackageInfoControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func importPackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void) {
+        let response = XPCDataReply(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeImportPackageControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .importPackage,
+                as: RuntimeImportPackageControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeImportPackageControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimeImportPackageControlRequest.self, from: request) else {
+                response.send(Self.encode(RuntimeImportPackageControlReply(error: Self.malformedWireError)))
+                return
+            }
+            guard
+                !files.isEmpty,
+                files.count <= 20,
+                !decoded.request.files.isEmpty,
+                decoded.request.files.count <= 20
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeImportPackageControlReply(
+                            error: .store("invalidImport", message: "Choose between 1 and 20 APK files.")
+                        )
+                    )
+                )
+                return
+            }
+            do {
+                let preview = try await host.importPackage(decoded.request, files: files)
+                response.send(Self.encode(RuntimeImportPackageControlReply(result: preview)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeImportPackageControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func installImported(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = XPCDataReply(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeInstallImportedControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .installImported,
+                as: RuntimeInstallImportedControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeInstallImportedControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimeInstallImportedControlRequest.self, from: request)
+            else {
+                response.send(Self.encode(RuntimeInstallImportedControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let result = try await host.installImported(decoded.request)
+                response.send(Self.encode(RuntimeInstallImportedControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeInstallImportedControlReply(error: wireError)))
             }
         }
     }

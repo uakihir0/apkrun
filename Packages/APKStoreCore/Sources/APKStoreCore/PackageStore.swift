@@ -430,6 +430,35 @@ public actor PackageStore {
         return preview
     }
 
+    /// Removes an unconsumed import ticket and its private APK copies.
+    public func discardImport(ticket: UUID) async throws {
+        try requireWritable()
+        let importsLock = try await acquireLock(at: importsLockURL)
+        defer { _ = Darwin.close(importsLock) }
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard let manifest = tickets[ticket] else { return }
+        let packageID = manifest.preview.packageID
+        guard !operationsInProgress.contains(packageID),
+            !transactionTicketForRecovery(ticket: ticket, packageID: packageID)
+        else {
+            throw PackageStoreFailure.operationInProgress
+        }
+
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        let incoming = incomingDirectory(packageID: packageID, directory: directory, ticket: ticket)
+        do {
+            if fileManager.fileExists(atPath: incoming.path) {
+                try fileManager.removeItem(at: incoming)
+            }
+        } catch {
+            throw PackageStoreFailure.io
+        }
+        tickets[ticket] = nil
+        activeTickets.remove(ticket)
+    }
+
     /// Installs a new package or reinstalls a retained-data package from an import ticket.
     public func installImported(ticket: UUID) async throws -> PackageRecord {
         try requireWritable()

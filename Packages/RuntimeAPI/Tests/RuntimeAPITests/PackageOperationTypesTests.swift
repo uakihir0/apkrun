@@ -50,6 +50,9 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
         displayName: "Hello Split",
         versionCode: 4_294_967_299,
         versionName: "1.2",
+        signerDigests: [
+            try #require(RuntimeSHA256Digest(rawValue: "sha256:\(String(repeating: "c", count: 64))"))
+        ],
         files: [
             RuntimeArtifactFile(name: "base.apk", size: 120, sha256: baseDigest),
             RuntimeArtifactFile(
@@ -64,6 +67,17 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
         warnings: [.debuggable, .lowTargetSDK(target: 27), .signingNotChecked]
     )
     #expect(try roundTrip(preview) == preview)
+    var legacyPreviewObject = try #require(
+        JSONSerialization.jsonObject(with: JSONEncoder().encode(preview)) as? [String: Any]
+    )
+    legacyPreviewObject["signerDigests"] = nil
+    let legacyPreviewData = try JSONSerialization.data(withJSONObject: legacyPreviewObject)
+    let decodedLegacyPreview = try JSONDecoder().decode(
+        RuntimeImportPreview.self,
+        from: legacyPreviewData
+    )
+    #expect(decodedLegacyPreview.signerDigests.isEmpty)
+    #expect(decodedLegacyPreview.files == preview.files)
 
     let installed = RuntimePackageSummary(
         packageID: packageID,
@@ -145,6 +159,49 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     #expect(try roundTrip(RuntimeTerminateControlReply(error: failure)).error == failure)
     #expect(try roundTrip(RuntimeListPackagesControlReply(error: failure)).error == failure)
     #expect(try roundTrip(RuntimePackageInfoControlReply(error: failure)).error == failure)
+}
+
+@Test func daemonPackageImportAndInstallControlDTOsRoundTrip() throws {
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellosplit"))
+    let ticket = try #require(RuntimeImportTicket(rawValue: UUID().uuidString.lowercased()))
+    let digest = try #require(RuntimeSHA256Digest(rawValue: "sha256:" + String(repeating: "a", count: 64)))
+    let header = APIRequestHeader(clientKind: .cli)
+    let importBody = RuntimeImportPackageRequest(
+        files: [
+            RuntimeImportSourceFile(fileIndex: 0, name: "base.apk"),
+            RuntimeImportSourceFile(fileIndex: 1, name: "split_config.arm64_v8a.apk"),
+        ],
+        origin: .cli
+    )
+    let importRequest = RuntimeImportPackageControlRequest(header: header, request: importBody)
+    let preview = RuntimeImportPreview(
+        ticket: ticket,
+        packageID: packageID,
+        displayName: "Hello Split",
+        versionCode: 2,
+        files: [
+            RuntimeArtifactFile(name: "base.apk", size: 12, sha256: digest)
+        ],
+        relation: .newPackage
+    )
+    let importReply = RuntimeImportPackageControlReply(result: preview)
+    let installBody = RuntimeInstallImportedRequest(ticket: ticket)
+    let installRequest = RuntimeInstallImportedControlRequest(header: header, request: installBody)
+    let summary = RuntimePackageSummary(packageID: packageID, displayName: "Hello Split", versionCode: 2)
+    let installReply = RuntimeInstallImportedControlReply(result: summary)
+    let failure = RuntimeWireError.store(
+        "invalidAPK",
+        message: "The APK set could not be inspected.",
+        remediation: "Choose a valid APK file."
+    )
+
+    #expect(try roundTrip(importRequest) == importRequest)
+    #expect(try roundTrip(importReply) == importReply)
+    #expect(try roundTrip(installRequest) == installRequest)
+    #expect(try roundTrip(installReply) == installReply)
+    #expect(try roundTrip(RuntimeImportPackageControlReply(error: failure)).error == failure)
+    #expect(try roundTrip(RuntimeInstallImportedControlReply(error: failure)).error == failure)
+    #expect(importRequest.header.apiVersion == APIVersion(major: 1, minor: 7))
 }
 
 private struct TestRuntimeService: RuntimeService {

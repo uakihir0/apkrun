@@ -1112,6 +1112,46 @@
       }
     },
     {
+      "code": "runtime.operationResultUnknown",
+      "parameters": [],
+      "message": {
+        "en": "APKRun couldn't confirm whether the install completed.",
+        "ja": "インストールが完了したか APKRun で確認できませんでした。"
+      },
+      "remediation": {
+        "en": "Check `apkrun info <package>` before retrying; Android may have completed the install.",
+        "ja": "再試行する前に `apkrun info <package>` で確認してください。Android ではインストールが完了している可能性があります。"
+      },
+      "action": "retry",
+      "cliExit": 75,
+      "doc": {
+        "case": "operationResultUnknown(operation:)",
+        "when": "the XPC connection is lost after `installImported` is sent, so the client cannot tell whether Android completed it",
+        "raisedBy": "RuntimeClient",
+        "ref": "[runtime-api.md](runtime-api.md) §4.6"
+      }
+    },
+    {
+      "code": "runtime.requestTimedOut",
+      "parameters": [],
+      "message": {
+        "en": "APKRun's background service didn't answer in time.",
+        "ja": "APKRun のバックグラウンドサービスから時間内に応答がありませんでした。"
+      },
+      "remediation": {
+        "en": "Try again.",
+        "ja": "もう一度お試しください。"
+      },
+      "action": "retry",
+      "cliExit": 75,
+      "doc": {
+        "case": "requestTimedOut(operation:)",
+        "when": "the daemon does not reply within the operation's deadline plus 5 seconds",
+        "raisedBy": "RuntimeClient",
+        "ref": "[runtime-api.md](runtime-api.md) §4.6"
+      }
+    },
+    {
       "code": "runtime.notAuthorized",
       "parameters": [],
       "message": {

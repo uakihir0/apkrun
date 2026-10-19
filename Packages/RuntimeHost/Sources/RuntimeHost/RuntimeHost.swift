@@ -63,10 +63,12 @@ public actor RuntimeHost {
     private var shutdownCompleted = false
     private var activeLifecycleOperations = 0
     private var activeRuntimeStarts = 0
+    private var activePackageInstalls = 0
     private var isRuntimeStopping = false
     private var isRuntimeResetting = false
     private var isRuntimeRestarting = false
     private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
+    private var packageInstallWaiters: [CheckedContinuation<Void, Never>] = []
     private var shutdownWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Creates a daemon host for the current user.
@@ -319,7 +321,9 @@ public actor RuntimeHost {
 
     /// Stops Android but keeps the daemon available for a later request.
     public func stopRuntime() async throws(RuntimeHostError) {
-        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, activeRuntimeStarts == 0 else {
+        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, activeRuntimeStarts == 0,
+            activePackageInstalls == 0
+        else {
             throw .invalidTransition
         }
         isRuntimeStopping = true
@@ -329,7 +333,9 @@ public actor RuntimeHost {
 
     /// Restarts Android under one reserved lifecycle transition.
     public func restartRuntime(reason: StartReason) async throws(RuntimeHostError) {
-        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, activeRuntimeStarts == 0 else {
+        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, activeRuntimeStarts == 0,
+            activePackageInstalls == 0
+        else {
             throw .invalidTransition
         }
         isRuntimeRestarting = true
@@ -353,7 +359,9 @@ public actor RuntimeHost {
 
     /// Clears the automatic boot-loop guard without starting Android or deleting user data.
     public func resetRuntime() async throws(RuntimeHostError) -> RuntimeHostStatus {
-        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, activeRuntimeStarts == 0 else {
+        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, activeRuntimeStarts == 0,
+            activePackageInstalls == 0
+        else {
             throw .invalidTransition
         }
         isRuntimeResetting = true
@@ -429,6 +437,40 @@ public actor RuntimeHost {
             request,
             using: guestAgent
         )
+    }
+
+    /// Imports and inspects APK files without starting Android.
+    public func importPackage(
+        _ request: RuntimeImportPackageRequest,
+        files: [FileHandle]
+    ) async throws(RuntimeWireError) -> RuntimeImportPreview {
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        return try await service.importPackage(request, files: files)
+    }
+
+    /// Starts Android on demand, attaches its package channel, and installs an inspected import.
+    public func installImported(
+        _ request: RuntimeInstallImportedRequest
+    ) async throws(RuntimeWireError) -> RuntimePackageSummary {
+        do {
+            try beginPackageInstall()
+        } catch {
+            throw Self.sessionWireError(for: error)
+        }
+        defer { finishPackageInstall() }
+
+        let service = packageQueryServiceInstance()
+        try await service.open()
+
+        do {
+            try await startRuntime(reason: .user)
+        } catch {
+            throw Self.sessionWireError(for: error)
+        }
+
+        try await attachPackageQueriesIfRuntimeIsReady(to: service)
+        return try await service.installImported(request)
     }
 
     /// Lists daemon-owned package records and, when requested, merges a live or cached Android inventory.
@@ -545,6 +587,7 @@ public actor RuntimeHost {
             await service.shutdown()
         }
         headlessSessionService = nil
+        await waitForPackageInstalls()
         // Mark an in-flight VM start for cancellation before waiting for any storage work to finish.
         await supervisor?.stop()
         await waitForLifecycleOperations()
@@ -585,6 +628,33 @@ public actor RuntimeHost {
         lifecycleWaiters.removeAll()
         for waiter in waiters {
             waiter.resume()
+        }
+    }
+
+    private func beginPackageInstall() throws(RuntimeHostError) {
+        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
+            throw .invalidTransition
+        }
+        try beginLifecycleOperation()
+        activePackageInstalls += 1
+    }
+
+    private func finishPackageInstall() {
+        activePackageInstalls -= 1
+        if activePackageInstalls == 0 {
+            let waiters = packageInstallWaiters
+            packageInstallWaiters.removeAll()
+            for waiter in waiters {
+                waiter.resume()
+            }
+        }
+        finishLifecycleOperation()
+    }
+
+    private func waitForPackageInstalls() async {
+        guard activePackageInstalls > 0 else { return }
+        await withCheckedContinuation { continuation in
+            packageInstallWaiters.append(continuation)
         }
     }
 

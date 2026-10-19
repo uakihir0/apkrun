@@ -28,7 +28,8 @@ import Testing
             ].map { "cli.\($0)" }
             + [
                 "instanceLocked", "instanceLockFailed", "hostShuttingDown", "hostStartupFailed",
-                "serviceUnavailable", "apiVersionMismatch", "notAuthorized", "malformedRequest",
+                "serviceUnavailable", "apiVersionMismatch", "operationResultUnknown",
+                "requestTimedOut", "cancelled", "notAuthorized", "malformedRequest",
                 "internal", "devLinuxTimedOut",
                 "devLinuxInvalidOptions", "devLinuxArtifactDirectoryMustBeAbsolute",
                 "devLinuxCheckFailed", "devLinuxDidNotFinish",
@@ -68,6 +69,8 @@ import Testing
     #expect(ErrorCatalog.cliExit(for: "runtime.hostStartupFailed") == 69)
     #expect(ErrorCatalog.cliExit(for: "runtime.serviceUnavailable") == 69)
     #expect(ErrorCatalog.cliExit(for: "runtime.apiVersionMismatch") == 69)
+    #expect(ErrorCatalog.cliExit(for: "runtime.operationResultUnknown") == 75)
+    #expect(ErrorCatalog.cliExit(for: "runtime.requestTimedOut") == 75)
     #expect(ErrorCatalog.cliExit(for: "runtime.notAuthorized") == 5)
     #expect(ErrorCatalog.cliExit(for: "runtime.malformedRequest") == 70)
     #expect(ErrorCatalog.cliExit(for: "runtime.internal") == 70)
@@ -170,7 +173,7 @@ import Testing
     let error = try #require(json["error"] as? [String: Any])
     let cause = try #require(error["cause"] as? [String: Any])
     #expect(error["code"] as? String == "runtime.internal")
-    #expect(error["message"] as? String == "The value of --since isn't valid (duration).")
+    #expect(error["message"] as? String == "Something went wrong in APKRun's background service.")
     #expect(error["operationID"] as? String == operationID.wireValue)
     #expect(cause["code"] as? String == "cli.invalidArgument")
     #expect(cause["message"] as? String == "The value of --since isn't valid (duration).")

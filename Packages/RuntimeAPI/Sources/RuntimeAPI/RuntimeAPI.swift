@@ -4,8 +4,9 @@
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// Version 1.0 introduces the authenticated control endpoint; 1.1 adds Guest Agent status fields;
     /// 1.2 adds control-endpoint launch and terminate operations; 1.3 adds bounded endpoint admission;
-    /// 1.4 adds package queries; 1.5 adds runtime reset; 1.6 adds one-request runtime restart.
-    public static let current = APIVersion(major: 1, minor: 6)
+    /// 1.4 adds package queries; 1.5 adds runtime reset; 1.6 adds one-request runtime restart;
+    /// 1.7 adds daemon-backed package import and install.
+    public static let current = APIVersion(major: 1, minor: 7)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -372,6 +373,34 @@ public struct RuntimePackageInfoControlRequest: Codable, Equatable, Sendable {
     }
 }
 
+/// Copies and inspects APK files through the authenticated control endpoint.
+public struct RuntimeImportPackageControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The package files and import origin.
+    public let request: RuntimeImportPackageRequest
+
+    /// Creates a package-import request.
+    public init(header: APIRequestHeader, request: RuntimeImportPackageRequest) {
+        self.header = header
+        self.request = request
+    }
+}
+
+/// Installs a package import through the authenticated control endpoint.
+public struct RuntimeInstallImportedControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The inspected package and installation options.
+    public let request: RuntimeInstallImportedRequest
+
+    /// Creates an imported-package install request.
+    public init(header: APIRequestHeader, request: RuntimeInstallImportedRequest) {
+        self.header = header
+        self.request = request
+    }
+}
+
 /// The result or typed error returned by a control launch request.
 public struct RuntimeLaunchControlReply: Codable, Equatable, Sendable {
     /// The launched session result, present on success.
@@ -381,6 +410,46 @@ public struct RuntimeLaunchControlReply: Codable, Equatable, Sendable {
 
     /// Creates a successful reply.
     public init(result: RuntimeLaunchResult) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// The result or typed error returned by a control package-import request.
+public struct RuntimeImportPackageControlReply: Codable, Equatable, Sendable {
+    /// The inspected package preview, present on success.
+    public let result: RuntimeImportPreview?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: RuntimeImportPreview) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// The result or typed error returned by a control package-install request.
+public struct RuntimeInstallImportedControlReply: Codable, Equatable, Sendable {
+    /// The installed package summary, present on success.
+    public let result: RuntimePackageSummary?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: RuntimePackageSummary) {
         self.result = result
         error = nil
     }
@@ -510,6 +579,10 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func listPackages(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns details for one package.
     func packageInfo(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Copies and inspects APK files without starting Android.
+    func importPackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
+    /// Installs a previously inspected import.
+    func installImported(_ request: Data, reply: @escaping (Data) -> Void)
     /// Launches an installed package session.
     func launch(_ request: Data, reply: @escaping (Data) -> Void)
     /// Terminates an installed package session.

@@ -339,6 +339,144 @@ import Testing
     }
 }
 
+@Test func controlClientImportsAndInstallsPackageThroughVersionedRequests() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let ticket = try #require(RuntimeImportTicket(rawValue: "84cfd2a0-504c-4dc2-9d6f-0f579f771902"))
+    let preview = RuntimeImportPreview(
+        ticket: ticket,
+        packageID: packageID,
+        displayName: "Hello Text",
+        versionCode: 7,
+        files: [],
+        relation: .newPackage
+    )
+    let summary = RuntimePackageSummary(packageID: packageID, displayName: "Hello Text", versionCode: 7)
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        importReply: RuntimeImportPackageControlReply(result: preview),
+        installImportedReply: RuntimeInstallImportedControlReply(result: summary)
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let file = try #require(FileHandle(forReadingAtPath: "/dev/null"))
+    defer { try? file.close() }
+    let importRequest = RuntimeImportPackageRequest(
+        files: [RuntimeImportSourceFile(fileIndex: 0, name: "hello.apk")],
+        origin: .cli
+    )
+    let installRequest = RuntimeInstallImportedRequest(ticket: ticket)
+
+    #expect(try await client.importPackage(importRequest, files: [file]) == preview)
+    #expect(try await client.installImported(installRequest) == summary)
+
+    let snapshot = transport.snapshot()
+    #expect(snapshot.importRequests.count == 1)
+    #expect(snapshot.importFileHandleIDs == [[ObjectIdentifier(file)]])
+    #expect(snapshot.installImportedRequests.count == 1)
+    let decodedImport = try JSONDecoder().decode(
+        RuntimeImportPackageControlRequest.self,
+        from: snapshot.importRequests[0]
+    )
+    let decodedInstall = try JSONDecoder().decode(
+        RuntimeInstallImportedControlRequest.self,
+        from: snapshot.installImportedRequests[0]
+    )
+    #expect(decodedImport.request == importRequest)
+    #expect(decodedInstall.request == installRequest)
+    for header in [decodedImport.header, decodedInstall.header] {
+        #expect(header.apiVersion == APIVersion(major: 1, minor: 7))
+        #expect(header.clientKind == .cli)
+    }
+}
+
+@Test func controlClientPreservesTypedInstallErrorsAndDoesNotReplay() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let ticket = try #require(RuntimeImportTicket(rawValue: "84cfd2a0-504c-4dc2-9d6f-0f579f771902"))
+    let failure = RuntimeWireError.store(
+        "installFailed",
+        message: "Android could not install this package.",
+        remediation: "Check the Android runtime and retry."
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        installImportedReply: RuntimeInstallImportedControlReply(error: failure)
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    do {
+        _ = try await client.installImported(RuntimeInstallImportedRequest(ticket: ticket))
+        Issue.record("The daemon install error was not returned to the caller.")
+    } catch {
+        #expect(error == .remoteFailure(code: failure.code, message: failure.message))
+    }
+    #expect(transport.snapshot().installImportedRequests.count == 1)
+
+    transport.failNextInstallImported()
+    do {
+        _ = try await client.installImported(RuntimeInstallImportedRequest(ticket: ticket))
+        Issue.record("The simulated install transport failure was not returned to the caller.")
+    } catch {
+        #expect(error == .operationResultUnknown(operation: "installImported"))
+    }
+    let snapshot = transport.snapshot()
+    #expect(snapshot.installImportedRequests.count == 2)
+}
+
+@Test func controlClientReportsMalformedInstallReplyAsUnknownOutcome() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let malformedReply = try JSONDecoder().decode(
+        RuntimeInstallImportedControlReply.self,
+        from: Data("{}".utf8)
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        installImportedReply: malformedReply
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let ticket = try #require(RuntimeImportTicket(rawValue: "84cfd2a0-504c-4dc2-9d6f-0f579f771902"))
+
+    do {
+        _ = try await client.installImported(RuntimeInstallImportedRequest(ticket: ticket))
+        Issue.record("A reply without a result or error must not look successful.")
+    } catch {
+        #expect(error == .operationResultUnknown(operation: "installImported"))
+    }
+    #expect(transport.snapshot().installImportedRequests.count == 1)
+}
+
 @Test func controlClientDoesNotReplaySessionMutationsAfterTransportFailure() async throws {
     let configuration = try RuntimeControlClientConfiguration(
         clientKind: .cli,
@@ -661,6 +799,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private let statusData: Data
     private let packageListData: Data
     private let packageInfoData: Data
+    private let importPackageData: Data
+    private let installImportedData: Data
     private let launchData: Data
     private let terminateData: Data
     private let lock = NSLock()
@@ -675,6 +815,9 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var restartRequestsValue: [Data] = []
     private var packageListRequestsValue: [Data] = []
     private var packageInfoRequestsValue: [Data] = []
+    private var importPackageRequestsValue: [Data] = []
+    private var importFileHandleIDsValue: [[ObjectIdentifier]] = []
+    private var installImportedRequestsValue: [Data] = []
     private var launchRequestsValue: [Data] = []
     private var terminateRequestsValue: [Data] = []
     private var resetRequestsValue: [Data] = []
@@ -687,6 +830,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var failNextRestartValue = false
     private var restartDelayValue: Duration?
     private var failNextResetValue = false
+    private var failNextInstallImportedValue = false
     private var endpointBusyRejectionsValue: Int
 
     init(
@@ -697,6 +841,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         helloFailure: RuntimeControlError? = nil,
         packageListReply: RuntimeListPackagesControlReply? = nil,
         packageInfoReply: RuntimePackageInfoControlReply? = nil,
+        importReply: RuntimeImportPackageControlReply? = nil,
+        installImportedReply: RuntimeInstallImportedControlReply? = nil,
         launchReply: RuntimeLaunchControlReply? = nil,
         terminateReply: RuntimeTerminateControlReply? = nil
     ) throws {
@@ -733,6 +879,17 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let defaultPackageInfoReply = RuntimePackageInfoControlReply(
             result: RuntimePackageDetails(summary: defaultSummary, files: [], artifactBytes: 0)
         )
+        let defaultImportReply = RuntimeImportPackageControlReply(
+            result: RuntimeImportPreview(
+                ticket: RuntimeImportTicket(rawValue: "84cfd2a0-504c-4dc2-9d6f-0f579f771902")!,
+                packageID: packageID,
+                displayName: "Example",
+                versionCode: 1,
+                files: [],
+                relation: .newPackage
+            )
+        )
+        let defaultInstallImportedReply = RuntimeInstallImportedControlReply(result: defaultSummary)
         let defaultLaunchReply = RuntimeLaunchControlReply(
             result: RuntimeLaunchResult(
                 sessionID: UUID(uuidString: "B1D9C07C-E76A-446F-B849-0C9E5FC7B1C7")!,
@@ -745,6 +902,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         )
         packageListData = try JSONEncoder().encode(packageListReply ?? defaultListReply)
         packageInfoData = try JSONEncoder().encode(packageInfoReply ?? defaultPackageInfoReply)
+        importPackageData = try JSONEncoder().encode(importReply ?? defaultImportReply)
+        installImportedData = try JSONEncoder().encode(installImportedReply ?? defaultInstallImportedReply)
         launchData = try JSONEncoder().encode(launchReply ?? defaultLaunchReply)
         terminateData = try JSONEncoder().encode(terminateReply ?? defaultTerminateReply)
     }
@@ -864,6 +1023,29 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return packageInfoData
     }
 
+    func importPackage(
+        _ request: Data,
+        files: [FileHandle]
+    ) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock {
+            importPackageRequestsValue.append(request)
+            importFileHandleIDsValue.append(files.map(ObjectIdentifier.init))
+        }
+        return importPackageData
+    }
+
+    func installImported(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        let shouldFail = lock.withLock {
+            installImportedRequestsValue.append(request)
+            defer { failNextInstallImportedValue = false }
+            return failNextInstallImportedValue
+        }
+        if shouldFail {
+            throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+        }
+        return installImportedData
+    }
+
     func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         let shouldFail = lock.withLock {
             launchRequestsValue.append(request)
@@ -902,6 +1084,9 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 restartRequests: restartRequestsValue,
                 packageListRequests: packageListRequestsValue,
                 packageInfoRequests: packageInfoRequestsValue,
+                importRequests: importPackageRequestsValue,
+                importFileHandleIDs: importFileHandleIDsValue,
+                installImportedRequests: installImportedRequestsValue,
                 launchRequests: launchRequestsValue,
                 terminateRequests: terminateRequestsValue,
                 resetRequests: resetRequestsValue,
@@ -936,6 +1121,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         lock.withLock { failNextResetValue = true }
     }
 
+    func failNextInstallImported() {
+        lock.withLock { failNextInstallImportedValue = true }
+    }
+
     struct Snapshot {
         let serviceName: String?
         let brokerRequirement: String?
@@ -948,6 +1137,9 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let restartRequests: [Data]
         let packageListRequests: [Data]
         let packageInfoRequests: [Data]
+        let importRequests: [Data]
+        let importFileHandleIDs: [[ObjectIdentifier]]
+        let installImportedRequests: [Data]
         let launchRequests: [Data]
         let terminateRequests: [Data]
         let resetRequests: [Data]

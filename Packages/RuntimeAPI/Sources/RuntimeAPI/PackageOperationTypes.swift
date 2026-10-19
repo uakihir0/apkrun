@@ -320,6 +320,8 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
     public var versionCode: RuntimeVersionCode
     /// The display-only version string, if present.
     public var versionName: String?
+    /// The current signer SHA-256 digests reported by APK inspection.
+    public var signerDigests: [RuntimeSHA256Digest]
     /// APK files selected for installation.
     public var files: [RuntimeArtifactFile]
     /// Split names excluded by split selection.
@@ -329,6 +331,19 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
     /// Non-fatal observations from host inspection.
     public var warnings: [RuntimeImportWarning]
 
+    private enum CodingKeys: String, CodingKey {
+        case ticket
+        case packageID
+        case displayName
+        case versionCode
+        case versionName
+        case signerDigests
+        case files
+        case excludedSplits
+        case relation
+        case warnings
+    }
+
     /// Creates an import preview.
     public init(
         ticket: RuntimeImportTicket,
@@ -336,6 +351,7 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
         displayName: String,
         versionCode: RuntimeVersionCode,
         versionName: String? = nil,
+        signerDigests: [RuntimeSHA256Digest] = [],
         files: [RuntimeArtifactFile],
         excludedSplits: [String] = [],
         relation: RuntimeImportRelation,
@@ -346,10 +362,26 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
         self.displayName = displayName
         self.versionCode = versionCode
         self.versionName = versionName
+        self.signerDigests = signerDigests
         self.files = files
         self.excludedSplits = excludedSplits
         self.relation = relation
         self.warnings = warnings
+    }
+
+    /// Decodes previews from earlier API minors that did not include signer digests.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ticket = try container.decode(RuntimeImportTicket.self, forKey: .ticket)
+        packageID = try container.decode(RuntimePackageID.self, forKey: .packageID)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        versionCode = try container.decode(RuntimeVersionCode.self, forKey: .versionCode)
+        versionName = try container.decodeIfPresent(String.self, forKey: .versionName)
+        signerDigests = try container.decodeIfPresent([RuntimeSHA256Digest].self, forKey: .signerDigests) ?? []
+        files = try container.decode([RuntimeArtifactFile].self, forKey: .files)
+        excludedSplits = try container.decode([String].self, forKey: .excludedSplits)
+        relation = try container.decode(RuntimeImportRelation.self, forKey: .relation)
+        warnings = try container.decode([RuntimeImportWarning].self, forKey: .warnings)
     }
 }
 

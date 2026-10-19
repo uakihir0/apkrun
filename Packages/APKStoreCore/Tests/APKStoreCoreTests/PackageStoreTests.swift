@@ -194,6 +194,33 @@ private actor CompletionFlag {
     #expect(storedAPK != input)
 }
 
+@Test func packageStoreDiscardsUnusedImportTicketAndPrivateAPKCopy() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let packages = temporary.appendingPathComponent("Packages", isDirectory: true)
+
+    let store = PackageStore(packagesDirectory: packages, inspector: { _ in facts() })
+    try await store.open()
+    let preview = try await store.importPackage(files: [input])
+    let ticketDirectory =
+        packages
+        .appendingPathComponent("io.apkrun.fixture.hellotext/incoming", isDirectory: true)
+        .appendingPathComponent(preview.ticket.uuidString, isDirectory: true)
+    #expect(FileManager.default.fileExists(atPath: ticketDirectory.path))
+
+    try await store.discardImport(ticket: preview.ticket)
+
+    #expect(!FileManager.default.fileExists(atPath: ticketDirectory.path))
+    do {
+        _ = try await store.installImported(ticket: preview.ticket)
+        Issue.record("A discarded import ticket must not be installable.")
+    } catch let failure as PackageStoreFailure {
+        #expect(failure == .importTicketNotFound)
+    }
+}
+
 @Test func packageStoreKeepsUnreadableRecordsVisibleAndProtectsOnlyThosePackages() async throws {
     let temporary = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: temporary) }

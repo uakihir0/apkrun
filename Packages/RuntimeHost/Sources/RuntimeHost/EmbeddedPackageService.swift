@@ -1,4 +1,5 @@
 import APKStoreCore
+import Darwin
 import DiagnosticsCore
 import Foundation
 import RuntimeAPI
@@ -412,7 +413,7 @@ public actor EmbeddedPackageService: RuntimeService {
         _ sources: [RuntimeImportSourceFile],
         from handles: [FileHandle]
     ) throws -> StagedImport {
-        guard !sources.isEmpty, sources.count <= Self.maximumAPKCount else {
+        guard !sources.isEmpty, sources.count <= Self.maximumAPKCount, sources.count == handles.count else {
             throw EmbeddedPackageServiceFailure.invalidFileCount
         }
 
@@ -421,6 +422,17 @@ public actor EmbeddedPackageService: RuntimeService {
             guard source.fileIndex >= 0, source.fileIndex < handles.count,
                 indexes.insert(source.fileIndex).inserted,
                 Self.isSafeSourceName(source.name)
+            else {
+                throw EmbeddedPackageServiceFailure.invalidSourceFile
+            }
+        }
+        guard indexes == Set(handles.indices) else {
+            throw EmbeddedPackageServiceFailure.invalidSourceFile
+        }
+        for handle in handles {
+            var fileInfo = stat()
+            guard Darwin.fstat(handle.fileDescriptor, &fileInfo) == 0,
+                fileInfo.st_mode & S_IFMT == S_IFREG
             else {
                 throw EmbeddedPackageServiceFailure.invalidSourceFile
             }
@@ -468,11 +480,25 @@ public actor EmbeddedPackageService: RuntimeService {
                 var fileBytes: Int64 = 0
                 while true {
                     try Task.checkCancellation()
-                    guard let chunk = try handles[source.fileIndex].read(upToCount: Self.copyChunkSize),
-                        !chunk.isEmpty
-                    else {
+                    var bytes = [UInt8](repeating: 0, count: Self.copyChunkSize)
+                    let bytesRead = bytes.withUnsafeMutableBytes { buffer in
+                        Darwin.pread(
+                            handles[source.fileIndex].fileDescriptor,
+                            buffer.baseAddress,
+                            buffer.count,
+                            off_t(fileBytes)
+                        )
+                    }
+                    if bytesRead < 0, errno == EINTR {
+                        continue
+                    }
+                    guard bytesRead >= 0 else {
+                        throw EmbeddedPackageServiceFailure.stagingIO
+                    }
+                    guard bytesRead > 0 else {
                         break
                     }
+                    let chunk = Data(bytes.prefix(bytesRead))
                     let count = Int64(chunk.count)
                     let (newFileBytes, fileOverflow) = fileBytes.addingReportingOverflow(count)
                     let (newTotalBytes, totalOverflow) = totalBytes.addingReportingOverflow(count)
@@ -617,6 +643,12 @@ public actor EmbeddedPackageService: RuntimeService {
             displayName: preview.displayName,
             versionCode: preview.versionCode,
             versionName: preview.versionName,
+            signerDigests: try preview.artifactSet.signerDigests.map { digest in
+                guard let runtimeDigest = RuntimeSHA256Digest(rawValue: digest.rawValue) else {
+                    throw EmbeddedPackageServiceFailure.artifactMetadataUnavailable
+                }
+                return runtimeDigest
+            },
             files: try preview.artifactSet.files.map(runtimeArtifact),
             relation: relation,
             warnings: [.signingNotChecked]

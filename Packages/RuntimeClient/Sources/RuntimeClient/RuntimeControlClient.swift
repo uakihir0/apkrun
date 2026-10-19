@@ -22,6 +22,8 @@ public enum RuntimeControlClientError: Error, Equatable, Sendable {
     case transportFailure(domain: String, code: Int)
     /// The daemon did not reply before the operation deadline plus the client grace period.
     case requestTimedOut(operation: String)
+    /// A side-effecting request was sent, but the client cannot determine whether it completed.
+    case operationResultUnknown(operation: String)
     /// The caller cancelled while waiting for a state-changing operation.
     case requestCancelled(operation: String)
     /// The control endpoint returned a catalog-backed error.
@@ -54,6 +56,8 @@ extension RuntimeControlClientError: LocalizedError {
             "The runtime daemon could not be reached."
         case .requestTimedOut:
             "APKRun's background service didn't answer in time."
+        case .operationResultUnknown:
+            "APKRun couldn't confirm whether the operation completed."
         case .requestCancelled:
             "The operation was cancelled."
         case .remoteFailure(_, let message):
@@ -261,6 +265,59 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Copies and inspects package files without starting Android.
+    ///
+    /// The file handles are passed once to the daemon. A transport failure is not replayed because
+    /// the daemon may already have staged the files.
+    public func importPackage(
+        _ request: RuntimeImportPackageRequest,
+        files: [FileHandle]
+    ) async throws(RuntimeControlClientError) -> RuntimeImportPreview {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeImportPackageControlRequest(
+                header: makeHeader(),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.importPackage(data, files: files)
+            return try Self.decodeImportPackageReply(from: response)
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
+    /// Installs a package import previously inspected by `importPackage`.
+    ///
+    /// The daemon may have installed the package even when the client loses the reply, so this
+    /// state-changing request is sent once and never replayed automatically.
+    public func installImported(
+        _ request: RuntimeInstallImportedRequest
+    ) async throws(RuntimeControlClientError) -> RuntimePackageSummary {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeInstallImportedControlRequest(
+                header: makeHeader(),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.installImported(data)
+            return try Self.decodeInstallImportedReply(from: response)
+        } catch {
+            guard let clientError = error as? RuntimeControlClientError else {
+                throw .malformedReply
+            }
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            switch clientError {
+            case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply:
+                throw .operationResultUnknown(operation: "installImported")
+            default:
+                throw clientError
+            }
+        }
+    }
+
     private func makeHeader() -> APIRequestHeader {
         APIRequestHeader(clientKind: configuration.clientKind)
     }
@@ -271,7 +328,7 @@ public actor RuntimeControlClient {
     ) {
         let shouldInvalidate: Bool
         switch error {
-        case .transportFailure, .requestTimedOut, .requestCancelled:
+        case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply:
             shouldInvalidate = true
         default:
             shouldInvalidate = false
@@ -478,6 +535,38 @@ public actor RuntimeControlClient {
             throw .malformedReply
         }
         return status
+    }
+
+    private static func decodeImportPackageReply(from data: Data) throws(RuntimeControlClientError)
+        -> RuntimeImportPreview
+    {
+        let reply = try Self.decode(RuntimeImportPackageControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
+    private static func decodeInstallImportedReply(from data: Data) throws(RuntimeControlClientError)
+        -> RuntimePackageSummary
+    {
+        let reply = try Self.decode(RuntimeInstallImportedControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
     }
 
     private static func decodeLaunchReply(from data: Data) throws(RuntimeControlClientError) -> RuntimeLaunchResult {
@@ -743,6 +832,8 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func resetRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func listPackages(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func packageInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func importPackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
+    func installImported(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func terminate(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func invalidate()
@@ -785,7 +876,7 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
         }
         let connection = configuredConnection(
             NSXPCConnection(listenerEndpoint: listenerEndpoint),
-            interface: NSXPCInterface(with: RuntimeControlXPC.self),
+            interface: try controlInterface(),
             signingRequirement: signingRequirement
         )
         return XPCControlChannel(connection: connection)
@@ -812,6 +903,20 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
             for: #selector(RuntimeBrokerXPC.requestEndpoint(_:reply:)),
             argumentIndex: 1,
             ofReply: true
+        )
+        return interface
+    }
+
+    private func controlInterface() throws(RuntimeControlClientError) -> NSXPCInterface {
+        let interface = NSXPCInterface(with: RuntimeControlXPC.self)
+        guard let fileClasses = NSSet(array: [NSArray.self, FileHandle.self]) as? Set<AnyHashable> else {
+            throw .invalidXPCInterface
+        }
+        interface.setClasses(
+            fileClasses,
+            for: #selector(RuntimeControlXPC.importPackage(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
         )
         return interface
     }
@@ -977,6 +1082,34 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.packageInfo(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func importPackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.importPackage(request, files: files) { response in finish(.success(response)) }
+        }
+    }
+
+    func installImported(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.installImported(request) { response in finish(.success(response)) }
         }
     }
 

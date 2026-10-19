@@ -2477,20 +2477,22 @@
     },
     {
       "code": "runtime.requiredAgentUnavailable",
-      "parameters": [],
+      "parameters": [
+        "agent"
+      ],
       "message": {
-        "en": "The Guest Agent keeps stopping, so APKRun stopped restarting it."
+        "en": "The {agent} in Android isn't available."
       },
       "remediation": {
-        "en": "Restart Android with apkrun dev boot. If it happens again, create a diagnostics report."
+        "en": "Restart Android."
       },
       "action": "restartAndroid",
       "cliExit": 1,
       "doc": {
-        "case": "requiredAgentUnavailable",
-        "when": "the agent died a fourth time within a minute, which the restart budget does not allow",
-        "raisedBy": "DevelopmentGuestAgent",
-        "ref": "[../02-design/guest-components.md](../02-design/guest-components.md) §3.3"
+        "case": "requiredAgentUnavailable(agent:)",
+          "when": "a required agent misses its 30 s readiness deadline after boot or remains unavailable for more than 30 s while ready, its restart budget is exhausted, or repeated protocol violations stop reconnection",
+        "raisedBy": "agent supervisor",
+          "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2, §4.3; [../02-design/guest-components.md](../02-design/guest-components.md) §3.3; [../02-design/guest-protocol.md](../02-design/guest-protocol.md) §12.2"
       }
     },
     {

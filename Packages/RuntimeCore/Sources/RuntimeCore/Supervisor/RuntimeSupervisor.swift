@@ -106,6 +106,7 @@ public actor RuntimeSupervisor {
     private let planner: AndroidBootPlanner
     private let timeouts: BootTimeouts
     private let guestAgentTimeout: Duration
+    private let requiredAgentOutageTimeout: Duration
     private let eventContinuation: AsyncStream<RuntimeEvent>.Continuation
     private let logger: APKLogger
     private let bootLogger: APKLogger
@@ -116,6 +117,8 @@ public actor RuntimeSupervisor {
     /// The lazily created pool-display coordinator for this running boot.
     private var displayPool: DisplayPool?
     private var tasks: [Task<Void, Never>] = []
+    /// Watches the required Guest Agent after runtime readiness.
+    private var requiredAgentOutageMonitor: RequiredAgentOutageMonitor?
     /// The loopback forwarder of developer ADB (`127.0.0.1:<port>` to guest vsock 5555), while Android runs.
     private var forwarder: VsockLoopbackForwarder?
     /// The developer's adb client, when adb was found.
@@ -160,6 +163,7 @@ public actor RuntimeSupervisor {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         guestAgentBundle: GuestAgentBundle? = nil,
         guestAgentTimeout: Duration = DevelopmentGuestAgent.defaultConnectTimeout,
+        requiredAgentOutageTimeout: Duration = .seconds(30),
         developmentDisplay: DevelopmentDisplay? = nil
     ) {
         self.guestAgentBundle = guestAgentBundle
@@ -171,6 +175,7 @@ public actor RuntimeSupervisor {
         planner = AndroidBootPlanner(platform: platform, paths: diagnostics.paths)
         self.timeouts = timeouts
         self.guestAgentTimeout = guestAgentTimeout
+        self.requiredAgentOutageTimeout = requiredAgentOutageTimeout
         self.environment = environment
         let stream = AsyncStream.makeStream(of: RuntimeEvent.self, bufferingPolicy: .bufferingNewest(4096))
         events = stream.stream
@@ -231,9 +236,10 @@ public actor RuntimeSupervisor {
             return
         }
         stopRequested = true
+        transition(to: .stopping)
+        await stopRequiredAgentOutageMonitor()
         await stopGuestAgent()
         bootProgress?.finish()
-        transition(to: .stopping)
         // A forced stop that is rejected while the VM is still starting is left to the boot, which stops the VM itself.
         let powerOff: (@Sendable () async -> Bool)? =
             options.developerMode ? { @Sendable in await self.requestPowerOff() } : nil
@@ -414,7 +420,11 @@ public actor RuntimeSupervisor {
             do throws(GuestAgentFailure) {
                 try await agent.start(until: requiredAgentDeadline)
             } catch {
-                throw .guestAgent(error)
+                throw Self.requiredAgentStartFailure(
+                    error,
+                    deadline: requiredAgentDeadline,
+                    now: ContinuousClock.now
+                )
             }
             Perf.mark(.agentConnected, timeline: diagnostics.perfTimeline)
             if let developmentDisplay {
@@ -440,6 +450,7 @@ public actor RuntimeSupervisor {
         try throwIfStopped()
         Perf.mark(.runtimeReady, timeline: diagnostics.perfTimeline)
         transition(to: .ready)
+        await startRequiredAgentOutageMonitor()
     }
 
     /// What the console and VM watchers report to the boot wait.
@@ -803,7 +814,7 @@ public actor RuntimeSupervisor {
             }
         }
         if let requiredAgentDeadline, ContinuousClock.now >= requiredAgentDeadline {
-            throw .guestAgent(.connectTimedOut)
+            throw .requiredAgentUnavailable(agent: .guestAgent)
         }
         throw .androidBootFailed(detail: "sys.boot_completed did not become 1 over the serial shell")
     }
@@ -842,6 +853,52 @@ public actor RuntimeSupervisor {
             return .vm(failure)
         }
         return .androidBootFailed(detail: "the VM controller failed: \(type(of: error))")
+    }
+
+    /// Promotes only a connect timeout that actually exhausted RuntimeSupervisor's required-agent deadline.
+    ///
+    /// Direct DevelopmentGuestAgent.start() callers keep the lower-level `connectTimedOut` failure.
+    static func requiredAgentStartFailure(
+        _ failure: GuestAgentFailure,
+        deadline: ContinuousClock.Instant,
+        now: ContinuousClock.Instant
+    ) -> RuntimeBootFailure {
+        if failure == .connectTimedOut, now >= deadline {
+            return .requiredAgentUnavailable(agent: .guestAgent)
+        }
+        return .guestAgent(failure)
+    }
+
+    private func startRequiredAgentOutageMonitor() async {
+        guard state == .ready, !stopRequested, let agent = developmentGuestAgent else { return }
+        let updates = await agent.supervisor.stateUpdates()
+        guard state == .ready, !stopRequested, developmentGuestAgent === agent else { return }
+
+        let monitor = RequiredAgentOutageMonitor(timeout: requiredAgentOutageTimeout) { [weak self] in
+            await self?.requiredAgentOutageExpired(for: agent)
+        }
+        requiredAgentOutageMonitor = monitor
+        await monitor.watch(updates)
+    }
+
+    private func stopRequiredAgentOutageMonitor() async {
+        let monitor = requiredAgentOutageMonitor
+        requiredAgentOutageMonitor = nil
+        await monitor?.stop()
+    }
+
+    private func requiredAgentOutageExpired(for agent: DevelopmentGuestAgent) async {
+        guard state == .ready, !stopRequested, developmentGuestAgent === agent else { return }
+        let status = await agent.supervisor.statusSnapshot()
+        guard state == .ready, !stopRequested, developmentGuestAgent === agent, status.state != .ready else { return }
+        let failure = RuntimeBootFailure.requiredAgentUnavailable(agent: .guestAgent)
+        transition(to: .failed(failure))
+        await fail(failure)
+        if !stopRequested, state == .failed(failure) {
+            // The failure transition is observable before cleanup completes; returning to stopped makes a later
+            // explicit ensureReady eligible to start a fresh runtime.
+            transition(to: .stopped)
+        }
     }
 
     /// Appends the boot's record to `perf/boots.jsonl`. A boot that never started the VM has none.
@@ -884,6 +941,7 @@ public actor RuntimeSupervisor {
     ]
 
     private func fail(_ failure: RuntimeBootFailure) async {
+        await stopRequiredAgentOutageMonitor()
         await stopGuestAgent(preservingFailureStatus: !stopRequested)
         bootProgress?.finish()
         bootProgress = nil

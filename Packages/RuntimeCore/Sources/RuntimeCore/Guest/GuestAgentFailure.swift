@@ -44,11 +44,13 @@ public enum GuestAgentFailure: APKRunError, Equatable {
         }
     }
 
-    /// The catalog parameters. They carry the reason names only, never output text.
+    /// The catalog parameters. They carry the agent name or reason names, never command output.
     public var parameters: [String: ErrorParameter] {
         switch self {
         case .installFailed(let reason), .handshakeFailed(let reason), .operationFailed(let reason):
             ["reason": .text(reason)]
+        case .requiredAgentUnavailable:
+            ["agent": .text("Guest Agent")]
         default:
             [:]
         }

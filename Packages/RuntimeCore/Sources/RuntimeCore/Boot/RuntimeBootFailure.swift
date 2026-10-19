@@ -1,6 +1,7 @@
 import DiagnosticsCore
 import Foundation
 import GraphicsCore
+import GuestProtocol
 import ImageCore
 import VirtualMachineCore
 
@@ -31,6 +32,9 @@ public enum RuntimeBootFailure: APKRunError, Equatable {
     case graphics(GraphicsFailure)
     /// The development Guest Agent could not be installed, started, or reached (guest-components.md §3).
     case guestAgent(GuestAgentFailure)
+    /// A required agent missed its readiness deadline after boot or after runtime readiness (runtime-daemon.md §3.2,
+    /// §4.3).
+    case requiredAgentUnavailable(agent: GuestAgentKind)
 
     /// The `runtime` error domain.
     public static let domain: ErrorDomain = .runtime
@@ -48,6 +52,7 @@ public enum RuntimeBootFailure: APKRunError, Equatable {
         case .gpuProfileUnavailable: "gpuProfileUnavailable"
         case .graphics: "graphics"
         case .guestAgent: "guestAgent"
+        case .requiredAgentUnavailable: "requiredAgentUnavailable"
         }
     }
 
@@ -57,6 +62,7 @@ public enum RuntimeBootFailure: APKRunError, Equatable {
         case .androidBootFailed(let detail): ["detail": .text(detail)]
         case .bootTimedOut(let phase), .bootStalled(let phase): ["phase": .text(phase.description)]
         case .gpuProfileUnavailable(let profile): ["profile": .text(profile)]
+        case .requiredAgentUnavailable(let agent): ["agent": .text(Self.agentName(agent))]
         default: [:]
         }
     }
@@ -70,6 +76,14 @@ public enum RuntimeBootFailure: APKRunError, Equatable {
         case .graphics(let failure): failure
         case .guestAgent(let failure): failure
         default: nil
+        }
+    }
+
+    private static func agentName(_ agent: GuestAgentKind) -> String {
+        switch agent {
+        case .guestAgent: "Guest Agent"
+        case .storeAgent: "Store Agent"
+        case .guestIME: "Guest IME"
         }
     }
 }

@@ -21560,3 +21560,48 @@ intentionally does not retry it.
 **Verification.** The combined focused run above includes tests for one-time
 dispatch after resynchronization, the 5-second wait deadline, prompt release
 on stop and caller cancellation, and no replay after an in-flight disconnect.
+
+**Required-agent outage deadline choice.** After `.ready`, start one 30-second
+deadline at the first non-ready Guest Agent state and keep it through
+reconnection attempts. Cancel it only after the supervisor reports `.ready`,
+which is emitted after handshake and `GetSnapshot`; a later outage starts a
+new deadline. Cancel the monitor before runtime stop. On expiry, report
+`RuntimeBootFailure.requiredAgentUnavailable(agent: .guestAgent)`, publish the
+`.failed` state event, clean up the runtime, and then return the current state
+to `.stopped`. This follows the existing failure lifecycle and keeps
+`ensureReady` retryable, because it starts from `.stopped`. Use the same
+runtime catalog code as an initial required-agent readiness timeout.
+RuntimeSupervisor promotes `connectTimedOut` only when its absolute required
+agent deadline has actually expired; direct `DevelopmentGuestAgent.start()`
+callers retain the lower-level `connectTimedOut` result. The existing restart
+budget and protocol-violation failures use the same catalog code and provide
+`agent = Guest Agent`.
+
+**Reason.** The deadline measures a continuous loss of synchronized agent
+readiness rather than the time spent in any one reconnect attempt. Synchronized
+readiness proves that the agent's snapshot is current, and restarting the timer
+on that state gives every later disconnect the documented recovery window.
+Using one typed runtime failure keeps boot and reconnect exhaustion aligned
+with runtime-daemon.md §§3.2, 3.6, and 4.3 without changing lower-level
+GuestAgentFailure timeout semantics. Keeping `.failed` as an event before
+cleanup follows the documented transient failure state; leaving it as the
+current state after cleanup would prevent `ensureReady` from accepting a retry.
+
+**Risk.** RuntimeCore currently supervises only the development Guest Agent;
+the Store Agent and production Guest Agent must use the same rule when their
+supervisors are added. RuntimeCore has no diagnostics-snapshot callback at
+this layer, so the failure event is followed by teardown and `.stopped`;
+diagnostic capture and automatic session restart remain daemon orchestration
+work. The T0 monitor test uses an injected short duration and does not exercise
+a live launchd daemon or VM teardown.
+
+**Verification.** Focused T0 tests cover deadline reset on synchronized
+readiness, stop cancellation, and mapping only an expired runtime deadline to
+`runtime.requiredAgentUnavailable`. The existing direct Guest Agent start
+timeout test continues to assert `connectTimedOut`.
+
+**Review follow-up.** Publish `.reconnecting` immediately after dropping the
+connection and before awaiting its close, so an actor scheduling delay cannot
+leave the supervisor reporting `.ready` after the transport is gone. The
+catalog trigger description and references also retain the existing restart
+budget and repeated protocol-violation cases that share this error code.

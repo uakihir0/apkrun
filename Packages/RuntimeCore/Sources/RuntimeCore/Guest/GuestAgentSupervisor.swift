@@ -169,6 +169,7 @@ public actor GuestAgentSupervisor {
     private let logSink: (any LogSink)?
     private let updateContinuation: AsyncStream<GPEvent>.Continuation
     private let androidRestartContinuation: AsyncStream<GuestAndroidRestart>.Continuation
+    private var stateObservers: [UUID: AsyncStream<State>.Continuation] = [:]
     private var connection: GuestConnection?
     private var consumer: Task<Void, Never>?
     private var maintenance: Task<Void, Never>?
@@ -314,6 +315,21 @@ public actor GuestAgentSupervisor {
         StatusSnapshot(state: state, protocolVersion: protocolVersion)
     }
 
+    /// Streams the current connection state followed by every later transition.
+    ///
+    /// Registering and yielding the initial state happen in one actor turn, so a caller cannot miss a transition
+    /// between reading the snapshot and subscribing.
+    public func stateUpdates() -> AsyncStream<State> {
+        let id = UUID()
+        let stream = AsyncStream<State>.makeStream(bufferingPolicy: .bufferingNewest(16))
+        stateObservers[id] = stream.continuation
+        stream.continuation.onTermination = { @Sendable _ in
+            Task { await self.removeStateObserver(id) }
+        }
+        stream.continuation.yield(state)
+        return stream.stream
+    }
+
     /// Sends one operation through the current connection. During a reconnect it waits up to
     /// ``requestReconnectTimeout`` for the new connection to finish its snapshot. Once submitted, an operation is
     /// never retried because the connection may have delivered it before failing.
@@ -346,7 +362,16 @@ public actor GuestAgentSupervisor {
             return
         }
         state = newState
+        for (id, continuation) in stateObservers {
+            if case .terminated = continuation.yield(newState) {
+                stateObservers[id] = nil
+            }
+        }
         resumeSendWaiters()
+    }
+
+    private func removeStateObserver(_ id: UUID) {
+        stateObservers[id] = nil
     }
 
     /// Returns whether this request belongs to a connected generation that is actively reconnecting.
@@ -610,11 +635,11 @@ public actor GuestAgentSupervisor {
         session = nil
         consumer?.cancel()
         consumer = nil
+        updateState(.reconnecting)
         await dead.close()
         guard generation == started, !Task.isCancelled, maintenance != nil else {
             return
         }
-        updateState(.reconnecting)
         if let cause, recordViolation(cause) {
             updateState(.unavailable)
             logger.error(

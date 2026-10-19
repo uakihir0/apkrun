@@ -332,7 +332,7 @@ Rule: **the host is the source of truth for configuration, the guest for Android
 - Frames keep flowing. The graphics path does not depend on the agent.
 - Input is dropped and counted (`input.droppedWhileDisconnected`). Text events are dropped too. The wrapper shows no error for gaps shorter than 2 s.
 - Requests that need the agent wait for an in-progress reconnect for up to 5 s, then throw `RuntimeFailure.guestAgentUnavailable` ([display-and-windowing.md](display-and-windowing.md) §10). The request stays unsent while it waits. Once submitted to the connection, it is never replayed after a disconnect because the guest may already have performed it. Stopping the supervisor or cancelling the caller wakes a queued request promptly; RuntimeCore reports the existing typed `GuestProtocolFailure.agentUnavailable` for either case.
-- A required agent that stays unreachable for more than 30 s while `ready` moves the runtime to `failed(.requiredAgentUnavailable(agent))` (§3.6).
+- A required agent that stays unreachable for more than 30 s while `ready` moves the runtime to `failed(.requiredAgentUnavailable(agent))` (§3.6). The deadline starts with the first non-ready connection state and continues across reconnect attempts. A completed handshake and `GetSnapshot` resynchronization cancels the deadline; a later outage starts a fresh 30 s interval. Stopping the runtime cancels the monitor before it can report a failure. RuntimeSupervisor publishes the failure state before teardown and returns to `stopped` after cleanup, so a later `ensureReady` can retry.
 - Hung guest watchdog: the agent misses pings, ADB is unreachable, and the console is silent, all for 60 s while `ready` → `failed(.guestUnresponsive)`.
 
 ---

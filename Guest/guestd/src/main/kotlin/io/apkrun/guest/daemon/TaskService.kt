@@ -131,24 +131,41 @@ class TaskService(
                 context.ensureActive()
                 removeTaskById(it.getTaskId())
             }
+            awaitPackageTasksDisappearLocked(packageName, deadline)
+        }
+    }
 
-            while (true) {
-                context.ensureActive()
-                val remainingTasks = refresh().filter { it.getPackage() == packageName }
-                context.ensureActive()
-                if (remainingTasks.isEmpty()) {
-                    return
-                }
-                val remainingMillis = deadline - nowMillis()
-                if (remainingMillis <= 0) {
-                    throw GuestFailure(
-                        GuestErrorCode.GUEST_ERROR_CODE_TIMEOUT,
-                        "the package tasks did not disappear after removal",
-                        mapOf("package" to packageName),
-                    )
-                }
-                waitMillis(minOf(TASK_POLL_MILLIS, remainingMillis))
+    /**
+     * Waits until Android no longer reports [packageName], publishing `TaskVanished` before return.
+     * Used after `IActivityManager.forceStopPackage`, which removes tasks without calling `removeTask`.
+     */
+    suspend fun awaitPackageTasksDisappear(packageName: String) {
+        removalLock.withLock {
+            awaitPackageTasksDisappearLocked(
+                packageName,
+                nowMillis() + TASK_REMOVAL_TIMEOUT_MILLIS,
+            )
+        }
+    }
+
+    private suspend fun awaitPackageTasksDisappearLocked(packageName: String, deadline: Long) {
+        val context = currentCoroutineContext()
+        while (true) {
+            context.ensureActive()
+            val remainingTasks = refresh().filter { it.getPackage() == packageName }
+            context.ensureActive()
+            if (remainingTasks.isEmpty()) {
+                return
             }
+            val remainingMillis = deadline - nowMillis()
+            if (remainingMillis <= 0) {
+                throw GuestFailure(
+                    GuestErrorCode.GUEST_ERROR_CODE_TIMEOUT,
+                    "the package tasks did not disappear after stopping",
+                    mapOf("package" to packageName),
+                )
+            }
+            waitMillis(minOf(TASK_POLL_MILLIS, remainingMillis))
         }
     }
 

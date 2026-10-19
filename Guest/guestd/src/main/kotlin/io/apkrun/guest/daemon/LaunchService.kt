@@ -51,6 +51,10 @@ internal data class LaunchServiceAdapters(
     val createOptions: (DisplayLaunchOptions) -> Any? = ::createLaunchOptions,
     val startActivityAsUser: (Array<out Any?>) -> Any? = ::invokeStartActivityAsUser,
     val startResult: (String) -> Int = ::activityStartResult,
+    val forceStopPackage: (String, Int) -> Unit = { packageName, userId ->
+        SystemServices.activity.call("forceStopPackage", packageName, userId)
+        Unit
+    },
 )
 
 /**
@@ -137,8 +141,7 @@ private constructor(
     }
 
     /**
-     * Finishes every task of the requested package. Force-stop remains unsupported here; it is
-     * implemented with the rest of the full Guest Agent operations in #034.
+     * Finishes every task, or force-stops every task and process, of the requested package.
      */
     suspend fun stop(request: StopApplication) {
         val pkg = request.getPackage()
@@ -150,11 +153,10 @@ private constructor(
         }
         when (request.getMode()) {
             StopMode.STOP_MODE_FINISH_TASKS -> tasks.removeAllForPackage(pkg)
-            StopMode.STOP_MODE_FORCE_STOP ->
-                throw GuestFailure(
-                    GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
-                    "force-stop is not available in this agent build",
-                )
+            StopMode.STOP_MODE_FORCE_STOP -> {
+                adapters.forceStopPackage(pkg, CURRENT_USER_ID)
+                tasks.awaitPackageTasksDisappear(pkg)
+            }
             StopMode.STOP_MODE_UNSPECIFIED,
             StopMode.UNRECOGNIZED ->
                 throw GuestFailure(

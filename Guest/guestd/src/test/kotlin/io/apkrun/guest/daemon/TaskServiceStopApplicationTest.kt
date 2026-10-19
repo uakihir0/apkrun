@@ -71,6 +71,23 @@ class TaskServiceStopApplicationTest {
     }
 
     @Test
+    fun forceStopWaitPublishesTaskVanishedBeforeReturning() = runBlocking {
+        val fixture =
+            fixture(
+                listOf(
+                    task(taskId = 7, displayId = 0, packageName = TARGET_PACKAGE),
+                    task(taskId = 8, displayId = 1, packageName = OTHER_PACKAGE),
+                )
+            )
+        fixture.remainingTasks.removeAll { it.getPackage() == TARGET_PACKAGE }
+
+        fixture.service.awaitPackageTasksDisappear(TARGET_PACKAGE)
+
+        assertEquals(listOf(8), fixture.remainingTasks.map { it.getTaskId() })
+        assertEquals(listOf(7), fixture.taskVanishedEvents().map { it.getTaskId() })
+    }
+
+    @Test
     fun cancellationInterruptsTheWaitAndReleasesTheRemovalLock() = runBlocking {
         val enteredWait = CompletableDeferred<Unit>()
         val fixture =

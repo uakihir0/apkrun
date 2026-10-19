@@ -165,6 +165,20 @@ object SystemServices {
                 ),
         )
 
+    /** `ActivityManager`: stops a package and its background processes (guest-components.md §6.2). */
+    val activity =
+        SystemServiceWrapper(
+            serviceName = "activity",
+            interfaceName = "android.app.IActivityManager",
+            requirements =
+                listOf(
+                    MethodRequirement(
+                        "forceStopPackage",
+                        listOf(listOf("java.lang.String", "int")),
+                    )
+                ),
+        )
+
     /** `InputManager`: event injection. It resolves now and is used from #024 on (input.v1). */
     val input =
         SystemServiceWrapper(
@@ -195,5 +209,5 @@ object SystemServices {
 
     /** Every wrapper, in the order that the service check reports them. */
     val all: List<SystemServiceWrapper>
-        get() = listOf(display, window, activityTask, input, lockSettings)
+        get() = listOf(display, window, activityTask, activity, input, lockSettings)
 }

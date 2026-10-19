@@ -6,7 +6,10 @@ import io.apkrun.guest.protocol.v1.DisplayMode
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchMode
+import io.apkrun.guest.protocol.v1.StopApplication
+import io.apkrun.guest.protocol.v1.StopMode
 import io.apkrun.guest.protocol.v1.TaskInfo
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
@@ -14,6 +17,38 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class LaunchServiceTest {
+    @Test
+    fun forceStopCallsActivityManagerAndWaitsUntilOnlyOtherPackagesRemain() = runBlocking {
+        val remainingTasks =
+            mutableListOf(
+                task(taskId = 91, displayId = 0),
+                task(taskId = 92, displayId = 1, packageName = OTHER_PACKAGE),
+            )
+        val forceStops = mutableListOf<Pair<String, Int>>()
+        val service =
+            service(
+                displayInventory = emptyMap(),
+                taskInventory = { remainingTasks.toList() },
+                adapters =
+                    LaunchServiceAdapters(
+                        forceStopPackage = { packageName, userId ->
+                            forceStops += packageName to userId
+                            remainingTasks.removeAll { it.getPackage() == packageName }
+                        },
+                    ),
+            )
+
+        service.stop(
+            StopApplication.newBuilder()
+                .setPackage(TARGET_PACKAGE)
+                .setMode(StopMode.STOP_MODE_FORCE_STOP)
+                .build(),
+        )
+
+        assertEquals(listOf(TARGET_PACKAGE to 0), forceStops)
+        assertEquals(listOf(92), remainingTasks.map { it.getTaskId() })
+    }
+
     @Test
     fun launchPassesRequestedDisplayOptionsToActivityManager() {
         var activityStarted = false
@@ -112,13 +147,15 @@ class LaunchServiceTest {
         adapters: LaunchServiceAdapters,
     ): LaunchService {
         val events = EventBus()
+        val tasks =
+            TaskService(
+                events = events,
+                callbacks = {},
+                readTaskList = taskInventory,
+            )
+        tasks.refresh()
         return LaunchService.withAdapters(
-            tasks =
-                TaskService(
-                    events = events,
-                    callbacks = {},
-                    readTaskList = taskInventory,
-                ),
+            tasks = tasks,
             displays =
                 DisplayService(
                     events = events,
@@ -143,15 +180,20 @@ class LaunchServiceTest {
             .setMode(DisplayMode.newBuilder().setWidthPx(960).setHeightPx(1700))
             .build()
 
-    private fun task(taskId: Int, displayId: Int): TaskInfo =
+    private fun task(
+        taskId: Int,
+        displayId: Int,
+        packageName: String = TARGET_PACKAGE,
+    ): TaskInfo =
         TaskInfo.newBuilder()
             .setTaskId(taskId)
             .setDisplayId(displayId)
-            .setPackage(TARGET_PACKAGE)
+            .setPackage(packageName)
             .build()
 
     private companion object {
         const val TARGET_PACKAGE = "io.apkrun.fixture.hellotext"
+        const val OTHER_PACKAGE = "io.apkrun.fixture.hellocompose"
         const val TARGET_DISPLAY = 7
         const val UNKNOWN_DISPLAY = 42
         const val INVALID_DISPLAY = -1

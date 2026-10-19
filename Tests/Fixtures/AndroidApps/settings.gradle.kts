@@ -21,6 +21,7 @@ rootProject.name = "apkrun-fixtures"
 include(":HelloText")
 include(":HelloGL")
 include(":HelloCompose")
+include(":HelloWebView")
 include(":HelloSplit")
 include(":feature")
 

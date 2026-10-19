@@ -6,6 +6,7 @@
 #   scripts/build-fixtures.sh                     build out/HelloText.apk and check its signer
 #   scripts/build-fixtures.sh --app HelloGL       build out/HelloGL.apk instead (the G3 gate, #023)
 #   scripts/build-fixtures.sh --app HelloCompose  build out/HelloCompose.apk instead (the list of #024, G5 of #030)
+#   scripts/build-fixtures.sh --app HelloWebView  build out/HelloWebView.apk instead (#029)
 #   scripts/build-fixtures.sh --app HelloSplit   build the xhdpi/ja/arm64 split set as out/HelloSplit.apks
 #   scripts/build-fixtures.sh --check-reproducible
 #                                                 build twice from clean, and compare the badging, the dex
@@ -26,7 +27,7 @@ bundletool_url="https://github.com/google/bundletool/releases/download/$bundleto
 expected_signer_sha256="a2f3893391ae70e6faee50a05c0d0c4b94505781f7af0d547c1625399e05f8b4"
 
 usage() {
-    printf 'usage: scripts/build-fixtures.sh [--app HelloText|HelloGL|HelloCompose|HelloSplit] [--check-reproducible]\n' >&2
+    printf 'usage: scripts/build-fixtures.sh [--app HelloText|HelloGL|HelloCompose|HelloWebView|HelloSplit] [--check-reproducible]\n' >&2
     exit 64
 }
 
@@ -44,7 +45,7 @@ while (($# > 0)); do
     shift
 done
 case "$app" in
-    HelloText | HelloGL | HelloCompose | HelloSplit) ;;
+    HelloText | HelloGL | HelloCompose | HelloWebView | HelloSplit) ;;
     *) usage ;;
 esac
 output_apk="$fixtures/out/$app.apk"

@@ -623,8 +623,8 @@ final class AndroidInputRun {
     /// Makes the window when the display is attached, and passes each frame to it.
     private func handle(_ event: DeveloperDisplayEvent) {
         switch event {
-        case .attached(let surfaces):
-            let source = DisplayFrames(surfaces: surfaces, display: display)
+        case .attached(let surfaceSet):
+            let source = DisplayFrames(surfaceSet: surfaceSet, display: display)
             let scale = NSScreen.main?.backingScaleFactor ?? 1
             let sink = WireSink(route: route)
             let window = SessionWindowController(
@@ -633,6 +633,8 @@ final class AndroidInputRun {
             frames = source
             self.window = window
             inputSink = sink
+        case .surfacesReplaced(let surfaceSet):
+            frames?.replace(surfaceSet)
         case .frameReady(let generation, let bufferIndex, let sequence):
             framesSeen += 1
             frames?.ingest(generation: generation, bufferIndex: bufferIndex, sequence: sequence)
@@ -924,31 +926,72 @@ struct InputPointer {
 
 /// The window's frames, from the developer display (the CLI's `SurfacePoolFrameSource`, #023).
 private final class DisplayFrames: FrameSource, @unchecked Sendable {
-    // UNCHECKED-SENDABLE: the surfaces are written once, and the continuation is used on the main actor only.
-    let surfaces: [IOSurface]
-    let generation: UInt64 = 1
-    let pixelWidth: Int
-    let pixelHeight: Int
+    // UNCHECKED-SENDABLE: surface sets and frame ingestion are used by the main actor, and display acknowledgements
+    // are generation-scoped.
+    private let lock = NSLock()
+    private var sets: [UInt64: FrameSurfaceSet]
+    private var current: FrameSurfaceSet
     let frames: AsyncStream<FrameSourceEvent>
     private let continuation: AsyncStream<FrameSourceEvent>.Continuation
     private let display: DeveloperDisplay
 
-    init(surfaces: [IOSurface], display: DeveloperDisplay) {
-        self.surfaces = surfaces
+    init(surfaceSet: DeveloperSurfaceSet, display: DeveloperDisplay) {
         self.display = display
-        pixelWidth = display.pixelWidth
-        pixelHeight = display.pixelHeight
+        let frameSet = Self.frameSurfaceSet(surfaceSet)
+        sets = [frameSet.generation: frameSet]
+        current = frameSet
         let made = AsyncStream.makeStream(of: FrameSourceEvent.self, bufferingPolicy: .bufferingNewest(8))
         frames = made.stream
         continuation = made.continuation
     }
 
+    var currentSurfaceSet: FrameSurfaceSet { lock.withLock { current } }
+    var surfaces: [IOSurface] { currentSurfaceSet.surfaces }
+    var generation: UInt64 { currentSurfaceSet.generation }
+    var pixelWidth: Int { currentSurfaceSet.pixelWidth }
+    var pixelHeight: Int { currentSurfaceSet.pixelHeight }
+
+    func surfaceSet(generation: UInt64) -> FrameSurfaceSet? {
+        lock.withLock { sets[generation] }
+    }
+
+    func replace(_ surfaceSet: DeveloperSurfaceSet) {
+        let frameSet = Self.frameSurfaceSet(surfaceSet)
+        lock.withLock {
+            sets[frameSet.generation] = frameSet
+            if frameSet.generation >= current.generation {
+                current = frameSet
+            }
+        }
+        continuation.yield(.surfacesReplaced(generation: frameSet.generation))
+    }
+
     func ingest(generation: UInt64, bufferIndex: Int, sequence: UInt64) {
+        if surfaceSet(generation: generation) == nil,
+            let recovered = display.surfaceSet(generation: generation)
+        {
+            replace(recovered)
+        }
         continuation.yield(.frameReady(generation: generation, bufferIndex: bufferIndex, sequence: sequence))
     }
 
-    func frameDisplayed(sequence: UInt64) {
-        display.frameDisplayed(sequence: sequence)
+    func frameDisplayed(generation: UInt64, sequence: UInt64) {
+        display.frameDisplayed(generation: generation, sequence: sequence)
+        if generation == currentSurfaceSet.generation {
+            lock.withLock { sets = sets.filter { $0.key >= generation } }
+        }
+    }
+
+    private static func frameSurfaceSet(_ surfaceSet: DeveloperSurfaceSet) -> FrameSurfaceSet {
+        FrameSurfaceSet(
+            generation: surfaceSet.generation,
+            surfaces: surfaceSet.surfaces,
+            pixelWidth: surfaceSet.pixelWidth,
+            pixelHeight: surfaceSet.pixelHeight,
+            contentSize: surfaceSet.contentSize,
+            contentsScale: surfaceSet.renderScale,
+            zoom: surfaceSet.zoom
+        )
     }
 }
 

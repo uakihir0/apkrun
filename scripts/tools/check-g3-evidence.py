@@ -26,15 +26,15 @@ TEST_PREFIX = "G3GraphicsTests/"
 FIXED_SIZE_STATEMENTS = (
     (
         "docs/02-design/graphics.md",
-        "### #023 SurfaceFlinger to Metal",
-        "3. The window is **fixed-size**: display 0 keeps the image's default mode, and the window scales the layer "
-        "with aspect fit.",
+        "### 6.5 Development window",
+        "The development window (#023) is **fixed-size**: display 0 keeps the image's default mode, and the window "
+        "scales the layer with aspect fit.",
     ),
     (
         "docs/02-design/display-and-windowing.md",
         "### 5.3 Wrapper presentation algorithm",
         "**Development window (#023), fixed-size:** display 0 keeps the image's default mode, and the window scales the "
-        "layer with aspect fit when it is resized (graphics.md §12 #023, step 3).",
+        "layer with aspect fit when it is resized ([graphics.md](graphics.md) §6).",
     ),
 )
 
@@ -104,8 +104,8 @@ def read_xcresult(path: Path) -> dict:
 
 def section(text: str, heading: str) -> str | None:
     """The text from `heading` to the next heading of the same or a higher level."""
-    start = text.find(heading)
-    if start < 0:
+    start = 0 if text.startswith(heading) else text.find("\n" + heading) + 1
+    if start <= 0 and not text.startswith(heading):
         return None
     level = len(heading) - len(heading.lstrip("#"))
     body = text[start + len(heading):]

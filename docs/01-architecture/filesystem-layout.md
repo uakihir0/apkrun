@@ -1,11 +1,8 @@
 # Filesystem Layout
 
-| Field | Value |
-|---|---|
-| Status | Baseline |
-| Related | [../02-design/package-store.md](../02-design/package-store.md), [../02-design/wrapper.md](../02-design/wrapper.md), [../02-design/android-image.md](../02-design/android-image.md), [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md), [../03-reference/configuration.md](../03-reference/configuration.md) |
+This page lists every host path that APKRun reads or writes, and the layout of the guest disks. All paths come from one `APKRunPaths` value in DiagnosticsCore, so tests can relocate the root. No other code builds these paths.
 
-All paths are resolved through a single `APKRunPaths` value in `DiagnosticsCore` (so tests can relocate the root). Do not build these paths anywhere else. `APKRUN_HOME` overrides the root for tests and development. With `APKRUN_HOME` set, the logs of §2 move with it, to `$APKRUN_HOME/Logs/`. Debug builds default to `~/Library/Application Support/APKRun-Dev/` and `~/Library/Logs/APKRun-Dev/`, so they never touch a release installation ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §2.6).
+`APKRUN_HOME` overrides the root for tests and development. With it set, the logs of §2 move to `$APKRUN_HOME/Logs/`. Debug builds use `~/Library/Application Support/APKRun-Dev/` and `~/Library/Logs/APKRun-Dev/` ([runtime-daemon.md](../02-design/runtime-daemon.md) §2.6), so they never touch a release installation.
 
 ---
 
@@ -13,14 +10,14 @@ All paths are resolved through a single `APKRunPaths` value in `DiagnosticsCore`
 
 ```text
 APKRun/
-├── state.json                         # global schema version, instance ID, lastRuntimeVersion + lastRuntimeBuild, selfUpdate probe state (runtime-maintenance.md §3.8, §9)
-├── settings.json                      # global settings (see configuration.md)
+├── state.json                         # schema version, instance ID, lastRuntimeVersion + lastRuntimeBuild, `selfUpdate` probe state (runtime-maintenance.md §3.8, §9)
+├── settings.json                      # global settings (configuration.md)
 ├── Diagnostics/
 │   └── index.json                     # indexed host crash-report paths (runtime-daemon.md §2.5)
 │
-├── Images/                            # runtime images (read-only once installed)
-│   ├── <imageVersion>/                # e.g. 2026.10.0-cf16373615-arm64 (naming: 03-reference/runtime-image-manifest.md)
-│   │   ├── manifest.json              # RuntimeImageManifest (03-reference/runtime-image-manifest.md)
+├── Images/                            # runtime images, read-only once installed
+│   ├── <imageVersion>/                # e.g. 2026.10.0-cf16373615-arm64 (naming: runtime-image-manifest.md)
+│   │   ├── manifest.json              # RuntimeImageManifest
 │   │   ├── manifest.sig               # Ed25519 signature over manifest.json
 │   │   ├── boot/
 │   │   │   ├── kernel                 # uncompressed arm64 Image
@@ -28,19 +25,18 @@ APKRun/
 │   │   │   ├── bootconfig.txt         # image-level bootconfig parameters (text)
 │   │   │   └── cmdline.txt            # kernel command line
 │   │   ├── disks/
-│   │   │   └── os.img                 # read-only raw GPT disk (boot/vbmeta partitions + unsparsed super)
+│   │   │   └── os.img                 # read-only raw GPT disk (boot and vbmeta partitions, unsparsed super)
 │   │   ├── templates/
-│   │   │   └── userdata.img           # raw GPT template: misc, metadata, frp (blank) and userdata, last
-│   │   │                              # (blank or pre-formatted, see android-image.md §5)
+│   │   │   └── userdata.img           # raw GPT template: misc, metadata, frp (blank), and userdata, last
+│   │   │                              # (blank or pre-formatted; android-image.md §5)
 │   │   └── SHA256SUMS
 │   ├── current -> <imageVersion>      # symlink = A/B pointer
 │   ├── previous -> <imageVersion>
-│   ├── .installing-<name>/            # install in progress; <name> = imageVersion, or manual-<16 hex> for a manual install;
-│   │                                  # removed at startup when orphaned (runtime-image-manifest.md §8.3)
+│   ├── .installing-<name>/            # install in progress; <name> = imageVersion, or manual-<16 hex>; removed at startup when orphaned (runtime-image-manifest.md §8.3)
 │   └── update-state.json              # Android system update state: feed sequence, candidate, phase, rejected versions (runtime-maintenance.md §4.3)
 │
 ├── Runtime/
-│   ├── instance.lock                  # flock held by the instance owner (apkrund or `apkrun dev`), runtime-daemon.md §2.3
+│   ├── instance.lock                  # flock held by the instance owner (apkrund or `apkrun dev`) (runtime-daemon.md §2.3)
 │   ├── daemon.json                    # apkrund run record: clean-exit flag, unclean exits, boot history (runtime-daemon.md §2.5)
 │   ├── maintenance.json               # present only while an APKRun update is being installed (runtime-maintenance.md §3.6)
 │   └── instance/                      # the one Android VM instance (v1 has exactly one)
@@ -57,13 +53,13 @@ APKRun/
 │   ├── journal.jsonl                  # transaction journal (append-only; recovered at startup)
 │   ├── .trash/                        # directories moved out by committed transactions; purged in the background
 │   └── <packageId>/                   # e.g. com.discord (case-collision rule: package-store.md §3.2)
-│       ├── metadata.json              # PackageRecord (03-reference/package-metadata-json.md)
+│       ├── metadata.json              # PackageRecord (package-metadata-json.md)
 │       ├── settings.json              # user preferences for this package (update mode, integrations, window)
 │       ├── current/                   # installed artifact set (base.apk + split_*.apk + artifact.json)
-│       ├── previous/                  # last known-good artifact set (kept until next successful update)
-│       ├── staged/                    # verified update waiting for gentle install
-│       ├── incoming/<ticket>/         # downloads / imports being inspected (deleted on failure, after 24 h, or at startup when orphaned)
-│       ├── failed/<versionCode>/      # a set that was rolled back; kept 7 days for diagnostics
+│       ├── previous/                  # last known-good artifact set (kept until the next successful update)
+│       ├── staged/                    # verified update waiting for a gentle install
+│       ├── incoming/<ticket>/         # downloads and imports being inspected (deleted on failure, after 24 h, or at startup when orphaned)
+│       ├── failed/<versionCode>/      # a rolled-back set, kept 7 days for diagnostics
 │       └── icon/                      # rendered icon PNGs (1536 px layers, adaptive) from the Store Agent
 │
 ├── Wrappers/
@@ -78,7 +74,7 @@ APKRun/
 ├── Providers/
 │   └── cache/<type>/<key>/            # provider indexes (F-Droid entry + index-v2), GitHub release JSON, ETags; safe to delete
 │
-├── Shared/                            # the only host folder shared with the guest by default (policy-controlled)
+├── Shared/                            # the only host folder that can be shared with the guest, under the integration policy (off by default: security-model.md §6)
 │
 └── Cache/                             # safe to delete: download temp, derived previews
     └── images/                        # Android system update downloads (<imageVersion>.aar[.partial]; runtime-maintenance.md §4.4)
@@ -86,15 +82,15 @@ APKRun/
 
 Rules:
 
-- Nothing under `Images/<version>/` is modified after installation. It is verified with `SHA256SUMS` on install and on `doctor --deep`.
-- `userdata.img` is created by `clonefile(2)` from the image template, then extended with `ftruncate` (sparse) and its GPT backup header is moved to the new end ([../02-design/android-image.md](../02-design/android-image.md) §5). They are never copied with a non-clone copy.
+- Nothing under `Images/<version>/` changes after installation. `SHA256SUMS` verifies it on install and on `doctor --deep`.
+- `userdata.img` comes from `clonefile(2)` of the template, is extended with `ftruncate` (sparse), and its GPT backup header moves to the new end ([android-image.md](../02-design/android-image.md) §5). Never copy it with a non-clone copy.
 - `boot/initrd.img` is derived data. It is rebuilt before every boot and may be deleted at any time.
-- The layout "read-only base + writable overlay + userdata" is realized as read-only `os.img` + writable `userdata.img`, which holds the small instance partitions (misc, metadata, frp) and `/data`. Android never writes to its system partitions, so no overlay image is needed. There is no third disk, because the stock fstab hands the third virtio-blk disk (`vdc`) to vold as removable storage ([../02-design/android-image.md](../02-design/android-image.md) §4.2).
-- Recovery points use `clonefile(2)`. They are cheap on APFS and are deleted after the migration passes its health check, keeping only the last one.
-- `Packages/<id>/current|previous|staged` swaps are performed as journaled renames ([../02-design/package-store.md](../02-design/package-store.md) §5). Only apkrund (or `apkrun dev` in embedded mode) writes under `Packages/`.
-- `Images/update-state.json` and `Cache/images/` are written only by `ImageUpdateCoordinator` and `ImageDownloader` in apkrund. `Runtime/maintenance.json` is written only by apkrund's `MaintenanceService`. Neither APKRun updates nor Android system updates write under `Packages/`, except for schema migrations shipped in a release ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §5).
-- A file migrated to a newer schema keeps its original next to it as `<name>.v<old>.json` for 90 days ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §5).
-- `Updates/` is written only by UpdateCore in apkrund. Losing `state.json` makes every package due for a check and is otherwise harmless ([../02-design/update-system.md](../02-design/update-system.md) §10). Provider tokens are in the Keychain, never under `Updates/` or `Providers/`.
+- The read-only base plus writable overlay is realized as read-only `os.img` plus writable `userdata.img`. `userdata.img` holds the small instance partitions (misc, metadata, frp) and `/data`. Android never writes its system partitions, so no overlay image is needed. There is no third disk: the stock fstab gives the third virtio-blk disk (`vdc`) to vold ([android-image.md](../02-design/android-image.md) §4.2).
+- Recovery points use `clonefile(2)`. They are deleted after the migration passes its health check, keeping only the last one.
+- Swaps of `Packages/<id>/current`, `previous`, and `staged` are journaled renames ([package-store.md](../02-design/package-store.md) §5). Only apkrund (or `apkrun dev` in embedded mode) writes under `Packages/`.
+- `Images/update-state.json` and `Cache/images/` are written only by `ImageUpdateCoordinator` and `ImageDownloader` in apkrund. `Runtime/maintenance.json` is written only by `MaintenanceService`. Neither APKRun updates nor Android system updates write under `Packages/`, except for schema migrations shipped in a release ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §5).
+- A file migrated to a newer schema keeps its original as `<name>.v<old>.json` for 90 days ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §5).
+- `Updates/` is written only by UpdateCore in apkrund. Losing `state.json` makes every package due for a check, and is otherwise harmless ([update-system.md](../02-design/update-system.md) §10). Provider tokens are in the Keychain, never under `Updates/` or `Providers/`.
 - APKRun never writes inside a wrapper bundle after generation (FR-WRP-04).
 
 ## 2. Logs: `~/Library/Logs/APKRun/`
@@ -115,7 +111,7 @@ Logs/APKRun/
     └── boots.jsonl                    # one record per Android boot; newest 200
 ```
 
-`os_log` (unified logging) is the primary log sink. The file mirrors exist so that diagnostics bundles can include logs even when `log show` is unavailable or slow.
+`os_log` (unified logging) is the primary sink. The files mirror it, so that diagnostics bundles include logs even when `log show` is unavailable or slow.
 
 ## 3. Caches: `~/Library/Caches/io.apkrun.APKRun/`
 
@@ -147,7 +143,7 @@ APKRun.app/Contents/
 └── Info.plist
 ```
 
-The runtime image is **not** inside the app bundle. It is downloaded or installed into `Images/` (size, independent update cadence, notarization; [decisions/0011-runtime-image-bundle.md](decisions/0011-runtime-image-bundle.md)).
+The runtime image is **not** inside the app bundle. It is installed into `Images/` instead, because of its size, its independent update cadence, and notarization ([0011](decisions/0011-runtime-image-bundle.md)).
 
 ## 5. Wrapper bundle
 
@@ -156,22 +152,22 @@ Discord.app/Contents/
 ├── MacOS/APKRunLauncher               # copy of the template, re-signed with the wrapper identifier
 ├── Resources/
 │   ├── AppIcon.icns
-│   ├── wrapper.json                   # identity + initial preferences (03-reference/wrapper-json.md)
+│   ├── wrapper.json                   # identity + initial preferences (wrapper-json.md)
 │   └── bootstrap/                     # portable and distribution wrappers only: bootstrap.json, base.apk, splits
 ├── Info.plist
 ├── PkgInfo
 └── _CodeSignature/
 ```
 
-Anatomy, Info.plist keys, and generation rules: [../02-design/wrapper.md](../02-design/wrapper.md) §2.
+Anatomy, Info.plist keys, and generation rules: [wrapper.md](../02-design/wrapper.md) §2.
 
 ## 6. Source-tree paths used at build and dev time
 
 | Path | Purpose |
 |---|---|
-| `build/` | Xcode / SwiftPM outputs (git-ignored) |
-| `ThirdParty/out/<name>/<rev>/` | built third-party artifacts (git-ignored, cached in CI) |
-| `Images/work/<buildId>/` | derived artifacts from image tooling (git-ignored) |
-| `Images/manifests/<buildId>/` | committed `inventory.json` and `android-image.json` of each pinned build ([../03-reference/android-image-manifest.md](../03-reference/android-image-manifest.md)). Runtime image manifests are built into bundles and are not committed |
-| `Images/reference/` | committed reference captures: `<buildId>/` from #064, `vz/<macOS build>/topology.txt` from #011 |
-| `Tests/Fixtures/AndroidApps/out/` | built fixture APKs (git-ignored, reproducible) |
+| `build/` | Xcode and SwiftPM outputs (git-ignored) |
+| `ThirdParty/out/<name>/<rev>/` | Built third-party artifacts (git-ignored, cached in CI) |
+| `Images/work/<buildId>/` | Derived artifacts from image tooling (git-ignored) |
+| `Images/manifests/<buildId>/` | Committed `inventory.json` and `android-image.json` of each pinned build ([android-image-manifest.md](../03-reference/android-image-manifest.md)). Runtime image manifests are built into bundles and are not committed. |
+| `Images/reference/` | Committed reference captures: `<buildId>/` and `vz/<macOS build>/topology.txt` |
+| `Tests/Fixtures/AndroidApps/out/` | Built fixture APKs (git-ignored, reproducible) |

@@ -19,7 +19,7 @@ CI enforces the graph (#062).
 
 ## Alternatives considered
 
-- **Fewer, larger modules:** faster to start, but they blur ownership. AGENTS §4 explicitly requires clear ownership.
+- **Fewer, larger modules:** faster to start, but they blur ownership. [AGENTS.md](../../../AGENTS.md) §4 explicitly requires clear ownership.
 - **One module per feature:** too granular for the team size.
 
 ## Consequences

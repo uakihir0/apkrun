@@ -1,26 +1,23 @@
 # Process Model and IPC
 
-| Field | Value |
-|---|---|
-| Status | Baseline |
-| Related | [overview.md](overview.md), [security-model.md](security-model.md), [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md), [../02-design/guest-protocol.md](../02-design/guest-protocol.md), [../03-reference/runtime-api.md](../03-reference/runtime-api.md) |
+This page defines the processes of APKRun, how clients reach apkrund over XPC, and how apkrund talks to the Android guest. Message signatures are in [runtime-api.md](../03-reference/runtime-api.md). The guest protocol is in [guest-protocol.md](../02-design/guest-protocol.md).
 
 ---
 
 ## 1. Processes
 
-| Process | Bundle / binary | Lifetime | Owns |
+| Process | Binary | Lifetime | Owns |
 |---|---|---|---|
-| `apkrund` | `APKRun.app/Contents/Helpers/apkrund`, registered as LaunchAgent `io.apkrun.apkrund` | Started by launchd when a client connects, at login, hourly for update checks, and after a crash. Stays alive while the VM runs or any client is connected. Exits 2 minutes after the runtime is stopped and no clients or activities remain ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §2). | VM, graphics, DisplayPool, sessions, package store, updates, wrappers registry, integrations |
-| Wrapper (`APKRunLauncher`) | `<Name>.app/Contents/MacOS/APKRunLauncher` | While the app is open. **Does not exit after launch.** It owns the window ([decisions/0006](decisions/0006-wrapper-owned-window-iosurface.md)). | One NSWindow, input capture, Dock/Cmd+Tab identity |
-| `APKRun.app` | main GUI | User-controlled | UI only |
-| `APKRunMenuBar` | `APKRun.app/Contents/Library/LoginItems/APKRunMenuBar.app` | Login item, on by default; Settings → General → "Show APKRun in the menu bar" turns it off ([../02-design/host-ui.md](../02-design/host-ui.md) §9.1) | UI only |
-| `apkrun` CLI | `APKRun.app/Contents/Resources/bin/apkrun` (symlinked to `/usr/local/bin/apkrun` on request) | Per command | nothing (client), except `apkrun dev …` embedded mode |
-| Android VM | inside `apkrund` (Virtualization.framework runs the VM in XPC helper processes owned by the framework) | While `RuntimeState ∈ {booting, ready, suspended}` | Android |
+| `apkrund` | `APKRun.app/Contents/Helpers/apkrund`, LaunchAgent `io.apkrun.apkrund` | Started by launchd on client connect, at login, hourly (update checks), and after a crash. Exits 2 minutes after the runtime stops, when no client or activity remains ([runtime-daemon.md](../02-design/runtime-daemon.md) §2). | VM, graphics, DisplayPool, sessions, package store, updates, wrapper registry, integrations |
+| Wrapper (`APKRunLauncher`) | `<Name>.app/Contents/MacOS/APKRunLauncher` | While the app is open. It does not exit after launch, because it owns the window ([0006](decisions/0006-wrapper-owned-window-iosurface.md)). | One NSWindow, input capture, Dock and Cmd+Tab identity |
+| `APKRun.app` | Main GUI | User-controlled | UI only |
+| `APKRunMenuBar` | `APKRun.app/Contents/Library/LoginItems/APKRunMenuBar.app` | Login item, on by default. "Show APKRun in the menu bar" in Settings turns it off ([host-ui.md](../02-design/host-ui.md) §9.1). | UI only |
+| `apkrun` CLI | `APKRun.app/Contents/Resources/bin/apkrun` (symlinked to `/usr/local/bin/apkrun` on request) | Per command | Nothing, except `apkrun dev` in embedded mode |
+| Android VM | Inside apkrund, in XPC helper processes that Virtualization.framework owns | While `RuntimeState` is `booting`, `ready`, or `suspended` | Android |
 
 ### 1.1 Registration of apkrund
 
-- Embedded plist `APKRun.app/Contents/Library/LaunchAgents/io.apkrun.apkrund.plist`:
+The embedded plist `APKRun.app/Contents/Library/LaunchAgents/io.apkrun.apkrund.plist` is:
 
 ```xml
 <dict>
@@ -36,17 +33,15 @@
 </dict>
 ```
 
-- `APKRun.app` calls `SMAppService.agent(plistName: "io.apkrun.apkrund.plist").register()` on ordinary launch when the service is absent or its embedded plist changed. `--register-runtime` remains available to the development installer and setup flow. If registration fails, the app explains the next step. If `status == .requiresApproval`, a new registration opens Login Items; later launches show an approval prompt without unregistering and registering the pending service again.
-- `KeepAlive.SuccessfulExit = false` makes launchd restart apkrund after a crash (NFR-REL-02). A clean idle exit (status 0) is not restarted. The next client connection relaunches it on demand.
-- `RunAtLoad`, `StartInterval`, and `ExitTimeOut` serve preboot and startup recovery, background update checks, and a graceful Android shutdown on logout. The reasons are in [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §2.1.
-- Debug builds use the label `io.apkrun.apkrund.dev` and the Mach service `io.apkrun.apkrund.dev.xpc` ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §2.6).
-- Sparkle replaces the bundle but does not manage agents. Before it does, apkrund stops Android and exits through the install handshake ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.5). At the first launch of the new version, APKRun.app runs `unregister()` then `register()` only if the agent's status is not `.enabled`, or the SHA-256 of the embedded plist differs from the one it registered last. With an unchanged plist, launchd resolves `BundleProgram` at the next spawn, so the new apkrund runs without re-registration. This is verified in #057 (R-24); the fallback is re-registration on every build change ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.7).
+- `APKRun.app` calls `SMAppService.agent(plistName: "io.apkrun.apkrund.plist").register()` on launch when the service is absent or its embedded plist changed. `--register-runtime` does the same for the installer and setup flow. If `status == .requiresApproval`, a new registration opens Login Items. Later launches only show an approval prompt.
+- `KeepAlive.SuccessfulExit = false` makes launchd restart apkrund after a crash (NFR-REL-02). A clean exit (status 0) is not restarted. The next client connection starts it.
+- `RunAtLoad`, `StartInterval`, and `ExitTimeOut` serve preboot and startup recovery, background update checks, and a graceful Android shutdown on logout ([runtime-daemon.md](../02-design/runtime-daemon.md) §2.1).
+- Debug builds use label `io.apkrun.apkrund.dev` and Mach service `io.apkrun.apkrund.dev.xpc` ([runtime-daemon.md](../02-design/runtime-daemon.md) §2.6).
+- Sparkle replaces the bundle, not the agent. Before it does, apkrund stops Android and exits through the install handshake ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.5). The first launch of the new version runs `unregister()` then `register()` only if the agent status is not `.enabled` or the plist SHA-256 changed. Otherwise launchd resolves `BundleProgram` at the next spawn. The fallback is re-registration on every build change ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.7).
 
 ### 1.2 Development (embedded) mode
 
-Before #031 there is no daemon. `apkrun dev …` commands link `RuntimeHost`, `WindowingCore`, and `InputCore` (build flag `APKRUN_EMBEDDED_RUNTIME`). They run the VM and the window inside the CLI process (the CLI runs an `NSApplication` event loop with `.regular` activation policy for these commands). All code paths go through the same `RuntimeService` protocol (`EmbeddedRuntimeService`). Moving to XPC in #031/#032 therefore replaces transport, not logic.
-
-`apkrun dev` stays available after M4 for debugging, e.g. booting a test image without touching the user's runtime. It refuses to run while apkrund owns the user's runtime instance.
+`apkrun dev …` links `RuntimeHost`, `WindowingCore`, and `InputCore` (build flag `APKRUN_EMBEDDED_RUNTIME`). It runs the VM and the window in the CLI process, with an `NSApplication` event loop and `.regular` activation policy. It uses the same `RuntimeService` protocol as apkrund (`EmbeddedRuntimeService`). It is for debugging, for example booting a test image without touching the user's runtime. It refuses to run while apkrund owns the user's runtime instance.
 
 ---
 
@@ -54,14 +49,17 @@ Before #031 there is no daemon. `apkrun dev …` commands link `RuntimeHost`, `W
 
 ### 2.1 Transport
 
-- `NSXPCConnection` / `NSXPCListener` with `@objc` protocols defined in `RuntimeAPI`.
-- Payloads are `Codable` DTOs encoded as `Data` (JSON for v0.x, with a switch to property-list binary possible later). `NSSecureCoding` is used only for `IOSurface` and file handles. Keeping DTOs as Codable avoids a large `NSSecureCoding` surface and allows versioning via optional fields.
+- `NSXPCConnection` and `NSXPCListener` with `@objc` protocols defined in `RuntimeAPI`.
+- Payloads are `Codable` DTOs encoded as `Data` (JSON in v0.x). `NSSecureCoding` is used only for `IOSurface` and file handles. New DTO fields are optional.
 - Every request carries `APIRequestHeader { apiVersion, operationID, clientKind }`.
-- API versioning: `RuntimeAPI.version = (major, minor)`. The server accepts the same major and any minor ≤ its own. Mismatched majors return `RuntimeFailure.apiVersionMismatch(client:server:)` ([../03-reference/error-catalog.md](../03-reference/error-catalog.md) §7) with remediation "Update APKRun" / "Update Mac App". One exception: the `.wrapper` endpoint also serves the previous major (N−1), so an APKRun update does not break existing wrappers at once. Control clients ship inside APKRun.app and match apkrund, except for the short time of an APKRun update, when an old apkrund can meet a new APKRun.app. For that, the `.maintenance` endpoint (§2.2) has a frozen, additive-only protocol without a major version ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §8.1). Wrappers compare `wrapper.json runtime.minimumVersion` with the runtime version they receive in `hello` ([../02-design/wrapper.md](../02-design/wrapper.md) §5.3).
+- `RuntimeAPI.version = (major, minor)`. The server accepts the same major and any minor up to its own. A major mismatch returns `RuntimeFailure.apiVersionMismatch(client:server:)` ([error-catalog.md](../03-reference/error-catalog.md) §7), with the remediation "Update APKRun" or "Update Mac App".
+- The `.wrapper` endpoint also serves major N−1, so an APKRun update does not break existing wrappers at once.
+- During an APKRun update, an old apkrund can meet a new APKRun.app. The `.maintenance` endpoint (§2.2) therefore has a frozen, additive-only protocol without a major version ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §8.1).
+- A wrapper compares `runtime.minimumVersion` in `wrapper.json` with the runtime version in the `hello` reply ([wrapper.md](../02-design/wrapper.md) §5.3).
 
-### 2.2 Connection establishment and authentication (broker pattern)
+### 2.2 Broker and endpoints
 
-The main Mach service is reachable by any process of the logged-in user. Therefore it exposes only a **broker** interface. For a control request, it creates a one-use **anonymous listener endpoint** protected by the requested client's code-signing requirement (`NSXPCListener.setConnectionCodeSigningRequirement`, macOS 13+, public API). The broker connection and that listener endpoint share one short-lived reservation, so a delayed connection cannot consume another client's grant.
+The main Mach service is reachable by every process of the logged-in user, so it exposes only a **broker**. For a control request, the broker creates a one-use **anonymous listener endpoint** protected by the client's code-signing requirement (`NSXPCListener.setConnectionCodeSigningRequirement`, macOS 13+, public API). The broker connection and the endpoint share one short-lived reservation, so a delayed connection cannot use another client's grant.
 
 ```text
 client ──(1) connect io.apkrun.apkrund.xpc──▶ BrokerService
@@ -75,69 +73,52 @@ client ──(2) connect to endpoint──▶ (system enforces the requirement; 
 
 | Client | Endpoint | Requirement (release) | Requirement (dev, ad-hoc) | Capabilities |
 |---|---|---|---|---|
-| APKRun.app, APKRunMenuBar, `apkrun` CLI | `.control` | `anchor apple generic and certificate leaf[subject.OU] = "<TEAMID>" and identifier "io.apkrun.*"` (one requirement per identifier) | `cdhash H"…"` of the binaries in the same APKRun.app (computed at apkrund start) | Full `RuntimeService` |
-| APKRun.app, APKRunMenuBar, `apkrun` CLI | `.maintenance` | same as `.control` | same as `.control` | host update coordination only: status, prepare, abort, complete, restart for update. Served in every host state ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §8.1) |
-| Wrapper | `.wrapper(bundleID)` | from wrapper registry: `identifier` + `cdhash` recorded at generation/registration | same | Session API, `packageInfo` and `packageIcon` **for its own package only**, `importBootstrap` (portable wrappers), the notification relay, `runtimeStatus` ([../02-design/wrapper.md](../02-design/wrapper.md) §12.1) |
-| Unknown wrapper (not in the registry: copied from another Mac, or a distribution wrapper) | none at first | — | — | `requestApproval` on the broker only. APKRun.app shows "Allow “Foo” to open com.foo in APKRun?". On approval the wrapper is registered with its current cdhash ([../02-design/wrapper.md](../02-design/wrapper.md) §7.3). |
+| APKRun.app, APKRunMenuBar, `apkrun` CLI | `.control` | `anchor apple generic and certificate leaf[subject.OU] = "<TEAMID>" and identifier "io.apkrun.*"` (one per identifier) | `cdhash H"…"` of the binaries in the same APKRun.app, computed at apkrund start | Full `RuntimeService` |
+| Same clients | `.maintenance` | As `.control` | As `.control` | Host update coordination only: status, prepare, abort, complete, restart. Served in every host state ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §8.1). |
+| Wrapper | `.wrapper(bundleID)` | `identifier` and `cdhash` from the wrapper registry | Same | Sessions; `packageInfo` and `packageIcon` for its own package only; `importBootstrap` (portable wrappers); notification relay; `runtimeStatus` ([wrapper.md](../02-design/wrapper.md) §12.1) |
+| Unknown wrapper (not in the registry) | None | — | — | `requestApproval` on the broker only. Approval registers the current cdhash ([wrapper.md](../02-design/wrapper.md) §7.3). |
 
-Notes:
+- Each wrapper launcher is re-signed ad hoc with the wrapper's bundle ID as identifier, so each wrapper has its own cdhash. WrapperCore records it in `Wrappers/registry.json` ([wrapper.md](../02-design/wrapper.md) §7).
+- Do not authorize with the private `auditToken` of `NSXPCConnection`, or with `processIdentifier`. PIDs can be reused in a race.
+- The client verifies apkrund too, with `NSXPCConnection.setCodeSigningRequirement(_:)` before `resume()`.
 
-- Wrapper launchers are re-signed per wrapper (ad-hoc, identifier = wrapper bundle ID), so each wrapper has its own cdhash. WrapperCore records it in `Wrappers/registry.json` at generation time ([../02-design/wrapper.md](../02-design/wrapper.md) §7).
-- Using the private `auditToken` of `NSXPCConnection` is forbidden. Using `processIdentifier` for authorization is forbidden (PID reuse races).
-- The client side verifies apkrund too: `NSXPCConnection.setCodeSigningRequirement(_:)` with APKRun's identity before `resume()`.
+### 2.3 Session channel
 
-### 2.3 Session channel (wrapper ↔ apkrund)
+A wrapper opens a session with `openSession`. The reply carries the surfaces. Signatures are in [runtime-api.md](../03-reference/runtime-api.md) §6, §7, and §11.
 
 ```text
 openSession(OpenSessionRequest{ packageID, geometry: DisplayGeometry{ pointSize, backingScale, zoom }, screenSize,
-                                 launchTiming: LaunchTiming{ processStart, requestSent } })   (diagnostics.md §4.2)
+                                 launchTiming: LaunchTiming{ processStart, requestSent } })
   → SessionDescriptor{ sessionID, displayID, windowPrefs, state,
                        surfaces: SurfaceSet{ generation, [IOSurface] (3), pixelSize, densityDpi } }
-events (server → client, via exported object on the same connection; stateChanged, imeStateChanged, windowRequest,
-        windowPrefsChanged, and the integration events are cases of SessionEvent, runtime-api.md §6.3):
-  stateChanged(phase)                    SessionPhase (runtime-api.md §6.2): starting | booting(progress) | waitingForPackage | launching | running | ended(reason)
-  frameReady(generation, surfaceIndex, frameSeq, presentationTime)
-  surfacesReplaced(SurfaceSet)           after resize / backing-scale change
-  imeStateChanged(EditorState)           Android editor focus, input type, selection, cursor rect (input.md §5.1)
-  windowRequest(.activate | .close | .setTitle)  e.g. notification click, app finished
-  windowPrefsChanged(WindowPrefs)        package settings changed: resizable, alwaysOnTop, zoom (host-ui.md §7.2)
-client → server:
-  frameDisplayed(generation, frameSeq)   releases older buffers (see display-and-windowing.md §5)
-  visibilityChanged(Bool)                minimized / occluded / hidden → presents stop
-  sendInput([InputEvent])                batched per runloop turn (input.md §8)
-  sendText(ImeTextEvent)                 unbatched, ordered (input.md §5)
-  resize(DisplayGeometry)                after live resize ends, on backing-scale or zoom change
-  focusChanged(Bool)
-  closeSession(policy)                   .stop | .keepRunning (display-and-windowing.md §7.6)
-  restartApp()                           Android → Restart ‹App›: force-stop, then a new launch on the same display (wrapper.md §5.6)
-  frameStatistics() → SessionGraphicsStatistics    developer mode only: View → Show Frame Statistics (display-and-windowing.md §7.7)
-integration (desktop-integration.md §3.3):
-  pushClipboard(ClipItem) → ClipAck      ⌘V and window-key pushes (§4.2 there)
-  clipboardWritten(changeCount, digest)  after the window wrote a guest clip to NSPasteboard
-  importFiles([FileHandle], [ImportFileInfo], ImportTarget) → ImportResult    drag and drop
-  acceptExport(offerID, FileHandle?)     Save panel result for "Save to Mac"
-  resolveLinkPrompt(promptID, LinkChoice)
-  events: clipboardFromGuest(ClipItem), exportOffered(ExportOffer), linkPrompt(LinkPrompt)
 ```
 
-- `IOSurface` objects pass over NSXPC directly (the class adopts `NSSecureCoding`). Surfaces are sent only on open and resize, never per frame. File handles for drag and drop and Save to Mac pass the same way (`NSFileHandle`), so apkrund never opens user-chosen paths itself.
-- The window process does the AppKit side of desktop integration (pasteboard, notifications, drop target, save panel, link prompt). apkrund makes every decision ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §1).
-- The per-frame event is small (≈ 40 bytes). If XPC event latency is ever measured as a bottleneck (#070), there is a planned optimization: a shared-memory ring plus a Mach semaphore. It is not implemented up front.
+`launchTiming` carries the launch markers of [diagnostics.md](../02-design/diagnostics.md) §4.2.
 
-### 2.4 Event subscription (GUI, menu bar, CLI)
+- apkrund → wrapper, as `SessionEvent` cases ([runtime-api.md](../03-reference/runtime-api.md) §6.3) on the same connection: `stateChanged(phase)` (`SessionPhase`, [runtime-api.md](../03-reference/runtime-api.md) §6.2: `starting`, `booting(progress)`, `waitingForPackage`, `launching`, `running`, `ended(reason)`), `frameReady(generation, surfaceIndex, frameSeq, presentationTime)`, `surfacesReplaced(SurfaceSet)`, `imeStateChanged(EditorState)` ([input.md](../02-design/input.md) §5.1), `windowRequest(.activate | .close | .setTitle)`, and `windowPrefsChanged(WindowPrefs)` (resizable, alwaysOnTop, zoom; [host-ui.md](../02-design/host-ui.md) §7.2).
+- Wrapper → apkrund: `frameDisplayed(generation, frameSeq)` (releases older buffers, [display-and-windowing.md](../02-design/display-and-windowing.md) §5), `visibilityChanged(Bool)`, `sendInput([InputEvent])`, `sendText(ImeTextEvent)`, `resize(DisplayGeometry)`, `focusChanged(Bool)`, `closeSession(policy)`, `restartApp()`, and `frameStatistics() → SessionGraphicsStatistics`.
+- Integration: `pushClipboard(ClipItem) → ClipAck`, `clipboardWritten(changeCount, digest)`, `importFiles([FileHandle], [ImportFileInfo], ImportTarget) → ImportResult`, `acceptExport(offerID, FileHandle?)`, `resolveLinkPrompt(promptID, LinkChoice)`. Events: `clipboardFromGuest(ClipItem)`, `exportOffered(ExportOffer)`, `linkPrompt(LinkPrompt)` ([desktop-integration.md](../02-design/desktop-integration.md) §3.3).
+- Surfaces are sent only on open and resize, never per frame. `IOSurface` objects and `NSFileHandle`s (drag and drop, Save to Mac) pass over NSXPC directly. apkrund never opens user-chosen paths itself.
+- `sendInput` is batched per run-loop turn. `sendText` is unbatched and ordered ([input.md](../02-design/input.md) §8).
+- `closeSession(policy)` takes `.stop` or `.keepRunning` ([display-and-windowing.md](../02-design/display-and-windowing.md) §7.6). `restartApp()` force-stops the app and launches it again on the same display ([wrapper.md](../02-design/wrapper.md) §5.6). `frameStatistics()` works in developer mode only ([display-and-windowing.md](../02-design/display-and-windowing.md) §7.7).
+- Minimized, occluded, or hidden windows stop presents (`visibilityChanged(false)`).
+- The window process does the AppKit side of desktop integration: pasteboard, notifications, drop target, save panel, and link prompt. apkrund makes every decision ([desktop-integration.md](../02-design/desktop-integration.md) §1).
+- The per-frame event is about 40 bytes. A shared-memory ring with a Mach semaphore is a possible optimization if XPC latency is measured as a bottleneck (#070). It is not implemented.
 
-`subscribe(topics) → stream of RuntimeEvent` (runtime state, package changes, update progress, session list, health). The GUI and menu bar render from this stream. They do not poll.
+### 2.4 Event subscription
+
+`subscribe(topics) → stream of RuntimeEvent` (runtime state, package changes, update progress, sessions, health; [runtime-api.md](../03-reference/runtime-api.md) §16). The GUI and the menu bar render from this stream and do not poll.
 
 ### 2.5 Failure handling
 
 | Failure | Client behavior |
 |---|---|
 | apkrund not registered | RuntimeClient opens APKRun.app (`NSWorkspace.open(bundleID)`) with `--register-runtime`. The wrapper shows "APKRun needs to finish setup". |
-| apkrund crashed mid-session | Connection invalidated. The wrapper shows "APKRun restarted — reopening…" and retries `openSession` with backoff (1 s, 2 s, 4 s; max 3). The VM is gone, so it goes through a cold launch. |
-| Control listener is at its eight-connection limit | RuntimeClient probes each new endpoint with idempotent `runtimeStatus` and retries rejected control connections with bounded backoff before sending a side-effecting request. |
-| API major mismatch | Actionable error dialog. The wrapper never tries to continue. |
-| APKRun or Android is updating (`HelloReply.hostState == updating`, `RuntimeFailure.hostUpdating`, or `ended(.runtimeUpdating)`) | The wrapper shows screen U "APKRun is updating" and retries `openSession` every 2 s for up to 10 minutes ([../02-design/wrapper.md](../02-design/wrapper.md) §5.4). The menu bar relaunches itself when `hello` reports another build ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.7) |
-| Endpoint rejected (requirement mismatch) | The wrapper calls `requestApproval`. The user sees the approval prompt in APKRun.app. |
+| apkrund crashed mid-session | The connection is invalidated. The wrapper shows "APKRun restarted — reopening…" and retries `openSession` with backoff (1 s, 2 s, 4 s; max 3). The VM is gone, so the launch is cold. |
+| Control listener at its eight-connection limit | RuntimeClient probes each new endpoint with the idempotent `runtimeStatus`, and retries rejected connections with bounded backoff before a side-effecting request. |
+| API major mismatch | Actionable error dialog. The wrapper never continues. |
+| APKRun or Android updating (`HelloReply.hostState == updating`, `RuntimeFailure.hostUpdating`, or `ended(.runtimeUpdating)`) | The wrapper shows screen U and retries `openSession` every 2 s for up to 10 minutes ([wrapper.md](../02-design/wrapper.md) §5.4). The menu bar relaunches when `hello` reports another build ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.7). |
+| Endpoint rejected (requirement mismatch) | The wrapper calls `requestApproval`. The user approves in APKRun.app. |
 
 ---
 
@@ -145,32 +126,36 @@ integration (desktop-integration.md §3.3):
 
 ### 3.1 Transports
 
-**The host always initiates.** Every channel is opened by apkrund with `VZVirtioSocketDevice.connect(toPort:)` (guest CID 3). Development mode instead goes through an ADB forward to a local abstract socket. Using one direction on both transports keeps `GuestAgentConnection` a single connector with a pluggable transport. It also matches how ADB works.
+The host always initiates. apkrund opens every channel with `VZVirtioSocketDevice.connect(toPort:)` (guest CID 3). Development mode uses an ADB forward to a local abstract socket instead. One direction on both transports keeps `GuestAgentConnection` a single connector with a pluggable transport.
 
-| Channel | Production transport (custom image, M5+) | Development transport (stock image, M1–M4) | Guest endpoint |
-|---|---|---|---|
-| ADB | guest vsock **5555** (`adbd` listens on `vsock:5555` when `persist.adb.tcp.port=5555`, verified in adbd source). apkrund bridges it to `127.0.0.1:6520` (the Cuttlefish convention) for the `adb` CLI. | same | `adbd` |
-| Guest Agent control | vsock 6100 → `apkrun_vsockd` → `@apkrun-guestd-control` | `adb forward tcp:0 localabstract:apkrun-guestd-control` | abstract Unix socket owned by `apkrun_guestd` |
-| Guest Agent input stream | vsock 6101 → `@apkrun-guestd-input` | ADB forward, same name pattern | same |
-| Guest Agent bulk data | vsock 6102 → `@apkrun-guestd-bulk` | ADB forward, same name pattern | same |
-| APKRun IME (development only) | — (in the custom image the IME runs inside the Guest Agent process and uses the input stream) | `adb forward tcp:0 localabstract:apkrun-guest-ime` | abstract Unix socket owned by the IME service process ([../02-design/input.md](../02-design/input.md) §5.6) |
-| Store Agent control | vsock 6110 → `@apkrun-store-control` | — (the Store Agent exists only on custom images) | abstract Unix socket owned by `io.apkrun.store` |
-| Store Agent artifact stream | vsock 6111 → `@apkrun-store-artifacts` | — | same |
-| Serial console | virtio-console port 0 (`hvc0`, `console=hvc0` on the cmdline) → `~/Library/Logs/APKRun/vm/console.log` | same | kernel |
-| Reserved | vsock 6120–6199 for host-side service substitutes the Cuttlefish guest may need ([../02-design/android-image.md](../02-design/android-image.md) §7) | | |
+| Channel | Production (custom image, M5+) | Development (stock image, M1–M4) |
+|---|---|---|
+| ADB | vsock **5555** (`adbd` listens on `vsock:5555` when `persist.adb.tcp.port=5555`). apkrund bridges it to `127.0.0.1:6520` for the `adb` CLI. | Same |
+| Guest Agent control | vsock 6100 → `apkrun_vsockd` → `@apkrun-guestd-control` | `adb forward tcp:0 localabstract:apkrun-guestd-control` |
+| Guest Agent input stream | vsock 6101 → `@apkrun-guestd-input` | ADB forward, same name pattern |
+| Guest Agent bulk data | vsock 6102 → `@apkrun-guestd-bulk` | ADB forward, same name pattern |
+| APKRun IME | None. On the custom image the IME runs in the Guest Agent process on the input stream. | `adb forward tcp:0 localabstract:apkrun-guest-ime` ([input.md](../02-design/input.md) §5.6) |
+| Store Agent control | vsock 6110 → `@apkrun-store-control` | None (custom images only) |
+| Store Agent artifact stream | vsock 6111 → `@apkrun-store-artifacts` | None |
+| Serial console | virtio-console port 0 (`hvc0`, `console=hvc0`) → `~/Library/Logs/APKRun/vm/console.log` | Same |
+| Reserved | vsock 6120–6199 for host-side service substitutes ([android-image.md](../02-design/android-image.md) §7) | |
 
-- **Why a native bridge:** Android's platform sepolicy has a `neverallow` that forbids `vsock_socket {create bind accept connect}` for every domain except a short list (`adbd`, virtualization domains, …) and domains tagged `unconstrained_vsock_violators`. Untrusted apps may only `getattr getopt read write` inherited vsock fds. So neither `shell` (development `app_process`) nor an app domain can listen on vsock. `apkrun_vsockd` is a small native daemon (Rust, `Guest/vsockd/`) running in its own domain `apkrun_vsockd` with `typeattribute apkrun_vsockd unconstrained_vsock_violators`, the pattern Cuttlefish HALs use. It listens on the ports above and splices each accepted connection to the matching abstract socket. Its policy allows `connectto` only on the agents' domains (`apkrun_guest_app`, `apkrun_store_app`, assigned via `seapp_contexts`), so other Android apps cannot connect to the agents.
-- **Authentication inside the guest:** besides SELinux, each agent checks `SO_PEERCRED` on accepted local connections. It only accepts uid `system`/`root` (the bridge) in production, or `shell` (the ADB forward) when developer mode is on.
-- **One vsock device per VM** (framework limit). There is no guest-initiated channel in v1. If one is needed later, the host would use `setSocketListener(_:forPort:)`.
-- **Reconnection:** if an agent restarts, the bridge still accepts vsock but the upstream connect fails, so it closes immediately. apkrund retries with backoff (100 ms doubling to 2 s) while `RuntimeState` is `booting` or `ready`, and reports `agent.disconnected` in health.
-- ADB is bridged to host loopback only (NFR-SEC-06). Production runtime images keep `adbd` stopped unless the user enables "Developer mode" in APKRun settings. The host then sets the boot parameter `androidboot.apkrun.devmode=1` at the next Android start ([../02-design/android-image.md](../02-design/android-image.md) §11.3).
+The guest endpoints are abstract Unix sockets: `apkrun_guestd` owns the Guest Agent ones, and `io.apkrun.store` owns the Store Agent ones. The IME service process owns the IME socket.
+
+- **Why a native bridge.** Android's platform sepolicy has a `neverallow` that forbids `vsock_socket {create bind accept connect}` for every domain except a short list (`adbd`, virtualization domains) and domains tagged `unconstrained_vsock_violators`. Untrusted apps may only `getattr`, `getopt`, `read`, and `write` inherited vsock file descriptors. So neither `shell` (development `app_process`) nor an app domain can listen on vsock. `apkrun_vsockd` is a small Rust daemon (`Guest/vsockd/`) in domain `apkrun_vsockd`, with `typeattribute apkrun_vsockd unconstrained_vsock_violators`, as Cuttlefish HALs do. It listens on the ports above and splices each connection to the matching abstract socket. Its policy allows `connectto` only for the agents' domains `apkrun_guest_app` and `apkrun_store_app` (assigned via `seapp_contexts`).
+- **Authentication in the guest.** Besides SELinux, each agent checks `SO_PEERCRED`. In production it accepts uid `system` or `root` (the bridge). With developer mode on, it also accepts `shell` (the ADB forward).
+- **One vsock device per VM** (framework limit). v1 has no guest-initiated channel. If one is needed, the host uses `setSocketListener(_:forPort:)`.
+- **Reconnection.** If an agent restarts, the bridge closes at once, because its upstream connect fails. apkrund retries with backoff (100 ms, doubling to 2 s) while `RuntimeState` is `booting` or `ready`, and reports `agent.disconnected` in health.
+- **ADB** is bridged to host loopback only (NFR-SEC-06). Production images keep `adbd` stopped unless the user enables "Developer mode". The host then sets `androidboot.apkrun.devmode=1` at the next start ([android-image.md](../02-design/android-image.md) §11.3).
 - The GuestProtocol handshake (§3.3) is identical on both transports.
 
 ### 3.2 Framing
 
-Every stream carries length-prefixed frames: `uint32 big-endian length` + `Envelope` (Protocol Buffers). The maximum frame is 4 MiB. Bulk data larger than that (APKs, images) is chunked on the bulk or artifact streams. Details: [../02-design/guest-protocol.md](../02-design/guest-protocol.md).
+Every stream carries length-prefixed frames: a `uint32` big-endian length, then an `Envelope` (Protocol Buffers). The maximum frame is 4 MiB. Larger bulk data, such as APKs and images, is chunked on the bulk and artifact streams ([guest-protocol.md](../02-design/guest-protocol.md) §4 and §10).
 
-### 3.3 Handshake (first frame on every connection)
+### 3.3 Handshake
+
+The first frame on every connection is `Hello`. The host answers with `HelloAck`:
 
 ```text
 guest → host: Hello{ protocol_version{major,minor}, agent{kind, version, build}, runtime_image_version,
@@ -178,7 +163,7 @@ guest → host: Hello{ protocol_version{major,minor}, agent{kind, version, build
 host  → guest: HelloAck{ accepted | rejected(reason), host_protocol_version, session_token, enabled_capabilities[] }
 ```
 
-A major-version mismatch results in `rejected`. The host marks the agent `incompatible` in health and surfaces a `GuestProtocolFailure.incompatibleVersion` error with remediation. The connection is closed (NFR-REL-04). Minor versions negotiate capabilities.
+A major-version mismatch is `rejected`. The host marks the agent `incompatible` in health, raises `GuestProtocolFailure.incompatibleVersion` with a remediation, and closes the connection (NFR-REL-04). Minor versions negotiate capabilities.
 
 ---
 
@@ -186,11 +171,11 @@ A major-version mismatch results in `rejected`. The host marks the agent `incomp
 
 | Component | Execution context |
 |---|---|
-| `VMController` | `actor`. VZ calls are made on the VM's dedicated serial `DispatchQueue` (VZ requirement) and bridged with `withCheckedThrowingContinuation`. |
-| virtio-gpu device | The custom device's `deviceQueue` (serial) handles queue notifications. The renderer thread is a single dedicated thread for all virglrenderer/ANGLE calls (virglrenderer is not thread-safe; RiftVM does the same). |
+| `VMController` | `actor`. VZ calls run on the VM's serial `DispatchQueue` and are bridged with `withCheckedThrowingContinuation`. |
+| virtio-gpu device | The `deviceQueue` (serial) handles queue notifications. All virglrenderer and ANGLE calls run on one dedicated renderer thread, because virglrenderer is not thread-safe. |
 | DisplayPool, SessionRegistry, InputRouter | `actor`s |
-| Guest connections | One `actor` per connection over a `NWConnection`/file-descriptor based reader using `DispatchIO`. |
-| XPC | NSXPC delivers calls on its own queue. Handlers immediately hop to the owning actor. |
-| Update scheduling | `actor UpdateScheduler` with `Task`s. Downloads use `URLSession` with background-friendly configuration. |
+| Guest connections | One `actor` per connection, reading from `NWConnection` or a file descriptor with `DispatchIO`. |
+| XPC | NSXPC delivers calls on its own queue. Handlers hop to the owning actor at once. |
+| Update scheduling | `actor UpdateScheduler` with `Task`s. Downloads use a background-friendly `URLSession`. |
 
 Rule: no blocking calls on actor executors. Blocking C APIs (virglrenderer) run only on the renderer thread.

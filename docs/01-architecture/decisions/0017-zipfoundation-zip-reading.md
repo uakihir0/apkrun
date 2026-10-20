@@ -27,7 +27,7 @@ The APK signature verifier is a different case. APK Signature Scheme v2 and late
 
 | Alternative | Why rejected |
 |---|---|
-| An APKRun ZIP reader on Compression.framework | Possible, but a ZIP64 and deflate reader for untrusted input is new security-sensitive code. A maintained, widely used library is preferred (AGENTS §15) |
+| An APKRun ZIP reader on Compression.framework | Possible, but a ZIP64 and deflate reader for untrusted input is new security-sensitive code. A maintained, widely used library is preferred ([AGENTS.md](../../../AGENTS.md) §15) |
 | `ditto -x -k` or `unzip` in a subprocess | Limits cannot be checked while extracting. Output parsing and error mapping would be fragile |
 | libarchive (in the macOS SDK as a dylib, no public headers) | Not a supported API on macOS |
 

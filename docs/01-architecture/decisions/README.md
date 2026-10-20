@@ -35,7 +35,7 @@ An ADR records one significant decision: its context, the decision, the alternat
 | [0003](0003-cuttlefish-base-image.md) | AOSP Cuttlefish arm64 as the guest base | Accepted |
 | [0004](0004-virgl-first-graphics.md) | VirGL (GLES) first via virglrenderer + ANGLE/Metal | Accepted |
 | [0005](0005-multi-display-window-model.md) | One Android display per macOS window | Accepted |
-| [0006](0006-wrapper-owned-window-iosurface.md) | Wrapper owns the window, apkrund renders into shared IOSurfaces | Accepted |
+| [0006](0006-wrapper-owned-window-iosurface.md) | Wrapper owns the window; apkrund renders into shared IOSurfaces | Accepted |
 | [0007](0007-apkrund-launchagent-xpc.md) | apkrund as a per-user LaunchAgent with an XPC API | Accepted |
 | [0008](0008-guest-agents.md) | Two Kotlin guest agents plus a native vsock bridge | Accepted |
 | [0009](0009-thin-immutable-wrappers.md) | Thin, immutable wrappers | Accepted |
@@ -47,4 +47,4 @@ An ADR records one significant decision: its context, the decision, the alternat
 | [0015](0015-direct-kernel-boot.md) | Direct kernel boot without a bootloader | Accepted |
 | [0016](0016-sparkle-host-updates.md) | Sparkle 2 for APKRun updates, coordinated with apkrund | Accepted |
 | [0017](0017-zipfoundation-zip-reading.md) | ZIPFoundation for reading ZIP archives | Accepted |
-| [0018](0018-guest-mesa-ndk-build.md) | Guest Mesa (EGL, GLES, virgl) built with the NDK as a standalone cross-build | Accepted |
+| [0018](0018-guest-mesa-ndk-build.md) | Guest Mesa (EGL, GLES, gallium virgl) built with the NDK as a standalone APKRun cross-build | Accepted |

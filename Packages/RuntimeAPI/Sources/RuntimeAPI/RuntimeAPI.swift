@@ -6,8 +6,8 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.2 adds control-endpoint launch and terminate operations; 1.3 adds bounded endpoint admission;
     /// 1.4 adds package queries; 1.5 adds runtime reset; 1.6 adds one-request runtime restart;
     /// 1.7 adds daemon-backed package import and install; 1.8 adds asynchronous install handles
-    /// and a pollable operation registry.
-    public static let current = APIVersion(major: 1, minor: 8)
+    /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery.
+    public static let current = APIVersion(major: 1, minor: 9)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -590,12 +590,24 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func listOperations(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns the latest snapshot for one operation, or a typed not-found error.
     func operationStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Subscribes this connection to the requested topics.
+    func subscribe(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Removes this connection's subscriptions to the requested topics.
+    func unsubscribe(_ request: Data, reply: @escaping (Data) -> Void)
     /// Installs a previously inspected import synchronously.
     func installImported(_ request: Data, reply: @escaping (Data) -> Void)
     /// Launches an installed package session.
     func launch(_ request: Data, reply: @escaping (Data) -> Void)
     /// Terminates an installed package session.
     func terminate(_ request: Data, reply: @escaping (Data) -> Void)
+}
+
+/// Client-exported callback for event batches from the authenticated control endpoint.
+@objc public protocol RuntimeEventSink {
+    /// Confirms that the client exported an event receiver on this connection.
+    func handshake(reply: @escaping (Bool) -> Void)
+    /// Delivers a JSON array of event envelopes. The client replies after decoding the batch.
+    func deliver(_ batch: Data, reply: @escaping () -> Void)
 }
 
 /// Runtime package operations. Package identity is resolved by the runtime before launch.

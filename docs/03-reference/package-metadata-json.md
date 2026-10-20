@@ -1,13 +1,8 @@
 # Package Metadata JSON (`metadata.json` and `settings.json`)
 
-| Field | Value |
-|---|---|
-| Status | Baseline |
-| Related | [runtime-api.md](runtime-api.md) §4.2, §8.3, §9.2, [direct-provider-manifest.md](direct-provider-manifest.md) §8, [wrapper-json.md](wrapper-json.md), [error-catalog.md](error-catalog.md), [../02-design/diagnostics.md](../02-design/diagnostics.md) §6.2, [../02-design/desktop-integration.md](../02-design/desktop-integration.md) §2 |
-
 APKStoreCore keeps two JSON files for every Android package that APKRun manages. `metadata.json` holds the `PackageRecord`: identity, versions, signers, update authority and provider, state, artifact slots, and the last known Android facts. `settings.json` holds the `PackageSettings`: the user's preferences for that package.
 
-**Normative split.** The inline JSON Schemas (draft 2020-12, §2.6 and §3.4) are normative for **structure**: field names, types, required fields, patterns, and limits. This document is normative for **semantics**: rules across fields (§2.5), how each writer and reader uses a field, and what happens on errors. §3.1 is the authority for the package settings keys and defaults. [configuration.md](configuration.md) §3 defers to it.
+The inline JSON Schemas (draft 2020-12, §2.6 and §3.4) define the **structure**: names, types, required fields, patterns, and limits. This document defines the **semantics**: rules across fields (§2.5), how each writer and reader uses a field, and the behavior on errors. §3.1 is the authority for the settings keys and defaults.
 
 ---
 
@@ -20,34 +15,33 @@ APKStoreCore keeps two JSON files for every Android package that APKRun manages.
 | `Packages/<dir>/metadata.json` | the package record (§2) | `PackageRecord` | `packageRecord` | 1 | `PackageStore` (APKStoreCore in apkrund) |
 | `Packages/<dir>/settings.json` | the package settings (§3) | `PackageSettings` | `packageSettings` | 1 | `PackageStore` |
 
-- `<dir>` is the package ID. After a case collision it is `<packageId>~<first 8 hex of SHA-256(packageId)>` ([../02-design/package-store.md](../02-design/package-store.md) §3.2). Readers find a package by the record's `packageId`, never by the directory name.
-- Every managed package has a `metadata.json`. The store writes `settings.json` together with the first record, even when it holds no key. A missing `settings.json` reads as `{"schemaVersion": 1}`: every key has its default. The next settings write creates the file.
-- Unmanaged packages (installed in Android by something else, [../02-design/package-store.md](../02-design/package-store.md) §9.3) have neither file.
-- Out of scope here: `artifact.json` in each slot (`ArtifactSet`, [../02-design/package-store.md](../02-design/package-store.md) §2.2, §3.3), the journal ([../02-design/package-store.md](../02-design/package-store.md) §5.1), and `Updates/state.json` ([../02-design/update-system.md](../02-design/update-system.md) §10.1). Skipped versions, cursors, and the update phase live in `Updates/state.json`, not in the record.
+- `<dir>` is the package ID. After a case collision it is `<packageId>~<first 8 hex of SHA-256(packageId)>` ([package-store.md](../02-design/package-store.md) §3.2). Readers find a package by the record's `packageId`, never by the directory name.
+- Every managed package has a `metadata.json`. The store writes `settings.json` with the first record, even when it holds no key. A missing `settings.json` reads as `{"schemaVersion": 1}`.
+- Unmanaged packages (installed in Android by something else, [package-store.md](../02-design/package-store.md) §9.3) have neither file.
+- Not defined here: `artifact.json` in each slot ([package-store.md](../02-design/package-store.md) §2.2, §3.3), the journal ([package-store.md](../02-design/package-store.md) §5.1), and `Updates/state.json` ([update-system.md](../02-design/update-system.md) §10.1). Skipped versions, cursors, and the update phase are in `Updates/state.json`, not in the record.
 
 ### 1.2 Encoding
 
-- One UTF-8 JSON object. `JSONEncoder` with `.sortedKeys`, `.prettyPrinted`, and `.withoutEscapingSlashes`, plus a trailing newline. This is the same encoding as `wrapper.json` ([../02-design/wrapper.md](../02-design/wrapper.md) §3).
-- Size limits: `metadata.json` at most 64 KiB, `settings.json` at most 16 KiB. A larger file is treated as unreadable (§4.2).
-- The examples in this document have sorted keys. Their whitespace is illustrative.
-- Values follow the DTO rules of [runtime-api.md](runtime-api.md) §4.2. The record in `PackageDetails.record` (`WirePackageRecord`, [runtime-api.md](runtime-api.md) §8.3) is therefore the same JSON, with the differences listed in §2.3.1 and §2.3.5.
+- One UTF-8 JSON object, written by `JSONEncoder` with `.sortedKeys`, `.prettyPrinted`, and `.withoutEscapingSlashes`, plus a trailing newline. The same encoding as `wrapper.json` ([wrapper.md](../02-design/wrapper.md) §3).
+- Size limits: `metadata.json` at most 64 KiB, `settings.json` at most 16 KiB. A larger file is unreadable (§4.2).
+- Values follow the DTO rules of [runtime-api.md](runtime-api.md) §4.2. The record in `PackageDetails.record` (`WirePackageRecord`, [runtime-api.md](runtime-api.md) §8.3) is the same JSON, with the differences of §2.3.1 and §2.3.5.
   - Keys are the Swift property names, lowerCamelCase.
   - An enum without payload is its case name as a string: `"installed"`.
   - An enum with payload is an object with one key, the case name. Unlabeled payloads use `_0`: `{"broken": {"_0": "removedInAndroid"}}`.
   - Optional values are omitted when nil. These files never contain `null`.
-  - Dates are ISO 8601 UTC. Writers write milliseconds and `Z` (`2026-10-02T09:12:09.020Z`). Readers also accept a date without fractional seconds.
-- `PackageState` mixes cases with and without payload. Swift's synthesized `Codable` would write `{"installed": {}}` for such an enum. `PackageState` and `WirePackageState` therefore have a hand-written `Codable` that produces the forms of §2.3.1.
+  - Dates are ISO 8601 UTC, written with milliseconds and `Z` (`2026-10-02T09:12:09.020Z`). Readers also accept a date without fractional seconds.
+- `PackageState` mixes cases with and without payload. Its `Codable` is hand-written to produce the forms of §2.3.1, because synthesized `Codable` would write `{"installed": {}}`. `WirePackageState` is the same.
 
 ### 1.3 Common value types
 
 | Type | JSON | Rule | Source |
 |---|---|---|---|
-| `PackageID` | string | two or more dot-separated segments of `[A-Za-z][A-Za-z0-9_]*`, at most 255 characters, case-sensitive | [../02-design/package-store.md](../02-design/package-store.md) §2.1 |
-| `VersionCode` | integer | `Int64`, at least 0. It includes `versionCodeMajor` (the long version code) | [../02-design/package-store.md](../02-design/package-store.md) §2.1 |
+| `PackageID` | string | two or more dot-separated segments of `[A-Za-z][A-Za-z0-9_]*`, at most 255 characters, case-sensitive | [package-store.md](../02-design/package-store.md) §2.1 |
+| `VersionCode` | integer | `Int64`, at least 0. Includes `versionCodeMajor` (the long version code) | [package-store.md](../02-design/package-store.md) §2.1 |
 | `SHA256Digest` | string | `"sha256:"` + 64 lowercase hex characters | [runtime-api.md](runtime-api.md) §4.3 |
 | `Date` | string | §1.2 | [runtime-api.md](runtime-api.md) §4.2 |
 | `OperationID` | string | lowercase UUID | [runtime-api.md](runtime-api.md) §4.3 |
-| `UUID` | string | lowercase UUID (`userdataGeneration`) | [../02-design/package-store.md](../02-design/package-store.md) §9.2 |
+| `UUID` | string | lowercase UUID (`userdataGeneration`) | [package-store.md](../02-design/package-store.md) §9.2 |
 | `StoredError` | object | a `WireError` without `context` (§2.3.6) | [runtime-api.md](runtime-api.md) §4.5 |
 
 ---
@@ -136,7 +130,7 @@ An `apkrun` package with a Direct provider. Version 45 is installed. Version 44 
 }
 ```
 
-An adopted package ([../02-design/package-store.md](../02-design/package-store.md) §9.3). It has no artifact, no provider, and no file source:
+An adopted package ([package-store.md](../02-design/package-store.md) §9.3). It has no artifact, no provider, and no file source:
 
 ```json
 {
@@ -177,21 +171,19 @@ An adopted package ([../02-design/package-store.md](../02-design/package-store.m
 
 ### 2.2 Top-level fields
 
-The field names match the package record defined in [../02-design/package-store.md](../02-design/package-store.md) §2.3.
-
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
 | `schemaVersion` | integer | yes | `1` | the schema of this file (§5) |
-| `packageId` | `PackageID` | yes | §1.3 | the Android package name. It never changes for a record |
-| `displayName` | string | yes | 1–1024 characters | Android's label in the guest locale ([../02-design/package-store.md](../02-design/package-store.md) §10.3). Before the first install, the host preview label. A longer label is cut at a grapheme boundary |
-| `versionCode` | `VersionCode` | yes | §1.3 | what Android reports as installed. For `uninstalledKeepingData`, the version that was installed at the uninstall |
+| `packageId` | `PackageID` | yes | §1.3 | the Android package name. Never changes for a record |
+| `displayName` | string | yes | 1–1024 characters | Android's label in the guest locale ([package-store.md](../02-design/package-store.md) §10.3). Before the first install, the host preview label. A longer label is cut at a grapheme boundary |
+| `versionCode` | `VersionCode` | yes | §1.3 | what Android reports as installed. For `uninstalledKeepingData`, the version installed at the uninstall |
 | `versionName` | string | no | 1–1024 characters | Android's `versionName`. Omitted when the package has none |
 | `signingCertificates` | array of `SHA256Digest` | yes | 1–16 items, unique, sorted ascending | the current signer set, as Android reports it after the install |
-| `signingLineage` | array of `SHA256Digest` | yes | 0–16 items, unique, oldest → newest. Empty without key rotation | the signing lineage. When it is not empty, its last item is in `signingCertificates` |
-| `installer` | enum | yes | `apkrun`, `external` | who installed the package into Android. `external` only for adopted packages ([../02-design/package-store.md](../02-design/package-store.md) §9.3) |
-| `updateAuthority` | enum | yes | `apkrun`, `googlePlay`, `external`, `manual` | who updates the package (ADR-0010, [../02-design/update-system.md](../02-design/update-system.md) §2.1). `googlePlay` is post-v1 (#097). v1 writers never write it, and v1 readers accept it |
+| `signingLineage` | array of `SHA256Digest` | yes | 0–16 items, unique, oldest → newest. Empty without key rotation | the signing lineage. When not empty, its last item is in `signingCertificates` |
+| `installer` | enum | yes | `apkrun`, `external` | who installed the package into Android. `external` only for adopted packages ([package-store.md](../02-design/package-store.md) §9.3) |
+| `updateAuthority` | enum | yes | `apkrun`, `googlePlay`, `external`, `manual` | who updates the package (ADR-0010, [update-system.md](../02-design/update-system.md) §2.1). `googlePlay` is post-v1 (#097): v1 writers never write it, and v1 readers accept it |
 | `updateProvider` | object | no | §2.4 | the attached update provider. Omitted when there is none |
-| `state` | `PackageState` | yes | a persisted state (§2.3.1) | the package state ([../01-architecture/state-machines.md](../01-architecture/state-machines.md) §5) |
+| `state` | `PackageState` | yes | a persisted state (§2.3.1) | the package state ([state-machines.md](../01-architecture/state-machines.md) §5) |
 | `artifacts` | object | yes | §2.3.2 | summaries of the artifact slots |
 | `android` | object | yes | §2.3.3 | the last known Android facts |
 | `source` | object | yes | §2.3.4 | how the package first arrived |
@@ -216,10 +208,10 @@ A record file holds only the states that last beyond one operation:
 | `broken(.artifactMissing)` | `{"broken": {"_0": "artifactMissing"}}` |
 | `broken(.reinstallFailed(error))` | `{"broken": {"_0": {"reinstallFailed": {"_0": <StoredError>}}}}` |
 
-- `importing`, `inspecting`, `installing`, `updating(_)`, and `uninstalling` exist only while a transaction or an UpdateCore flow runs. The store derives them from its open transactions and from UpdateCore when it publishes a record. They are never written. After a crash, recovery decides the state ([../02-design/package-store.md](../02-design/package-store.md) §5.5).
-- `WirePackageState` ([runtime-api.md](runtime-api.md) §8.3) uses the same encoding. It adds the transient states and `unknown`, and its `reinstallFailed` payload is a full `WireError`.
+- `importing`, `inspecting`, `installing`, `updating(_)`, and `uninstalling` exist only while a transaction or an UpdateCore flow runs. The store derives them and never writes them. After a crash, recovery decides the state ([package-store.md](../02-design/package-store.md) §5.5).
+- `WirePackageState` ([runtime-api.md](runtime-api.md) §8.3) uses the same encoding and adds the transient states and `unknown`. Its `reinstallFailed` payload is a full `WireError`.
 
-An example of the last row, after three failed reinstalls on consecutive boots:
+Example of the last row, after three failed reinstalls on consecutive boots:
 
 ```json
 {
@@ -241,18 +233,18 @@ An example of the last row, after three failed reinstalls on consecutive boots:
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
-| `current` | slot summary | no | required while `installer` is `apkrun` and `state` is not `uninstalledKeepingData` | the set in `current/`, what Android should have installed |
+| `current` | slot summary | no | required while `installer` is `apkrun` and `state` is not `uninstalledKeepingData` | the set in `current/`, which Android should have installed |
 | `previous` | slot summary | no | only with `current`. `versionCode` lower than `current`'s | the last known-good set in `previous/` |
-| `staged` | staged slot summary | no | only with `current`. `versionCode` higher than the top-level `versionCode` | a verified update in `staged/` ([../02-design/package-store.md](../02-design/package-store.md) §7.1) |
-| `currentMatchesAndroid` | boolean | yes | `false` when `current` is absent | whether Android's installed version is the set in `current/`. `false` after someone else updated the package ([../02-design/package-store.md](../02-design/package-store.md) §9.2) |
+| `staged` | staged slot summary | no | only with `current`. `versionCode` higher than the top-level `versionCode` | a verified update in `staged/` ([package-store.md](../02-design/package-store.md) §7.1) |
+| `currentMatchesAndroid` | boolean | yes | `false` when `current` is absent | whether Android's installed version is the set in `current/`. `false` after someone else updated the package ([package-store.md](../02-design/package-store.md) §9.2) |
 
-Slot summary. The values are copied from the slot's `artifact.json` when the slot is filled:
+Slot summary. The values are copied from the slot's `artifact.json`:
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
 | `versionCode` | `VersionCode` | yes | | the set's version |
 | `versionName` | string | no | 1–1024 characters | for "Roll Back to ‹version›" without reading `artifact.json` |
-| `setDigest` | `SHA256Digest` | yes | unique across the three slots | the set digest ([../02-design/package-store.md](../02-design/package-store.md) §3.3) |
+| `setDigest` | `SHA256Digest` | yes | unique across the three slots | the set digest ([package-store.md](../02-design/package-store.md) §3.3) |
 | `size` | integer | yes | 1 to 8 GiB (8589934592) | the sum of the file sizes in bytes |
 | `fileCount` | integer | yes | 1–256 | the number of APK files (base plus splits) |
 
@@ -260,67 +252,65 @@ A staged slot summary has the fields of a slot summary plus `origin`:
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
-| `origin.type` | enum | yes | `local`, `direct`, `fdroid`, `github`, `manualFile` | where the candidate came from. `manualFile` is a user-supplied file for an installed package ([../02-design/update-system.md](../02-design/update-system.md) §5) |
-| `origin.url` | string | no | absolute `https` URL, at most 2048 characters, without user info, query, or fragment | the download URL of the first artifact. Omitted for `local` and `manualFile`. Query and fragment are removed before storing |
-| `origin.declaredDigests` | array of `SHA256Digest` | no | 1–256 items | the SHA-256 values the provider declared, in artifact order. Omitted when the provider declared none |
+| `origin.type` | enum | yes | `local`, `direct`, `fdroid`, `github`, `manualFile` | where the candidate came from. `manualFile` is a user-supplied file for an installed package ([update-system.md](../02-design/update-system.md) §5) |
+| `origin.url` | string | no | absolute `https` URL, at most 2048 characters, no user info | the download URL of the first artifact. Omitted for `local` and `manualFile`. Query and fragment are removed before storing |
+| `origin.declaredDigests` | array of `SHA256Digest` | no | 1–256 items | the SHA-256 values the provider declared, in artifact order. Omitted when none |
 
 #### 2.3.3 `android`
 
-The facts come from `GetPackageMetadata` (or `QueryPackage` on stock images). The guest protocol field is given in parentheses.
+The facts come from `GetPackageMetadata` (or `QueryPackage` on stock images). The guest protocol field is in parentheses.
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
-| `updateOwner` | string | no | `PackageID` | the update owner (`update_owner`). Omitted when the package has none ([../02-design/package-store.md](../02-design/package-store.md) §6.3) |
+| `updateOwner` | string | no | `PackageID` | the update owner (`update_owner`). Omitted when none ([package-store.md](../02-design/package-store.md) §6.3) |
 | `installerOfRecord` | string | no | `PackageID` | the installing package (`installer_of_record`). `io.apkrun.store` for Store Agent installs |
 | `firstInstallTime` | `Date` | no | | `first_install_time_ms` |
-| `lastUpdateTime` | `Date` | no | | `last_update_time_ms`. Recovery compares it with a transaction's `begin` ([../02-design/package-store.md](../02-design/package-store.md) §5.5) |
+| `lastUpdateTime` | `Date` | no | | `last_update_time_ms`. Recovery compares it with a transaction's `begin` ([package-store.md](../02-design/package-store.md) §5.5) |
 | `minSdk` | integer | yes | 1–10000 | `min_sdk` |
 | `targetSdk` | integer | yes | 1–10000 | `target_sdk` |
-| `nativeAbis` | array of string | yes | 0–8 unique items, each `^[a-z0-9_-]{1,32}$` | `native_abis`. Empty when the package has no native code |
-| `userdataGeneration` | `UUID` | yes | | the `userdata.img` generation from `instance.json` that the package was installed or adopted into ([../02-design/package-store.md](../02-design/package-store.md) §9.2) |
+| `nativeAbis` | array of string | yes | 0–8 unique items, each `^[a-z0-9_-]{1,32}$` | `native_abis`. Empty without native code |
+| `userdataGeneration` | `UUID` | yes | | the `userdata.img` generation from `instance.json` that the package was installed or adopted into ([package-store.md](../02-design/package-store.md) §9.2) |
 | `lastSyncedAt` | `Date` | yes | | the last time these facts were read from Android |
 
-Before the first contact with Android (a first install on a stock image that returned no metadata yet), `minSdk`, `targetSdk`, and `nativeAbis` come from the host inspection.
+Before the first contact with Android, `minSdk`, `targetSdk`, and `nativeAbis` come from the host inspection.
 
 #### 2.3.4 `source`
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
-| `kind` | enum | yes | `file`, `provider`, `wrapperBootstrap`, `adopted` | how the package first arrived on this Mac ([../02-design/package-store.md](../02-design/package-store.md) §2.3) |
+| `kind` | enum | yes | `file`, `provider`, `wrapperBootstrap`, `adopted` | how the package first arrived ([package-store.md](../02-design/package-store.md) §2.3) |
 | `at` | `Date` | yes | ≤ `createdAt` | when the import or adoption started |
-| `origin` | enum | no | `addFlow`, `document`, `dropOnHome`, `cli`, `wrap`. Only with `kind` `file` | the `ImportOrigin` of the import ([runtime-api.md](runtime-api.md) §8.2) |
-| `fileNames` | array of string | no | 1–20 items, each 1–255 characters without `/`. Only with `kind` `file` | the last path components of the user's files ([../02-design/package-store.md](../02-design/package-store.md) §3.1). Never a full path |
-| `container` | enum | no | `apk`, `apks`, `xapk`, `apkm`, `zip`. Only with `kind` `file` or `provider` | the detected container ([../02-design/package-store.md](../02-design/package-store.md) §4.2) |
+| `origin` | enum | no | `addFlow`, `document`, `dropOnHome`, `cli`, `wrap`. Only with `kind` `file` | the `ImportOrigin` ([runtime-api.md](runtime-api.md) §8.2) |
+| `fileNames` | array of string | no | 1–20 items, each 1–255 characters without `/`. Only with `kind` `file` | the last path components of the user's files ([package-store.md](../02-design/package-store.md) §3.1). Never a full path |
+| `container` | enum | no | `apk`, `apks`, `xapk`, `apkm`, `zip`. Only with `kind` `file` or `provider` | the detected container ([package-store.md](../02-design/package-store.md) §4.2) |
 | `providerType` | enum | no | `local`, `direct`, `fdroid`, `github`. Required with `kind` `provider`, absent otherwise | the provider that delivered the first install |
-| `wrapperBundleId` | string | no | `^io\.apkrun\.android\.[A-Za-z0-9.-]+$`, at most 255 characters. Required with `kind` `wrapperBootstrap`, absent otherwise | the portable wrapper that carried the bootstrap ([../02-design/wrapper.md](../02-design/wrapper.md) §10.2) |
+| `wrapperBundleId` | string | no | `^io\.apkrun\.android\.[A-Za-z0-9.-]+$`, at most 255 characters. Required with `kind` `wrapperBootstrap`, absent otherwise | the portable wrapper that carried the bootstrap ([wrapper.md](../02-design/wrapper.md) §10.2) |
 
 `source` is written once and never changes. Later changes of authority or provider do not touch it.
 
 #### 2.3.5 `lastOperation` (`OperationSummary`)
 
-This is the definition of `OperationSummary`, which [../02-design/package-store.md](../02-design/package-store.md) §2.3 and [runtime-api.md](runtime-api.md) §8.3 use.
-
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
 | `kind` | enum | yes | `firstInstall`, `reinstall`, `update`, `rollback`, `uninstall`, `adopt` | the operation. Repair is a `reinstall` |
-| `operationID` | `OperationID` | yes | | the operation's ID ([../02-design/diagnostics.md](../02-design/diagnostics.md) §2.4) |
+| `operationID` | `OperationID` | yes | | the operation's ID ([diagnostics.md](../02-design/diagnostics.md) §2.4) |
 | `startedAt` | `Date` | yes | | when it started |
 | `finishedAt` | `Date` | yes | ≥ `startedAt` | when it ended |
 | `fromVersionCode` | `VersionCode` | no | only for `reinstall`, `update`, `rollback` | the version before |
 | `toVersionCode` | `VersionCode` | no | | the target version |
-| `result` | enum | yes | `succeeded`, `failed`, `interrupted`, `rollbackUnavailable` | `interrupted`: recovery aborted it ("Installing ‹App› was interrupted", [../02-design/package-store.md](../02-design/package-store.md) §5.5). `rollbackUnavailable`: only for `rollback`, a background rollback that needed the data-loss fallback ([../02-design/package-store.md](../02-design/package-store.md) §7.3) |
-| `healthPending` | boolean | no | `true` only. Only for `update` with `result` `succeeded` | the post-update health check has not been recorded yet ([../02-design/package-store.md](../02-design/package-store.md) §7.2). UpdateCore runs it after a restart ([../02-design/update-system.md](../02-design/update-system.md) §10.1) |
+| `result` | enum | yes | `succeeded`, `failed`, `interrupted`, `rollbackUnavailable` | `interrupted`: recovery aborted it ([package-store.md](../02-design/package-store.md) §5.5). `rollbackUnavailable`: only for `rollback`, a background rollback that needed the data-loss fallback ([package-store.md](../02-design/package-store.md) §7.3) |
+| `healthPending` | boolean | no | `true` only. Only for `update` with `result` `succeeded` | the post-update health check is not recorded yet ([package-store.md](../02-design/package-store.md) §7.2). UpdateCore runs it after a restart ([update-system.md](../02-design/update-system.md) §10.1) |
 | `healthResult` | enum | no | `passed`, `failed`. Only for `update` with `result` `succeeded`, and never with `healthPending` | what `recordHealth` recorded |
-| `failureCount` | integer | no | 1–1000. Required when `result` is `failed`, absent otherwise | consecutive failures of the same kind for the same `toVersionCode`. The third failed boot reinstall moves the package to `broken(.reinstallFailed)` |
+| `failureCount` | integer | no | 1–1000. Required when `result` is `failed`, absent otherwise | consecutive failures of the same kind for the same `toVersionCode`. The third failed boot's reinstall moves the package to `broken(.reinstallFailed)` |
 | `error` | `StoredError` | no | only when `result` is `failed` or `rollbackUnavailable` | the failure (§2.3.6) |
-| `pending` | boolean | no | never written to `metadata.json` | only in the published record: post-boot work is pending ([../02-design/package-store.md](../02-design/package-store.md) §5.4 step 6) |
+| `pending` | boolean | no | never written to `metadata.json` | only in the published record: post-boot work is pending ([package-store.md](../02-design/package-store.md) §5.4 step 6) |
 
-- Booleans that can only be `true` are omitted instead of being written as `false`. Readers treat `false` like an absent field.
-- `pending` is an overlay. The store sets it when it publishes records at `open()`. The file keeps the last finished operation.
+- Booleans that can only be `true` are omitted instead of written as `false`. Readers treat `false` like an absent field.
+- `pending` is an overlay that the store sets when it publishes records at `open()`. The file keeps the last finished operation.
 
 #### 2.3.6 `StoredError`
 
-A stored error is a `WireError` ([runtime-api.md](runtime-api.md) §4.5) without `context`:
+A `WireError` ([runtime-api.md](runtime-api.md) §4.5) without `context`:
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
@@ -330,50 +320,49 @@ A stored error is a `WireError` ([runtime-api.md](runtime-api.md) §4.5) without
 | `cause` | `StoredError` | no | nesting depth at most 4 | a nested error |
 | `underlying` | object | no | `{domain: string, code: integer}` | the system error, without `userInfo` |
 
-Stored errors never contain a full path or a URL with a query ([../02-design/diagnostics.md](../02-design/diagnostics.md) §3.2, §6).
+A stored error never contains a full path or a URL with a query ([diagnostics.md](../02-design/diagnostics.md) §3.2, §6).
 
 ### 2.4 `updateProvider` and `ProviderConfiguration`
 
-`updateProvider` is an `UpdateProviderRef` ([../02-design/update-system.md](../02-design/update-system.md) §4.1):
+`updateProvider` is an `UpdateProviderRef` ([update-system.md](../02-design/update-system.md) §4.1):
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
 | `type` | enum | yes | `local`, `direct`, `fdroid`, `github` | the provider (`ProviderType`) |
-| `configuration` | object | yes | the object for `type`, below | the `ProviderConfiguration` |
+| `configuration` | object | yes | the object for `type`, below | the `ProviderConfiguration`. Plain object, not wrapped in an enum object, because `type` names the case |
 
-- `configuration` is a plain object with the fields of its type. It is not wrapped in an enum object, because `type` already names the case.
-- Only these fields are stored. The GitHub token lives in the Keychain (service `io.apkrun.provider.github`) and never in this file, `settings.json`, or logs ([../02-design/update-system.md](../02-design/update-system.md) §4.6).
+- Only the fields below are stored. The GitHub token lives in the Keychain (service `io.apkrun.provider.github`), never in these files or in logs ([update-system.md](../02-design/update-system.md) §4.6).
 - `setUpdatePolicy` parses the CLI spec (`ProviderSpec.spec`, [runtime-api.md](runtime-api.md) §9.2) into these fields. It fills in defaults, normalizes values, and validates them before anything is written. For F-Droid and GitHub it also makes one test request. A failure writes nothing.
 
-**Local** (`type: local`, #037). For tests and development. Hidden in the UI unless developer mode is on ([../02-design/update-system.md](../02-design/update-system.md) §4.3).
+**Local** (`type: local`). For tests and development. Hidden in the UI unless developer mode is on ([update-system.md](../02-design/update-system.md) §4.3).
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
-| `path` | string | yes | an absolute POSIX path, at most 1024 UTF-8 bytes, no `.` or `..` components | the provider root that holds `<packageId>/<versionCode>/`. For display and logs at `debug` level only |
+| `path` | string | yes | absolute POSIX path, at most 1024 UTF-8 bytes, no `.` or `..` components | the provider root that holds `<packageId>/<versionCode>/`. Shown in logs at `debug` level only |
 | `bookmark` | string | yes | Base64 of security-scoped bookmark data, at most 8 KiB after decoding | how apkrund opens the root. apkrund never opens `path` itself ([runtime-api.md](runtime-api.md) §9.2) |
 
 CLI spec `local:<path>`. The CLI makes the path absolute and creates the bookmark.
 
-**Direct** (`type: direct`, #050). The rules are in [direct-provider-manifest.md](direct-provider-manifest.md) §8:
+**Direct** (`type: direct`). The rules are in [direct-provider-manifest.md](direct-provider-manifest.md) §8.
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
 | `url` | string | yes | absolute `https` URL, at most 2048 characters, no user info. Debug builds also accept `http://127.0.0.1[:port]` and `http://localhost[:port]` | the manifest URL |
 
-CLI spec `direct:<https-url>`, and the alternate flags `--update-provider direct --update-url <url>`.
+CLI spec `direct:<https-url>`, and `--update-provider direct --update-url <url>`.
 
-**F-Droid** (`type: fdroid`, #051, [../02-design/update-system.md](../02-design/update-system.md) §4.5):
+**F-Droid** (`type: fdroid`, [update-system.md](../02-design/update-system.md) §4.5):
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
-| `repository` | string | yes | absolute `https` URL, at most 2048 characters, no user info, query, or fragment, no trailing `/`. Debug builds also accept `http://127.0.0.1[:port]` and `http://localhost[:port]` (the F-Droid mode of the test server, #051) | the repository base. The index is `<repository>/entry.jar` |
+| `repository` | string | yes | absolute `https` URL, at most 2048 characters, no user info, query, or fragment, no trailing `/`. Debug builds also accept `http://127.0.0.1[:port]` and `http://localhost[:port]` | the repository base. The index is `<repository>/entry.jar` |
 | `fingerprint` | string | yes | 64 lowercase hex characters | the SHA-256 fingerprint of the repository's signing certificate |
 
-- CLI spec `fdroid[:<repository-url>#<fingerprint>]`. Plain `fdroid` means the main repository `https://f-droid.org/repo` with the fingerprint pinned in the app (`43238d512c1e5eb2d6569f4a3afbf5523418b82e0a3ed1552770abb9a9c9ccab`, to be verified in #051).
+- CLI spec `fdroid[:<repository-url>#<fingerprint>]`. Plain `fdroid` means `https://f-droid.org/repo` with the fingerprint pinned in the app (`43238d512c1e5eb2d6569f4a3afbf5523418b82e0a3ed1552770abb9a9c9ccab`, to be verified).
 - Both fields are stored explicitly, also for the main repository. A later change of the built-in default does not change existing records.
 - The parser removes spaces and `:` from a fingerprint and lowercases it.
 
-**GitHub** (`type: github`, #052, [../02-design/update-system.md](../02-design/update-system.md) §4.6):
+**GitHub** (`type: github`, [update-system.md](../02-design/update-system.md) §4.6):
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
@@ -381,32 +370,32 @@ CLI spec `direct:<https-url>`, and the alternate flags `--update-provider direct
 | `assetPattern` | string | yes | 1–255 characters, no `/` | the glob for the release asset. Default `*.apk` |
 | `channel` | enum | yes | `stable`, `prerelease` | `prerelease` also considers pre-releases. Default `stable` |
 
-CLI spec `github:<owner>/<name>[:<asset-glob>][@prerelease]`. All three fields are stored, with the defaults filled in.
+CLI spec `github:<owner>/<name>[:<asset-glob>][@prerelease]`. All three fields are stored, with defaults filled in.
 
 Rules for all providers:
 
-- A provider is attached only to an `apkrun` package. Attaching one to a `manual` package makes it `apkrun`. Detaching it makes the package `manual` ([../02-design/update-system.md](../02-design/update-system.md) §2.1).
-- The UI choice **Manual** keeps the provider, unused, so switching back restores it ([../02-design/update-system.md](../02-design/update-system.md) §2.3). A `manual` record can therefore have `updateProvider`.
+- A provider is attached only to an `apkrun` package. Attaching one to a `manual` package makes it `apkrun`. Detaching it makes the package `manual` ([update-system.md](../02-design/update-system.md) §2.1).
+- The UI choice **Manual** keeps the provider, unused, so switching back restores it ([update-system.md](../02-design/update-system.md) §2.3). A `manual` record can therefore have `updateProvider`.
 - `googlePlay` and `external` records never have a provider.
-- A reader that finds a configuration that breaks these rules keeps the record readable. Every check of that package then fails with `update.providerNotConfigured` until the user sets a new provider. Examples: a release build that reads a debug `http` URL, or an unknown field.
-- Diagnostics and logs show the provider type and the host only ([../02-design/diagnostics.md](../02-design/diagnostics.md) §6.2). `path`, `bookmark`, the URL path, the repository name, and the asset pattern are left out.
+- A configuration that breaks these rules keeps the record readable. Every check of that package then fails with `update.providerNotConfigured` until the user sets a new provider. Examples: a release build that reads a debug `http` URL, or an unknown field.
+- Diagnostics and logs show the provider type and host only ([diagnostics.md](../02-design/diagnostics.md) §6.2). `path`, `bookmark`, the URL path, the repository name, and the asset pattern are left out.
 
 ### 2.5 Invariants
 
-The store checks these rules before every write (§4.1). The schema of §2.6 encodes the rules marked "schema". The others are checked in code by `PackageRecordValidator`.
+The store checks these rules before every write (§4.1). Rules marked "schema" are encoded in §2.6. The others are checked in code by `PackageRecordValidator`.
 
 | # | Rule | Check |
 |---|---|---|
-| R1 | `installer` `external` ⇒ `updateAuthority` is `external`, `googlePlay`, or `manual`, there is no `updateProvider`, and `artifacts.current` is absent | schema |
-| R2 | `updateAuthority` `apkrun` ⇒ `installer` is `apkrun` and `updateProvider` is present | schema |
+| R1 | `installer` `external` ⇒ `updateAuthority` is `external`, `googlePlay`, or `manual`; no `updateProvider`; `artifacts.current` absent | schema |
+| R2 | `updateAuthority` `apkrun` ⇒ `installer` `apkrun` and `updateProvider` present | schema |
 | R3 | `updateAuthority` `googlePlay` or `external` ⇒ no `updateProvider` | schema |
-| R4 | `source.kind` `adopted` ⇒ `installer` `external`, until APKRun installs a file for the package. Then `installer` becomes `apkrun`, and `source` stays `adopted` | code |
+| R4 | `source.kind` `adopted` ⇒ `installer` `external`, until APKRun installs a file for the package. Then `installer` becomes `apkrun` and `source` stays `adopted` | code |
 | R5 | `state` `uninstalledKeepingData` ⇒ no `current`, `previous`, or `staged` | schema |
-| R6 | `installer` `apkrun` and `state` not `uninstalledKeepingData` ⇒ `artifacts.current` is present | schema |
-| R7 | `state` `needsReinstall(_)` ⇒ `installer` `apkrun`. An adopted package becomes `broken(.removedInAndroid)` instead ([../02-design/package-store.md](../02-design/package-store.md) §9.3) | schema |
+| R6 | `installer` `apkrun` and `state` not `uninstalledKeepingData` ⇒ `artifacts.current` present | schema |
+| R7 | `state` `needsReinstall(_)` ⇒ `installer` `apkrun`. An adopted package becomes `broken(.removedInAndroid)` instead ([package-store.md](../02-design/package-store.md) §9.3) | schema |
 | R8 | `previous.versionCode` < `current.versionCode`, and `staged.versionCode` > the top-level `versionCode` | code |
 | R9 | the `setDigest` values of the slots are distinct | code |
-| R10 | `artifacts.currentMatchesAndroid` ⇒ `current` is present and `current.versionCode` equals the top-level `versionCode` | code |
+| R10 | `artifacts.currentMatchesAndroid` ⇒ `current` present and `current.versionCode` equals the top-level `versionCode` | code |
 | R11 | `createdAt` ≤ `updatedAt`, and `source.at` ≤ `createdAt` | code |
 | R12 | the last item of a non-empty `signingLineage` is in `signingCertificates` | code |
 | R13 | `configuration` matches `type` (§2.4) | schema |
@@ -826,43 +815,43 @@ The store checks these rules before every write (§4.1). The schema of §2.6 enc
 
 ### 3.1 Keys and defaults
 
-This table is the authority for the package settings keys and defaults. The UI and CLI columns and the design links are in [configuration.md](configuration.md) §3.1. Every key is optional in the file. An absent key has the default.
+This table is the authority for the package settings keys and defaults. Every key is optional in the file. An absent key has the default. The UI and CLI columns are in [configuration.md](configuration.md) §3.1.
 
-| Key | Type | Required | Constraints | Default | Applies | Meaning |
-|---|---|---|---|---|---|---|
-| `window.mode` | enum | no | `secondaryDisplay`, `primaryDisplayCompatibility` | `secondaryDisplay` | next session | the display mode ([../02-design/display-and-windowing.md](../02-design/display-and-windowing.md) §8) |
-| `window.defaultWidth` | integer (pt) | no | 320–8192 | `480`, or `850` when the launcher activity requests landscape | next session | the width of a new window without a saved frame |
-| `window.defaultHeight` | integer (pt) | no | 400–8192 | `850`, or `480` in landscape | next session | the height of such a window |
-| `window.resizable` | boolean | no | | `true` (`false` with fallback B) | live | whether the window can be resized |
-| `window.alwaysOnTop` | boolean | no | | `false` | live | floating window level |
-| `window.zoom` | number | no | 0.75–2.0 | `1.0` | live (next session with fallback B) | Android UI scale ([../02-design/display-and-windowing.md](../02-design/display-and-windowing.md) §6.1) |
-| `window.closeBehavior` | enum | no | `stop`, `keepRunning` | `stop` | live, read when the window closes | what closing the window does |
-| `input.escapeKey` | enum | no | `back`, `escape` | `back` | next session | what Esc sends |
-| `input.secondaryClick` | enum | no | `mouseSecondary`, `longPress` | `mouseSecondary` | next session | what a right click sends |
-| `input.scrollMode` | enum | no | `scroll`, `touchDrag` | `scroll` | next session | how scrolling is sent |
-| `input.hover` | boolean | no | | `true` | next session | send mouse hover events |
-| `input.sendCommandKey` | boolean | no | | `false` | next session | send ⌘ to the app |
-| `integrations.clipboard` | boolean | no | | `true` | live | clipboard sync |
-| `integrations.notifications` | boolean | no | | `true` | live | notification forwarding |
-| `integrations.links` | enum | no | `ask`, `mac`, `android` | `ask` | live | where links open |
-| `integrations.files` | boolean | no | | `true` | live | file open and share |
-| `integrations.sharedFolders` | enum | no | `off`, `readOnly`, `readWrite` | `off` | live | shared folder access |
-| `integrations.microphone` | boolean | no | | `false` | live. Turning it on for the first package, or off for the last, needs a runtime restart | microphone input |
-| `update.mode` | enum | no | `automatic`, `notifyOnly` | `automatic` | next check | the update mode. It has an effect only while `updateAuthority` is `apkrun` ([../02-design/update-system.md](../02-design/update-system.md) §2.2) |
-| `update.autoRollback` | boolean | no | | `true` | next health-check result | roll back an update that fails its health check |
-| `update.healthCheckLaunch` | boolean | no | | `true` | next update | launch the app briefly after an update. `false` limits the check to `versionOnly` |
+| Key | Type | Constraints | Default | Applies | Meaning |
+|---|---|---|---|---|---|
+| `window.mode` | enum | `secondaryDisplay`, `primaryDisplayCompatibility` | `secondaryDisplay` | next session | the display mode ([display-and-windowing.md](../02-design/display-and-windowing.md) §8) |
+| `window.defaultWidth` | integer (pt) | 320–8192 | `480`, or `850` when the launcher activity requests landscape | next session | width of a new window without a saved frame |
+| `window.defaultHeight` | integer (pt) | 400–8192 | `850`, or `480` in landscape | next session | height of such a window |
+| `window.resizable` | boolean | | `true` (`false` with fallback B) | live | whether the window can be resized |
+| `window.alwaysOnTop` | boolean | | `false` | live | floating window level |
+| `window.zoom` | number | 0.75–2.0 | `1.0` | live (next session with fallback B) | Android UI scale ([display-and-windowing.md](../02-design/display-and-windowing.md) §6.1) |
+| `window.closeBehavior` | enum | `stop`, `keepRunning` | `stop` | live, read when the window closes | what closing the window does |
+| `input.escapeKey` | enum | `back`, `escape` | `back` | next session | what Esc sends |
+| `input.secondaryClick` | enum | `mouseSecondary`, `longPress` | `mouseSecondary` | next session | what a right click sends |
+| `input.scrollMode` | enum | `scroll`, `touchDrag` | `scroll` | next session | how scrolling is sent |
+| `input.hover` | boolean | | `true` | next session | send mouse hover events |
+| `input.sendCommandKey` | boolean | | `false` | next session | send ⌘ to the app |
+| `integrations.clipboard` | boolean | | `true` | live | clipboard sync |
+| `integrations.notifications` | boolean | | `true` | live | notification forwarding |
+| `integrations.links` | enum | `ask`, `mac`, `android` | `ask` | live | where links open |
+| `integrations.files` | boolean | | `true` | live | file open and share |
+| `integrations.sharedFolders` | enum | `off`, `readOnly`, `readWrite` | `off` | live | shared folder access |
+| `integrations.microphone` | boolean | | `false` | live. Turning it on for the first package, or off for the last, needs a runtime restart | microphone input |
+| `update.mode` | enum | `automatic`, `notifyOnly` | `automatic` | next check | the update mode. Effective only while `updateAuthority` is `apkrun` ([update-system.md](../02-design/update-system.md) §2.2) |
+| `update.autoRollback` | boolean | | `true` | next health-check result | roll back an update that fails its health check |
+| `update.healthCheckLaunch` | boolean | | `true` | next update | launch the app briefly after an update. `false` limits the check to `versionOnly` |
 
-- The window size is clamped when it is used: to 90 % of the screen's visible frame and to the 4095 px backing limit ([../02-design/display-and-windowing.md](../02-design/display-and-windowing.md) §6.2). A frame saved by AppKit wins over the default size.
-- The landscape defaults depend on the launcher activity. The resolver decides them. They are never written.
-- The integration defaults for a new package come from `integrations.defaults.*` ([configuration.md](configuration.md) §2.8), not from this table (§3.5).
+- The window size is clamped when used: to 90 % of the screen's visible frame and to the 4095 px backing limit ([display-and-windowing.md](../02-design/display-and-windowing.md) §6.2). A frame saved by AppKit wins over the default size.
+- The landscape defaults depend on the launcher activity. The resolver decides them and never writes them.
+- The integration defaults of a new package come from `integrations.defaults.*` ([configuration.md](configuration.md) §2.8), not from this table (§3.5).
 
 ### 3.2 Storage form
 
 - Dotted keys are nested objects: `window.zoom` is `{"window": {"zoom": 1.25}}`.
 - The file holds only explicit values: the user's values and the values copied at the first record ([configuration.md](configuration.md) §1.2). The resolver needs this to tell a user value from a recommendation.
-- A group object without keys is omitted. `{"schemaVersion": 1}` is a valid file.
+- A group object without keys is omitted. `{"schemaVersion": 1}` is valid.
 - `schemaVersion` is required. The top-level groups are `window`, `input`, `integrations`, and `update`.
-- Numbers: sizes are integers. `zoom` is a JSON number. The writer stores the value as given, after validation.
+- Sizes are integers. `zoom` is a JSON number, stored as given after validation.
 
 ### 3.3 Example
 
@@ -954,7 +943,7 @@ This schema is the writer's contract. It rejects unknown keys. Readers are more 
 
 ### 3.5 Resolution and the first record
 
-These rules are defined in [configuration.md](configuration.md). They are only summarized here.
+These rules are defined in [configuration.md](configuration.md). They are summarized here.
 
 - **Effective value** ([configuration.md](configuration.md) §3.2): the global switch `integrations.enabled.<name> = false`, then the value in this file, then the compatibility database recommendation (#090), then the default of §3.1. Recommendations are never written to this file.
 - **First record** ([configuration.md](configuration.md) §3.3, §4): at install and import, at a bootstrap import, and at the approval of a wrapper whose package has no settings. The sources are the command's flags, then `wrapper.json` ([wrapper-json.md](wrapper-json.md)), then `integrations.defaults.*`. A value equal to the default of §3.1 is not written. Authority and provider go to the record (§2.4), not to this file.
@@ -962,12 +951,12 @@ These rules are defined in [configuration.md](configuration.md). They are only s
 
 ### 3.6 Changes
 
-- `updatePackageSettings(id, patch)` applies a JSON merge patch (RFC 7396) to the nested form of §3.2 ([configuration.md](configuration.md) §1.4). `null` removes a key (**Reset**). The whole patch is validated first. One bad key rejects the whole patch, and nothing is written.
+- `updatePackageSettings(id, patch)` applies a JSON merge patch (RFC 7396) to the nested form of §3.2 ([configuration.md](configuration.md) §1.4). `null` removes a key (**Reset**). The whole patch is validated first. One bad key rejects the whole patch.
 - Setting a key explicitly to its default stores it, because an explicit value beats a recommendation. This differs from the first record on purpose.
 - A patch that changes nothing writes nothing and posts no event.
 - After a write the store posts `PackageChange.settingsChanged(id, keys)` with dotted keys. A change of `window.resizable`, `window.alwaysOnTop`, or `window.zoom` also sends `windowPrefsChanged` to the package's wrapper ([configuration.md](configuration.md) §1.5).
-- CLI: `apkrun settings <package> list [--json] | get <key> | set <key> <value> | reset (<key> | --all)` ([../02-design/cli.md](../02-design/cli.md) §4.2). `reset --all` writes `{"schemaVersion": 1}`.
-- `setUpdatePolicy` writes `update.mode` and the record's authority and provider together ([../02-design/update-system.md](../02-design/update-system.md) §2.3). It writes `settings.json` first, then `metadata.json` (§6.2).
+- CLI: `apkrun settings <package> list [--json] | get <key> | set <key> <value> | reset (<key> | --all)` ([cli.md](../02-design/cli.md) §4.2). `reset --all` writes `{"schemaVersion": 1}`.
+- `setUpdatePolicy` writes `update.mode` and the record's authority and provider together ([update-system.md](../02-design/update-system.md) §2.3). It writes `settings.json` first, then `metadata.json` (§6.2).
 
 ---
 
@@ -984,23 +973,23 @@ These rules are defined in [configuration.md](configuration.md). They are only s
 | The record fails §2.6 or §2.5 before a write | a programming error. The write is refused, the transaction aborts, and the error is `runtime.internal` with a fault log |
 | The package or the store is read-only (§4.2, §5.3) | `store.storeReadOnly(reason)` for the record. `runtime.hostStartupFailed(step:)` when APKStoreCore is degraded |
 
-Every write is atomic: a temporary file in the same directory, `fcntl(F_BARRIERFSYNC)`, then a rename over the old file ([../02-design/package-store.md](../02-design/package-store.md) §5.1).
+Every write is atomic: a temporary file in the same directory, `fcntl(F_BARRIERFSYNC)`, then a rename over the old file ([package-store.md](../02-design/package-store.md) §5.1).
 
 ### 4.2 On load
 
 | Problem | `metadata.json` | `settings.json` |
 |---|---|---|
 | Older `schemaVersion` | migrated (§5.2) | migrated (§5.2) |
-| Newer `schemaVersion` | that package is read-only with `store.metadataUnreadable`. The file is never written ([../02-design/package-store.md](../02-design/package-store.md) §5.4) | the same as for `metadata.json`: that package is read-only with `store.metadataUnreadable` ([configuration.md](configuration.md) §8.3). The file is never written |
+| Newer `schemaVersion` | that package is read-only with `store.metadataUnreadable`. Never written ([package-store.md](../02-design/package-store.md) §5.4) | the same: that package is read-only with `store.metadataUnreadable` ([configuration.md](configuration.md) §8.3). Never written |
 | Not JSON, larger than §1.2, or no `schemaVersion` | that package is read-only with `store.metadataUnreadable` and a health error. The file is kept as it is | renamed to `settings.json.corrupt-<time>`. Every key uses its default. The next change writes a new file ([configuration.md](configuration.md) §8.2) |
 | A required field is missing, or a field breaks §2.6 or §2.5 | the same as the row above | — |
-| Unknown field or key | ignored. It is dropped at the next write | ignored, with one warning per load. It is dropped at the next write |
-| Invalid value of a known key | the record is unreadable (row 3). Exception: an invalid provider configuration (§2.4) | that key uses its default. An error is logged. The value is dropped at the next write |
+| Unknown field or key | ignored. Dropped at the next write | ignored, with one warning per load. Dropped at the next write |
+| Invalid value of a known key | the record is unreadable (row 3). Exception: an invalid provider configuration (§2.4) | that key uses its default. An error is logged. Dropped at the next write |
 | File missing | the journal decides (§6.3) | read as `{"schemaVersion": 1}` |
 
 - A problem in one package's files affects no other package.
 - A read-only package is listed with its last readable facts where possible. It cannot be updated, rolled back, or uninstalled until the problem is fixed. **Remove from APKRun** (`forget`) still works.
-- `<time>` in `.corrupt-<time>` is the UTC time in the form `20261002T091203Z`.
+- `<time>` in `.corrupt-<time>` is UTC, for example `20261002T091203Z`.
 
 ---
 
@@ -1008,27 +997,26 @@ Every write is atomic: a temporary file in the same directory, `fcntl(F_BARRIERF
 
 ### 5.1 Rules
 
-- `schemaVersion` is an integer. This build's values are in `components.json` `dataSchemas` (`packageRecord` 1, `packageSettings` 1, [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.1).
-- Every change raises the version, also an additive one. `Codable` drops unknown keys, so an older build that wrote the file would lose the new field ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §5).
+- `schemaVersion` is an integer. This build's values are in `components.json` `dataSchemas` (`packageRecord` 1, `packageSettings` 1; [runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.1).
+- Every change raises the version, also an additive one. `Codable` drops unknown keys, so an older build would lose the new field ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §5).
 - A migration never changes what a value means. Renaming or removing a field is a migration step.
-- A build migrates every older version in the window of R5 (24 months, [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.3).
+- A build migrates every older version in the window of R5 (24 months, [runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.3).
 - The schema `$id` carries the version: `urn:apkrun:schema:package-record:<n>` and `urn:apkrun:schema:package-settings:<n>`.
 
 ### 5.2 Migrating older files
 
-At `open()` ([../02-design/package-store.md](../02-design/package-store.md) §5.4 step 2), before recovery:
+At `open()` ([package-store.md](../02-design/package-store.md) §5.4 step 2), before recovery:
 
-1. The store begins one journal transaction of kind `schemaMigration` for all packages that have an older file ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §5).
+1. The store begins one journal transaction of kind `schemaMigration` for all packages with an older file ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §5).
 2. For each file: keep the original bytes as `metadata.v<old>.json` or `settings.v<old>.json` in the same directory. Migrate in memory, validate against the current schema, and replace the file with `FileManager.replaceItemAt`. Journal step `migrated` with the package ID.
 3. Commit. Backups are deleted 90 days after the migration.
-
 - Recovery of an unfinished `schemaMigration` continues with the files that still have the old version. A file at the current version is skipped.
 - A failure makes APKStoreCore start degraded with `maintenance.schemaMigrationFailed(file, from, to, detail)`. The original file and its backup stay unchanged.
 - Golden fixtures prove each step (§9).
 
 ### 5.3 Newer files
 
-A newer file appears only after APKRun was downgraded. §4.2 lists the behavior. The store never writes, migrates, or resets a file with a newer version.
+A newer file appears only after APKRun was downgraded. §4.2 gives the behavior. The store never writes, migrates, or resets a file with a newer version.
 
 ---
 
@@ -1036,12 +1024,12 @@ A newer file appears only after APKRun was downgraded. §4.2 lists the behavior.
 
 ### 6.1 Transactions
 
-The transaction kinds are in [../02-design/package-store.md](../02-design/package-store.md) §5.2. Both files are written before the step `metadataWritten` is journaled.
+The transaction kinds are in [package-store.md](../02-design/package-store.md) §5.2. Both files are written before the step `metadataWritten` is journaled.
 
 | Kind | `metadata.json` | `settings.json` |
 |---|---|---|
 | `firstInstall` | created with state `installed`, `current`, the Android facts, and `lastOperation` | created with the first-record values (§3.5) |
-| `reinstall` | `versionCode`, Android facts, `state` `installed`, `lastOperation` `reinstall`. `current` is replaced for `reinstallSameVersion` | unchanged |
+| `reinstall` | `versionCode`, Android facts, `state` `installed`, `lastOperation` `reinstall`. `current` replaced for `reinstallSameVersion` | unchanged |
 | `stage` | `artifacts.staged` set or replaced | unchanged |
 | `update` | slots rotated (`previous` ← `current` ← `staged`), `versionCode`, `lastOperation` `update` with `healthPending` | unchanged |
 | `rollback` | `current` ← `previous`, `previous` removed, `lastOperation` `rollback` | unchanged |
@@ -1051,27 +1039,27 @@ The transaction kinds are in [../02-design/package-store.md](../02-design/packag
 | `discardStaged` | `artifacts.staged` removed | unchanged |
 | `schemaMigration` | §5.2 | §5.2 |
 
-Recovery writes the record again from the transaction's `begin` line (`from`, `to`, `setDigest`) and the slots' `artifact.json`. That write is idempotent. A crash never leaves a partly written file, because of the atomic rename.
+Recovery writes the record again from the transaction's `begin` line (`from`, `to`, `setDigest`) and the slots' `artifact.json`. That write is idempotent. The atomic rename means a crash never leaves a partly written file.
 
 ### 6.2 Writes outside transactions
 
-These writes change only the files and never a slot or Android. They take the package's operation lock ([../02-design/package-store.md](../02-design/package-store.md) §5.3) and use the atomic write of §4.1. They are not journaled.
+These writes change only the files, never a slot or Android. They take the package's operation lock ([package-store.md](../02-design/package-store.md) §5.3) and use the atomic write of §4.1. They are not journaled.
 
 | Write | Fields |
 |---|---|
-| Reconciliation ([../02-design/package-store.md](../02-design/package-store.md) §9.2) | `displayName`, `versionName`, `versionCode` (Android has a higher version), `signingCertificates`, `signingLineage`, `android.*`, `currentMatchesAndroid`, `state` (`needsReinstall`, `broken`) |
+| Reconciliation ([package-store.md](../02-design/package-store.md) §9.2) | `displayName`, `versionName`, `versionCode` (Android has a higher version), `signingCertificates`, `signingLineage`, `android.*`, `currentMatchesAndroid`, `state` (`needsReinstall`, `broken`) |
 | `recordHealth(id, result)` | `lastOperation.healthPending` removed, `healthResult` set |
 | A failed operation that did not reach Android | `lastOperation` with `result` `failed` and `failureCount` |
-| Adopt ([../02-design/package-store.md](../02-design/package-store.md) §9.3) | a new record with `lastOperation` `adopt`, and a new `settings.json` |
+| Adopt ([package-store.md](../02-design/package-store.md) §9.3) | a new record with `lastOperation` `adopt`, and a new `settings.json` |
 | `setUpdatePolicy` | `settings.json` `update.mode` first, then `updateAuthority` and `updateProvider` in `metadata.json` |
 | `updatePackageSettings` | `settings.json` only |
 
-The order for `setUpdatePolicy` is chosen so that a crash between the two writes never turns on automatic updates by itself: the mode alone has no effect without the authority `apkrun`.
+The order for `setUpdatePolicy` means a crash between the two writes never turns on automatic updates by itself: the mode alone has no effect without the authority `apkrun`.
 
 ### 6.3 A missing `metadata.json`
 
-- An unfinished `firstInstall` for the directory: recovery decides ([../02-design/package-store.md](../02-design/package-store.md) §5.5).
-- No transaction refers to the directory: the directory is moved to `.trash/` with a health warning ([../02-design/package-store.md](../02-design/package-store.md) §3.2).
+- An unfinished `firstInstall` for the directory: recovery decides ([package-store.md](../02-design/package-store.md) §5.5).
+- No transaction refers to the directory: the directory moves to `.trash/` with a health warning ([package-store.md](../02-design/package-store.md) §3.2).
 - A `metadata.json` that exists but cannot be read is never moved. §4.2 applies.
 
 ---
@@ -1084,10 +1072,9 @@ The order for `setUpdatePolicy` is chosen so that a crash between the two writes
 | Reader | `PackageStore.open()` | builds the directory index, migrates, recovers (§5, §6) |
 | Reader | RuntimeHost for RuntimeAPI | `packageInfo` returns the record as `WirePackageRecord` and the settings as `ResolvedPackageSettings` ([runtime-api.md](runtime-api.md) §8.3) |
 | Reader | UpdateCore | authority, provider, and `update.*` through `PackageStore` |
-| Reader | sessions, IntegrationCore, DisplayPool | settings through `PackageStore.settings(for:)`. They do not cache across `settingsChanged` ([../02-design/package-store.md](../02-design/package-store.md) §2.4) |
-| Reader | WrapperCore | `displayName` and the settings that seed `wrapper.json` ([../02-design/wrapper.md](../02-design/wrapper.md) §6.1, [wrapper-json.md](wrapper-json.md)) |
+| Reader | sessions, IntegrationCore, DisplayPool | settings through `PackageStore.settings(for:)`. No caching across `settingsChanged` ([package-store.md](../02-design/package-store.md) §2.4) |
+| Reader | WrapperCore | `displayName` and the settings that seed `wrapper.json` ([wrapper.md](../02-design/wrapper.md) §6.1; [wrapper-json.md](wrapper-json.md)) |
 | Reader | DiagnosticsCore | an allowlisted copy (§8) |
-| Reader (tests) | the fixtures of §9 | |
 
 No other process reads these files. APKRun.app, the CLI, and wrappers use RuntimeAPI. Hand edits are not supported. apkrund reads them only at its next start.
 
@@ -1095,8 +1082,8 @@ No other process reads these files. APKRun.app, the CLI, and wrappers use Runtim
 
 ## 8. Diagnostics and privacy
 
-- A diagnostics bundle includes each record with the allowlist of [../02-design/diagnostics.md](../02-design/diagnostics.md) §6.2: package ID, label, version name and code, state, installer, update authority and owner, provider type and host, signer digests truncated to 12 hex characters, and sizes.
-- Left out of the bundle: `source.fileNames`, `artifacts.staged.origin.url` except its host, and every provider configuration value except the type and the host (§2.4). The Local `bookmark` is never copied.
+- A diagnostics bundle includes each record with the allowlist of [diagnostics.md](../02-design/diagnostics.md) §6.2: package ID, label, version name and code, state, installer, update authority and owner, provider type and host, signer digests truncated to 12 hex characters, and sizes.
+- Left out: `source.fileNames`, `artifacts.staged.origin.url` except its host, and every provider configuration value except the type and host (§2.4). The Local `bookmark` is never copied.
 - Each `settings.json` is copied as is. Every key of §3.1 is on the allowlist ([configuration.md](configuration.md) §1.7).
 - Logs name the package ID and the provider type and host. They never contain paths from the user's disk at `info` level or above.
 
@@ -1106,19 +1093,15 @@ No other process reads these files. APKRun.app, the CLI, and wrappers use Runtim
 
 Fixtures:
 
-- `Tests/Fixtures/schemas/packageRecord/v1.json` and `v1.expected.json` (identical for v1), `Tests/Fixtures/schemas/packageSettings/v1.json` and `v1.expected.json` ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §5). Each later version adds `v<n>.json` and its expected result.
-- `Tests/Fixtures/schemas/packageRecord/valid/*.json` and `invalid/*.json`, and the same for `packageSettings`. The valid set contains the examples of §2.1 and §3.3. Each invalid fixture breaks one rule, and its file name names the rule (`r2-apkrun-without-provider.json`).
+- `Tests/Fixtures/schemas/packageRecord/v1.json` and `v1.expected.json`, and `Tests/Fixtures/schemas/packageSettings/v1.json` and `v1.expected.json` ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §5). Each later version adds `v<n>.json` and its expected result.
+- `Tests/Fixtures/schemas/packageRecord/valid/*.json` and `invalid/*.json`, and the same for `packageSettings`. The valid set contains the examples of §2.1 and §3.3. Each invalid fixture breaks one rule, and its name gives the rule (`r2-apkrun-without-provider.json`).
 
-| Tier | Test | Task |
-|---|---|---|
-| T0 | Schema: every valid fixture passes §2.6 or §3.4, and every invalid fixture fails | #027, #037 |
-| T0 | Model and schema agree: every valid fixture decodes with `Codable`, encodes to the same bytes, and passes `PackageRecordValidator`. Every invalid fixture fails with the expected rule of §2.5 | #027, #037 |
-| T0 | `PackageState` encoding: every row of §2.3.1, both directions. `{"installed": {}}` is refused | #027 |
-| T0 | Provider configuration: spec parsing and normalization for the four types (§2.4), refusal of `http` in release builds, F-Droid fingerprint normalization, GitHub name rules | #037, #050, #051, #052 |
-| T0 | Migration: `v<n>.json` → current equals `v<n>.expected.json`. A newer `schemaVersion` gives the behavior of §4.2 | #027, #057 |
-| T0 | Settings: merge patch with `null`, unknown key (`store.unknownSetting`), invalid value (`store.invalidSettingValue`), no-op patch without event, explicit default stored | #079 |
-| T0 | Settings load rules of §4.2: unknown key dropped at the next write, invalid value → default, corrupt file renamed | #079 |
-| T0 | Resolver precedence and first-record rules ([configuration.md](configuration.md) §3.2, §3.3) | #079, #090 |
-| T1 | Crash injection at every step of every kind (§6.1): after restart both files parse, and the record matches the slots | #027, #038 |
-| T1 | `setUpdatePolicy` with a crash between the two writes (§6.2) | #037 |
-| T1 | APKRun update: the decoded records are equal field by field before and after ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §5) | #057 |
+Tests:
+
+- T0: every valid fixture passes §2.6 or §3.4, and every invalid one fails. Every valid fixture decodes with `Codable`, encodes to the same bytes, and passes `PackageRecordValidator`. Every invalid one fails with its rule of §2.5.
+- T0: `PackageState` encoding for every row of §2.3.1, both directions. `{"installed": {}}` is refused.
+- T0: provider configuration: spec parsing and normalization for the four types (§2.4), refusal of `http` in release builds, F-Droid fingerprint normalization, GitHub name rules.
+- T0: migration: `v<n>.json` → current equals `v<n>.expected.json`. A newer `schemaVersion` gives the behavior of §4.2.
+- T0: settings: merge patch with `null`, unknown key, invalid value, no-op patch without event, explicit default stored, load rules of §4.2, resolver precedence ([configuration.md](configuration.md) §3.2, §3.3).
+- T1: crash injection at every step of every transaction kind (§6.1): after restart both files parse, and the record matches the slots. `setUpdatePolicy` with a crash between its two writes (§6.2).
+- T1: an APKRun update leaves the decoded records equal field by field ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §5).

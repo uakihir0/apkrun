@@ -1,30 +1,24 @@
 # Runtime Image Bundle, Manifest, and Image Feed
 
-| Field | Value |
-|---|---|
-| Status | Baseline |
-| Related | [android-image-manifest.md](android-image-manifest.md), [error-catalog.md](error-catalog.md) (domains `image`, `maintenance`), [configuration.md](configuration.md), [../02-design/package-store.md](../02-design/package-store.md) §4.6, [../01-architecture/security-model.md](../01-architecture/security-model.md) §7, [../05-development/build-system.md](../05-development/build-system.md) §10, FR-IMG-* |
-
 This document defines the formats that carry an Android system to a Mac:
 
 - the **image version** string (§2);
 - the **runtime image bundle**, the directory `Images/<imageVersion>/` (§3);
-- its **manifest**, `manifest.json` (the `RuntimeImageManifest`, §4 and §5);
+- its **manifest**, `manifest.json` (§4 and §5);
 - its **signature** `manifest.sig` and the `SHA256SUMS` file (§6);
 - the **release archive** `<imageVersion>.aar` (§8);
 - the **image feed** `feed.json` and `feed.json.sig` (§9).
 
-The design lives in [../02-design/android-image.md](../02-design/android-image.md) (the bundle, ImageCore) and [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) (updates). This document fixes field names, types, limits, and encodings. When it disagrees with those design documents on behavior, the design documents win and this document has a bug.
+The design is in [android-image.md](../02-design/android-image.md) (the bundle, ImageCore) and [runtime-maintenance.md](../02-design/runtime-maintenance.md) (updates). This document fixes field names, types, limits, and encodings.
 
 ---
 
 ## 1. Overview
 
-- A build-time pipeline (`python3 -m apkrun_image bundle`, #065) turns one Android build into one bundle. The Mac never parses AOSP outputs ([ADR-0011](../01-architecture/decisions/0011-runtime-image-bundle.md)).
-- ImageCore (in apkrund) verifies, installs, and consumes bundles. It never changes a file inside an installed bundle.
-- The manifest is the only index of the bundle. No Swift code names a partition, a disk file, or a console port. They come from the manifest ([../02-design/android-image.md](../02-design/android-image.md) §4.2, §7.1).
-- The manifest is signed. Its `files` block pins the size and SHA-256 of every other file. So the signature covers the whole bundle.
-- Release bundles reach users as an `.aar` archive listed in a signed feed. Development bundles are installed as directories.
+- The build pipeline (`python3 -m apkrun_image bundle`) turns one Android build into one bundle. The Mac never parses AOSP outputs ([ADR-0011](../01-architecture/decisions/0011-runtime-image-bundle.md)).
+- ImageCore (in apkrund) verifies, installs, and uses bundles. It never changes a file inside an installed bundle.
+- The manifest is the only index of the bundle. No Swift code names a partition, a disk file, or a console port; they come from the manifest ([android-image.md](../02-design/android-image.md) §4.2, §7.1).
+- The manifest is signed. Its `files` block pins the size and SHA-256 of every other file, so the signature covers the whole bundle.
 
 ## 2. ImageVersion
 
@@ -41,7 +35,7 @@ YYYY.MM.N-<base>-<arch>
 | `YYYY` | 4 digits | release year |
 | `MM` | 2 digits, `01` to `12` | release month |
 | `N` | `0` to `999`, no leading zeros | sequence within the month |
-| `base` | `cf` + the CI build ID (1 to 20 digits) when `provenance.source.origin` is `ci.android.com`. The builder build ID itself (`ar` + 6 digits) when it is `apkrun-builder` | the Android build. Informational only |
+| `base` | `cf` + the CI build ID (1 to 20 digits) when `provenance.source.origin` is `ci.android.com`; `ar` + 6 digits (the builder build ID) when it is `apkrun-builder` | the Android build. Informational only |
 | `arch` | `arm64` | guest architecture. v1 has no other value |
 
 Full regular expression:
@@ -50,44 +44,44 @@ Full regular expression:
 ^([0-9]{4})\.(0[1-9]|1[0-2])\.(0|[1-9][0-9]{0,2})-(cf[0-9]{1,20}|ar[0-9]{6})-(arm64)$
 ```
 
-The **short form** `YYYY.MM.N` (regular expression `^[0-9]{4}\.(0[1-9]|1[0-2])\.(0|[1-9][0-9]{0,2})$`) appears in exactly these places:
+The **short form** `YYYY.MM.N` (`^[0-9]{4}\.(0[1-9]|1[0-2])\.(0|[1-9][0-9]{0,2})$`) appears only in:
 
-- `compatibility.upgradeFrom.minimumImageVersion` (§4.9) and the feed's `upgradeFrom.minimumImageVersion` (§9);
-- the `--image-version` input of `bundle`, which appends `-<base>-<arch>` itself ([../02-design/android-image.md](../02-design/android-image.md) §10.2);
-- user-facing text ("Go back to Android 2026.07.0?", [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.8) and release note URLs.
+- `compatibility.upgradeFrom.minimumImageVersion` (§4.9) and the feed's `upgradeFrom.minimumImageVersion` (§9.3);
+- the `--image-version` input of `bundle`, which appends `-<base>-<arch>` itself ([android-image.md](../02-design/android-image.md) §10.2);
+- user-facing text such as "Go back to Android 2026.07.0?" ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.8) and release note URLs.
 
 ### 2.2 Parsing
 
-- The Swift type is `ImageVersion {year, month, sequence, base, architecture}`. It is `Codable` as a single string, `Comparable`, and `CustomStringConvertible` ([../02-design/android-image.md](../02-design/android-image.md) §9.1).
-- Parsing uses the regular expression of §2.1 on the whole string. A failure in a manifest gives `ImageFailure.manifestInvalid(path, reason)`. A failure in the feed gives `MaintenanceFailure.imageFeedInvalid(detail)`.
-- Rendering is canonical. `description` of a parsed value returns the exact input string, and parsing a rendered value returns an equal value. Leading zeros in `N` are rejected so that this holds.
-- The short form has its own parser. It yields `(year, month, sequence)` only.
+- The Swift type is `ImageVersion {year, month, sequence, base, architecture}`. It is `Codable` as a single string, `Comparable`, and `CustomStringConvertible` ([android-image.md](../02-design/android-image.md) §9.1).
+- Parsing applies the regular expression to the whole string. A failure in a manifest gives `ImageFailure.manifestInvalid(path, reason)`. A failure in the feed gives `MaintenanceFailure.imageFeedInvalid(detail)`.
+- Rendering is canonical: `description` returns the input string, and parsing a rendered value gives an equal value. Leading zeros in `N` are rejected so that this holds.
+- The short form has its own parser, which yields `(year, month, sequence)` only.
 
 ### 2.3 Ordering
 
-- Versions are compared on `(year, month, sequence)` as integers, in that order. `base` and `architecture` do not take part ([../02-design/android-image.md](../02-design/android-image.md) §12.1).
-- `==` compares all five fields. So two versions can be neither `<` nor `>` and still differ. That happens when the same triple is published with two bases. It is a publishing error. A reader treats such a candidate as **not newer** (C1 fails), and a feed that lists two entries with the same triple is invalid (§9.4).
+- Versions compare on `(year, month, sequence)` as integers. `base` and `architecture` do not take part ([android-image.md](../02-design/android-image.md) §12.1).
+- `==` compares all five fields. Two versions with the same triple and different bases are neither `<` nor `>`. That is a publishing error: a reader treats such a candidate as **not newer** (C1 fails), and a feed with two entries of the same triple is invalid (§9.4).
 - A short form compares with a full version on the triple only.
-- Versions are monotonic. APKRun never installs or activates a lower version automatically (`ImageFailure.downgradeRejected(from, to)`). The only ways back are the `previous` image and a recovery point ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.8).
+- APKRun never installs or activates a lower version automatically (`ImageFailure.downgradeRejected(from, to)`). The only ways back are the `previous` image and a recovery point ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.8).
 
 ### 2.4 Where the version appears
 
 | Place | Form |
 |---|---|
-| bundle directory `Images/<imageVersion>/`, the `current` and `previous` symlink targets | full |
+| bundle directory `Images/<imageVersion>/`; the `current` and `previous` symlink targets | full |
 | `manifest.json` `imageVersion` | full |
 | `Runtime/instance/instance.json` (image in use) | full |
-| recovery points `Runtime/instance/recovery-points/<timestamp>-<imageVersion>/`, with `<timestamp>` = UTC `YYYYMMDDTHHMMSSZ` | full |
-| bootconfig `androidboot.apkrun.image` (layer 4, [../02-design/android-image.md](../02-design/android-image.md) §6.2) | full |
-| release archive `<imageVersion>.aar` and `Cache/images/<imageVersion>.aar.partial` | full |
-| feed entry `imageVersion` (§9), `Images/update-state.json` | full |
-| `apkrun image list`, diagnostics, `image.current` | full, with the short form as the display name |
+| recovery points `Runtime/instance/recovery-points/<timestamp>-<imageVersion>/`, `<timestamp>` = UTC `YYYYMMDDTHHMMSSZ` | full |
+| bootconfig `androidboot.apkrun.image` (layer 4, [android-image.md](../02-design/android-image.md) §6.2) | full |
+| `<imageVersion>.aar` and `Cache/images/<imageVersion>.aar.partial` | full |
+| feed entry `imageVersion` (§9.3), `Images/update-state.json` | full |
+| `apkrun image list`, diagnostics, `image.current` | full, with the short form as display name |
 
 ## 3. Bundle layout
 
 ### 3.1 Files
 
-The layout is fixed by [../01-architecture/filesystem-layout.md](../01-architecture/filesystem-layout.md) §1. The paths below are the v1 values. ImageCore takes every path from the manifest, never from this table.
+The layout is fixed by [filesystem-layout.md](../01-architecture/filesystem-layout.md) §1. ImageCore takes every path from the manifest, never from this tree.
 
 ```text
 Images/<imageVersion>/
@@ -107,22 +101,22 @@ Images/<imageVersion>/
     └── notice.html          # notices and source offers; release bundles only (§4.2)
 ```
 
-- The bundle contains exactly these files: the three metadata files plus every path in `files` (§4.10). Anything else is `ImageFailure.unexpectedFile(file)`.
-- Nothing inside `Images/<imageVersion>/` changes after installation. The only exception is hole punching during the install itself (§8.3), which does not change any byte.
-- Neighbours, which are not part of a bundle:
+- The bundle contains exactly the three metadata files and every path in `files` (§4.10). Anything else is `ImageFailure.unexpectedFile(file)`.
+- Nothing inside `Images/<imageVersion>/` changes after installation, except hole punching during the install (§8.3), which changes no byte.
+- Files outside a bundle:
 
 | Path | Written by | Format |
 |---|---|---|
 | `Images/current`, `Images/previous` | ImageCore (`setCurrent`) | symlinks to a bundle directory name |
 | `Images/.installing-<name>/` | ImageCore during an install (§8.3) | a partial bundle. Deleted at startup when orphaned |
-| `Images/update-state.json` | `ImageUpdateCoordinator` only | [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.3 |
-| `Runtime/instance/instance.json` | ImageCore (`InstanceStore`) | [../02-design/android-image.md](../02-design/android-image.md) §5.1 |
-| `Runtime/instance/boot/initrd.img` | ImageCore before every boot | `ramdisk.img` plus the merged bootconfig trailer ([../02-design/android-image.md](../02-design/android-image.md) §6.3) |
+| `Images/update-state.json` | `ImageUpdateCoordinator` only | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.3 |
+| `Runtime/instance/instance.json` | ImageCore (`InstanceStore`) | [android-image.md](../02-design/android-image.md) §5.1 |
+| `Runtime/instance/boot/initrd.img` | ImageCore before every boot | `ramdisk.img` plus the merged bootconfig trailer ([android-image.md](../02-design/android-image.md) §6.3) |
 | `Runtime/instance/userdata.img` | ImageCore at provisioning | APFS clone of the template. The instance file name is the template's file name |
 
 ### 3.2 `boot/bootconfig.txt`
 
-The file holds bootconfig layer 1 (vendor) and the fixed part of layer 2 (image). The GPU profile part of layer 2 is in the manifest (§4.7). Layers 3 and 4 are computed at boot ([../02-design/android-image.md](../02-design/android-image.md) §6.1).
+The file holds bootconfig layer 1 (vendor) and the fixed part of layer 2 (image). The GPU profile part of layer 2 is in the manifest (§4.7). Layers 3 and 4 are computed at boot ([android-image.md](../02-design/android-image.md) §6.1).
 
 ```text
 [vendor]
@@ -136,24 +130,22 @@ androidboot.vbmeta.device_state = "unlocked"
 androidboot.verifiedbootstate = "orange"
 ```
 
-(Excerpt. The real file also has the vbmeta digest keys, the fstab suffix, the HAL and APEX selection, and the other keys of [../02-design/android-image.md](../02-design/android-image.md) §6.2.)
-
-Rules:
+(Excerpt. The real file also has the vbmeta digest keys, the fstab suffix, the HAL and APEX selection, and the other keys of [android-image.md](../02-design/android-image.md) §6.2.)
 
 - ASCII, LF line ends, a final LF. No blank lines and no comments.
-- The section header `[vendor]` comes first and `[image]` second. Each appears exactly once. Either section may be empty.
-- Every other line is `<key> = "<value>"` with one space on each side of `=`.
-- Keys match `[A-Za-z0-9_.-]+`, at most 256 characters. Values are printable ASCII without `"`, backslash, or newline, at most 1024 characters ([../02-design/android-image.md](../02-design/android-image.md) §6.1).
-- Keys are sorted by byte value within a section. A key appears at most once in the whole file, unless `boot.bootconfigOverrides` (§4.4) lists it. Then it may appear in both sections, and the `[image]` value wins.
-- The build fails if the serialized layers 1 and 2 (with the largest GPU profile) exceed 16 KiB. ImageCore fails the boot above 32 KiB with `bootconfigTooLarge(size)`.
+- The header `[vendor]` comes first and `[image]` second. Each appears exactly once. Either section may be empty.
+- Every other line is `<key> = "<value>"`, with one space on each side of `=`.
+- Keys match `[A-Za-z0-9_.-]+`, at most 256 characters. Values are printable ASCII without `"`, backslash, or newline, at most 1024 characters ([android-image.md](../02-design/android-image.md) §6.1).
+- Keys are sorted by byte value within a section. A key appears at most once in the file, unless `boot.bootconfigOverrides` (§4.4) lists it. Then it may appear in both sections, and the `[image]` value wins.
+- The build fails if layers 1 and 2 (with the largest GPU profile) serialize to more than 16 KiB. ImageCore fails the boot above 32 KiB with `bootconfigTooLarge(size)`.
 - A file that does not parse gives `manifestInvalid(path: "boot/bootconfig.txt", reason)` during boot preparation.
 
 ### 3.3 `boot/cmdline.txt`
 
 - The exact kernel command line: ASCII, one line, tokens separated by single spaces, **no** trailing newline.
-- Content: the vendor cmdline, the boot cmdline, then the APKRun additions starting with `console=hvc0` ([../02-design/android-image.md](../02-design/android-image.md) §6.4). It must contain the token `bootconfig`.
-- No token starts with `androidboot.`. The length is at most 2048 bytes (`cmdlineTooLong(length)` at boot, and a build failure before that).
-- Example (172 bytes, the stock build 16373615; the APKRun additions are `console=hvc0` and `log_buf_len=2M`, [../02-design/android-image.md](../02-design/android-image.md) §4.1):
+- Content: the vendor cmdline, the boot cmdline, then the APKRun additions starting with `console=hvc0` ([android-image.md](../02-design/android-image.md) §6.4). It must contain the token `bootconfig`.
+- No token starts with `androidboot.`. The length is at most 2048 bytes (`cmdlineTooLong(length)` at boot; a build failure before that).
+- Example (172 bytes, stock build 16373615; the APKRun additions are `console=hvc0` and `log_buf_len=2M`, [android-image.md](../02-design/android-image.md) §4.1):
 
 ```text
 printk.devkmsg=on audit=1 panic=-1 8250.nr_uarts=1 binder.impl=rust cma=0 firmware_class.path=/vendor/etc/ loop.max_part=7 init=/init bootconfig console=hvc0 log_buf_len=2M
@@ -163,9 +155,7 @@ printk.devkmsg=on audit=1 panic=-1 8250.nr_uarts=1 binder.impl=rust cma=0 firmwa
 
 ### 4.1 Complete example
 
-The development bundle of the stock build 16373615. The `source` and `android` blocks are copied from [android-image-manifest.md](android-image-manifest.md) §5. Sizes of the boot files and all hashes are illustrative. The partition layout is computed with the rules of §4.5.
-
-The file on disk has its keys sorted (§4.11). This example shows them in reading order.
+The development bundle of the stock build 16373615. The `source` and `android` blocks are copied from [android-image-manifest.md](android-image-manifest.md) §5. Sizes of the boot files and all hashes are illustrative. The partition layout is computed with the rules of §4.5. The file on disk has its keys sorted (§4.11); this example shows them in reading order.
 
 ```json
 {
@@ -316,7 +306,7 @@ The file on disk has its keys sorted (§4.11). This example shows them in readin
 }
 ```
 
-A product image (`kind: apkrun`, M5+) differs in these blocks. The fragment below is not a complete manifest:
+A product image (`kind: apkrun`, M5 and later) differs in these blocks. The fragment is not a complete manifest:
 
 ```json
 {
@@ -343,8 +333,8 @@ A product image (`kind: apkrun`, M5+) differs in these blocks. The fragment belo
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
 | `schemaVersion` | integer | yes | `1` | format version of the manifest (§11) |
-| `imageVersion` | string | yes | full form (§2.1). Base consistent with `provenance.source` (S1) | the version of this bundle. Equals the bundle directory name |
-| `kind` | string | yes | `stock` or `apkrun`. `stock` exactly when `provenance.source.origin` is `ci.android.com` (S2) | `stock` = a ci.android.com build, development only. `apkrun` = the APKRun product image |
+| `imageVersion` | string | yes | full form (§2.1). Base consistent with `provenance.source` (S1) | the version of this bundle. Equals the directory name |
+| `kind` | string | yes | `stock` or `apkrun`. `stock` exactly when `provenance.source.origin` is `ci.android.com` (S2) | `stock`: a ci.android.com build, development only. `apkrun`: the APKRun product image |
 | `provenance` | object | yes | §4.3 | where the bundle came from |
 | `guest` | object | yes | §4.3 | guest facts for package checks before the first boot |
 | `boot` | object | yes | §4.4 | direct-boot files |
@@ -355,31 +345,31 @@ A product image (`kind: apkrun`, M5+) differs in these blocks. The fragment belo
 | `requirements` | object | yes | §4.8 | what the host must provide |
 | `userdata` | object | yes | §4.9 | userdata schema compatibility |
 | `compatibility` | object | yes | §4.9 | which images may migrate to this one |
-| `legal` | object | no | `{notice}`: one file entry with `path` under `legal/`. Required in bundles published on a feed; the release pipeline checks it (#093) | the image's license notices and source offers ([../05-development/legal-and-licensing.md](../05-development/legal-and-licensing.md) §7.3). ImageCore verifies the file like every other file and never reads it |
+| `legal` | object | no | `{notice}`: one file entry with `path` under `legal/`. Required in bundles published on a feed; the release pipeline checks it | the license notices and source offers ([legal-and-licensing.md](../05-development/legal-and-licensing.md) §7.3). ImageCore verifies the file like every other and never reads it |
 | `files` | array | yes | 1 to 64 entries (§4.10) | every file of the bundle except the three metadata files |
 
 Unknown fields are rejected at every level (§11).
 
 ### 4.3 `provenance` and `guest`
 
-`provenance` is informational. ImageCore shows it (`apkrun image list`, diagnostics) but makes no decision from it, except S1, S2, and S14.
+`provenance` is informational. ImageCore shows it but decides only from S1, S2, and S14.
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
-| `source` | object | yes | exactly the `source` block of the AndroidImageManifest, same schema ([android-image-manifest.md](android-image-manifest.md) §6.2) | the Android build and its downloaded archives |
-| `android` | object | yes | exactly the `android` block of the AndroidImageManifest ([android-image-manifest.md](android-image-manifest.md) §6.3) | release, SDK, variant, security patch month |
-| `deviceFamily` | string | yes | as in the AndroidImageManifest | the device family, for example `cuttlefish-phone-arm64` |
+| `source` | object | yes | exactly the `source` block of the AndroidImageManifest ([android-image-manifest.md](android-image-manifest.md) §6.2) | the Android build and its archives |
+| `android` | object | yes | exactly the `android` block ([android-image-manifest.md](android-image-manifest.md) §6.3) | release, SDK, variant, security patch month |
+| `deviceFamily` | string | yes | as in the AndroidImageManifest | for example `cuttlefish-phone-arm64` |
 | `layout` | object | yes | `{path, sha256}`. `path` relative to the repository root | the layout file used, and its SHA-256 |
-| `reference` | string or null | yes | a repository-relative path, or null | the reference capture that supplied bootconfig values ([../02-design/android-image.md](../02-design/android-image.md) §8) |
-| `tools` | object | yes | `apkrunImage`: `MAJOR.MINOR.PATCH`. `mkbootimg`, `avbtool`: 40 hex digits | tool versions: the `apkrun_image` package, and the pinned revisions of the vendored AOSP tools (`ThirdParty.lock.json`) |
+| `reference` | string or null | yes | a repository-relative path, or null | the reference capture that supplied bootconfig values ([android-image.md](../02-design/android-image.md) §8) |
+| `tools` | object | yes | `apkrunImage`: `MAJOR.MINOR.PATCH`. `mkbootimg`, `avbtool`: 40 hex digits | tool versions: the `apkrun_image` package and the pinned AOSP tools (`ThirdParty.lock.json`) |
 | `revisions.imagesTools` | string | yes | 40 lowercase hex digits, optionally followed by `-dirty` | git revision of `Images/tools` |
 | `revisions.guest` | string or null | yes | same pattern. Null for `stock` | git revision of `Guest/` |
-| `pinnedManifestSHA256` | string or null | yes | 64 lowercase hex. Null for `stock`, required for `apkrun` | SHA-256 of `Guest/product/manifest/pinned.xml` ([../02-design/android-image.md](../02-design/android-image.md) §11.5) |
+| `pinnedManifestSHA256` | string or null | yes | 64 lowercase hex. Null for `stock`, required for `apkrun` | SHA-256 of `Guest/product/manifest/pinned.xml` ([android-image.md](../02-design/android-image.md) §11.5) |
 | `builderImageDigest` | string or null | yes | `sha256:` + 64 lowercase hex. Null for `stock`, required for `apkrun` | digest of the builder container image |
 
-The bundle has no timestamps. That keeps it deterministic ([../02-design/android-image.md](../02-design/android-image.md) §10.2).
+The bundle has no timestamps, so it is deterministic ([android-image.md](../02-design/android-image.md) §10.2).
 
-`guest` gives APKStoreCore its `GuestFacts` before the first boot. After the first Guest Agent `Hello`, `instance.json` has the live values ([../02-design/package-store.md](../02-design/package-store.md) §4.6).
+`guest` gives APKStoreCore its `GuestFacts` before the first boot. After the first Guest Agent `Hello`, `instance.json` has the live values ([package-store.md](../02-design/package-store.md) §4.6).
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
@@ -395,62 +385,62 @@ The bundle has no timestamps. That keeps it deterministic ([../02-design/android
 | `ramdisk` | file entry | yes | `path` under `boot/` | the initrd without a bootconfig trailer |
 | `bootconfig` | file entry | yes | `path` under `boot/`. Format §3.2 | bootconfig layers 1 and 2 |
 | `cmdline` | file entry | yes | `path` under `boot/`. Format §3.3 | kernel command line |
-| `kernelPageSize` | integer | yes | `4096`, `16384`, or `65536` | page size from the arm64 `Image` header flags (bits 1–2). Checked by `bundle`, shown in diagnostics |
-| `bootconfigOverrides` | array of string | yes | 0 to 64 unique bootconfig keys | layer 1 keys that the `[image]` section may override ([../02-design/android-image.md](../02-design/android-image.md) §6.1) |
+| `kernelPageSize` | integer | yes | `4096`, `16384`, or `65536` | page size from the arm64 `Image` header flags (bits 1–2). Checked by `bundle` |
+| `bootconfigOverrides` | array of string | yes | 0 to 64 unique bootconfig keys | layer 1 keys that the `[image]` section may override ([android-image.md](../02-design/android-image.md) §6.1) |
 
 A **file entry** is `{path, size, sha256}`: a bundle-relative path, the size in bytes, and the SHA-256 in lowercase hex. It must equal the `files` entry with the same path (S3).
 
 ### 4.5 `disks` and `templates`
 
-Each entry describes one raw GPT disk image with 512-byte sectors ([../02-design/android-image.md](../02-design/android-image.md) §4.2, §4.4).
+Each entry describes one raw GPT disk image with 512-byte sectors ([android-image.md](../02-design/android-image.md) §4.2, §4.4).
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
-| `role` | string | yes | `os` in `disks`. `userdata` in `templates` | what the disk is for |
+| `role` | string | yes | `os` in `disks`; `userdata` in `templates` | what the disk is for |
 | `path` | string | yes | under `disks/` for `os`, under `templates/` for templates | the bundle file |
 | `readOnly` | boolean | yes | `true` for `os`, `false` for templates | how VZ attaches the disk (or its instance clone) |
-| `identifier` | string | yes | `[a-z0-9][a-z0-9-]{0,19}` (the virtio-blk serial limit is 20 bytes). Unique | `blockDeviceIdentifier`. For logs and host lookups only |
-| `logicalSize` | integer | yes | a multiple of 1 MiB, at least 2 MiB. Equals the file size in `files` | the disk size in bytes. For `userdata`, the template size before growth |
-| `userdataStrategy` | string | only for `userdata` | `blankFormattable` or `prebuiltTemplate`. Forbidden for other roles | `blankFormattable`: an empty partition that Android formats on first boot, grown at provisioning. `prebuiltTemplate`: a formatted file system of fixed size (fallback A or B of [../02-design/android-image.md](../02-design/android-image.md) §5.2) |
+| `identifier` | string | yes | `[a-z0-9][a-z0-9-]{0,19}` (virtio-blk serial limit, 20 bytes). Unique | `blockDeviceIdentifier`. For logs and host lookups only |
+| `logicalSize` | integer | yes | a multiple of 1 MiB, at least 2 MiB. Equals the file size in `files` | disk size in bytes. For `userdata`, the template size before growth |
+| `userdataStrategy` | string | `userdata` only | `blankFormattable` or `prebuiltTemplate`. Forbidden for other roles | `blankFormattable`: an empty partition that Android formats on first boot, grown at provisioning. `prebuiltTemplate`: a formatted file system of fixed size (fallback A or B of [android-image.md](../02-design/android-image.md) §5.2) |
 | `partitions` | array | yes | 1 to 64 entries | GPT partitions in on-disk order |
-| `partitions[].label` | string | yes | `[a-z][a-z0-9_]{0,35}` (GPT names hold 36 UTF-16 code units). Unique across all disks | the GPT name, seen as `/dev/block/by-name/<label>` |
+| `partitions[].label` | string | yes | `[a-z][a-z0-9_]{0,35}` (36 UTF-16 code units). Unique across all disks | the GPT name, seen as `/dev/block/by-name/<label>` |
 | `partitions[].firstLBA` | integer | yes | a multiple of 2048 (1 MiB), at least 2048 | the first sector |
-| `partitions[].size` | integer | yes | a multiple of 512, at least 512 | the size in bytes. Equals the source image size exactly ([../02-design/android-image.md](../02-design/android-image.md) §4.2) |
-| `partitions[].sha256` | string | yes | 64 lowercase hex | SHA-256 of the partition contents. For blank partitions, the hash of zeros |
+| `partitions[].size` | integer | yes | a multiple of 512, at least 512 | size in bytes. Equals the source image size exactly ([android-image.md](../02-design/android-image.md) §4.2) |
+| `partitions[].sha256` | string | yes | 64 lowercase hex | SHA-256 of the contents. For blank partitions, the hash of zeros |
 
-How ImageCore uses them ([../02-design/android-image.md](../02-design/android-image.md) §9.2):
+How ImageCore uses them ([android-image.md](../02-design/android-image.md) §9.2):
 
-- VZ attach order is `disks` in array order, then `templates` in array order. In v1 that is `os`, then `userdata`. There is no third disk: the stock fstab gives `/devices/*/block/vdc` to vold as removable storage ([../02-design/android-image.md](../02-design/android-image.md) §4.2).
+- VZ attach order is `disks` in array order, then `templates`. In v1 that is `os`, then `userdata`. There is no third disk: the stock fstab gives `/devices/*/block/vdc` to vold as removable storage ([android-image.md](../02-design/android-image.md) §4.2).
 - `os` is attached from the bundle, read-only, with caching `.automatic`. Each template is cloned once at provisioning into `Runtime/instance/<file name of path>` and attached read-write with synchronization `.full`.
-- With `blankFormattable`, provisioning grows `userdata.img` to `runtime.userdataGiB` and moves the backup GPT ([../02-design/android-image.md](../02-design/android-image.md) §5.2). With `prebuiltTemplate`, the size stays `logicalSize` and Settings offers no size choice.
-- ImageCore does not hash partitions. The file hash covers them. `bundle` checks them against `disks.json`, and the T2 disk test uses them.
-- The disk and partition GUIDs are not in the manifest. They are derived (UUIDv5) and rewritten per instance ([../02-design/android-image.md](../02-design/android-image.md) §4.4, §5.1).
+- With `blankFormattable`, provisioning grows `userdata.img` to `runtime.userdataGiB` and moves the backup GPT ([android-image.md](../02-design/android-image.md) §5.2). With `prebuiltTemplate`, the size stays `logicalSize` and Settings offers no size choice.
+- ImageCore does not hash partitions. The file hash covers them. `bundle` checks them against `disks.json`.
+- Disk and partition GUIDs are not in the manifest. They are derived (UUIDv5) and rewritten per instance ([android-image.md](../02-design/android-image.md) §4.4, §5.1).
 
 ### 4.6 `consolePorts`
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
 | `index` | integer | yes | 0 to 31. Equals the array position | the guest `hvcN` number |
-| `role` | string | yes | `systemConsole`, `log`, `silent`, or `service` | the default `ConsoleRole` ([../02-design/vm.md](../02-design/vm.md) §2) |
+| `role` | string | yes | `systemConsole`, `log`, `silent`, or `service` | the default `ConsoleRole` ([vm.md](../02-design/vm.md) §2) |
 | `name` | string | yes | `[a-z][a-z0-9_]{0,31}`. Unique | the role's name, for example `logcat` |
 
 - Exactly one port is `systemConsole`, and it is index 0.
-- The manifest gives the default roles. `BootOptions` change them **by name**, never by index: developer mode turns `serial` into `.service("serial")`, and log capture turns `logcat` into `.log("logcat")` ([../02-design/android-image.md](../02-design/android-image.md) §7.1). If a name is missing, that option has no effect.
-- `ConsolePortPlan` (RuntimeCore) orders the ports so that the guest numbering matches `index` ([../02-design/vm.md](../02-design/vm.md) §6.2).
+- The manifest gives the default roles. `BootOptions` change them **by name**, never by index: developer mode turns `serial` into `.service("serial")`, and log capture turns `logcat` into `.log("logcat")` ([android-image.md](../02-design/android-image.md) §7.1). If a name is missing, that option has no effect.
+- `ConsolePortPlan` (RuntimeCore) orders the ports so the guest numbering matches `index` ([vm.md](../02-design/vm.md) §6.2).
 
 ### 4.7 `gpuProfiles`
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
-| `drmVirgl` | profile | yes | — | the default profile ([../02-design/graphics.md](../02-design/graphics.md) §9) |
+| `drmVirgl` | profile | yes | — | the default profile ([graphics.md](../02-design/graphics.md) §9) |
 | `guestSwiftshader` | profile | yes | — | Graphics Safe Mode (`graphics.safeMode`) |
-| `headless` | profile | no | development bundles only (§7.3) | the no-GPU bring-up profile of `apkrun dev boot --gpu none` ([../02-design/android-image.md](../02-design/android-image.md) §9.1) |
+| `headless` | profile | no | development bundles only (§7.3) | the no-GPU bring-up profile of `apkrun dev boot --gpu none` ([android-image.md](../02-design/android-image.md) §9.1) |
 | profile `.bootconfig` | object | yes | 0 to 64 entries. Keys and values as in §3.2 | bootconfig layer 2 keys added for this profile |
 | profile `.overrides` | array of string | yes | 0 to 64 unique keys | keys of `bootconfig.txt` that this profile may override |
-| profile `.requiredHostCapabilities` | array of string | yes | unique items, each `virgl` or `edid` | the virtio-gpu features the host device must offer: `virgl` = `VIRTIO_GPU_F_VIRGL`, `edid` = `VIRTIO_GPU_F_EDID` |
+| profile `.requiredHostCapabilities` | array of string | yes | unique items, each `virgl` or `edid` | virtio-gpu features the host device must offer: `virgl` = `VIRTIO_GPU_F_VIRGL`, `edid` = `VIRTIO_GPU_F_EDID` |
 
 - `BootOptions.gpuProfile` picks one profile per boot. The others are ignored.
-- The `drmVirgl` keys are verified names. The `guestSwiftshader` keys in §4.1 are placeholders until #013 copies them from the reference capture of that profile.
+- The `drmVirgl` keys are verified names. The `guestSwiftshader` keys in §4.1 are placeholders until the reference capture of that profile supplies them.
 
 ### 4.8 `requirements`
 
@@ -463,22 +453,22 @@ How ImageCore uses them ([../02-design/android-image.md](../02-design/android-im
 | `agents[].package` | string | yes | an Android package name ([package-metadata-json.md](package-metadata-json.md) §2). Unique | agent package |
 | `agents[].versionCode` | integer | yes | 1 to 9223372036854775807 | its `longVersionCode` |
 
-- The host check is: `minimumRuntimeVersion` ≤ the APKRun version (`CFBundleShortVersionString`), and `min…max` intersects `guestProtocol.majors` of `components.json` ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.1, §2.2). Failures: `incompatibleRuntime(required)`, `incompatibleProtocol(range)`.
-- A stock image has no agents. The host installs the development Guest Agent from `Resources/guest/`, and reinstalls it when its `versionCode` differs ([../02-design/guest-protocol.md](../02-design/guest-protocol.md) §5.2).
-- The migration health check expects each listed agent at its `versionCode` ([../02-design/android-image.md](../02-design/android-image.md) §12.3 step 5).
+- The host check: `minimumRuntimeVersion` ≤ the APKRun version (`CFBundleShortVersionString`), and `min…max` intersects `guestProtocol.majors` of `components.json` ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.1, §2.2). Failures: `incompatibleRuntime(required)`, `incompatibleProtocol(range)`.
+- A stock image has no agents. The host installs the development Guest Agent from `Resources/guest/` and reinstalls it when its `versionCode` differs ([guest-protocol.md](../02-design/guest-protocol.md) §5.2).
+- The migration health check expects each listed agent at its `versionCode` ([android-image.md](../02-design/android-image.md) §12.3 step 5).
 
 ### 4.9 `userdata` and `compatibility`
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
-| `userdata.schemaVersion` | integer | yes | 1 to 9223372036854775807 (2^63 − 1, so that every reader holds the same integers) | what `/data` and `/metadata` look like after this image boots them ([../02-design/android-image.md](../02-design/android-image.md) §12.1) |
+| `userdata.schemaVersion` | integer | yes | 1 to 9223372036854775807 (2^63 − 1) | what `/data` and `/metadata` look like after this image boots them ([android-image.md](../02-design/android-image.md) §12.1) |
 | `userdata.upgradableFrom` | array of integer | yes | 1 to 64 items, ascending, unique, each from 1 to 9223372036854775807. Contains `schemaVersion` | instance userdata schemas this image can boot |
 | `compatibility.upgradeFrom.minimumImageVersion` | string | yes | short form (§2.1). At most the triple of `imageVersion` | the oldest current image that may migrate to this one (C4) |
 
 - Provisioning writes `userdata.schemaVersion` into `instance.json`.
 - Activation of an image whose `upgradableFrom` lacks the instance's schema gives `userdataSchemaUnsupported(instance, image)`. The way out is a newer image or Reset Android.
-- A manual activation of an image whose `minimumImageVersion` is above the current image gives `migrationSourceTooOld(minimum)`. The feed never offers it (C4). Provisioning a new instance doesn't check `minimumImageVersion`.
-- `minimumImageVersion` equal to this image's own triple means that no image may migrate to it. Only a new instance can use it. That is the `bundle` default.
+- A manual activation of an image whose `minimumImageVersion` is above the current image gives `migrationSourceTooOld(minimum)`. The feed never offers it (C4). Provisioning a new instance does not check `minimumImageVersion`.
+- `minimumImageVersion` equal to the image's own triple means no image may migrate to it. Only a new instance can use it. That is the `bundle` default.
 
 ### 4.10 `files`
 
@@ -493,14 +483,14 @@ How ImageCore uses them ([../02-design/android-image.md](../02-design/android-im
 
 ### 4.11 Encoding
 
-- UTF-8 without a BOM. In practice all values are ASCII.
+- UTF-8 without a BOM. All values in practice are ASCII.
 - Keys sorted by byte value at every level, two-space indentation, LF line ends, a final LF. Python: `json.dumps(m, sort_keys=True, indent=2) + "\n"`.
 - At most 1 MiB.
 - Readers never re-encode the file. The signature covers the exact bytes (§6.1).
 
 ## 5. JSON Schema
 
-This schema is copied byte for byte into `Images/tools/schemas/runtime-image-manifest.schema.json` ([../02-design/android-image.md](../02-design/android-image.md) §1.2). `bundle` validates its output with it. The Swift `Codable` model in ImageCore plus the rules of §7.2 must accept exactly the same documents (§13).
+This schema is copied byte for byte into `Images/tools/schemas/runtime-image-manifest.schema.json` ([android-image.md](../02-design/android-image.md) §1.2). `bundle` validates its output with it. The Swift `Codable` model in ImageCore plus the rules of §7.2 must accept exactly the same documents.
 
 ```json
 {
@@ -836,7 +826,7 @@ This schema is copied byte for byte into `Images/tools/schemas/runtime-image-man
 
 ### 6.1 `manifest.sig`
 
-`manifest.sig` is an Ed25519 signature over the exact bytes of `manifest.json`, with a key ID in a small header ([../02-design/android-image.md](../02-design/android-image.md) §10.1). `feed.json.sig` uses the same format (§9).
+`manifest.sig` is an Ed25519 signature over the exact bytes of `manifest.json`, with a key ID in a small header ([android-image.md](../02-design/android-image.md) §10.1). `feed.json.sig` uses the same format (§9).
 
 ```text
 apkrun-signature-v1
@@ -854,9 +844,10 @@ signature: Ii6yqtn26gB5SDj+amUWCNjW5BlbZDlJ/oGmsn9o4yQgEhgDNjiHlKbHm1iWq5WHfWuWS
 
 - ASCII, exactly four lines, each ending in LF. At most 4 KiB. Anything else gives `manifestInvalid(path: "manifest.sig", reason)`.
 - The signed message is the bytes of `manifest.json` only. The header is not signed. A changed key ID only selects a different key, so the check still fails.
-- **Trust store.** `ImageTrustStore` is a list of `(keyID, publicKey)` compiled into the app. Release builds contain the release image keys only. Debug builds, and the `ReleaseUpdateTest` builds of the maintenance tests ([../05-development/build-system.md](../05-development/build-system.md) §2.4), also contain the per-developer key: the build reads `~/.config/apkrun/dev-image-key.pub` (written by `python3 -m apkrun_image keygen --out ~/.config/apkrun/dev-image-key`, [../05-development/build-system.md](../05-development/build-system.md) §10.1) when it exists. `dev-image-key.pub` holds the base64 of the raw public key on one line. Each lab Mac has its own key the same way ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.5). Tests inject a store with `test-image-ed25519`. As built in #065 (`ImageTrustStore.standard`): Debug builds read the developer key, and the release list is empty until the release key ceremony (#093), so a Release build refuses every bundle with `untrustedKey` ([IR-341](../04-plan/implementation-review.md)). `ReleaseUpdateTest` builds do not read the developer key yet, because package code cannot see that configuration ([IR-342](../04-plan/implementation-review.md)).
+- **Trust store.** `ImageTrustStore` is a list of `(keyID, publicKey)` compiled into the app. Release builds contain the release image keys only. Debug builds, and the `ReleaseUpdateTest` builds, also contain the per-developer key. The build reads `~/.config/apkrun/dev-image-key.pub` (one line: the base64 of the raw public key, written by `python3 -m apkrun_image keygen --out ~/.config/apkrun/dev-image-key`, [build-system.md](../05-development/build-system.md) §10.1) when it exists. Tests inject a store with `test-image-ed25519`.
+- Until the release key ceremony, the release key list is empty, so a Release build refuses every bundle with `untrustedKey`. `ReleaseUpdateTest` builds do not read the developer key yet, because package code cannot see that configuration.
 - An unknown key ID gives `untrustedKey(keyID)`. A failed check gives `signatureInvalid(keyID)`.
-- A compromised key is removed from `ImageTrustStore` in an APKRun release ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §10).
+- A compromised key is removed from `ImageTrustStore` in an APKRun release ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §10).
 
 ### 6.2 `SHA256SUMS`
 
@@ -870,14 +861,14 @@ b522bcfff2ba6df0999d4772142b22165fff473d596d40915275f324f5c2322b  boot/ramdisk.i
 ```
 
 - One line per `files` entry, in the same order: 64 lowercase hex, two spaces, the path, LF.
-- It exists so that `cd Images/<v> && shasum -a 256 -c SHA256SUMS` works in a shell ([../02-design/android-image.md](../02-design/android-image.md) §10.1). It is not signed, so ImageCore never trusts it. Full verification requires it to be byte-equal to the rendering of `files`. Otherwise: `manifestInvalid(path: "SHA256SUMS", reason)`.
-- CI builds the fixture bundle twice and compares the two `SHA256SUMS` files (T1).
+- It exists so that `cd Images/<v> && shasum -a 256 -c SHA256SUMS` works ([android-image.md](../02-design/android-image.md) §10.1). It is not signed, so ImageCore never trusts it. Verification requires it to be byte-equal to the rendering of `files`. Otherwise: `manifestInvalid(path: "SHA256SUMS", reason)`.
+- CI builds the fixture bundle twice and compares the two `SHA256SUMS` files.
 
 ## 7. Verification
 
 ### 7.1 Order
 
-The order is fixed: signature, then schema, then files ([../02-design/android-image.md](../02-design/android-image.md) §10.1).
+The order is fixed: signature, then schema, then files ([android-image.md](../02-design/android-image.md) §10.1).
 
 | Step | Check | Failure (`ImageFailure`) |
 |---|---|---|
@@ -892,7 +883,7 @@ The order is fixed: signature, then schema, then files ([../02-design/android-im
 
 - **Quick** verification (`ImageStore.verify(_, depth: .quick)`) runs steps 1–7 before every boot. The result of steps 1–6 is cached for the life of the apkrund process, keyed by the inode, size, and modification time of `manifest.json`.
 - **Full** verification (`.full`) runs steps 1–8 at every install and in `apkrun doctor --deep`.
-- Compatibility checks follow at activation and before every boot ([../02-design/android-image.md](../02-design/android-image.md) §9.3): `incompatibleRuntime(required)`, `incompatibleProtocol(range)`, `userdataSchemaUnsupported(instance, image)`, `migrationSourceTooOld(minimum)` (activation only), `downgradeRejected(from, to)`.
+- Compatibility checks follow at activation and before every boot ([android-image.md](../02-design/android-image.md) §9.3): `incompatibleRuntime(required)`, `incompatibleProtocol(range)`, `userdataSchemaUnsupported(instance, image)`, `migrationSourceTooOld(minimum)` (activation only), and `downgradeRejected(from, to)`.
 - Codes, messages, and remediations are in [error-catalog.md](error-catalog.md) (domain `image`).
 
 ### 7.2 Semantic rules
@@ -923,42 +914,43 @@ Boot preparation adds the bootconfig and cmdline checks of §3.2 and §3.3 (`boo
 - any of §5, S1–S14, §3.2, or §3.3 fails;
 - layers 1 and 2 serialize to more than 16 KiB with any GPU profile;
 - a partition hash differs from `disks.json`, or `kernelPageSize` differs from the kernel header;
-- a bundle signed with a release key has an `androidboot.apkrun.test.*` key ([../02-design/android-image.md](../02-design/android-image.md) §6.2), a `-dirty` revision, a `headless` GPU profile, or `kind: stock`;
-- two builds of the same inputs give different `SHA256SUMS` (CI, T1).
+- a bundle signed with a release key has an `androidboot.apkrun.test.*` key ([android-image.md](../02-design/android-image.md) §6.2), a `-dirty` revision, a `headless` GPU profile, or `kind: stock`;
+- two builds of the same inputs give different `SHA256SUMS` (CI).
 
 ## 8. Release archive (`.aar`)
 
 ### 8.1 Format
 
-- The release job packs the bundle directory of a bundle signed with the release image key: `aa archive -a lzfse -d Images/work/<buildId>/bundle -o <imageVersion>.aar` ([../05-development/build-system.md](../05-development/build-system.md) §10.2).
+- The release job packs the bundle directory of a bundle signed with the release image key: `aa archive -a lzfse -d Images/work/<buildId>/bundle -o <imageVersion>.aar` ([build-system.md](../05-development/build-system.md) §10.2).
 - Entries are relative to the bundle root (`manifest.json`, `boot/kernel`, …). There is no top-level directory.
-- Only regular files and directories. Zero runs in `os.img` compress to almost nothing.
+- Only regular files and directories.
 - The feed entry records the archive's `size` and `sha256`, and `expandedSize`: the sum of the sizes of all regular files in the archive, including the three metadata files.
 
 ### 8.2 Download
 
-`ImageDownloader` downloads to `Cache/images/<imageVersion>.aar.partial` with `Range` and `If-Range`, hashes while it downloads, and renames to `.aar` when size and hash match. More bytes than `size` gives `imageArchiveSizeMismatch`. The free space must be at least archive size + `expandedSize` + 10 GiB, before downloading and before installing (`insufficientSpace`). Details: [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.4.
+`ImageDownloader` downloads to `Cache/images/<imageVersion>.aar.partial` with `Range` and `If-Range`, hashes while it downloads, and renames to `.aar` when size and hash match. More bytes than `size` gives `imageArchiveSizeMismatch`. The free space must be at least archive size + `expandedSize` + 10 GiB, before downloading and before installing (`insufficientSpace`) ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.4).
 
 ### 8.3 Install
 
-`ImageStore.install(from: .archive(url))` ([../02-design/android-image.md](../02-design/android-image.md) §10.4, [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.5):
+`ImageStore.install(from: .archive(url))` ([android-image.md](../02-design/android-image.md) §10.4, [runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.5):
 
-1. Check the archive SHA-256 against the feed entry (`imageArchiveHashMismatch`). A manual install (`apkrun image install <file.aar>`, Install from File…) has no feed entry and skips this step. Space: a feed install needs the archive size + `expandedSize` + 10 GiB free. A manual install needs the file size + 10 GiB before step 2, and step 2 stops with `insufficientSpace` when less than 10 GiB would be left ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.4).
-2. Extract with the AppleArchive framework into `Images/.installing-<name>/`. `<name>` is the `imageVersion` of the feed entry, or `manual-` + 16 random hex digits for a manual install. Entry rules: regular files and directories only, relative paths inside the root, no `..`, no absolute paths, symlinks, hard links, devices, or FIFOs (`imageArchiveUnsafeEntry(path)`). Permissions are reset to 0644 and 0755. Extended attributes and ACLs are dropped.
-3. Full verification (§7.1). For a feed install, the manifest's `imageVersion`, `requirements.minimumRuntimeVersion`, `requirements.guestProtocol`, and `userdata` must equal the feed entry (`imageFeedInvalid`, §9 rule 6).
+1. Check the archive SHA-256 against the feed entry (`imageArchiveHashMismatch`). A manual install (`apkrun image install <file.aar>`, **Install from File…**) has no feed entry and skips this step. Space: a feed install needs the archive size + `expandedSize` + 10 GiB free. A manual install needs the file size + 10 GiB before step 2, and step 2 stops with `insufficientSpace` when less than 10 GiB would be left ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.4).
+2. Extract with the AppleArchive framework into `Images/.installing-<name>/`. `<name>` is the `imageVersion` of the feed entry, or `manual-` + 16 random hex digits for a manual install. Entry rules: regular files and directories only, relative paths inside the root, no `..`, no absolute paths, no symlinks, hard links, devices, or FIFOs (`imageArchiveUnsafeEntry(path)`). Permissions are reset to 0644 and 0755. Extended attributes and ACLs are dropped.
+3. Full verification (§7.1). For a feed install, the manifest's `imageVersion`, `requirements.minimumRuntimeVersion`, `requirements.guestProtocol`, and `userdata` must equal the feed entry (`imageFeedInvalid`, §9.2 rule 6).
 4. Punch holes (`fcntl(F_PUNCHHOLE)`) over all-zero 1 MiB blocks of every file under `disks/` and `templates/`. The bytes do not change.
-5. Rename the directory to `Images/<imageVersion>/`. An existing directory of that name is left alone and the install succeeds without a change, if its manifest bytes are identical. Otherwise the install fails with `unexpectedFile`.
+5. Rename the directory to `Images/<imageVersion>/`. An existing directory of that name is left alone, and the install succeeds without a change, if its manifest bytes are identical. Otherwise the install fails with `unexpectedFile`.
 6. Delete the archive.
 
-An install changes neither `current` nor `previous`. An interrupted install leaves only `.installing-*`, which is deleted at the next start. A development directory install (`apkrun dev image install <dir>`) runs steps 3 and 5 on `clonefile` copies and then sets `current` ([../02-design/android-image.md](../02-design/android-image.md) §10.3).
+An install changes neither `current` nor `previous`. An interrupted install leaves only `.installing-*`, which is deleted at the next start. A development directory install (`apkrun dev image install <dir>`) runs steps 3 and 5 on `clonefile` copies and then sets `current` ([android-image.md](../02-design/android-image.md) §10.3).
 
 ## 9. Image feed
 
-This section restates [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.1, which is authoritative for the client rules. §9.3 and §9.4 add the field constraints.
+[runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.1 is authoritative for the client rules. §9.2 restates them with field constraints in §9.3 and §9.4.
 
 ### 9.1 Location and example
 
 - **Location:** `https://<updates host>/apkrun/images/<channel>/feed.json` and `feed.json.sig`, where the channel is `stable` or `beta` (OQ-01).
+- `feed.json.sig` uses the same signature format and trust store as `manifest.sig` (`ImageTrustStore`, [android-image.md](../02-design/android-image.md) §10.1). It signs the exact bytes of `feed.json`.
 
 ```json
 {
@@ -988,18 +980,16 @@ This section restates [../02-design/runtime-maintenance.md](../02-design/runtime
 }
 ```
 
-- `feed.json.sig` uses the same signature format and trust store as `manifest.sig` (`ImageTrustStore`, [../02-design/android-image.md](../02-design/android-image.md) §10.1). It signs the exact bytes of `feed.json`.
-
 ### 9.2 Client rules (`ImageFeedClient`)
 
 1. HTTPS only. `feed.json` at most 1 MiB, `feed.json.sig` at most 4 KiB. Conditional GET with the stored ETag.
 2. The signature is checked before parsing. An unknown key or a bad signature gives `imageFeedSignatureInvalid`, and the last accepted feed stays in effect.
 3. `channel` must equal the requested channel.
-4. **Replay and freeze protection:** `sequence` must be at least the highest sequence accepted for this channel (stored in `Images/update-state.json`). If it is equal, the bytes must be identical. A lower sequence gives `imageFeedReplayed`. A feed whose `expiresAt` has passed gives `imageFeedExpired` and is not used. The release workflow signs the feed again with a new sequence at least once a week, with `expiresAt = generatedAt + 30 days`.
+4. **Replay and freeze protection:** `sequence` must be at least the highest sequence accepted for this channel (stored in `Images/update-state.json`). If it is equal, the bytes must be identical. A lower sequence gives `imageFeedReplayed`. A feed whose `expiresAt` has passed gives `imageFeedExpired` and is not used. The release workflow signs a new feed with a new sequence at least once a week, with `expiresAt = generatedAt + 30 days`.
 5. Unknown fields are ignored. An unknown `schemaVersion` means the feed is not used, and a health warning says "Update APKRun to receive Android system updates."
-6. The feed is only a pointer. The archive's SHA-256 and the manifest signature inside the archive are checked on their own ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.5), and the manifest's `imageVersion`, `requirements`, and `userdata` must equal the feed entry (`imageFeedInvalid` otherwise).
+6. The feed is only a pointer. The archive's SHA-256 and the manifest signature inside the archive are checked on their own ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.5). The manifest's `imageVersion`, `requirements`, and `userdata` must equal the feed entry (`imageFeedInvalid` otherwise).
 
-Candidate selection (C1–C7), the phases, the download, and the apply gate are in [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.2–§4.6.
+Candidate selection (C1–C7), the phases, the download, and the apply gate are in [runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.2–§4.6.
 
 ### 9.3 Fields
 
@@ -1019,7 +1009,7 @@ Entry:
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
 | `imageVersion` | string | yes | full form (§2.1). The triple is unique in the feed | the image |
-| `kind` | string | yes | `apkrun`. An entry with another value is skipped | only product images are published ([../05-development/build-system.md](../05-development/build-system.md) §10.2). C7 |
+| `kind` | string | yes | `apkrun`. An entry with another value is skipped | only product images are published (C7) |
 | `publishedAt` | string | yes | RFC 3339 in UTC | shown in Settings |
 | `archive.url` | string | yes | absolute `https` URL, at most 2048 characters, no user info | the `.aar` (§8) |
 | `archive.size` | integer | yes | 1 to `expandedSize` | archive bytes. The downloader stops above it |
@@ -1030,7 +1020,7 @@ Entry:
 | `upgradeFrom.minimumImageVersion` | string | yes | short form (§2.1) | C4. The release script copies it from the manifest's `compatibility.upgradeFrom` |
 | `securityPatchLevel` | string | no | `YYYY-MM-DD` | the day-precise Android security patch level |
 | `tzdataVersion` | string | no | four digits and one lowercase letter, for example `2026b` | the time zone database in the image |
-| `critical` | boolean | yes | — | skips the rollout (C6) and gets the shorter reminders ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.6, §4.11) |
+| `critical` | boolean | yes | — | skips the rollout (C6) and gets the shorter reminders ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.6, §4.11) |
 | `rolloutPercent` | integer | yes | 0 to 100 | C6 |
 | `releaseNotesURL` | string | no | absolute `https` URL | "What's new" link |
 
@@ -1041,29 +1031,29 @@ Entry:
 
 - An entry that fails §9.3 other than by an unknown `kind`, or two entries with the same `(year, month, sequence)`, make the whole feed invalid (`imageFeedInvalid(detail)`). The last accepted feed stays in effect.
 - Unknown fields are ignored at every level (rule 5). A new optional field keeps `schemaVersion` 1. A field a v1 client would misread raises it.
-- Release checks before publishing: R3 and R7 of [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.3; the entry equals its manifest (rule 6 and `upgradeFrom`); `archive.size` and `sha256` equal the uploaded file.
-- Test fixtures: `Tests/Fixtures/runtime-updates/image-feed/` (valid, tampered, replayed sequence, expired, [../04-plan/test-strategy.md](../04-plan/test-strategy.md)).
+- Release checks before publishing: R3 and R7 of [runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.3; the entry equals its manifest (rule 6 and `upgradeFrom`); `archive.size` and `sha256` equal the uploaded file.
+- Test fixtures: `Tests/Fixtures/runtime-updates/image-feed/` (valid, tampered, replayed sequence, expired).
 
 ## 10. Related files
 
-These files are defined elsewhere. They are listed here because readers confuse them with the manifest.
+These files are defined elsewhere. Readers confuse them with the manifest.
 
 | File | What it is | Defined in |
 |---|---|---|
-| `APKRun.app/Contents/Resources/components.json` | the APKRun build's own versions. Its `guestProtocol.majors` is the host side of C3 and §4.8 | [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.1 |
-| `APKRun.app/Contents/Resources/compatibility.json` | the app compatibility database (Android apps, not images). Not related to the manifest's `compatibility` block | [../02-design/diagnostics.md](../02-design/diagnostics.md) §10 |
+| `APKRun.app/Contents/Resources/components.json` | the APKRun build's own versions. Its `guestProtocol.majors` is the host side of C3 and §4.8 | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.1 |
+| `APKRun.app/Contents/Resources/compatibility.json` | the app compatibility database (Android apps, not images). Not the manifest's `compatibility` block | [diagnostics.md](../02-design/diagnostics.md) §10 |
 | `Images/manifests/<buildId>/android-image.json`, `inventory.json` | build-time descriptions of an Android build. Copied into `provenance` | [android-image-manifest.md](android-image-manifest.md) |
-| `Images/update-state.json` | Android system update state | [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.3 |
-| `Runtime/instance/instance.json` | the VM instance, including the image version in use and the userdata schema | [../02-design/android-image.md](../02-design/android-image.md) §5.1 |
+| `Images/update-state.json` | Android system update state | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.3 |
+| `Runtime/instance/instance.json` | the VM instance, including the image version in use and the userdata schema | [android-image.md](../02-design/android-image.md) §5.1 |
 
 ## 11. Versioning rules
 
 - `schemaVersion` is an integer. Only `1` is defined. The schema `$id` carries the version.
-- Unknown fields are rejected. Any change to the schema, even an optional field, raises `schemaVersion`. The manifest is ours and signed, so a mistake must fail.
-- Installed manifests are signed and are never rewritten or migrated. So ImageCore keeps a decoder for **every** manifest schema version from 1 up. This differs from host data files, which are migrated ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §5).
+- Unknown fields are rejected. Any change to the schema, even an optional field, raises `schemaVersion`. The manifest is signed and written by APKRun, so a mistake must fail.
+- Installed manifests are signed and are never rewritten or migrated. ImageCore therefore keeps a decoder for **every** manifest schema version from 1 up. This differs from host data files, which are migrated ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §5).
 - A manifest with a newer `schemaVersion` fails step 4 of §7.1. To keep that from reaching users, an image whose manifest uses schema version n must set `minimumRuntimeVersion` to an APKRun that reads n (a release check, together with R3).
 - The signature format has its own version, in line 1 of the signature file (`apkrun-signature-v1`).
-- The feed follows rule 5 of §9.2: unknown fields ignored, an unknown `schemaVersion` not used.
+- The feed follows rule 5 of §9.2.
 - The ImageVersion format (§2) is fixed. Changing it needs an ADR, because it is a directory name, a bootconfig value, and a sort key.
 
 ## 12. Writers and readers
@@ -1072,7 +1062,7 @@ These files are defined elsewhere. They are listed here because readers confuse 
 |---|---|---|
 | Writer | `python3 -m apkrun_image bundle` (`bundle.py`, `sign.py`) | `manifest.json`, `SHA256SUMS`, `manifest.sig`, and the bundle files |
 | Writer | `python3 -m apkrun_image keygen` | the per-developer key pair in `~/.config/apkrun/` |
-| Writer | the image release job | `<imageVersion>.aar` (`aa archive`), `feed.json` and `feed.json.sig` (`scripts/release/image-feed.py`, [../05-development/build-system.md](../05-development/build-system.md) §10.2) |
+| Writer | the image release job | `<imageVersion>.aar` (`aa archive`), `feed.json` and `feed.json.sig` (`scripts/release/image-feed.py`, [build-system.md](../05-development/build-system.md) §10.2) |
 | Reader | ImageCore `ImageStore` (apkrund) | verification (§7), install (§8.3), garbage collection |
 | Reader | ImageCore `AndroidBootPlanner`, `InstanceStore` | `boot`, `disks`, `templates`, `consolePorts`, `gpuProfiles` at boot and provisioning |
 | Reader | RuntimeCore | `requirements` (activation, boot, migration health check) |
@@ -1084,14 +1074,12 @@ The manifest is written once, at build time. No runtime component writes it.
 
 ## 13. Tests and fixtures
 
-| Tier | Test | Task |
-|---|---|---|
-| T0 | `ImageVersion`: parsing of valid and invalid strings, canonical rendering, ordering on the triple only, equal triples with different bases | #065 |
-| T0 | the schema and S1–S14 over the fixtures, in Python and in Swift. The Swift model and the schema accept and reject the same files | #065 |
-| T0 | `manifest.sig` parsing and Ed25519 vectors with `test-image-ed25519`, including an unknown key ID and a changed byte | #065, #087 |
-| T0 | feed rules 1–6 and §9.4 over the feed fixtures | #087 |
-| T1 | the fixture bundle built twice, identical `SHA256SUMS`. Install from a directory and from an `.aar`, hole punching, an extra file, a missing file, an unsafe archive entry, an interrupted install | #065 (directory), #058 (`.aar`), #087 (feed checks) |
-| T2 | the stock bundle boots to `sys.boot_completed=1` ([ADR-0011](../01-architecture/decisions/0011-runtime-image-bundle.md) verification) | #065 |
+- T0: `ImageVersion`: parsing of valid and invalid strings, canonical rendering, ordering on the triple only, and equal triples with different bases.
+- T0: the schema and S1–S14 over the fixtures, in Python and in Swift. The Swift model and the schema accept and reject the same files.
+- T0: `manifest.sig` parsing and Ed25519 vectors with `test-image-ed25519`, including an unknown key ID and a changed byte.
+- T0: feed rules 1–6 and §9.4 over the feed fixtures.
+- T1: the fixture bundle built twice gives identical `SHA256SUMS`. Install from a directory and from an `.aar`, hole punching, an extra file, a missing file, an unsafe archive entry, and an interrupted install.
+- T2: the stock bundle boots to `sys.boot_completed=1` ([ADR-0011](../01-architecture/decisions/0011-runtime-image-bundle.md) verification).
 
 Fixtures:
 

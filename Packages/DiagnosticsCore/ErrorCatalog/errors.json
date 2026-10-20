@@ -1525,7 +1525,7 @@
         "case": "commandFailed(command:status:)",
         "when": "an adb command exits with a nonzero status. The output is not logged",
         "raisedBy": "AdbClient",
-        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §15"
+        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §13.2"
       }
     },
     {
@@ -1546,7 +1546,7 @@
         "case": "commandTimedOut(command:seconds:)",
         "when": "an adb command runs past its timeout, and the process is terminated",
         "raisedBy": "AdbClient",
-        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §15"
+        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §13.2"
       }
     },
     {
@@ -1566,7 +1566,7 @@
         "case": "invalidArgument(command:)",
         "when": "a helper receives a value that could change the command line. This is a bug",
         "raisedBy": "AdbClient",
-        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §15"
+        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §13.2"
       }
     },
     {
@@ -1586,7 +1586,7 @@
         "case": "unexpectedOutput(command:)",
         "when": "the output of an adb command has no shape the parser knows",
         "raisedBy": "AdbClient",
-        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §15"
+        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §13.2"
       }
     },
     {
@@ -2548,7 +2548,7 @@
         "case": "connectTimedOut",
         "when": "no handshake completes before the connect deadline, and no refusal that would repeat was received",
         "raisedBy": "GuestAgentSupervisor",
-        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §15 (#072)"
+        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §13.2 (#072)"
       }
     },
     {

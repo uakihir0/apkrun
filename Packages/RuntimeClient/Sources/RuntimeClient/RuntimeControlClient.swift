@@ -75,8 +75,13 @@ public actor RuntimeControlClient {
 
     private let configuration: RuntimeControlClientConfiguration
     private let connectionFactory: any RuntimeXPCConnectionFactory
+    private let eventStreamHub: RuntimeEventStreamHub
+    private let eventSink: RuntimeEventSinkReceiver
     private var openedControl: OpenedControlConnection?
     private var openingControl: Task<OpenedControlConnection, any Error>?
+    private var remoteEventTopics: [EventTopic] = []
+    private var eventReconnectID: UUID?
+    private var eventReconnectTask: Task<Void, Never>?
 
     /// Creates a client for the current signed APKRun process.
     ///
@@ -92,6 +97,9 @@ public actor RuntimeControlClient {
             claimedIdentity: claimedIdentity
         )
         connectionFactory = SystemRuntimeXPCConnectionFactory()
+        let eventStreamHub = RuntimeEventStreamHub()
+        self.eventStreamHub = eventStreamHub
+        eventSink = RuntimeEventSinkReceiver(streamHub: eventStreamHub)
     }
 
     init(
@@ -100,6 +108,9 @@ public actor RuntimeControlClient {
     ) {
         self.configuration = configuration
         self.connectionFactory = connectionFactory
+        let eventStreamHub = RuntimeEventStreamHub()
+        self.eventStreamHub = eventStreamHub
+        eventSink = RuntimeEventSinkReceiver(streamHub: eventStreamHub)
     }
 
     /// Completes broker hello and control-endpoint authentication, returning the daemon facts.
@@ -426,8 +437,193 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Subscribes to one event topic and returns a stream that remains registered after reconnects.
+    public func subscribe(to topic: EventTopic) async throws(RuntimeControlClientError)
+        -> AsyncStream<EventEnvelope>
+    {
+        let subscription = eventStreamHub.makeStream(for: topic) { [weak self] id in
+            Task {
+                await self?.removeEventSubscriber(id)
+            }
+        }
+        do {
+            let opened = try await ensureControl()
+            try await ensureEventTopicSubscribed(topic, on: opened)
+            return subscription.stream
+        } catch let error as RuntimeControlClientError {
+            _ = eventStreamHub.removeSubscriber(subscription.id)
+            throw error
+        } catch {
+            _ = eventStreamHub.removeSubscriber(subscription.id)
+            throw Self.transportFailure(error)
+        }
+    }
+
     private func makeHeader() -> APIRequestHeader {
         APIRequestHeader(clientKind: configuration.clientKind)
+    }
+
+    private func replayEventSubscriptions(on opened: OpenedControlConnection) async throws {
+        for topic in eventStreamHub.activeTopics() {
+            try await ensureEventTopicSubscribed(topic, on: opened)
+        }
+        if let current = openedControl, current.channel !== opened.channel {
+            try await replayEventSubscriptions(on: current)
+        }
+    }
+
+    private func ensureEventTopicSubscribed(
+        _ topic: EventTopic,
+        on initialConnection: OpenedControlConnection
+    ) async throws {
+        var opened = initialConnection
+        while true {
+            guard let current = openedControl else {
+                opened = try await ensureControl()
+                continue
+            }
+            if current.channel !== opened.channel {
+                opened = current
+                continue
+            }
+            if remoteEventTopics.contains(topic) {
+                return
+            }
+
+            let request = try Self.encode(
+                RuntimeSubscribeControlRequest(header: makeHeader(), topics: [topic])
+            )
+            do {
+                let response = try await opened.channel.subscribe(request)
+                let reply = try Self.decode(RuntimeSubscribeControlReply.self, from: response)
+                if let error = reply.error {
+                    throw RuntimeControlClientError.remoteFailure(
+                        code: error.code,
+                        message: error.message
+                    )
+                }
+                guard reply.result?.contains(topic) == true else {
+                    throw RuntimeControlClientError.malformedReply
+                }
+                guard let latest = openedControl, latest.channel === opened.channel else {
+                    opened = try await ensureControl()
+                    continue
+                }
+                if !remoteEventTopics.contains(topic) {
+                    remoteEventTopics.append(topic)
+                }
+                if !eventStreamHub.activeTopics().contains(topic) {
+                    await unsubscribeEventTopic(topic, on: opened)
+                }
+                return
+            } catch {
+                let clientError = Self.clientError(from: error)
+                invalidateAfterTransportFailure(opened.channel, error: clientError)
+                throw clientError
+            }
+        }
+    }
+
+    private func removeEventSubscriber(_ id: UUID) async {
+        guard let removed = eventStreamHub.removeSubscriber(id) else { return }
+        guard removed.lastForTopic else { return }
+
+        if !eventStreamHub.hasSubscribers() {
+            eventReconnectTask?.cancel()
+            eventReconnectTask = nil
+            eventReconnectID = nil
+        }
+        guard let openedControl,
+            remoteEventTopics.contains(removed.topic)
+        else {
+            return
+        }
+        await unsubscribeEventTopic(removed.topic, on: openedControl)
+    }
+
+    private func unsubscribeEventTopic(
+        _ topic: EventTopic,
+        on opened: OpenedControlConnection
+    ) async {
+        guard openedControl?.channel === opened.channel,
+            remoteEventTopics.contains(topic)
+        else {
+            return
+        }
+        do {
+            let request = try Self.encode(
+                RuntimeUnsubscribeControlRequest(header: makeHeader(), topics: [topic])
+            )
+            let response = try await opened.channel.unsubscribe(request)
+            let reply = try Self.decode(RuntimeUnsubscribeControlReply.self, from: response)
+            if let error = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: error.code,
+                    message: error.message
+                )
+            }
+            guard reply.result != nil else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            guard openedControl?.channel === opened.channel else { return }
+            remoteEventTopics.removeAll { $0 == topic }
+            if eventStreamHub.activeTopics().contains(topic), let current = openedControl {
+                try await ensureEventTopicSubscribed(topic, on: current)
+            }
+        } catch {
+            invalidateControlConnection(opened.channel)
+        }
+    }
+
+    private func controlConnectionWasInterrupted(_ channel: any RuntimeControlChannel) {
+        invalidateControlConnection(channel)
+    }
+
+    private func invalidateControlConnection(_ channel: any RuntimeControlChannel) {
+        guard let openedControl, openedControl.channel === channel else { return }
+        eventStreamHub.markResyncRequired(for: eventStreamHub.activeTopics())
+        channel.invalidate()
+        self.openedControl = nil
+        remoteEventTopics = []
+        startEventReconnectIfNeeded()
+    }
+
+    private func startEventReconnectIfNeeded() {
+        guard eventStreamHub.hasSubscribers(), eventReconnectID == nil else { return }
+        let reconnectID = UUID()
+        eventReconnectID = reconnectID
+        let task = Task { [weak self] in
+            var retryDelay = Duration.milliseconds(250)
+            while !Task.isCancelled {
+                guard let self, self.eventStreamHub.hasSubscribers() else { break }
+                do {
+                    _ = try await self.ensureControl()
+                    if await self.openedControlHasEventSubscribers() {
+                        break
+                    }
+                } catch {
+                    // Keep the stream registered and retry while any subscriber is still alive.
+                }
+                do {
+                    try await Task.sleep(for: retryDelay)
+                } catch {
+                    break
+                }
+                retryDelay = min(retryDelay * 2, .seconds(5))
+            }
+            await self?.eventReconnectFinished(reconnectID)
+        }
+        eventReconnectTask = task
+    }
+
+    private func openedControlHasEventSubscribers() -> Bool {
+        openedControl != nil && !eventStreamHub.activeTopics().isEmpty
+    }
+
+    private func eventReconnectFinished(_ reconnectID: UUID) {
+        guard eventReconnectID == reconnectID else { return }
+        eventReconnectID = nil
+        eventReconnectTask = nil
     }
 
     private func invalidateAfterTransportFailure(
@@ -447,8 +643,7 @@ public actor RuntimeControlClient {
         else {
             return
         }
-        openedControl.channel.invalidate()
-        self.openedControl = nil
+        invalidateControlConnection(openedControl.channel)
     }
 
     private static func withTimeout<Value: Sendable>(
@@ -497,7 +692,22 @@ public actor RuntimeControlClient {
 
     private func ensureControl() async throws(RuntimeControlClientError) -> OpenedControlConnection {
         if let openedControl {
-            return openedControl
+            do {
+                try await replayEventSubscriptions(on: openedControl)
+                guard let current = self.openedControl else {
+                    return try await ensureControl()
+                }
+                guard current.channel === openedControl.channel else {
+                    return try await ensureControl()
+                }
+                return current
+            } catch {
+                invalidateAfterTransportFailure(
+                    openedControl.channel,
+                    error: Self.clientError(from: error)
+                )
+                throw Self.clientError(from: error)
+            }
         }
 
         let task: Task<OpenedControlConnection, any Error>
@@ -510,9 +720,40 @@ public actor RuntimeControlClient {
 
         do {
             let opened = try await task.value
-            openedControl = opened
             openingControl = nil
-            return opened
+            if let current = openedControl, current.channel === opened.channel {
+                try await replayEventSubscriptions(on: current)
+                guard let latest = openedControl else {
+                    return try await ensureControl()
+                }
+                guard latest.channel === current.channel else {
+                    return try await ensureControl()
+                }
+                return latest
+            }
+
+            openedControl = opened
+            remoteEventTopics = []
+            opened.channel.setConnectionEventHandler { [weak self, weak channel = opened.channel] in
+                guard let channel else { return }
+                Task {
+                    await self?.controlConnectionWasInterrupted(channel)
+                }
+            }
+            do {
+                try await replayEventSubscriptions(on: opened)
+                guard let current = openedControl else {
+                    return try await ensureControl()
+                }
+                guard current.channel === opened.channel else {
+                    return try await ensureControl()
+                }
+                return current
+            } catch {
+                let clientError = Self.clientError(from: error)
+                invalidateAfterTransportFailure(opened.channel, error: clientError)
+                throw clientError
+            }
         } catch {
             openingControl = nil
             if let clientError = error as? RuntimeControlClientError {
@@ -605,7 +846,8 @@ public actor RuntimeControlClient {
             }
             let control = try connectionFactory.makeControl(
                 endpoint: endpoint,
-                signingRequirement: configuration.daemonCodeSigningRequirement
+                signingRequirement: configuration.daemonCodeSigningRequirement,
+                eventSink: eventSink
             )
             return .opened(OpenedControlConnection(hello: helloReply, channel: control))
         }
@@ -1014,12 +1256,16 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func cancelOperation(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func listOperations(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func operationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func subscribe(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func unsubscribe(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func terminate(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void)
     func invalidate()
 }
 
 extension RuntimeControlChannel {
+    func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void) {}
     func invalidate() {}
 }
 
@@ -1030,7 +1276,8 @@ protocol RuntimeXPCConnectionFactory: Sendable {
     ) throws(RuntimeControlClientError) -> any RuntimeBrokerChannel
     func makeControl(
         endpoint: RuntimeXPCListenerEndpoint,
-        signingRequirement: String
+        signingRequirement: String,
+        eventSink: RuntimeEventSinkReceiver
     ) throws(RuntimeControlClientError) -> any RuntimeControlChannel
 }
 
@@ -1049,7 +1296,8 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
 
     func makeControl(
         endpoint: RuntimeXPCListenerEndpoint,
-        signingRequirement: String
+        signingRequirement: String,
+        eventSink: RuntimeEventSinkReceiver
     ) throws(RuntimeControlClientError) -> any RuntimeControlChannel {
         guard let listenerEndpoint = endpoint.value as? NSXPCListenerEndpoint else {
             throw .malformedReply
@@ -1057,7 +1305,9 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
         let connection = configuredConnection(
             NSXPCConnection(listenerEndpoint: listenerEndpoint),
             interface: try controlInterface(),
-            signingRequirement: signingRequirement
+            signingRequirement: signingRequirement,
+            exportedInterface: NSXPCInterface(with: RuntimeEventSink.self),
+            exportedObject: eventSink
         )
         return XPCControlChannel(connection: connection)
     }
@@ -1065,9 +1315,13 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
     private func configuredConnection(
         _ connection: NSXPCConnection,
         interface: NSXPCInterface,
-        signingRequirement: String
+        signingRequirement: String,
+        exportedInterface: NSXPCInterface? = nil,
+        exportedObject: AnyObject? = nil
     ) -> NSXPCConnection {
         connection.remoteObjectInterface = interface
+        connection.exportedInterface = exportedInterface
+        connection.exportedObject = exportedObject
         connection.setCodeSigningRequirement(signingRequirement)
         connection.resume()
         return connection
@@ -1152,6 +1406,7 @@ private final class XPCBrokerChannel: RuntimeBrokerChannel, @unchecked Sendable 
 
 private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendable {
     private let connection: NSXPCConnection
+    private var eventHandlerRelay: RuntimeXPCConnectionEventRelay?
 
     init(connection: NSXPCConnection) {
         self.connection = connection
@@ -1349,6 +1604,34 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
         }
     }
 
+    func subscribe(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.subscribe(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func unsubscribe(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.unsubscribe(request) { response in finish(.success(response)) }
+        }
+    }
+
     func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         try await withXPCReply { finish in
             let proxy =
@@ -1381,9 +1664,29 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
         connection.invalidate()
     }
 
+    func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void) {
+        let relay = RuntimeXPCConnectionEventRelay(handler)
+        eventHandlerRelay = relay
+        let callback: @Sendable () -> Void = { [relay] in relay.fire() }
+        connection.interruptionHandler = callback
+        connection.invalidationHandler = callback
+    }
+
     private static func transportFailure(_ error: any Error) -> RuntimeControlClientError {
         let error = error as NSError
         return .transportFailure(domain: error.domain, code: error.code)
+    }
+}
+
+private final class RuntimeXPCConnectionEventRelay: @unchecked Sendable {
+    private let handler: @Sendable () -> Void
+
+    init(_ handler: @escaping @Sendable () -> Void) {
+        self.handler = handler
+    }
+
+    func fire() {
+        handler()
     }
 }
 

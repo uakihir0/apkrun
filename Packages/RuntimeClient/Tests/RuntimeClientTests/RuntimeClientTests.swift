@@ -73,6 +73,177 @@ import Testing
     }
 }
 
+@Test func controlClientSubscribesToOperationEventsAndDeliversEnvelopes() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let status = RuntimeHostStatus(
+        hostState: "running",
+        runtimeState: "ready",
+        bootProgress: nil,
+        startupFailureStep: nil,
+        startupFailureCode: nil,
+        crashLoopActive: false,
+        daemonPID: 42,
+        imageVersion: "test-image"
+    )
+    let transport = try MockRuntimeTransport(hello: hello, status: status)
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let stream = try await client.subscribe(to: .operations)
+
+    let operationID = OperationID()
+    let envelope = EventEnvelope(
+        topic: .operations,
+        seq: 1,
+        time: Date(timeIntervalSince1970: 1_800_000_001),
+        operationID: operationID,
+        payload: .operations(.progress(operationID, OperationProgress(stage: "installing")))
+    )
+    let eventTask = Task { () -> EventEnvelope? in
+        for await event in stream {
+            return event
+        }
+        return nil
+    }
+    try transport.deliver([envelope])
+    #expect(await eventTask.value == envelope)
+
+    let snapshot = transport.snapshot()
+    #expect(snapshot.subscribeRequests.count == 1)
+    let request = try JSONDecoder().decode(
+        RuntimeSubscribeControlRequest.self,
+        from: snapshot.subscribeRequests[0]
+    )
+    #expect(request.topics == [.operations])
+}
+
+@Test func controlClientReplaysEventSubscriptionsAfterConnectionInterruption() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let status = RuntimeHostStatus(
+        hostState: "running",
+        runtimeState: "ready",
+        bootProgress: nil,
+        startupFailureStep: nil,
+        startupFailureCode: nil,
+        crashLoopActive: false,
+        daemonPID: 42,
+        imageVersion: "test-image"
+    )
+    let transport = try MockRuntimeTransport(hello: hello, status: status)
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let stream = try await client.subscribe(to: .operations)
+    let eventTask = Task { () -> [EventEnvelope] in
+        var received: [EventEnvelope] = []
+        for await event in stream {
+            received.append(event)
+            if received.count == 2 {
+                break
+            }
+        }
+        return received
+    }
+
+    transport.interruptControlConnection()
+    for _ in 0..<100 {
+        let snapshot = transport.snapshot()
+        if snapshot.controlConnections >= 2 && snapshot.subscribeRequests.count >= 2 {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    let reconnected = transport.snapshot()
+    #expect(reconnected.controlConnections >= 2)
+    #expect(reconnected.subscribeRequests.count == 2)
+
+    let operationID = OperationID()
+    let envelope = EventEnvelope(
+        topic: .operations,
+        seq: 1,
+        time: Date(timeIntervalSince1970: 1_800_000_002),
+        operationID: operationID,
+        payload: .operations(
+            .started(
+                OperationSnapshot(
+                    operationID: operationID,
+                    kind: .install,
+                    startedAt: Date(timeIntervalSince1970: 1_800_000_002)
+                )
+            ))
+    )
+    try transport.deliver([envelope])
+    let received = await eventTask.value
+    #expect(received.count == 2)
+    #expect(received[0].seq == 0)
+    #expect(received[0].payload == .resyncRequired(.operations))
+    #expect(received[1] == envelope)
+}
+
+@Test func eventStreamHubBoundsBuffersAndSignalsResyncAfterOverflow() async {
+    let hub = RuntimeEventStreamHub()
+    let stream = hub.makeStream(for: .operations, onTermination: { _ in }).stream
+    let operationID = OperationID()
+    let timestamp = Date(timeIntervalSince1970: 1_800_000_003)
+    let events = (1...1_100).map { sequence in
+        EventEnvelope(
+            topic: .operations,
+            seq: UInt64(sequence),
+            time: timestamp,
+            operationID: operationID,
+            payload: .operations(
+                .progress(operationID, OperationProgress(stage: "installing"))
+            )
+        )
+    }
+
+    hub.deliver(events)
+
+    var iterator = stream.makeAsyncIterator()
+    var received: [EventEnvelope] = []
+    for _ in 0..<1_024 {
+        guard let event = await iterator.next() else { break }
+        received.append(event)
+    }
+    #expect(received.count == 1_024)
+    #expect(
+        received.contains {
+            $0.seq == 0 && $0.payload == .resyncRequired(.operations)
+        })
+}
+
+@Test func eventSinkAcknowledgesMalformedBatchesAndSignalsResync() async {
+    let hub = RuntimeEventStreamHub()
+    let stream = hub.makeStream(for: .operations, onTermination: { _ in }).stream
+    let receiver = RuntimeEventSinkReceiver(streamHub: hub)
+    await withCheckedContinuation { continuation in
+        receiver.deliver(Data("not-json".utf8)) {
+            continuation.resume()
+        }
+    }
+
+    var iterator = stream.makeAsyncIterator()
+    let marker = await iterator.next()
+    #expect(marker?.seq == 0)
+    #expect(marker?.payload == .resyncRequired(.operations))
+}
+
 @Test func controlClientRestartsWithOneVersionedRequestAndDoesNotReplayFailures() async throws {
     let configuration = try RuntimeControlClientConfiguration(
         clientKind: .cli,
@@ -1066,6 +1237,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var operationStatusRequestsValue: [Data] = []
     private var listOperationsRequestsValue: [Data] = []
     private var cancelOperationRequestsValue: [Data] = []
+    private var subscribeRequestsValue: [Data] = []
+    private var unsubscribeRequestsValue: [Data] = []
     private var launchRequestsValue: [Data] = []
     private var terminateRequestsValue: [Data] = []
     private var resetRequestsValue: [Data] = []
@@ -1082,6 +1255,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var failNextBeginInstallImportedValue = false
     private var failNextOperationStatusValue = false
     private var endpointBusyRejectionsValue: Int
+    private var eventSinkValue: RuntimeEventSinkReceiver?
+    private var connectionEventHandlerValue: (@Sendable () -> Void)?
 
     init(
         hello: RuntimeHelloReply,
@@ -1200,7 +1375,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
 
     func makeControl(
         endpoint: RuntimeXPCListenerEndpoint,
-        signingRequirement: String
+        signingRequirement: String,
+        eventSink: RuntimeEventSinkReceiver
     ) throws(RuntimeControlClientError) -> any RuntimeControlChannel {
         guard endpoint.value is NSObject else {
             throw .malformedReply
@@ -1208,6 +1384,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         lock.withLock {
             controlRequirementValue = signingRequirement
             controlConnectionsValue += 1
+            eventSinkValue = eventSink
         }
         return self
     }
@@ -1348,6 +1525,39 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return operationStatusData
     }
 
+    func subscribe(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { subscribeRequestsValue.append(request) }
+        guard
+            let subscription = try? JSONDecoder().decode(
+                RuntimeSubscribeControlRequest.self,
+                from: request
+            )
+        else {
+            throw .malformedReply
+        }
+        do {
+            return try JSONEncoder().encode(RuntimeSubscribeControlReply(result: subscription.topics))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func unsubscribe(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { unsubscribeRequestsValue.append(request) }
+        guard (try? JSONDecoder().decode(RuntimeUnsubscribeControlRequest.self, from: request)) != nil else {
+            throw .malformedReply
+        }
+        do {
+            return try JSONEncoder().encode(RuntimeUnsubscribeControlReply())
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void) {
+        lock.withLock { connectionEventHandlerValue = handler }
+    }
+
     func listOperations(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         lock.withLock { listOperationsRequestsValue.append(request) }
         return listOperationsData
@@ -1403,6 +1613,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 operationStatusRequests: operationStatusRequestsValue,
                 listOperationsRequests: listOperationsRequestsValue,
                 cancelOperationRequests: cancelOperationRequestsValue,
+                subscribeRequests: subscribeRequestsValue,
+                unsubscribeRequests: unsubscribeRequestsValue,
                 launchRequests: launchRequestsValue,
                 terminateRequests: terminateRequestsValue,
                 resetRequests: resetRequestsValue,
@@ -1449,6 +1661,17 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         lock.withLock { failNextOperationStatusValue = true }
     }
 
+    func interruptControlConnection() {
+        let handler = lock.withLock { connectionEventHandlerValue }
+        handler?()
+    }
+
+    func deliver(_ envelopes: [EventEnvelope]) throws {
+        let data = try JSONEncoder().encode(envelopes)
+        let eventSink = lock.withLock { eventSinkValue }
+        eventSink?.deliver(data) {}
+    }
+
     struct Snapshot {
         let serviceName: String?
         let brokerRequirement: String?
@@ -1468,6 +1691,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let operationStatusRequests: [Data]
         let listOperationsRequests: [Data]
         let cancelOperationRequests: [Data]
+        let subscribeRequests: [Data]
+        let unsubscribeRequests: [Data]
         let launchRequests: [Data]
         let terminateRequests: [Data]
         let resetRequests: [Data]

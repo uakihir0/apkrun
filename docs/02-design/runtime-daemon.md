@@ -111,7 +111,7 @@ Exit status 0 is not restarted by launchd. The next client connection, the next 
 
 `SIGTERM` (logout, system shutdown, `SMAppService.unregister()`, `launchctl bootout`):
 
-1. Reject new XPC connections while existing clients drain. Lifecycle operations that race with shutdown get `RuntimeControlError` code `runtime.hostShuttingDown`; status remains available to connected clients and reports `shuttingDown`. Shut down any daemon-owned headless session service, remove its Guest Agent observers, and wait for active package installs, session operations, and deferred display releases before stopping Android.
+1. Reject new XPC connections while existing clients drain. Lifecycle operations that race with shutdown get `RuntimeControlError` code `runtime.hostShuttingDown`; status remains available to connected clients and reports `shuttingDown`. Drain accepted package mutations and session operations before shutting down the daemon-owned headless session service, removing Guest Agent observers, and stopping Android. An accepted package mutation may finish a required Android start while shutdown waits for it.
 2. `RuntimeSupervisor.stop(reason: .hostShutdown)` with a 40 s deadline (§3.5). Sessions end with `.runtimeStopped`. Wrappers show nothing new: during logout they are quitting too.
 3. Flush logs, write `daemon.json` with `cleanExit = true`, close the XPC connections, and exit 0.
 
@@ -573,7 +573,8 @@ entering PackageStore's guest-install transaction. PackageStore continues
 through guest-result reconciliation and journal commit/abort.
 
 RuntimeAPI 1.9 adds topic subscriptions and sequenced event delivery. API 1.10
-adds package-install event payloads. The
+adds package-install event payloads. API 1.11 adds tracked uninstalls and their
+committed package-removal event. The
 control endpoint verifies the exported event sink before subscribing.
 RuntimeHost reads one `RuntimeSupervisor.events` stream from supervisor
 creation, ignores console and logcat payloads, and publishes runtime state
@@ -614,6 +615,17 @@ operations, and bounded operation-specific deadlines remain outstanding under
   `packages.updated` after a successful synchronous or tracked install. The
   remaining topic publishers are part of the wire contract but are still
   pending #032; streams and per-session callbacks are pending #032/#068.
+- API 1.11 adds the tracked `beginUninstallPackage` operation. RuntimeHost ends
+  the package's active session with `.packageUninstalled` before the Store Agent
+  uninstall, then publishes `packages.removed` only after the store transaction
+  commits. The event records the retained-data policy. Operation snapshots carry
+  an optional fingerprint of the canonical request so a reconnect can verify
+  that a retained operation used the same package and data policy. `--forget`
+  stays host-only, does not start Android, and emits no removal event. Uninstall
+  work shares the package-mutation lifecycle reservation, so stop, restart,
+  reset, and daemon shutdown wait for it. A launch already admitted for the same
+  package drains before session closure; later launches are rejected until the
+  uninstall reaches a terminal result.
 
 ### 8.5 The CLI as a client
 
@@ -849,7 +861,7 @@ Error domain `runtime`. Codes, user messages, and remediations are in [../03-ref
 
 ### #032 XPC runtime API (M4)
 
-1. Define the DTOs and `@objc` protocols in RuntimeAPI ([../03-reference/runtime-api.md](../03-reference/runtime-api.md)): `runtimeStatus`, `install`, `launch`, `terminate`, `list`, `applicationInfo`, plus `subscribe`, `cancel`, `runtime start/stop`, the session channel, and the operations of §8.6 that name #032.
+1. Define the DTOs and `@objc` protocols in RuntimeAPI ([../03-reference/runtime-api.md](../03-reference/runtime-api.md)): `runtimeStatus`, `install`, `launch`, `terminate`, `list`, `packageInfo` (the wire operation for FR-RT-01's application metadata query), plus `subscribe`, `cancel`, `runtime start/stop`, the session channel, and the operations of §8.6 that name #032.
 2. Implement the broker and the endpoints (§8.1), request rules (§8.2), long-running operations (§8.3), and `EventHub` (§8.4).
 3. RuntimeClient: `XPCRuntimeService` with the reconnect behavior of process-model §2.5.
 4. Switch the CLI's non-`dev` commands to RuntimeClient (§8.5).

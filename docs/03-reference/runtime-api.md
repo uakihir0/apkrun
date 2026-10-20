@@ -98,7 +98,7 @@ apkrund sets the requirement on each anonymous listener with `NSXPCListener.setC
 
 ```swift
 public enum RuntimeAPI {
-    public static let version = APIVersion(major: 1, minor: 10)      // the control and wrapper protocols
+    public static let version = APIVersion(major: 1, minor: 11)      // the control and wrapper protocols
     public static let wrapperMajors: [Int] = [1]                     // served on the wrapper endpoint: N and N−1
     public static let brokerRevision = 2                              // additive-only broker protocol
     public static let maintenanceRevision = 1                         // additive-only MaintenanceControl
@@ -118,6 +118,7 @@ public struct APIVersion: Codable, Sendable, Comparable { public var major: Int;
 - Version `1.8` adds `beginInstallImported`, `cancelOperation`, `listOperations`, and `operationStatus`. The daemon retains running operations and the last 50 finished operations in memory; the synchronous `installImported` selector remains for existing clients. The first tracked operation is manual-authority install, and CLI clients poll snapshots until event subscriptions are available.
 - Version `1.9` adds `subscribe` and `unsubscribe`, the exported event-sink handshake, and sequenced event batches. RuntimeHost publishes runtime state and estimated boot progress, plus tracked package-install events on `operations`. The other topic publishers, session callbacks, and stream callbacks remain outstanding under #032 and #068.
 - Version `1.10` adds `packages` event payloads for successful first installs, retained-data restores, updates, and same-version reinstalls. Other package changes and their publishers remain outstanding under #032.
+- Version `1.11` adds `beginUninstallPackage` as a tracked control operation, `PackageChange.removed`, and an optional `OperationSnapshot.requestFingerprint` for matching an ambiguous begin reply to its original request. `--forget` is host-only and does not publish an Android package-removal event.
 - `components.json` of a release records `"runtimeAPI": { "current": "M.m", "wrapperMajors": [N−1, N] }` ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.3). A major is dropped only as that section allows.
 - The #031 `RuntimeHostStatus` includes optional `guestAgentState` and `guestAgentProtocolVersion` fields. Clients accept their absence as `nil`.
 
@@ -589,6 +590,7 @@ public struct OperationSnapshot: Codable, Sendable {
     public var parent: OperationID?
     public var kind: OperationKind
     public var packageID: PackageID?
+    public var requestFingerprint: String?     // SHA-256 of the canonical begin request
     public var clientKind: ClientKind?        // nil for work apkrund started itself
     public var startedAt: Date
     public var progress: OperationProgress?
@@ -638,7 +640,7 @@ Topics, payloads, coalescing, and ordering are in §16. Summary:
 | `wrappers` | `WrapperChange` | C |
 | `integrations` | `IntegrationChange` | C |
 
-API 1.10 publishes `packages.installed` and `packages.updated` after successful installs. For `updated`, `from` is the best pre-install version observed by PackageStore (live Android when present, otherwise the managed record); an out-of-band Android install can race with this observation.
+API 1.10 publishes `packages.installed` and `packages.updated` after successful installs. For `updated`, `from` is the best pre-install version observed by PackageStore (live Android when present, otherwise the managed record); an out-of-band Android install can race with this observation. API 1.11 publishes `packages.removed` only after the Android uninstall and package-store transaction commit; `keptData` records whether app data was retained. `uninstall --forget` removes only APKRun's local record and artifacts, can run without Android, and publishes no removal event.
 
 ### 4.9 File handles, bookmarks, and IOSurfaces
 

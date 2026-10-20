@@ -395,9 +395,249 @@ import Testing
     #expect(decodedImport.request == importRequest)
     #expect(decodedInstall.request == installRequest)
     for header in [decodedImport.header, decodedInstall.header] {
-        #expect(header.apiVersion == APIVersion(major: 1, minor: 7))
+        #expect(header.apiVersion == APIVersion.current)
         #expect(header.clientKind == .cli)
     }
+}
+
+@Test func controlClientBeginsAndTracksInstallOperationsWithVersionedRequests() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let operationID = try #require(OperationID(wire: "b4a90e78-5e1f-4d5a-9ba1-0b691f180032"))
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let ticket = try #require(RuntimeImportTicket(rawValue: "84cfd2a0-504c-4dc2-9d6f-0f579f771902"))
+    let request = RuntimeInstallImportedRequest(ticket: ticket)
+    let handle = OperationHandle(operationID: operationID, kind: .install)
+    let snapshot = OperationSnapshot(
+        operationID: operationID,
+        kind: .install,
+        packageID: packageID,
+        clientKind: .cli,
+        startedAt: Date(timeIntervalSince1970: 1_800_000_000),
+        progress: OperationProgress(fraction: 0.5, stage: "installing"),
+        result: nil
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        beginInstallImportedReply: RuntimeBeginInstallImportedControlReply(result: handle),
+        operationStatusReply: RuntimeOperationStatusControlReply(result: snapshot),
+        listOperationsReply: RuntimeListOperationsControlReply(result: [snapshot]),
+        cancelOperationReply: RuntimeCancelOperationControlReply(result: .cancelling)
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    #expect(try await client.beginInstallImported(request, operationID: operationID) == handle)
+    #expect(try await client.operationStatus(operationID) == snapshot)
+    #expect(try await client.listOperations() == [snapshot])
+    #expect(try await client.cancelOperation(operationID) == .cancelling)
+
+    let requests = transport.snapshot()
+    #expect(requests.beginInstallImportedRequests.count == 1)
+    #expect(requests.operationStatusRequests.count == 1)
+    #expect(requests.listOperationsRequests.count == 1)
+    #expect(requests.cancelOperationRequests.count == 1)
+    let begin = try JSONDecoder().decode(
+        RuntimeBeginInstallImportedControlRequest.self,
+        from: requests.beginInstallImportedRequests[0]
+    )
+    #expect(begin.header.operationID == operationID.rawValue)
+    #expect(begin.header.apiVersion == APIVersion.current)
+    #expect(begin.header.clientKind == .cli)
+    #expect(begin.request == request)
+
+    let statusRequest = try JSONDecoder().decode(
+        RuntimeOperationStatusControlRequest.self,
+        from: requests.operationStatusRequests[0]
+    )
+    #expect(statusRequest.operationID == operationID)
+    #expect(statusRequest.header.apiVersion == APIVersion.current)
+    let listRequest = try JSONDecoder().decode(
+        RuntimeListOperationsControlRequest.self,
+        from: requests.listOperationsRequests[0]
+    )
+    #expect(listRequest.header.apiVersion == APIVersion.current)
+    let cancelRequest = try JSONDecoder().decode(
+        RuntimeCancelOperationControlRequest.self,
+        from: requests.cancelOperationRequests[0]
+    )
+    #expect(cancelRequest.operationID == operationID)
+    #expect(cancelRequest.header.apiVersion == APIVersion.current)
+}
+
+@Test func controlClientReconcilesAmbiguousBeginWithoutReplayingIt() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let operationID = try #require(OperationID(wire: "b4a90e78-5e1f-4d5a-9ba1-0b691f180032"))
+    let snapshot = OperationSnapshot(
+        operationID: operationID,
+        kind: .install,
+        startedAt: Date(timeIntervalSince1970: 1_800_000_000)
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        operationStatusReply: RuntimeOperationStatusControlReply(result: snapshot)
+    )
+    transport.failNextBeginInstallImported()
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let ticket = try #require(RuntimeImportTicket(rawValue: "84cfd2a0-504c-4dc2-9d6f-0f579f771902"))
+
+    let handle = try await client.beginInstallImported(
+        RuntimeInstallImportedRequest(ticket: ticket),
+        operationID: operationID
+    )
+
+    #expect(handle == OperationHandle(operationID: operationID, kind: .install))
+    let requests = transport.snapshot()
+    #expect(requests.beginInstallImportedRequests.count == 1)
+    #expect(requests.operationStatusRequests.count == 1)
+    #expect(requests.controlConnections == 2)
+    let statusRequest = try JSONDecoder().decode(
+        RuntimeOperationStatusControlRequest.self,
+        from: requests.operationStatusRequests[0]
+    )
+    #expect(statusRequest.operationID == operationID)
+}
+
+@Test func controlClientReconcilesMalformedBeginReplyWithoutReplayingIt() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let operationID = try #require(OperationID(wire: "b4a90e78-5e1f-4d5a-9ba1-0b691f180032"))
+    let snapshot = OperationSnapshot(
+        operationID: operationID,
+        kind: .install,
+        startedAt: Date(timeIntervalSince1970: 1_800_000_000)
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        operationStatusReply: RuntimeOperationStatusControlReply(result: snapshot),
+        beginInstallImportedReplyData: Data("not-json".utf8)
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let ticket = try #require(RuntimeImportTicket(rawValue: "84cfd2a0-504c-4dc2-9d6f-0f579f771902"))
+
+    let handle = try await client.beginInstallImported(
+        RuntimeInstallImportedRequest(ticket: ticket),
+        operationID: operationID
+    )
+
+    #expect(handle.operationID == operationID)
+    let requests = transport.snapshot()
+    #expect(requests.beginInstallImportedRequests.count == 1)
+    #expect(requests.operationStatusRequests.count == 1)
+    #expect(requests.controlConnections == 2)
+}
+
+@Test func controlClientReportsUnknownWhenAmbiguousBeginCannotBeFound() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let operationID = try #require(OperationID(wire: "b4a90e78-5e1f-4d5a-9ba1-0b691f180032"))
+    let notFound = RuntimeWireError.runtime("operationNotFound", message: "Operation not found.")
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        operationStatusReply: RuntimeOperationStatusControlReply(error: notFound)
+    )
+    transport.failNextBeginInstallImported()
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let ticket = try #require(RuntimeImportTicket(rawValue: "84cfd2a0-504c-4dc2-9d6f-0f579f771902"))
+
+    do {
+        _ = try await client.beginInstallImported(
+            RuntimeInstallImportedRequest(ticket: ticket),
+            operationID: operationID
+        )
+        Issue.record("The missing operation was treated as a confirmed begin result.")
+    } catch {
+        #expect(error == .operationResultUnknown(operation: "beginInstallImported"))
+    }
+
+    let requests = transport.snapshot()
+    #expect(requests.beginInstallImportedRequests.count == 1)
+    #expect(requests.operationStatusRequests.count == 1)
+    #expect(requests.controlConnections == 2)
+}
+
+@Test func controlClientReportsUnknownWhenAmbiguousBeginStatusTransportFails() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let operationID = try #require(OperationID(wire: "b4a90e78-5e1f-4d5a-9ba1-0b691f180032"))
+    let snapshot = OperationSnapshot(
+        operationID: operationID,
+        kind: .install,
+        startedAt: Date(timeIntervalSince1970: 1_800_000_000)
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        operationStatusReply: RuntimeOperationStatusControlReply(result: snapshot)
+    )
+    transport.failNextBeginInstallImported()
+    transport.failNextOperationStatus()
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let ticket = try #require(RuntimeImportTicket(rawValue: "84cfd2a0-504c-4dc2-9d6f-0f579f771902"))
+
+    do {
+        _ = try await client.beginInstallImported(
+            RuntimeInstallImportedRequest(ticket: ticket),
+            operationID: operationID
+        )
+        Issue.record("A failed status query was treated as a confirmed begin result.")
+    } catch {
+        #expect(error == .operationResultUnknown(operation: "beginInstallImported"))
+    }
+
+    let requests = transport.snapshot()
+    #expect(requests.beginInstallImportedRequests.count == 1)
+    #expect(requests.operationStatusRequests.count == 1)
+    #expect(requests.controlConnections == 2)
 }
 
 @Test func controlClientPreservesTypedInstallErrorsAndDoesNotReplay() async throws {
@@ -801,6 +1041,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private let packageInfoData: Data
     private let importPackageData: Data
     private let installImportedData: Data
+    private let beginInstallImportedData: Data
+    private let operationStatusData: Data
+    private let listOperationsData: Data
+    private let cancelOperationData: Data
     private let launchData: Data
     private let terminateData: Data
     private let lock = NSLock()
@@ -818,6 +1062,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var importPackageRequestsValue: [Data] = []
     private var importFileHandleIDsValue: [[ObjectIdentifier]] = []
     private var installImportedRequestsValue: [Data] = []
+    private var beginInstallImportedRequestsValue: [Data] = []
+    private var operationStatusRequestsValue: [Data] = []
+    private var listOperationsRequestsValue: [Data] = []
+    private var cancelOperationRequestsValue: [Data] = []
     private var launchRequestsValue: [Data] = []
     private var terminateRequestsValue: [Data] = []
     private var resetRequestsValue: [Data] = []
@@ -831,6 +1079,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var restartDelayValue: Duration?
     private var failNextResetValue = false
     private var failNextInstallImportedValue = false
+    private var failNextBeginInstallImportedValue = false
+    private var failNextOperationStatusValue = false
     private var endpointBusyRejectionsValue: Int
 
     init(
@@ -843,6 +1093,11 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         packageInfoReply: RuntimePackageInfoControlReply? = nil,
         importReply: RuntimeImportPackageControlReply? = nil,
         installImportedReply: RuntimeInstallImportedControlReply? = nil,
+        beginInstallImportedReply: RuntimeBeginInstallImportedControlReply? = nil,
+        operationStatusReply: RuntimeOperationStatusControlReply? = nil,
+        listOperationsReply: RuntimeListOperationsControlReply? = nil,
+        cancelOperationReply: RuntimeCancelOperationControlReply? = nil,
+        beginInstallImportedReplyData: Data? = nil,
         launchReply: RuntimeLaunchControlReply? = nil,
         terminateReply: RuntimeTerminateControlReply? = nil
     ) throws {
@@ -890,6 +1145,13 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
             )
         )
         let defaultInstallImportedReply = RuntimeInstallImportedControlReply(result: defaultSummary)
+        let defaultOperationID = try #require(OperationID(wire: "b4a90e78-5e1f-4d5a-9ba1-0b691f180032"))
+        let defaultOperationHandle = OperationHandle(operationID: defaultOperationID, kind: .install)
+        let defaultOperationSnapshot = OperationSnapshot(
+            operationID: defaultOperationID,
+            kind: .install,
+            startedAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
         let defaultLaunchReply = RuntimeLaunchControlReply(
             result: RuntimeLaunchResult(
                 sessionID: UUID(uuidString: "B1D9C07C-E76A-446F-B849-0C9E5FC7B1C7")!,
@@ -904,6 +1166,22 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         packageInfoData = try JSONEncoder().encode(packageInfoReply ?? defaultPackageInfoReply)
         importPackageData = try JSONEncoder().encode(importReply ?? defaultImportReply)
         installImportedData = try JSONEncoder().encode(installImportedReply ?? defaultInstallImportedReply)
+        beginInstallImportedData =
+            try beginInstallImportedReplyData
+            ?? JSONEncoder().encode(
+                beginInstallImportedReply
+                    ?? RuntimeBeginInstallImportedControlReply(
+                        result: defaultOperationHandle
+                    ))
+        operationStatusData = try JSONEncoder().encode(
+            operationStatusReply ?? RuntimeOperationStatusControlReply(result: defaultOperationSnapshot)
+        )
+        listOperationsData = try JSONEncoder().encode(
+            listOperationsReply ?? RuntimeListOperationsControlReply(result: [])
+        )
+        cancelOperationData = try JSONEncoder().encode(
+            cancelOperationReply ?? RuntimeCancelOperationControlReply(result: .cancelling)
+        )
         launchData = try JSONEncoder().encode(launchReply ?? defaultLaunchReply)
         terminateData = try JSONEncoder().encode(terminateReply ?? defaultTerminateReply)
     }
@@ -1046,6 +1324,40 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return installImportedData
     }
 
+    func beginInstallImported(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        let shouldFail = lock.withLock {
+            beginInstallImportedRequestsValue.append(request)
+            defer { failNextBeginInstallImportedValue = false }
+            return failNextBeginInstallImportedValue
+        }
+        if shouldFail {
+            throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+        }
+        return beginInstallImportedData
+    }
+
+    func operationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        let shouldFail = lock.withLock {
+            operationStatusRequestsValue.append(request)
+            defer { failNextOperationStatusValue = false }
+            return failNextOperationStatusValue
+        }
+        if shouldFail {
+            throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+        }
+        return operationStatusData
+    }
+
+    func listOperations(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { listOperationsRequestsValue.append(request) }
+        return listOperationsData
+    }
+
+    func cancelOperation(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { cancelOperationRequestsValue.append(request) }
+        return cancelOperationData
+    }
+
     func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         let shouldFail = lock.withLock {
             launchRequestsValue.append(request)
@@ -1087,6 +1399,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 importRequests: importPackageRequestsValue,
                 importFileHandleIDs: importFileHandleIDsValue,
                 installImportedRequests: installImportedRequestsValue,
+                beginInstallImportedRequests: beginInstallImportedRequestsValue,
+                operationStatusRequests: operationStatusRequestsValue,
+                listOperationsRequests: listOperationsRequestsValue,
+                cancelOperationRequests: cancelOperationRequestsValue,
                 launchRequests: launchRequestsValue,
                 terminateRequests: terminateRequestsValue,
                 resetRequests: resetRequestsValue,
@@ -1125,6 +1441,14 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         lock.withLock { failNextInstallImportedValue = true }
     }
 
+    func failNextBeginInstallImported() {
+        lock.withLock { failNextBeginInstallImportedValue = true }
+    }
+
+    func failNextOperationStatus() {
+        lock.withLock { failNextOperationStatusValue = true }
+    }
+
     struct Snapshot {
         let serviceName: String?
         let brokerRequirement: String?
@@ -1140,6 +1464,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let importRequests: [Data]
         let importFileHandleIDs: [[ObjectIdentifier]]
         let installImportedRequests: [Data]
+        let beginInstallImportedRequests: [Data]
+        let operationStatusRequests: [Data]
+        let listOperationsRequests: [Data]
+        let cancelOperationRequests: [Data]
         let launchRequests: [Data]
         let terminateRequests: [Data]
         let resetRequests: [Data]

@@ -305,9 +305,7 @@ public actor RuntimeControlClient {
             let response = try await opened.channel.installImported(data)
             return try Self.decodeInstallImportedReply(from: response)
         } catch {
-            guard let clientError = error as? RuntimeControlClientError else {
-                throw .malformedReply
-            }
+            let clientError = Self.clientError(from: error)
             invalidateAfterTransportFailure(opened.channel, error: clientError)
             switch clientError {
             case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply:
@@ -315,6 +313,116 @@ public actor RuntimeControlClient {
             default:
                 throw clientError
             }
+        }
+    }
+
+    /// Starts installation and returns a handle that can be polled or cancelled.
+    ///
+    /// The supplied operation ID makes an ambiguous begin reply recoverable. If the begin request
+    /// may have reached the daemon but its reply is lost or unusable, the client reconnects and
+    /// checks that ID once; it never resends the begin request.
+    public func beginInstallImported(
+        _ request: RuntimeInstallImportedRequest,
+        operationID: OperationID
+    ) async throws(RuntimeControlClientError) -> OperationHandle {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeBeginInstallImportedControlRequest(
+                header: APIRequestHeader(
+                    operationID: operationID.rawValue,
+                    clientKind: configuration.clientKind
+                ),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.beginInstallImported(data)
+            let handle = try Self.decodeBeginInstallImportedReply(from: response)
+            guard handle.operationID == operationID, handle.kind == .install else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return handle
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            switch clientError {
+            case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply, .invalidRemoteProxy:
+                do {
+                    let snapshot = try await operationStatus(operationID)
+                    guard snapshot.operationID == operationID, snapshot.kind == .install else {
+                        throw RuntimeControlClientError.operationResultUnknown(
+                            operation: "beginInstallImported"
+                        )
+                    }
+                    return OperationHandle(
+                        operationID: snapshot.operationID,
+                        parent: snapshot.parent,
+                        kind: snapshot.kind
+                    )
+                } catch {
+                    throw RuntimeControlClientError.operationResultUnknown(
+                        operation: "beginInstallImported"
+                    )
+                }
+            default:
+                throw clientError
+            }
+        }
+    }
+
+    /// Returns the latest state for an operation.
+    public func operationStatus(
+        _ operationID: OperationID
+    ) async throws(RuntimeControlClientError) -> OperationSnapshot {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeOperationStatusControlRequest(
+                header: makeHeader(),
+                operationID: operationID
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.operationStatus(data)
+            let snapshot = try Self.decodeOperationStatusReply(from: response)
+            guard snapshot.operationID == operationID else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return snapshot
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Lists running operations and recently completed operations retained by the daemon.
+    public func listOperations() async throws(RuntimeControlClientError) -> [OperationSnapshot] {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeListOperationsControlRequest(header: makeHeader())
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.listOperations(data)
+            return try Self.decodeListOperationsReply(from: response)
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
+    /// Requests cancellation at the operation's next supported cancellation point.
+    public func cancelOperation(_ operationID: OperationID) async throws(RuntimeControlClientError)
+        -> CancelReply
+    {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeCancelOperationControlRequest(
+                header: makeHeader(),
+                operationID: operationID
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.cancelOperation(data)
+            return try Self.decodeCancelOperationReply(from: response)
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
         }
     }
 
@@ -328,7 +436,7 @@ public actor RuntimeControlClient {
     ) {
         let shouldInvalidate: Bool
         switch error {
-        case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply:
+        case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply, .invalidRemoteProxy:
             shouldInvalidate = true
         default:
             shouldInvalidate = false
@@ -567,6 +675,74 @@ public actor RuntimeControlClient {
             throw .malformedReply
         }
         return result
+    }
+
+    private static func decodeBeginInstallImportedReply(from data: Data) throws(RuntimeControlClientError)
+        -> OperationHandle
+    {
+        let reply = try Self.decode(RuntimeBeginInstallImportedControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
+    private static func decodeOperationStatusReply(from data: Data) throws(RuntimeControlClientError)
+        -> OperationSnapshot
+    {
+        let reply = try Self.decode(RuntimeOperationStatusControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
+    private static func decodeListOperationsReply(from data: Data) throws(RuntimeControlClientError)
+        -> [OperationSnapshot]
+    {
+        let reply = try Self.decode(RuntimeListOperationsControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
+    private static func decodeCancelOperationReply(from data: Data) throws(RuntimeControlClientError)
+        -> CancelReply
+    {
+        let reply = try Self.decode(RuntimeCancelOperationControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
+    private static func clientError(from error: any Error) -> RuntimeControlClientError {
+        (error as? RuntimeControlClientError) ?? .malformedReply
     }
 
     private static func decodeLaunchReply(from data: Data) throws(RuntimeControlClientError) -> RuntimeLaunchResult {
@@ -834,6 +1010,10 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func packageInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func importPackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
     func installImported(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func beginInstallImported(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func cancelOperation(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func listOperations(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func operationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func terminate(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func invalidate()
@@ -1110,6 +1290,62 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.installImported(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func beginInstallImported(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.beginInstallImported(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func cancelOperation(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.cancelOperation(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func listOperations(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.listOperations(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func operationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.operationStatus(request) { response in finish(.success(response)) }
         }
     }
 

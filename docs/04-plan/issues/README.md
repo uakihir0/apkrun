@@ -1,268 +1,197 @@
-# Implementation Issues
+# Implementation Tasks
 
-| Field | Value |
-|---|---|
-| Status | Baseline |
-| Related | [../roadmap.md](../roadmap.md), [../risks.md](../risks.md), [../test-strategy.md](../test-strategy.md), [../open-questions.md](../open-questions.md), [../../05-development/workflow.md](../../05-development/workflow.md), [../../../AGENTS.md](../../../AGENTS.md) |
-
-Every unit of implementation work is one numbered task. Each task becomes one GitHub issue with the same number and title. The files in this directory are the source of truth for the issue text. If an issue and this directory disagree, fix this directory first, then the issue.
+Every unit of implementation work is one task. A task's number is its GitHub issue number. The milestone files in this directory hold the task text and are its source of truth. The GitHub issue holds the status and links to the entry (`scripts/dev/sync-task-issues.py` keeps the issue title, body, and milestone in step with the entry).
 
 ---
 
 ## 1. Files
 
-| File | Milestone | Version | Tasks |
-|---|---|---|---|
-| [M00-repository-and-vm-foundation.md](M00-repository-and-vm-foundation.md) | M0 Repository and VM foundation | v0.1 | #001–#007, #061, #062, #063 |
-| [M01-android-bring-up.md](M01-android-bring-up.md) | M1 Android bring-up | v0.1 | #008–#017, #064, #065, #095 |
-| [M02-graphics.md](M02-graphics.md) | M2 Graphics | v0.1 | #018–#023, #099 |
-| [M03-input-and-basic-runtime.md](M03-input-and-basic-runtime.md) | M3 Input and basic runtime | v0.1 / v0.2 | #033, #072, #024–#030, #067, #101–#103 |
-| [M04-daemon-and-guest-protocol.md](M04-daemon-and-guest-protocol.md) | M4 Daemon and guest protocol | v0.2 | #031, #032, #066, #068, #034, #053, #069, #070, #071 |
-| [M05-custom-android-image.md](M05-custom-android-image.md) | M5 Custom Android runtime image | v0.3 | #035, #036 |
-| [M06-update-system.md](M06-update-system.md) | M6 Update system | v0.3 | #073, #037–#043, #050, #074 |
-| [M07-mac-app-wrappers.md](M07-mac-app-wrappers.md) | M7 Mac app wrappers | v0.4 | #044–#049, #055, #056, #075–#079, #089 |
-| [M08-real-update-sources.md](M08-real-update-sources.md) | M8 Real update sources | v0.5 | #051, #052 |
-| [M09-macos-integration.md](M09-macos-integration.md) | M9 macOS integration | v0.5 | #054, #080–#082, #085, #086 |
-| [M10-runtime-maintenance.md](M10-runtime-maintenance.md) | M10 Runtime maintenance | v0.5 | #057, #058, #087 |
-| [M11-diagnostics.md](M11-diagnostics.md) | M11 Diagnostics | v0.5 | #059, #060 |
-| [M12-v1-release.md](M12-v1-release.md) | M12 v1.0 release | v1.0 | #083, #084, #088, #090–#094 |
-| [post-v1.md](post-v1.md) | Post-v1 tracks | — | #096, #097 |
+| File | Milestone | Version |
+|---|---|---|
+| [M00-repository-and-vm-foundation.md](M00-repository-and-vm-foundation.md) | M0 Repository and VM foundation | v0.1 |
+| [M01-android-bring-up.md](M01-android-bring-up.md) | M1 Android bring-up | v0.1 |
+| [M02-graphics.md](M02-graphics.md) | M2 Graphics | v0.1 |
+| [M03-input-and-basic-runtime.md](M03-input-and-basic-runtime.md) | M3 Input and basic runtime | v0.1, v0.2 |
+| [M04-daemon-and-guest-protocol.md](M04-daemon-and-guest-protocol.md) | M4 Daemon and guest protocol | v0.2 |
+| [M05-custom-android-image.md](M05-custom-android-image.md) | M5 Custom Android runtime image | v0.3 |
+| [M06-update-system.md](M06-update-system.md) | M6 Update system | v0.3 |
+| [M07-mac-app-wrappers.md](M07-mac-app-wrappers.md) | M7 Mac app wrappers | v0.4 |
+| [M08-real-update-sources.md](M08-real-update-sources.md) | M8 Real update sources | v0.5 |
+| [M09-macos-integration.md](M09-macos-integration.md) | M9 macOS integration | v0.5 |
+| [M10-runtime-maintenance.md](M10-runtime-maintenance.md) | M10 Runtime maintenance | v0.5 |
+| [M11-diagnostics.md](M11-diagnostics.md) | M11 Diagnostics | v0.5 |
+| [M12-v1-release.md](M12-v1-release.md) | M12 v1.0 release | v1.0 |
+| [post-v1.md](post-v1.md) | Post-v1 tracks | — |
 
-Inside each file, tasks appear in the order they should be worked on. That order respects the dependencies in §3.
+Inside each file, tasks are in working order and separated by `---`.
 
 ---
 
 ## 2. Task entry format
 
-Every task in the milestone files uses this layout. Keep the headings, even when a section only says "None".
+### 2.1 Open task
 
-```markdown
-## #NNN Title
+````markdown
+## #N Title
 
 | Field | Value |
 |---|---|
-| Milestone | M<n> (v<x.y>) |
-| Depends on | #…, #… (or "None") |
-| Gate | G<n> (only if this task closes a gate) |
-| Requirements | FR-…, NFR-… |
-| Design | links to the design sections that specify the behavior |
-| Modules / paths | the modules, targets, and repository paths the task changes |
-| Risks / questions | R-…, OQ-… (or "None") |
+| Milestone | M6 (v0.3) |
+| Depends on | #N, #N (or None) |
+| Gate | G7 (only when the task closes a gate) |
+| Design | [update-system.md](../../02-design/update-system.md) §5, §6 (at most six sections) |
+| Code | `Packages/UpdateCore/`, `Tests/IntegrationTests/UpdateTests/` |
 
-### Goal
-One or two sentences: the observable result.
+**Goal.** One or two sentences: the observable result.
 
-### Scope
-In scope, as a bullet list. Then "Out of scope" with explicit exclusions (scope discipline, scope.md §5).
+**Out of scope.**
+- What a reader might expect here, and the task that does it.
 
-### Deliverables
-Files, targets, tools, fixtures, and docs that exist when the task is done.
+**Steps.**
+1. **Short name.** What to do, naming the types and files. **Check:** the test or command that shows it works.
 
-### Implementation steps
-Numbered steps in execution order. Each step is small enough for one pull request, names the types and
-files it touches, and ends in something that can be checked. The design documents hold the full
-specification; steps link to the exact section instead of repeating it.
+**Tests.**
+- T0: what is tested, and where.
+- T1, T2, T3: the same, or "none".
 
-### Tests
-By tier (T0–T3, [../test-strategy.md](../test-strategy.md)): what is tested and where the test lives.
+**Done when.**
+- A checkable statement. All of them must hold to close the task.
 
-### Acceptance criteria
-- [ ] Checkable statements. Every acceptance criterion appears here, reworded only where the design changed it.
+**Pitfalls.**
+- At most three.
+````
 
-### Notes
-Verification results to record, follow-ups to file, and pitfalls.
-```
+- `Gate`, `Out of scope`, and `Pitfalls` are omitted when empty.
+- Every `§N` names its document. The entry links to design sections instead of copying them.
+- `Done when` is a plain list. Progress is not tracked in the file; the GitHub issue is open until every item holds.
+- Keep an entry under 4 KB. A task that needs more is two tasks.
 
-Section references in a task entry: a bare `§N` refers to the first document in the entry's Design row. Every other document is named with a link before its `§N`.
+### 2.2 Closed task
+
+When a task closes, its entry is shortened: the `Steps`, `Tests`, `Done when`, and `Pitfalls` blocks are replaced by one block.
+
+````markdown
+**Result.** What exists now (main types, commands, scripts) and where its tests are. Known limits, each with the task or open question that tracks it.
+````
+
+Keep a closed entry under 1.5 KB.
 
 ---
 
 ## 3. Task index
 
-"Design" names the main design document. Dependencies are hard: a task may start only when every task it depends on meets its acceptance criteria. Work on independent tasks can run in parallel.
+The tasks in working order ([../roadmap.md](../roadmap.md) §1.3). A task can start when every task it depends on is closed or labeled `needs-verification` ([../../05-development/workflow.md](../../05-development/workflow.md) §2.2). `scripts/dev/next-task.py` reads this table and GitHub, and prints the tasks that can start now.
 
-| Task | Title | Milestone | Depends on | Gate | Main design |
-|---|---|---|---|---|---|
-| #001 | Bootstrap Xcode workspace | M0 | None | | [modules.md](../../01-architecture/modules.md), [build-system.md](../../05-development/build-system.md) |
-| #002 | VMDefinition and VM validation | M0 | #001 (done only after #061 step 4) | | [vm.md](../../02-design/vm.md) §2–§3 |
-| #003 | Boot minimal ARM64 Linux | M0 | #002 | G1 | [vm.md](../../02-design/vm.md) §4, §9, §12 |
-| #004 | Serial console logging | M0 | #003 | | [vm.md](../../02-design/vm.md) §6 |
-| #005 | virtio-blk storage | M0 | #003 | | [vm.md](../../02-design/vm.md) §2, §4, §5 |
-| #006 | Guest networking | M0 | #003 | | [vm.md](../../02-design/vm.md) §7 |
-| #007 | virtio-vsock | M0 | #003 | | [vm.md](../../02-design/vm.md) §8 |
-| #061 | Diagnostics foundation | M0 | #001 | | [diagnostics.md](../../02-design/diagnostics.md) §2–§4 |
-| #062 | CI and module dependency checks | M0 | #001 | | [build-system.md](../../05-development/build-system.md), [modules.md](../../01-architecture/modules.md) §3 |
-| #063 | VirtioDeviceCore and test virtio device | M0 | #003 | | [graphics.md](../../02-design/graphics.md) §3 |
-| #008 | Acquire and inventory ARM64 Cuttlefish artifacts | M1 | #001 | | [android-image.md](../../02-design/android-image.md) §2–§3.1 |
-| #064 | Reference boot capture | M1 | #008 | | [android-image.md](../../02-design/android-image.md) §8 |
-| #009 | AndroidImageManifest | M1 | #008 | | [android-image.md](../../02-design/android-image.md) §3.2 |
-| #010 | Extract Android kernel and ramdisk | M1 | #008, #009 | | [android-image.md](../../02-design/android-image.md) §4.1, §6 |
-| #011 | GPT disks and partition mapping | M1 | #005, #009, #010 | | [android-image.md](../../02-design/android-image.md) §4.2, §5 |
-| #012 | Boot the Android kernel | M1 | #010, #011 | | [android-image.md](../../02-design/android-image.md) §6 |
-| #013 | Reach Android init | M1 | #012 | | [android-image.md](../../02-design/android-image.md) §6 |
-| #095 | Cuttlefish host-service substitution | M1 | #013 | | [android-image.md](../../02-design/android-image.md) §7 |
-| #014 | Reach system_server and boot_completed | M1 | #013, #095 | G2 | [android-image.md](../../02-design/android-image.md) §6–§8 |
-| #015 | ADB debugging over vsock | M1 | #014, #007 | | [android-image.md](../../02-design/android-image.md) §7, [runtime-daemon.md](../../02-design/runtime-daemon.md) |
-| #016 | Install HelloText APK | M1 | #015 | | [package-store.md](../../02-design/package-store.md), [cli.md](../../02-design/cli.md) §5 |
-| #017 | Launch HelloText APK | M1 | #016 | | [cli.md](../../02-design/cli.md) §5 |
-| #065 | Runtime image bundle | M1 | #014 | | [android-image.md](../../02-design/android-image.md) §10 |
-| #018 | Analyze the RiftVM GPU prototype | M2 | #001 | | [graphics.md](../../02-design/graphics.md) §2 |
-| #019 | virtio-gpu device layer | M2 | #018, #003, #063 | | [graphics.md](../../02-design/graphics.md) §4 |
-| #020 | Build graphics dependencies | M2 | #018 | | [graphics.md](../../02-design/graphics.md) §5 |
-| #021 | Android detects virtio-gpu | M2 | #019, #014 | | [graphics.md](../../02-design/graphics.md) §4 |
-| #099 | Mesa-enabled VirGL guest image | M2 | #020, #021 | | [graphics.md](../../02-design/graphics.md) §5 |
-| #022 | Android VirGL | M2 | #021, #020, #099 | | [graphics.md](../../02-design/graphics.md) §5 |
-| #023 | Render SurfaceFlinger to Metal | M2 | #020, #022 | G3 | [graphics.md](../../02-design/graphics.md) §6 |
-| #033 | Define GuestProtocol | M3 | #007 | | [guest-protocol.md](../../02-design/guest-protocol.md) |
-| #072 | Guest Agent bootstrap | M3 | #033, #015 | | [guest-protocol.md](../../02-design/guest-protocol.md), [guest-components.md](../../02-design/guest-components.md) |
-| #024 | Pointer input | M3 | #023, #072 | | [input.md](../../02-design/input.md) |
-| #101 | Input route rebinds after the guest agent is lost (follow-up of #024) | M3 | #024 | | [input.md](../../02-design/input.md) §3, [guest-components.md](../../02-design/guest-components.md) §3.3 |
-| #102 | A pointer tap reliably focuses a text field (follow-up of #024 and #025) | M3 | #024 | | [input.md](../../02-design/input.md) §4.1, §7.3 |
-| #103 | Trace intermittent click loss during repeated presses (follow-up of #024) | M3 | #023, #072 | | [input.md](../../02-design/input.md) §4, §8, §11 |
-| #025 | Keyboard input | M3 | #024 | | [input.md](../../02-design/input.md) |
-| #026 | HelloText in a native Mac window | M3 | #023, #024, #025 | G4 | [display-and-windowing.md](../../02-design/display-and-windowing.md) §7 |
-| #027 | RuntimeCore package operations | M3 | #026 | | [package-store.md](../../02-design/package-store.md) |
-| #067 | Retina, density, and resize | M3 | #026 | | [display-and-windowing.md](../../02-design/display-and-windowing.md) §6 |
-| #028 | DisplayPool | M3 | #027, #067 | | [display-and-windowing.md](../../02-design/display-and-windowing.md) §3 |
-| #029 | App on a secondary Android display | M3 | #028 | | [display-and-windowing.md](../../02-design/display-and-windowing.md) §4, §8 |
-| #030 | Two APKs in two native windows | M3 | #029 | G5 | [display-and-windowing.md](../../02-design/display-and-windowing.md), [input.md](../../02-design/input.md) §7 |
-| #031 | Introduce apkrund | M4 | #030 | G6 (headless form) | [runtime-daemon.md](../../02-design/runtime-daemon.md) |
-| #032 | XPC runtime API | M4 | #031 | | [runtime-daemon.md](../../02-design/runtime-daemon.md) §8, [runtime-api.md](../../03-reference/runtime-api.md) |
-| #066 | First-run provisioning | M4 | #032, #065, #068 | | [runtime-daemon.md](../../02-design/runtime-daemon.md) §9, [host-ui.md](../../02-design/host-ui.md) §4 |
-| #068 | Session client and IOSurface window over XPC | M4 | #032 | G6 (full form) | [display-and-windowing.md](../../02-design/display-and-windowing.md) §5 |
-| #034 | Full Guest Agent protocol and vsock transport | M4 | #033, #027 | | [guest-protocol.md](../../02-design/guest-protocol.md), [guest-components.md](../../02-design/guest-components.md) |
-| #053 | Clipboard, plain text | M4 | #034, #068 | | [desktop-integration.md](../../02-design/desktop-integration.md) §4 |
-| #069 | Idle policy and host sleep/wake | M4 | #031 | | [runtime-daemon.md](../../02-design/runtime-daemon.md) §5–§6 |
-| #070 | Performance harness | M4 | #031, #068 | | [diagnostics.md](../../02-design/diagnostics.md) §9 |
-| #071 | APKRun IME | M4 | #034, #068 | | [input.md](../../02-design/input.md) §5, [guest-components.md](../../02-design/guest-components.md) §7 |
-| #035 | APKRun AOSP product | M5 | #034 | | [android-image.md](../../02-design/android-image.md) §11, [guest-components.md](../../02-design/guest-components.md) §10 |
-| #036 | Store Agent | M5 | #035 | | [guest-components.md](../../02-design/guest-components.md) §8, [package-store.md](../../02-design/package-store.md) |
-| #073 | Host inspection and import formats | M6 | #036 | | [package-store.md](../../02-design/package-store.md) |
-| #037 | LocalUpdateProvider | M6 | #036 | | [update-system.md](../../02-design/update-system.md) §4.3 |
-| #038 | PackageInstaller updates | M6 | #037, #073 | | [update-system.md](../../02-design/update-system.md), [package-store.md](../../02-design/package-store.md) |
-| #039 | Update ownership | M6 | #038 | | [update-system.md](../../02-design/update-system.md) |
-| #040 | Gentle updates | M6 | #039 | G7 | [update-system.md](../../02-design/update-system.md) §7 |
-| #041 | Package and signature verification | M6 | #038, #073 | | [update-system.md](../../02-design/update-system.md) §6, [package-store.md](../../02-design/package-store.md) |
-| #042 | Split APK installation | M6 | #041, #073 | | [package-store.md](../../02-design/package-store.md) |
-| #043 | Update rollback | M6 | #041, #042 | | [update-system.md](../../02-design/update-system.md) §8 |
-| #050 | DirectProvider | M6 | #037, #041 | | [update-system.md](../../02-design/update-system.md) §4.4, [direct-provider-manifest.md](../../03-reference/direct-provider-manifest.md) |
-| #074 | Update scheduler | M6 | #037, #040, #050 | | [update-system.md](../../02-design/update-system.md) §3 |
-| #044 | Launcher as a wrapper (APKRunLauncher) | M7 | #032, #068 | | [wrapper.md](../../02-design/wrapper.md) §5 |
-| #045 | WrapperCore generator | M7 | #044 | | [wrapper.md](../../02-design/wrapper.md) §6 |
-| #046 | Generate Hello.app | M7 | #045 | | [wrapper.md](../../02-design/wrapper.md) §4, §7 |
-| #047 | Launch Hello.app end to end | M7 | #046, #031 | G8 | [wrapper.md](../../02-design/wrapper.md) §5 |
-| #055 | Android icon to macOS icon pipeline | M7 | #045, #036 | | [wrapper.md](../../02-design/wrapper.md) §8 |
-| #056 | Finder, Dock, and Spotlight integration | M7 | #055 | | [wrapper.md](../../02-design/wrapper.md) |
-| #048 | Wrapper independent of the APK file | M7 | #047, #037 | | [wrapper.md](../../02-design/wrapper.md), [package-store.md](../../02-design/package-store.md) |
-| #049 | Automatic update behind an unchanged wrapper | M7 | #043, #048 | G9 | [wrapper.md](../../02-design/wrapper.md), [update-system.md](../../02-design/update-system.md) |
-| #075 | `apkrun wrap` CLI | M7 | #046, #048 | | [wrapper.md](../../02-design/wrapper.md) §12, [cli.md](../../02-design/cli.md) |
-| #076 | Wrapper lifecycle and uninstall choices | M7 | #048 | | [wrapper.md](../../02-design/wrapper.md) §9, [host-ui.md](../../02-design/host-ui.md) §8 |
-| #077 | Home and store UI | M7 | #048 | | [host-ui.md](../../02-design/host-ui.md) §5 |
-| #078 | Add flow | M7 | #077, #073 | | [host-ui.md](../../02-design/host-ui.md) §6 |
-| #079 | Per-app settings | M7 | #077, #039, #074 | | [host-ui.md](../../02-design/host-ui.md) §7 |
-| #089 | Portable wrappers | M7 | #075 | | [wrapper.md](../../02-design/wrapper.md) §10 |
-| #051 | F-Droid provider | M8 | #050 | | [update-system.md](../../02-design/update-system.md) §4.5 |
-| #052 | GitHub provider | M8 | #050 | | [update-system.md](../../02-design/update-system.md) §4.6 |
-| #054 | Notifications | M9 | #034, #035, #047 | | [desktop-integration.md](../../02-design/desktop-integration.md) §5 |
-| #080 | Image and HTML clipboard | M9 | #053 | | [desktop-integration.md](../../02-design/desktop-integration.md) §4 |
-| #081 | Links | M9 | #034, #035, #047 | | [desktop-integration.md](../../02-design/desktop-integration.md) §7 |
-| #082 | Files | M9 | #034, #035 | | [desktop-integration.md](../../02-design/desktop-integration.md) §6 |
-| #085 | Locale, time zone, clock format, and time | M9 | #034, #035, #069 | | [desktop-integration.md](../../02-design/desktop-integration.md) §9 |
-| #086 | Menu bar | M9 | #032 | | [host-ui.md](../../02-design/host-ui.md) §12 |
-| #057 | APKRun runtime updater | M10 | #031, #049 | | [runtime-maintenance.md](../../02-design/runtime-maintenance.md) §3 |
-| #058 | Guest image versioning and migration | M10 | #035, #057 | | [runtime-maintenance.md](../../02-design/runtime-maintenance.md) §4, [android-image.md](../../02-design/android-image.md) §12 |
-| #087 | Runtime image distribution | M10 | #058, #065 | | [runtime-maintenance.md](../../02-design/runtime-maintenance.md) §4, [android-image.md](../../02-design/android-image.md) §10.4 |
-| #059 | `apkrun doctor` | M11 | #031, #034, #036 | | [diagnostics.md](../../02-design/diagnostics.md) §7 |
-| #060 | Diagnostics bundle | M11 | #004, #059 | | [diagnostics.md](../../02-design/diagnostics.md) §8 |
-| #083 | Audio output | M12 | #035 | | [desktop-integration.md](../../02-design/desktop-integration.md) §8.1, [vm.md](../../02-design/vm.md) §11 |
-| #084 | Microphone | M12 | #083 | | [desktop-integration.md](../../02-design/desktop-integration.md) §8.2 |
-| #088 | Developer ID signing, notarization, and distribution wrappers | M12 | #062, #046 | | [wrapper.md](../../02-design/wrapper.md) §11, [build-system.md](../../05-development/build-system.md) |
-| #090 | Compatibility database | M12 | #059 | | [diagnostics.md](../../02-design/diagnostics.md) §10 |
-| #091 | Security hardening and fuzzing | M12 | #031, #034 | | [security-model.md](../../01-architecture/security-model.md) |
-| #092 | Localization and accessibility | M12 | #077 | | [host-ui.md](../../02-design/host-ui.md) §13 |
-| #093 | Legal and licensing compliance | M12 | #020, #035 | | [legal-and-licensing.md](../../05-development/legal-and-licensing.md) |
-| #094 | v1.0 release readiness | M12 | every other v1.0 task | | [../roadmap.md](../roadmap.md) §3 |
-| #096 | Vulkan track | Post-v1 | #023, #035 | | [graphics.md](../../02-design/graphics.md) §10 |
-| #097 | Google Play authority | Post-v1 | #039, #049 | | [update-system.md](../../02-design/update-system.md), [package-store.md](../../02-design/package-store.md) |
-
-Gates G1–G9 are the project checkpoints. Their pass conditions are in [../roadmap.md](../roadmap.md) §2. The post-v1 tracks are numbered "Phase 21" (Vulkan) and "Phase 22" (Google Play).
+| Task | Title | Milestone | Depends on | Gate |
+|---|---|---|---|---|
+| #001 | Bootstrap Xcode workspace | M0 | None |  |
+| #002 | VMDefinition and VM validation | M0 | #001, #061 |  |
+| #003 | Boot minimal ARM64 Linux | M0 | #002 | G1 |
+| #004 | Serial console logging | M0 | #003 |  |
+| #005 | virtio-blk storage | M0 | #003 |  |
+| #006 | Guest networking | M0 | #003 |  |
+| #007 | virtio-vsock | M0 | #003 |  |
+| #061 | Diagnostics foundation | M0 | #001 |  |
+| #062 | CI and module dependency checks | M0 | #001 |  |
+| #063 | VirtioDeviceCore and test virtio device | M0 | #003 |  |
+| #008 | Acquire and inventory ARM64 Cuttlefish artifacts | M1 | #001 |  |
+| #064 | Reference boot capture | M1 | #008 |  |
+| #009 | AndroidImageManifest | M1 | #008 |  |
+| #010 | Extract Android kernel and ramdisk | M1 | #008, #009 |  |
+| #011 | GPT disks and partition mapping | M1 | #005, #009, #010 |  |
+| #012 | Boot the Android kernel | M1 | #010, #011 |  |
+| #013 | Reach Android init | M1 | #012 |  |
+| #095 | Cuttlefish host-service substitution | M1 | #013 |  |
+| #014 | Reach system_server and boot_completed | M1 | #013, #095 | G2 |
+| #015 | ADB debugging over vsock | M1 | #014, #007 |  |
+| #016 | Install HelloText APK | M1 | #015 |  |
+| #017 | Launch HelloText APK | M1 | #016 |  |
+| #065 | Runtime image bundle | M1 | #014 |  |
+| #018 | Analyze the RiftVM GPU prototype | M2 | #001 |  |
+| #019 | virtio-gpu device layer | M2 | #018, #003, #063 |  |
+| #020 | Build graphics dependencies | M2 | #018 |  |
+| #021 | Android detects virtio-gpu | M2 | #019, #014 |  |
+| #099 | Mesa-enabled VirGL guest image | M2 | #020, #021 |  |
+| #022 | Android VirGL | M2 | #021, #020, #099 |  |
+| #023 | Render SurfaceFlinger to Metal | M2 | #020, #022 | G3 |
+| #105 | VirGL submit errors during app runs | M2 | #023 |  |
+| #033 | Define GuestProtocol | M3 | #007 |  |
+| #072 | Guest Agent bootstrap | M3 | #033, #015 |  |
+| #024 | Pointer input | M3 | #023, #072 |  |
+| #025 | Keyboard input | M3 | #024 |  |
+| #101 | Input route rebinds after the guest agent is lost | M3 | #024 |  |
+| #102 | A pointer tap reliably focuses a text field | M3 | #024 |  |
+| #103 | Trace intermittent click loss during repeated presses | M3 | #023, #072 |  |
+| #026 | HelloText in a native Mac window | M3 | #023, #024, #025 | G4 |
+| #027 | RuntimeCore package operations | M3 | #026 |  |
+| #067 | Retina, density, and resize | M3 | #026 |  |
+| #028 | DisplayPool | M3 | #027, #067 |  |
+| #029 | App on a secondary Android display | M3 | #028 |  |
+| #030 | Two APKs in two native windows | M3 | #029 | G5 |
+| #098 | Parallel VM test runs | M3 | #014 |  |
+| #031 | Introduce apkrund | M4 | #030 | G6 (headless form) |
+| #032 | XPC runtime API | M4 | #031 |  |
+| #068 | Session client and IOSurface window over XPC | M4 | #032 | G6 (full form) |
+| #044 | Launcher as a wrapper (APKRunLauncher) | M7 | #032, #068 |  |
+| #045 | WrapperCore generator | M7 | #044 |  |
+| #046 | Generate Hello.app | M7 | #045 |  |
+| #047 | Launch Hello.app end to end | M7 | #046, #031 | G8 |
+| #034 | Full Guest Agent protocol and vsock transport | M4 | #033, #027 |  |
+| #066 | First-run provisioning | M4 | #032, #065, #068 |  |
+| #069 | Idle policy and host sleep/wake | M4 | #031 |  |
+| #070 | Performance harness | M4 | #031, #068 |  |
+| #053 | Clipboard, plain text | M4 | #034, #068 |  |
+| #071 | APKRun IME | M4 | #034, #068 |  |
+| #035 | APKRun AOSP product | M5 | #034 |  |
+| #036 | Store Agent | M5 | #035 |  |
+| #073 | Host inspection and import formats | M6 | #036 |  |
+| #037 | LocalUpdateProvider | M6 | #036 |  |
+| #038 | PackageInstaller updates | M6 | #037, #073 |  |
+| #039 | Update ownership | M6 | #038 |  |
+| #040 | Gentle updates | M6 | #039 | G7 |
+| #041 | Package and signature verification | M6 | #038, #073 |  |
+| #042 | Split APK installation | M6 | #041, #073 |  |
+| #043 | Update rollback | M6 | #041, #042 |  |
+| #050 | DirectProvider | M6 | #037, #041 |  |
+| #074 | Update scheduler | M6 | #037, #040, #050 |  |
+| #055 | Android icon to macOS icon pipeline | M7 | #045, #036 |  |
+| #056 | Finder, Dock, and Spotlight integration | M7 | #055 |  |
+| #048 | Wrapper independent of the APK file | M7 | #047, #037 |  |
+| #049 | Automatic update behind an unchanged wrapper | M7 | #043, #048 | G9 |
+| #075 | `apkrun wrap` CLI | M7 | #046, #048 |  |
+| #076 | Wrapper lifecycle and uninstall choices | M7 | #048 |  |
+| #077 | Home and store UI | M7 | #048 |  |
+| #078 | Add flow | M7 | #077, #073 |  |
+| #079 | Per-app settings | M7 | #077, #039, #074 |  |
+| #089 | Portable wrappers | M7 | #075 |  |
+| #051 | F-Droid provider | M8 | #050 |  |
+| #052 | GitHub provider | M8 | #050 |  |
+| #054 | Notifications | M9 | #034, #035, #047 |  |
+| #080 | Image and HTML clipboard | M9 | #053 |  |
+| #081 | Links | M9 | #034, #035, #047 |  |
+| #082 | Files | M9 | #034, #035 |  |
+| #085 | Locale, time zone, clock format, and time | M9 | #034, #035, #069 |  |
+| #086 | Menu bar | M9 | #032 |  |
+| #057 | APKRun runtime updater | M10 | #031, #049 |  |
+| #058 | Guest image versioning and migration | M10 | #035, #057 |  |
+| #087 | Runtime image distribution | M10 | #058, #065 |  |
+| #059 | `apkrun doctor` | M11 | #031, #034, #036 |  |
+| #060 | Diagnostics bundle | M11 | #004, #059 |  |
+| #083 | Audio output | M12 | #035 |  |
+| #084 | Microphone | M12 | #083 |  |
+| #088 | Developer ID signing, notarization, and distribution wrappers | M12 | #062, #046 |  |
+| #090 | Compatibility database | M12 | #059 |  |
+| #091 | Security hardening and fuzzing | M12 | #031, #034 |  |
+| #092 | Localization and accessibility | M12 | #077 |  |
+| #093 | Legal and licensing compliance | M12 | #020, #035 |  |
+| #094 | v1.0 release readiness | M12 | every other v1.0 task |  |
+| #096 | Vulkan track | Post-v1 | #023, #035 |  |
+| #097 | Google Play authority | Post-v1 | #039, #049 |  |
 
 ---
 
-## 4. Rules for working an issue
+## 4. Rules
 
-- In a new repository, a maintainer first creates the GitHub issues of #001–#097 from the milestone files, in number order, with the task template, before any other issue or pull request is opened. GitHub numbers issues and pull requests in one sequence, so this keeps each task's number equal to its issue number ([../../05-development/workflow.md](../../05-development/workflow.md) §2.4).
-- Take the lowest-numbered task in the current milestone whose dependencies are done, unless the roadmap says otherwise ([../roadmap.md](../roadmap.md) §1).
-- One task per branch. The branch and pull request name the task (`task/024-pointer-input`, "#024 Pointer input"). [../../05-development/workflow.md](../../05-development/workflow.md) has the branch, review, and merge rules.
-- Follow the steps in order. If a step is wrong or impossible, change the design document and this file in the same pull request, and say why in the pull request.
-- Keep the scope. If finishing a task needs something outside its scope, stop and file a follow-up task ([../../00-product/scope.md](../../00-product/scope.md) §5). New tasks get their number from GitHub when their issue is opened (#098 and up, not contiguous) and go into the milestone file and §3 ([../../05-development/workflow.md](../../05-development/workflow.md) §2.4).
-- Record verification results where the task's Notes section says (design document verification logs, [../risks.md](../risks.md), ADRs).
-- A task is done when all acceptance criteria are checked, the tests of every tier the task lists pass, and the documents the task changes are updated.
-
-## 5. Current progress
-
-**Updated:** 2026-10-17 UTC (local `main`)
-**Working branch:** `main`
-
-Task entries remain the source of truth for scope and acceptance. This section
-summarizes the work in progress on `main`. Its facts come from three sources:
-the acceptance checkboxes in each milestone file (counted per task by script),
-the IR entries that record open decisions, and the git log of `main`. The table
-lists the six partially checked tasks, #035 which has no ticked box, #022,
-#023, and #072 whose boxes are all ticked but whose closure evidence or review
-is still open, and #098. The other 61 baseline tasks with no ticked box are not
-listed. All tasks whose acceptance boxes are ticked are listed below the table.
-
-**Counts on `main`:** 96 tasks have a milestone entry (#001 to #095 and #099; #096 and
-#097 are post-v1 tracks). 28 have every box ticked, 6 have some boxes ticked and
-some open, and 62 have no ticked box. The IR log has 864 entries: 850 are marked
-exactly "Needs maintainer review", 6 add a qualifier to that status, 7 carry
-another status, and one is superseded. Two entries carry the number IR-901 (see
-the note below the table).
-
-**Project position:** The task issues #001 to #097 are mirrored as issues #2 to #98 (IR-293).
-Branch protection on `main` requires the eight CI checks (IR-294). IR-297 records the decision to
-close #002 and #003 as implemented, with maintainer review open. On GitHub at 2026-10-11, issue #3
-(#002) is closed and issue #4 (#003) is open. #014 (8 of 8) and #015 (6 of 6) are ticked on `main`;
-the clean-`main` G2 pass for #014 is recorded in `f064070`, and the final-`main` pass in `37a81b5`.
-The stock Android image boots directly on Virtualization.framework (IR-306).
-
-| Task | Boxes ticked on `main` | Open on `main` | IR records |
-|---|---|---|---|
-| [#003 Boot minimal ARM64 Linux](M00-repository-and-vm-foundation.md#003-boot-minimal-arm64-linux) | 11 of 12 | The `linux-guest` T2 box stays open. The criterion needs a maintainer-run T2 result for the reviewed commit until lab capacity allows PR runs, and no lab runner exists (IR-295). | IR-295, IR-313, IR-314, IR-297 |
-| [#010 Extract Android kernel and ramdisk](M01-android-bring-up.md#010-extract-android-kernel-and-ramdisk) | 6 of 7 | Each `(reference)` value must trace to a capture or a VZ observation. The `drm_virgl` values stay unconfirmed until #022 confirms them; the maintainer chooses between accepting the source-derived set and emptying it. | IR-400, IR-401, IR-404 |
-| [#022 Android VirGL](M02-graphics.md#022-android-virgl) | 6 of 6 | IR-1333's focused VM rerun supports the narrowed guest-report and renderer-counter criterion 5, pending maintainer review. IR-1334 is partial IR-849 evidence: a bounded sample found a nonzero byte in resource 4's attached backing before its first renderer submission. IR-1335 covers reset and forced stop with `kmscube` paused and the backing attached, but does not establish an in-flight operation at invalidation. IR-1343 records that only the synthetic fixture has an exact pixel/hash comparison; KMSCube replay uses zero-filled backing and does not prove guest pixels. IR-1359 adds privacy-safe renderer operation labels and records a current-main direct-view T2 run that passed its click assertions while logging six failed submits. The first submit shares a render thread with VirGL resource/transfer/command-buffer errors; an earlier backing-attachment rejection occurred on another thread without a resource ID, so its connection is unproven and the root cause remains unknown. The failing direct-view cadence run repeated six submit errors and the `COPY_TRANSFER3D: 22` callback shape on a render thread (IR-1361); it does not correlate these errors with the two missing fixture increments. The input test does not establish graphics health. Whether the narrowed replay meets the original step 3 expectation remains under maintainer review. IR-849 remains open for guest-write/transfer correlation and invalidation ordering. IR-961 still needs maintainer acceptance of the ODM-overlay evidence. | IR-800, IR-801, IR-849, IR-850, IR-905, IR-961, IR-980, IR-1332, IR-1333, IR-1334, IR-1335, IR-1343, IR-1359, IR-1361 |
-| [#023 Render SurfaceFlinger to Metal](M02-graphics.md#023-render-surfaceflinger-to-metal) | 9 of 9 | The G3 gate passed on 2026-10-16 at `7241003`: one AcceptanceTests case passed, the evidence checker exited 0, HelloGL averaged 59.99 fps with 0 mixed frames, and both readback/copy counters stayed at 0. C01-6 received a bounded sampled review of the 480×312, 1797.512-second source recording; five 5-second APKRun-window samples are committed as permanent evidence and show no visible tearing or stutter in the reviewed color transitions (IR-1344). The full-screen source remains local because intervals without the APKRun window include unrelated desktop content. IR-1211 and IR-1342 align the gate target. M2 closure still depends on #022 review. | IR-1203 to IR-1225, IR-1341, IR-1211, IR-1342, IR-1344 |
-| [#061 Diagnostics foundation](M00-repository-and-vm-foundation.md#061-diagnostics-foundation) | 9 of 10 | OQ-04 (`log show` as a standard user) stays open. This host has no non-admin account. The limit is recorded in the [#061 Notes](M00-repository-and-vm-foundation.md#061-diagnostics-foundation) and in [open-questions.md](../open-questions.md). | No IR entry records OQ-04. IR-246 and IR-247 (maintainer review pending) are the open review. |
-| [#064 Reference boot capture](M01-android-bring-up.md#064-reference-boot-capture) | 2 of 6 | Re-scoped (IR-305). Open: the `default`, `target`, and `swiftshader` profiles with every §8.3 item (deferred); normalized captures with no serial numbers, MAC addresses, host paths, or keys; the serial-shell run of `guest-capture.txt` (part of #014 step 5); and a schema-version-3 `host.json` with path-free host-tool identities (deferred). | IR-305, IR-306, IR-269, IR-271, IR-184 |
-| [#072 Guest Agent bootstrap](M03-input-and-basic-runtime.md#072-guest-agent-bootstrap) | 7 of 7 | The T2 suite `GuestAgentTests` passed 8 of 8 in the Xcode test host on 2026-10-13 (IR-438). The CLI does not print `runtime.requiredAgentUnavailable`, and whether it should is open; the code is asserted at T0 (IR-1229). Closure is for the maintainer (IR-1259). The device checks of 2026-10-12 are in the Notes. | IR-1226 to IR-1231, IR-435, IR-438, IR-1253 to IR-1255, IR-425, IR-431 (method variants) |
-| [#024 Pointer input](M03-input-and-basic-runtime.md#024-pointer-input) | 6 of 8 | Open: the 100-of-100 box (box 3); the click-loss investigation is follow-up #103. Six consecutive CLI batches of 100 clicks logged 590 of 600 (IR-1290), and the batch verdicts cannot show three consecutive 100-of-100 batches. Current-main direct-view T2 passed the 100-click test in two Xcode repetitions (IR-1357); it calls view handlers directly at a slower cadence and uses a separate VM per repetition, so it does not establish three product-cadence WindowServer batches in one session. The new opt-in direct-view cadence diagnostic persisted batch 1, then recorded 98 of 100 clicks in batch 2 at the failure read and stopped before batch 3; its phase, counter, and periodic ACK limits are recorded in IR-1360. A separate batch-two direct-view trace passed with 100 clicks and complete host/route/ACK/fixture joins, but its per-event trace and debug listener perturb timing, so it neither reproduces nor explains the earlier deficit (IR-1362). Neither diagnostic is #024/#103 acceptance. IR-1347 adds a T0-verified exact host wire touch-phase check per 100-click batch; it does not establish route delivery or close the GUI/product acceptance. IR-1348 makes #103's synthetic trace reject unexpected `cancelAll` at the translated or routed boundary, but it does not diagnose Android-side click loss. IR-1349 adds T0-verified, capture-only pressed-state and counter-write timing records; IR-1350 parses transitions separately and accepts only valid click records, joining only unique-UP callbacks. Neither change diagnoses the click-loss cause. IR-1358's read-only TCC query shows Accessibility denied for `io.apkrun.testhost` while `com.openai.codex` is granted; these are separate app identities, and the status does not distinguish an explicit denial from missing authorization. A further signed local rerun after the user believed permission was enabled again skipped both repetitions at the test host's false preflight (0.011 s and 0.008 s; 0.0095 s aggregate), without starting a VM (IR-1363). All 10 synthetic trace-join T0 tests pass on current main, without a VM. The trackpad and wheel box (box 4) is the manual check C01-2 (T3). Current-main T2 passed HelloCompose drag, precise fixed-sign scroll, and wheel-scroll (IR-1353), but physical trackpad/wheel behavior and the configured macOS natural-scrolling setting remain unverified, so C01-2 remains open. Box 7's host-side clamping criterion is covered by T0; the top/left guest-side T2 also passed on current `main` (IR-1355), with the local-session and per-event acceptance limits recorded in the task notes. After the user enabled `APKRunTestHost` in macOS 27 Device Control and Data Access, the #103 WindowServer test passed its permission preflight. Shared-Mac r10/r11 runs were disrupted by foreground changes and unclassified GUI input, so they remain inconclusive; the user directed feature work to continue with #024 box 3 open (IR-1364). The direct-view T2 also logged repeated live-VM VirGL errors before shutdown (IR-1357); their relationship to input is unknown. The route does not rebind after an agent loss; the follow-up is #101. The T2 suite `AndroidInputTests` passes 7 of 7 on the odm7 bundle in its final run (IR-1294), and its click case logged 99 of 100 in one of six full runs (IR-1294). | IR-1233 to IR-1257, IR-1275 to IR-1294, IR-1314, IR-1316, IR-1318, IR-1338, IR-1340, IR-1346, IR-1347, IR-1348, IR-1349, IR-1350, IR-1351, IR-1353, IR-1355, IR-1356, IR-1357, IR-1358, IR-1360, IR-1361, IR-1362, IR-1363, IR-1364 |
-| [#095 Cuttlefish host-service substitution](M01-android-bring-up.md#095-cuttlefish-host-service-substitution) | 6 of 7 | Criterion 1 (all 20 console ports attached and numbered by `APKRUN-PORT` markers) stays open. The pinned test kernel exposes 8 `hvc` nodes (IR-372), and the 2026-10-11 boot received markers on `hvc0` and `hvc1` only (IR-877). IR-901 (second entry) records 13 ports that receive their full marker in two boots, and four ports (`hvc5`, `hvc8`, `hvc9`, `hvc12`) that product HALs read. The criterion text does not yet reflect IR-901. | IR-372, IR-873, IR-877, IR-901 (second entry) |
-| [#099 Mesa-enabled VirGL guest image](M02-graphics.md#099-mesa-enabled-virgl-guest-image) | 4 of 4 | Its Mesa runtime check passes on the 2026.10.3 diagnostic control, including HelloGL in `untrusted_app`. The proposed #099 completion boundary is pending maintainer review in IR-1332. The image without a diagnostic overlay still fails EGL; #035 step 8 must confirm graphics on the custom image under enforcing product policy and without a diagnostic profile. The two-rule profile still fails HelloGL, and the `platform_app` `sysfs` AVC timing does not establish causality (IR-1329 to IR-1332). | IR-650, IR-727, IR-751, IR-800, IR-837, IR-997, IR-999, IR-1323, IR-1326, IR-1327, IR-1328, IR-1329, IR-1330, IR-1331, IR-1332 |
-| [#035 APKRun AOSP product](M05-custom-android-image.md#035-apkrun-aosp-product) | 0 of 10 | All 10 boxes are open. They cover the custom image's boot and production-policy graphics check (SurfaceFlinger Mesa VirGL plus HelloGL in `untrusted_app` with no diagnostic profile), the product contents, the remote build with provenance, the priv-app domains, the Hello capability list, the `untrusted_app` socket test, the sepolicy and `avc` checks, ADB in both developer modes, the reference diff, and the release AVB state (OQ-36, IR-1332). IR-900 to IR-906 record the earlier sepolicy route for the SurfaceFlinger sysfs label, which #022 criterion 4 needs. | IR-900, IR-903, IR-905, IR-906, IR-1332 |
-| #098 Parallel VM runs (follow-up, GitHub issue #100) | not in §3 or a milestone file | The T2 behavior is unverified (IR-539). The one-VM rule (test-strategy §3.6) needs a maintainer decision (IR-525). | IR-525, IR-528, IR-539 |
-
-Complete on acceptance boxes: #001, #002, #004, #005, #006, #007, #008, #009, #011, #012, #013, #014, #015, #016, #017, #018, #019, #020, #021, #022, #023, #025, #033, #062, #063, #065, #072, #099. A fully ticked task can still have a dependency, manual check, or maintainer review open, as listed above.
-
-**Recent work on `main`** (git log, 2026-10-09 to 2026-10-18): #022 kmscube on the VM,
-renderer failure checks, bounded backing observations, paused reset/stop lifecycle, and
-privacy-safe operation labels with follow-up T2 evidence
-(`537731c`, `efc4fef`, `f622092`, `bc96946`, `911f5bd`, `783e912`, `09a6089`); #024's
-read-only test-host permission recheck (`e16c0be`); the #099 offline Mesa injection and the verity
-steps (`10f921e` to `ce7a21e`); the #095 port and marker results (`bfd0860`, `c217fc8`,
-`4c6b7c0`); #016 PackageInstaller (`3d0031e`); the exact-image ODM control builder and EGL
-evidence (`ad78532`, `d9bc980`, `5f0681a`, `39ec354`); and the HelloGL application-domain
-comparison and the M2 policy boundary recorded in IR-1331 and IR-1332; #103
-trace-stage discrepancies, cancellation checks, pressed-transition instrumentation, and typed
-fixture observations, plus #024 wire-phase counts (`d76f80f`, `50ff272`, `efb78ac`,
-`11a5832`, `f8b0c00`, `15cfa9f`; IR-1346 to IR-1350); and #024's opt-in direct-view
-cadence diagnostic, its timing-perturbing second-batch #103 trace, the repeated live VirGL
-failure shape, the enabled test-host permission, and inconclusive shared-Mac WindowServer runs; #026 implementation resumes by user direction (`1b78455`, `11d0029`; IR-1360 to IR-1364).
-
-**Note on IR-901.** The number IR-901 is used by the SELinux compiler entry only. The HAL-port entry was renumbered to IR-907 to remove the duplicate.
-offline", is the entry that IR-904 cites. The second, "Four of the marked ports are read by product
-HALs", was added by `213984d`; its Affected documents cite IR-899, which does not exist. Both are
-kept as they are until a maintainer decides the numbering.
-
-**Process gap.** #098 is not yet in §3 or in a milestone file, as AGENTS.md §11 requires for a
-follow-up task.
+- One task at a time per agent. Follow [../../../AGENTS.md](../../../AGENTS.md) §2.
+- Follow the steps in order. If a step is wrong or impossible, fix the design document and the entry in the same commit, and say why in the commit message.
+- Keep the scope. Work that is outside the entry becomes a new task: open a GitHub issue, then add its entry to the milestone file and its row to §3 in the same commit ([../../05-development/workflow.md](../../05-development/workflow.md) §2.4).

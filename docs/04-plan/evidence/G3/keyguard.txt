@@ -1,6 +1,0 @@
-    mKeyguardOccluded=false mPendingKeyguardOccluded=false
-    KeyguardServiceDelegate
-      deviceHasKeyguard=true
-    mKeyguardDrawComplete=true mWindowManagerDrawComplete=true
-    isKeyguardShowing=false
-    SettingsEntry{mWindowingMode=0, mUserRotationMode=null, mUserRotation=null, mForcedWidth=0, mForcedHeight=0, mForcedDensity=0, mForcedDensityRatio=0.0, mForcedScalingMode=null, mRemoveContentMode=0, mShouldShowWithInsecureKeyguard=null, mShouldShowSystemDecors=null, mIsHomeSupported=null, mShouldShowIme=null, mFixedToUserRotation=null, mIgnoreOrientationRequest=null, mIgnoreDisplayCutout=null, mDontMoveToTop=null, mForceAppsUniversalResizable=null, mCanStealTopFocus=null}

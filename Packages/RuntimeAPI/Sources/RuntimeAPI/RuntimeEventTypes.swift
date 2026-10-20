@@ -127,13 +127,85 @@ public struct EventEnvelope: Codable, Equatable, Sendable {
     }
 }
 
+/// A package change published on the `packages` event topic.
+///
+/// API 1.10 publishes changes produced by successful package installs. Other package-store changes
+/// remain reserved for later event publishers. Unknown changes decode as ``unknown``.
+public enum PackageChange: Codable, Equatable, Sendable {
+    /// A package was installed for the first time or restored with its retained data.
+    case installed(RuntimePackageSummary)
+    /// A package was replaced by a new version or reinstalled at the same version. `from`
+    /// is the best version observed before installation; an out-of-band Android install may race.
+    case updated(RuntimePackageSummary, from: RuntimeVersionCode)
+    /// The daemon reported a package change added by a newer API version.
+    case unknown
+
+    private enum AssociatedKey: String, CodingKey {
+        case first = "_0"
+        case from
+    }
+
+    /// Decodes an install change or preserves an event added by a newer API version.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: RuntimeEventCodingKey.self)
+        guard container.allKeys.count == 1, let key = container.allKeys.first else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "Expected one package change case.")
+            )
+        }
+        switch key.stringValue {
+        case "installed":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .installed(try payload.decode(RuntimePackageSummary.self, forKey: .first))
+        case "updated":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .updated(
+                try payload.decode(RuntimePackageSummary.self, forKey: .first),
+                from: try payload.decode(RuntimeVersionCode.self, forKey: .from)
+            )
+        default:
+            self = .unknown
+        }
+    }
+
+    /// Encodes a known install change.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: RuntimeEventCodingKey.self)
+        switch self {
+        case .installed(let summary):
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self,
+                forKey: RuntimeEventCodingKey("installed")
+            )
+            try payload.encode(summary, forKey: .first)
+        case .updated(let summary, let from):
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self,
+                forKey: RuntimeEventCodingKey("updated")
+            )
+            try payload.encode(summary, forKey: .first)
+            try payload.encode(from, forKey: .from)
+        case .unknown:
+            throw EncodingError.invalidValue(
+                self,
+                .init(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "Unknown package changes cannot be encoded."
+                )
+            )
+        }
+    }
+}
+
 /// The payload carried by an event envelope.
 ///
-/// API 1.9 implements operation events and queue-resynchronization notices. Payloads added by a
-/// newer API version decode as ``unknown`` so an older client can keep processing the batch.
+/// Payloads added by a newer API version decode as ``unknown`` so an older client can keep
+/// processing the batch.
 public enum EventPayload: Codable, Equatable, Sendable {
     /// Runtime state and boot progress.
     case runtime(RuntimeChange)
+    /// Package install and store changes.
+    case packages(PackageChange)
     /// An operation started, progressed, or finished.
     case operations(OperationEvent)
     /// Events for the topic were dropped; fetch a fresh snapshot.
@@ -143,6 +215,7 @@ public enum EventPayload: Codable, Equatable, Sendable {
 
     private enum CaseKey: String, CodingKey {
         case runtime
+        case packages
         case operations
         case resyncRequired
     }
@@ -163,6 +236,9 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case "runtime":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .runtime(try payload.decode(RuntimeChange.self, forKey: .first))
+        case "packages":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .packages(try payload.decode(PackageChange.self, forKey: .first))
         case "operations":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .operations(try payload.decode(OperationEvent.self, forKey: .first))
@@ -181,6 +257,9 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case .runtime(let event):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .runtime)
             try payload.encode(event, forKey: .first)
+        case .packages(let change):
+            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .packages)
+            try payload.encode(change, forKey: .first)
         case .operations(let event):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .operations)
             try payload.encode(event, forKey: .first)

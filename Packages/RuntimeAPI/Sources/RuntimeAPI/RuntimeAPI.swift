@@ -6,8 +6,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.2 adds control-endpoint launch and terminate operations; 1.3 adds bounded endpoint admission;
     /// 1.4 adds package queries; 1.5 adds runtime reset; 1.6 adds one-request runtime restart;
     /// 1.7 adds daemon-backed package import and install; 1.8 adds asynchronous install handles
-    /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery.
-    public static let current = APIVersion(major: 1, minor: 9)
+    /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
+    /// 1.10 adds package install change events.
+    public static let current = APIVersion(major: 1, minor: 10)
 
     /// The incompatible protocol generation.
     public let major: Int

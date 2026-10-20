@@ -542,7 +542,7 @@ public struct RuntimeInstallOptions: Codable, Sendable, Equatable {
     public var authority: RuntimeUpdateAuthority
     /// Whether to request wrapper creation after installation.
     public var createWrapper: Bool
-    /// Whether a lower version may replace an installed version after explicit user confirmation.
+    /// Reserved for wire compatibility. RuntimeHost rejects lower-version imports regardless.
     public var allowDowngrade: Bool
 
     /// Creates installation options.

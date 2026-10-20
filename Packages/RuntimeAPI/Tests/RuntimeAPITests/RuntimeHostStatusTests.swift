@@ -4,7 +4,7 @@ import Testing
 @testable import RuntimeAPI
 
 @Test func runtimeRestartAdvancesAPIMinorVersion() {
-    #expect(APIVersion.current == APIVersion(major: 1, minor: 9))
+    #expect(APIVersion.current == APIVersion(major: 1, minor: 10))
 }
 
 @Test func runtimeRestartRequestRoundTripsVersionedHeader() throws {

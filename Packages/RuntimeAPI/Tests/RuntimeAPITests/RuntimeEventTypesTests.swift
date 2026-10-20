@@ -16,7 +16,7 @@ private func eventRoundTrip<Value: Codable & Equatable>(_ value: Value) throws -
     let subscribe = RuntimeSubscribeControlRequest(header: header, topics: [.operations, .packages])
     let unsubscribe = RuntimeUnsubscribeControlRequest(header: header, topics: [.operations])
 
-    #expect(APIVersion.current == APIVersion(major: 1, minor: 9))
+    #expect(APIVersion.current == APIVersion(major: 1, minor: 10))
     #expect(try topics.map(eventRoundTrip) == topics)
     #expect(try eventRoundTrip(subscribe) == subscribe)
     #expect(try eventRoundTrip(unsubscribe) == unsubscribe)
@@ -95,6 +95,41 @@ private func eventRoundTrip<Value: Codable & Equatable>(_ value: Value) throws -
     #expect(try operationEvents.map(eventRoundTrip) == operationEvents)
     #expect(try envelopes.map(eventRoundTrip) == envelopes)
     #expect(try eventRoundTrip(envelopes) == envelopes)
+}
+
+@Test func packageChangesAndEnvelopesRoundTrip() throws {
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let summary = RuntimePackageSummary(
+        packageID: packageID,
+        displayName: "Hello Text",
+        versionCode: 7,
+        state: .installed
+    )
+    let changes: [PackageChange] = [
+        .installed(summary),
+        .updated(summary, from: 6),
+    ]
+    let envelopes = changes.enumerated().map { index, change in
+        EventEnvelope(
+            topic: .packages,
+            seq: UInt64(index + 1),
+            time: now,
+            payload: .packages(change)
+        )
+    }
+
+    #expect(try changes.map(eventRoundTrip) == changes)
+    #expect(try envelopes.map(eventRoundTrip) == envelopes)
+    #expect(
+        try JSONDecoder().decode(
+            PackageChange.self,
+            from: Data(#"{"rolledBack":{"_0":{},"from":7}}"#.utf8)
+        ) == .unknown
+    )
+    #expect(throws: EncodingError.self) {
+        try JSONEncoder().encode(PackageChange.unknown)
+    }
 }
 
 @Test func runtimeChangesAndEventEnvelopesRoundTrip() throws {

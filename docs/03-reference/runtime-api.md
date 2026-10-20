@@ -98,7 +98,7 @@ apkrund sets the requirement on each anonymous listener with `NSXPCListener.setC
 
 ```swift
 public enum RuntimeAPI {
-    public static let version = APIVersion(major: 1, minor: 9)       // the control and wrapper protocols
+    public static let version = APIVersion(major: 1, minor: 10)      // the control and wrapper protocols
     public static let wrapperMajors: [Int] = [1]                     // served on the wrapper endpoint: N and N−1
     public static let brokerRevision = 2                              // additive-only broker protocol
     public static let maintenanceRevision = 1                         // additive-only MaintenanceControl
@@ -117,6 +117,7 @@ public struct APIVersion: Codable, Sendable, Comparable { public var major: Int;
 - Version `1.7` adds authenticated `importPackage` and `installImported` control calls. Import passes opened `FileHandle`s beside its versioned JSON request, returns the existing package preview, and does not start Android. Install starts Android on demand and returns the package summary. The first implementation is synchronous and manual-authority only; the operation handles and progress events in §8.1 remain the target behavior.
 - Version `1.8` adds `beginInstallImported`, `cancelOperation`, `listOperations`, and `operationStatus`. The daemon retains running operations and the last 50 finished operations in memory; the synchronous `installImported` selector remains for existing clients. The first tracked operation is manual-authority install, and CLI clients poll snapshots until event subscriptions are available.
 - Version `1.9` adds `subscribe` and `unsubscribe`, the exported event-sink handshake, and sequenced event batches. RuntimeHost publishes runtime state and estimated boot progress, plus tracked package-install events on `operations`. The other topic publishers, session callbacks, and stream callbacks remain outstanding under #032 and #068.
+- Version `1.10` adds `packages` event payloads for successful first installs, retained-data restores, updates, and same-version reinstalls. Other package changes and their publishers remain outstanding under #032.
 - `components.json` of a release records `"runtimeAPI": { "current": "M.m", "wrapperMajors": [N−1, N] }` ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.3). A major is dropped only as that section allows.
 - The #031 `RuntimeHostStatus` includes optional `guestAgentState` and `guestAgentProtocolVersion` fields. Clients accept their absence as `nil`.
 
@@ -636,6 +637,8 @@ Topics, payloads, coalescing, and ordering are in §16. Summary:
 | `maintenance` | `MaintenanceEvent` | C |
 | `wrappers` | `WrapperChange` | C |
 | `integrations` | `IntegrationChange` | C |
+
+API 1.10 publishes `packages.installed` and `packages.updated` after successful installs. For `updated`, `from` is the best pre-install version observed by PackageStore (live Android when present, otherwise the managed record); an out-of-band Android install can race with this observation.
 
 ### 4.9 File handles, bookmarks, and IOSurfaces
 
@@ -1298,6 +1301,11 @@ public struct OperationHandle: Codable, Sendable {
 - Normal `apkrun install` currently sends `authority: .manual` and
   `createWrapper: false`. `--yes` skips only the confirmation prompt; it does
   not skip package identity, signer, version, ABI, SDK, split, or hash checks.
+- `RuntimeInstallOptions.allowDowngrade` is retained for wire compatibility and
+  ignored by RuntimeHost. The candidate version is checked against Android's
+  live PackageManager version, or the managed version when Android does not
+  have the package; normal import installs refuse lower versions regardless of
+  `--yes`.
 - Import still returns its preview directly. The tracked install stores a
   package summary on success, a typed error on failure, or `cancelled` when
   cancelled before PackageStore starts the guest operation. The event topic
@@ -1305,7 +1313,7 @@ public struct OperationHandle: Codable, Sendable {
 
 - `ImportPreview` and `ImportRelation` are the store's types, copied field for field ([../02-design/package-store.md](../02-design/package-store.md) §4.7). `icon` is a PNG (Base64).
 - The client shows the preview and asks before an install that changes package state. `apkrun install --yes` skips that question. The server does not know whether the user was asked. A `sameAsInstalled` preview means the imported APK bytes match the managed host artifact record; it does not prove that Android still has those bytes. The current guest API returns package metadata and signing digests but not installed APK byte digests, so the CLI confirms and reapplies this set through PackageInstaller.
-- `installImported` by relation: `newPackage` and `reinstallSameVersion` install; `uninstalledWithData` installs and keeps the data; `update` hands the ticket to UpdateCore as a manual update (handle kind `update`); `sameAsInstalled` reinstalls the staged set because guest APK byte equality cannot yet be confirmed; `downgrade` returns `store.downgradeRefused`; `otherSigner` returns `store.signerMismatch`.
+- `installImported` by relation: `newPackage` and `reinstallSameVersion` install; `uninstalledWithData` installs and keeps the data; `update` hands the ticket to UpdateCore as a manual update (handle kind `update`); `sameAsInstalled` reinstalls the staged set because guest APK byte equality cannot yet be confirmed; `downgrade` returns `store.downgradeRefused` even if a client sets the legacy `allowDowngrade` field; `otherSigner` returns `store.signerMismatch`.
 - A ticket is valid for 60 minutes after its preview, and until apkrund exits. Later use returns `store.importExpired`. `inspectFile` deletes its ticket when it finishes.
 - `createWrapper` failures do not fail the install. The result is `.package(PackageSummary)` with `wrapperError` set (§8.3). A client that needs the destination rules of [../02-design/wrapper.md](../02-design/wrapper.md) §6.3 (the CLI with `--wrap --output`) calls `createWrapper` itself with the same operation ID.
 
@@ -2827,7 +2835,7 @@ public enum SessionListChange: Codable, Sendable {
 
 public enum PackageChange: Codable, Sendable {           // package-store.md §11.3
     case installed(PackageSummary)
-    case updated(PackageSummary, from: VersionCode)      // also a same-version reinstall (from == to)
+    case updated(PackageSummary, from: VersionCode)      // also a same-version reinstall (from == to); `from` is a best pre-install observation
     case rolledBack(PackageSummary, from: VersionCode)
     case removed(PackageID, keptData: Bool)
     case stateChanged(PackageID, WirePackageState)

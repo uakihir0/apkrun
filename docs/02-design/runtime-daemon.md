@@ -567,10 +567,31 @@ Concurrent callers share one runtime-start attempt, so simultaneous installs
 do not race the supervisor while Android is booting.
 
 The current Store Agent install method is one transaction call and exposes no
-`CommitInstall` callback. Therefore this first slice accepts cancellation
-while Android is starting, then reports `notCancellable` immediately before
-entering PackageStore's guest-install transaction. PackageStore continues
-through guest-result reconciliation and journal commit/abort.
+`CommitInstall` callback. RuntimeHost accepts cancellation while Android is
+starting, while it checks whether the target app has an active session, while
+PackageStore waits for its mutation lock, and while it validates the ticket and
+queries Android's current package version, and waits for the Store Agent
+channel to be ready. When the app is open, the install fails with
+`store.packageInUse`; the user closes the window and retries. Otherwise
+RuntimeHost reports `notCancellable` after channel setup, immediately before
+`StoreAgentChannel.install`. The guest request is journaled before channel
+setup; if cancellation or channel setup failure prevents the call, PackageStore
+aborts that journal entry and preserves the import ticket. After the call
+starts, PackageStore continues through guest-result reconciliation and journal
+commit/abort. This is more conservative than the normative `CommitInstall`
+cancellation point; track the finer boundary when the Store Agent exposes it.
+
+For tracked `--forget`, RuntimeHost keeps cancellation available while
+PackageStore waits for the mutation lock and validates the managed record. It
+reports `notCancellable` immediately before the host-only forget transaction
+is journaled; this operation does not start Android or close an app session.
+
+`EmbeddedPackageService` also reserves the package before awaiting session
+state or the RuntimeHost mutation-boundary callback. A launch already admitted
+by that service drains before the active-session check; later launches fail
+with `store.operationInProgress` until the package mutation returns. RuntimeHost
+binds the service to the daemon's session owner before the check, so the check
+observes the live daemon session registry rather than an embedded fallback.
 
 RuntimeAPI 1.9 adds topic subscriptions and sequenced event delivery. API 1.10
 adds package-install event payloads. API 1.11 adds tracked uninstalls and their
@@ -598,8 +619,8 @@ subscriptions after reconnect and reports a local resync marker when events
 may have been missed.
 
 This is a partial EventHub implementation: `runtime`, `operations`, and
-successful package-install changes have publishers. Other topic publishers,
-package removal and progress, streams, session callbacks, other long
+successful package install and removal changes have publishers. Other topic
+publishers, package progress, streams, session callbacks, other long
 operations, and bounded operation-specific deadlines remain outstanding under
 #032 and #068 (IR-1390–IR-1395).
 
@@ -625,7 +646,20 @@ operations, and bounded operation-specific deadlines remain outstanding under
   work shares the package-mutation lifecycle reservation, so stop, restart,
   reset, and daemon shutdown wait for it. A launch already admitted for the same
   package drains before session closure; later launches are rejected until the
-  uninstall reaches a terminal result.
+  uninstall reaches a terminal result. Cancellation remains available while the
+  PackageStore waits for its mutation lock and validates the managed record
+  before the active session closes. PackageStore checks cancellation immediately
+  before invoking the session-close callback. Cancellation remains available
+  while the session closes, the pending guest request is journaled, and
+  RuntimeAccess obtains a Store Agent channel. PackageStore invokes the boundary
+  callback immediately before `StoreAgentChannel.uninstall`; if cancellation
+  wins, it appends an abort and never calls Android. If cancellation is observed
+  before session closure starts, the callback is skipped and the window stays
+  open. If cancellation races with or arrives during an already-running close,
+  the window may close while the package remains installed. `EmbeddedPackageService`
+  holds its package gate through the same interval, including for direct service
+  callers, so actor reentrancy cannot admit a new launch between session closure
+  and the store mutation.
 
 ### 8.5 The CLI as a client
 

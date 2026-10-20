@@ -22247,3 +22247,99 @@ topics, so a concurrent change cannot be reflected in the snapshot and delivered
 after its reply. Consumers must refresh a topic after a resync marker. The
 wrapper endpoint and own-operation filtering remain for #044.
 
+## IR-1404: Refuse package installation while its app session is active
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #032 |
+| Affected documents | [runtime-api.md](../03-reference/runtime-api.md) §8.2; [runtime-daemon.md](../02-design/runtime-daemon.md) §8.3; [error-catalog.md](../03-reference/error-catalog.md) §10.4 |
+
+**Choice.** RuntimeHost binds package operations to the daemon's session
+registry and drains package launch requests before checking session state. If
+the target has an active session, install returns `store.packageInUse` and
+asks the user to close the APKRun window and retry. It does not close the app
+automatically.
+
+**Reason.** The current begin-install request has no `closeRunningApp` or
+wait-until-closed choice. Silently ending a running app would turn an ordinary
+install into an unexpected user-visible action. Rejecting the install keeps
+the Android package and the open session intact while avoiding a Package
+Installer update underneath a live window.
+
+**Risk for review.** This is more conservative than the planned manual-update
+flow, which offers Update Now or When the App Quits in #040. Add that explicit
+choice when the tracked install API is integrated with the manual-update
+coordinator; do not infer consent from `--yes`.
+
+## IR-1405: Keep uninstall cancellable while its window closes
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #032 |
+| Affected documents | [runtime-api.md](../03-reference/runtime-api.md) §4.7; [runtime-daemon.md](../02-design/runtime-daemon.md) §§8.3–8.4 |
+
+**Choice.** RuntimeHost changes a tracked install, uninstall, or forget
+operation to `notCancellable` through a callback at its PackageStore boundary.
+Install crosses that boundary after acquiring the mutation lock, validating
+the ticket, querying Android's current package version, and acquiring the
+Store Agent channel, immediately before `StoreAgentChannel.install`. The guest
+request is already journaled; cancellation or channel-setup failure before the
+call aborts it and preserves the import ticket. Host-only forget crosses after
+acquiring the lock and validating the package record, before journaling its
+transaction. Uninstall
+first waits for the PackageStore mutation lock and validates the record, then
+checks cancellation immediately before closing the package's active session.
+It stays cancellable while the session closes, the guest request is journaled,
+and the Store Agent channel is acquired. PackageStore invokes the final
+boundary callback immediately ahead of `StoreAgentChannel.uninstall`; if
+cancellation wins before that callback, PackageStore appends an abort.
+
+**Reason.** The documented cancellation boundary is the start of the guest
+uninstall, not local lock wait, validation, host-side session cleanup, journal
+update, or channel setup. Marking the operation non-cancellable before those
+steps rejected cancellation earlier than the wire contract allows. The callback
+runs on RuntimeHost's actor, so a concurrent cancel either wins before the
+channel call or observes `notCancellable` after it.
+
+**Risk for review.** If cancellation is already visible before the session
+close callback starts, PackageStore skips the callback. Cancellation that
+races with or arrives during an already-running session close may still leave
+the window closed while the package remains installed. Cancellation while
+waiting for the PackageStore lock or Store Agent channel has the same
+package-store outcome: the pending journal transaction is aborted before the
+guest call. Install and forget remain cancellable while waiting for the lock
+and completing their pre-mutation validation; install also remains cancellable
+while the Store Agent channel is prepared.
+
+## IR-1406: Gate launches at the package-service mutation boundary
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #032 |
+| Affected documents | [runtime-daemon.md](../02-design/runtime-daemon.md) §§8.3–8.4; [runtime-api.md](../03-reference/runtime-api.md) §§4.7, 8.2 |
+
+**Choice.** `EmbeddedPackageService` reserves a package synchronously before
+its first awaited session check or mutation callback. It counts launch RPCs
+admitted before that reservation, waits for them to return, and rejects later
+launches with `store.operationInProgress` until install or uninstall reaches a
+terminal result. Host-only `--forget` reserves package-store writes but keeps
+its existing behavior of changing APKRun's local record and artifacts without
+blocking Android launches.
+
+**Reason.** RuntimeHost's operation registry protects daemon entry points, but
+the package service is an actor that suspends at session and callback awaits.
+Without a service-level reservation, a launch could enter during that
+suspension; direct service callers also do not necessarily pass through the
+RuntimeHost lifecycle reservation. A separate store-write reservation keeps
+direct forget/install/uninstall calls serialized without changing host-only
+forget behavior. Reserving before suspension closes both paths while keeping
+unrelated packages independent.
+
+**Risk for review.** New launches receive a retryable operation-in-progress
+error instead of waiting behind install/uninstall. This avoids queuing an
+unbounded number of launch requests and matches the daemon's existing
+package-activity reservation behavior.
+

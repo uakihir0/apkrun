@@ -606,8 +606,8 @@ Cancellation points:
 | Kind | Cancellable | After cancellation |
 |---|---|---|
 | `import`, `inspect` | any time | the incoming files are deleted |
-| `install` | until `CommitInstall` ([../02-design/package-store.md](../02-design/package-store.md) §5) | the guest session is abandoned; the store is unchanged |
-| `uninstall` | until the guest uninstall starts | nothing changed |
+| `install` | until `CommitInstall` ([../02-design/package-store.md](../02-design/package-store.md) §5) | Android and the package record are unchanged; the import ticket remains available |
+| `uninstall` | until the guest uninstall starts ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §8.4) | the package remains installed; its app window may already be closed |
 | `repair` | until the guest install starts | |
 | `rollback`, `imageApply`, `imageRollback`, `runtimeStop` | never | `notCancellable` |
 | `resetAndroid` | until Android has stopped | nothing deleted |
@@ -623,6 +623,32 @@ Cancellation points:
 | `runtimeRestart` | during the stop phase: no; before the start: yes | Android stays stopped |
 
 A cancellation of an operation that is waiting (for example an update that waits for the app to quit) ends only the wait. The result is `cancelled`.
+
+The tracked install implementation currently has a coarser boundary: because
+the Store Agent install call does not expose `CommitInstall`, RuntimeHost marks
+it non-cancellable after PackageStore acquires its mutation lock, validates the
+ticket, queries Android's current package version, and waits for the Store
+Agent channel, immediately before `StoreAgentChannel.install`. Cancellation
+remains available during Android startup, the active-session check, lock wait,
+guest snapshot query, and channel setup. If cancellation or channel setup
+failure prevents the guest call, PackageStore aborts the pending journal entry
+and preserves the import ticket. This implementation detail is recorded for
+review in
+[IR-1390](../04-plan/implementation-review.md#ir-1390-track-package-installs-before-the-guest-call).
+
+Tracked `--forget` remains cancellable while waiting for the mutation lock and
+validating the package record; it becomes non-cancellable immediately before
+the host-only journal transaction starts.
+
+Tracked uninstall remains cancellable while PackageStore waits for its
+mutation lock, closes the app session, journals the pending guest request, and
+while RuntimeAccess obtains a Store Agent channel. The boundary callback runs
+inside that channel access immediately before `StoreAgentChannel.uninstall`.
+If cancellation wins, PackageStore journals an abort and leaves the Android
+package and APKRun record intact; the app window may already be closed.
+PackageStore checks cancellation just before invoking the session-close
+callback, but cancellation that races with or arrives during an already-running
+close can still close the window.
 
 ### 4.8 Events and topics
 
@@ -1303,6 +1329,9 @@ public struct OperationHandle: Codable, Sendable {
 - Normal `apkrun install` currently sends `authority: .manual` and
   `createWrapper: false`. `--yes` skips only the confirmation prompt; it does
   not skip package identity, signer, version, ABI, SDK, split, or hash checks.
+- If the target package has an active app session, install returns
+  `store.packageInUse`. Close its APKRun window and retry; `--yes` does not
+  close an app that is in use.
 - `RuntimeInstallOptions.allowDowngrade` is retained for wire compatibility and
   ignored by RuntimeHost. The candidate version is checked against Android's
   live PackageManager version, or the managed version when Android does not
@@ -1310,8 +1339,9 @@ public struct OperationHandle: Codable, Sendable {
   `--yes`.
 - Import still returns its preview directly. The tracked install stores a
   package summary on success, a typed error on failure, or `cancelled` when
-  cancelled before PackageStore starts the guest operation. The event topic
-  and bounded operation deadline remain outstanding.
+  cancelled before PackageStore starts the guest operation. Successful
+  installs publish `packages.installed` or `packages.updated`; bounded
+  operation-specific deadlines remain outstanding.
 
 - `ImportPreview` and `ImportRelation` are the store's types, copied field for field ([../02-design/package-store.md](../02-design/package-store.md) §4.7). `icon` is a PNG (Base64).
 - The client shows the preview and asks before an install that changes package state. `apkrun install --yes` skips that question. The server does not know whether the user was asked. A `sameAsInstalled` preview means the imported APK bytes match the managed host artifact record; it does not prove that Android still has those bytes. The current guest API returns package metadata and signing digests but not installed APK byte digests, so the CLI confirms and reapplies this set through PackageInstaller.

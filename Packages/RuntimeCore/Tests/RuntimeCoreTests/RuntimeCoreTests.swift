@@ -100,3 +100,25 @@ func sessionRegistryRejectsSkippedLifecycleTransitionsAndRecordsWindowClose() as
     #expect(ended?.state == .ended(.userClosed))
     #expect(!AppSessionState.ended(.userClosed).acceptsInput)
 }
+
+@Test(.timeLimit(.minutes(1)))
+func sessionRegistryPreservesUninstallReasonWhenTaskVanishedDuringClose() async throws {
+    let registry = SessionRegistry()
+    let session = try await registry.request(packageID: "io.apkrun.fixture.hellotext")
+    _ = try await registry.transition(session.id, to: .acquiringDisplay)
+    _ = try await registry.transition(session.id, to: .launching)
+    _ = await registry.launchCompleted(packageID: session.packageID, taskID: 12)
+    _ = try await registry.transition(session.id, to: .running)
+    _ = await registry.taskAppeared(packageID: session.packageID, taskID: 12)
+    _ = try await registry.transition(session.id, to: .closing)
+
+    let taskVanished = await registry.taskVanished(packageID: session.packageID, taskID: 12)
+    let uninstallCompleted = await registry.stopCompleted(
+        sessionID: session.id,
+        endReason: .packageUninstalled
+    )
+
+    #expect(taskVanished?.state == .ended(.userClosed))
+    #expect(uninstallCompleted?.state == .ended(.packageUninstalled))
+    #expect(await registry.session(session.id)?.state == .ended(.packageUninstalled))
+}

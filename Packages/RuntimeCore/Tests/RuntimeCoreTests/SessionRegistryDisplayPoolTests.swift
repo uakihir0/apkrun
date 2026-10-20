@@ -78,6 +78,55 @@ func leasedSessionReleasesOnLastTaskExit() async throws {
 }
 
 @Test
+func uninstallCompletionTargetsTheCurrentSessionAfterRelaunch() async throws {
+    let guest = FakeDisplayControlChannel()
+    let scanouts = FakeScanoutController(guest: guest)
+    let displayPool = DisplayPool(scanouts: scanouts, guest: guest)
+    let registry = SessionRegistry()
+    let configuration = DisplayConfiguration(
+        geometry: DisplayGeometry(pointSize: CGSize(width: 480, height: 850), backingScale: 1)
+    )
+    let packageID = "io.apkrun.fixture.hellotext"
+
+    let first = try await registry.requestLeased(
+        packageID: packageID,
+        configuration: configuration,
+        displayPool: displayPool
+    )
+    _ = try await registry.transition(first.id, to: .launching)
+    _ = await registry.launchCompleted(packageID: packageID, taskID: 41)
+    _ = try await registry.transition(first.id, to: .running)
+    _ = await registry.taskAppeared(packageID: packageID, taskID: 41)
+    _ = try await registry.transition(first.id, to: .closing)
+    _ = await registry.taskVanished(packageID: packageID, taskID: 41)
+
+    let relaunched = try await registry.requestLeased(
+        packageID: packageID,
+        configuration: configuration,
+        displayPool: displayPool
+    )
+    _ = try await registry.transition(relaunched.id, to: .launching)
+    _ = await registry.launchCompleted(packageID: packageID, taskID: 42)
+    _ = try await registry.transition(relaunched.id, to: .running)
+    _ = await registry.taskAppeared(packageID: packageID, taskID: 42)
+    _ = try await registry.transition(relaunched.id, to: .closing)
+
+    let taskVanished = await registry.taskVanished(packageID: packageID, taskID: 42)
+    let uninstallCompleted = await registry.stopCompleted(
+        sessionID: relaunched.id,
+        endReason: .packageUninstalled
+    )
+
+    #expect(taskVanished?.state == .ended(.userClosed))
+    #expect(uninstallCompleted?.id == relaunched.id)
+    #expect(uninstallCompleted?.state == .ended(.packageUninstalled))
+    #expect(await registry.session(first.id)?.state == .ended(.userClosed))
+    #expect(await registry.displayLease(relaunched.id) == nil)
+    #expect((await displayPool.snapshot())[0].state == .free)
+    #expect(scanouts.disabledScanouts == [1, 1])
+}
+
+@Test
 func primaryCompatibilityLeaseReservesDisplayZeroBeforeTheGuestOperationCompletes() async throws {
     let guest = FakeDisplayControlChannel()
     guest.emit(

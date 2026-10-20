@@ -317,6 +317,7 @@ public actor AdbClient {
         }
         let result: AdbProcessResult
         if keepData {
+            shellInvocationCount += 1
             result = try await runDeviceCommand(
                 "uninstall",
                 arguments: ["shell", "pm uninstall -k \(packageName)"],

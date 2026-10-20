@@ -213,8 +213,14 @@ public actor SessionRegistry {
 
     /// Completes a close after the Guest Agent confirms that the package has no remaining tasks.
     @discardableResult
-    public func stopCompleted(packageID: String) async -> AppSessionSnapshot? {
-        guard var entry = entries.values.first(where: { $0.packageID == packageID && $0.state == .closing }) else {
+    public func stopCompleted(
+        sessionID: SessionID,
+        endReason: SessionEndReason = .userClosed
+    ) async -> AppSessionSnapshot? {
+        guard var entry = entries[sessionID],
+            entry.state == .closing
+                || (endReason == .packageUninstalled && entry.state == .ended(.userClosed))
+        else {
             return nil
         }
         let previous = entry.state
@@ -222,7 +228,7 @@ public actor SessionRegistry {
         entry.launchReplyPending = false
         entry.vanishedDuringLaunch.removeAll()
         entry.stateBeforeClosing = nil
-        entry.state = .ended(.userClosed)
+        entry.state = .ended(endReason)
         let allocationToRelease = Self.takeDisplayAllocationIfEnded(from: &entry)
         entries[entry.id] = entry
         log("session state \(String(describing: previous)) -> \(String(describing: entry.state))", entry: entry)

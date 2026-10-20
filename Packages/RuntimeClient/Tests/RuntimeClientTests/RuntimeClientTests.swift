@@ -645,6 +645,63 @@ import Testing
     #expect(cancelRequest.header.apiVersion == APIVersion.current)
 }
 
+@Test func controlClientBeginsAndRecoversUninstallOperationsWithoutReplay() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let operationID = try #require(OperationID(wire: "b4a90e78-5e1f-4d5a-9ba1-0b691f180032"))
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let request = RuntimeUninstallPackageRequest(
+        packageID: packageID,
+        options: RuntimeUninstallOptions(keepData: true)
+    )
+    let handle = OperationHandle(operationID: operationID, kind: .uninstall)
+    let snapshot = OperationSnapshot(
+        operationID: operationID,
+        kind: .uninstall,
+        packageID: packageID,
+        requestFingerprint: try RuntimeOperationRequestFingerprint.make(for: request),
+        clientKind: .cli,
+        startedAt: Date(timeIntervalSince1970: 1_800_000_000)
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        beginUninstallPackageReply: RuntimeBeginUninstallPackageControlReply(result: handle),
+        operationStatusReply: RuntimeOperationStatusControlReply(result: snapshot)
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    #expect(try await client.beginUninstallPackage(request, operationID: operationID) == handle)
+    transport.failNextBeginUninstallPackage()
+    #expect(try await client.beginUninstallPackage(request, operationID: operationID) == handle)
+
+    let requests = transport.snapshot()
+    #expect(requests.beginUninstallPackageRequests.count == 2)
+    #expect(requests.operationStatusRequests.count == 1)
+    let begin = try JSONDecoder().decode(
+        RuntimeBeginUninstallPackageControlRequest.self,
+        from: requests.beginUninstallPackageRequests[0]
+    )
+    #expect(begin.header.operationID == operationID.rawValue)
+    #expect(begin.header.apiVersion == APIVersion.current)
+    #expect(begin.header.clientKind == .cli)
+    #expect(begin.request == request)
+    let statusRequest = try JSONDecoder().decode(
+        RuntimeOperationStatusControlRequest.self,
+        from: requests.operationStatusRequests[0]
+    )
+    #expect(statusRequest.operationID == operationID)
+}
+
 @Test func controlClientReconcilesAmbiguousBeginWithoutReplayingIt() async throws {
     let configuration = try RuntimeControlClientConfiguration(
         clientKind: .cli,
@@ -658,9 +715,13 @@ import Testing
         hostState: "running"
     )
     let operationID = try #require(OperationID(wire: "b4a90e78-5e1f-4d5a-9ba1-0b691f180032"))
+    let ticket = try #require(RuntimeImportTicket(rawValue: "84cfd2a0-504c-4dc2-9d6f-0f579f771902"))
+    let request = RuntimeInstallImportedRequest(ticket: ticket)
     let snapshot = OperationSnapshot(
         operationID: operationID,
         kind: .install,
+        packageID: RuntimePackageID(rawValue: "com.example.app"),
+        requestFingerprint: try RuntimeOperationRequestFingerprint.make(for: request),
         startedAt: Date(timeIntervalSince1970: 1_800_000_000)
     )
     let transport = try MockRuntimeTransport(
@@ -670,12 +731,8 @@ import Testing
     )
     transport.failNextBeginInstallImported()
     let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
-    let ticket = try #require(RuntimeImportTicket(rawValue: "84cfd2a0-504c-4dc2-9d6f-0f579f771902"))
 
-    let handle = try await client.beginInstallImported(
-        RuntimeInstallImportedRequest(ticket: ticket),
-        operationID: operationID
-    )
+    let handle = try await client.beginInstallImported(request, operationID: operationID)
 
     #expect(handle == OperationHandle(operationID: operationID, kind: .install))
     let requests = transport.snapshot()
@@ -687,6 +744,55 @@ import Testing
         from: requests.operationStatusRequests[0]
     )
     #expect(statusRequest.operationID == operationID)
+}
+
+@Test func controlClientDoesNotRecoverAnUninstallWithDifferentOptions() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let operationID = try #require(OperationID(wire: "b4a90e78-5e1f-4d5a-9ba1-0b691f180032"))
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let requested = RuntimeUninstallPackageRequest(
+        packageID: packageID,
+        options: RuntimeUninstallOptions(keepData: false)
+    )
+    let existing = RuntimeUninstallPackageRequest(
+        packageID: packageID,
+        options: RuntimeUninstallOptions(keepData: true)
+    )
+    let snapshot = OperationSnapshot(
+        operationID: operationID,
+        kind: .uninstall,
+        packageID: packageID,
+        requestFingerprint: try RuntimeOperationRequestFingerprint.make(for: existing),
+        startedAt: Date(timeIntervalSince1970: 1_800_000_000)
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        operationStatusReply: RuntimeOperationStatusControlReply(result: snapshot)
+    )
+    transport.failNextBeginUninstallPackage()
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    do {
+        _ = try await client.beginUninstallPackage(requested, operationID: operationID)
+        Issue.record("A status for a different keep-data policy was accepted as the requested operation.")
+    } catch {
+        #expect(error == .operationResultUnknown(operation: "beginUninstallPackage"))
+    }
+
+    let requests = transport.snapshot()
+    #expect(requests.beginUninstallPackageRequests.count == 1)
+    #expect(requests.operationStatusRequests.count == 1)
 }
 
 @Test func controlClientReconcilesMalformedBeginReplyWithoutReplayingIt() async throws {
@@ -702,9 +808,13 @@ import Testing
         hostState: "running"
     )
     let operationID = try #require(OperationID(wire: "b4a90e78-5e1f-4d5a-9ba1-0b691f180032"))
+    let ticket = try #require(RuntimeImportTicket(rawValue: "84cfd2a0-504c-4dc2-9d6f-0f579f771902"))
+    let request = RuntimeInstallImportedRequest(ticket: ticket)
     let snapshot = OperationSnapshot(
         operationID: operationID,
         kind: .install,
+        packageID: RuntimePackageID(rawValue: "com.example.app"),
+        requestFingerprint: try RuntimeOperationRequestFingerprint.make(for: request),
         startedAt: Date(timeIntervalSince1970: 1_800_000_000)
     )
     let transport = try MockRuntimeTransport(
@@ -714,12 +824,8 @@ import Testing
         beginInstallImportedReplyData: Data("not-json".utf8)
     )
     let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
-    let ticket = try #require(RuntimeImportTicket(rawValue: "84cfd2a0-504c-4dc2-9d6f-0f579f771902"))
 
-    let handle = try await client.beginInstallImported(
-        RuntimeInstallImportedRequest(ticket: ticket),
-        operationID: operationID
-    )
+    let handle = try await client.beginInstallImported(request, operationID: operationID)
 
     #expect(handle.operationID == operationID)
     let requests = transport.snapshot()
@@ -1213,6 +1319,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private let importPackageData: Data
     private let installImportedData: Data
     private let beginInstallImportedData: Data
+    private let beginUninstallPackageData: Data
     private let operationStatusData: Data
     private let listOperationsData: Data
     private let cancelOperationData: Data
@@ -1234,6 +1341,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var importFileHandleIDsValue: [[ObjectIdentifier]] = []
     private var installImportedRequestsValue: [Data] = []
     private var beginInstallImportedRequestsValue: [Data] = []
+    private var beginUninstallPackageRequestsValue: [Data] = []
     private var operationStatusRequestsValue: [Data] = []
     private var listOperationsRequestsValue: [Data] = []
     private var cancelOperationRequestsValue: [Data] = []
@@ -1253,6 +1361,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var failNextResetValue = false
     private var failNextInstallImportedValue = false
     private var failNextBeginInstallImportedValue = false
+    private var failNextBeginUninstallPackageValue = false
     private var failNextOperationStatusValue = false
     private var endpointBusyRejectionsValue: Int
     private var eventSinkValue: RuntimeEventSinkReceiver?
@@ -1269,6 +1378,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         importReply: RuntimeImportPackageControlReply? = nil,
         installImportedReply: RuntimeInstallImportedControlReply? = nil,
         beginInstallImportedReply: RuntimeBeginInstallImportedControlReply? = nil,
+        beginUninstallPackageReply: RuntimeBeginUninstallPackageControlReply? = nil,
         operationStatusReply: RuntimeOperationStatusControlReply? = nil,
         listOperationsReply: RuntimeListOperationsControlReply? = nil,
         cancelOperationReply: RuntimeCancelOperationControlReply? = nil,
@@ -1322,6 +1432,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let defaultInstallImportedReply = RuntimeInstallImportedControlReply(result: defaultSummary)
         let defaultOperationID = try #require(OperationID(wire: "b4a90e78-5e1f-4d5a-9ba1-0b691f180032"))
         let defaultOperationHandle = OperationHandle(operationID: defaultOperationID, kind: .install)
+        let defaultUninstallOperationHandle = OperationHandle(operationID: defaultOperationID, kind: .uninstall)
         let defaultOperationSnapshot = OperationSnapshot(
             operationID: defaultOperationID,
             kind: .install,
@@ -1348,6 +1459,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                     ?? RuntimeBeginInstallImportedControlReply(
                         result: defaultOperationHandle
                     ))
+        beginUninstallPackageData = try JSONEncoder().encode(
+            beginUninstallPackageReply
+                ?? RuntimeBeginUninstallPackageControlReply(result: defaultUninstallOperationHandle)
+        )
         operationStatusData = try JSONEncoder().encode(
             operationStatusReply ?? RuntimeOperationStatusControlReply(result: defaultOperationSnapshot)
         )
@@ -1513,6 +1628,18 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return beginInstallImportedData
     }
 
+    func beginUninstallPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        let shouldFail = lock.withLock {
+            beginUninstallPackageRequestsValue.append(request)
+            defer { failNextBeginUninstallPackageValue = false }
+            return failNextBeginUninstallPackageValue
+        }
+        if shouldFail {
+            throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+        }
+        return beginUninstallPackageData
+    }
+
     func operationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         let shouldFail = lock.withLock {
             operationStatusRequestsValue.append(request)
@@ -1610,6 +1737,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 importFileHandleIDs: importFileHandleIDsValue,
                 installImportedRequests: installImportedRequestsValue,
                 beginInstallImportedRequests: beginInstallImportedRequestsValue,
+                beginUninstallPackageRequests: beginUninstallPackageRequestsValue,
                 operationStatusRequests: operationStatusRequestsValue,
                 listOperationsRequests: listOperationsRequestsValue,
                 cancelOperationRequests: cancelOperationRequestsValue,
@@ -1657,6 +1785,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         lock.withLock { failNextBeginInstallImportedValue = true }
     }
 
+    func failNextBeginUninstallPackage() {
+        lock.withLock { failNextBeginUninstallPackageValue = true }
+    }
+
     func failNextOperationStatus() {
         lock.withLock { failNextOperationStatusValue = true }
     }
@@ -1688,6 +1820,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let importFileHandleIDs: [[ObjectIdentifier]]
         let installImportedRequests: [Data]
         let beginInstallImportedRequests: [Data]
+        let beginUninstallPackageRequests: [Data]
         let operationStatusRequests: [Data]
         let listOperationsRequests: [Data]
         let cancelOperationRequests: [Data]

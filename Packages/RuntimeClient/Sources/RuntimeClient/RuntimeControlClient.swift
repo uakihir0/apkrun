@@ -336,6 +336,12 @@ public actor RuntimeControlClient {
         _ request: RuntimeInstallImportedRequest,
         operationID: OperationID
     ) async throws(RuntimeControlClientError) -> OperationHandle {
+        let requestFingerprint: String
+        do {
+            requestFingerprint = try RuntimeOperationRequestFingerprint.make(for: request)
+        } catch {
+            throw .encodingFailure
+        }
         let opened = try await ensureControl()
         do {
             let controlRequest = RuntimeBeginInstallImportedControlRequest(
@@ -359,7 +365,10 @@ public actor RuntimeControlClient {
             case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply, .invalidRemoteProxy:
                 do {
                     let snapshot = try await operationStatus(operationID)
-                    guard snapshot.operationID == operationID, snapshot.kind == .install else {
+                    guard snapshot.operationID == operationID,
+                        snapshot.kind == .install,
+                        snapshot.requestFingerprint == requestFingerprint
+                    else {
                         throw RuntimeControlClientError.operationResultUnknown(
                             operation: "beginInstallImported"
                         )
@@ -372,6 +381,65 @@ public actor RuntimeControlClient {
                 } catch {
                     throw RuntimeControlClientError.operationResultUnknown(
                         operation: "beginInstallImported"
+                    )
+                }
+            default:
+                throw clientError
+            }
+        }
+    }
+
+    /// Starts uninstall or forget and reconciles an ambiguous reply by the requested operation ID.
+    public func beginUninstallPackage(
+        _ request: RuntimeUninstallPackageRequest,
+        operationID: OperationID
+    ) async throws(RuntimeControlClientError) -> OperationHandle {
+        let requestFingerprint: String
+        do {
+            requestFingerprint = try RuntimeOperationRequestFingerprint.make(for: request)
+        } catch {
+            throw .encodingFailure
+        }
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeBeginUninstallPackageControlRequest(
+                header: APIRequestHeader(
+                    operationID: operationID.rawValue,
+                    clientKind: configuration.clientKind
+                ),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.beginUninstallPackage(data)
+            let handle = try Self.decodeBeginUninstallPackageReply(from: response)
+            guard handle.operationID == operationID, handle.kind == .uninstall else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return handle
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            switch clientError {
+            case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply, .invalidRemoteProxy:
+                do {
+                    let snapshot = try await operationStatus(operationID)
+                    guard snapshot.operationID == operationID,
+                        snapshot.kind == .uninstall,
+                        snapshot.packageID == request.packageID,
+                        snapshot.requestFingerprint == requestFingerprint
+                    else {
+                        throw RuntimeControlClientError.operationResultUnknown(
+                            operation: "beginUninstallPackage"
+                        )
+                    }
+                    return OperationHandle(
+                        operationID: snapshot.operationID,
+                        parent: snapshot.parent,
+                        kind: snapshot.kind
+                    )
+                } catch {
+                    throw RuntimeControlClientError.operationResultUnknown(
+                        operation: "beginUninstallPackage"
                     )
                 }
             default:
@@ -935,6 +1003,22 @@ public actor RuntimeControlClient {
         return result
     }
 
+    private static func decodeBeginUninstallPackageReply(from data: Data) throws(RuntimeControlClientError)
+        -> OperationHandle
+    {
+        let reply = try Self.decode(RuntimeBeginUninstallPackageControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
     private static func decodeOperationStatusReply(from data: Data) throws(RuntimeControlClientError)
         -> OperationSnapshot
     {
@@ -1253,6 +1337,7 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func importPackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
     func installImported(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func beginInstallImported(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func beginUninstallPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func cancelOperation(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func listOperations(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func operationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
@@ -1559,6 +1644,20 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.beginInstallImported(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func beginUninstallPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.beginUninstallPackage(request) { response in finish(.success(response)) }
         }
     }
 

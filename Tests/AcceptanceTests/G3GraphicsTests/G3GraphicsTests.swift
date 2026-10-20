@@ -1,14 +1,14 @@
 import Foundation
 import XCTest
 
-/// Gate G3 (roadmap.md §2, test-strategy.md §5, graphics.md §12 #023): SurfaceFlinger renders through virtio-gpu to
+/// Gate G3 (roadmap.md §2, test-strategy.md §5, graphics.md §14): SurfaceFlinger renders through virtio-gpu to
 /// Metal, and the Android display is shown in a macOS window.
 ///
 /// One boot runs the whole check, as the manual HelloGL run of #023 did (IR-1200 to IR-1208):
 /// `apkrun dev boot --gpu virgl --window --stats --console` on the Android bundle that scripts/run-gate.sh names, in a
 /// new APKRUN_HOME. Then, in this order: the display is in a window; HelloGL's `renderer` event and the GLES line of
 /// SurfaceFlinger name virgl; 60 s of statistics show no readback and no CPU copy; the alternating-colour phase shows no
-/// frame with both colours, by the test-only readback sampler of the CLI (graphics.md §12 #023, step 5); HelloGL
+/// frame with both colours, by the test-only readback sampler of the CLI (graphics.md §7); HelloGL
 /// averages at least 55 fps and runs 10 minutes with the same pid and no renderer crash. The run stops with SIGINT.
 ///
 /// It runs in the `G3` configuration of AcceptanceTests.xctestplan, with the inputs that scripts/run-gate.sh sets. The

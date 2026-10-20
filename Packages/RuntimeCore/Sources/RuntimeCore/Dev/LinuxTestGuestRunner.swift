@@ -46,8 +46,8 @@ public struct LinuxTestGuestRunner: Sendable {
     }
 
     /// The devices that the requested checks need. `virgl` attaches the virtio-gpu device with
-    /// the renderer, so the renderer starts before the VM (graphics.md §12 step 2, #022). `gpu`
-    /// attaches the virtio-gpu device (graphics.md §12, #019). `gpu-hotplug` also starts the
+    /// the renderer, so the renderer starts before the VM (graphics.md §8, #022). `gpu`
+    /// attaches the virtio-gpu device (graphics.md §4, #019). `gpu-hotplug` also starts the
     /// R-01 spike, which enables scanout 1 after a delay. The `virgl` device has no spike, so
     /// `gpu-hotplug` with `virgl` fails in the guest instead of enabling scanout 1.
     static func customDevices(for tests: [String]) throws(GraphicsFailure) -> [VirtioGPUDevice] {

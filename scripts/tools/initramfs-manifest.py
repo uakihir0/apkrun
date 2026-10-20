@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check the virgl inputs of the Linux test initramfs and write its manifest.
 
-The virgl check (graphics.md §12 step 1, #022) runs kmscube on Mesa's virtio_gpu
+The virgl check (graphics.md §14, #022) runs kmscube on Mesa's virtio_gpu
 driver from pinned Alpine packages. scripts/build-test-initramfs.sh calls this
 tool after it unpacks the packages and before it moves the archive into place.
 The tool fails unless:

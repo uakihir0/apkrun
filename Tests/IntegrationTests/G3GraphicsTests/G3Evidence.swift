@@ -2,7 +2,7 @@ import Foundation
 
 /// One statistics line of the development window, as `apkrun dev boot --stats` writes it to standard error.
 ///
-/// The tearing counters are present only in a build with the TestReadback trait (CLI DisplayPump, graphics.md §12 #023).
+/// The tearing counters are present only in a build with the TestReadback trait (CLI DisplayPump, graphics.md §7).
 struct G3StatisticsLine: Equatable {
     let framesPerSecond: Int
     let hostReadbacks: UInt64

@@ -3,7 +3,7 @@
     import RuntimeHost
     import WindowingCore
 
-    /// The test-only tearing check of graphics.md §12 #023 (step 5): each frame that the display makes ready is read
+    /// The test-only tearing check of graphics.md §7 (#023): each frame that the display makes ready is read
     /// from its pool buffer, and the pure red and pure blue pixels are counted.
     ///
     /// DEBUG-READBACK: this exists only in builds with the TestReadback trait, and the CLI reads the buffer with an

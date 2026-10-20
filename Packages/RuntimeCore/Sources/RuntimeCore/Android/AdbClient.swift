@@ -93,7 +93,7 @@ public struct AdbForward: Equatable, Sendable {
 ///
 /// Every command line is built inside one of the helper methods below. `shellInvocationCount`
 /// counts `adb shell` runs, so tests can check that production paths stop using ADB shell commands
-/// (guest-protocol.md §15, #034).
+/// (#034).
 public actor AdbClient {
     /// The development endpoint: adbd on vsock 5555, reached through the loopback forwarder.
     public static let developmentEndpoint = "127.0.0.1:6520"
@@ -232,7 +232,7 @@ public actor AdbClient {
         return reply.output
     }
 
-    /// Reads every DRM connector and its status from `/sys/class/drm` (#021; graphics.md §12). The device shell
+    /// Reads every DRM connector and its status from `/sys/class/drm` (#021; graphics.md §14). The device shell
     /// names the connectors, and a reply that is not one `<name> <status>` line per connector is unexpected, so a
     /// glob that matches nothing is never read as an empty list.
     public func drmConnectors() async throws(AdbFailure) -> [AdbDRMConnector] {

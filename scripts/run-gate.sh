@@ -131,7 +131,7 @@ fi
 # run depends on disks left by an earlier build.
 scripts/build-test-android-disks.sh
 if [[ "$gate" == G3 ]]; then
-    # The Guest Agent bundle, HelloGL, and the Debug CLI with the TestReadback trait (graphics.md §12 #023, step 5).
+    # The Guest Agent bundle, HelloGL, and the Debug CLI with the TestReadback trait (graphics.md §7).
     # Each is built from this clean checkout. The files the test host reads are copied under the shared test directory,
     # outside ~/Documents, so the test host can read them without a file-access prompt (as G2 does for its bundle).
     export ANDROID_HOME="$g3_android_home"
@@ -201,7 +201,7 @@ xcodebuild test \
     "APKRUN_CI=1" \
     "${signing_arguments[@]}"
 if [[ "$gate" == G3 ]]; then
-    # The G3 check runs one boot in the G3 configuration (graphics.md §12 #023). It is serialised with the other VM runs
+    # The G3 check runs one boot in the G3 configuration (graphics.md §14). It is serialised with the other VM runs
     # by lockf (test-strategy §3.6). The artifacts stay outside ~/Documents until the run ends, and the gate copies them.
     artifacts="$APKRUN_TEST_LINUX_DIR/g3-artifacts"
     rm -rf "$artifacts"

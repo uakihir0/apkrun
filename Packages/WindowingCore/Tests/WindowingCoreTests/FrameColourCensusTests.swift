@@ -2,7 +2,7 @@ import Testing
 
 @testable import WindowingCore
 
-// The tearing census of the test-only readback (graphics.md §12 #023, step 5). The pixels are BGRA8 bytes.
+// The tearing census of the test-only readback (graphics.md §7). The pixels are BGRA8 bytes.
 
 /// Builds a BGRA8 image of `width` x `height` pixels, with `rowBytes` bytes per row. `pixel(x, y)` gives (blue, green, red).
 private func bgraImage(

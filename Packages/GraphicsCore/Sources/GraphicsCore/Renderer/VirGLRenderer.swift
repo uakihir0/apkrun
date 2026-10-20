@@ -333,7 +333,7 @@ extension VirGLRenderer: VirGLEngine, @unchecked Sendable {
     }
 
     #if APKRUN_TEST_READBACK
-        // DEBUG-READBACK: test-only host readback for the replay and tearing tests (graphics.md §12). It exists only in
+        // DEBUG-READBACK: test-only host readback for the replay and tearing tests (graphics.md §7). It exists only in
         // builds with the TestReadback trait, and it never touches the device's counters, because the normal path has none.
         func readResourceForTest(_ transfer: VirGLTransfer, byteCount: Int) throws(GraphicsFailure) -> [UInt8] {
             let renderer = try live(operation: "readResourceForTest")

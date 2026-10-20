@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validates the coordinate mapping of input.md §3 on display 0, with ADB input (#024 step 1, input.md §12 #024).
+# Validates the coordinate mapping of input.md §3 on display 0, with ADB input (#024).
 #
 #   scripts/dev/validate-input-coordinates.sh [--serial SERIAL] [--display-size WxH] [--content x,y,w,h] [--taps N]
 #   scripts/dev/validate-input-coordinates.sh --self-test

@@ -3,7 +3,7 @@ import ImageCore
 import RuntimeCore
 import XCTest
 
-/// T2 checks of the virtio-gpu device on the Android boot (#021; graphics.md §12, android-image.md §7).
+/// T2 checks of the virtio-gpu device on the Android boot (#021; graphics.md §14, android-image.md §7).
 ///
 /// They run in the `AndroidGraphics` configuration of IntegrationTests.xctestplan, with the `guestSwiftshader`
 /// profile. They need the Android bundle of `scripts/build-test-android-bundle.sh` and adb under ANDROID_HOME.

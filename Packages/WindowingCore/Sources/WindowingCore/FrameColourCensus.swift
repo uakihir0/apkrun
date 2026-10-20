@@ -1,4 +1,4 @@
-/// A census of the pure red and pure blue pixels of one frame (graphics.md §12 #023, the tearing check).
+/// A census of the pure red and pure blue pixels of one frame (graphics.md §7, the tearing check).
 ///
 /// The alternating-colour mode of HelloGL clears each frame to one of two colours, so a frame that holds both colours
 /// was written partly before and partly after the other colour. The census reads the pixels of a BGRA8 buffer, the

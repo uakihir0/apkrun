@@ -1,7 +1,7 @@
 import Foundation
 import IOSurface
 
-/// One renderer operation, as the device issued it. A recording replays these calls in order (graphics.md §12).
+/// One renderer operation, as the device issued it. A recording replays these calls in order (graphics.md §14).
 enum VirGLOperation: Codable, Equatable, Sendable {
     case createContext(id: UInt32, name: String)
     case destroyContext(id: UInt32)

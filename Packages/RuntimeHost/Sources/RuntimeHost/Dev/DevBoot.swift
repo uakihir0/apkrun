@@ -1215,7 +1215,7 @@ actor DevBootStopSignal {
     }
 }
 
-/// Where the development Guest Agent bundle is (guest-components.md §7.1, build-system.md §7.1). The order is the
+/// Where the development Guest Agent bundle is (guest-components.md §2, build-system.md §7.1). The order is the
 /// `--guest-dir` value, then `APKRUN_GUEST_DIR`, then `Resources/guest` of the app bundle that holds the executable.
 public enum DevGuestAgentLocation {
     /// The bundle directory for `guestDir` (the flag value, or nil), `environment`, and `executable`.

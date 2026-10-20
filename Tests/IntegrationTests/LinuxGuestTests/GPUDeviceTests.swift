@@ -18,7 +18,7 @@ private final class TraceRecorder: @unchecked Sendable {
 }
 
 /// T2 checks of the virtio-gpu device: the probe and EDID, and the R-01 hotplug spike
-/// (graphics.md §12, #019).
+/// (graphics.md §4, #019).
 final class GPUDeviceTests: XCTestCase {
     func testLinuxGuestDetectsTheVirtioGPUAndReadsTheGeneratedEDID() async throws {
         let trace = TraceRecorder()
@@ -29,7 +29,7 @@ final class GPUDeviceTests: XCTestCase {
             tests: ["gpu"],
             customDevices: [VirtioGPUDevice(traceObserver: { trace.append($0) })]
         )
-        // The exchanged bytes become the golden driver trace of graphics.md §12 (#019 step 1).
+        // The exchanged bytes become the golden driver trace of graphics.md §14 (#019).
         try writeDriverTrace(trace.records)
 
         XCTAssertEqual(result.records.first, .bootOK)

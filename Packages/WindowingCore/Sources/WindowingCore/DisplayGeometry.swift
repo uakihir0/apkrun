@@ -1,7 +1,7 @@
 import CoreGraphics
 import InputCore
 
-/// The fixed-size geometry of a display window (graphics.md §12 #023, step 3).
+/// The fixed-size geometry of a display window (graphics.md §6.5).
 ///
 /// The content keeps the scanout's pixel size. The window never changes the scanout's mode, and when the window is
 /// resized the content is scaled with aspect fit.

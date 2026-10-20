@@ -3,7 +3,7 @@ import Testing
 
 @testable import WindowingCore
 
-// The geometry and the frame gate of display-and-windowing.md §5.3 and graphics.md §12 #023, without a window.
+// The geometry and the frame gate of display-and-windowing.md §5.3 and graphics.md §6.5, without a window.
 
 @Test func anAspectFitOfTheSameSizeFillsTheBounds() {
     let rect = DisplayGeometry.aspectFit(

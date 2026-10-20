@@ -10,7 +10,7 @@ private struct AndroidImageVariantReceipt: Decodable {
     let variantManifestSHA256: String
 }
 
-/// The pointer checks of #024 on a real Android guest (T2, test-strategy §6.4), through the path of `apkrun dev launch`.
+/// The pointer checks of #024 on a real Android guest (T2), through the path of `apkrun dev launch`.
 ///
 /// Each test boots the test image with the embedded runtime (`DevBoot` and `DevInputRoute`), shows the development
 /// window, and posts the pointer events into the window's content view. The existing tests synthesize `NSEvent`s

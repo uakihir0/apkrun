@@ -7,7 +7,7 @@ import VirtioDeviceCoreTestSupport
 
 @testable import GraphicsCore
 
-// T1 (graphics.md §12 #023, test-strategy §6.3): the real virglrenderer and ANGLE, without a VM. The test uploads
+// T1 (graphics.md §14, #023): the real virglrenderer and ANGLE, without a VM. The test uploads
 // known pixels into two resources, flushes each to scanout 0, and reads back the pool IOSurface. It checks the
 // orientation and the channel layout of the blit, and that the normal path left the host counters at zero. The
 // readback is a test-only comparison of the surface contents. It does not use the production counters.

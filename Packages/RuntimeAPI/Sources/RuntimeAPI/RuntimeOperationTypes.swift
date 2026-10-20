@@ -321,6 +321,8 @@ public struct OperationSnapshot: Codable, Equatable, Sendable {
     public let kind: OperationKind
     /// The affected Android package, when known.
     public let packageID: RuntimePackageID?
+    /// SHA-256 of the canonical request payload, used to reconcile ambiguous begin replies.
+    public let requestFingerprint: String?
     /// The client that started this operation, or `nil` for daemon-owned work.
     public let clientKind: RuntimeClientKind?
     /// When the operation began.
@@ -338,6 +340,7 @@ public struct OperationSnapshot: Codable, Equatable, Sendable {
         parent: OperationID? = nil,
         kind: OperationKind,
         packageID: RuntimePackageID? = nil,
+        requestFingerprint: String? = nil,
         clientKind: RuntimeClientKind? = nil,
         startedAt: Date,
         progress: OperationProgress? = nil,
@@ -348,6 +351,7 @@ public struct OperationSnapshot: Codable, Equatable, Sendable {
         self.parent = parent
         self.kind = kind
         self.packageID = packageID
+        self.requestFingerprint = requestFingerprint
         self.clientKind = clientKind
         self.startedAt = startedAt
         self.progress = progress
@@ -461,6 +465,40 @@ public struct RuntimeBeginInstallImportedControlRequest: Codable, Equatable, Sen
 /// The result or structured failure for a begin-install request.
 public struct RuntimeBeginInstallImportedControlReply: Codable, Equatable, Sendable {
     /// The long-running install handle, present on success.
+    public let result: OperationHandle?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: OperationHandle) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// Starts a package uninstall or APKRun-store forget asynchronously.
+public struct RuntimeBeginUninstallPackageControlRequest: Codable, Equatable, Sendable {
+    /// The authenticated request metadata. Its operation ID is reused by the returned handle.
+    public let header: APIRequestHeader
+    /// The package and requested uninstall policy.
+    public let request: RuntimeUninstallPackageRequest
+
+    /// Creates a begin-uninstall request.
+    public init(header: APIRequestHeader, request: RuntimeUninstallPackageRequest) {
+        self.header = header
+        self.request = request
+    }
+}
+
+/// The result or structured failure for a begin-uninstall request.
+public struct RuntimeBeginUninstallPackageControlReply: Codable, Equatable, Sendable {
+    /// The long-running uninstall handle, present on success.
     public let result: OperationHandle?
     /// The structured failure, present on failure.
     public let error: RuntimeWireError?

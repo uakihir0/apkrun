@@ -3,8 +3,8 @@ import Testing
 
 @testable import RuntimeAPI
 
-@Test func runtimeRestartAdvancesAPIMinorVersion() {
-    #expect(APIVersion.current == APIVersion(major: 1, minor: 10))
+@Test func runtimeTrackedUninstallAdvancesAPIMinorVersion() {
+    #expect(APIVersion.current == APIVersion(major: 1, minor: 11))
 }
 
 @Test func runtimeRestartRequestRoundTripsVersionedHeader() throws {

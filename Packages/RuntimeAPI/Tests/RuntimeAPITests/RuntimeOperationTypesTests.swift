@@ -19,6 +19,23 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     #expect(OperationID(wire: "41f9ed7b-a123-1ebd-9a61-7a2be9465780") == nil)
 }
 
+@Test func operationRequestFingerprintIsStableAndIncludesUninstallOptions() throws {
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let removeData = RuntimeUninstallPackageRequest(packageID: packageID)
+    let keepData = RuntimeUninstallPackageRequest(
+        packageID: packageID,
+        options: RuntimeUninstallOptions(keepData: true)
+    )
+
+    let removeFingerprint = try RuntimeOperationRequestFingerprint.make(for: removeData)
+    let repeatedFingerprint = try RuntimeOperationRequestFingerprint.make(for: removeData)
+    let keepFingerprint = try RuntimeOperationRequestFingerprint.make(for: keepData)
+
+    #expect(removeFingerprint == repeatedFingerprint)
+    #expect(removeFingerprint != keepFingerprint)
+    #expect(RuntimeSHA256Digest(rawValue: removeFingerprint) != nil)
+}
+
 @Test func operationDTOsRoundTrip() throws {
     let operationID = OperationID()
     let parent = OperationID()
@@ -58,6 +75,7 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
         parent: parent,
         kind: .install,
         packageID: packageID,
+        requestFingerprint: "sha256:\(String(repeating: "a", count: 64))",
         clientKind: .cli,
         startedAt: startedAt,
         progress: progress,
@@ -82,6 +100,12 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     #expect(try roundTrip(OperationResult.unknown) == .unknown)
     #expect(try roundTrip(running) == running)
     #expect(try roundTrip(completed) == completed)
+    var legacySnapshot = try #require(
+        JSONSerialization.jsonObject(with: JSONEncoder().encode(completed)) as? [String: Any]
+    )
+    legacySnapshot["requestFingerprint"] = nil
+    let legacySnapshotData = try JSONSerialization.data(withJSONObject: legacySnapshot)
+    #expect(try JSONDecoder().decode(OperationSnapshot.self, from: legacySnapshotData).requestFingerprint == nil)
     #expect(try roundTrip(CancelReply.cancelling) == .cancelling)
     #expect(
         try roundTrip(CancelReply.notCancellable(reason: "The package transaction committed."))
@@ -125,10 +149,20 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     let ticket = try #require(RuntimeImportTicket(rawValue: "84cfd2a0-504c-4dc2-9d6f-0f579f771902"))
     let installRequest = RuntimeInstallImportedRequest(ticket: ticket)
     let beginRequest = RuntimeBeginInstallImportedControlRequest(header: header, request: installRequest)
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let uninstallRequest = RuntimeUninstallPackageRequest(
+        packageID: packageID,
+        options: RuntimeUninstallOptions(keepData: true)
+    )
+    let beginUninstallRequest = RuntimeBeginUninstallPackageControlRequest(
+        header: header,
+        request: uninstallRequest
+    )
     let cancelRequest = RuntimeCancelOperationControlRequest(header: header, operationID: operationID)
     let listRequest = RuntimeListOperationsControlRequest(header: header)
     let statusRequest = RuntimeOperationStatusControlRequest(header: header, operationID: operationID)
     let handle = OperationHandle(operationID: operationID, kind: .install)
+    let uninstallHandle = OperationHandle(operationID: operationID, kind: .uninstall)
     let snapshot = OperationSnapshot(
         operationID: operationID,
         kind: .install,
@@ -140,6 +174,7 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     )
 
     #expect(try roundTrip(beginRequest) == beginRequest)
+    #expect(try roundTrip(beginUninstallRequest) == beginUninstallRequest)
     #expect(try roundTrip(cancelRequest) == cancelRequest)
     #expect(try roundTrip(listRequest) == listRequest)
     #expect(try roundTrip(statusRequest) == statusRequest)
@@ -149,6 +184,12 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     #expect(
         try roundTrip(RuntimeBeginInstallImportedControlReply(error: failure))
             == RuntimeBeginInstallImportedControlReply(error: failure))
+    #expect(
+        try roundTrip(RuntimeBeginUninstallPackageControlReply(result: uninstallHandle))
+            == RuntimeBeginUninstallPackageControlReply(result: uninstallHandle))
+    #expect(
+        try roundTrip(RuntimeBeginUninstallPackageControlReply(error: failure))
+            == RuntimeBeginUninstallPackageControlReply(error: failure))
     #expect(
         try roundTrip(RuntimeCancelOperationControlReply(result: .cancelling))
             == RuntimeCancelOperationControlReply(result: .cancelling))
@@ -170,11 +211,12 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
 
     for requestHeader in [
         beginRequest.header,
+        beginUninstallRequest.header,
         cancelRequest.header,
         listRequest.header,
         statusRequest.header,
     ] {
-        #expect(requestHeader.apiVersion == APIVersion(major: 1, minor: 10))
+        #expect(requestHeader.apiVersion == APIVersion(major: 1, minor: 11))
         #expect(requestHeader.clientKind == .cli)
     }
 }

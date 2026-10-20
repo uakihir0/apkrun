@@ -7,8 +7,8 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.4 adds package queries; 1.5 adds runtime reset; 1.6 adds one-request runtime restart;
     /// 1.7 adds daemon-backed package import and install; 1.8 adds asynchronous install handles
     /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
-    /// 1.10 adds package install change events.
-    public static let current = APIVersion(major: 1, minor: 10)
+    /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints.
+    public static let current = APIVersion(major: 1, minor: 11)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -585,6 +585,8 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func importPackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
     /// Starts installation and returns an operation handle without waiting for installation to finish.
     func beginInstallImported(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Starts a package uninstall or store forget and returns its operation handle.
+    func beginUninstallPackage(_ request: Data, reply: @escaping (Data) -> Void)
     /// Requests cancellation at the operation's next cancellation point, if it is still cancellable.
     func cancelOperation(_ request: Data, reply: @escaping (Data) -> Void)
     /// Lists running operations and recently finished operations retained by the daemon.

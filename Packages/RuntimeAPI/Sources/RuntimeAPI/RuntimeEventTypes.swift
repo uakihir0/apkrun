@@ -129,23 +129,27 @@ public struct EventEnvelope: Codable, Equatable, Sendable {
 
 /// A package change published on the `packages` event topic.
 ///
-/// API 1.10 publishes changes produced by successful package installs. Other package-store changes
-/// remain reserved for later event publishers. Unknown changes decode as ``unknown``.
+/// API 1.10 publishes successful package installs and API 1.11 publishes Android package removals.
+/// Other package-store changes remain reserved for later event publishers. Unknown changes decode
+/// as ``unknown``.
 public enum PackageChange: Codable, Equatable, Sendable {
     /// A package was installed for the first time or restored with its retained data.
     case installed(RuntimePackageSummary)
     /// A package was replaced by a new version or reinstalled at the same version. `from`
     /// is the best version observed before installation; an out-of-band Android install may race.
     case updated(RuntimePackageSummary, from: RuntimeVersionCode)
+    /// An Android package uninstall committed; `keptData` records the requested data policy.
+    case removed(RuntimePackageID, keptData: Bool)
     /// The daemon reported a package change added by a newer API version.
     case unknown
 
     private enum AssociatedKey: String, CodingKey {
         case first = "_0"
         case from
+        case keptData
     }
 
-    /// Decodes an install change or preserves an event added by a newer API version.
+    /// Decodes a package change or preserves an event added by a newer API version.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: RuntimeEventCodingKey.self)
         guard container.allKeys.count == 1, let key = container.allKeys.first else {
@@ -163,12 +167,18 @@ public enum PackageChange: Codable, Equatable, Sendable {
                 try payload.decode(RuntimePackageSummary.self, forKey: .first),
                 from: try payload.decode(RuntimeVersionCode.self, forKey: .from)
             )
+        case "removed":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .removed(
+                try payload.decode(RuntimePackageID.self, forKey: .first),
+                keptData: try payload.decode(Bool.self, forKey: .keptData)
+            )
         default:
             self = .unknown
         }
     }
 
-    /// Encodes a known install change.
+    /// Encodes a known package change.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: RuntimeEventCodingKey.self)
         switch self {
@@ -185,6 +195,13 @@ public enum PackageChange: Codable, Equatable, Sendable {
             )
             try payload.encode(summary, forKey: .first)
             try payload.encode(from, forKey: .from)
+        case .removed(let packageID, let keptData):
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self,
+                forKey: RuntimeEventCodingKey("removed")
+            )
+            try payload.encode(packageID, forKey: .first)
+            try payload.encode(keptData, forKey: .keptData)
         case .unknown:
             throw EncodingError.invalidValue(
                 self,

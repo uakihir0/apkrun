@@ -1,244 +1,45 @@
 # Risk Register
 
-| Field | Value |
-|---|---|
-| Status | Baseline |
-| Related | [open-questions.md](open-questions.md), [roadmap.md](roadmap.md), [issues/README.md](issues/README.md), [test-strategy.md](test-strategy.md), [../01-architecture/decisions/README.md](../01-architecture/decisions/README.md) |
-
-A risk is something that could make a planned design fail or cost much more than planned. Each risk names the task that settles it and the fallback if it goes badly. An open question that is only a choice, with no risk of failure, is in [open-questions.md](open-questions.md) instead.
+A risk is something that could make a planned design fail, or cost much more than planned. Each row names the impact, the task that settles the risk, and its status and fallback. An open question that is only a choice, with no risk of failure, is in [open-questions.md](open-questions.md).
 
 ---
 
 ## 1. How the register is used
 
-- **IDs are permanent.** A closed risk keeps its ID. New risks take the next free number (R-26 and up).
-- **Status:** `open` (not yet checked), `watching` (checked once, could return, for example on a new macOS build), `closed` (settled; the result is recorded), `realized` (it happened and the fallback is in use).
-- **Impact** is what happens if the risk is realized and the fallback is needed: **High** blocks a version's Definition of Done or a gate, **Medium** degrades a feature or costs weeks, **Low** is local.
-- **Likelihood** is our estimate before the settling task runs: High, Medium, or Low.
-- The settling task records the result in the "Result" line of the risk (§3), in the design document's verification log, and, if the design changes, in an ADR. The pull request that closes the task updates this file.
-- Risks are reviewed at every milestone exit ([roadmap.md](roadmap.md) §4). Any risk still `open` whose settling task is in the finished milestone blocks the exit. When a risk has settling tasks in several milestones, each earlier milestone exit records the partial result in the Result line, and only the milestone that holds the last settling task must close it (or mark it `watching` or `realized`).
+- **IDs are permanent.** A closed risk keeps its ID. A new risk takes a number that no row uses.
+- **Status:** `open` (not yet settled), `watching` (checked once, could return, for example on a new macOS build), `closed` (settled, and the row holds the outcome), `realized` (it happened, and the fallback is in use).
+- **Impact** is what happens if the risk is realized and the fallback is needed. **High** blocks a version's Definition of Done or a gate. **Medium** degrades a feature or costs weeks. **Low** is local.
+- The settling task updates its row in the same pull request. If the design changes, it also writes an ADR.
+- At each milestone exit ([roadmap.md](roadmap.md) §4), every `open` risk whose settling task is done gets a status update.
 
 ---
 
 ## 2. Summary
 
-| ID | Risk | Impact | Likelihood | Settled by | Status |
-|---|---|---|---|---|---|
-| R-01 | Limits of the macOS 27 custom virtio device API | High | Medium | #063, #019, #028 | Linux part settled (#019, positive); Android open (#028) |
-| R-02 | virglrenderer / ANGLE correctness for Android's GLES use | High | Medium | #020, #022, #023 | open |
-| R-03 | Graphics performance with one renderer thread | Medium | Medium | #023, #030, #068, #070 | partial; two-display performance unmeasured |
-| R-04 | Multi-display: scanout hotplug, mode changes, apps on secondary displays | High | Medium | #028, #029, #067, #030 | open |
-| R-05 | Input injection and IME on secondary displays | High | Low | #024, #030, #071 | partial; two-window guest input and IME unverified |
-| R-06 | The stock Cuttlefish image does not boot on the VZ topology | High | Medium | #012–#014 | G2 passed from `691e114` on the task branch (2026-10-09, android-image.md §8.5); closes with the clean-`main` G2 run |
-| R-07 | No VM save/restore while VirGL is active | Medium | High (known) | accepted; #070 measures cold start | watching |
-| R-08 | Memory footprint of the guest and the renderer | Medium | Medium | #028, #070 | open |
-| R-09 | No Google Mobile Services: apps that need them do not work | Medium | High (known) | accepted; #090 labels apps | watching |
-| R-10 | Licensing of redistributed images and libraries | High | Low | #093 | open |
-| R-11 | Direct kernel boot is not enough (AVB, slots, boot devices) | High | Low | #012–#014 | G2 passed from `691e114` with the planner's bootconfig (2026-10-09); closes with the clean-`main` G2 run |
-| R-12 | Cuttlefish host-service dependencies (hvc HALs, input, network naming) | High | Medium | #095, #014 | realized in part (10-port limit, sensors wait); mitigated, G2 passed (2026-10-09); the validated Wi-Fi stage is intermittent (IR-374) |
-| R-13 | SELinux policy for the vsock bridge and the privileged agents | Medium | Medium | #035 | open |
-| R-14 | AOSP build infrastructure and upstream branch changes | Medium | Medium | #035 | open |
-| R-15 | Android install floors reject older apps (targetSdk, signature, alignment) | Low | High (known) | #041, #073, #090 | watching |
-| R-16 | Virtualization.framework changes on new macOS builds | High | Low | T2 suite on every new macOS build | watching |
-| R-17 | Gatekeeper and App Management policy for generated wrappers | High | Low | #046, #047, #076, #088 | open |
-| R-18 | Hidden or privileged Android APIs used by the guest agents change or are refused | Medium | Medium | #072, #034, #039, #043 | open |
-| R-19 | Background mode without a Dock tile flash; notification permission across wrapper refreshes | Medium | Medium | #054, #076 | open |
-| R-20 | Dock pins and App Management with the `Contents` swap | Medium | Medium | #076 | open |
-| R-21 | Pasteboard read prompts on macOS 27 for the focus push | Medium | Medium | #053 | open |
-| R-22 | Privacy prompts and their attribution when apkrund reads user folders | Medium | Medium | #082 | open |
-| R-23 | Sparkle details differ from the design | Low | Low | #057 step 1 | open |
-| R-24 | launchd does not run the new apkrund from a replaced bundle | Medium | Low | #057 (T2) | open |
-| R-25 | Image extraction writes the zero runs of `os.img` before holes are punched | Low | High | #087 | open |
-
----
-
-## 3. Risks
-
-### R-01 Limits of the macOS 27 custom virtio device API
-
-- **Risk.** The API exists (macOS 27 SDK, WWDC26 session 224) but has limits that shape the devices APKRun can build: there is no callback for guest writes to config space and no call to raise an interrupt; queues are valid only after `DRIVER_OK`; guest memory mappings are invalid after a reboot; the maximum number of shared-memory regions (`maximumAllowedSharedMemoryRegionCount`) is undocumented; and it is not verified that `updateDeviceSpecificConfiguration` raises a config-change interrupt in the guest.
-- **Consequences already designed in.** No host virtio-input device; input goes through guest injection ([ADR-0013](../01-architecture/decisions/0013-input-via-guest-injection.md)). The virtio-gpu `events_clear` write is not observable, so the device uses the display-generation workaround ([../02-design/graphics.md](../02-design/graphics.md) §4.3). No blob resources or host-visible shared memory in v1.
-- **Open part.** Scanout hotplug through a config-change interrupt.
-- **Fallbacks** ([../02-design/graphics.md](../02-design/graphics.md) §4.3): A. the Guest Agent forces a DRM connector re-probe (custom image); B. all pool scanouts enabled at boot with a placeholder mode; C. a fixed display count per boot (a product regression, then also recorded under R-04).
-- **Settled by.** #063 (the test device exercises queues, config updates, and resets), #019 (hotplug spike with the Linux test guest), #028 (the same with Android).
-- **Result.** Partial (#063, 2026-10-05, arm64 MacBook Pro, macOS 27.0 build 26A428): 26 VirtioDeviceCore T0 tests and 71 VirtualMachineCore T0 tests passed; a clean filtered-copy Xcode integration build passed, followed by all 10 LinuxGuest XCTest cases and 6 observer tests. The test device gates queue/context access until `DRIVER_OK`; same-size configuration updates succeeded, size mismatch was rejected, and guest unbind/rebind reset the device and served a second seeded sample. A real 4 KiB VZ guest-memory mapping at GPA `0x70000000` rejected access in reset, ordinary stop, and forced-stop callbacks. In the forced-stop run, the callback timeline contains no `WillReset` between mapping creation and `WillStop`; a late attempt through the invalidated deferred-element token was recorded after stop. Reboot evidence records the guest-console order and VZ callback order independently; the streams do not establish a cross-stream order. Config-change interrupt delivery is not tested by virtio-rng and remains for #019/#028. R-01 stays open for the virtio-gpu hotplug work. #019 (2026-10-08, macOS 27.0.1 build 26A434): the `LinuxGuest` T2 run passed 29 of 29. The guest's `gpu-hotplug` check reported scanout 1 connected after about 4 s and 5 s in two runs, after the host enabled it 3.0 s after DRIVER_OK (spike mechanism IR-256). The Linux driver re-reads display info only on a config-change event, so the update raised one (inference). R-01 stays open for Android (#028).
-
-### R-02 virglrenderer / ANGLE correctness
-
-- **Risk.** Android's GLES 3.0 through Mesa virgl, translated by virglrenderer and ANGLE to Metal, renders incorrectly or crashes for common apps: MSAA (RiftVM needs a patch), texture formats, `EGL_METAL_TEXTURE_ANGLE` scanout import, WebView and Skia paths.
-- **Mitigation.** Pinned revisions and patches in `ThirdParty/ThirdParty.lock.json` ([../02-design/graphics.md](../02-design/graphics.md) §5); HelloGL, HelloCompose, and HelloWebView fixtures; the renderer runs isolated so that a crash is reported, not hidden.
-- **Fallback.** The `guestSwiftshader` GPU profile ([../02-design/graphics.md](../02-design/graphics.md) §9), turned on by Graphics Safe Mode (`graphics.safeMode`, [../03-reference/configuration.md](../03-reference/configuration.md)), with a warning. The profile is chosen at boot, so it applies to the whole VM, never to one app. Upstream fixes are carried as patches.
-- **Settled by.** #020 (build and host tests), #022 (Android VirGL), #023 (gate G3), then the compatibility runs of #090.
-- **Result.** Partial (2026-10-16): the ODM-overlay development variant booted with SELinux enforcing, and SurfaceFlinger reported Mesa VirGL GLES (IR-961). Separately, the G3 test bundle passed the one-display HelloGL gate at 59.99 fps average, with no renderer crash and no mixed frame in 408 alternating-phase samples (IR-1344). Together these results validate the tested Mesa/VirGL path and one app on one display; product-policy validation remains in #035, and broader app compatibility remains in #090.
-
-### R-03 Graphics performance
-
-- **Risk.** One renderer thread (the RiftVM model: one frame in flight plus one pending) cannot serve several displays at 60 fps, or the present cost exceeds the budget (present < 2 ms p95, NFR-PERF-*).
-- **Mitigation.** No CPU readback on the normal path (FR-GFX-05), IOSurface pools shared with the wrapper ([ADR-0006](../01-architecture/decisions/0006-wrapper-owned-window-iosurface.md)), frame statistics and readback counters ([../02-design/graphics.md](../02-design/graphics.md) §7), the perf harness ([../02-design/diagnostics.md](../02-design/diagnostics.md) §9).
-- **Fallback.** Lower the frame rate of background windows; one renderer context thread per display if virglrenderer allows it; revise the provisional targets with an ADR ([../00-product/requirements.md](../00-product/requirements.md) §2).
-- **Settled by.** #023 (one display), #030 (two displays, embedded runtime), #068 and #070 (through the XPC path in apkrund, measured by the perf harness).
-- **Result.** Partial (2026-10-19, IR-1378): the embedded two-window path is implemented. The one-display G3 run averaged 59.99 fps across 61 HelloGL events over ten minutes, with 0 mixed frames in 408 alternating-phase samples and no renderer crash (IR-1344). Two-display execution, APKRun present-time p95, and multi-display performance remain unmeasured and are owned by #030, #068, and #070.
-
-### R-04 Multi-display
-
-- **Risk.** virtio-gpu multi-scanout with the ranchu HWC does not behave as designed: scanouts cannot be added at runtime (see R-01), a mode change is reported as disconnect + connect and changes the Android display ID, or apps misbehave on secondary displays.
-- **Mitigation.** `DisplayPool` owns all allocation ([../02-design/display-and-windowing.md](../02-design/display-and-windowing.md) §3); EDID-derived stable display IDs; `primaryDisplayCompatibility` window mode for apps that fail on secondary displays (FR-DSP-06).
-- **Fallback.** Fixed pool size per boot (R-01 fallback C); for resize, fallback A or B in [../02-design/display-and-windowing.md](../02-design/display-and-windowing.md) §7.1 (move the task to a new display, or fixed window size).
-- **Settled by.** #028 (hotplug), #067 (mode change keeps the display ID), #029, #030 (gate G5).
-- **Result.** Partial (#067, 2026-10-19, IR-1372): the embedded development resize waits for display 0 to report the requested dimensions and attempts to restore the advertised mode and density policy on timeout. This rejects a resize if display 0 changes ID, but does not identify the replacement display. No Android guest mode-change test has run, so ID stability and pool-display behavior remain unverified.
-
-### R-05 Input and IME on secondary displays
-
-- **Risk.** Events injected by the Guest Agent with a display ID do not reach the right app on a secondary display, focus follows the wrong display, or the IME attaches to display 0.
-- **Mitigation.** Per-display injection and focus routing ([../02-design/input.md](../02-design/input.md) §7); the APKRun IME with the per-display `ime_policy` (`LOCAL`, `FALLBACK_DISPLAY`, `HIDE`; [../02-design/guest-protocol.md](../02-design/guest-protocol.md)).
-- **Fallback.** `primaryDisplayCompatibility` for affected apps; `FALLBACK_DISPLAY` IME policy.
-- **Settled by.** #024, #030 (independent input to two displays), #071 (typing goes to the focused display).
-- **Result.** Partial (2026-10-19, IR-1378): #024 verified clicks, drags, scrolls, and right-click on display 0. #030 now implements per-window focus-gated routing and task-focus retry with host-side tests. Secondary-display guest input and the #071 IME behavior remain unverified. See [issues/M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md#024-pointer-input).
-
-### R-06 Stock Cuttlefish image on the VZ topology
-
-- **Risk.** The Cuttlefish arm64 image expects crosvm's machine: its device set, interrupt layout, and console count. VZ gives one PCI ECAM host, GICv3, PSCI hvc, a PL031 RTC, a PL061 power button, no PL011, and RAM at 0x70000000 ([../02-design/vm.md](../02-design/vm.md) §5). Android could fail in the kernel, in first-stage init (block devices, `boot_devices`), or later in HALs.
-- **Mitigation.** Use the static launcher outputs of the #064 captures (bootconfig, command line, disk layout, kernel log up to `system_server`) as the reference, and the Cuttlefish source at the pinned revision for host-service behaviour; a complete crosvm reference boot needs a non-nested arm64 Linux host (IR-305). Continue direct kernel boot with a generated bootconfig ([ADR-0015](../01-architecture/decisions/0015-direct-kernel-boot.md)) and topology discovery with the Linux test guest (#011).
-- **Fallback.** Adapt the custom image (#035): kernel config, fstab, init scripts. That moves the fix to M5 and delays G2 with the stock image.
-- **Settled by.** #012, #013, #014 (gate G2). #064 supplies the static launcher captures only (IR-305).
-- **Result.** The stock image boots on VZ. The 2026-10-08 direct-boot spike (`Experiments/vz-android-boot/`, IR-306) booted build 16373615 on macOS 27.0.1 (26A434) to `VIRTUAL_DEVICE_BOOT_COMPLETED` in 7.5 s on the first boot and about 5 s on later cold boots, with SELinux enforcing and no AVC denials. The kernel, first-stage init, `boot_devices` (`40000000.pci`), dynamic partitions, AVB with `orange`/`unlocked`, and first-boot formatting of `/metadata` and `/data` all worked without image changes. The deviations it needed are host-service substitutes (R-12), the M1 GPU profile ([../02-design/android-image.md](../02-design/android-image.md) §9.1), and the two-disk layout (§4.2). The #064 crosvm reference never became a known-good baseline: inside a nested-virtualization Linux VM the guest ran about 100 times slower than on VZ, and `system_server` was killed by its Watchdog (IR-305). On 2026-10-09 the production code (`apkrun dev boot`, `RuntimeSupervisor`; branch `task/012-android-kernel-boot` at `ec72fa2`) passed the G2 conditions: `G2AndroidBootTests` ran five cold boots with 10 minutes of stability each, reaching `BOOT_COMPLETED` in 12.4 s on the first boot and 5.2–6.0 s later ([../02-design/android-image.md](../02-design/android-image.md) §17). The risk closes when the same run passes from a clean `main`. G2 passed from `691e114` on the task branch (2026-10-09, [android-image.md](../02-design/android-image.md) §8.5): five cold boots with a 600 s dwell each, and a reference diff with 30 explained differences and none unexplained.
-
-### R-07 No VM save/restore while VirGL is active
-
-- **Risk (accepted).** Host renderer state cannot be serialized, so the custom GPU device sets `supportsSaveRestore = false` ([../02-design/vm.md](../02-design/vm.md) §9.5). Cold start cannot be shortened by restoring a saved VM, and APKRun cannot save the VM across host restarts.
-- **Mitigation.** Keep the VM warm under apkrund with pause/resume ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §5); trim boot time measured by the perf harness (NFR-PERF-02).
-- **Watch.** Revisit if a later virglrenderer or a Venus track (#096) can rebuild state.
-- **Result.** Accepted in ADR-0002 and ADR-0004.
-
-### R-08 Memory footprint
-
-- **Risk.** Guest RAM, the renderer's host memory, and one IOSurface pool per display exceed what a typical Mac can give, especially with several windows (NFR-RES-*).
-- **Mitigation.** `display.maxSessions` (default 8) bounds displays ([../02-design/display-and-windowing.md](../02-design/display-and-windowing.md) §3; [../03-reference/configuration.md](../03-reference/configuration.md)); memory defaults in [../02-design/vm.md](../02-design/vm.md) §10; idle pause ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §5); measurements in #070.
-- **Fallback.** Lower defaults, smaller pools, balloon before pause (an open question in [open-questions.md](open-questions.md)).
-- **Settled by.** #028, #070.
-- **Result.** Not yet measured.
-
-### R-09 No Google Mobile Services
-
-- **Risk (accepted).** Many apps need Google Play services for sign-in, push (FCM), maps, or Play Integrity. They fail or lose features. Apps that rely only on FCM get no push while they are not running ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §5).
-- **Mitigation.** Clear scope ([../00-product/scope.md](../00-product/scope.md) §3); the compatibility database (#090) labels apps; the FCM limit is stated in the FR-INT-03 row ([traceability.md](traceability.md) §2).
-- **Never.** Integrity bypass. Google Play is only considered as the isolated post-v1 track #097.
-- **Result.** Accepted.
-
-### R-10 Licensing of images and libraries
-
-- **Risk.** Redistributing Cuttlefish-derived images, GPL/LGPL components, or ANGLE/virglrenderer builds without meeting their terms (source offers, notices), or depending on a component whose license is incompatible with distribution.
-- **Mitigation.** Every third-party component is listed with its license in `ThirdParty/ThirdParty.lock.json`; notices are generated for the app and the image; the rules are in [../05-development/legal-and-licensing.md](../05-development/legal-and-licensing.md). Stock Google-built images are used for development only; shipped images are built by APKRun from AOSP source (#035).
-- **Settled by.** #093 (legal review and compliance checklist) before v1.0.
-- **Result.** Not yet reviewed.
-
-### R-11 Direct kernel boot is not enough
-
-- **Risk.** Android needs something that U-Boot provides on Cuttlefish: AVB results, the slot suffix, the boot reason, or `boot_devices`. Direct kernel boot through `VZLinuxBootLoader` (an uncompressed arm64 `Image`) with a generated bootconfig misses it.
-- **Mitigation.** The bootconfig carries the values U-Boot would set (`androidboot.slot_suffix=_a`, `verifiedbootstate`, `boot_devices`; [../02-design/android-image.md](../02-design/android-image.md) §6); the reference capture (#064) lists what U-Boot passes.
-- **Fallback.** A U-Boot EFI build as the boot loader ([ADR-0015](../01-architecture/decisions/0015-direct-kernel-boot.md)).
-- **Settled by.** #012–#014.
-- **Result.** Spike positive (IR-306). With the bootconfig of [../02-design/android-image.md](../02-design/android-image.md) §6 (the launcher's keys, `slot_suffix=_a`, `force_normal_boot=1`, `verifiedbootstate=orange`, `vbmeta.device_state=unlocked`, the `avb.py` digest, and `boot_devices=40000000.pci`), first-stage init mounted every logical partition, `libfs_avb` accepted the chain, and `/proc/bootconfig` equalled the merged block. Nothing U-Boot provides was missing. The production boot planner uses the same values, and the 2026-10-09 G2 run passed five cold boots with them. G2 passed from `691e114` on the task branch (2026-10-09, [android-image.md](../02-design/android-image.md) §8.5). Closed when G2 passes from a clean `main`.
-
-### R-12 Cuttlefish host-service dependencies
-
-- **Risk.** The guest expects Cuttlefish host processes (secure_env, modem simulator, GNSS, sensors, vhost-user input, `socket_vsock_proxy`) on fixed hvc ports and vsock ports. VZ's ordering of 20 virtio-console devices is not confirmed, a HAL may crash-loop on a silent port, and network interface naming depends on Cuttlefish's multi-NIC setup.
-- **Mitigation.** #095 decides port by port and service by service: attach all 20 ports in order, verified with `APKRUN-PORT-<i>` markers ([../02-design/vm.md](../02-design/vm.md) §6.2); in-guest KeyMint and Gatekeeper implementations selected through bootconfig; one NAT NIC set up as Wi-Fi ([../02-design/android-image.md](../02-design/android-image.md) §7).
-- **Fallback.** Attach fewer ports and move the affected HALs into the custom image ([../02-design/android-image.md](../02-design/android-image.md) §7).
-- **Settled by.** #095, #014.
-- **Result (2026-10-09, #095).** The eight-port marker identity passes on the test kernel, which creates eight `hvc` nodes (IR-372), so the 20-port marker check is blocked there. The Android guest has `hvc0`–`hvc19`. KeyMint, Gatekeeper, `/data`, and LockSettings pass. The network does not come up after the first boot (no Wi-Fi carrier, no IPv4, no DNS): follow-up IR-374 (§7.8). The first join of Wi-Fi finishes after `ready`: in the 2026-10-09 #014 runs the address, the IPv4 default route, and DNS pass within a 120 s poll, and the validated stage is intermittent (4 of 5 polled runs did not validate; IR-374).
-- **Result.** Realized in part, with mitigations found in the 2026-10-08 spike (IR-306):
-  - VZ accepts at most 10 single-port console devices. Ports 10–19 are the ports of one multiport `VZVirtioConsoleDeviceConfiguration` with `isConsole` set; the sensors HAL's traffic arrived on hvc18, so the guest numbers them in array order ([../02-design/vm.md](../02-design/vm.md) §6).
-  - A silent hvc18 does not just idle: the sensors HAL waits for the host's `list-sensors` reply, `system_server` blocks in `SensorService`, and its Watchdog kills it after 185 s. A minimal host reply ("no sensors") fixes it ([../02-design/android-image.md](../02-design/android-image.md) §7.1).
-  - Several launcher keys configure guest-side servers, and their HALs abort without them; the RIL exits without `modem_simulator_ports`. These keys stay (§7.3).
-  - The OpenThread HAL needs `eth1`, and Wi-Fi needs `virt_wifi` on `eth2`: three NAT NICs in Cuttlefish's order (§7.4).
-  - Without rootcanal, `com.android.bluetooth` aborts seven times per boot until its recovery limit; Bluetooth is turned off on the first boot (§7.6).
-  - The production code applies all of these: the multiport console device in VirtualMachineCore, the sensors responder and the first-boot settings in RuntimeCore, the three NICs and the kept keys in the boot plan. In the 2026-10-09 G2 run no init service exited more than twice in five 10-minute dwells. The `APKRUN-PORT-<i>` marker check and the network checks inside Android remain for #095.
-
-### R-13 SELinux policy for the bridge and agents
-
-- **Risk.** The permissions the custom image grants to `apkrun_vsockd`, the Guest Agent, and the Store Agent (vsock sockets, local sockets, privileged services) need more policy than planned, or conflict with neverallow rules.
-- **Mitigation.** New domains developed in permissive mode on userdebug only, denials turned into rules, CI check that release builds have no permissive domains ([../02-design/guest-components.md](../02-design/guest-components.md) §4.2).
-- **Fallback.** Move a function from the agent to a system service in the product, or use the platform-signed priv-app path.
-- **Settled by.** #035.
-- **Result.** Not yet run.
-
-### R-14 AOSP build infrastructure
-
-- **Risk.** Building the APKRun product needs a large x86_64 Linux builder ([../05-development/environment-setup.md](../05-development/environment-setup.md) §5). Public AOSP arrives as release drops (the pinned branch is `aosp-android-latest-release`, [../02-design/android-image.md](../02-design/android-image.md) §2), and the Cuttlefish device tree can change layout between drops. Build breaks or long builds slow M5 and every image release.
-- **Mitigation.** Pinned `repo` manifests, a scripted remote build, the stock image kept usable for development until the custom image passes the same pipeline ([../02-design/android-image.md](../02-design/android-image.md) §11).
-- **Settled by.** #035.
-- **Result.** Not yet run.
-
-### R-15 Android install floors
-
-- **Risk (known).** Android refuses some apps: `targetSdkVersion` below the install floor (23 on API 34, 24 on API 35 and later), no v2+ signature with `targetSdk ≥ 30`, and uncompressed-and-aligned `resources.arsc` for `targetSdk ≥ 30`. Users see older apps fail.
-- **Mitigation.** The host inspection reports these before install with clear errors (`targetSdkTooLow`, `legacySignatureNotAllowed`, `resourcesArscNotAligned`; [../02-design/package-store.md](../02-design/package-store.md) §4.6). APKRun never bypasses the floor (`--bypass-low-target-sdk-block` is not used).
-- **Settled by.** #041, #073; the corpus runs of #090 show the real share.
-- **Result.** Rules known; field share not measured.
-
-### R-16 Virtualization.framework changes on new macOS builds
-
-- **Risk.** A macOS update changes the VZ guest topology (PCI paths, device order), the custom virtio API behavior, or console numbering. `boot_devices` and hvc numbering depend on them.
-- **Mitigation.** The topology is recorded in `Images/reference/vz/<macOS build>/topology.txt` by #011 and re-checked by the T2 suite on every new macOS build (beta seeds included) ([../02-design/vm.md](../02-design/vm.md) §5, [../02-design/android-image.md](../02-design/android-image.md) §5.3); `boot_part_uuid` is the alternative if the path is unstable ([../02-design/android-image.md](../02-design/android-image.md) §5.3).
-- **Status.** Watching for every macOS release.
-
-### R-17 Gatekeeper and App Management policy for wrappers
-
-- **Risk.** Future macOS policy blocks or prompts for locally created, ad-hoc signed wrappers, or App Management blocks apkrund from updating wrappers in `/Applications`.
-- **Mitigation.** Local wrappers are created by apkrund, never downloaded, and carry no quarantine attribute, so Gatekeeper does not assess them ([../02-design/wrapper.md](../02-design/wrapper.md) §7.1); the registry trusts wrappers by cdhash; distribution wrappers are Developer ID signed and notarized (#088).
-- **Fallback.** Wrappers in `~/Applications` by default; a one-time App Management permission prompt with instructions.
-- **Settled by.** #046, #047 (gate G8), #076, #088.
-- **Result.** Tested on macOS 27 during research (`open` runs a locally created wrapper without assessment). Not yet tested in the product.
-
-### R-18 Hidden or privileged Android APIs
-
-- **Risk.** The guest agents rely on APIs that are hidden, privileged, or signature-protected and can change between Android releases: input injection with a display ID, the pointer-icon API, `moveRootTaskToDisplay`, update ownership (`setRequestUpdateOwnership`), and `RollbackManager` with `MANAGE_ROLLBACKS` / `TEST_MANAGE_ROLLBACKS`. On the stock image the agent runs as a shell-launched `app_process`; on the custom image it is a platform-signed priv-app.
-- **Mitigation.** The privilege table in [../02-design/guest-components.md](../02-design/guest-components.md) §5 names each API and its permission; every call has a capability check reported in `Health`; the custom image grants permissions through privapp allowlists.
-- **Fallback.** Per API, as listed in the design: hover off if the pointer cannot be hidden ([../02-design/input.md](../02-design/input.md) §4); the confirmed data-loss path if rollback is refused ([../02-design/package-store.md](../02-design/package-store.md) §7.3).
-- **Settled by.** #072, #034, #039, #043, and again for each new Android base in #058.
-- **Result, 2026-10-12.** The same five wrappers resolve on build 16373615 with the final build (`ServiceCheck` through `app_process`, all `available=true`, no missing method on two boots). No new fallback was needed. Each wrapper takes its service lookup as a constructor parameter that defaults to the framework lookup, so a test can supply a fake (IR-1229).
-- **Result.** #072, on build 16373615 (stock image, `app_process`, macOS 27 host, 2026-10-10). Every wrapper resolves: DisplayManager (`getDisplayIds(boolean)`, `getDisplayInfo(int)`, `registerCallback`), WindowManager (`setForcedDisplayDensityForUser(int,int,int)`, `setDisplayImePolicy(int,int)`), ActivityTaskManager (`getTasks(int,boolean,boolean,int)`, `registerTaskStackListener`, `startActivityAsUser` with 12 parameters, `setFocusedTask`, `moveRootTaskToDisplay`), InputManager (`injectInputEvent`), and LockSettings (`setBoolean(String,boolean,int)`). Three findings differ from the design. The `getTasks` form has 4 parameters, and `ILockSettings` has no `setLockScreenDisabled`, so the keyguard switch is the `lockscreen.disabled` key. The settings provider refuses a direct write from the shell uid, and so does the keyguard setter (`ACCESS_KEYGUARD_SECURE_STORAGE`). Both succeed through the service's shell entry point (`cmd settings`, `cmd lock_settings`). The activity start is refused for the calling package `android` (`Permission Denial`) and accepted for `com.android.shell`. Its result codes are renumbered (`START_INTENT_NOT_RESOLVED` is -91), and the display and task listeners must be Binder objects. Not yet run: rollback and ownership (#039, #043), and the keyguard key on other images. See [implementation-review.md](implementation-review.md) IR-422 to IR-431.
-- **Result, 2026-10-12 UTC (#024).** On build 16373615, the injection calls `setDisplayId` and `setActionButton` (the secondary button) are reached by reflection, and display 0 accepted the events. Every click, drag, scroll, and right-click reached the app, and the final run logged no framework refusal (`refused=0`). The risk names input injection with a display ID and the pointer-icon API. The pointer-icon API is not called, because Android draws no pointer for the injected hover on display 0 (OQ-31). `setActionButton` is not named in the risk; it is recorded here as the same kind of hidden call. A non-zero display is not tested (#029). See [issues/M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md#024-pointer-input) and [implementation-review.md](implementation-review.md) IR-1236, IR-1242.
-
-### R-19 Background mode and notification permission
-
-- **Risk.** A wrapper that keeps its app running without a window shows a Dock tile flash, or notification authorization is lost when a wrapper is regenerated ([../02-design/wrapper.md](../02-design/wrapper.md) §5.8).
-- **Settled by.** #054, #076.
-- **Fallback.** As in [../02-design/wrapper.md](../02-design/wrapper.md) §5.8 and [../02-design/desktop-integration.md](../02-design/desktop-integration.md) §5.
-
-### R-20 Dock pins with the `Contents` swap
-
-- **Risk.** Replacing a wrapper's `Contents` directory during regeneration breaks Dock pins or triggers App Management prompts on macOS 27 ([../02-design/wrapper.md](../02-design/wrapper.md) §9.3).
-- **Settled by.** #076 (verified first, before the rest of the task).
-- **Fallback.** Replace the whole bundle, with a note that a Dock pin may need to be re-added.
-
-### R-21 Pasteboard read prompts
-
-- **Risk.** macOS 27 shows a paste-permission prompt when apkrund or a wrapper reads the pasteboard on focus to push it to Android ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §4.2).
-- **Settled by.** #053: which process reads, whether reading on focus prompts, and which API tells the change count without reading.
-- **Fallback.** Push on paste only (Cmd+V in the window) instead of on focus.
-
-### R-22 Privacy prompts for user folders
-
-- **Risk.** Reading user-added shared folders from apkrund triggers privacy prompts attributed to the wrong app, or none that the user can act on ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4).
-- **Settled by.** #082.
-- **Fallback.** Security-scoped bookmarks created by APKRun.app through an open panel; Settings → Files explains how to allow access.
-
-### R-23 Sparkle details
-
-- **Risk.** The pinned Sparkle 2 version differs from the design in the two recent Info.plist keys (`SUVerifyUpdateBeforeExtraction`, `SURequireSignedFeed`), in installing a postponed update on quit, in the signed appcast format, or in allowing plain HTTP on loopback for tests ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.2).
-- **Settled by.** #057 step 1. Differences are recorded here and in [ADR-0016](../01-architecture/decisions/0016-sparkle-host-updates.md).
-- **Fallback.** Keep the archive signature and Developer ID checks, and document the gap.
-
-### R-24 launchd and a replaced bundle
-
-- **Risk.** launchd keeps running or spawns the old apkrund binary after Sparkle replaces the bundle, when the agent plist is unchanged and APKRun does not re-register it ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.7).
-- **Settled by.** #057 T2 test "APKRun N → N+1", variant (d) and the unchanged-plist case.
-- **Fallback.** Re-register the agent on every build change.
-
-### R-25 Extraction writes zero runs
-
-- **Risk.** Extracting a runtime image archive writes the all-zero runs of `os.img` to disk before holes are punched, costing time and SSD writes ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.5).
-- **Settled by.** #087 measures time and bytes written.
-- **Fallback.** A sparse-aware extraction sink that seeks over zero blocks.
+| ID | Risk | Impact | Settled by | Status and fallback |
+|---|---|---|---|---|
+| R-01 | Limits of the macOS 27 custom virtio device API: no callback for guest config writes, no call to raise an interrupt, queues valid only after `DRIVER_OK`, undocumented shared-memory region count. | High | #063, #019, #028 | open. Linux part settled (#019); Android scanout hotplug open (#028). Fallbacks ([../02-design/graphics.md](../02-design/graphics.md) §4.3): A. the Guest Agent forces a DRM connector re-probe; B. all pool scanouts enabled at boot with a placeholder mode; C. a fixed display count per boot. |
+| R-02 | virglrenderer or ANGLE renders wrongly or crashes for Android's GLES 3.0 use: MSAA, texture formats, `EGL_METAL_TEXTURE_ANGLE` scanout import, WebView and Skia paths. | High | #020, #022, #023, #090 | open. The one-display HelloGL path passes G3; app compatibility is open (#090). Fallback: the `guestSwiftshader` profile ([../02-design/graphics.md](../02-design/graphics.md) §9), chosen at boot through `graphics.safeMode`, with a warning. |
+| R-03 | One renderer thread cannot serve several displays at 60 fps, or present cost exceeds 2 ms p95. | Medium | #023, #030, #068, #070 | open. One display is measured; two-display and present-time numbers are not. Fallback: lower the frame rate of background windows; one renderer thread per display if virglrenderer allows; revise the targets by ADR ([../00-product/requirements.md](../00-product/requirements.md) §2). |
+| R-04 | Multi-display: scanout hotplug, mode changes, and apps on secondary displays misbehave. | High | #028, #029, #067, #030 | open. Resize rejects a change of display 0's ID; no Android mode-change test has run. Fallback: fixed pool size per boot (R-01 C); for resize, [../02-design/display-and-windowing.md](../02-design/display-and-windowing.md) §7.1 A or B. |
+| R-05 | Input injected with a display ID misses the right app on a secondary display, focus follows the wrong display, or the IME attaches to display 0. | High | #024, #030, #071 | open. Display 0 input is verified (#024); secondary-display input and the IME are not. Fallback: `primaryDisplayCompatibility` for affected apps; `FALLBACK_DISPLAY` IME policy. |
+| R-06 | The stock Cuttlefish image does not boot on the VZ topology: the kernel, first-stage init, or a HAL fails. | High | #012–#014 (G2) | open until G2 passes from a clean `main` ([roadmap.md](roadmap.md) §2). Fallback: adapt the custom image (#035): kernel config, fstab, init scripts. |
+| R-07 | No VM save/restore while VirGL is active. | Medium | #070 (measures cold start); accepted in ADR-0002 and ADR-0004 | watching. Accepted. Mitigation: keep the VM warm under apkrund with pause and resume ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §5). Revisit if a later virglrenderer or the Venus track (#096) can rebuild state. |
+| R-08 | Guest RAM, renderer memory, and one IOSurface pool per display exceed what a typical Mac can give. | Medium | #028, #070 | open. Not yet measured. Mitigation: `display.maxSessions` (default 8) and idle pause. Fallback: lower defaults, smaller pools, balloon before pause (OQ-32). |
+| R-09 | No Google Mobile Services: apps that need them lose features or fail. Apps that rely only on FCM get no push while not running ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §5). | Medium | #090 (labels apps); accepted | watching. Accepted. Never bypass integrity checks. Google Play is only the isolated post-v1 track #097. |
+| R-10 | Redistributing Cuttlefish-derived images, GPL or LGPL components, or ANGLE and virglrenderer builds without meeting their terms. | High | #093 | open until the legal review before v1.0 (rules in [../05-development/legal-and-licensing.md](../05-development/legal-and-licensing.md)). Stock Google-built images are for development only; shipped images are built from AOSP (#035). |
+| R-11 | Direct kernel boot misses what U-Boot provides: AVB results, slot suffix, boot reason, `boot_devices`. | High | #012–#014 (G2) | open until G2 passes from a clean `main`. The bootconfig of [../02-design/android-image.md](../02-design/android-image.md) §6 supplies these values. Fallback: a U-Boot EFI build as boot loader ([ADR-0015](../01-architecture/decisions/0015-direct-kernel-boot.md)). |
+| R-12 | Cuttlefish host-service dependencies (hvc ports, HALs, input, network naming) fail on VZ. | High | #095, #014 | realized in part; mitigated in the design ([../02-design/android-image.md](../02-design/android-image.md) §7). VZ accepts at most 10 single-port consoles, so ports 10–19 come from one multiport device. Open: Wi-Fi validates intermittently; the 20-port marker check and in-guest network checks remain (#095). |
+| R-13 | The SELinux policy for the vsock bridge and privileged agents needs more permissions than planned, or conflicts with neverallow rules. | Medium | #035 | open. New domains are permissive on userdebug only; denials become rules; release builds have no permissive domain ([../02-design/guest-components.md](../02-design/guest-components.md) §4.2). Fallback: move the function into a system service, or use the platform-signed priv-app path. |
+| R-14 | AOSP build infrastructure or upstream branch changes break the custom image build. | Medium | #035 | open. Mitigation: pinned `repo` manifests, a scripted remote build, and the stock image kept usable for development ([../02-design/android-image.md](../02-design/android-image.md) §11). |
+| R-15 | Android install floors reject older apps: targetSdk, v1-only signature, `resources.arsc` alignment. | Low | #041, #073, #090 | watching. Refused before install with `targetSdkTooLow`, `legacySignatureNotAllowed`, or `resourcesArscNotAligned` ([../02-design/package-store.md](../02-design/package-store.md) §4.6). APKRun never bypasses the floor. |
+| R-16 | Virtualization.framework changes on a new macOS build: guest topology, custom virtio API behavior, console numbering. | High | #011; T2 suite on every new macOS build ([test-strategy.md](test-strategy.md) §9.4) | watching. The topology is recorded per macOS build in `Images/reference/vz/<macOS build>/topology.txt`. Fallback if the PCI path is unstable: `boot_part_uuid` ([../02-design/android-image.md](../02-design/android-image.md) §5.3). |
+| R-17 | Gatekeeper or App Management blocks or prompts for generated wrappers, or blocks wrapper updates in `/Applications`. | High | #046, #047 (G8), #076, #088 | open. Local wrappers carry no quarantine attribute, and the registry trusts them by cdhash ([../02-design/wrapper.md](../02-design/wrapper.md) §7.1); distribution wrappers are Developer ID signed and notarized (#088). Fallback: wrappers in `~/Applications`, with a one-time App Management prompt and instructions. Tested in research on macOS 27; not yet in the product. |
+| R-18 | Hidden or privileged Android APIs used by the guest agents change or are refused. | Medium | #072, #034, #039, #043 | open. Wrappers resolve on the stock image (#072). Rollback and ownership APIs are not yet run (#039, #043). Mitigation: the privilege table ([../02-design/guest-components.md](../02-design/guest-components.md) §5), a capability check in `Health`, privapp allowlists. Fallback per API: hover off if the pointer cannot be hidden ([../02-design/input.md](../02-design/input.md) §4); the confirmed data-loss rollback path if rollback is refused ([../02-design/package-store.md](../02-design/package-store.md) §7.3). |
+| R-19 | A wrapper that keeps its app running without a window shows a Dock flash, or notification permission is lost when a wrapper is regenerated. | Medium | #054, #076 | open. Fallback: as [../02-design/wrapper.md](../02-design/wrapper.md) §5.8 and [../02-design/desktop-integration.md](../02-design/desktop-integration.md) §5. |
+| R-20 | Replacing a wrapper's `Contents` directory breaks Dock pins or triggers App Management prompts on macOS 27 ([../02-design/wrapper.md](../02-design/wrapper.md) §9.3). | Medium | #076 (verified first) | open. Fallback: replace the whole bundle; a Dock pin may need to be re-added. |
+| R-21 | macOS 27 prompts for pasteboard access when apkrund or a wrapper reads the pasteboard on focus. | Medium | #053 | open. #053 settles which process reads, whether reading on focus prompts, and which API gives the change count without reading ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §4.2). Fallback: push on paste (Cmd+V) only, not on focus. |
+| R-22 | Privacy prompts for user folders are attributed to the wrong app, or none can be acted on ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4). | Medium | #082 | open. Fallback: security-scoped bookmarks created by APKRun.app through an open panel; Settings → Files explains how to allow access. |
+| R-23 | Sparkle 2 differs from the design: Info.plist keys, installing a postponed update on quit, the signed appcast format, or plain HTTP on loopback for tests ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.2). | Low | #057 | open. The differences go into [ADR-0016](../01-architecture/decisions/0016-sparkle-host-updates.md). Fallback: keep the archive signature and Developer ID checks, and document the gap. |
+| R-24 | launchd keeps running or spawns the old apkrund after Sparkle replaces the bundle, because the agent plist is unchanged and APKRun does not re-register it ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.7). | Medium | #057 (T2 "APKRun N → N+1") | open. Fallback: re-register the agent on every build change. |
+| R-25 | Extracting a runtime image archive writes the zero runs of `os.img` before holes are punched ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.5). | Low | #087 | open. #087 measures the time and bytes written. Fallback: a sparse-aware extraction sink that seeks over zero blocks. |

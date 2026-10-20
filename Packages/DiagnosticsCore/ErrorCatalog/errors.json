@@ -1126,9 +1126,29 @@
       "cliExit": 75,
       "doc": {
         "case": "operationResultUnknown(operation:)",
-        "when": "the XPC connection is lost after `installImported` is sent, so the client cannot tell whether Android completed it",
+        "when": "the legacy `installImported` reply is lost after dispatch, or API 1.8 cannot recover the `beginInstallImported` operation ID from daemon history",
         "raisedBy": "RuntimeClient",
         "ref": "[runtime-api.md](runtime-api.md) §4.6"
+      }
+    },
+    {
+      "code": "runtime.operationNotFound",
+      "parameters": [],
+      "message": {
+        "en": "That operation doesn't exist or has expired.",
+        "ja": "その操作は存在しないか、有効期限が切れています。"
+      },
+      "remediation": {
+        "en": "List current operations with: `apkrun operations list`",
+        "ja": "現在の操作を `apkrun operations list` で一覧表示してください。"
+      },
+      "action": "none",
+      "cliExit": 4,
+      "doc": {
+        "case": "operationNotFound(OperationID)",
+        "when": "`operationStatus`, `cancel`, or `apkrun operations wait` receives an unknown or expired ID",
+        "raisedBy": "RuntimeHost",
+        "ref": "[runtime-api.md](runtime-api.md) §4.7, [../02-design/cli.md](../02-design/cli.md) §4.9"
       }
     },
     {

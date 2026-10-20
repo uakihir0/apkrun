@@ -4,6 +4,8 @@ import ImageCore
 import RuntimeAPI
 import RuntimeCore
 
+typealias WireOperationID = RuntimeAPI.OperationID
+
 /// Failures that prevent the daemon from accepting lifecycle operations.
 public enum RuntimeHostError: Error, Equatable, Sendable {
     /// Startup has not initialized the daemon components.
@@ -28,6 +30,14 @@ public enum RuntimeHostError: Error, Equatable, Sendable {
     case runtimeBoot(RuntimeBootFailure)
     /// The daemon lifecycle record could not be updated.
     case stateStore(DaemonStateStoreError)
+}
+
+private struct RuntimeTrackedOperation {
+    let handle: OperationHandle
+    let requestPayload: Data
+    var snapshot: OperationSnapshot
+    var isCancellable: Bool
+    var task: Task<Void, Never>?
 }
 
 /// Composes the daemon's per-user runtime and owns it for the process lifetime.
@@ -64,12 +74,14 @@ public actor RuntimeHost {
     private var activeLifecycleOperations = 0
     private var activeRuntimeStarts = 0
     private var activePackageInstalls = 0
+    private var runtimeStartTask: Task<Result<Void, RuntimeHostError>, Never>?
     private var isRuntimeStopping = false
     private var isRuntimeResetting = false
     private var isRuntimeRestarting = false
     private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
     private var packageInstallWaiters: [CheckedContinuation<Void, Never>] = []
     private var shutdownWaiters: [CheckedContinuation<Void, Never>] = []
+    private var trackedOperations: [WireOperationID: RuntimeTrackedOperation] = [:]
 
     /// Creates a daemon host for the current user.
     public init(
@@ -245,6 +257,28 @@ public actor RuntimeHost {
         try beginLifecycleOperation()
         defer { finishLifecycleOperation() }
 
+        if let runtimeStartTask {
+            try await runtimeStartTask.value.get()
+            return
+        }
+
+        let task = Task { [weak self] () -> Result<Void, RuntimeHostError> in
+            guard let self else { return .failure(.notStarted) }
+            do {
+                try await self.performRuntimeStart(reason: reason)
+                return .success(())
+            } catch let error as RuntimeHostError {
+                return .failure(error)
+            } catch {
+                return .failure(.notStarted)
+            }
+        }
+        runtimeStartTask = task
+        defer { runtimeStartTask = nil }
+        try await task.value.get()
+    }
+
+    private func performRuntimeStart(reason: StartReason) async throws(RuntimeHostError) {
         if let startupFailure {
             throw .startupFailed(step: startupFailure.step, code: startupFailure.code)
         }
@@ -460,17 +494,252 @@ public actor RuntimeHost {
         }
         defer { finishPackageInstall() }
 
-        let service = packageQueryServiceInstance()
-        try await service.open()
+        return try await performInstallImported(request, clientKind: nil, operationID: nil)
+    }
+
+    /// Begins a daemon-owned install and returns its handle before Android starts or installs the APK.
+    ///
+    /// The lifecycle reservation and operation record are created synchronously before the handle
+    /// is returned. A repeated request with the same ID and payload joins the existing operation.
+    func beginInstallImported(
+        _ request: RuntimeInstallImportedRequest,
+        operationID requestedID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) throws(RuntimeWireError) -> OperationHandle {
+        let requestPayload: Data
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            requestPayload = try encoder.encode(request)
+        } catch {
+            throw .runtime(
+                "malformedRequest",
+                message: "APKRun's background service couldn't read the request."
+            )
+        }
+
+        if let existing = trackedOperations[requestedID] {
+            guard existing.handle.kind == .install, existing.requestPayload == requestPayload else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The operation ID is already being used for a different request."
+                )
+            }
+            return existing.handle
+        }
 
         do {
-            try await startRuntime(reason: .user)
+            try beginPackageInstall()
+        } catch {
+            throw Self.sessionWireError(for: error)
+        }
+
+        let handle = OperationHandle(operationID: requestedID, kind: .install)
+        let snapshot = OperationSnapshot(
+            operationID: requestedID,
+            kind: .install,
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(stage: "startingRuntime", message: "Starting Android…")
+        )
+        trackedOperations[requestedID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: requestPayload,
+            snapshot: snapshot,
+            isCancellable: true,
+            task: nil
+        )
+        let task = Task { [weak self] in
+            guard let self else { return }
+            if let diagnosticsID = DiagnosticsCore.OperationID(wire: requestedID.wireValue) {
+                let context = OperationContext(operationID: diagnosticsID)
+                await OperationContext.$current.withValue(context) {
+                    await self.runInstallOperation(
+                        request,
+                        operationID: requestedID,
+                        clientKind: clientKind
+                    )
+                }
+            } else {
+                await self.runInstallOperation(request, operationID: requestedID, clientKind: clientKind)
+            }
+        }
+        trackedOperations[requestedID]?.task = task
+        return handle
+    }
+
+    /// Returns running operations and up to fifty recently finished operations.
+    func listOperations() -> [OperationSnapshot] {
+        trackedOperations.values
+            .map(\.snapshot)
+            .sorted { $0.startedAt > $1.startedAt }
+    }
+
+    /// Returns a retained operation snapshot.
+    func operationStatus(_ operationID: WireOperationID) throws(RuntimeWireError) -> OperationSnapshot {
+        guard let operation = trackedOperations[operationID] else {
+            throw Self.operationNotFoundError
+        }
+        return operation.snapshot
+    }
+
+    /// Requests cancellation before the PackageStore guest-install phase begins.
+    func cancelOperation(_ operationID: WireOperationID) throws(RuntimeWireError) -> CancelReply {
+        guard let operation = trackedOperations[operationID] else {
+            throw Self.operationNotFoundError
+        }
+        if let result = operation.snapshot.result {
+            return .alreadyFinished(result)
+        }
+        guard operation.isCancellable else {
+            return .notCancellable(reason: "Android package installation has started and will continue.")
+        }
+        operation.task?.cancel()
+        trackedOperations[operationID] = operation
+        return .cancelling
+    }
+
+    private static let operationNotFoundError = RuntimeWireError.runtime(
+        "operationNotFound",
+        message: "That operation doesn't exist or has expired.",
+        remediation: "List the current operations with: apkrun operations list"
+    )
+
+    private static let cancelledOperationError = RuntimeWireError.runtime(
+        "cancelled",
+        message: "The operation was cancelled."
+    )
+
+    private func runInstallOperation(
+        _ request: RuntimeInstallImportedRequest,
+        operationID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) async {
+        defer { finishPackageInstall() }
+        do {
+            let result = try await performInstallImported(
+                request,
+                clientKind: clientKind,
+                operationID: operationID
+            )
+            finishOperation(operationID, result: .succeeded(.package(result)))
+            logger?.notice(
+                "Package installation completed for \(result.packageID.rawValue, .public)"
+            )
+        } catch {
+            if Task.isCancelled {
+                finishOperation(operationID, result: .cancelled)
+                logger?.notice("Package installation was cancelled")
+                return
+            }
+            let wireError = Self.operationWireError(for: error)
+            finishOperation(operationID, result: .failed(wireError))
+            logger?.error("Package installation failed", errorCode: wireError.code)
+        }
+    }
+
+    private func performInstallImported(
+        _ request: RuntimeInstallImportedRequest,
+        clientKind: RuntimeClientKind?,
+        operationID: WireOperationID?
+    ) async throws(RuntimeWireError) -> RuntimePackageSummary {
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        do {
+            try Task.checkCancellation()
+        } catch {
+            throw Self.cancelledOperationError
+        }
+
+        do {
+            try await startRuntime(reason: clientKind == .cli ? .cli : .user)
         } catch {
             throw Self.sessionWireError(for: error)
         }
 
         try await attachPackageQueriesIfRuntimeIsReady(to: service)
+        if let operationID {
+            guard !Task.isCancelled else {
+                throw Self.cancelledOperationError
+            }
+            // PackageStore currently makes the guest install a single transaction call. From this
+            // point it reconciles ambiguous guest results and must run to a terminal journal state.
+            setInstallNotCancellable(operationID)
+        }
         return try await service.installImported(request)
+    }
+
+    private static func operationWireError(for error: any Error) -> RuntimeWireError {
+        if let wireError = error as? RuntimeWireError {
+            return wireError
+        }
+        if let hostError = error as? RuntimeHostError {
+            return sessionWireError(for: hostError)
+        }
+        if error is CancellationError {
+            return cancelledOperationError
+        }
+        return .runtime(
+            "internal",
+            message: "APKRun couldn't complete the package installation."
+        )
+    }
+
+    private func setInstallNotCancellable(_ operationID: WireOperationID) {
+        guard var operation = trackedOperations[operationID], operation.snapshot.result == nil else {
+            return
+        }
+        operation.isCancellable = false
+        operation.snapshot = OperationSnapshot(
+            operationID: operation.snapshot.operationID,
+            parent: operation.snapshot.parent,
+            kind: operation.snapshot.kind,
+            packageID: operation.snapshot.packageID,
+            clientKind: operation.snapshot.clientKind,
+            startedAt: operation.snapshot.startedAt,
+            progress: OperationProgress(
+                stage: "installing",
+                message: "Installing the Android package…"
+            )
+        )
+        trackedOperations[operationID] = operation
+    }
+
+    private func finishOperation(_ operationID: WireOperationID, result: OperationResult) {
+        guard var operation = trackedOperations[operationID], operation.snapshot.result == nil else {
+            return
+        }
+        let packageID: RuntimePackageID?
+        if case .succeeded(.package(let summary)) = result {
+            packageID = summary.packageID
+        } else {
+            packageID = operation.snapshot.packageID
+        }
+        operation.task = nil
+        operation.snapshot = OperationSnapshot(
+            operationID: operation.snapshot.operationID,
+            parent: operation.snapshot.parent,
+            kind: operation.snapshot.kind,
+            packageID: packageID,
+            clientKind: operation.snapshot.clientKind,
+            startedAt: operation.snapshot.startedAt,
+            progress: operation.snapshot.progress,
+            result: result,
+            finishedAt: Date()
+        )
+        trackedOperations[operationID] = operation
+        pruneFinishedOperations()
+    }
+
+    private func pruneFinishedOperations() {
+        let finished = trackedOperations.values
+            .filter { $0.snapshot.result != nil }
+            .sorted {
+                ($0.snapshot.finishedAt ?? .distantPast) < ($1.snapshot.finishedAt ?? .distantPast)
+            }
+        for operation in finished.dropLast(50) {
+            trackedOperations[operation.handle.operationID] = nil
+        }
     }
 
     /// Lists daemon-owned package records and, when requested, merges a live or cached Android inventory.

@@ -1044,6 +1044,10 @@ extension RuntimeLaunchControlRequest: VersionedControlRequest {}
 extension RuntimeTerminateControlRequest: VersionedControlRequest {}
 extension RuntimeImportPackageControlRequest: VersionedControlRequest {}
 extension RuntimeInstallImportedControlRequest: VersionedControlRequest {}
+extension RuntimeBeginInstallImportedControlRequest: VersionedControlRequest {}
+extension RuntimeCancelOperationControlRequest: VersionedControlRequest {}
+extension RuntimeListOperationsControlRequest: VersionedControlRequest {}
+extension RuntimeOperationStatusControlRequest: VersionedControlRequest {}
 
 enum RuntimeControlOperation {
     case runtimeStatus
@@ -1057,6 +1061,10 @@ enum RuntimeControlOperation {
     case terminate
     case importPackage
     case installImported
+    case beginInstallImported
+    case cancelOperation
+    case listOperations
+    case operationStatus
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1068,7 +1076,8 @@ enum RuntimeControlOperation {
                 false
             }
         case .startRuntime, .stopRuntime, .restartRuntime, .resetRuntime,
-            .importPackage, .installImported:
+            .importPackage, .installImported, .beginInstallImported,
+            .cancelOperation, .listOperations, .operationStatus:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -1408,6 +1417,179 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeInstallImportedControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func beginInstallImported(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = XPCDataReply(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeBeginInstallImportedControlReply(error: Self.rejection(for: admission).wireError)
+                )
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .beginInstallImported,
+                as: RuntimeBeginInstallImportedControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeBeginInstallImportedControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeBeginInstallImportedControlRequest.self,
+                    from: request
+                ),
+                let operationID = RuntimeAPI.OperationID(rawValue: decoded.header.operationID)
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeBeginInstallImportedControlReply(error: Self.malformedWireError)
+                    )
+                )
+                return
+            }
+            do {
+                let handle = try await host.beginInstallImported(
+                    decoded.request,
+                    operationID: operationID,
+                    clientKind: clientKind
+                )
+                response.send(Self.encode(RuntimeBeginInstallImportedControlReply(result: handle)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeBeginInstallImportedControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func cancelOperation(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = XPCDataReply(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeCancelOperationControlReply(error: Self.rejection(for: admission).wireError)
+                )
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .cancelOperation,
+                as: RuntimeCancelOperationControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeCancelOperationControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeCancelOperationControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(Self.encode(RuntimeCancelOperationControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let result = try await host.cancelOperation(decoded.operationID)
+                response.send(Self.encode(RuntimeCancelOperationControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeCancelOperationControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func listOperations(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = XPCDataReply(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeListOperationsControlReply(error: Self.rejection(for: admission).wireError)
+                )
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .listOperations,
+                as: RuntimeListOperationsControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeListOperationsControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard (try? JSONDecoder().decode(RuntimeListOperationsControlRequest.self, from: request)) != nil
+            else {
+                response.send(Self.encode(RuntimeListOperationsControlReply(error: Self.malformedWireError)))
+                return
+            }
+            response.send(
+                Self.encode(RuntimeListOperationsControlReply(result: await host.listOperations()))
+            )
+        }
+    }
+
+    func operationStatus(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = XPCDataReply(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeOperationStatusControlReply(error: Self.rejection(for: admission).wireError)
+                )
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .operationStatus,
+                as: RuntimeOperationStatusControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeOperationStatusControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeOperationStatusControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(Self.encode(RuntimeOperationStatusControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let result = try await host.operationStatus(decoded.operationID)
+                response.send(Self.encode(RuntimeOperationStatusControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeOperationStatusControlReply(error: wireError)))
             }
         }
     }

@@ -22194,3 +22194,56 @@ snapshots. If cancellation is no longer available or cannot be confirmed
 within ten seconds, the operation can continue; the CLI points to its wait
 command so the user can inspect it later.
 
+## IR-1392: Deliver tracked install events with bounded reconnecting streams
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #032 |
+| Affected documents | [runtime-api.md](../03-reference/runtime-api.md) §§2, 4.1, 16; [runtime-daemon.md](../02-design/runtime-daemon.md) §§8.3–8.4; [M04](issues/M04-daemon-and-guest-protocol.md) #032 |
+
+**Choices.** RuntimeAPI 1.9 adds subscribe/unsubscribe requests and replies,
+an event-sink handshake, and operation event batches. EventHub authorizes the
+complete topic set using the listener-derived client kind, sequences events
+per connection, batches at 16 ms/64 events, limits unacknowledged batches to
+four, bounds pending events to 1024, coalesces operation progress, removes
+queued events on unsubscribe, and reports dropped backlogs through
+`resyncRequired`. Ordinary RPC replies flush currently deliverable event
+batches but retain pending events during acknowledgement backpressure or
+progress rate limits. Snapshot requests discard a still-undeliverable backlog
+into a resync marker before releasing later event delivery. Operation
+list/status snapshots start their barrier synchronously inside the RuntimeHost
+actor immediately before reading operation state; runtime and package snapshots
+start it immediately before their query. The subscriber's per-operation
+rate-limit state is removed when an operation finishes.
+
+RuntimeClient exports the sink before resuming XPC, verifies the sink through
+the handshake, keeps subscriptions across reconnects, and bounds each local
+stream to 1024 items. RuntimeClient emits a local `resyncRequired` envelope
+with sequence zero after reconnect, malformed batch decoding, or local buffer
+eviction. Sequence zero is reserved for this client-local signal and never
+crosses XPC.
+
+**Reason.** A proxy cast does not prove the remote connection exported the
+callback object. The explicit handshake prevents a subscription from
+appearing successful when no receiver can accept it. The shared connection
+output queue keeps the reply and event order coherent, while flow-control
+limits prevent either side from growing buffers without bound. Reconnects and
+local overflow can lose events, so consumers need an explicit snapshot-refresh
+signal rather than silent gaps.
+
+**Verification.** Focused RuntimeAPI DTO tests, RuntimeHost EventHub tests for
+sequencing, authorization, unsubscribe cleanup, bounded in-flight delivery and
+resync, and RuntimeClient tests for stream delivery, reconnect markers,
+bounded buffering, and malformed-batch resync pass. Swift-format lint and
+RuntimeAPI, RuntimeHost, and RuntimeClient target builds pass.
+
+**Risk for review.** Only tracked package installs publish events. The other
+eight topics, session callbacks, and stream callbacks remain unimplemented;
+subscriptions to those topics currently register but remain silent. Runtime and
+package snapshot barriers currently sit just before their asynchronous queries;
+move each barrier into the state-owning actor before adding publishers for those
+topics, so a concurrent change cannot be reflected in the snapshot and delivered
+after its reply. Consumers must refresh a topic after a resync marker. The
+wrapper endpoint and own-operation filtering remain for #044.
+

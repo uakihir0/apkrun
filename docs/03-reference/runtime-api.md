@@ -98,7 +98,7 @@ apkrund sets the requirement on each anonymous listener with `NSXPCListener.setC
 
 ```swift
 public enum RuntimeAPI {
-    public static let version = APIVersion(major: 1, minor: 8)       // the control and wrapper protocols
+    public static let version = APIVersion(major: 1, minor: 9)       // the control and wrapper protocols
     public static let wrapperMajors: [Int] = [1]                     // served on the wrapper endpoint: N and N−1
     public static let brokerRevision = 2                              // additive-only broker protocol
     public static let maintenanceRevision = 1                         // additive-only MaintenanceControl
@@ -116,6 +116,7 @@ public struct APIVersion: Codable, Sendable, Comparable { public var major: Int;
 - Version `1.6` adds `restartRuntime` to the authenticated control endpoint. One versioned request stops and starts Android and returns the final runtime status.
 - Version `1.7` adds authenticated `importPackage` and `installImported` control calls. Import passes opened `FileHandle`s beside its versioned JSON request, returns the existing package preview, and does not start Android. Install starts Android on demand and returns the package summary. The first implementation is synchronous and manual-authority only; the operation handles and progress events in §8.1 remain the target behavior.
 - Version `1.8` adds `beginInstallImported`, `cancelOperation`, `listOperations`, and `operationStatus`. The daemon retains running operations and the last 50 finished operations in memory; the synchronous `installImported` selector remains for existing clients. The first tracked operation is manual-authority install, and CLI clients poll snapshots until event subscriptions are available.
+- Version `1.9` adds `subscribe` and `unsubscribe`, the exported event-sink handshake, and sequenced event batches. The first publisher is the `operations` topic for tracked package installs; other topic payloads and publishers, session callbacks, and stream callbacks remain outstanding under #032 and #068.
 - `components.json` of a release records `"runtimeAPI": { "current": "M.m", "wrapperMajors": [N−1, N] }` ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.3). A major is dropped only as that section allows.
 - The #031 `RuntimeHostStatus` includes optional `guestAgentState` and `guestAgentProtocolVersion` fields. Clients accept their absence as `nil`.
 
@@ -374,6 +375,7 @@ public struct ReplyEnvelope<Result: Codable & Sendable>: Codable, Sendable {
 
 ```swift
 @objc public protocol RuntimeEventSink {
+    func handshake(reply: @escaping (Bool) -> Void)               // confirms that the peer exported this sink
     func deliver(_ batch: Data, reply: @escaping () -> Void)        // [EventEnvelope], topic events; the reply is the ack (§16.2)
     func sessionEvent(_ event: Data)                                // SessionEvent, own session only (§6.3)
     func frameReady(generation: UInt32, surfaceIndex: UInt8, frameSeq: UInt64, presentationTime: UInt64)
@@ -2722,12 +2724,25 @@ public enum EventTopic: String, Codable, Sendable {
     case runtime, sessions, packages, updates, operations, health, maintenance, wrappers, integrations
 }
 
-public struct SubscribeRequest: Codable, Sendable { public var topics: [EventTopic] }
-public struct SubscribeReply: Codable, Sendable { public var topics: [EventTopic] }   // every topic the connection now has
-public struct UnsubscribeRequest: Codable, Sendable { public var topics: [EventTopic] }
+public struct RuntimeSubscribeControlRequest: Codable, Sendable {
+    public var header: APIRequestHeader
+    public var topics: [EventTopic]
+}
+public struct RuntimeSubscribeControlReply: Codable, Sendable {
+    public var result: [EventTopic]?
+    public var error: RuntimeWireError?
+}
+public struct RuntimeUnsubscribeControlRequest: Codable, Sendable {
+    public var header: APIRequestHeader
+    public var topics: [EventTopic]
+}
+public struct RuntimeUnsubscribeControlReply: Codable, Sendable {
+    public var result: RuntimeEmpty?
+    public var error: RuntimeWireError?
+}
 ```
 
-- The connection must export a `RuntimeEventSink` (§4.1). Otherwise `subscribe` returns `runtime.malformedRequest`.
+- The connection must export a responsive `RuntimeEventSink` (§4.1). Otherwise `subscribe` returns `runtime.malformedRequest`. The server confirms the sink with a bounded handshake before registering any topic.
 - A topic that the client kind may not have fails the whole request with `runtime.notAuthorized`, and nothing changes. An unknown topic is `runtime.malformedRequest` (a request enum, §2.3).
 - `subscribe` and `unsubscribe` are idempotent. Subscriptions end when the connection is invalidated (§3.5), and a reconnect subscribes again (§3.6).
 - apkrund sends the replies and the event batches of one connection from one serial queue. The client therefore sees them in the order the server produced them. A client subscribes first and then fetches its snapshots (`runtimeStatus`, `listPackages`, `listOperations`, …). Events that arrive before a snapshot reply are older than the snapshot, and the client drops them. Chosen (§19.1).
@@ -2767,6 +2782,13 @@ Delivery:
 | Queue | 1024 envelopes per connection (§4.10). When the queue is full, apkrund drops the queued envelopes of the topic with the most queued envelopes and queues one `resyncRequired(topic)` in their place |
 | Order | envelopes of one connection arrive in `seq` order. `seq` has no gaps, because it is assigned after coalescing and dropping |
 | Coalescing | the latest value per key, at most 10 per second per key and connection. State changes, results, and `finished` events are never coalesced (runtime-daemon §8.4) |
+
+RuntimeClient also bounds each local `AsyncStream` to 1024 envelopes. If the
+client drops buffered data or reconnects, it emits a local
+`resyncRequired(topic)` envelope with `seq == 0`; that marker is synthesized by
+RuntimeClient and is never sent over XPC. The consumer should fetch a fresh
+snapshot for the topic after receiving it. Server envelopes always use
+`seq >= 1`, and sequence numbers restart on each connection.
 
 Coalescing keys:
 

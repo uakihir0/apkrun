@@ -570,10 +570,21 @@ The current Store Agent install method is one transaction call and exposes no
 `CommitInstall` callback. Therefore this first slice accepts cancellation
 while Android is starting, then reports `notCancellable` immediately before
 entering PackageStore's guest-install transaction. PackageStore continues
-through guest-result reconciliation and journal commit/abort. The public
-RuntimeAPI operation types are present, but event delivery, bounded
-operation-specific deadlines, and long operations other than install remain
-outstanding under #032 (IR-1390 and IR-1391).
+through guest-result reconciliation and journal commit/abort.
+
+RuntimeAPI 1.9 adds topic subscriptions and sequenced operation event delivery.
+The control endpoint verifies the exported event sink before subscribing, and
+RuntimeHost publishes `started`, install-boundary `progress`, and terminal
+`finished` events for tracked installs. The hub bounds queued events and
+unacknowledged batches, removes subscriptions on unsubscribe or connection
+close, and emits `resyncRequired` when it must discard queued data. RuntimeClient
+replays subscriptions after reconnect and reports a local resync marker when
+events may have been missed.
+
+This is a partial EventHub implementation: only the `operations` topic has a
+publisher; other topic payloads, streams, session callbacks, other long
+operations, and bounded operation-specific deadlines remain outstanding under
+#032 and #068 (IR-1390–IR-1392).
 
 ### 8.4 Events
 
@@ -582,6 +593,10 @@ outstanding under #032 (IR-1390 and IR-1391).
 - Session events for a wrapper (`frameReady`, `surfacesReplaced`, `imeStateChanged`, …) go only to the session's own connection, never through topics.
 - Coalescing: for `runtime` boot progress, `operations` progress, and `health`, only the latest value per key is delivered, at most 10 per second per subscriber. State changes and results are never coalesced.
 - A subscriber whose connection is invalidated is removed at once.
+- API 1.9 currently publishes only `operations` events for tracked package
+  installs. The other topics are part of the wire contract, but their RuntimeHost
+  publishers are still pending #032; streams and per-session callbacks are
+  pending #032/#068.
 
 ### 8.5 The CLI as a client
 

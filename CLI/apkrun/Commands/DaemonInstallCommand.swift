@@ -123,6 +123,107 @@
         }
     }
 
+    struct UninstallCommand: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "uninstall",
+            abstract: "Remove an installed Android app."
+        )
+
+        @Argument(help: "The Android package name.")
+        var package: String
+
+        @Flag(name: .long, help: "Keep the app's Android data for a later reinstall.")
+        var keepData = false
+
+        @Flag(
+            name: .long,
+            help: "Forget APKRun's record and stored APKs without contacting Android."
+        )
+        var forget = false
+
+        @Flag(name: .long, help: "Uninstall without asking for confirmation.")
+        var yes = false
+
+        @Flag(name: .long, help: "Return after the uninstall operation has started.")
+        var detach = false
+
+        @Flag(name: .long, help: "Print the result as JSON.")
+        var json = false
+
+        mutating func run() async throws {
+            guard !forget || !keepData else {
+                throw CLIFailure.invalidArgument(argument: "--keep-data", reason: "incompatibleWithForget")
+            }
+            guard let packageID = RuntimePackageID(rawValue: package) else {
+                throw CLIFailure.invalidPackageName(package: package)
+            }
+            let request = RuntimeUninstallPackageRequest(
+                packageID: packageID,
+                options: RuntimeUninstallOptions(keepData: keepData, forget: forget)
+            )
+            let prompt =
+                forget
+                ? "Forget APKRun's record and stored APKs for \(packageID.rawValue)? "
+                    + "This does not determine or change Android app data."
+                : "Uninstall \(packageID.rawValue)\(keepData ? " and keep its data" : " and delete its data")?"
+            try CLIConfirmation.confirm(prompt, yes: yes)
+
+            let client: RuntimeControlClient
+            do {
+                client = try RuntimeControlClient(clientKind: .cli)
+            } catch {
+                throw await RuntimeStatusOutput.commandFailure(error)
+            }
+
+            let operationID = OperationID()
+            let handle: OperationHandle
+            do {
+                handle = try await client.beginUninstallPackage(request, operationID: operationID)
+            } catch {
+                throw await DaemonInstallSupport.uninstallBeginFailure(
+                    error,
+                    packageID: packageID,
+                    operationID: operationID
+                )
+            }
+
+            if detach {
+                if json {
+                    try OperationCommandOutput.writeJSON(handle)
+                } else {
+                    Output.write(
+                        "Started uninstall operation \(handle.operationID.wireValue). "
+                            + "Wait with `apkrun operations wait \(handle.operationID.wireValue)`."
+                    )
+                }
+                return
+            }
+
+            let snapshot: OperationSnapshot
+            do {
+                snapshot = try await OperationCommandOutput.waitForTerminalSnapshot(
+                    using: client,
+                    operationID: handle.operationID,
+                    progressToStderr: OperationCommandOutput.shouldShowProgress
+                )
+            } catch {
+                throw await DaemonInstallSupport.uninstallWaitFailure(
+                    error,
+                    packageID: packageID,
+                    operationID: handle.operationID
+                )
+            }
+            try OperationCommandOutput.requireSuccess(snapshot)
+            if json {
+                try OperationCommandOutput.writeJSON(snapshot)
+            } else if forget {
+                Output.write("Forgot \(packageID.rawValue) from APKRun.")
+            } else {
+                Output.write("Uninstalled \(packageID.rawValue)\(keepData ? " and kept its data" : "").")
+            }
+        }
+    }
+
     enum DaemonInstallSupport {
         static let maximumInputFileCount = 20
 
@@ -228,7 +329,7 @@
             if case .downgrade(let fromVersion) = preview.relation {
                 return "The preview shows \(displayName) (\(packageID)) at version "
                     + "\(preview.versionCode), below version \(fromVersion). Recheck Android's "
-                    + "current version and install only if allowed?"
+                    + "current version before continuing? If this is still a downgrade, installation will be refused."
             }
             if case .sameAsInstalled = preview.relation {
                 return "Reinstall \(displayName) (\(packageID)) using the selected APK files?"
@@ -294,6 +395,68 @@
                 return uncertainInstallResult(packageID: packageID, operationID: operationID)
             }
             return await RuntimeStatusOutput.commandFailure(error)
+        }
+
+        static func uninstallBeginFailure(
+            _ error: any Error,
+            packageID: RuntimePackageID,
+            operationID: OperationID
+        ) async -> RuntimeWireError {
+            if isUnknownOperationResult(error) {
+                return uncertainUninstallResult(packageID: packageID, operationID: operationID)
+            }
+            return await RuntimeStatusOutput.commandFailure(error)
+        }
+
+        static func uninstallWaitFailure(
+            _ error: any Error,
+            packageID: RuntimePackageID,
+            operationID: OperationID
+        ) async -> RuntimeWireError {
+            if isUnknownOperationResult(error) {
+                return uncertainUninstallResult(packageID: packageID, operationID: operationID)
+            }
+            if let clientError = error as? RuntimeControlClientError {
+                switch clientError {
+                case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply, .invalidRemoteProxy:
+                    return uncertainUninstallResult(packageID: packageID, operationID: operationID)
+                default:
+                    break
+                }
+            }
+            return await RuntimeStatusOutput.commandFailure(error)
+        }
+
+        private static func isUnknownOperationResult(_ error: any Error) -> Bool {
+            if let clientError = error as? RuntimeControlClientError {
+                switch clientError {
+                case .operationResultUnknown:
+                    return true
+                case .remoteFailure(let code, _) where code == "runtime.operationNotFound":
+                    return true
+                default:
+                    break
+                }
+            }
+            if let wireError = error as? RuntimeWireError {
+                return wireError.code == "runtime.operationResultUnknown"
+                    || wireError.code == "runtime.operationNotFound"
+            }
+            return false
+        }
+
+        private static func uncertainUninstallResult(
+            packageID: RuntimePackageID,
+            operationID: OperationID
+        ) -> RuntimeWireError {
+            RuntimeWireError(
+                domain: "runtime",
+                code: "runtime.operationResultUnknown",
+                message: "APKRun could not confirm whether the uninstall operation completed.",
+                remediation:
+                    "Run `apkrun operations wait \(operationID.wireValue)` to check the retained result. "
+                    + "Inspect `apkrun info \(packageID.rawValue)` before retrying."
+            )
         }
 
         private static func uncertainInstallResult(

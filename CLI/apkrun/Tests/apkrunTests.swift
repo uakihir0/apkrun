@@ -212,6 +212,7 @@ import Testing
         let prompt = DaemonInstallSupport.installConfirmationPrompt(for: preview)
         #expect(prompt.contains("version 12, below version 18"))
         #expect(prompt.contains("Recheck Android's current version"))
+        #expect(prompt.contains("installation will be refused"))
         #expect(!prompt.contains("debuggable Android"))
     }
 
@@ -281,6 +282,20 @@ import Testing
         #expect(failure.remediation?.contains("apkrun operations wait \(operationID.wireValue)") == true)
         #expect(failure.remediation?.contains("apkrun info com.example.app") == true)
         #expect(failure.remediation?.contains("before retrying") == true)
+    }
+
+    @Test func daemonUninstallUncertaintyShowsTheOperationIDAndRecoveryCommand() async throws {
+        let packageID = try #require(RuntimePackageID(rawValue: "com.example.app"))
+        let operationID = RuntimeAPI.OperationID()
+        let failure = await DaemonInstallSupport.uninstallBeginFailure(
+            RuntimeControlClientError.operationResultUnknown(operation: "beginUninstallPackage"),
+            packageID: packageID,
+            operationID: operationID
+        )
+
+        #expect(failure.code == "runtime.operationResultUnknown")
+        #expect(failure.remediation?.contains("apkrun operations wait \(operationID.wireValue)") == true)
+        #expect(failure.remediation?.contains("apkrun info com.example.app") == true)
     }
 #endif
 
@@ -967,6 +982,7 @@ private final class CLIOutputRecorder: @unchecked Sendable {
         let prompt = PackageCommandSupport.installConfirmationPrompt(for: preview)
         #expect(prompt.contains("version 12, below version 18"))
         #expect(prompt.contains("Recheck Android's current version"))
+        #expect(prompt.contains("installation will be refused"))
         #expect(!prompt.contains("debuggable Android"))
     }
 #endif

@@ -216,7 +216,7 @@
             if case .downgrade(let fromVersion) = preview.relation {
                 return "The preview shows \(displayName) (\(packageID)) at version "
                     + "\(preview.versionCode), below version \(fromVersion). Recheck Android's "
-                    + "current version and install only if allowed?"
+                    + "current version before continuing? If this is still a downgrade, installation will be refused."
             }
             if case .sameAsInstalled = preview.relation {
                 return "Reinstall \(displayName) (\(packageID)) using the selected APK files?"

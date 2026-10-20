@@ -14,9 +14,41 @@ public enum RuntimeState: Equatable, Sendable {
     /// Android reported boot completion (M1: `ready` is `.bootCompleted`).
     case ready
     /// Android is shutting down.
-    case stopping
+    case stopping(StopReason)
     /// The boot or the VM failed.
     case failed(RuntimeBootFailure)
+}
+
+/// A runtime state paired with its monotonic position in the supervisor's event stream.
+public struct RuntimeStateSnapshot: Equatable, Sendable {
+    /// Increments whenever the supervisor changes runtime state.
+    public let revision: UInt64
+    /// The state at `revision`.
+    public let state: RuntimeState
+
+    /// Creates a state snapshot.
+    public init(revision: UInt64, state: RuntimeState) {
+        self.revision = revision
+        self.state = state
+    }
+}
+
+/// Why the daemon is stopping Android (runtime-daemon.md §3.5).
+public enum StopReason: String, Equatable, Sendable {
+    /// A user explicitly stopped or restarted Android.
+    case user
+    /// Android stopped after the idle policy expired.
+    case idle
+    /// The host is shutting down.
+    case hostShutdown
+    /// The host is updating APKRun.
+    case hostUpdate
+    /// Android is stopping for an image migration.
+    case migration
+    /// Android is stopping for a data reset.
+    case reset
+    /// Android is stopping after a runtime failure.
+    case failure
 }
 
 /// Why a client asked for the runtime (runtime-daemon.md §3.1).
@@ -60,7 +92,7 @@ public struct BootTimeouts: Equatable, Sendable {
 /// What the supervisor reports while it runs.
 public enum RuntimeEvent: Sendable {
     /// The runtime state changed.
-    case state(RuntimeState)
+    case state(RuntimeStateSnapshot)
     /// Bytes from the kernel console (hvc0).
     case console(Data)
     /// Bytes from the logcat port (hvc2) when log capture is on.
@@ -92,6 +124,7 @@ private struct BootDraft: Sendable {
 public actor RuntimeSupervisor {
     /// The current state.
     public private(set) var state: RuntimeState = .stopped
+    private var stateRevision: UInt64 = 0
     /// The Guest Agent state retained after the last failed boot.
     private var lastGuestAgentStatus: GuestAgentSupervisor.StatusSnapshot?
     /// State changes and console output, in order. Finishes when the supervisor is released.
@@ -225,9 +258,14 @@ public actor RuntimeSupervisor {
         return lastGuestAgentStatus
     }
 
+    /// Returns the current state with the revision used by state events.
+    public func stateSnapshot() -> RuntimeStateSnapshot {
+        RuntimeStateSnapshot(revision: stateRevision, state: state)
+    }
+
     /// Stops Android: `reboot -p` over ADB (or over the serial shell when ADB is not connected) in
     /// developer mode, then a forced stop after 20 s (vm.md §9.3).
-    public func stop() async {
+    public func stop(reason: StopReason = .user) async {
         guard let controller else {
             // A boot that has not created the VM yet checks this flag before it starts the VM.
             if isBooting {
@@ -236,7 +274,7 @@ public actor RuntimeSupervisor {
             return
         }
         stopRequested = true
-        transition(to: .stopping)
+        transition(to: .stopping(reason))
         await stopRequiredAgentOutageMonitor()
         await stopGuestAgent()
         bootProgress?.finish()
@@ -261,6 +299,11 @@ public actor RuntimeSupervisor {
         graphicsDevice = nil
         shell = nil
         transition(to: .stopped)
+    }
+
+    /// Finishes the event stream after the owning daemon has completed its final stop.
+    public func finishEventStream() {
+        eventContinuation.finish()
     }
 
     /// Connects to a guest vsock port of the running VM.
@@ -980,6 +1023,9 @@ public actor RuntimeSupervisor {
             return
         }
         state = newState
-        eventContinuation.yield(.state(newState))
+        stateRevision &+= 1
+        eventContinuation.yield(
+            .state(RuntimeStateSnapshot(revision: stateRevision, state: newState))
+        )
     }
 }

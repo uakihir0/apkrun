@@ -1,5 +1,6 @@
 import Foundation
 import RuntimeAPI
+import RuntimeCore
 import Testing
 
 @testable import RuntimeHost
@@ -78,6 +79,128 @@ func eventHubDeliversSequencedOperationEventsToSubscribedConnections() async thr
     try await Task.sleep(for: .milliseconds(40))
     #expect(try sink.envelopes().count == 2)
     hub.remove(connectionID: connectionID)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func eventHubCoalescesRuntimeProgressButPreservesStateTransitions() async throws {
+    let hub = RuntimeEventHub()
+    let sink = RecordingRuntimeEventSink()
+    let connectionID = ObjectIdentifier(sink)
+    let outputQueue = DispatchQueue(label: "RuntimeEventHubTests.runtime")
+    _ = try hub.subscribe(
+        connectionID: connectionID,
+        clientKind: .cli,
+        topics: [.runtime],
+        sink: RuntimeEventSinkReference(value: sink),
+        outputQueue: outputQueue,
+        isConnectionOpen: { true }
+    )
+    hub.beginSnapshotBarrier(connectionID: connectionID)
+    hub.publishRuntimeChange(.stateChanged(.booting(.kernel)))
+    hub.publishRuntimeChange(
+        .bootProgress(BootProgress(phase: .kernel, fraction: 0.1, elapsedMs: 100, purpose: .normal))
+    )
+    hub.publishRuntimeChange(
+        .bootProgress(BootProgress(phase: .kernel, fraction: 0.4, elapsedMs: 400, purpose: .normal))
+    )
+    hub.publishRuntimeChange(.stateChanged(.ready))
+    hub.endSnapshotBarrier(connectionID: connectionID, outputQueue: outputQueue) {}
+    try await Task.sleep(for: .milliseconds(60))
+
+    let envelopes = try sink.envelopes()
+    #expect(envelopes.map(\.seq) == [1, 2, 3])
+    #expect(envelopes.map(\.topic) == [.runtime, .runtime, .runtime])
+    guard case .runtime(.stateChanged(.booting(.kernel))) = envelopes[0].payload else {
+        Issue.record("Expected the booting state transition to be preserved.")
+        return
+    }
+    guard case .runtime(.bootProgress(let progress)) = envelopes[1].payload else {
+        Issue.record("Expected one coalesced runtime progress event.")
+        return
+    }
+    #expect(progress.fraction == 0.4)
+    guard case .runtime(.stateChanged(.ready)) = envelopes[2].payload else {
+        Issue.record("Expected the ready state transition to be preserved.")
+        return
+    }
+    try hub.unsubscribe(connectionID: connectionID, clientKind: .cli, topics: [.runtime])
+    hub.remove(connectionID: connectionID)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func runtimeHostStateBridgeKeepsSnapshotAndEventStateConsistent() async throws {
+    let host = RuntimeHost()
+    let sink = RecordingRuntimeEventSink()
+    let connectionID = ObjectIdentifier(sink)
+    _ = try host.eventHub.subscribe(
+        connectionID: connectionID,
+        clientKind: .cli,
+        topics: [.runtime],
+        sink: RuntimeEventSinkReference(value: sink),
+        outputQueue: DispatchQueue(label: "RuntimeEventHubTests.hostBridge"),
+        isConnectionOpen: { true }
+    )
+
+    await host.consumeSupervisorState(RuntimeStateSnapshot(revision: 1, state: .stopping(.reset)))
+    #expect(await host.status().runtimeState == "stopping")
+    try await Task.sleep(for: .milliseconds(40))
+
+    let envelopes = try sink.envelopes()
+    #expect(envelopes.count == 1)
+    guard case .runtime(.stateChanged(.stopping(.reset))) = envelopes.first?.payload else {
+        Issue.record("Expected the reset stop reason in the runtime topic.")
+        return
+    }
+    host.eventHub.remove(connectionID: connectionID)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func runtimeHostPreservesDelayedStateEventsAfterNewerStatusSnapshot() async throws {
+    let host = RuntimeHost()
+    let sink = RecordingRuntimeEventSink()
+    let connectionID = ObjectIdentifier(sink)
+    _ = try host.eventHub.subscribe(
+        connectionID: connectionID,
+        clientKind: .cli,
+        topics: [.runtime],
+        sink: RuntimeEventSinkReference(value: sink),
+        outputQueue: DispatchQueue(label: "RuntimeEventHubTests.stateRevision"),
+        isConnectionOpen: { true }
+    )
+
+    await host.synchronizeRuntimeStateSnapshot(RuntimeStateSnapshot(revision: 2, state: .ready))
+    await host.consumeSupervisorState(
+        RuntimeStateSnapshot(revision: 1, state: .booting(.kernel))
+    )
+    await host.consumeSupervisorState(RuntimeStateSnapshot(revision: 2, state: .ready))
+    #expect(await host.status().runtimeState == "ready")
+    try await Task.sleep(for: .milliseconds(40))
+
+    let envelopes = try sink.envelopes()
+    #expect(envelopes.count == 2)
+    guard case .runtime(.stateChanged(.booting(.kernel))) = envelopes.first?.payload else {
+        Issue.record("A delayed booting transition must still be delivered.")
+        return
+    }
+    guard case .runtime(.stateChanged(.ready)) = envelopes.last?.payload else {
+        Issue.record("The latest state transition must follow the earlier transition.")
+        return
+    }
+    host.eventHub.remove(connectionID: connectionID)
+}
+
+@Test
+func runtimeFailureEventsOmitUntrustedGuestDetails() {
+    let state = RuntimeHost.wireRuntimeState(
+        for: .failed(.androidBootFailed(detail: "untrusted guest console text"))
+    )
+    guard case .failed(let error) = state else {
+        Issue.record("Expected a failed runtime state.")
+        return
+    }
+    #expect(error.domain == "runtime")
+    #expect(error.code == "runtime.androidBootFailed")
+    #expect(error.parameters["detail"] == nil)
 }
 
 @Test

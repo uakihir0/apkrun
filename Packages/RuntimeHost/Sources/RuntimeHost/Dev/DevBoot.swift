@@ -514,8 +514,8 @@ public struct DevBoot: Sendable {
         let eventTask = Task {
             for await event in supervisor.events {
                 switch event {
-                case .state(let state):
-                    onEvent(.state(Self.describe(state)))
+                case .state(let snapshot):
+                    onEvent(.state(Self.describe(snapshot.state)))
                 case .console(let bytes):
                     onEvent(.console(bytes))
                 case .logcat(let bytes):
@@ -1117,7 +1117,7 @@ public struct DevBoot: Sendable {
         case .stopped: "stopped"
         case .booting(let phase): "booting(\(phase))"
         case .ready: "ready"
-        case .stopping: "stopping"
+        case .stopping(_): "stopping"
         case .failed(let failure): "failed(\(failure.qualifiedCode))"
         }
     }

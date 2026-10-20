@@ -60,11 +60,17 @@ public actor RuntimeHost {
     private var image: InstalledImage?
     private var instanceStore: InstanceStore?
     private var supervisor: RuntimeSupervisor?
+    private var supervisorEventsTask: Task<Void, Never>?
     private var packageQueryService: EmbeddedPackageService?
     private var headlessSessionService: (any RuntimeSessionService)?
     private var runtimeSessionGeneration: UInt64 = 0
     private var bootProgressEstimator: BootProgressEstimator?
     private var bootStartedAt: ContinuousClock.Instant?
+    private var bootPurpose: RuntimeAPI.BootPurpose?
+    private var bootProgressGeneration: UInt64 = 0
+    private var runtimeStateSnapshotRevision: UInt64 = 0
+    private var runtimeStateEventRevision: UInt64 = 0
+    private var runtimeStateSnapshot: RuntimeState = .stopped
     private var recordedBootOperationIDs = Set<UUID>()
     private var hostState = "starting"
     private var startupFailure: (step: Int, code: String)?
@@ -218,7 +224,7 @@ public actor RuntimeHost {
             )
             do {
                 let guestAgent = try GuestAgentBundle.load(directory: guestDirectory)
-                supervisor = RuntimeSupervisor(
+                let runtimeSupervisor = RuntimeSupervisor(
                     image: image,
                     instanceStore: instanceStore,
                     options: BootOptions(
@@ -230,6 +236,8 @@ public actor RuntimeHost {
                     guestAgentBundle: guestAgent,
                     guestAgentTimeout: .seconds(30)
                 )
+                supervisor = runtimeSupervisor
+                observeSupervisorEvents(from: runtimeSupervisor)
             } catch {
                 recordDegradedStartup(step: 8, code: error.qualifiedCode)
             }
@@ -338,7 +346,24 @@ public actor RuntimeHost {
             bootKind: instance.firstBootSettingsApplied ? "cold" : "firstBoot",
             history: progressHistory()
         )
+        bootPurpose = instance.firstBootSettingsApplied ? .normal : .firstBoot
         bootStartedAt = ContinuousClock.now
+        bootProgressGeneration &+= 1
+        let progressGeneration = bootProgressGeneration
+        let progressTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+                guard !Task.isCancelled else { return }
+                await self?.publishBootProgress(generation: progressGeneration)
+            }
+        }
+        defer {
+            progressTask.cancel()
+            if bootProgressGeneration == progressGeneration {
+                bootProgressGeneration &+= 1
+                bootPurpose = nil
+            }
+        }
         do {
             try await supervisor.ensureReady(reason)
         } catch {
@@ -364,7 +389,7 @@ public actor RuntimeHost {
         }
         isRuntimeStopping = true
         defer { isRuntimeStopping = false }
-        try await stopRuntimeBody()
+        try await stopRuntimeBody(reason: .user)
     }
 
     /// Restarts Android under one reserved lifecycle transition.
@@ -376,11 +401,11 @@ public actor RuntimeHost {
         }
         isRuntimeRestarting = true
         defer { isRuntimeRestarting = false }
-        try await stopRuntimeBody()
+        try await stopRuntimeBody(reason: .user)
         try await startRuntimeBody(reason: reason)
     }
 
-    private func stopRuntimeBody() async throws(RuntimeHostError) {
+    private func stopRuntimeBody(reason: StopReason) async throws(RuntimeHostError) {
         try await waitForStartupCompletion()
         try beginLifecycleOperation()
         defer { finishLifecycleOperation() }
@@ -388,7 +413,7 @@ public actor RuntimeHost {
         if let service = headlessSessionService as? DaemonHeadlessSessionService {
             await service.shutdown()
         }
-        await supervisor?.stop()
+        await supervisor?.stop(reason: reason)
         await packageQueryService?.detachRuntime()
         headlessSessionService = nil
     }
@@ -406,7 +431,7 @@ public actor RuntimeHost {
         try beginLifecycleOperation()
         defer { finishLifecycleOperation() }
 
-        if await supervisor?.state == .stopping {
+        if let runtimeState = await supervisor?.state, case .stopping(_) = runtimeState {
             throw .invalidTransition
         }
         guard !isShuttingDown else {
@@ -786,26 +811,23 @@ public actor RuntimeHost {
 
     /// Returns a point-in-time view for the control endpoint.
     public func status() async -> RuntimeHostStatus {
-        let runtimeStateValue = await supervisor?.state
+        if let snapshot = await supervisor?.stateSnapshot() {
+            synchronizeRuntimeStateSnapshot(snapshot)
+        }
+        let runtimeStateValue = runtimeStateSnapshot
         let guestAgentStatus = await supervisor?.guestAgentStatusSnapshot()
-        let runtimeState: String
+        let runtimeState = Self.describe(runtimeStateValue)
         let bootProgress: Double?
-        if let runtimeStateValue {
-            runtimeState = Self.describe(runtimeStateValue)
-            if case .booting(let phase) = runtimeStateValue,
-                let bootStartedAt,
-                var estimator = bootProgressEstimator
-            {
-                bootProgress = estimator.fraction(
-                    phase: phase,
-                    elapsedSinceStart: bootStartedAt.duration(to: ContinuousClock.now)
-                )
-                bootProgressEstimator = estimator
-            } else {
-                bootProgress = nil
-            }
+        if case .booting(let phase) = runtimeStateValue,
+            let bootStartedAt,
+            var estimator = bootProgressEstimator
+        {
+            bootProgress = estimator.fraction(
+                phase: phase,
+                elapsedSinceStart: bootStartedAt.duration(to: ContinuousClock.now)
+            )
+            bootProgressEstimator = estimator
         } else {
-            runtimeState = "stopped"
             bootProgress = nil
         }
         let guestAgentStateName: GuestAgentConnectionState?
@@ -848,6 +870,171 @@ public actor RuntimeHost {
             && (runtimeState == nil || runtimeState == .stopped)
     }
 
+    private func observeSupervisorEvents(from supervisor: RuntimeSupervisor) {
+        guard supervisorEventsTask == nil else { return }
+        let events = supervisor.events
+        supervisorEventsTask = Task.detached { [weak self] in
+            for await event in events {
+                guard !Task.isCancelled else { return }
+                guard case .state(let snapshot) = event else { continue }
+                await self?.consumeSupervisorState(snapshot)
+            }
+        }
+    }
+
+    /// Advances the status cache without changing the ordered event-delivery cursor.
+    func synchronizeRuntimeStateSnapshot(_ snapshot: RuntimeStateSnapshot) {
+        guard snapshot.revision > runtimeStateSnapshotRevision else { return }
+        runtimeStateSnapshotRevision = snapshot.revision
+        runtimeStateSnapshot = snapshot.state
+    }
+
+    /// Publishes every supervisor state update once, even when a status snapshot has moved ahead.
+    func consumeSupervisorState(_ snapshot: RuntimeStateSnapshot) {
+        guard snapshot.revision > runtimeStateEventRevision else { return }
+        runtimeStateEventRevision = snapshot.revision
+        synchronizeRuntimeStateSnapshot(snapshot)
+        eventHub.publishRuntimeChange(.stateChanged(Self.wireRuntimeState(for: snapshot.state)))
+        if case .booting = snapshot.state {
+            publishBootProgress(generation: bootProgressGeneration)
+        }
+    }
+
+    private func publishBootProgress(generation: UInt64) {
+        guard generation == bootProgressGeneration,
+            case .booting(let phase) = runtimeStateSnapshot,
+            let bootStartedAt,
+            let bootPurpose,
+            var estimator = bootProgressEstimator
+        else {
+            return
+        }
+        let elapsed = bootStartedAt.duration(to: ContinuousClock.now)
+        let fraction = estimator.fraction(phase: phase, elapsedSinceStart: elapsed)
+        bootProgressEstimator = estimator
+        eventHub.publishRuntimeChange(
+            .bootProgress(
+                RuntimeAPI.BootProgress(
+                    phase: Self.wireBootPhase(phase),
+                    fraction: fraction,
+                    elapsedMs: Self.milliseconds(elapsed),
+                    purpose: bootPurpose
+                )
+            )
+        )
+    }
+
+    static func wireRuntimeState(for state: RuntimeState) -> RuntimeAPI.WireRuntimeState {
+        switch state {
+        case .stopped:
+            .stopped
+        case .booting(let phase):
+            .booting(wireBootPhase(phase))
+        case .ready:
+            .ready
+        case .stopping(let reason):
+            .stopping(wireStopReason(reason))
+        case .failed(let failure):
+            .failed(wireError(for: failure))
+        }
+    }
+
+    private static func wireBootPhase(_ phase: RuntimeCore.BootPhase) -> RuntimeAPI.BootPhase {
+        switch phase {
+        case .kernel: .kernel
+        case .`init`: .`init`
+        case .systemServer: .systemServer
+        case .bootCompleted: .bootCompleted
+        case .agentsConnecting: .agentsConnecting
+        }
+    }
+
+    private static func wireStopReason(_ reason: StopReason) -> RuntimeAPI.WireStopReason {
+        switch reason {
+        case .user: .user
+        case .idle: .idle
+        case .hostShutdown: .hostShutdown
+        case .hostUpdate: .hostUpdate
+        case .migration: .migration
+        case .reset: .reset
+        case .failure: .failure
+        }
+    }
+
+    private static func wireError(
+        for error: any APKRunError,
+        depth: Int = 0
+    ) -> RuntimeAPI.WireError {
+        var parameters: [String: RuntimeAPI.WireErrorParameter] = [:]
+        for (key, value) in error.parameters where key != "detail" {
+            switch value {
+            case .text(let text):
+                parameters[key] = .text(text)
+            case .bytes(let bytes):
+                parameters[key] = .bytes(bytes)
+            case .count(let count):
+                parameters[key] = .count(count)
+            case .duration(let duration):
+                parameters[key] = .durationMs(Self.milliseconds(duration))
+            case .fileName(let fileName):
+                parameters[key] = .fileName(URL(fileURLWithPath: fileName).lastPathComponent)
+            }
+        }
+        let listItems: [RuntimeAPI.WireErrorListItem]? =
+            error.listItems.isEmpty
+            ? nil
+            : error.listItems.map { item in
+                let selector: RuntimeAPI.WireErrorListItemSelector
+                switch item.selector {
+                case .errorCode(let code):
+                    selector = .errorCode(code)
+                case .variant(let code, let key):
+                    selector = .variant(code: code, key: key)
+                }
+                var itemParameters: [String: RuntimeAPI.WireErrorParameter] = [:]
+                for (key, value) in item.parameters {
+                    switch value {
+                    case .text(let text):
+                        itemParameters[key] = .text(text)
+                    case .bytes(let bytes):
+                        itemParameters[key] = .bytes(bytes)
+                    case .count(let count):
+                        itemParameters[key] = .count(count)
+                    case .duration(let duration):
+                        itemParameters[key] = .durationMs(Self.milliseconds(duration))
+                    case .fileName(let fileName):
+                        itemParameters[key] = .fileName(URL(fileURLWithPath: fileName).lastPathComponent)
+                    }
+                }
+                return RuntimeAPI.WireErrorListItem(selector: selector, parameters: itemParameters)
+            }
+        let cause: RuntimeAPI.WireErrorBox?
+        if depth < 8, let nested = error.cause {
+            cause = RuntimeAPI.WireErrorBox(wireError(for: nested, depth: depth + 1))
+        } else {
+            cause = nil
+        }
+        let underlying = error.underlying.map {
+            RuntimeAPI.WireUnderlyingError(domain: $0.domain, code: $0.code)
+        }
+        return RuntimeAPI.WireError(
+            domain: type(of: error).domain.rawValue,
+            code: error.qualifiedCode,
+            parameters: parameters,
+            listItems: listItems,
+            cause: cause,
+            underlying: underlying
+        )
+    }
+
+    private static func milliseconds(_ duration: Duration) -> Int64 {
+        let components = duration.components
+        let milliseconds =
+            Double(components.seconds) * 1_000
+            + Double(components.attoseconds) / 1_000_000_000_000_000
+        return Int64(milliseconds)
+    }
+
     /// Records the marker at the time the authenticated XPC endpoint began serving.
     private func markDaemonReady(at time: ContinuousClock.Instant) {
         guard let diagnostics else { return }
@@ -876,11 +1063,16 @@ public actor RuntimeHost {
         headlessSessionService = nil
         await waitForPackageInstalls()
         // Mark an in-flight VM start for cancellation before waiting for any storage work to finish.
-        await supervisor?.stop()
+        await supervisor?.stop(reason: .hostShutdown)
         await waitForLifecycleOperations()
         // A start that was already inside RuntimeSupervisor may have finished its cancellation path
         // while this actor was waiting. Stop once more before recording a clean process exit.
-        await supervisor?.stop()
+        await supervisor?.stop(reason: .hostShutdown)
+        await supervisor?.finishEventStream()
+        if let supervisorEventsTask {
+            await supervisorEventsTask.value
+            self.supervisorEventsTask = nil
+        }
         if let stateStore {
             do {
                 try stateStore.markCleanExit()
@@ -1240,7 +1432,7 @@ public actor RuntimeHost {
         case .stopped: "stopped"
         case .booting(let phase): "booting(\(phase.description))"
         case .ready: "ready"
-        case .stopping: "stopping"
+        case .stopping(_): "stopping"
         case .failed: "failed"
         }
     }

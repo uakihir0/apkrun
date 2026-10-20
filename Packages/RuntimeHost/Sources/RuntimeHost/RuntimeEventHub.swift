@@ -81,8 +81,8 @@ final class RuntimeEventHub: @unchecked Sendable {
             let removedTopics = Set(topics)
             subscriber.topics.subtract(removedTopics)
             subscriber.pending.removeAll { removedTopics.contains($0.topic) }
-            if removedTopics.contains(.operations) {
-                subscriber.lastProgressDelivery.removeAll()
+            for topic in removedTopics {
+                Self.clearProgressDelivery(for: topic, from: &subscriber)
             }
             if subscriber.topics.isEmpty {
                 subscribers[connectionID] = nil
@@ -148,26 +148,41 @@ final class RuntimeEventHub: @unchecked Sendable {
     }
 
     func publishOperationEvent(_ event: OperationEvent, operationID: OperationID) {
+        publish(
+            QueuedEvent(
+                topic: .operations,
+                time: Date(),
+                operationID: operationID,
+                payload: .operations(event)
+            )
+        )
+    }
+
+    func publishRuntimeChange(_ change: RuntimeChange) {
+        publish(
+            QueuedEvent(
+                topic: .runtime,
+                time: Date(),
+                operationID: nil,
+                payload: .runtime(change)
+            )
+        )
+    }
+
+    private func publish(_ event: QueuedEvent) {
         queue.sync {
-            let now = Date()
             for connectionID in Array(subscribers.keys) {
                 guard var subscriber = subscribers[connectionID],
-                    subscriber.topics.contains(.operations),
+                    subscriber.topics.contains(event.topic),
                     subscriber.isConnectionOpen()
                 else {
                     subscribers[connectionID] = nil
                     continue
                 }
-                let queued = QueuedEvent(
-                    topic: .operations,
-                    time: now,
-                    operationID: operationID,
-                    payload: .operations(event)
-                )
-                if case .finished(let finishedID, _) = event {
-                    subscriber.lastProgressDelivery[finishedID.wireValue] = nil
+                if case .operations(.finished(let finishedID, _)) = event.payload {
+                    subscriber.lastProgressDelivery[Self.operationProgressKey(finishedID)] = nil
                 }
-                enqueue(queued, for: &subscriber)
+                enqueue(event, for: &subscriber)
                 subscribers[connectionID] = subscriber
                 scheduleDelivery(for: connectionID, subscriber: &subscriber)
                 subscribers[connectionID] = subscriber
@@ -203,8 +218,8 @@ final class RuntimeEventHub: @unchecked Sendable {
     }
 
     private func enqueue(_ event: QueuedEvent, for subscriber: inout Subscriber) {
-        if let progressID = event.coalescedOperationID,
-            let index = subscriber.pending.firstIndex(where: { $0.coalescedOperationID == progressID })
+        if let progressKey = event.coalescingKey,
+            let index = subscriber.pending.firstIndex(where: { $0.coalescingKey == progressKey })
         {
             subscriber.pending[index] = event
             return
@@ -217,6 +232,7 @@ final class RuntimeEventHub: @unchecked Sendable {
             }
             if let droppedTopic = counts.max(by: { $0.value < $1.value })?.key {
                 subscriber.pending.removeAll { $0.topic == droppedTopic }
+                Self.clearProgressDelivery(for: droppedTopic, from: &subscriber)
                 subscriber.pending.append(
                     QueuedEvent(
                         topic: droppedTopic,
@@ -274,9 +290,28 @@ final class RuntimeEventHub: @unchecked Sendable {
                 payload: .resyncRequired(topic)
             )
         }
-        if topics.contains(.operations) {
-            subscriber.lastProgressDelivery.removeAll()
+        for topic in topics {
+            Self.clearProgressDelivery(for: topic, from: &subscriber)
         }
+    }
+
+    private static func clearProgressDelivery(for topic: EventTopic, from subscriber: inout Subscriber) {
+        let prefix: String
+        switch topic {
+        case .runtime:
+            prefix = "runtime:"
+        case .operations:
+            prefix = "operations:"
+        default:
+            return
+        }
+        subscriber.lastProgressDelivery = subscriber.lastProgressDelivery.filter {
+            !$0.key.hasPrefix(prefix)
+        }
+    }
+
+    private static func operationProgressKey(_ operationID: OperationID) -> String {
+        "operations:\(operationID.wireValue)"
     }
 
     private func scheduleDelivery(for connectionID: ObjectIdentifier, subscriber: inout Subscriber) {
@@ -313,8 +348,8 @@ final class RuntimeEventHub: @unchecked Sendable {
         }
 
         let now = DispatchTime.now().uptimeNanoseconds
-        if let progressID = subscriber.pending.first?.coalescedOperationID,
-            let lastSent = subscriber.lastProgressDelivery[progressID],
+        if let progressKey = subscriber.pending.first?.coalescingKey,
+            let lastSent = subscriber.lastProgressDelivery[progressKey],
             now - lastSent < Self.progressIntervalNanoseconds
         {
             let delay = Self.progressIntervalNanoseconds - (now - lastSent)
@@ -328,15 +363,15 @@ final class RuntimeEventHub: @unchecked Sendable {
 
         var envelopes: [EventEnvelope] = []
         while envelopes.count < Self.maximumBatchSize, !subscriber.pending.isEmpty {
-            if let progressID = subscriber.pending[0].coalescedOperationID,
-                let lastSent = subscriber.lastProgressDelivery[progressID],
+            if let progressKey = subscriber.pending[0].coalescingKey,
+                let lastSent = subscriber.lastProgressDelivery[progressKey],
                 now - lastSent < Self.progressIntervalNanoseconds
             {
                 break
             }
             let event = subscriber.pending.removeFirst()
-            if let progressID = event.coalescedOperationID {
-                subscriber.lastProgressDelivery[progressID] = now
+            if let progressKey = event.coalescingKey {
+                subscriber.lastProgressDelivery[progressKey] = now
             }
             envelopes.append(
                 EventEnvelope(
@@ -386,11 +421,15 @@ final class RuntimeEventHub: @unchecked Sendable {
         let operationID: OperationID?
         let payload: EventPayload
 
-        var coalescedOperationID: String? {
-            guard case .operations(.progress(let operationID, _)) = payload else {
-                return nil
+        var coalescingKey: String? {
+            switch payload {
+            case .runtime(.bootProgress):
+                "runtime:bootProgress"
+            case .operations(.progress(let operationID, _)):
+                RuntimeEventHub.operationProgressKey(operationID)
+            default:
+                nil
             }
-            return operationID.wireValue
         }
     }
 

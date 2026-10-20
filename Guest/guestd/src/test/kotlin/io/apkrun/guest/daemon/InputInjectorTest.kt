@@ -1149,8 +1149,8 @@ class InputInjectorTest {
 }
 
 /**
- * Key mode on the injector (input.md §5.2, §7.3; #26). The base time is the uptime that the
- * harness starts at.
+ * Key mode on the injector (input.md §5.2, §7.3; #26). The base time is the uptime that the harness
+ * starts at.
  */
 class InputInjectorKeyTest {
     private val base = 1_000L

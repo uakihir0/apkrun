@@ -701,7 +701,15 @@ public actor RuntimeHost {
             // point it reconciles ambiguous guest results and must run to a terminal journal state.
             setInstallNotCancellable(operationID)
         }
-        return try await service.installImported(request)
+        let installResult = try await service.installImportedWithChange(request)
+        if installResult.cleanupDeferred {
+            logger?.warning(
+                "Package install committed; package-store cleanup is deferred",
+                errorCode: "store.cleanupDeferred"
+            )
+        }
+        eventHub.publishPackageChange(installResult.change, operationID: operationID)
+        return installResult.summary
     }
 
     private static func operationWireError(for error: any Error) -> RuntimeWireError {

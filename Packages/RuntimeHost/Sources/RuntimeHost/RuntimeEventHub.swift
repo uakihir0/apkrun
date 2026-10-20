@@ -169,6 +169,17 @@ final class RuntimeEventHub: @unchecked Sendable {
         )
     }
 
+    func publishPackageChange(_ change: PackageChange, operationID: OperationID? = nil) {
+        publish(
+            QueuedEvent(
+                topic: .packages,
+                time: Date(),
+                operationID: operationID,
+                payload: .packages(change)
+            )
+        )
+    }
+
     private func publish(_ event: QueuedEvent) {
         queue.sync {
             for connectionID in Array(subscribers.keys) {

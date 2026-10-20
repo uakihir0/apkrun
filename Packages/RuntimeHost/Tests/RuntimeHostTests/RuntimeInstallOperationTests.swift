@@ -26,6 +26,17 @@ func installOperationReturnsHandleAndRetainsItsTerminalFailure() async throws {
     )
     try await host.start { ContinuousClock.now }
     defer { Task { await host.shutdown() } }
+    let packageEvents = InstallOperationEventSink()
+    let connectionID = ObjectIdentifier(packageEvents)
+    _ = try host.eventHub.subscribe(
+        connectionID: connectionID,
+        clientKind: .cli,
+        topics: [.packages],
+        sink: RuntimeEventSinkReference(value: packageEvents),
+        outputQueue: DispatchQueue(label: "RuntimeInstallOperationTests.packages"),
+        isConnectionOpen: { true }
+    )
+    defer { host.eventHub.remove(connectionID: connectionID) }
 
     let operationID = RuntimeAPI.OperationID()
     let ticket = try #require(
@@ -61,4 +72,29 @@ func installOperationReturnsHandleAndRetainsItsTerminalFailure() async throws {
     #expect(finalSnapshot.finishedAt != nil)
     #expect(await host.listOperations().filter { $0.operationID == operationID }.count == 1)
     #expect(try await host.cancelOperation(operationID) == .alreadyFinished(.failed(error)))
+    try await Task.sleep(for: .milliseconds(40))
+    #expect(try packageEvents.envelopes().isEmpty)
+}
+
+private final class InstallOperationEventSink: NSObject, RuntimeEventSink, @unchecked Sendable {
+    private let lock = NSLock()
+    private var batches: [Data] = []
+
+    func handshake(reply: @escaping (Bool) -> Void) {
+        reply(true)
+    }
+
+    func deliver(_ batch: Data, reply: @escaping () -> Void) {
+        lock.lock()
+        batches.append(batch)
+        lock.unlock()
+        reply()
+    }
+
+    func envelopes() throws -> [EventEnvelope] {
+        lock.lock()
+        let captured = batches
+        lock.unlock()
+        return try captured.flatMap { try JSONDecoder().decode([EventEnvelope].self, from: $0) }
+    }
 }

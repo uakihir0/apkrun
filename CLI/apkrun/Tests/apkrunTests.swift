@@ -199,7 +199,7 @@ import Testing
         }
     }
 
-    @Test func daemonInstallDowngradePromptNamesBothVersions() throws {
+    @Test func daemonInstallDowngradePromptExplainsRuntimeRecheck() throws {
         let preview = RuntimeImportPreview(
             ticket: try #require(RuntimeImportTicket(rawValue: "00000000-0000-0000-0000-000000000001")),
             packageID: try #require(RuntimePackageID(rawValue: "com.example.app")),
@@ -210,9 +210,9 @@ import Testing
         )
 
         let prompt = DaemonInstallSupport.installConfirmationPrompt(for: preview)
-        #expect(prompt.contains("Downgrade Example (com.example.app)"))
-        #expect(prompt.contains("from version 18 to version 12"))
-        #expect(prompt.contains("debuggable Android image"))
+        #expect(prompt.contains("version 12, below version 18"))
+        #expect(prompt.contains("Recheck Android's current version"))
+        #expect(!prompt.contains("debuggable Android"))
     }
 
     @Test func daemonInstallPreviewShowsFileHashesAndSigningStatus() throws {
@@ -950,6 +950,24 @@ private final class CLIOutputRecorder: @unchecked Sendable {
             PackageCommandSupport.installConfirmationPrompt(for: preview)
                 == "Reinstall Example�[2J (com.example.app) using the selected APK files?"
         )
+    }
+
+    @Test func packageCommandDowngradePromptExplainsRuntimeRecheck() throws {
+        let preview = RuntimeImportPreview(
+            ticket: try #require(
+                RuntimeImportTicket(rawValue: "00000000-0000-0000-0000-000000000001")
+            ),
+            packageID: try #require(RuntimePackageID(rawValue: "com.example.app")),
+            displayName: "Example",
+            versionCode: 12,
+            files: [],
+            relation: .downgrade(from: 18)
+        )
+
+        let prompt = PackageCommandSupport.installConfirmationPrompt(for: preview)
+        #expect(prompt.contains("version 12, below version 18"))
+        #expect(prompt.contains("Recheck Android's current version"))
+        #expect(!prompt.contains("debuggable Android"))
     }
 #endif
 

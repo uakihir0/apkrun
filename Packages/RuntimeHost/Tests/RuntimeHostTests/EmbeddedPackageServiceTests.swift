@@ -6,6 +6,64 @@ import Testing
 
 @testable import RuntimeHost
 
+@Test func downgradeFailurePreservesInstalledAndCandidateVersions() {
+    let error = EmbeddedPackageService.wireError(
+        for: PackageStoreFailure.downgradeRefused(installed: 18, candidate: 12)
+    )
+
+    #expect(error.code == "store.downgradeRefused")
+    #expect(error.message.contains("12"))
+    #expect(error.message.contains("18"))
+    #expect(error.remediation?.contains("newer APK") == true)
+}
+
+@Test func runtimePackageInstallResultClassifiesInstallsAndReplacements() throws {
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let summary = RuntimePackageSummary(
+        packageID: packageID,
+        displayName: "Hello Text",
+        versionCode: 8,
+        state: .installed
+    )
+
+    #expect(
+        RuntimePackageInstallResult(
+            summary: summary,
+            previousVersionCode: nil,
+            restoredRetainedData: false
+        ).change == .installed(summary)
+    )
+    #expect(
+        RuntimePackageInstallResult(
+            summary: summary,
+            previousVersionCode: 7,
+            restoredRetainedData: true
+        ).change == .installed(summary)
+    )
+    #expect(
+        RuntimePackageInstallResult(
+            summary: summary,
+            previousVersionCode: 8,
+            restoredRetainedData: false
+        ).change == .updated(summary, from: 8)
+    )
+    #expect(
+        RuntimePackageInstallResult(
+            summary: summary,
+            previousVersionCode: 7,
+            restoredRetainedData: false
+        ).change == .updated(summary, from: 7)
+    )
+    #expect(
+        RuntimePackageInstallResult(
+            summary: summary,
+            previousVersionCode: 7,
+            restoredRetainedData: false,
+            cleanupDeferred: true
+        ).cleanupDeferred
+    )
+}
+
 @Test(.timeLimit(.minutes(1)))
 func embeddedPackageServiceListsUnreadablePackagesAndReturnsTheirTypedError() async throws {
     let root = FileManager.default.temporaryDirectory

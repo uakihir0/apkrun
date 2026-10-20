@@ -128,6 +128,43 @@ func eventHubCoalescesRuntimeProgressButPreservesStateTransitions() async throws
 }
 
 @Test(.timeLimit(.minutes(1)))
+func eventHubDeliversPackageChangesWithOperationContext() async throws {
+    let hub = RuntimeEventHub()
+    let sink = RecordingRuntimeEventSink()
+    let connectionID = ObjectIdentifier(sink)
+    let outputQueue = DispatchQueue(label: "RuntimeEventHubTests.packages")
+    _ = try hub.subscribe(
+        connectionID: connectionID,
+        clientKind: .cli,
+        topics: [.packages],
+        sink: RuntimeEventSinkReference(value: sink),
+        outputQueue: outputQueue,
+        isConnectionOpen: { true }
+    )
+
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let summary = RuntimePackageSummary(
+        packageID: packageID,
+        displayName: "Hello Text",
+        versionCode: 8,
+        state: .installed
+    )
+    let operationID = OperationID()
+    hub.publishPackageChange(.installed(summary), operationID: operationID)
+    hub.publishPackageChange(.updated(summary, from: 7))
+    try await Task.sleep(for: .milliseconds(60))
+
+    let envelopes = try sink.envelopes()
+    #expect(envelopes.map(\.seq) == [1, 2])
+    #expect(envelopes.map(\.topic) == [.packages, .packages])
+    #expect(envelopes.map(\.operationID) == [operationID, nil])
+    #expect(envelopes[0].payload == .packages(.installed(summary)))
+    #expect(envelopes[1].payload == .packages(.updated(summary, from: 7)))
+
+    hub.remove(connectionID: connectionID)
+}
+
+@Test(.timeLimit(.minutes(1)))
 func runtimeHostStateBridgeKeepsSnapshotAndEventStateConsistent() async throws {
     let host = RuntimeHost()
     let sink = RecordingRuntimeEventSink()

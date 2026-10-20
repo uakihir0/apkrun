@@ -59,16 +59,9 @@
                 )
             }
 
-            let allowDowngrade: Bool
-            if case .downgrade = preview.relation {
-                // A confirmed prompt or explicit --yes is the user's approval for this downgrade.
-                allowDowngrade = true
-            } else {
-                allowDowngrade = false
-            }
             let installRequest = RuntimeInstallImportedRequest(
                 ticket: preview.ticket,
-                options: RuntimeInstallOptions(allowDowngrade: allowDowngrade)
+                options: RuntimeInstallOptions()
             )
 
             let operationID = OperationID()
@@ -180,12 +173,6 @@
 
         static func writePreview(_ preview: RuntimeImportPreview) {
             Output.writeLogLine(previewText(preview), toStandardError: true)
-            if case .downgrade(let fromVersion) = preview.relation {
-                Output.writeLogLine(
-                    "Warning: This downgrade replaces version \(fromVersion); it will work only on a debuggable Android image.",
-                    toStandardError: true
-                )
-            }
             for warning in preview.warnings {
                 Output.writeLogLine("Warning: \(warningName(warning))", toStandardError: true)
             }
@@ -239,8 +226,9 @@
             let displayName = safeTerminalText(preview.displayName)
             let packageID = preview.packageID.rawValue
             if case .downgrade(let fromVersion) = preview.relation {
-                return "Downgrade \(displayName) (\(packageID)) from version \(fromVersion) "
-                    + "to version \(preview.versionCode)? This requires a debuggable Android image."
+                return "The preview shows \(displayName) (\(packageID)) at version "
+                    + "\(preview.versionCode), below version \(fromVersion). Recheck Android's "
+                    + "current version and install only if allowed?"
             }
             if case .sameAsInstalled = preview.relation {
                 return "Reinstall \(displayName) (\(packageID)) using the selected APK files?"

@@ -41,16 +41,9 @@
                 files: handles
             )
 
-            let allowDowngrade: Bool
-            if case .downgrade = preview.relation {
-                // The install prompt (or explicit --yes) is the downgrade approval for this CLI flow.
-                allowDowngrade = true
-            } else {
-                allowDowngrade = false
-            }
             let installRequest = RuntimeInstallImportedRequest(
                 ticket: preview.ticket,
-                options: RuntimeInstallOptions(allowDowngrade: allowDowngrade)
+                options: RuntimeInstallOptions()
             )
             PackageCommandSupport.writePreview(preview)
             try PackageCommandSupport.confirm(
@@ -196,12 +189,6 @@
                     + "Relation: \(relationName(preview.relation))",
                 toStandardError: true
             )
-            if case .downgrade = preview.relation {
-                Output.writeLogLine(
-                    "Warning: This is a downgrade; it will work only on a debuggable Android image.",
-                    toStandardError: true
-                )
-            }
             for warning in preview.warnings {
                 Output.writeLogLine("Warning: \(warningName(warning))", toStandardError: true)
             }
@@ -226,6 +213,11 @@
         static func installConfirmationPrompt(for preview: RuntimeImportPreview) -> String {
             let displayName = safeTerminalText(preview.displayName)
             let packageID = preview.packageID.rawValue
+            if case .downgrade(let fromVersion) = preview.relation {
+                return "The preview shows \(displayName) (\(packageID)) at version "
+                    + "\(preview.versionCode), below version \(fromVersion). Recheck Android's "
+                    + "current version and install only if allowed?"
+            }
             if case .sameAsInstalled = preview.relation {
                 return "Reinstall \(displayName) (\(packageID)) using the selected APK files?"
             }

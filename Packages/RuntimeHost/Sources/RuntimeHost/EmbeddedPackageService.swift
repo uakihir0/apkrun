@@ -5,6 +5,27 @@ import Foundation
 import RuntimeAPI
 import RuntimeCore
 
+struct RuntimePackageInstallResult: Sendable {
+    let summary: RuntimePackageSummary
+    let change: PackageChange
+    let cleanupDeferred: Bool
+
+    init(
+        summary: RuntimePackageSummary,
+        previousVersionCode: RuntimeVersionCode?,
+        restoredRetainedData: Bool,
+        cleanupDeferred: Bool = false
+    ) {
+        self.summary = summary
+        self.cleanupDeferred = cleanupDeferred
+        if let previousVersionCode, !restoredRetainedData {
+            change = .updated(summary, from: previousVersionCode)
+        } else {
+            change = .installed(summary)
+        }
+    }
+}
+
 /// The embedded RuntimeAPI implementation for APK imports and package management.
 ///
 /// Import previews are host-only and work before Android starts. Guest-dependent operations
@@ -138,6 +159,13 @@ public actor EmbeddedPackageService: RuntimeService {
     public func installImported(
         _ request: RuntimeInstallImportedRequest
     ) async throws(RuntimeWireError) -> RuntimePackageSummary {
+        try await installImportedWithChange(request).summary
+    }
+
+    /// Installs an import and reports the store change that occurred.
+    func installImportedWithChange(
+        _ request: RuntimeInstallImportedRequest
+    ) async throws(RuntimeWireError) -> RuntimePackageInstallResult {
         do {
             try await ensureOpen()
             guard request.options.authority == .manual else {
@@ -150,39 +178,33 @@ public actor EmbeddedPackageService: RuntimeService {
                 throw EmbeddedPackageServiceFailure.invalidTicket
             }
 
-            let record: PackageRecord
+            let outcome: PackageInstallOutcome
             if let preview = importPreviews[ticket] {
-                if case .downgrade = preview.relation, !request.options.allowDowngrade {
-                    throw EmbeddedPackageServiceFailure.downgradeRequiresExplicitApproval
-                }
                 if case .otherSigner = preview.relation {
                     throw EmbeddedPackageServiceFailure.signerMismatch
                 }
 
                 if case .uninstalledWithData = preview.relation {
-                    record = try await store.installImported(ticket: ticket)
+                    outcome = try await store.installImportedWithOutcome(ticket: ticket)
                 } else if case .newPackage = preview.relation {
-                    record = try await store.installImported(ticket: ticket)
+                    outcome = try await store.installImportedWithOutcome(ticket: ticket)
                 } else {
-                    let allowDowngrade: Bool
-                    if case .downgrade = preview.relation {
-                        allowDowngrade = request.options.allowDowngrade
-                    } else {
-                        allowDowngrade = false
-                    }
-                    record = try await store.reinstall(
-                        ticket: ticket,
-                        allowDowngrade: allowDowngrade
-                    )
+                    outcome = try await store.reinstallWithOutcome(ticket: ticket)
                 }
             } else {
                 // The ticket may have been restored from disk after a restart. PackageStore
                 // safely permits first installs and retained-data reinstalls in this case.
-                record = try await store.installImported(ticket: ticket)
+                outcome = try await store.installImportedWithOutcome(ticket: ticket)
             }
             importPreviews[ticket] = nil
             try? await refreshAndroidInventory()
-            return try Self.summary(from: record)
+            let summary = try Self.summary(from: outcome.record)
+            return RuntimePackageInstallResult(
+                summary: summary,
+                previousVersionCode: outcome.previousVersionCode,
+                restoredRetainedData: outcome.restoredRetainedData,
+                cleanupDeferred: outcome.cleanupDeferred
+            )
         } catch {
             throw Self.wireError(for: error)
         }
@@ -732,7 +754,7 @@ public actor EmbeddedPackageService: RuntimeService {
             && !name.unicodeScalars.contains(where: { $0.value == 0 })
     }
 
-    private static func wireError(for error: any Error) -> RuntimeWireError {
+    static func wireError(for error: any Error) -> RuntimeWireError {
         if let wireError = error as? RuntimeWireError {
             return wireError
         }
@@ -797,6 +819,13 @@ public actor EmbeddedPackageService: RuntimeService {
                     "guestPackageMismatch",
                     message: "Android installed a package version that did not match the inspected APK.",
                     remediation: "Check the APK set and retry.")
+            case .downgradeRefused(let installed, let candidate):
+                return .store(
+                    "downgradeRefused",
+                    message:
+                        "Version \(candidate) is older than installed version \(installed).",
+                    remediation: "Choose a newer APK, or uninstall the app first."
+                )
             case .downgradeReinstallUnavailable:
                 return .store(
                     "downgradeUnavailable", message: "This Android image does not support package downgrades.")
@@ -909,10 +938,6 @@ public actor EmbeddedPackageService: RuntimeService {
                 return .store(
                     "invalidImportTicket", message: "The APK preview ticket is invalid.",
                     remediation: "Import the APK files again.")
-            case .downgradeRequiresExplicitApproval:
-                return .store(
-                    "downgradeRequiresApproval", message: "This APK is older than the installed version.",
-                    remediation: "Use a package flow that explicitly confirms downgrades.")
             case .signerMismatch:
                 return .store(
                     "signerMismatch",
@@ -976,7 +1001,6 @@ private enum EmbeddedPackageServiceFailure: Error {
     case unsupportedUpdateAuthority
     case wrapperCreationUnavailable
     case invalidTicket
-    case downgradeRequiresExplicitApproval
     case signerMismatch
     case runtimeNotAttached
     case invalidPackageID

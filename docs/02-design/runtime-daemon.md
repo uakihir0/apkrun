@@ -572,7 +572,8 @@ while Android is starting, then reports `notCancellable` immediately before
 entering PackageStore's guest-install transaction. PackageStore continues
 through guest-result reconciliation and journal commit/abort.
 
-RuntimeAPI 1.9 adds topic subscriptions and sequenced event delivery. The
+RuntimeAPI 1.9 adds topic subscriptions and sequenced event delivery. API 1.10
+adds package-install event payloads. The
 control endpoint verifies the exported event sink before subscribing.
 RuntimeHost reads one `RuntimeSupervisor.events` stream from supervisor
 creation, ignores console and logcat payloads, and publishes runtime state
@@ -595,10 +596,11 @@ removes subscriptions on unsubscribe or connection close, and emits
 subscriptions after reconnect and reports a local resync marker when events
 may have been missed.
 
-This is a partial EventHub implementation: `runtime` and `operations` have
-publishers; the other topic publishers, streams, session callbacks, other long
+This is a partial EventHub implementation: `runtime`, `operations`, and
+successful package-install changes have publishers. Other topic publishers,
+package removal and progress, streams, session callbacks, other long
 operations, and bounded operation-specific deadlines remain outstanding under
-#032 and #068 (IR-1390–IR-1393).
+#032 and #068 (IR-1390–IR-1395).
 
 ### 8.4 Events
 
@@ -607,10 +609,11 @@ operations, and bounded operation-specific deadlines remain outstanding under
 - Session events for a wrapper (`frameReady`, `surfacesReplaced`, `imeStateChanged`, …) go only to the session's own connection, never through topics.
 - Coalescing: for `runtime` boot progress, `operations` progress, and `health`, only the latest value per key is delivered, at most 10 per second per subscriber. State changes and results are never coalesced.
 - A subscriber whose connection is invalidated is removed at once.
-- API 1.9 publishes `runtime` state and boot-progress events, and `operations`
-  events for tracked package installs. The remaining topic publishers are part
-  of the wire contract but are still pending #032; streams and per-session
-  callbacks are pending #032/#068.
+- API 1.10 publishes `runtime` state and boot-progress events, `operations`
+  events for tracked package installs, and `packages.installed` or
+  `packages.updated` after a successful synchronous or tracked install. The
+  remaining topic publishers are part of the wire contract but are still
+  pending #032; streams and per-session callbacks are pending #032/#068.
 
 ### 8.5 The CLI as a client
 

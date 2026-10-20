@@ -5,8 +5,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// Version 1.0 introduces the authenticated control endpoint; 1.1 adds Guest Agent status fields;
     /// 1.2 adds control-endpoint launch and terminate operations; 1.3 adds bounded endpoint admission;
     /// 1.4 adds package queries; 1.5 adds runtime reset; 1.6 adds one-request runtime restart;
-    /// 1.7 adds daemon-backed package import and install.
-    public static let current = APIVersion(major: 1, minor: 7)
+    /// 1.7 adds daemon-backed package import and install; 1.8 adds asynchronous install handles
+    /// and a pollable operation registry.
+    public static let current = APIVersion(major: 1, minor: 8)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -581,7 +582,15 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func packageInfo(_ request: Data, reply: @escaping (Data) -> Void)
     /// Copies and inspects APK files without starting Android.
     func importPackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
-    /// Installs a previously inspected import.
+    /// Starts installation and returns an operation handle without waiting for installation to finish.
+    func beginInstallImported(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Requests cancellation at the operation's next cancellation point, if it is still cancellable.
+    func cancelOperation(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Lists running operations and recently finished operations retained by the daemon.
+    func listOperations(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns the latest snapshot for one operation, or a typed not-found error.
+    func operationStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Installs a previously inspected import synchronously.
     func installImported(_ request: Data, reply: @escaping (Data) -> Void)
     /// Launches an installed package session.
     func launch(_ request: Data, reply: @escaping (Data) -> Void)

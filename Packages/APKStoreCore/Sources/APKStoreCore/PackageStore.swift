@@ -43,6 +43,7 @@ public enum PackageStoreFailure: Error, Equatable, Sendable {
     case runtimeUnavailable
     case guestPackageMismatch
     case guestVersionMismatch
+    case downgradeRefused(installed: VersionCode, candidate: VersionCode)
     case downgradeReinstallUnavailable
     case unsupportedJournalVersion(Int)
     case journalUnreadable
@@ -461,6 +462,11 @@ public actor PackageStore {
 
     /// Installs a new package or reinstalls a retained-data package from an import ticket.
     public func installImported(ticket: UUID) async throws -> PackageRecord {
+        try await installImportedWithOutcome(ticket: ticket).record
+    }
+
+    /// Installs a new package or retained-data package and reports its committed prior state.
+    public func installImportedWithOutcome(ticket: UUID) async throws -> PackageInstallOutcome {
         try requireWritable()
         guard let manifest = try verifiedTicket(ticket) else {
             throw PackageStoreFailure.importTicketNotFound
@@ -475,7 +481,12 @@ public actor PackageStore {
     }
 
     /// Reinstalls the package in a ticket over its current version.
-    public func reinstall(ticket: UUID, allowDowngrade: Bool = false) async throws -> PackageRecord {
+    public func reinstall(ticket: UUID) async throws -> PackageRecord {
+        try await reinstallWithOutcome(ticket: ticket).record
+    }
+
+    /// Reinstalls a package and reports the prior state validated by its install transaction.
+    public func reinstallWithOutcome(ticket: UUID) async throws -> PackageInstallOutcome {
         try requireWritable()
         guard let manifest = try verifiedTicket(ticket) else {
             throw PackageStoreFailure.importTicketNotFound
@@ -489,8 +500,7 @@ public actor PackageStore {
         return try await performInstall(
             manifest,
             kind: "reinstall",
-            from: existing.versionCode,
-            allowDowngrade: allowDowngrade
+            from: existing.versionCode
         )
     }
 
@@ -817,9 +827,8 @@ public actor PackageStore {
     private func performInstall(
         _ manifest: TicketManifest,
         kind: String,
-        from: VersionCode?,
-        allowDowngrade: Bool = false
-    ) async throws -> PackageRecord {
+        from: VersionCode?
+    ) async throws -> PackageInstallOutcome {
         guard let runtimeAccess else { throw PackageStoreFailure.runtimeUnavailable }
         let preview = manifest.preview
         let packageID = preview.packageID
@@ -846,8 +855,9 @@ public actor PackageStore {
         if kind == "firstInstall", records[packageID] != nil {
             throw PackageStoreFailure.packageAlreadyInstalled
         }
+        let previousRecord = records[packageID]
         if kind == "reinstall" {
-            guard let existing = records[packageID],
+            guard let existing = previousRecord,
                 existing.state == .uninstalledKeepingData || Self.canReinstall(existing.state)
             else {
                 throw PackageStoreFailure.packageNotFound
@@ -856,13 +866,17 @@ public actor PackageStore {
                 throw PackageStoreFailure.guestVersionMismatch
             }
         }
-        if let from, preview.versionCode < from, !allowDowngrade {
-            throw PackageStoreFailure.guestVersionMismatch
-        }
-
         let operationID = UUID()
         let previouslyInstalled = try await runtimeAccess.withStoreAgent(operationID) { channel in
             try await channel.packageInfo(packageID)
+        }
+        if let installedVersion = previouslyInstalled?.versionCode ?? from,
+            preview.versionCode < installedVersion
+        {
+            throw PackageStoreFailure.downgradeRefused(
+                installed: installedVersion,
+                candidate: preview.versionCode
+            )
         }
         let transaction = Self.makeTransactionID(at: clock())
         let startedAt = clock()
@@ -895,16 +909,11 @@ public actor PackageStore {
         let info: StorePackageInfo
         do {
             info = try await runtimeAccess.withStoreAgent(operationID) { channel in
-                if allowDowngrade, let from, preview.versionCode < from,
-                    !channel.capabilities.contains(.downgradeReinstall)
-                {
-                    throw PackageStoreFailure.downgradeReinstallUnavailable
-                }
                 return try await channel.install(
                     StoreInstallRequest(
                         packageID: packageID,
                         versionCode: preview.versionCode,
-                        allowDowngrade: allowDowngrade
+                        allowDowngrade: false
                     ),
                     files: Self.artifactURLs(in: incoming, set: preview.artifactSet)
                 )
@@ -963,7 +972,7 @@ public actor PackageStore {
             manifest: manifest,
             info: info,
             generation: generation,
-            existing: records[packageID],
+            existing: previousRecord,
             operationID: operationID,
             startedAt: startedAt,
             kind: kind
@@ -972,20 +981,44 @@ public actor PackageStore {
         try appendStep(transaction, kind: kind, step: "metadataWritten")
         try injectFault(kind: kind, step: "metadataWritten")
         try appendTerminal(transaction, op: "commit")
-        try abortSupersededInstallTransactions(
-            packageID: packageID,
-            versionCode: preview.versionCode,
-            setDigest: preview.artifactSet.setDigest,
-            excluding: transaction
-        )
         records[packageID] = record
         directories[packageID] = directory
         tickets[preview.ticket] = nil
         activeTickets.remove(preview.ticket)
-        try? fileManager.removeItem(at: current.appendingPathComponent("ticket.json"))
         try injectFault(kind: kind, step: "commit")
-        try purgeTrash()
-        return record
+        // Cleanup follows the durable commit and cannot change whether the install succeeded.
+        var cleanupDeferred = false
+        let ticketMarker = current.appendingPathComponent("ticket.json")
+        do {
+            try fileManager.removeItem(at: ticketMarker)
+        } catch {
+            if fileManager.fileExists(atPath: ticketMarker.path) {
+                cleanupDeferred = true
+            }
+        }
+        do {
+            try abortSupersededInstallTransactions(
+                packageID: packageID,
+                versionCode: preview.versionCode,
+                setDigest: preview.artifactSet.setDigest,
+                excluding: transaction
+            )
+        } catch {
+            cleanupDeferred = true
+        }
+        do {
+            try purgeTrash()
+        } catch {
+            cleanupDeferred = true
+        }
+        let previousVersionCode = previouslyInstalled?.versionCode ?? previousRecord?.versionCode
+        return PackageInstallOutcome(
+            record: record,
+            previousVersionCode: previousVersionCode,
+            restoredRetainedData: previousRecord?.state == .uninstalledKeepingData
+                && previouslyInstalled == nil,
+            cleanupDeferred: cleanupDeferred
+        )
     }
 
     private static func canReinstall(_ state: PackageState) -> Bool {

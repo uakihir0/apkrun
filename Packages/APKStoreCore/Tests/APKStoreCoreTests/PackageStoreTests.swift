@@ -837,10 +837,18 @@ private actor CompletionFlag {
     try await store.open()
 
     let preview = try await store.importPackage(files: [input])
-    let record = try await store.installImported(ticket: preview.ticket)
+    let firstInstall = try await store.installImportedWithOutcome(ticket: preview.ticket)
+    let record = firstInstall.record
+    #expect(firstInstall.previousVersionCode == nil)
+    #expect(!firstInstall.restoredRetainedData)
     #expect(record.state == .installed)
     #expect(record.versionCode == 7)
     #expect(record.updateAuthority == .manual)
+
+    let reinstallPreview = try await store.importPackage(files: [input])
+    let reinstall = try await store.reinstallWithOutcome(ticket: reinstallPreview.ticket)
+    #expect(reinstall.previousVersionCode == 7)
+    #expect(!reinstall.restoredRetainedData)
 
     let packageDirectory = temporary.appendingPathComponent("Packages/io.apkrun.fixture.hellotext")
     let current = packageDirectory.appendingPathComponent("current", isDirectory: true)
@@ -855,12 +863,132 @@ private actor CompletionFlag {
     #expect(await channel.lastKeepData == true)
 
     let secondPreview = try await store.importPackage(files: [input])
-    let reinstalled = try await store.installImported(ticket: secondPreview.ticket)
+    let restore = try await store.installImportedWithOutcome(ticket: secondPreview.ticket)
+    let reinstalled = restore.record
+    #expect(restore.previousVersionCode == 7)
+    #expect(restore.restoredRetainedData)
     #expect(reinstalled.state == .installed)
     try await store.uninstall(packageID: record.packageId)
     #expect(try await store.listManagedPackages().isEmpty)
     #expect(await channel.lastKeepData == false)
     #expect(!FileManager.default.fileExists(atPath: packageDirectory.path))
+}
+
+@Test func packageStoreUsesLiveAndroidVersionForInstallOutcomeAndDowngradeChecks() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let packages = temporary.appendingPathComponent("Packages", isDirectory: true)
+    let channel = FakeStoreChannel()
+    let runtime = FakeStoreRuntime(channel: channel)
+    let store = PackageStore(
+        packagesDirectory: packages,
+        runtimeAccess: runtime,
+        inspector: { apk in
+            let versionCode = try #require(Int64(String(contentsOf: apk, encoding: .utf8)))
+            return facts(versionCode: versionCode)
+        }
+    )
+    try await store.open()
+
+    let version7 = temporary.appendingPathComponent("version-7.apk")
+    try Data("7".utf8).write(to: version7)
+    let firstPreview = try await store.importPackage(files: [version7])
+    _ = try await store.installImported(ticket: firstPreview.ticket)
+
+    await channel.seed(storePackageInfo(packageID: packageID, versionCode: 9))
+    let version10 = temporary.appendingPathComponent("version-10.apk")
+    try Data("10".utf8).write(to: version10)
+    let replacementPreview = try await store.importPackage(files: [version10])
+    let replacement = try await store.reinstallWithOutcome(ticket: replacementPreview.ticket)
+    #expect(replacement.previousVersionCode == 9)
+    #expect(!replacement.restoredRetainedData)
+
+    await channel.seed(storePackageInfo(packageID: packageID, versionCode: 12))
+    let version11 = temporary.appendingPathComponent("version-11.apk")
+    try Data("11".utf8).write(to: version11)
+    let downgradePreview = try await store.importPackage(files: [version11])
+    await #expect(
+        throws: PackageStoreFailure.downgradeRefused(installed: 12, candidate: 11)
+    ) {
+        try await store.reinstallWithOutcome(ticket: downgradePreview.ticket)
+    }
+    #expect(try await store.listManagedPackages().first?.versionCode == 10)
+}
+
+@Test func packageStoreDoesNotTreatAnExternallyReinstalledRetainedPackageAsNew() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let packages = temporary.appendingPathComponent("Packages", isDirectory: true)
+    let channel = FakeStoreChannel()
+    let runtime = FakeStoreRuntime(channel: channel)
+    let store = PackageStore(
+        packagesDirectory: packages,
+        runtimeAccess: runtime,
+        inspector: { apk in
+            let versionCode = try #require(Int64(String(contentsOf: apk, encoding: .utf8)))
+            return facts(versionCode: versionCode)
+        }
+    )
+    try await store.open()
+
+    let version7 = temporary.appendingPathComponent("version-7.apk")
+    try Data("7".utf8).write(to: version7)
+    let firstPreview = try await store.importPackage(files: [version7])
+    let installed = try await store.installImported(ticket: firstPreview.ticket)
+    try await store.uninstall(packageID: installed.packageId, keepData: true)
+
+    await channel.seed(storePackageInfo(packageID: packageID, versionCode: 9))
+    let version10 = temporary.appendingPathComponent("version-10.apk")
+    try Data("10".utf8).write(to: version10)
+    let restorePreview = try await store.importPackage(files: [version10])
+    let replacement = try await store.installImportedWithOutcome(ticket: restorePreview.ticket)
+
+    #expect(replacement.previousVersionCode == 9)
+    #expect(!replacement.restoredRetainedData)
+}
+
+@Test func packageStoreReturnsCommittedInstallWhenTrashCleanupFails() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let packages = temporary.appendingPathComponent("Packages", isDirectory: true)
+    let channel = FakeStoreChannel()
+    let runtime = FakeStoreRuntime(channel: channel)
+    let firstStore = PackageStore(
+        packagesDirectory: packages,
+        runtimeAccess: runtime,
+        inspector: { _ in facts() }
+    )
+    try await firstStore.open()
+
+    let version7 = temporary.appendingPathComponent("version-7.apk")
+    try Data("base apk bytes".utf8).write(to: version7)
+    let firstPreview = try await firstStore.importPackage(files: [version7])
+    _ = try await firstStore.installImported(ticket: firstPreview.ticket)
+
+    let version8 = temporary.appendingPathComponent("version-8.apk")
+    try Data("replacement apk bytes".utf8).write(to: version8)
+    let trash = packages.appendingPathComponent(".trash", isDirectory: true)
+    let replacementStore = PackageStore(
+        packagesDirectory: packages,
+        runtimeAccess: runtime,
+        inspector: { _ in facts(versionCode: 8) },
+        faultInjector: { kind, step in
+            guard kind == "reinstall", step == "commit" else { return }
+            try FileManager.default.removeItem(at: trash)
+            try Data("blocks directory cleanup".utf8).write(to: trash)
+        }
+    )
+    try await replacementStore.open()
+    let replacementPreview = try await replacementStore.importPackage(files: [version8])
+    let outcome = try await replacementStore.reinstallWithOutcome(ticket: replacementPreview.ticket)
+
+    #expect(outcome.record.versionCode == 8)
+    #expect(outcome.previousVersionCode == 7)
+    #expect(outcome.cleanupDeferred)
+    #expect(try await replacementStore.listManagedPackages().first?.versionCode == 8)
+    #expect(FileManager.default.fileExists(atPath: trash.path))
 }
 
 @Test func packageStoreRecoversInstallInterruptedAfterGuestCommit() async throws {
@@ -1010,16 +1138,27 @@ private actor CompletionFlag {
     )
 }
 
-private func facts() -> APKFacts {
+private func facts(versionCode: VersionCode = 7) -> APKFacts {
     APKFacts(
         packageID: PackageID(rawValue: "io.apkrun.fixture.hellotext")!,
-        versionCode: 7,
+        versionCode: versionCode,
         versionName: "1.0",
         splitName: nil,
         displayName: "HelloText",
         minSDK: 24,
         targetSDK: 35,
         nativeABIs: ["arm64-v8a"]
+    )
+}
+
+private func storePackageInfo(packageID: PackageID, versionCode: VersionCode) -> StorePackageInfo {
+    StorePackageInfo(
+        packageID: packageID,
+        displayName: "HelloText",
+        versionCode: versionCode,
+        enabled: true,
+        targetSDK: 35,
+        minSDK: 24
     )
 }
 

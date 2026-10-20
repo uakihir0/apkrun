@@ -695,7 +695,7 @@ Owner: APKStoreCore. Design: [../02-design/package-store.md](../02-design/packag
 | Case | Code | When raised | Raised by | Message | Remediation · action | Exit | Ref |
 |---|---|---|---|---|---|---|---|
 | `alreadyInstalled(VersionCode)` | `store.alreadyInstalled` | `ImportRelation.sameAsInstalled`: the same set digest is installed. A warning (catalog §3.6) | PackageStore | "{app} {version} is already installed." | "No action is needed." `none` | 0 | §4.7 |
-| `downgradeRefused(installed:candidate:)` | `store.downgradeRefused` | `ImportRelation.downgrade` (FR-UPD-05) | PackageStore | "{app} {newVersion} is older than the installed version {installedVersion}." | "Keep the installed version, or uninstall {app} first." `none` | 5 | §4.7, [../02-design/diagnostics.md](../02-design/diagnostics.md) §2.2 |
+| `downgradeRefused(installed:candidate:)` | `store.downgradeRefused` | Candidate is below the live PackageManager version or the managed-record fallback (FR-UPD-05) | PackageStore | "Version {candidate} is older than installed version {installed}." | "Choose a newer APK, or uninstall the app first." `none` | 5 | §4.7, [../02-design/diagnostics.md](../02-design/diagnostics.md) §2.2 |
 | `signerMismatch` | `store.signerMismatch` | `ImportRelation.otherSigner` | PackageStore | "This file is signed by a different developer than the installed app." | "Install updates of {app} from its original developer, or uninstall {app} first." `none` | 5 | §4.7 |
 
 - The text of `store.downgradeRefused` is the example of diagnostics.md §2.2. package-store.md §4.7 uses the same text.

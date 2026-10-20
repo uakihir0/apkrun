@@ -1021,6 +1021,32 @@ public struct PackageRecord: Codable, Sendable, Equatable {
     }
 }
 
+/// The package-store result and prior state captured by one successful install transaction.
+public struct PackageInstallOutcome: Sendable {
+    /// The committed package record.
+    public let record: PackageRecord
+    /// The best available pre-install version: Android's live version when present, otherwise
+    /// the managed version. An out-of-band Android install may race with this observation.
+    public let previousVersionCode: VersionCode?
+    /// Whether the transaction restored retained Android data while the package was absent.
+    public let restoredRetainedData: Bool
+    /// Whether post-commit transaction or trash cleanup must be retried.
+    public let cleanupDeferred: Bool
+
+    /// Creates an install outcome.
+    public init(
+        record: PackageRecord,
+        previousVersionCode: VersionCode?,
+        restoredRetainedData: Bool,
+        cleanupDeferred: Bool = false
+    ) {
+        self.record = record
+        self.previousVersionCode = previousVersionCode
+        self.restoredRetainedData = restoredRetainedData
+        self.cleanupDeferred = cleanupDeferred
+    }
+}
+
 /// Identifies a package directory whose persisted metadata cannot be read safely.
 ///
 /// `detail` is a stable, non-sensitive reason code. It never contains decoded package

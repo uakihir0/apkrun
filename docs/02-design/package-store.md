@@ -362,6 +362,7 @@ public enum ImportWarning: Codable, Sendable, Equatable {   // the warnings of �
 ```
 
 - An import for a package that is already installed goes to UpdateCore as a *manual update*. It gets the same validation and gentle install as provider updates ([update-system.md](update-system.md) §7). A downgrade is refused with `store.downgradeRefused`: "‹App› ‹version› is older than the installed version ‹installed version›. Keep the installed version, or uninstall ‹App› first." A different signer is refused with "This file is signed by a different developer than the installed app."
+- The install transaction compares the candidate against Android's live `PackageManager` version when present, and against the managed record when Android does not currently have the package (such as a retained-data reinstall). A stale import preview cannot authorize a lower version. Normal import requests always refuse downgrades; the legacy `allowDowngrade` request field is ignored.
 - `reinstallSameVersion` is allowed. It installs with mode `REINSTALL` and replaces `current/` in a `reinstall` transaction (§5.2).
 
 ---
@@ -405,6 +406,7 @@ JSON Lines, append-only, one object per line:
 Rules:
 
 - **Files mirror Android.** `current/` is promoted as soon as Android confirms the install, before the post-update health check. The directories therefore always describe what Android should have, and a rollback is a transaction of its own. The previous set stays in `previous/` until the next successful update.
+- **Post-commit cleanup is best effort.** After the journal's `commit` record and in-memory package state are updated, failures while removing the consumed ticket marker, aborting superseded attempts, or purging trash do not turn a successful Android install into a reported failure. The result marks cleanup as deferred; RuntimeHost emits `store.cleanupDeferred` so diagnostics show that maintenance remains.
 - A failure before `guestCommitRequested` ends the transaction with `{"op":"abort","reason":…}` and undoes nothing on disk, because nothing has moved yet. The `incoming/` or `staged/` set stays where it was, for a retry or cleanup.
 - `update` promotion uses `renamex_np(RENAME_SWAP)` for `staged ↔ current`, then renames the old `current` (now in `staged`) to `previous` after the old `previous` went to `.trash`. Each rename is atomic on APFS, and each intermediate state is recognizable by `setDigest` (§5.5).
 - `.trash` is purged by a background task after the commit. A crash leaves at most garbage in `.trash`, which the next `open()` purges.

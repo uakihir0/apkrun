@@ -1,14 +1,14 @@
 # APKRun: Rules for Implementers
 
-These rules apply to everyone who changes this repository, human or AI coding agent. The documents in [docs/](docs/README.md) are the specification. This file lists the rules that are never broken and points to the detailed design.
+These rules apply to everyone who changes this repository, human or AI agent. [docs/](docs/README.md) is the specification. This file is the part you must always follow. Read §2 before every task.
 
-If a task seems to need a change to one of these rules, stop. A change to a rule needs an ADR ([docs/01-architecture/decisions/README.md](docs/01-architecture/decisions/README.md)), and the ADR has to be accepted before code depends on it.
+If a task seems to need breaking one of these rules, stop and ask. Changing a rule needs an accepted ADR first ([docs/01-architecture/decisions/README.md](docs/01-architecture/decisions/README.md)).
 
 ---
 
 ## 1. What APKRun is
 
-APKRun runs Android ARM64 apps on Apple silicon Macs as ordinary, automatically updating Mac apps. It is not an emulator UI. The user never sees Android itself.
+APKRun runs Android ARM64 apps on Apple silicon Macs as ordinary, automatically updating Mac apps. It is not an emulator UI: the user never sees Android itself.
 
 ```text
 Android APK
@@ -22,25 +22,42 @@ apkrund (per-user LaunchAgent, owns the VM)
 Android ARM64 guest (AOSP Cuttlefish based) on Virtualization.framework
 ```
 
-The target command is:
+Target command: `apkrun wrap app.apk --install` → `/Applications/App.app`. The `.app` is a thin, immutable launcher. APKs, Android data, update metadata, and runtime images live outside it ([docs/02-design/wrapper.md](docs/02-design/wrapper.md), ADR-0009).
 
-```bash
-apkrun wrap app.apk --install        # → /Applications/App.app
-```
-
-A generated `.app` is a thin, immutable launcher. APK files, Android data, update metadata, runtime images, and all Android state live outside the signed bundle ([docs/02-design/wrapper.md](docs/02-design/wrapper.md), ADR-0009).
-
-Start with [docs/00-product/vision.md](docs/00-product/vision.md) and [docs/01-architecture/overview.md](docs/01-architecture/overview.md).
+Background: [docs/00-product/vision.md](docs/00-product/vision.md), [docs/01-architecture/overview.md](docs/01-architecture/overview.md).
 
 ---
 
-## 2. Before you start a task
+## 2. How to do a task
 
-1. Pick the task from [docs/04-plan/issues/README.md](docs/04-plan/issues/README.md) §3. Take the lowest-numbered task in the current milestone whose dependencies are done, unless [docs/04-plan/roadmap.md](docs/04-plan/roadmap.md) says otherwise.
-2. Read the whole task entry in its milestone file: goal, scope, steps, tests, acceptance criteria, and notes.
-3. Read every design section the entry links to. The design wins over your assumptions. If the design looks wrong, see §15.
-4. Check the risks and open questions the entry names ([docs/04-plan/risks.md](docs/04-plan/risks.md), [docs/04-plan/open-questions.md](docs/04-plan/open-questions.md)). Build to the working default of an open question. A Decision question that is still open at its deadline task blocks that task.
-5. Set up the environment ([docs/05-development/environment-setup.md](docs/05-development/environment-setup.md)).
+1. **Pick the task.** Use the task the user names. Otherwise run `scripts/dev/next-task.py` and take the first task it lists. A task number is its GitHub issue number.
+2. **Read.** `gh issue view <N>` links to the task entry in `docs/04-plan/issues/`. Read the whole entry. Then read the design sections in its `Design` row, and nothing else unless a step needs it. The design wins over your assumptions.
+3. **Check open questions and risks** named in the entry ([docs/04-plan/open-questions.md](docs/04-plan/open-questions.md), [docs/04-plan/risks.md](docs/04-plan/risks.md)). Build to the working default of an open question.
+4. **Do the steps in order.** After each step, run its **Check:**. Commit when the check passes (§13).
+5. **Run the tests** the entry lists, at every tier you can run:
+
+   ```bash
+   swift build                                   # builds every Swift package and the CLI
+   swift test --skip SystemTests                 # T0, as in CI
+   swift test --filter <Module>Tests             # one module
+   scripts/ci/run-checks.sh                      # lint: module graph, TODOs, format, lock, protos, docs
+   scripts/ci/codegen.sh                         # when errors.json, .proto files, or project.yml changed
+   ```
+
+   T2 and T3 tests need a real Apple silicon Mac, a VM, and sometimes a signing identity or a person. If you cannot run them, say so. Never claim that a test passed when it did not run.
+6. **Update the documents** when the code does something the design does not say, in the same commit ([docs/README.md](docs/README.md) §4). Run `scripts/check-docs.sh`.
+7. **Finish.**
+   - Every `Done when` item holds, and every listed test passed → close the issue (`gh issue close <N> --comment "<what was verified>"`), and shorten the entry to the closed format ([docs/04-plan/issues/README.md](docs/04-plan/issues/README.md) §2.2).
+   - The code is done but T2/T3 or the gate could not run → leave the issue open and add the label: `gh issue edit <N> --add-label needs-verification`. Comment which tests are left.
+8. **Report** to the user: what changed, which tests ran and their results, and what is not verified.
+
+### 2.1 Stop and ask when
+
+- a rule in this file would be broken;
+- the design looks wrong, or a step is impossible as written;
+- the work needs files or behavior outside the task's scope (file a follow-up instead, §11);
+- the same test still fails after two different fix attempts, and you do not know why;
+- you would need to delete or rewrite code that the task does not mention.
 
 ---
 
@@ -59,38 +76,30 @@ Vulkan and Google Play are post-v1 tracks (#096, #097). Do not add code for them
 
 ## 4. Product invariants
 
-These hold in every task. Each links to the document that specifies it.
+These hold in every task.
 
 1. **Do not reimplement Android.** Android runs in the guest. Never implement Android APIs on Darwin (ADR-0001).
-2. **Use existing standards.** virtio, virtio-gpu, virtio-vsock, `PackageInstaller`, `PackageManager`, Android multi-display, Mesa, VirGL, ANGLE. Do not invent a graphics protocol unless the standard one has been proven unusable.
-3. **Do not trim Android before the baseline works.** Launcher, SystemUI, SetupWizard, and unused system apps stay until boot, ADB, GPU, Hello APK, input, and a native window all work.
-4. **apkrund owns the VM**, not the GUI. APKRun.app, the menu bar app, the CLI, and wrappers are clients over XPC through `RuntimeClient`. Quitting the GUI does not stop the VM ([docs/02-design/runtime-daemon.md](docs/02-design/runtime-daemon.md), ADR-0007).
-5. **The wrapper owns its window**; apkrund renders into shared IOSurfaces (ADR-0006).
-6. **One Android display ≈ one Mac window**, managed by `DisplayPool`. Never hard-code app ↔ display mappings ([docs/02-design/display-and-windowing.md](docs/02-design/display-and-windowing.md), ADR-0005).
-7. **Four update systems stay separate:** Android apps (UpdateCore and the Store Agent), APKRun itself (Sparkle, ADR-0016), the Android image, and wrapper metadata ([docs/02-design/update-system.md](docs/02-design/update-system.md), [docs/02-design/runtime-maintenance.md](docs/02-design/runtime-maintenance.md)).
+2. **Use existing standards:** virtio, virtio-gpu, virtio-vsock, `PackageInstaller`, `PackageManager`, Android multi-display, Mesa, VirGL, ANGLE. Do not invent a protocol unless the standard one is proven unusable.
+3. **Do not trim Android** (Launcher, SystemUI, SetupWizard, system apps) before boot, ADB, GPU, Hello APK, input, and a native window all work.
+4. **apkrund owns the VM**, not the GUI. APKRun.app, the menu bar app, the CLI, and wrappers are XPC clients through `RuntimeClient`. Quitting the GUI does not stop the VM (ADR-0007).
+5. **The wrapper owns its window.** apkrund renders into shared IOSurfaces (ADR-0006).
+6. **One Android display per Mac window**, managed by `DisplayPool`. Never hard-code app ↔ display mappings (ADR-0005).
+7. **Four update systems stay separate:** Android apps (UpdateCore and the Store Agent), APKRun itself (Sparkle, ADR-0016), the Android image, and wrapper metadata.
 8. **One update authority per package** (`apkrun`, `googlePlay`, `external`, `manual`). Two automatic updaters never manage the same package (ADR-0010).
-9. **Updates never block launch.** Launch immediately; check, download, and install asynchronously; install only when the app is not in use.
+9. **Updates never block launch.** Launch at once; check, download, and install in the background; install only when the app is not in use.
 10. **No signature bypass.** Before an update: the package ID matches, `versionCode` increases, the signing lineage is valid, ABI and SDK fit, the split set is consistent, and the hash matches. No flag, setting, or debug path skips a check.
 11. **Rollback is binary only.** Keep the previous APK set until the new version passes its health check. Never claim that data migrations can be reversed.
-12. **Install only through `PackageInstaller`.** Never copy APKs into Android package directories. `PackageManager` is the source of truth for package identity; host-side APK parsing is for previews only ([docs/02-design/package-store.md](docs/02-design/package-store.md)).
-13. **Wrappers are immutable.** An APK update never changes, re-signs, or regenerates a wrapper. A wrapper never contains the Android app's version (G9).
-14. **Bundle IDs are deterministic.** `io.apkrun.android.<mapped package>`, never random or per machine ([docs/02-design/wrapper.md](docs/02-design/wrapper.md) §4.1).
+12. **Install only through `PackageInstaller`.** Never copy APKs into Android package directories. `PackageManager` is the source of truth for package identity. Host-side APK parsing is for previews and for refusing bad input early ([docs/02-design/package-store.md](docs/02-design/package-store.md) §4); it never decides what is installed.
+13. **Wrappers are immutable.** An APK update never changes, re-signs, or regenerates a wrapper. A wrapper never contains the Android app's version.
+14. **Bundle IDs are deterministic:** `io.apkrun.android.<mapped package>`, never random or per machine ([docs/02-design/wrapper.md](docs/02-design/wrapper.md) §4.1).
 
 ---
 
 ## 5. Development order and gates
 
-The order is fixed:
+The working order is [docs/04-plan/roadmap.md](docs/04-plan/roadmap.md) §1.3. Do not skip ahead because a later task looks easier. The gates G1–G9 and their pass conditions are in [docs/04-plan/roadmap.md](docs/04-plan/roadmap.md) §2.
 
-```text
-Linux VM → Android boot → ADB → APK install → virtio-gpu → Android rendering → input
-→ single native window → multi-display → apkrund → Guest Agent → custom Android image
-→ store → automatic updates → Mac wrapper → desktop integration → Vulkan → optional Google integration
-```
-
-Do not skip ahead because a later task looks easier or more interesting. The gates G1–G9 and their pass conditions are in [docs/04-plan/roadmap.md](docs/04-plan/roadmap.md) §2.
-
-- Do not declare the core architecture validated before **G3** (SurfaceFlinger renders through virtio-gpu to Metal).
+- Do not declare the core architecture validated before **G3** (passed).
 - Do not declare the product concept validated before **G9** (the wrapper stays unchanged while the APK updates automatically).
 
 ---
@@ -99,29 +108,29 @@ Do not skip ahead because a later task looks easier or more interesting. The gat
 
 ### 6.1 Modules
 
-- The module set, the owner of each responsibility, and the allowed imports are in [docs/01-architecture/modules.md](docs/01-architecture/modules.md). An import that is not in the dependency graph is forbidden, and CI rejects it (#062).
+- Modules, owners, and allowed imports are in [docs/01-architecture/modules.md](docs/01-architecture/modules.md). An import outside the dependency graph is forbidden, and CI rejects it.
 - No dumping grounds: no `Common/`, `Utils/`, `Helpers/`, or `Misc/`. A shared abstraction needs a named owner module.
-- Client executables (APKRun.app, APKRunMenuBar, the CLI, APKRunLauncher) never import RuntimeCore. The only exception is the CLI built with `APKRUN_EMBEDDED_RUNTIME` for development, which links RuntimeHost ([docs/01-architecture/modules.md](docs/01-architecture/modules.md) §3).
+- Client executables (APKRun.app, APKRunMenuBar, the CLI, APKRunLauncher) never import RuntimeCore. The only exception is the CLI built with the `EmbeddedRuntime` trait for development, which links RuntimeHost.
 
 ### 6.2 VM
 
 - `VMController` is an actor with async `start`, `stop`, `pause`, and `resume`.
-- VM state is an explicit `VMState` enum ([docs/01-architecture/state-machines.md](docs/01-architecture/state-machines.md) §1). Never infer state from whether a reference is `nil`.
+- VM state is the explicit `VMState` enum ([docs/01-architecture/state-machines.md](docs/01-architecture/state-machines.md) §1). Never infer state from whether a reference is `nil`.
 
 ### 6.3 Android images
 
-- Never assume file names inside Cuttlefish artifacts. Every artifact set is inventoried first, and all access goes through `AndroidImageManifest` ([docs/02-design/android-image.md](docs/02-design/android-image.md) §3).
-- Code like `directory.appendingPathComponent("boot.img")` outside the manifest layer is a review failure.
+- Never assume file names inside Cuttlefish artifacts. All access goes through `AndroidImageManifest` ([docs/02-design/android-image.md](docs/02-design/android-image.md) §3).
+- `directory.appendingPathComponent("boot.img")` outside the manifest layer is a review failure.
 - Image handling lives in `ImageCore` and `Images/tools/`, never in `VirtualMachineCore`.
 
 ### 6.4 Graphics
 
-- Graphics is the largest technical risk. Study the RiftVM prototype (#018, which writes `docs/02-design/riftvm-analysis.md`; [docs/02-design/graphics.md](docs/02-design/graphics.md) §2) before writing new virtual GPU code.
-- The normal frame path never uses `glReadPixels`, CPU framebuffer readback, or CPU texture copies. Debug readback is behind a clearly marked, removable switch, and the readback counter must stay at 0 in tests ([docs/02-design/graphics.md](docs/02-design/graphics.md) §6–§7).
+- Read [docs/02-design/graphics.md](docs/02-design/graphics.md) and [docs/02-design/riftvm-analysis.md](docs/02-design/riftvm-analysis.md) before writing virtual GPU code.
+- The frame path never uses `glReadPixels`, CPU framebuffer readback, or CPU texture copies. Debug readback is behind a clearly marked switch, and the readback counters stay at 0 in tests ([docs/02-design/graphics.md](docs/02-design/graphics.md) §6–§7).
 
 ### 6.5 Native code boundary
 
-- Swift → narrow C API → Objective-C++/C++ → virglrenderer/ANGLE. Expose opaque handles, never C++ object graphs, to Swift ([docs/05-development/coding-conventions.md](docs/05-development/coding-conventions.md)).
+Swift → narrow C API → Objective-C++/C++ → virglrenderer/ANGLE. Expose opaque handles to Swift, never C++ object graphs ([docs/05-development/coding-conventions.md](docs/05-development/coding-conventions.md)).
 
 ### 6.6 Third-party code
 
@@ -130,33 +139,33 @@ Do not skip ahead because a later task looks easier or more interesting. The gat
 
 ### 6.7 Input
 
-- Early validation may use `adb shell input`. The production path never runs a shell command per event (FR-IN-06).
+- Tests and early checks may use `adb shell input`. The production path never runs a shell command per event (FR-IN-06).
 - Production input: `NSEvent → InputCore → GuestProtocol → Guest Agent → Android input injection` (ADR-0013, [docs/02-design/input.md](docs/02-design/input.md)).
 
 ### 6.8 Guest communication
 
-- ADB is the main debugging interface until the guest protocol is stable, and it stays available in development builds (FR-RT-05). Production control uses vsock ([docs/02-design/guest-protocol.md](docs/02-design/guest-protocol.md) §13).
+- ADB stays available in development builds for debugging (FR-RT-05). Production control uses vsock ([docs/02-design/guest-protocol.md](docs/02-design/guest-protocol.md) §13).
 - The guest protocol is versioned protobuf (ADR-0014). Every connection starts with a handshake. An incompatible major version fails with a typed error; never continue silently.
-- Guest components: the Guest Agent and the Store Agent (Kotlin) and `apkrun_vsockd` (Rust) ([docs/02-design/guest-components.md](docs/02-design/guest-components.md), ADR-0008).
+- Guest components: the Guest Agent and the Store Agent (Kotlin), and `apkrun_vsockd` (Rust) ([docs/02-design/guest-components.md](docs/02-design/guest-components.md), ADR-0008).
 
 ---
 
 ## 7. Storage and naming
 
 - Host data lives under `~/Library/Application Support/APKRun/` ([docs/01-architecture/filesystem-layout.md](docs/01-architecture/filesystem-layout.md)). Nothing mutable lives inside a generated `.app`.
-- Reverse-DNS root: `io.apkrun` for bundle IDs, XPC and launchd names, log subsystems, and guest packages ([docs/01-architecture/modules.md](docs/01-architecture/modules.md) §5).
-- Configuration keys and defaults: [docs/03-reference/configuration.md](docs/03-reference/configuration.md).
+- Reverse-DNS root: `io.apkrun` for bundle IDs, XPC and launchd names, log subsystems, and guest packages.
+- Settings and defaults: [docs/03-reference/configuration.md](docs/03-reference/configuration.md).
 
 ---
 
 ## 8. Logging, diagnostics, and errors
 
-- Log through DiagnosticsCore with structured fields. Use the `io.apkrun.*` subsystems in [docs/02-design/diagnostics.md](docs/02-design/diagnostics.md) §3.
-- Every critical lifecycle event carries an operation ID, and the package ID, display ID, error domain, and error code where they apply.
+- Log through DiagnosticsCore with structured fields and the `io.apkrun.*` subsystems ([docs/02-design/diagnostics.md](docs/02-design/diagnostics.md) §3).
+- Every lifecycle event carries an operation ID, and the package ID, display ID, error domain, and error code where they apply.
 - Never log secrets, clipboard contents, file contents, or private app data.
-- Errors are typed domains (`enum GraphicsFailure: Error { … }`), never `NSError(domain: "error", code: 1)`. Every user-visible error has an entry with a remediation in [docs/03-reference/error-catalog.md](docs/03-reference/error-catalog.md). CLI errors say what to do next.
-- Every major subsystem reports health to `apkrun doctor`. A user must be able to tell apart a VM failure, an Android boot failure, a graphics failure, a Guest Agent failure, a package failure, and an update failure without reading source code.
-- Record the performance markers of [docs/02-design/diagnostics.md](docs/02-design/diagnostics.md) §4.2. Do not optimize before measuring.
+- Errors are typed domains (`enum GraphicsFailure: Error { … }`), never `NSError(domain: "error", code: 1)`. Every user-visible error has an entry with a remediation in `Packages/DiagnosticsCore/ErrorCatalog/errors.json`; run `swift scripts/errorgen.swift --markdown` to regenerate the code and [docs/03-reference/error-catalog.md](docs/03-reference/error-catalog.md). CLI errors say what to do next.
+- Every major subsystem reports health to `apkrun doctor`, so a user can tell apart VM, Android boot, graphics, Guest Agent, package, and update failures.
+- Measure before optimizing. Performance markers: [docs/02-design/diagnostics.md](docs/02-design/diagnostics.md) §4.
 
 ---
 
@@ -172,61 +181,57 @@ Do not skip ahead because a later task looks easier or more interesting. The gat
 
 ## 10. Tests
 
-- Tiers ([docs/04-plan/test-strategy.md](docs/04-plan/test-strategy.md)): **T0** unit tests (every module where meaningful), **T1** host integration without a VM, **T2** against a real guest VM (the test Linux guest or Android), **T3** acceptance and manual checks on real Apple silicon Macs.
+- Tiers ([docs/04-plan/test-strategy.md](docs/04-plan/test-strategy.md) §2): **T0** unit tests, **T1** host integration without a VM, **T2** against a real VM (the test Linux guest or Android), **T3** acceptance and manual checks on a real Mac.
+- A test lives in the lowest tier that can catch the failure. Tests wait for markers, never for fixed sleeps.
 - Graphics is never complete on mocks alone.
-- Use the fixture apps in `Tests/Fixtures/AndroidApps/` (HelloText, HelloCompose, HelloGL, HelloWebView, HelloNotification, HelloClipboard, HelloUpdate V1/V2, and the others in the test strategy) before blaming a third-party APK.
-- A task lists its tests by tier. All of them pass before the task is done.
+- Use the fixture apps in `Tests/Fixtures/AndroidApps/` ([docs/04-plan/test-strategy.md](docs/04-plan/test-strategy.md) §4.2) before blaming a third-party APK.
 
 ---
 
-## 11. Scope discipline and experiments
+## 11. Scope and experiments
 
-- One risk per task. A task about Android boot does not also touch the wrapper UI, the updater, Google Play, or Vulkan ([docs/00-product/scope.md](docs/00-product/scope.md) §5).
-- If finishing a task needs a large expansion of scope, stop and file a follow-up task. It takes the number GitHub gives its issue (#098 and up), and its entry goes into the milestone file and the task index ([docs/05-development/workflow.md](docs/05-development/workflow.md) §2.4).
-- Experiments live in `Experiments/` or on `experiment/*` branches (for example `experiment/android-virgl`). Production targets never import them. When an experiment works, reimplement the minimum cleanly in the production modules, and have it reviewed.
+- One risk per task. A task about Android boot does not also touch the wrapper UI, the updater, Google Play, or Vulkan.
+- Work outside the task's scope becomes a follow-up task: `gh issue create --label task`, then its entry and index row ([docs/05-development/workflow.md](docs/05-development/workflow.md) §2.4).
+- Experiments live in `Experiments/` or on `experiment/*` branches. Production targets never import them. When an experiment works, reimplement the minimum cleanly in the production modules.
 
 ---
 
 ## 12. Definition of done
 
-A task is not done when it compiles. It is done when:
+A task is done when:
 
-- the implementation meets every acceptance criterion of the task entry,
-- the tests of every tier the entry lists pass,
-- logging and typed error handling are in place,
-- non-obvious behavior is documented, and the design documents describe what was built,
-- the manual checks the entry requires are recorded, and
-- verification results are written where the entry's Notes say (design verification logs, risks, ADRs).
+- every `Done when` item of its entry holds;
+- the tests of every tier the entry lists pass;
+- logging and typed errors are in place;
+- the design documents describe what was built, and `scripts/check-docs.sh` passes.
 
-Every temporary workaround has `TODO(#NNN): reason`, with a tracking task (NFR-DEV-04). CI rejects a `TODO` without a task number.
+Every temporary workaround has `TODO(#N): reason` with an open issue number. CI rejects a `TODO` without one.
 
 ---
 
-## 13. Branches, commits, and pull requests
+## 13. Commits
 
-- One task per branch: `task/<NNN>-<short-name>` (for example `task/024-pointer-input`). The pull request title is `#NNN Title`.
-- A bug fix uses `fix/<NNN>-<short-name>` with the bug's issue number, a documentation change that belongs to no task uses `docs/<short-name>`, and an experiment uses `experiment/<name>`, which is never merged ([docs/05-development/workflow.md](docs/05-development/workflow.md) §4.1).
-- A commit scope is one of the scopes in [docs/05-development/workflow.md](docs/05-development/workflow.md) §4.2. The body ends with `Refs: #NNN`.
-- Small commits in Conventional Commits style, scoped to a module or area:
+- Conventional Commits with a scope from [docs/05-development/workflow.md](docs/05-development/workflow.md) §4.2, and `Refs: #N` (the GitHub issue number) at the end of the body:
 
   ```text
   feat(vm): boot arm64 linux with Virtualization.framework
-  feat(graphics): expose virtio-gpu through custom virtio device
-  fix(update): reject mismatched signing certificate
+
+  Start the VM through VZLinuxBootLoader and wait for the serial marker.
+
+  Refs: #4
   ```
 
-  Never `work`, `changes`, `fix stuff`, or `wip final`.
-- Use [.github/pull_request_template.md](.github/pull_request_template.md). The review, merge, and parallel-work rules are in [docs/05-development/workflow.md](docs/05-development/workflow.md).
+- Small commits. Each commit builds. Generated files go in the same commit as their source.
+- Never `work`, `changes`, `fix stuff`, or `wip`.
+- Branches and pull requests: [docs/05-development/workflow.md](docs/05-development/workflow.md) §4–§7.
 
 ---
 
 ## 14. Documentation
 
-- All documentation is in English.
-- Documentation changes go in the same pull request as the code that makes them necessary.
-- Adding, removing, or renaming a requirement, a task, or a design section also updates [docs/04-plan/traceability.md](docs/04-plan/traceability.md).
-- [docs/](docs/README.md) is the maintained product and implementation specification. Requirements, tasks, design sections, and accepted ADRs are the canonical references.
-- Document conventions: [docs/README.md](docs/README.md) §3.
+- Documents are in English and follow [docs/README.md](docs/README.md) §3.
+- A change that makes a document wrong updates the document in the same commit.
+- Do not add history, test evidence, or progress reports to documents. They go into commit messages, pull requests, and GitHub issue comments.
 
 ---
 
@@ -241,6 +246,4 @@ Prefer, in this order:
 5. minimal adapter code,
 6. a new custom mechanism, only as the last resort.
 
-APKRun is an integration project, not a collection of custom subsystems.
-
-If the design is wrong or a step is impossible, fix the design document and the task entry in the same pull request and explain why in the pull request. If the fix changes an architectural decision, write an ADR first. If you are an AI agent and the right choice is still unclear, stop and ask instead of guessing.
+APKRun is an integration project, not a collection of custom subsystems. If the right choice is still unclear, stop and ask (§2.1).

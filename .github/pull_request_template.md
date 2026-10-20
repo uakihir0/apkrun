@@ -1,16 +1,10 @@
-<!-- Title: "#NNN Title" of the task. One task per pull request (AGENTS.md §13). -->
+<!-- Title: "#N Title", the task's GitHub issue number and title. One task per pull request. -->
 
 ## Task
 
-Closes #NNN. Task entry: `docs/04-plan/issues/M<nn>-<name>.md`
+Closes #N <!-- or "Part of #N" when the task needs more pull requests -->
 
 ## What changed
-
--
-
-## Implementation steps covered
-
-<!-- The step numbers of the task entry that this pull request completes. -->
 
 -
 
@@ -23,22 +17,14 @@ Closes #NNN. Task entry: `docs/04-plan/issues/M<nn>-<name>.md`
 | T2 | | |
 | T3 / manual | | |
 
+<!-- Paste gate and T2 evidence (summaries, links to logs) here, not into the repository. -->
+
 ## Checklist (AGENTS.md §12)
 
-- [ ] Every acceptance criterion of the task is met, or this pull request says which step it completes and what remains.
-- [ ] The tests the task lists pass. Graphics work is verified on real hardware, not only with mocks.
-- [ ] Logging goes through DiagnosticsCore; no secrets, clipboard contents, or private app data are logged.
-- [ ] Errors are typed. New user-visible errors have an entry with a remediation in `docs/03-reference/error-catalog.md`, and from #061 on in `Packages/DiagnosticsCore/ErrorCatalog/errors.json`, and the catalog tables are regenerated with `swift scripts/errorgen.swift --markdown`.
-- [ ] No import outside the dependency graph (`docs/01-architecture/modules.md` §3).
-- [ ] New third-party code is pinned in `ThirdParty/ThirdParty.lock.json`, with an ADR where one is required.
-- [ ] Every `TODO` has `TODO(#NNN): reason`.
-- [ ] No readback in the normal frame path, and no shell command per input event.
-- [ ] The scope stayed within the task. Follow-ups are filed as new tasks: #…
-- [ ] The documents describe what was built (design sections, reference formats, verification logs, risks, open questions, traceability).
-- [ ] An ADR is included if an architectural decision changed.
-
-## Verification results to record
-
-<!-- Measurements, gate evidence, answers to open questions, risk results. Say where each was recorded. -->
-
-## Notes for reviewers
+- [ ] Every `Done when` item of the task entry holds, or this pull request says which steps it covers.
+- [ ] The tests the task lists pass. A test that could not run is named above.
+- [ ] Errors are typed. New user-visible errors are in `Packages/DiagnosticsCore/ErrorCatalog/errors.json`, regenerated with `swift scripts/errorgen.swift --markdown`.
+- [ ] Every `TODO` is `TODO(#N): reason`.
+- [ ] No readback in the frame path, and no shell command per input event.
+- [ ] Follow-up work is filed as new issues: #…
+- [ ] The documents describe what was built, and `scripts/check-docs.sh` passes.

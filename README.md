@@ -13,16 +13,16 @@ The generated `.app` is a thin launcher that never changes. The APK, the app's d
 
 ## Status
 
-The documentation baseline is complete. Implementation is proceeding from task #001 in milestone M0 ([docs/04-plan/roadmap.md](docs/04-plan/roadmap.md)).
+Android boots on Virtualization.framework (G2) and renders through VirGL to Metal (G3). Input, multiple windows, and the resident runtime are implemented and wait for verification on a real Mac. The gates and their results are in [docs/04-plan/roadmap.md](docs/04-plan/roadmap.md) §2; task status is in the GitHub issues.
 
-| Milestone | Version | Result |
-|---|---|---|
-| M0–M2, part of M3 | v0.1 | An Android app in a Mac window (GPU-accelerated, mouse and keyboard) |
-| rest of M3, M4 | v0.2 | Several apps in several windows; a resident runtime (`apkrund`) |
-| M5, M6 | v0.3 | The package store and automatic updates |
-| M7 | v0.4 | APK → Mac app wrappers; first public demo |
-| M8–M11 | v0.5 | Real update sources, desktop integration, runtime maintenance, diagnostics |
-| M12 | v1.0 | Release |
+| Version | Result |
+|---|---|
+| v0.1 | An Android app in a Mac window (GPU-accelerated, mouse and keyboard) |
+| v0.2 | Several apps in several windows; a resident runtime (`apkrund`) |
+| v0.3 | The package store and automatic updates |
+| v0.4 | APK → Mac app wrappers; first public demo |
+| v0.5 | Real update sources, desktop integration, runtime maintenance, diagnostics |
+| v1.0 | Release |
 
 ## Requirements
 
@@ -50,9 +50,9 @@ The details are in [docs/01-architecture/overview.md](docs/01-architecture/overv
 
 ## Documentation
 
-- [docs/README.md](docs/README.md) is the map of the documentation and its conventions.
-- [AGENTS.md](AGENTS.md) holds the rules for everyone who implements APKRun, humans and AI coding agents.
-- [docs/04-plan/issues/README.md](docs/04-plan/issues/README.md) lists every implementation task, #001–#097.
+- [AGENTS.md](AGENTS.md): the rules for everyone who implements APKRun, humans and AI agents, and how to do a task.
+- [docs/README.md](docs/README.md): the map of the specification and its conventions.
+- [docs/04-plan/issues/README.md](docs/04-plan/issues/README.md): every implementation task, in working order.
 
 ## Repository layout
 

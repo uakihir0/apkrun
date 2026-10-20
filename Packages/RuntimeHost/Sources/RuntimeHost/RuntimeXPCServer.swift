@@ -1077,6 +1077,7 @@ extension RuntimeTerminateControlRequest: VersionedControlRequest {}
 extension RuntimeImportPackageControlRequest: VersionedControlRequest {}
 extension RuntimeInstallImportedControlRequest: VersionedControlRequest {}
 extension RuntimeBeginInstallImportedControlRequest: VersionedControlRequest {}
+extension RuntimeBeginUninstallPackageControlRequest: VersionedControlRequest {}
 extension RuntimeCancelOperationControlRequest: VersionedControlRequest {}
 extension RuntimeListOperationsControlRequest: VersionedControlRequest {}
 extension RuntimeOperationStatusControlRequest: VersionedControlRequest {}
@@ -1096,6 +1097,7 @@ enum RuntimeControlOperation {
     case importPackage
     case installImported
     case beginInstallImported
+    case beginUninstallPackage
     case cancelOperation
     case listOperations
     case operationStatus
@@ -1113,6 +1115,7 @@ enum RuntimeControlOperation {
             }
         case .startRuntime, .stopRuntime, .restartRuntime, .resetRuntime,
             .importPackage, .installImported, .beginInstallImported,
+            .beginUninstallPackage,
             .cancelOperation, .listOperations, .operationStatus:
             switch clientKind {
             case .app, .menuBar, .cli:
@@ -1522,6 +1525,58 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeBeginInstallImportedControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func beginUninstallPackage(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeBeginUninstallPackageControlReply(error: Self.rejection(for: admission).wireError)
+                )
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .beginUninstallPackage,
+                as: RuntimeBeginUninstallPackageControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeBeginUninstallPackageControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeBeginUninstallPackageControlRequest.self,
+                    from: request
+                ),
+                let operationID = RuntimeAPI.OperationID(rawValue: decoded.header.operationID)
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeBeginUninstallPackageControlReply(error: Self.malformedWireError)
+                    )
+                )
+                return
+            }
+            do {
+                let handle = try await host.beginUninstallPackage(
+                    decoded.request,
+                    operationID: operationID,
+                    clientKind: clientKind
+                )
+                response.send(Self.encode(RuntimeBeginUninstallPackageControlReply(result: handle)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeBeginUninstallPackageControlReply(error: wireError)))
             }
         }
     }

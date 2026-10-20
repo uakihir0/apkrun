@@ -7,7 +7,7 @@ import RuntimeCore
 ///
 /// It composes the RuntimeCore registry with the embedded development boot. The API remains narrow: display 0, one
 /// package session, and the stop policy that finishes the package's tasks.
-public actor EmbeddedRuntimeService: RuntimeSessionService {
+public actor EmbeddedRuntimeService: RuntimeSessionService, PackageUninstallSessionEnding {
     private let registry: SessionRegistry
     private var sessionID: SessionID?
     private var packageID: String?
@@ -102,7 +102,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         }
         switch await Self.stopApplication(package: packageID, using: guestAgent) {
         case .success(true):
-            _ = await registry.stopCompleted(packageID: packageID)
+            _ = await registry.stopCompleted(sessionID: sessionID)
             taskID = nil
         case .success(false):
             _ = await registry.stopFailed(packageID: packageID)
@@ -302,7 +302,9 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
         switch await Self.forceStopApplication(package: requestedPackage, using: guestAgent) {
         case .success(true):
             if hadSession {
-                _ = await registry.stopCompleted(packageID: requestedPackage)
+                if let current {
+                    _ = await registry.stopCompleted(sessionID: current.id)
+                }
                 taskID = nil
             }
             return RuntimeTerminateResult(packageID: request.packageID, hadSession: hadSession)
@@ -320,6 +322,60 @@ public actor EmbeddedRuntimeService: RuntimeSessionService {
                 _ = await registry.stopFailed(packageID: requestedPackage)
             }
             throw Self.wireError(for: failure)
+        }
+    }
+
+    /// Closes this package's active window with the package-removal reason before uninstall.
+    func endSessionForPackageUninstall(_ request: RuntimeTerminateRequest) async throws(RuntimeWireError) {
+        await acquireSessionOperation()
+        defer { releaseSessionOperation() }
+
+        let package = request.packageID.rawValue
+        guard let current = await registry.session(packageID: package) else { return }
+        guard let guestAgent else {
+            throw .runtime(
+                "guestAgentUnavailable",
+                message: "The Android Guest Agent is unavailable.",
+                remediation: "Boot Android with the development Guest Agent, then retry."
+            )
+        }
+        guard current.state != .closing else {
+            throw .runtime(
+                "operationInProgress",
+                message: "The app window is already closing.",
+                remediation: "Wait for the window to close, then retry the uninstall."
+            )
+        }
+        await inputRoute?.unbind()
+        var shouldForceStop = true
+        do {
+            _ = try await windowClosed()
+        } catch {
+            guard let latest = await registry.session(current.id), latest.state.isEnded else {
+                throw Self.wireError(for: error)
+            }
+            shouldForceStop = false
+        }
+
+        if shouldForceStop {
+            switch await Self.forceStopApplication(package: package, using: guestAgent) {
+            case .success(true):
+                _ = await registry.stopCompleted(sessionID: current.id, endReason: .packageUninstalled)
+                taskID = nil
+            case .success(false):
+                _ = await registry.stopFailed(packageID: package)
+                throw .runtime(
+                    "guestAgentOperationFailed",
+                    message: "Android still reports tasks for this app.",
+                    remediation: "Wait for the app to close, then try again."
+                )
+            case .failure(let failure):
+                _ = await registry.stopFailed(packageID: package)
+                throw Self.wireError(for: failure)
+            }
+        } else {
+            _ = await registry.stopCompleted(sessionID: current.id, endReason: .packageUninstalled)
+            taskID = nil
         }
     }
 

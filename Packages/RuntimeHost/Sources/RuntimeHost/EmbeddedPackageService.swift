@@ -26,6 +26,11 @@ struct RuntimePackageInstallResult: Sendable {
     }
 }
 
+struct RuntimePackageUninstallResult: Sendable {
+    let change: PackageChange?
+    let cleanupDeferred: Bool
+}
+
 /// The embedded RuntimeAPI implementation for APK imports and package management.
 ///
 /// Import previews are host-only and work before Android starts. Guest-dependent operations
@@ -122,6 +127,11 @@ public actor EmbeddedPackageService: RuntimeService {
         runtimeAttached = false
     }
 
+    /// Reuses the daemon's session owner when package operations run over XPC.
+    func setSessionService(_ sessionService: any RuntimeSessionService) {
+        self.sessionService = sessionService
+    }
+
     /// Launches an installed package in the embedded runtime through the Guest Agent.
     public func launch(_ request: RuntimeLaunchRequest) async throws(RuntimeWireError) -> RuntimeLaunchResult {
         try await sessionService.launch(request)
@@ -160,6 +170,25 @@ public actor EmbeddedPackageService: RuntimeService {
         _ request: RuntimeInstallImportedRequest
     ) async throws(RuntimeWireError) -> RuntimePackageSummary {
         try await installImportedWithChange(request).summary
+    }
+
+    /// Resolves the package for a pending install ticket without starting Android.
+    func packageIDForInstall(_ request: RuntimeInstallImportedRequest) async throws(RuntimeWireError)
+        -> RuntimePackageID
+    {
+        do {
+            try await ensureOpen()
+            guard let ticket = UUID(uuidString: request.ticket.rawValue) else {
+                throw EmbeddedPackageServiceFailure.invalidTicket
+            }
+            let packageID = try await store.packageIDForImportTicket(ticket)
+            guard let runtimePackageID = RuntimePackageID(rawValue: packageID.rawValue) else {
+                throw EmbeddedPackageServiceFailure.invalidTicket
+            }
+            return runtimePackageID
+        } catch {
+            throw Self.wireError(for: error)
+        }
     }
 
     /// Installs an import and reports the store change that occurred.
@@ -214,6 +243,20 @@ public actor EmbeddedPackageService: RuntimeService {
     public func uninstallPackage(
         _ request: RuntimeUninstallPackageRequest
     ) async throws(RuntimeWireError) {
+        _ = try await uninstallPackageWithChange(request)
+    }
+
+    /// Uninstalls through Android or forgets the host record, preserving the event distinction.
+    func uninstallPackageWithChange(
+        _ request: RuntimeUninstallPackageRequest
+    ) async throws(RuntimeWireError) -> RuntimePackageUninstallResult {
+        guard !request.options.forget || !request.options.keepData else {
+            throw .runtime(
+                "malformedRequest",
+                message: "A package cannot be forgotten while retaining its Android data.",
+                remediation: "Choose either `--forget` or `--keep-data`, not both."
+            )
+        }
         do {
             try await ensureOpen()
             guard let packageID = PackageID(rawValue: request.packageID.rawValue) else {
@@ -221,10 +264,23 @@ public actor EmbeddedPackageService: RuntimeService {
             }
             if request.options.forget {
                 try await store.forget(packageID: packageID)
+                return RuntimePackageUninstallResult(change: nil, cleanupDeferred: false)
             } else {
-                try await store.uninstall(packageID: packageID, keepData: request.options.keepData)
+                if let sessionEnding = sessionService as? any PackageUninstallSessionEnding {
+                    try await sessionEnding.endSessionForPackageUninstall(
+                        RuntimeTerminateRequest(packageID: request.packageID)
+                    )
+                }
+                let outcome = try await store.uninstallWithOutcome(
+                    packageID: packageID,
+                    keepData: request.options.keepData
+                )
+                try? await refreshAndroidInventory()
+                return RuntimePackageUninstallResult(
+                    change: .removed(request.packageID, keptData: outcome.keptData),
+                    cleanupDeferred: outcome.cleanupDeferred
+                )
             }
-            try? await refreshAndroidInventory()
         } catch {
             throw Self.wireError(for: error)
         }

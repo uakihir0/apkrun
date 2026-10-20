@@ -10,7 +10,7 @@ import RuntimeCore
 ///
 /// This service owns no window. It drains each lease's frame stream and acknowledges frames as discarded, then marks
 /// the session running as soon as Android confirms the launch operation.
-public actor DaemonHeadlessSessionService: RuntimeSessionService {
+public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageUninstallSessionEnding {
     private let guestAgent: any DaemonHeadlessGuestAgent
     private let displayPool: DisplayPool
     private let registry: SessionRegistry
@@ -222,30 +222,80 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService {
         guard isInstalled else {
             throw Self.packageNotInstalledError
         }
+        var shouldForceStop = true
         if current.state != .closing {
             do throws(SessionRegistryFailure) {
                 _ = try await registry.transition(current.id, to: .closing)
             } catch {
-                throw Self.wireError(for: error)
+                guard let latest = await registry.session(current.id), Self.isEnded(latest.state) else {
+                    throw Self.wireError(for: error)
+                }
+                shouldForceStop = false
             }
         }
 
-        let stopped: Bool
-        do throws(GuestAgentFailure) {
-            stopped = try await guestAgent.forceStopApplication(package: packageID)
-        } catch {
-            _ = await registry.stopFailed(packageID: packageID)
-            throw Self.wireError(for: error)
-        }
-        guard stopped else {
-            _ = await registry.stopFailed(packageID: packageID)
-            throw Self.guestTasksStillRunningError
+        if shouldForceStop {
+            let stopped: Bool
+            do throws(GuestAgentFailure) {
+                stopped = try await guestAgent.forceStopApplication(package: packageID)
+            } catch {
+                _ = await registry.stopFailed(packageID: packageID)
+                throw Self.wireError(for: error)
+            }
+            guard stopped else {
+                _ = await registry.stopFailed(packageID: packageID)
+                throw Self.guestTasksStillRunningError
+            }
         }
 
         await stopDrainingFrames(for: current.id)
-        _ = await registry.stopCompleted(packageID: packageID)
+        _ = await registry.stopCompleted(sessionID: current.id)
         forgetSession(packageID: packageID, sessionID: current.id)
         return RuntimeTerminateResult(packageID: request.packageID, hadSession: true)
+    }
+
+    /// Closes an active session with the package-removal reason before the store uninstalls Android's package.
+    func endSessionForPackageUninstall(_ request: RuntimeTerminateRequest) async throws(RuntimeWireError) {
+        guard await acquireOperation() else {
+            throw Self.shuttingDownError
+        }
+        defer { releaseOperation() }
+        await ensureGuestObservation()
+        guard !isShuttingDown else {
+            throw Self.shuttingDownError
+        }
+
+        let packageID = request.packageID.rawValue
+        guard let current = await registry.session(packageID: packageID) else { return }
+        var shouldForceStop = true
+        if current.state != .closing {
+            do throws(SessionRegistryFailure) {
+                _ = try await registry.transition(current.id, to: .closing)
+            } catch {
+                guard let latest = await registry.session(current.id), Self.isEnded(latest.state) else {
+                    throw Self.wireError(for: error)
+                }
+                shouldForceStop = false
+            }
+        }
+
+        if shouldForceStop {
+            let stopped: Bool
+            do throws(GuestAgentFailure) {
+                stopped = try await guestAgent.forceStopApplication(package: packageID)
+            } catch {
+                _ = await registry.stopFailed(packageID: packageID)
+                throw Self.wireError(for: error)
+            }
+            guard stopped else {
+                _ = await registry.stopFailed(packageID: packageID)
+                throw Self.guestTasksStillRunningError
+            }
+        }
+
+        await stopDrainingFrames(for: current.id)
+        _ = await registry.stopCompleted(sessionID: current.id, endReason: .packageUninstalled)
+        forgetSession(packageID: packageID, sessionID: current.id)
     }
 
     static func terminateWithoutSession(

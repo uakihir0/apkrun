@@ -264,6 +264,10 @@ func embeddedPackageServiceImportsIndexedFileHandlesWithoutStartingAndroid() asy
     #expect(preview.displayName == "Hello Text")
     #expect(preview.relation == .newPackage)
     #expect(preview.files.count == 1)
+    #expect(
+        try await service.packageIDForInstall(RuntimeInstallImportedRequest(ticket: preview.ticket))
+            == preview.packageID
+    )
     #expect(try handle.offset() == 4)
     #expect(try await service.listPackages(RuntimeListPackagesRequest()).packages == [])
     let stagingRoot = paths.packagesDirectory.appendingPathComponent(".client-imports", isDirectory: true)

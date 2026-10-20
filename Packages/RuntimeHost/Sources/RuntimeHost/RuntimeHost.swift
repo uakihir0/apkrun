@@ -81,15 +81,16 @@ public actor RuntimeHost {
     private var shutdownCompleted = false
     private var activeLifecycleOperations = 0
     private var activeRuntimeStarts = 0
-    private var activePackageInstalls = 0
+    private var activePackageMutations = 0
     private var runtimeStartTask: Task<Result<Void, RuntimeHostError>, Never>?
     private var isRuntimeStopping = false
     private var isRuntimeResetting = false
     private var isRuntimeRestarting = false
     private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
-    private var packageInstallWaiters: [CheckedContinuation<Void, Never>] = []
+    private var packageMutationWaiters: [CheckedContinuation<Void, Never>] = []
     private var shutdownWaiters: [CheckedContinuation<Void, Never>] = []
     private var trackedOperations: [WireOperationID: RuntimeTrackedOperation] = [:]
+    private var packageActivityReservations = PackageActivityReservations()
 
     /// Creates a daemon host for the current user.
     public init(
@@ -262,9 +263,21 @@ public actor RuntimeHost {
         try await startRuntimeBody(reason: reason)
     }
 
-    private func startRuntimeBody(reason: StartReason) async throws(RuntimeHostError) {
-        try await waitForStartupCompletion()
-        try beginLifecycleOperation()
+    private func startRuntimeForPackageMutation(reason: StartReason) async throws(RuntimeHostError) {
+        guard activePackageMutations > 0 else {
+            throw .invalidTransition
+        }
+        activeRuntimeStarts += 1
+        defer { activeRuntimeStarts -= 1 }
+        try await startRuntimeBody(reason: reason, allowingReservedPackageMutation: true)
+    }
+
+    private func startRuntimeBody(
+        reason: StartReason,
+        allowingReservedPackageMutation: Bool = false
+    ) async throws(RuntimeHostError) {
+        try await waitForStartupCompletion(allowingReservedPackageMutation: allowingReservedPackageMutation)
+        try beginLifecycleOperation(allowingReservedPackageMutation: allowingReservedPackageMutation)
         defer { finishLifecycleOperation() }
 
         if let runtimeStartTask {
@@ -275,7 +288,10 @@ public actor RuntimeHost {
         let task = Task { [weak self] () -> Result<Void, RuntimeHostError> in
             guard let self else { return .failure(.notStarted) }
             do {
-                try await self.performRuntimeStart(reason: reason)
+                try await self.performRuntimeStart(
+                    reason: reason,
+                    allowingReservedPackageMutation: allowingReservedPackageMutation
+                )
                 return .success(())
             } catch let error as RuntimeHostError {
                 return .failure(error)
@@ -288,7 +304,10 @@ public actor RuntimeHost {
         try await task.value.get()
     }
 
-    private func performRuntimeStart(reason: StartReason) async throws(RuntimeHostError) {
+    private func performRuntimeStart(
+        reason: StartReason,
+        allowingReservedPackageMutation: Bool
+    ) async throws(RuntimeHostError) {
         if let startupFailure {
             throw .startupFailed(step: startupFailure.step, code: startupFailure.code)
         }
@@ -339,7 +358,7 @@ public actor RuntimeHost {
         } catch {
             throw .image(error)
         }
-        guard !isShuttingDown else {
+        guard !isShuttingDown || allowingReservedPackageMutation || activePackageMutations > 0 else {
             throw .shuttingDown
         }
         bootProgressEstimator = BootProgressEstimator(
@@ -383,7 +402,7 @@ public actor RuntimeHost {
     /// Stops Android but keeps the daemon available for a later request.
     public func stopRuntime() async throws(RuntimeHostError) {
         guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, activeRuntimeStarts == 0,
-            activePackageInstalls == 0
+            activePackageMutations == 0
         else {
             throw .invalidTransition
         }
@@ -395,7 +414,7 @@ public actor RuntimeHost {
     /// Restarts Android under one reserved lifecycle transition.
     public func restartRuntime(reason: StartReason) async throws(RuntimeHostError) {
         guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, activeRuntimeStarts == 0,
-            activePackageInstalls == 0
+            activePackageMutations == 0
         else {
             throw .invalidTransition
         }
@@ -421,7 +440,7 @@ public actor RuntimeHost {
     /// Clears the automatic boot-loop guard without starting Android or deleting user data.
     public func resetRuntime() async throws(RuntimeHostError) -> RuntimeHostStatus {
         guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, activeRuntimeStarts == 0,
-            activePackageInstalls == 0
+            activePackageMutations == 0
         else {
             throw .invalidTransition
         }
@@ -469,6 +488,8 @@ public actor RuntimeHost {
     /// Debug-only headless acceptance hook. The headless session owns a DisplayPool lease and
     /// leaves frame surfaces unconsumed.
     public func launch(_ request: RuntimeLaunchRequest) async throws(RuntimeWireError) -> RuntimeLaunchResult {
+        try beginPackageLaunch(request.packageID)
+        defer { finishPackageLaunch(request.packageID) }
         guard headlessLaunchHookIsEnabled else {
             throw Self.launchUnavailableError
         }
@@ -477,7 +498,9 @@ public actor RuntimeHost {
         } catch {
             throw Self.sessionWireError(for: error)
         }
+        try requirePackageLaunchAllowed(request.packageID)
         let service = try await makeHeadlessSessionService()
+        try requirePackageLaunchAllowed(request.packageID)
         return try await service.launch(request)
     }
 
@@ -514,14 +537,25 @@ public actor RuntimeHost {
     public func installImported(
         _ request: RuntimeInstallImportedRequest
     ) async throws(RuntimeWireError) -> RuntimePackageSummary {
+        let packageID = try await resolvePackageIDForInstall(request)
+        try reservePackageInstall(packageID)
         do {
-            try beginPackageInstall()
+            try beginPackageMutation()
         } catch {
+            packageActivityReservations.finishInstall(packageID: packageID.rawValue)
             throw Self.sessionWireError(for: error)
         }
-        defer { finishPackageInstall() }
+        defer {
+            packageActivityReservations.finishInstall(packageID: packageID.rawValue)
+            finishPackageMutation()
+        }
 
-        return try await performInstallImported(request, clientKind: nil, operationID: nil)
+        return try await performInstallImported(
+            request,
+            packageID: packageID,
+            clientKind: nil,
+            operationID: nil
+        )
     }
 
     /// Begins a daemon-owned install and returns its handle before Android starts or installs the APK.
@@ -532,7 +566,7 @@ public actor RuntimeHost {
         _ request: RuntimeInstallImportedRequest,
         operationID requestedID: WireOperationID,
         clientKind: RuntimeClientKind
-    ) throws(RuntimeWireError) -> OperationHandle {
+    ) async throws(RuntimeWireError) -> OperationHandle {
         let requestPayload: Data
         do {
             let encoder = JSONEncoder()
@@ -555,9 +589,35 @@ public actor RuntimeHost {
             return existing.handle
         }
 
+        let packageID: RuntimePackageID
         do {
-            try beginPackageInstall()
+            packageID = try await resolvePackageIDForInstall(request)
         } catch {
+            if let existing = trackedOperations[requestedID] {
+                guard existing.handle.kind == .install, existing.requestPayload == requestPayload else {
+                    throw .runtime(
+                        "malformedRequest",
+                        message: "The operation ID is already being used for a different request."
+                    )
+                }
+                return existing.handle
+            }
+            throw error
+        }
+        if let existing = trackedOperations[requestedID] {
+            guard existing.handle.kind == .install, existing.requestPayload == requestPayload else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The operation ID is already being used for a different request."
+                )
+            }
+            return existing.handle
+        }
+        try reservePackageInstall(packageID)
+        do {
+            try beginPackageMutation()
+        } catch {
+            packageActivityReservations.finishInstall(packageID: packageID.rawValue)
             throw Self.sessionWireError(for: error)
         }
 
@@ -565,6 +625,8 @@ public actor RuntimeHost {
         let snapshot = OperationSnapshot(
             operationID: requestedID,
             kind: .install,
+            packageID: packageID,
+            requestFingerprint: RuntimeOperationRequestFingerprint.make(from: requestPayload),
             clientKind: clientKind,
             startedAt: Date(),
             progress: OperationProgress(stage: "startingRuntime", message: "Starting Android…")
@@ -584,12 +646,110 @@ public actor RuntimeHost {
                 await OperationContext.$current.withValue(context) {
                     await self.runInstallOperation(
                         request,
+                        packageID: packageID,
                         operationID: requestedID,
                         clientKind: clientKind
                     )
                 }
             } else {
-                await self.runInstallOperation(request, operationID: requestedID, clientKind: clientKind)
+                await self.runInstallOperation(
+                    request,
+                    packageID: packageID,
+                    operationID: requestedID,
+                    clientKind: clientKind
+                )
+            }
+        }
+        trackedOperations[requestedID]?.task = task
+        return handle
+    }
+
+    /// Begins a daemon-owned uninstall or host-only forget and returns its handle immediately.
+    func beginUninstallPackage(
+        _ request: RuntimeUninstallPackageRequest,
+        operationID requestedID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) throws(RuntimeWireError) -> OperationHandle {
+        guard !request.options.forget || !request.options.keepData else {
+            throw Self.incompatibleUninstallOptionsError
+        }
+
+        let requestPayload: Data
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            requestPayload = try encoder.encode(request)
+        } catch {
+            throw .runtime(
+                "malformedRequest",
+                message: "APKRun's background service couldn't read the request."
+            )
+        }
+
+        if let existing = trackedOperations[requestedID] {
+            guard existing.handle.kind == .uninstall, existing.requestPayload == requestPayload else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The operation ID is already being used for a different request."
+                )
+            }
+            return existing.handle
+        }
+
+        do {
+            if request.options.forget {
+                try packageActivityReservations.beginForget(packageID: request.packageID.rawValue)
+            } else {
+                try packageActivityReservations.beginUninstall(packageID: request.packageID.rawValue)
+            }
+        } catch {
+            throw Self.packageOperationInProgressError
+        }
+        do {
+            try beginPackageMutation()
+        } catch {
+            if request.options.forget {
+                packageActivityReservations.finishForget(packageID: request.packageID.rawValue)
+            } else {
+                packageActivityReservations.finishUninstall(packageID: request.packageID.rawValue)
+            }
+            throw Self.sessionWireError(for: error)
+        }
+
+        let handle = OperationHandle(operationID: requestedID, kind: .uninstall)
+        let snapshot = OperationSnapshot(
+            operationID: requestedID,
+            kind: .uninstall,
+            packageID: request.packageID,
+            requestFingerprint: RuntimeOperationRequestFingerprint.make(from: requestPayload),
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(
+                stage: request.options.forget ? "updatingStore" : "startingRuntime",
+                message: request.options.forget ? "Updating APKRun's package store…" : "Starting Android…"
+            )
+        )
+        trackedOperations[requestedID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: requestPayload,
+            snapshot: snapshot,
+            isCancellable: true,
+            task: nil
+        )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: requestedID)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            if let diagnosticsID = DiagnosticsCore.OperationID(wire: requestedID.wireValue) {
+                let context = OperationContext(operationID: diagnosticsID)
+                await OperationContext.$current.withValue(context) {
+                    await self.runUninstallOperation(
+                        request,
+                        operationID: requestedID,
+                        clientKind: clientKind
+                    )
+                }
+            } else {
+                await self.runUninstallOperation(request, operationID: requestedID, clientKind: clientKind)
             }
         }
         trackedOperations[requestedID]?.task = task
@@ -618,7 +778,7 @@ public actor RuntimeHost {
         return operation.snapshot
     }
 
-    /// Requests cancellation before the PackageStore guest-install phase begins.
+    /// Requests cancellation before an install or uninstall enters its guest transaction.
     func cancelOperation(_ operationID: WireOperationID) throws(RuntimeWireError) -> CancelReply {
         guard let operation = trackedOperations[operationID] else {
             throw Self.operationNotFoundError
@@ -627,7 +787,11 @@ public actor RuntimeHost {
             return .alreadyFinished(result)
         }
         guard operation.isCancellable else {
-            return .notCancellable(reason: "Android package installation has started and will continue.")
+            let reason =
+                operation.handle.kind == .uninstall
+                ? "Android package removal has started and will continue."
+                : "Android package installation has started and will continue."
+            return .notCancellable(reason: reason)
         }
         operation.task?.cancel()
         trackedOperations[operationID] = operation
@@ -647,13 +811,18 @@ public actor RuntimeHost {
 
     private func runInstallOperation(
         _ request: RuntimeInstallImportedRequest,
+        packageID: RuntimePackageID,
         operationID: WireOperationID,
         clientKind: RuntimeClientKind
     ) async {
-        defer { finishPackageInstall() }
+        defer {
+            packageActivityReservations.finishInstall(packageID: packageID.rawValue)
+            finishPackageMutation()
+        }
         do {
             let result = try await performInstallImported(
                 request,
+                packageID: packageID,
                 clientKind: clientKind,
                 operationID: operationID
             )
@@ -673,13 +842,50 @@ public actor RuntimeHost {
         }
     }
 
+    private func runUninstallOperation(
+        _ request: RuntimeUninstallPackageRequest,
+        operationID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) async {
+        defer {
+            if request.options.forget {
+                packageActivityReservations.finishForget(packageID: request.packageID.rawValue)
+            } else {
+                packageActivityReservations.finishUninstall(packageID: request.packageID.rawValue)
+            }
+            finishPackageMutation()
+        }
+        do {
+            try await performUninstallPackage(
+                request,
+                clientKind: clientKind,
+                operationID: operationID
+            )
+            finishOperation(operationID, result: .succeeded(.none))
+            logger?.notice(
+                "Package uninstall operation completed for \(request.packageID.rawValue, .public)"
+            )
+        } catch {
+            if Task.isCancelled {
+                finishOperation(operationID, result: .cancelled)
+                logger?.notice("Package uninstall operation was cancelled")
+                return
+            }
+            let wireError = Self.operationWireError(for: error)
+            finishOperation(operationID, result: .failed(wireError))
+            logger?.error("Package uninstall operation failed", errorCode: wireError.code)
+        }
+    }
+
     private func performInstallImported(
         _ request: RuntimeInstallImportedRequest,
+        packageID: RuntimePackageID,
         clientKind: RuntimeClientKind?,
         operationID: WireOperationID?
     ) async throws(RuntimeWireError) -> RuntimePackageSummary {
         let service = packageQueryServiceInstance()
         try await service.open()
+        try await waitForPackageLaunches(packageID.rawValue)
         do {
             try Task.checkCancellation()
         } catch {
@@ -687,7 +893,7 @@ public actor RuntimeHost {
         }
 
         do {
-            try await startRuntime(reason: clientKind == .cli ? .cli : .user)
+            try await startRuntimeForPackageMutation(reason: clientKind == .cli ? .cli : .user)
         } catch {
             throw Self.sessionWireError(for: error)
         }
@@ -699,7 +905,11 @@ public actor RuntimeHost {
             }
             // PackageStore currently makes the guest install a single transaction call. From this
             // point it reconciles ambiguous guest results and must run to a terminal journal state.
-            setInstallNotCancellable(operationID)
+            setPackageMutationNotCancellable(
+                operationID,
+                stage: "installing",
+                message: "Installing the Android package…"
+            )
         }
         let installResult = try await service.installImportedWithChange(request)
         if installResult.cleanupDeferred {
@@ -710,6 +920,63 @@ public actor RuntimeHost {
         }
         eventHub.publishPackageChange(installResult.change, operationID: operationID)
         return installResult.summary
+    }
+
+    private func performUninstallPackage(
+        _ request: RuntimeUninstallPackageRequest,
+        clientKind: RuntimeClientKind,
+        operationID: WireOperationID
+    ) async throws(RuntimeWireError) {
+        guard !request.options.forget || !request.options.keepData else {
+            throw Self.incompatibleUninstallOptionsError
+        }
+        let service = packageQueryServiceInstance()
+        if let headlessSessionService {
+            await service.setSessionService(headlessSessionService)
+        }
+        try await service.open()
+        do {
+            try Task.checkCancellation()
+        } catch {
+            throw Self.cancelledOperationError
+        }
+        if !request.options.forget {
+            try await waitForPackageLaunches(request.packageID.rawValue)
+        }
+
+        if !request.options.forget {
+            do {
+                try await startRuntimeForPackageMutation(reason: clientKind == .cli ? .cli : .user)
+            } catch {
+                throw Self.sessionWireError(for: error)
+            }
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+            if let headlessSessionService {
+                await service.setSessionService(headlessSessionService)
+            }
+            guard !Task.isCancelled else {
+                throw Self.cancelledOperationError
+            }
+        }
+
+        // A guest uninstall has no safe cancellation point after its Store Agent transaction begins.
+        setPackageMutationNotCancellable(
+            operationID,
+            stage: request.options.forget ? "updatingStore" : "uninstalling",
+            message: request.options.forget
+                ? "Updating APKRun's package store…"
+                : "Uninstalling the Android package…"
+        )
+        let result = try await service.uninstallPackageWithChange(request)
+        if result.cleanupDeferred {
+            logger?.warning(
+                "Package uninstall committed; package-store cleanup is deferred",
+                errorCode: "store.cleanupDeferred"
+            )
+        }
+        if let change = result.change {
+            eventHub.publishPackageChange(change, operationID: operationID)
+        }
     }
 
     private static func operationWireError(for error: any Error) -> RuntimeWireError {
@@ -724,11 +991,76 @@ public actor RuntimeHost {
         }
         return .runtime(
             "internal",
-            message: "APKRun couldn't complete the package installation."
+            message: "APKRun couldn't complete the package operation."
         )
     }
 
-    private func setInstallNotCancellable(_ operationID: WireOperationID) {
+    private static let incompatibleUninstallOptionsError = RuntimeWireError.runtime(
+        "malformedRequest",
+        message: "A package cannot be forgotten while retaining its Android data.",
+        remediation: "Choose either `--forget` or `--keep-data`, not both."
+    )
+
+    private func requirePackageLaunchAllowed(_ packageID: RuntimePackageID) throws(RuntimeWireError) {
+        guard !packageActivityReservations.isUninstalling(packageID: packageID.rawValue),
+            !packageActivityReservations.isInstalling(packageID: packageID.rawValue)
+        else {
+            throw Self.packageOperationInProgressError
+        }
+    }
+
+    private func resolvePackageIDForInstall(
+        _ request: RuntimeInstallImportedRequest
+    ) async throws(RuntimeWireError) -> RuntimePackageID {
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        return try await service.packageIDForInstall(request)
+    }
+
+    private func reservePackageInstall(_ packageID: RuntimePackageID) throws(RuntimeWireError) {
+        do {
+            try packageActivityReservations.beginInstall(packageID: packageID.rawValue)
+        } catch {
+            throw Self.packageOperationInProgressError
+        }
+    }
+
+    private func beginPackageLaunch(_ packageID: RuntimePackageID) throws(RuntimeWireError) {
+        do {
+            try packageActivityReservations.beginLaunch(packageID: packageID.rawValue)
+        } catch {
+            throw Self.packageOperationInProgressError
+        }
+    }
+
+    private func finishPackageLaunch(_ packageID: RuntimePackageID) {
+        packageActivityReservations.finishLaunch(packageID: packageID.rawValue)
+    }
+
+    private func waitForPackageLaunches(_ package: String) async throws(RuntimeWireError) {
+        while packageActivityReservations.hasActiveLaunches(packageID: package) {
+            guard !Task.isCancelled else {
+                throw Self.cancelledOperationError
+            }
+            do {
+                try await Task.sleep(for: .milliseconds(25))
+            } catch {
+                throw Self.cancelledOperationError
+            }
+        }
+    }
+
+    private static let packageOperationInProgressError = RuntimeWireError.store(
+        "operationInProgress",
+        message: "APKRun is already changing this app's package state.",
+        remediation: "Wait for the package operation to finish, then try again."
+    )
+
+    private func setPackageMutationNotCancellable(
+        _ operationID: WireOperationID,
+        stage: String,
+        message: String
+    ) {
         guard var operation = trackedOperations[operationID], operation.snapshot.result == nil else {
             return
         }
@@ -738,11 +1070,12 @@ public actor RuntimeHost {
             parent: operation.snapshot.parent,
             kind: operation.snapshot.kind,
             packageID: operation.snapshot.packageID,
+            requestFingerprint: operation.snapshot.requestFingerprint,
             clientKind: operation.snapshot.clientKind,
             startedAt: operation.snapshot.startedAt,
             progress: OperationProgress(
-                stage: "installing",
-                message: "Installing the Android package…"
+                stage: stage,
+                message: message
             )
         )
         trackedOperations[operationID] = operation
@@ -768,6 +1101,7 @@ public actor RuntimeHost {
             parent: operation.snapshot.parent,
             kind: operation.snapshot.kind,
             packageID: packageID,
+            requestFingerprint: operation.snapshot.requestFingerprint,
             clientKind: operation.snapshot.clientKind,
             startedAt: operation.snapshot.startedAt,
             progress: operation.snapshot.progress,
@@ -1065,11 +1399,11 @@ public actor RuntimeHost {
             completeShutdown()
             return
         }
+        await waitForPackageMutations()
         if let service = headlessSessionService as? DaemonHeadlessSessionService {
             await service.shutdown()
         }
         headlessSessionService = nil
-        await waitForPackageInstalls()
         // Mark an in-flight VM start for cancellation before waiting for any storage work to finish.
         await supervisor?.stop(reason: .hostShutdown)
         await waitForLifecycleOperations()
@@ -1098,11 +1432,13 @@ public actor RuntimeHost {
         completeShutdown()
     }
 
-    private func beginLifecycleOperation() throws(RuntimeHostError) {
+    private func beginLifecycleOperation(
+        allowingReservedPackageMutation: Bool = false
+    ) throws(RuntimeHostError) {
         guard hasStarted else {
             throw .notStarted
         }
-        guard !isShuttingDown else {
+        guard !isShuttingDown || allowingReservedPackageMutation && activePackageMutations > 0 else {
             throw .shuttingDown
         }
         activeLifecycleOperations += 1
@@ -1118,19 +1454,19 @@ public actor RuntimeHost {
         }
     }
 
-    private func beginPackageInstall() throws(RuntimeHostError) {
+    private func beginPackageMutation() throws(RuntimeHostError) {
         guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
             throw .invalidTransition
         }
         try beginLifecycleOperation()
-        activePackageInstalls += 1
+        activePackageMutations += 1
     }
 
-    private func finishPackageInstall() {
-        activePackageInstalls -= 1
-        if activePackageInstalls == 0 {
-            let waiters = packageInstallWaiters
-            packageInstallWaiters.removeAll()
+    private func finishPackageMutation() {
+        activePackageMutations -= 1
+        if activePackageMutations == 0 {
+            let waiters = packageMutationWaiters
+            packageMutationWaiters.removeAll()
             for waiter in waiters {
                 waiter.resume()
             }
@@ -1138,10 +1474,10 @@ public actor RuntimeHost {
         finishLifecycleOperation()
     }
 
-    private func waitForPackageInstalls() async {
-        guard activePackageInstalls > 0 else { return }
+    private func waitForPackageMutations() async {
+        guard activePackageMutations > 0 else { return }
         await withCheckedContinuation { continuation in
-            packageInstallWaiters.append(continuation)
+            packageMutationWaiters.append(continuation)
         }
     }
 
@@ -1152,7 +1488,9 @@ public actor RuntimeHost {
         }
     }
 
-    private func waitForStartupCompletion() async throws(RuntimeHostError) {
+    private func waitForStartupCompletion(
+        allowingReservedPackageMutation: Bool = false
+    ) async throws(RuntimeHostError) {
         guard hasStarted else {
             throw .notStarted
         }
@@ -1165,7 +1503,7 @@ public actor RuntimeHost {
                 }
             }
         }
-        guard !isShuttingDown else {
+        guard !isShuttingDown || allowingReservedPackageMutation && activePackageMutations > 0 else {
             throw .shuttingDown
         }
         if hostState == "starting" {

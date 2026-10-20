@@ -164,6 +164,35 @@ func embeddedRuntimeServiceImplementsRuntimeLaunchAndTerminate() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceEndsAnActiveSessionBeforePackageUninstall() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent()
+    let service = EmbeddedRuntimeService()
+    await service.attachGuestAgent(guest)
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    _ = try await service.requestSession(packageID: package.rawValue)
+    _ = try await service.displayReady()
+    _ = try await service.beginLaunch()
+    _ = try await service.launched(taskID: 23)
+    _ = try await service.firstFramePresented()
+
+    try await service.endSessionForPackageUninstall(RuntimeTerminateRequest(packageID: package))
+
+    #expect(await service.currentSession()?.state == .ended(.packageUninstalled))
+    #expect(await guest.forceStoppedPackages == [package.rawValue])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceDoesNotRequireAGuestAgentWhenUninstallHasNoSession() async throws {
+    let service = EmbeddedRuntimeService()
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    try await service.endSessionForPackageUninstall(RuntimeTerminateRequest(packageID: package))
+
+    #expect(await service.currentSession() == nil)
+}
+
+@Test(.timeLimit(.minutes(1)))
 func embeddedRuntimeServiceRejectsLaunchWithoutAWindow() async throws {
     let guest = FakeEmbeddedSessionGuestAgent()
     let service = EmbeddedRuntimeService()

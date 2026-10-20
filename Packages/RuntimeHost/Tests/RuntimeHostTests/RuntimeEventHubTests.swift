@@ -152,14 +152,16 @@ func eventHubDeliversPackageChangesWithOperationContext() async throws {
     let operationID = OperationID()
     hub.publishPackageChange(.installed(summary), operationID: operationID)
     hub.publishPackageChange(.updated(summary, from: 7))
+    hub.publishPackageChange(.removed(packageID, keptData: true), operationID: operationID)
     try await Task.sleep(for: .milliseconds(60))
 
     let envelopes = try sink.envelopes()
-    #expect(envelopes.map(\.seq) == [1, 2])
-    #expect(envelopes.map(\.topic) == [.packages, .packages])
-    #expect(envelopes.map(\.operationID) == [operationID, nil])
+    #expect(envelopes.map(\.seq) == [1, 2, 3])
+    #expect(envelopes.map(\.topic) == [.packages, .packages, .packages])
+    #expect(envelopes.map(\.operationID) == [operationID, nil, operationID])
     #expect(envelopes[0].payload == .packages(.installed(summary)))
     #expect(envelopes[1].payload == .packages(.updated(summary, from: 7)))
+    #expect(envelopes[2].payload == .packages(.removed(packageID, keptData: true)))
 
     hub.remove(connectionID: connectionID)
 }

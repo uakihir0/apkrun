@@ -1,169 +1,149 @@
 # Diagnostics, observability, and performance measurement
 
-| Field | Value |
-|---|---|
-| Status | Baseline |
-| Related | [../01-architecture/modules.md](../01-architecture/modules.md) (DiagnosticsCore), [../01-architecture/filesystem-layout.md](../01-architecture/filesystem-layout.md) §2, [../01-architecture/security-model.md](../01-architecture/security-model.md), [runtime-daemon.md](runtime-daemon.md) §3.6, §9.1, §12, [cli.md](cli.md) §3, §4.8, [host-ui.md](host-ui.md) §9.8, [guest-protocol.md](guest-protocol.md) (`CollectDiagnostics`, `Health`), [../03-reference/error-catalog.md](../03-reference/error-catalog.md) |
-| Tasks | #061 diagnostics foundation (M0), #070 performance harness (M4), #059 `apkrun doctor` (M11), #060 diagnostics bundle (M11), #090 compatibility database (M12) |
-
-This document defines how APKRun reports errors, writes logs, measures performance, checks its own health, and packages all of that into a report a user can attach to a bug. Every subsystem design has a "Logging, markers, health" section. This document is the common model those sections plug into.
+This document defines error reporting, logging, performance markers, health checks, `apkrun doctor`, the diagnostics bundle, the performance harness, and the compatibility database. Subsystem documents add their log categories, markers, and health checks to this model.
 
 ---
 
 ## 1. Responsibilities and components
 
-`DiagnosticsCore` is a leaf module ([../01-architecture/modules.md](../01-architecture/modules.md) §2). It imports no other APKRun module, so every process can use it: apkrund, APKRun.app, APKRunMenuBar, the launcher, and the CLI.
+`DiagnosticsCore` is a leaf module ([modules.md](../01-architecture/modules.md) §2). Every process uses it.
 
-| Component (DiagnosticsCore) | Role | Section |
-|---|---|---|
-| `APKRunPaths` | every file path of [../01-architecture/filesystem-layout.md](../01-architecture/filesystem-layout.md) | — |
-| `BuildInfo` | version, build number, git commit, configuration (debug/release), embedded-runtime flag | §8.2 |
-| `APKRunError`, `ErrorDomain`, `RemediationAction`, `ErrorCatalog` | the error model and its texts | §2 |
-| `OperationID`, `OperationContext` | correlation of one user-visible operation across processes and into the guest | §2.4 |
-| `APKLogger`, `LogSubsystem`, `LogMessage`, `Sensitive<T>`, `LogSink`, `LogMirrorWriter` | the logging facade. `APKLogger` writes through the `LogSink` protocol: `os.Logger` in production, `RecordingLogSink` in tests | §3 |
-| `PerfMarker`, `Perf`, `PerfTimeline`, `PerfRecordWriter` | lifecycle markers and signposts | §4 |
-| `MetricsSampler`, `MetricsSnapshot` | process CPU and memory sampling | §5 |
-| `Redactor`, `RedactionRules` | redaction of everything that leaves the Mac in a report | §6 |
-| `HealthCheck`, `HealthResult`, `HealthReport`, `HealthCheckRegistry`, `HostChecks`, `DoctorFormatter` | the health model and `apkrun doctor` | §7 |
-| `DiagnosticsContributor`, `DiagnosticsBundleWriter`, `ZipWriter` | the diagnostics bundle | §8 |
-| `DiagnosticsContext` | the `Sendable` value that module entry points receive (for example `VMController.init`, [vm.md](vm.md) §2): the `LogSink`, the `HealthCheckRegistry`, the `PerfTimeline`, `APKRunPaths`, and a clock. `DiagnosticsContext.live(paths:)` builds the production value; `DiagnosticsContext.testing()` lives in `DiagnosticsCoreTestSupport` | — |
+| Component (DiagnosticsCore) | Section |
+|---|---|
+| `APKRunPaths` (every path of [filesystem-layout.md](../01-architecture/filesystem-layout.md)), `BuildInfo` | §8.2 |
+| `APKRunError`, `ErrorDomain`, `RemediationAction`, `ErrorCatalog` | §2 |
+| `OperationID`, `OperationContext` | §2.4 |
+| `APKLogger`, `LogSubsystem`, `LogMessage`, `Sensitive<T>`, `LogSink`, `LogMirrorWriter`. `LogSink` is `os.Logger` in production and `RecordingLogSink` in tests | §3 |
+| `PerfMarker`, `Perf`, `PerfTimeline`, `PerfRecordWriter` | §4 |
+| `MetricsSampler`, `MetricsSnapshot` | §5 |
+| `Redactor`, `RedactionRules` | §6 |
+| `HealthCheck`, `HealthResult`, `HealthReport`, `HealthCheckRegistry`, `HostChecks`, `DoctorFormatter` | §7 |
+| `DiagnosticsContributor`, `DiagnosticsBundleWriter`, `ZipWriter` | §8 |
+| `DiagnosticsContext`: the `Sendable` value that module entry points take (for example `VMController.init`, [vm.md](vm.md) §2). `DiagnosticsContext.live(paths:)` builds it; `DiagnosticsContext.testing()` is in `DiagnosticsCoreTestSupport` | — |
 
-Components outside DiagnosticsCore:
+Outside DiagnosticsCore:
 
 | Component | Module | Role |
 |---|---|---|
-| `DiagnosticsService` | RuntimeHost | serves the health, diagnostics, and statistics operations of the control endpoint (§7.6, §8.1); owns the apkrund `HealthCheckRegistry` and contributor list |
-| Health checks and contributors | each module | implement the checks listed in their design documents (§7.4) and contribute their bundle sections (§8.2) |
-| `CompatibilityDatabase`, `PackageSettingsResolver` | APKStoreCore | the compatibility database (§10) |
-| `apkrun-perf` | `Tests/PerformanceTests/` | the performance harness (§9) |
-| Wire types (`WireError`, `WireHealthReport`, `WirePerfStatistics`, `DiagnosticsRequest`) | RuntimeAPI | field-for-field copies of the DiagnosticsCore types. RuntimeAPI imports only Foundation and IOSurface ([../01-architecture/modules.md](../01-architecture/modules.md) §3), so RuntimeHost converts to wire types and RuntimeClient converts back. A round-trip test covers every type |
+| `DiagnosticsService` | RuntimeHost | serves health, diagnostics, and statistics operations (§7.6, §8.1); owns apkrund's registry and contributor list |
+| health checks, contributors | each module | implement the checks of their documents (§7.4) and bundle sections (§8.2) |
+| `CompatibilityDatabase`, `PackageSettingsResolver` | APKStoreCore | §10 |
+| `apkrun-perf` | `Tests/PerformanceTests/` | the harness (§9) |
+| wire types `WireError`, `WireHealthReport`, `WirePerfStatistics`, `DiagnosticsRequest` | RuntimeAPI | copies of the DiagnosticsCore types. RuntimeAPI imports only Foundation and IOSurface ([modules.md](../01-architecture/modules.md) §3); RuntimeHost converts to them, RuntimeClient back |
 
 ---
 
-## 2. Error model (#061, FR-CLI-02, NFR-DEV-03)
+## 2. Error model (FR-CLI-02, NFR-DEV-03)
 
 ### 2.1 `APKRunError`
 
-Every error that can reach a user is a typed domain error ([../01-architecture/overview.md](../01-architecture/overview.md), "Typed errors"). Each domain enum conforms to `APKRunError`:
+Every error that can reach a user is a typed domain error. Each domain enum conforms to `APKRunError`:
 
 ```swift
 public protocol APKRunError: Error, Sendable {
     static var domain: ErrorDomain { get }
-    var code: String { get }                          // the enum case name, stable: "downgradeRefused"
-    var parameters: [String: ErrorParameter] { get }  // public-safe values for the message template
-    var listItems: [ErrorListItem] { get }             // ordered typed details for list cases
-    var cause: (any APKRunError)? { get }             // a nested domain error, if any
-    var underlying: UnderlyingError? { get }          // a system error: domain and code only
+    var code: String { get }                          // the case name, stable: "downgradeRefused"
+    var parameters: [String: ErrorParameter] { get }  // public-safe values for the template
+    var listItems: [ErrorListItem] { get }            // ordered details of list cases
+    var cause: (any APKRunError)? { get }             // nested domain error
+    var underlying: UnderlyingError? { get }          // system error: domain and code only
 }
-
 public extension APKRunError {
     var qualifiedCode: String { "\(Self.domain.rawValue).\(code)" }   // "store.downgradeRefused"
-    var listItems: [ErrorListItem] { [] }
 }
-
 public enum ErrorParameter: Sendable, Codable, Equatable {
-    case text(String)            // must be public-safe: package ID, version name, app label, step name
-    case bytes(Int64)            // formatted with ByteCountFormatter
+    case text(String)        // public-safe: package ID, version name, app label, step name
+    case bytes(Int64)        // ByteCountFormatter
     case count(Int)
     case duration(Duration)
-    case fileName(String)        // last path component only. Full paths are never parameters
+    case fileName(String)    // last path component only. Full paths are never parameters
 }
-
 public enum ErrorListItemSelector: Codable, Sendable, Equatable {
     case errorCode(String)                       // fully qualified catalog code
     case variant(code: String, key: String)      // catalog code and variant key
 }
-
 public struct ErrorListItem: Codable, Sendable, Equatable {
     public let selector: ErrorListItemSelector
     public let parameters: [String: ErrorParameter]
 }
-
 public struct UnderlyingError: Sendable, Codable, Equatable {
     public var domain: String    // "VZErrorDomain", "NSPOSIXErrorDomain", "OSStatus"
-    public var code: Int         // userInfo is dropped: it may contain paths (NSFilePathErrorKey)
+    public var code: Int         // userInfo is dropped: it may contain paths
 }
 ```
 
-In #061, `listItems` is populated by `VMConfigurationFailure.configurationInvalid`;
-the child selectors and parameters retain validation order, including repeated
-codes. Health findings such as `runtime.hostRequirementsNotMet` use `ErrorInfo`
-and localized text, not this `APKRunError` list payload. RuntimeAPI transport
-adds a compatible wire field and round-trip coverage in #032.
+- `VMConfigurationFailure.configurationInvalid` fills `listItems` in validation order, including repeated codes. RuntimeAPI carries `listItems` in a compatible wire field.
+- Health findings (for example `runtime.hostRequirementsNotMet`) use `ErrorInfo`, not `listItems`.
 
-| Domain (`ErrorDomain`) | Swift type | Code prefix | Owner |
-|---|---|---|---|
-| `vm` | `VMFailure`, `VMConfigurationFailure` | `vm.` | VirtualMachineCore ([vm.md](vm.md)) |
-| `graphics` | `GraphicsFailure` | `graphics.` | GraphicsCore ([graphics.md](graphics.md)) |
-| `runtime` | `RuntimeFailure` | `runtime.` | RuntimeCore, RuntimeHost ([runtime-daemon.md](runtime-daemon.md)) |
-| `guestProtocol` | `GuestProtocolFailure` | `guestProtocol.` | GuestProtocol ([guest-protocol.md](guest-protocol.md)) |
-| `image` | `ImageFailure` | `image.` | ImageCore ([android-image.md](android-image.md)) |
-| `store` | `StoreFailure` | `store.` | APKStoreCore ([package-store.md](package-store.md)) |
-| `update` | `UpdateFailure` (with nested `ValidationFailure`, `HealthCheckFailure`) | `update.` | UpdateCore ([update-system.md](update-system.md)) |
-| `wrapper` | `WrapperFailure` | `wrapper.` | WrapperCore ([wrapper.md](wrapper.md)) |
-| `integration` | `IntegrationFailure` | `integration.` | IntegrationCore ([desktop-integration.md](desktop-integration.md)) |
-| `maintenance` | `MaintenanceFailure` | `maintenance.` | APKRun and image updates ([runtime-maintenance.md](runtime-maintenance.md)) |
-| `diagnostics` | `DiagnosticsFailure` | `diagnostics.` | DiagnosticsCore (this document, below) |
-| `cli` | `CLIFailure` | `cli.` | CLI ([cli.md](cli.md)), for example `cli.confirmationRequired` |
+| Domain (`ErrorDomain`) | Swift type | Owner |
+|---|---|---|
+| `vm` | `VMFailure`, `VMConfigurationFailure` | [vm.md](vm.md) |
+| `graphics` | `GraphicsFailure` | [graphics.md](graphics.md) |
+| `runtime` | `RuntimeFailure` | [runtime-daemon.md](runtime-daemon.md) |
+| `guestProtocol` | `GuestProtocolFailure` | [guest-protocol.md](guest-protocol.md) |
+| `image` | `ImageFailure` | [android-image.md](android-image.md) |
+| `store` | `StoreFailure` | [package-store.md](package-store.md) |
+| `update` | `UpdateFailure` (nested `ValidationFailure`, `HealthCheckFailure`) | [update-system.md](update-system.md) |
+| `wrapper` | `WrapperFailure` | [wrapper.md](wrapper.md) |
+| `integration` | `IntegrationFailure` | [desktop-integration.md](desktop-integration.md) |
+| `maintenance` | `MaintenanceFailure` | [runtime-maintenance.md](runtime-maintenance.md) §11 |
+| `diagnostics` | `DiagnosticsFailure` (below) | this document |
+| `cli` | `CLIFailure` (for example `cli.confirmationRequired`) | [cli.md](cli.md) |
 
-Rules:
+The code prefix is `<domain>.`.
 
-- A code never changes meaning once released. A removed case keeps its code reserved in the catalog (`"retired": true`).
-- Nested errors (`UpdateFailure.installFailed(StoreFailure)`) keep the outer code. The outer message may include `{cause}`, which renders the inner message. When the outer entry has no remediation, the inner one is used. JSON output carries the chain (`cause`).
-- Error codes, configuration keys, and health check IDs use the same `<domain>.<name>` shape but are separate namespaces. A catalog test fails if an error code equals a health check ID, so they cannot be confused in support conversations.
-- `fatalError` and `preconditionFailure` are for programming errors only. Anything caused by input, the guest, the host, or the network is a typed error.
+- A code never changes meaning once released. A removed case keeps its code reserved (`"retired": true`, §2.2).
+- A nested error keeps the outer code (`UpdateFailure.installFailed(StoreFailure)` keeps `update.installFailed`). `{cause}` in the outer message renders the inner message. Without an outer remediation, the inner one is used. JSON carries the chain as `cause`.
+- Error codes, configuration keys, and health check IDs use `<domain>.<name>` in separate namespaces. A catalog test fails if an error code equals a health check ID.
+- `fatalError` and `preconditionFailure` are for programming errors only.
 
-DiagnosticsCore's own domain covers reports, fixes, and the findings of the host and background service checks (§7.3). The findings are never thrown. They are only the `HealthResult.error` of their checks ([../03-reference/error-catalog.md](../03-reference/error-catalog.md) §15):
+`DiagnosticsFailure` covers reports, fixes, and the host and service findings of §7.3. Findings are never thrown; they appear only as `HealthResult.error`:
 
 ```swift
 public enum DiagnosticsFailure: APKRunError {
     // reports and fixes (§7.5, §7.6, §8.1)
-    case stagingFailed                                  // the staging directory in $TMPDIR can't be created or written (§8.1 step 3)
-    case bundleWriteFailed                              // writing the ZIP into the client's file handle fails. apkrund truncates the output; the client deletes the file
-    case unknownHealthCheck(check: HealthCheckID)       // healthReport or applyHealthFixes names an ID that this apkrund doesn't have (an N−1 client)
-    case fixNotAvailable(check: HealthCheckID)          // the check has no fix, or its fix is not offered now (apkrund.version while Android runs)
-    case fixFailed(check: HealthCheckID, underlying: any APKRunError)   // a fix ran and failed. The fix's error is the cause
-    // findings of the host and background service checks (§7.3), never thrown
+    case stagingFailed                                  // $TMPDIR staging directory cannot be created or written
+    case bundleWriteFailed                              // writing the ZIP to the client's file handle failed
+    case unknownHealthCheck(check: HealthCheckID)       // apkrund does not know this ID (N−1 client)
+    case fixNotAvailable(check: HealthCheckID)          // no fix, or not offered now
+    case fixFailed(check: HealthCheckID, underlying: any APKRunError)
+    // findings of host and service checks (§7.3), never thrown
     case appNotInApplications                           // host.appLocation
     case appSignatureInvalid                            // host.appSignature
     case componentVersionMismatch(build: String)        // host.componentVersions
-    case lowDiskSpace(available: Int64)                 // host.dataVolume, image.freeSpace, and the store.hostSpace warning
+    case lowDiskSpace(available: Int64)                 // host.dataVolume, image.freeSpace, store.hostSpace
     case lowMemory(memory: Int64)                       // host.memory
-    case serviceVersionMismatch(build: String)          // apkrund.version. Variants restartPending, androidRunning
+    case serviceVersionMismatch(build: String)          // apkrund.version: variants restartPending, androidRunning
     case serviceCrashLoop(count: Int)                   // apkrund.crashLoop
 }
 ```
 
-A cancelled report is `runtime.cancelled`. A contributor that fails or runs out of time is not an error: it is recorded in `omitted` (§8.1).
+A cancelled report is `runtime.cancelled`. A contributor that fails or overruns goes to `omitted` (§8.1), not to an error.
 
 ### 2.2 The error catalog
 
-The catalog is the single source of user-facing error text for the GUI, the menu bar, the launcher, and the CLI ([host-ui.md](host-ui.md) §13).
-
-- Human-readable design source: [../03-reference/error-catalog.md](../03-reference/error-catalog.md). #061 turns it into `Packages/DiagnosticsCore/ErrorCatalog/errors.json`. From then on the JSON is the source, and `swift scripts/errorgen.swift --markdown` regenerates the tables of [../03-reference/error-catalog.md](../03-reference/error-catalog.md) §5–§16 and §20.3. CI fails if the two differ.
-- `errors.json` entry:
+- The catalog is the only source of user-facing error text for the GUI, menu bar, launcher, and CLI ([host-ui.md](host-ui.md) §13).
+- `Packages/DiagnosticsCore/ErrorCatalog/errors.json` is the source. `swift scripts/errorgen.swift --markdown` regenerates the tables of [error-catalog.md](../03-reference/error-catalog.md) §5–§16 and §20.3; CI fails if they differ. `errorgen` also writes `ErrorCatalog.generated.swift` with all languages as Swift literals, because the launcher has no resource bundles ([wrapper.md](wrapper.md) §5.9). CI checks it is current.
+- Entry:
 
   ```json
   {
     "code": "store.downgradeRefused",
     "parameters": ["app", "installedVersion", "newVersion"],
-    "message":     { "en": "{app} {newVersion} is older than the installed version {installedVersion}.",
-                     "ja": "…" },
+    "message":     { "en": "{app} {newVersion} is older than the installed version {installedVersion}.", "ja": "…" },
     "remediation": { "en": "Keep the installed version, or uninstall {app} first.", "ja": "…" },
     "action": "none",
     "cliExit": 5
   }
   ```
 
-- Optional members ([../03-reference/error-catalog.md](../03-reference/error-catalog.md) §3.1):
-  - `variants`: texts and an action per sub-reason, for example per `InstallFailureKind` of `store.guestInstallFailed`. The keys are the case names of the sub-enum, or the fixed keys `hostNewer`, `guestNewer`, `sharedFolders`, `schemaVersion`, `restartPending`, and `androidRunning`. The error passes the key as the parameter `reason`. A variant may override `message`, `remediation`, and `action`. Code, parameters, and `cliExit` stay those of the entry. A list case keeps its comma-separated case names in the `items` text parameter for compatibility and carries an ordered `listItems` array with a selector and that item's own parameters. Each item renders as one hint line ([../03-reference/error-catalog.md](../03-reference/error-catalog.md) §3.4).
-  - `transparent: true`: a pure container such as `runtime.image(ImageFailure)`. It has no text of its own. Message, remediation, action, and exit code come from the first non-transparent error in the cause chain. `"cliExit": "cause"` is allowed only on a transparent entry ([../03-reference/error-catalog.md](../03-reference/error-catalog.md) §3.5).
-  - `retired: true`: a removed case. Its entry keeps its last texts, so a code that an N−1 peer sends still renders. The generated Swift catalog retains retired entries; module fixture lists skip them ([../03-reference/error-catalog.md](../03-reference/error-catalog.md) §2.2).
-  - `cliExitRule`: a named rule for list errors whose exit depends on their items. The entry's fixed `cliExit` is the fallback, and the catalog defines each supported rule.
-- A code that the receiving build doesn't know is treated as transparent when its cause chain contains a known code. Otherwise the generic entry of [../03-reference/error-catalog.md](../03-reference/error-catalog.md) §3.8 is shown, and the `code:` line keeps the original code.
-- `swift scripts/errorgen.swift` generates `ErrorCatalog.generated.swift` with every language compiled in as Swift literals. The generated file is checked in, and CI verifies that it is current. Compiling the strings in is required because the launcher carries no resource bundles ([wrapper.md](wrapper.md) §5.9).
-- Language selection follows `Locale.preferredLanguages` of the presenting process, with English as the fallback.
-- Tests: every case of every domain enum has a catalog entry (one test per module, iterating a `CaseIterable` fixture list of representative values); every placeholder in a template is declared in `parameters`; every entry has `en` and `ja` text in release builds (#092); every `cliExit` value is one of the exit codes of [cli.md](cli.md) §3.3, or `"cause"` on a transparent entry, and `CLI/apkrun/Support/ExitCodes.swift` agrees with it. Named `cliExitRule`s have catalog-specific validation and deterministic fallback behavior.
+- Optional members ([error-catalog.md](../03-reference/error-catalog.md) §3.1):
+  - `variants`: texts and action per sub-reason, for example per `InstallFailureKind` of `store.guestInstallFailed`. Keys are sub-enum case names, or `hostNewer`, `guestNewer`, `sharedFolders`, `schemaVersion`, `restartPending`, `androidRunning`. The error passes the key as parameter `reason`. A variant overrides `message`, `remediation`, and `action` only. A list case keeps its names in the `items` parameter and an ordered `listItems` array, one hint line per item ([error-catalog.md](../03-reference/error-catalog.md) §3.4).
+  - `transparent: true`: a pure container (for example `runtime.image(ImageFailure)`). Texts and exit code come from the first non-transparent error in the cause chain. `"cliExit": "cause"` is allowed only here ([error-catalog.md](../03-reference/error-catalog.md) §3.5).
+  - `retired: true`: a removed case. Its texts stay, so a code sent by an N−1 peer still renders ([error-catalog.md](../03-reference/error-catalog.md) §2.2).
+  - `cliExitRule`: a named rule for list errors whose exit depends on items. The fixed `cliExit` is the fallback.
+- An unknown code is transparent when its cause chain holds a known code. Otherwise the generic entry of [error-catalog.md](../03-reference/error-catalog.md) §3.8 is shown, with the original code on the `code:` line.
+- Language follows `Locale.preferredLanguages` of the presenting process, English as fallback.
 
 ### 2.3 Remediation actions and presentation
 
@@ -173,56 +153,46 @@ public enum RemediationAction: String, Sendable, Codable {
          openRuntimeSettings, openStorageSettings, openPrivacySettings,
          openLoginItemsSettings,        // System Settings → General → Login Items & Extensions
          openNotificationSettings,      // System Settings → Notifications
-         openDownloadsPage,             // the APKRun downloads page in the browser
+         openDownloadsPage,             // the APKRun downloads page
          updateAPKRun, updateAndroid, updateMacApp, createMacApp, reinstallApp, reportProblem
 }
 ```
 
-`updateAPKRun` opens Settings → General and starts a user-initiated Sparkle check. `updateAndroid` opens Settings → General and starts the Android system update (check, download, and apply, [runtime-maintenance.md](runtime-maintenance.md) §4.6). `openDownloadsPage` is the action for "reinstall APKRun": it opens the Info.plist URL `APKRunDownloadsURL` ([../03-reference/configuration.md](../03-reference/configuration.md) §7.1) with `NSWorkspace.open(_:)`. The launcher opens `LauncherBuild.downloadURL`, the same URL compiled into the launcher template, because APKRun.app may be missing ([wrapper.md](wrapper.md) §5.4).
+- `updateAPKRun` opens Settings → General and starts a user-initiated Sparkle check. `updateAndroid` opens Settings → General and starts the Android system update ([runtime-maintenance.md](runtime-maintenance.md) §4.6).
+- `openDownloadsPage` (reinstall APKRun) opens the Info.plist URL `APKRunDownloadsURL` ([configuration.md](../03-reference/configuration.md) §7.1) with `NSWorkspace.open(_:)`. The launcher opens `LauncherBuild.downloadURL`, the same URL compiled into its template, because APKRun.app may be missing ([wrapper.md](wrapper.md) §5.4).
+- APKRun.app and APKRunMenuBar show the message as title, the remediation as body, a button for `action`, **Copy Details**, and **Troubleshooting…** where it helps ([host-ui.md](host-ui.md) §1). The launcher uses its error screens ([wrapper.md](wrapper.md) §5.4).
+- CLI: three stderr lines. `--json` puts the same fields in the `error` object ([cli.md](cli.md) §3.2):
 
-| Surface | Presentation |
-|---|---|
-| APKRun.app, APKRunMenuBar | alert or inline error view: the message as the title, the remediation as the body, a button for `action` (for example **Restart Android**), **Copy Details**, and **Troubleshooting…** where it helps ([host-ui.md](host-ui.md) §1) |
-| Launcher (wrapper window) | the error screens of [wrapper.md](wrapper.md) §5.4 with the same texts and actions |
-| CLI | three lines on stderr (below). `--json` puts the same fields in the `error` object ([cli.md](cli.md) §3.2) |
+  ```text
+  error: Hello GL 1.2 is older than the installed version 1.3.
+  hint: Keep the installed version, or uninstall Hello GL first.
+  code: store.downgradeRefused (operation 3f9a1c2e)
+  ```
 
-CLI format (FR-CLI-02):
-
-```text
-error: Hello GL 1.2 is older than the installed version 1.3.
-hint: Keep the installed version, or uninstall Hello GL first.
-code: store.downgradeRefused (operation 3f9a1c2e)
-```
-
-**Copy Details** copies one line with no personal data:
-
-```text
-APKRun 1.0 (1000) · image 2026.10.0-cf16373615-arm64 · store.downgradeRefused · op 3f9a1c2e-5b7d-4e8f-9a01-2c3d4e5f6a7b · 2026-09-28T10:15:02Z · underlying NSPOSIXErrorDomain 28
-```
+- **Copy Details** copies one line: version, image, code, operation, time, and the underlying domain and code. It has no personal data and no paths.
 
 ### 2.4 Operation IDs
 
-An `OperationID` ties together everything that happens for one user-visible operation (NFR-OBS-01).
+An `OperationID` ties together everything one user-visible operation does (NFR-OBS-01).
 
-- Format: a random UUID (version 4), lowercase. UI and CLI human output show the first 8 hex digits. JSON and Copy Details use the full value; logs use `op=<first 8 hex>` as specified in §3.2.
-- Created by the client that starts the operation: the GUI or CLI for a command, the launcher for `openSession`. apkrund creates IDs for work it starts itself (scheduled update runs, idle stop, recovery at startup).
-- Carried in `APIRequestHeader.operationID` over XPC ([../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.1), in `OperationHandle` for long-running operations, and in the guest envelope's `operation_id` ([guest-protocol.md](guest-protocol.md) §4.1).
-- Inside a process, `OperationContext` is a task-local value (`@TaskLocal static var current`). `APKLogger` adds it to every entry automatically. Work started from a task inherits it. A sub-operation (one package of `apkrun update --all`) gets its own ID with `parent` set to the run's ID.
-- Guest agents log `op=<first 8 hex>` with every entry that has an operation ID ([guest-components.md](guest-components.md) §9).
-- Operation IDs identify operations, not users or Macs. They are safe in bug reports.
+- A random UUID (version 4), lowercase. UI and CLI show the first 8 hex digits. JSON and Copy Details use the full value. Logs use `op=<first 8 hex>`.
+- The starting client creates the ID: the GUI or CLI for a command, the launcher for `openSession`. apkrund creates IDs for its own work (scheduled updates, idle stop, startup recovery).
+- The ID travels in `APIRequestHeader.operationID` ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.1), `OperationHandle`, and the guest envelope's `operation_id` ([guest-protocol.md](guest-protocol.md) §4.1).
+- `OperationContext` is a task-local value (`@TaskLocal static var current`). `APKLogger` adds it to every entry. Child work inherits it. A sub-operation (one package of `apkrun update --all`) has its own ID, with `parent` set to the run's ID.
+- Guest agents log `op=<first 8 hex>` ([guest-components.md](guest-components.md) §9). IDs identify operations, not users or Macs.
 
 ---
 
-## 3. Logging (#061, NFR-OBS-01, NFR-SEC-05)
+## 3. Logging (NFR-OBS-01, NFR-SEC-05)
 
 ### 3.1 Subsystems and categories
 
-Unified logging (`os_log`) is the primary sink. Every host process logs only through `APKLogger`. Direct use of `os.Logger`, `print`, or `NSLog` outside DiagnosticsCore fails `scripts/check-logging.sh` (CI, #062).
+Unified logging (`os_log`) is the primary sink. Host processes log only through `APKLogger`. `os.Logger`, `print(`, and `NSLog` outside DiagnosticsCore fail `scripts/check-logging.sh` in CI. `LogSubsystem` is a closed enum with exactly these values. Categories are per-subsystem enums.
 
 | Subsystem | Processes | Categories | Defined in |
 |---|---|---|---|
-| `io.apkrun.runtime` | apkrund | `host`, `supervisor`, `agents`, `idle`, `power`, `sessions`, `display`, `xpc`, `adb` (developer ADB client, #015) | [runtime-daemon.md](runtime-daemon.md) §12 |
-| `io.apkrun.vm` | apkrund | `lifecycle`, `config`, `console`, `vsock`, `network`, `virtio` (VirtioDeviceCore) | [vm.md](vm.md) §14 |
+| `io.apkrun.runtime` | apkrund | `host`, `supervisor`, `agents`, `idle`, `power`, `sessions`, `display`, `xpc`, `adb` | [runtime-daemon.md](runtime-daemon.md) §12 |
+| `io.apkrun.vm` | apkrund | `lifecycle`, `config`, `console`, `vsock`, `network`, `virtio` | [vm.md](vm.md) §14 |
 | `io.apkrun.graphics` | apkrund | `device`, `renderer`, `present`, `stats` | [graphics.md](graphics.md) |
 | `io.apkrun.input` | launcher, apkrund | `translate`, `route`, `ime` | [input.md](input.md) §11 |
 | `io.apkrun.image` | apkrund | `store`, `install`, `verify`, `instance`, `boot`, `migration` | [android-image.md](android-image.md) §14 |
@@ -230,13 +200,11 @@ Unified logging (`os_log`) is the primary sink. Every host process logs only thr
 | `io.apkrun.update` | apkrund | `scheduler`, `provider`, `validate`, `install`, `health` | [update-system.md](update-system.md) §14 |
 | `io.apkrun.wrapper` | apkrund, launcher | `generate`, `sign`, `icon`, `registry`, `approval`, `lifecycle`, `launcher`, `window`, `integration` | [wrapper.md](wrapper.md) §14 |
 | `io.apkrun.integration` | apkrund | `clipboard`, `notifications`, `links`, `files`, `audio`, `locale` | [desktop-integration.md](desktop-integration.md) §13 |
-| `io.apkrun.maintenance` | APKRun.app, apkrund | `selfUpdate`, `imageUpdate` | [runtime-maintenance.md](runtime-maintenance.md) |
+| `io.apkrun.maintenance` | APKRun.app, apkrund | `selfUpdate`, `imageUpdate` | [runtime-maintenance.md](runtime-maintenance.md) §12 |
 | `io.apkrun.ui` | APKRun.app | `app`, `onboarding`, `operations`, `approval`, `settings` | [host-ui.md](host-ui.md) |
 | `io.apkrun.menubar` | APKRunMenuBar | `status` | [host-ui.md](host-ui.md) §12 |
 | `io.apkrun.cli` | apkrun | `command`, `client` | [cli.md](cli.md) |
 | `io.apkrun.diagnostics` | all | `health`, `bundle`, `perf`, `redaction` | this document |
-
-`LogSubsystem` is a closed enum with exactly these values. Categories are per-subsystem enums, so a typo is a compile error.
 
 ### 3.2 The facade and privacy
 
@@ -246,76 +214,67 @@ log.info("commit \(txn, .public) \(packageID, .public) \(fromCode, .public)→\(
 log.error("import failed for \(fileName, .private)", error: failure)   // adds err=store.<code>
 ```
 
-- `LogMessage` is a custom string-interpolation type. **Every interpolation must state its privacy** (`.public`, `.private`, or `.hashed`). There is no default, so forgetting is a compile error.
-- `.hashed` renders `#` plus the first 8 hex digits of SHA-256 over a random salt created at process start and the value. It lets a reader see that two entries refer to the same file without seeing the name. Hashes correlate within one process lifetime only.
-- `Sensitive<T>` wraps values that must never be logged at any level: clipboard content, notification title and text, IME text, file contents, credentials and tokens, Android account names. Its `description` is `<redacted>`, and `LogMessage` has no interpolation overload for it, so logging one does not compile. IntegrationCore, InputCore, and UpdateCore (provider credentials) hold these values only inside `Sensitive`.
-- Structured context: the facade appends ` op=<id8> pkg=<packageID> disp=<displayID> sess=<sessionID> err=<qualifiedCode>` from `OperationContext` and the call's `error:` argument (NFR-OBS-01). These fields are always public. `apkrun logs` and the bundle's "Recent problems" (§8.3) parse them.
-- Rendering: the facade renders a **public text**, where private values become `<private>` and hashed values become their hash, and, only when the message has private values, a **full text**. It sends `"\(publicText, privacy: .public)\u{1F}\(fullText, privacy: .private)"` to `os.Logger`. Unified logging shows the second part as `<private>` unless a private-data logging profile is installed. The bundle writer cuts every entry at U+001F, so a developer Mac with such a profile still produces a clean report (§6.2).
-- Messages are rendered only if the level is enabled (`OSLog.isEnabled(type:)`), so debug messages cost almost nothing in release builds.
-- What may be public: IDs (package, bundle, session, display, operation, transaction), versions, error codes, counts, sizes, durations, states, digests truncated to 12 hex, provider type and host name. What must be `.private` or `.hashed`: paths (after `APKRunPaths` reduction, §6.3), file names, URLs beyond scheme and registrable domain, window titles, Android app labels in free text. What is never logged: everything that `Sensitive` wraps. Input details (key codes, pointer positions) are `.private` and logged only at debug level in development builds ([input.md](input.md) §9).
+- **Every interpolation states its privacy** (`.public`, `.private`, or `.hashed`). There is no default, so a missing privacy is a compile error.
+- `.hashed` renders `#` plus the first 8 hex digits of SHA-256 over a random per-process salt and the value. Hashes correlate within one process only.
+- `Sensitive<T>` wraps values never logged at any level: clipboard content, notification title and text, IME text, file contents, credentials and tokens, Android account names. Its `description` is `<redacted>`. `LogMessage` has no overload for it, so logging one does not compile. IntegrationCore, InputCore, and UpdateCore (provider credentials) hold such values only inside `Sensitive`.
+- The facade appends ` op=<id8> pkg=<packageID> disp=<displayID> sess=<sessionID> err=<qualifiedCode>` (always public) from `OperationContext` and the `error:` argument. `apkrun logs` and the bundle's "Recent problems" (§8.3) parse these fields.
+- The facade renders a **public text** (private values as `<private>`, hashed values as their hash) and, only when private values exist, a **full text**. It sends `"\(publicText, privacy: .public)\u{1F}\(fullText, privacy: .private)"` to `os.Logger`. Messages render only when `OSLog.isEnabled(type:)`.
+- Public: IDs, versions, error codes, counts, sizes, durations, states, digests truncated to 12 hex, provider type, host name. `.private` or `.hashed`: paths (after §6.3), file names, URLs beyond scheme and registrable domain, window titles, Android app labels in free text. Input details are `.private` and logged only at debug level in development builds ([input.md](input.md) §9).
 
 | Level | Use |
 |---|---|
-| `debug` | per-frame, per-event, and per-message detail. Off in release unless enabled with `log config` |
+| `debug` | per-frame, per-event, per-message detail. Off in release unless `log config` enables it |
 | `info` | state transitions, operation start and end, timings |
 | `notice` (`default`) | user-visible outcomes: installed, updated, rolled back, Android started or stopped |
-| `warning` (`default`) | a recoverable condition needs attention; carries its catalog code when one applies |
+| `warning` (`default`) | a recoverable condition. Carries its catalog code when one applies |
 | `error` | an operation failed with a typed error. Always carries `err=` |
-| `fault` | an invariant was violated (for example an invalid state transition, [../01-architecture/state-machines.md](../01-architecture/state-machines.md)) |
+| `fault` | an invariant was violated, for example an invalid state transition ([state-machines.md](../01-architecture/state-machines.md)) |
 
-OSLog has no separate warning type. APKRun writes warning entries as `default`
-under a reserved `.__apkrun_warning` category suffix. `apkrun logs` removes the
-suffix and restores the warning level, so message text cannot set its own
-severity. Unknown or missing OSLog message types remain `unknown` instead of
-being reported as notices. The file mirror stores the level directly.
+OSLog has no warning type. Warnings are written as `default` under the reserved category suffix `.__apkrun_warning`. `apkrun logs` removes the suffix and restores the level, so message text cannot set severity. Unknown or missing types stay `unknown`, never `notice`.
 
 ### 3.3 File mirrors
 
-`os_log` can be unavailable for reports: `log show` needs an administrator account and can be slow on busy Macs. apkrund therefore keeps file mirrors ([../01-architecture/filesystem-layout.md](../01-architecture/filesystem-layout.md) §2):
+`log show` needs an administrator account and can be slow, so apkrund keeps file mirrors ([filesystem-layout.md](../01-architecture/filesystem-layout.md) §2):
 
 | File | Writer | Content | Rotation |
 |---|---|---|---|
-| `apkrund.log`, `apkrund.1.log`, `apkrund.2.log` | `LogMirrorWriter` in apkrund | the public text of every `info` and higher entry of apkrund, one line each: ISO 8601 time, level, subsystem/category, message, structured fields | 10 MiB × 3 |
+| `apkrund.log`, `apkrund.1.log`, `apkrund.2.log` | `LogMirrorWriter` | public text of every apkrund `info` and higher entry: ISO 8601 time, level, subsystem/category, message, fields | 10 MiB × 3 |
 | `vm/console.log`, `vm/console.<n>.log`, `vm/boot-<timestamp>.log` | `ConsoleLogWriter` ([vm.md](vm.md)) | guest serial console, unredacted | 20 MiB × 5; last 5 boots |
-| `guest/logcat-<timestamp>.log` | RuntimeCore | logcat console capture (§8.3) | 20 MiB each; last 5 |
+| `guest/logcat-<timestamp>.log` | RuntimeCore | logcat capture (§8.3) | 20 MiB each; last 5 |
 | `crash/<timestamp>-runtime/` | RuntimeCore | failure snapshots ([runtime-daemon.md](runtime-daemon.md) §3.6) | last 10 |
-| `perf/launches.jsonl`, `perf/boots.jsonl` | `PerfRecordWriter` in apkrund | perf records (§4.3) | newest 2,000 / 200 records |
+| `perf/launches.jsonl`, `perf/boots.jsonl` | `PerfRecordWriter` | perf records (§4.3) | newest 2,000 / 200 |
 
-- The mirror writer is asynchronous: a serial queue with a 1 MiB buffer, flushed every second and immediately after `error` and `fault` entries. A slow disk never blocks a logging call. When the buffer is full, entries are dropped and counted (`diagnostics.mirrorDropped`, shown in the bundle manifest).
-- Other processes (APKRun.app, the menu bar, launchers, the CLI) do not write mirrors. Their entries are in unified logging, and their failures that matter reach apkrund as operation results.
-- Files are created with mode 0600. The logs directory is not in any location that syncs or backs up differently from the rest of `~/Library`.
+- The mirror writer is asynchronous: a serial queue with a 1 MiB buffer, flushed every second and after each `error` and `fault`. A full buffer drops and counts entries (`diagnostics.mirrorDropped`).
+- Only apkrund writes mirrors. Other processes log to unified logging; their failures that matter reach apkrund as operation results. Files are created with mode 0600.
 
 ### 3.4 Guest logs
 
-| Source | Content | Reaches the host through |
-|---|---|---|
-| logcat tags `ApkRunGuest`, `ApkRunInput`, `ApkRunIme`, `ApkRunStore`, `apkrun_vsockd` | agent logs ([guest-components.md](guest-components.md) §9) | `CollectDiagnostics` (§8.3), logcat capture |
-| `agent.log`, `store.log` ring buffers (2 × 1 MiB) | agent logs that survive logcat rotation | `CollectDiagnostics` item `AGENT_LOG` |
-| Kernel log, init, `VIRTUAL_DEVICE_*` status lines | early boot | serial console `hvc0` → `vm/console.log` ([android-image.md](android-image.md) §7.1) |
-| logcat console | full logcat stream | `hvc2` → `guest/logcat-<timestamp>.log` when capture is on (§8.3) |
-
-Guest agents follow the same rules as the host: clipboard content, notification text, typed or IME text, and account names are never logged, at any level. Key codes, pointer positions, and file names appear only at debug level, which release builds of the agents compile out ([guest-components.md](guest-components.md) §9).
+- Agent logs use logcat tags `ApkRunGuest`, `ApkRunInput`, `ApkRunIme`, `ApkRunStore`, and `apkrun_vsockd` ([guest-components.md](guest-components.md) §9). They reach the host through `CollectDiagnostics` (§8.3) and logcat capture. The ring buffers `agent.log` and `store.log` (2 × 1 MiB) survive logcat rotation and come through item `AGENT_LOG`.
+- Kernel log, init, and `VIRTUAL_DEVICE_*` status lines (early boot) go to serial `hvc0` → `vm/console.log` ([android-image.md](android-image.md) §7.1). The full logcat stream goes to `hvc2` → `guest/logcat-<timestamp>.log` when capture is on.
+- Agents follow the host rules: clipboard, notification text, typed or IME text, and account names are never logged. Key codes, pointer positions, and file names appear only at debug level, which release builds compile out.
 
 ### 3.5 Reading logs
 
-- `apkrun logs` ([cli.md](cli.md) §4.8) runs `/usr/bin/log show` or `log stream` with `--predicate 'subsystem BEGINSWITH "io.apkrun"' --style ndjson`, cuts each message at U+001F, and prints time, level, subsystem/category, and message. The default window is the last hour; `--since` replaces it and accepts durations up to 30 days. `--subsystem` adds a narrower prefix predicate under `io.apkrun`. `--json` prints normalized records as NDJSON, escaping Unicode formatting scalars so the JSON stays on one physical line while decoding to the original record. Human-readable output escapes Unicode control and formatting characters.
-- `apkrun logs --follow` starts `log stream` and waits for its subscription notice on stderr, or its first stdout record, before starting the history query. The process runner times out after 30 seconds if neither signal arrives. Each record is limited to 1 MiB; an oversized line is discarded through its next newline. It buffers live records while history is read; the buffer is capped at 4,096 records or 4 MiB of estimated record text, whichever comes first, and pipe reads pause when either limit is reached. The initial `--since` cutoff applies to history only, so a delayed live record is not discarded as the cutoff moves. After any stream exit, including a clean exit, the reader retries with a delay that grows from 1 to 30 seconds. Once a replacement stream is ready, it runs `log show --start` from one second before the last covered instant while buffering live output. After a complete unified query, the checkpoint advances only through the later of the query start and replacement-stream end; the query and stream jointly cover the interval. If the initial history query is partial, the checkpoint stays at the oldest requested history boundary until a complete query covers the gap. The one-second margin handles the whole-second timestamp precision accepted by `log show`; occurrence-aware watermarking removes records already covered by history and retains separate identical records. The recent-record cache is limited to 4,096 records or 1 MiB. The query-side occurrence cache is limited to 4,096 records or 4 MiB, and an additional bounded count map preserves matches for records already in the live buffer as the query advances. If a partial catch-up gap remains unresolved beyond the recent-record window, or a matching live row arrives after its query-side occurrence has been evicted, an older row can appear again; the reader favors retaining late rows over suppressing them by timestamp alone. `/usr/bin/log stream` does not take a `--follow` option. If `log show` fails, times out, or returns no matching entries, it reads any readable mirrors and says so on stderr. If the stream cannot become ready after three attempts, it runs a one-shot history query with mirror fallback and exits; if no source is readable, it reports `cli.logsUnavailable`. A quiet live stream stays open; it does not time out after becoming ready.
-- If the unified log command fails and no mirror file is readable, `apkrun logs` reports `cli.logsUnavailable` and exits 1. Partial parsed output and an empty but successfully queried unified log are readable sources.
-- A requested minimum level is applied to normalized records from both unified logging and file mirrors. Records with an unrecognized level are omitted when a minimum level is set.
-- `apkrun logs --guest` reads the logcat console through the `guestLog` stream (§7.6, [../03-reference/runtime-api.md](../03-reference/runtime-api.md) §13.1). It needs developer mode.
-- Developers: `log stream --level debug --predicate 'subsystem BEGINSWITH "io.apkrun"'`. Instruments shows the signposts of §4 in the Points of Interest and os_signpost instruments.
+- `apkrun logs` ([cli.md](cli.md) §4.8) runs `/usr/bin/log show` or `log stream` with `--predicate 'subsystem BEGINSWITH "io.apkrun"' --style ndjson`, cuts messages at U+001F, and prints time, level, subsystem/category, and message. Default window: the last hour. `--since` replaces it, up to 30 days. `--subsystem` adds a narrower prefix. `--json` prints NDJSON with Unicode formatting scalars escaped, one record per line. Human output escapes Unicode control and formatting characters. A minimum level applies to unified-log and mirror records alike; unrecognized levels are omitted when one is set.
+- `--follow`:
+  - `apkrun logs --follow` waits up to 30 s for the `/usr/bin/log stream` subscription notice (stderr) or the first record (stdout) before the history query. `/usr/bin/log stream` has no `--follow` option. Records over 1 MiB are discarded through the next newline.
+  - Live records are buffered during the history read: at most 4,096 records or 4 MiB of estimated text. Pipe reads pause at either limit. `--since` applies to history only.
+  - After a stream exit, retry with a delay growing from 1 s to 30 s. When the replacement is ready, run `log show --start` from one second before the last covered instant, while buffering live output.
+  - The checkpoint advances only through the later of the query start and the replacement-stream end. After a partial history query it stays at the oldest requested boundary until a complete query covers the gap. Identical records are kept separate. Late rows are kept, not suppressed by timestamp.
+  - If the stream is not ready after three attempts, a one-shot history query with mirror fallback runs and the command exits. A quiet live stream stays open.
+- If `log show` fails, times out, or matches nothing, mirrors are read and stderr says so. With no readable source, the command reports `cli.logsUnavailable` and exits 1. Partial output and an empty successful query both count as readable.
+- `apkrun logs --guest` reads the `guestLog` stream (§7.6, [runtime-api.md](../03-reference/runtime-api.md) §13.1) and needs developer mode.
+- Developers: `log stream --level debug --predicate 'subsystem BEGINSWITH "io.apkrun"'`. Instruments shows the signposts of §4.
 
 ---
 
-## 4. Performance markers (#061, #070, FR-OPS-05)
+## 4. Performance markers (FR-OPS-05)
 
 ### 4.1 Model
 
 ```swift
 public struct PerfMarker: RawRepresentable, Hashable, Sendable { public let rawValue: String }   // "FIRST_FRAME"
-public enum PerfValue: Sendable, Equatable {
-    case string(String), integer(Int64), double(Double), boolean(Bool)
-}
+public enum PerfValue: Sendable, Equatable { case string(String), integer(Int64), double(Double), boolean(Bool) }
 
 public enum Perf {
     public static let timeline: PerfTimeline
@@ -327,174 +286,149 @@ public enum Perf {
 }
 ```
 
-- `Perf.mark` emits a signpost event (`OSSignposter`, category `pointsOfInterest`) and appends the marker, timestamp, attributes, and operation context to the selected process `PerfTimeline` (a ring of the last 2,000 markers). The timeline argument lets a module use the timeline from `DiagnosticsContext`.
-- A marker uses the subsystem of its catalogue emitter in §4.2. This keeps attribution stable when one process records a marker on behalf of another process. An unrecognized raw marker uses `io.apkrun.diagnostics`; high-frequency interval names use `io.apkrun.graphics` for `gpu.*`, `io.apkrun.input` for `input.*`, and `io.apkrun.diagnostics` otherwise.
-- `OSSignposter` event names are static strings. Lifecycle events therefore use the fixed event name `APKRunPerfMarker`; the marker name and its fields are included in the event message. A marker outside the catalogue is stored as `UNKNOWN`.
-- Public marker fields are allowlisted. `Perf.mark` accepts at most 16 attributes per event and only the attribute keys listed in §4.2. If the caller supplies more than 16 attributes, all attributes are dropped. Attribute names are at most 64 ASCII bytes and string values at most 256 UTF-8 bytes; longer values and unknown keys are dropped before storage. The in-memory timeline retains bounded string values for later processing, but the public signpost emits strings only for finite catalogue values: `bootKind` (`cold`, `firstBoot`, `migration`) and `agent` (`guest`, `store`). Other string values are omitted from the signpost. Any later writer that persists timeline data must apply the public-data rules of §3.2.
-- The signpost timestamp is when `OSSignposter` receives the event. Because it cannot be backdated, the payload includes `sourceTimeOffsetMsAtSample`, the signed millisecond distance from the supplied `at:` instant to a `ContinuousClock` sample taken after the base fields are prepared and immediately before final message encoding and `emitEvent`. The signpost timestamp follows that sample by the small cost of encoding and emission. The timeline retains the supplied instant as the marker's source time; consumers can use the offset as an approximation when correlating an event received from another process.
-- `Perf.interval` creates only a signpost interval. It is for high-frequency work (`gpu.flush`, `gpu.present`, `input.translate`, `input.route`), which is not recorded in the timeline.
-- **Clock.** All host markers use `ContinuousClock` (`mach_continuous_time`), which is the same clock in every process on the Mac, so marker times from the launcher and apkrund can be subtracted directly. Guest times are never mixed with host times. Only durations measured on one side are combined ([input.md](input.md) §8).
-- Cost: markers are lifecycle events (a few per launch). A mark performs one signpost emission and one in-memory ring append; it does no filesystem I/O and never writes through `LogSink` or `LogMirrorWriter`.
+- `Perf.mark` emits an `OSSignposter` event (category `pointsOfInterest`) and appends marker, time, attributes, and operation context to the process `PerfTimeline`, a ring of the last 2,000 markers.
+- Subsystem: a marker uses the subsystem of its catalogue emitter (§4.2). An unknown marker uses `io.apkrun.diagnostics`. Intervals use `io.apkrun.graphics` for `gpu.*`, `io.apkrun.input` for `input.*`, and `io.apkrun.diagnostics` otherwise.
+- Lifecycle events use the static event name `APKRunPerfMarker`; the marker name and fields go in the message. A marker outside the catalogue is stored as `UNKNOWN`.
+- Attributes are allowlisted: at most 16 per event, only keys of §4.2 (more than 16 drops all). Names are at most 64 ASCII bytes; strings at most 256 UTF-8 bytes. Longer values and unknown keys are dropped before storage. The signpost emits strings only for `bootKind` (`cold`, `firstBoot`, `migration`) and `agent` (`guest`, `store`). Writers that persist timeline data apply §3.2.
+- Signposts cannot be backdated. The payload carries `sourceTimeOffsetMsAtSample`: the signed millisecond distance from the `at:` instant to a `ContinuousClock` sample taken after the base fields are prepared and just before encoding and `emitEvent`. The timeline keeps the `at:` instant.
+- `Perf.interval` makes a signpost interval only, for high-frequency work. It is not recorded in the timeline.
+- Host markers use `ContinuousClock` (`mach_continuous_time`), the same clock in every process, so launcher and apkrund times can be subtracted. Guest times are never mixed with host times ([input.md](input.md) §8).
+- A mark does one signpost emission and one in-memory append. It does no file I/O and never writes through `LogSink` or `LogMirrorWriter`.
 
 ### 4.2 Catalogue
 
-The marker catalogue requires `VM_START`, `APP_LAUNCH_REQUEST`, `ACTIVITY_STARTED`, `FIRST_FRAME`, `UPDATE_CHECK_START`, `UPDATE_DOWNLOAD_END`, and `UPDATE_INSTALL_END`. `BOOT_COMPLETED` is the marker for Android's `sys.boot_completed=1` event and the emitted marker for the `.bootCompleted` phase below.
+The catalogue requires these markers: `VM_START`, `APP_LAUNCH_REQUEST`, `ACTIVITY_STARTED`, `FIRST_FRAME`, `UPDATE_CHECK_START`, `UPDATE_DOWNLOAD_END`, and `UPDATE_INSTALL_END`. `BOOT_COMPLETED` is Android's `sys.boot_completed=1` event and the marker of the `.bootCompleted` phase.
 
-| Marker | Emitted by | When | Attributes |
+| Marker | Emitted by | Emitted when | Attributes |
 |---|---|---|---|
-| `DAEMON_READY` | RuntimeHost | apkrund's broker listener is resumed after startup recovery ([runtime-daemon.md](runtime-daemon.md) §2.2) | `startupMs`, `recoverySteps` |
-| `VM_START` | VirtualMachineCore | `VZVirtualMachine.start` is called | `bootKind` (`cold`, `firstBoot`, `migration`) |
-| `KERNEL_START` | RuntimeCore `BootPhaseDetector` | first kernel console line | |
-| `ANDROID_INIT` | `BootPhaseDetector` | first-stage init starts | |
-| `SYSTEM_SERVER_READY` | `BootPhaseDetector` | system server is up | |
-| `BOOT_COMPLETED` | `BootPhaseDetector` | `sys.boot_completed=1` | |
-| `AGENT_CONNECTED` | RuntimeCore | an agent handshake is accepted | `agent` (`guest`, `store`) |
+| `DAEMON_READY` | RuntimeHost | broker listener resumed after startup recovery | `startupMs`, `recoverySteps` |
+| `VM_START` | VirtualMachineCore | `VZVirtualMachine.start` called | `bootKind` (`cold`, `firstBoot`, `migration`) |
+| `KERNEL_START`, `ANDROID_INIT`, `SYSTEM_SERVER_READY`, `BOOT_COMPLETED` | RuntimeCore `BootPhaseDetector` | first kernel console line; first-stage init; system server up; `sys.boot_completed=1` | |
+| `AGENT_CONNECTED` | RuntimeCore | agent handshake accepted | `agent` (`guest`, `store`) |
 | `RUNTIME_READY` | RuntimeCore | `RuntimeState` becomes `ready` | `bootMs` |
 | `VM_PAUSED`, `VM_RESUMED` | RuntimeCore | idle suspend and resume ([runtime-daemon.md](runtime-daemon.md) §5) | `pausedMs` on resume |
-| `WRAPPER_PROCESS_START` | launcher, recorded by apkrund | kernel start time of the launcher process (`proc_pidinfo(PROC_PIDTBSDINFO)`), so dyld and AppKit start-up are included | |
-| `APP_LAUNCH_REQUEST` | launcher, recorded by apkrund | `openSession` is sent ([wrapper.md](wrapper.md) §5.2) | `xpcDelayMs` (send to receipt) |
-| `DISPLAY_ATTACHED` | RuntimeCore `DisplayPool` | the lease is ready ([display-and-windowing.md](display-and-windowing.md) §3) | `slot`, `displayID`, `reused` |
-| `ACTIVITY_STARTED` | RuntimeCore | the agent reports the launched activity resumed | `processStarted` (the app process was started for this launch) |
-| `FIRST_FRAME` | RuntimeCore | the first `frameReady` on the session's scanout ([graphics.md](graphics.md) §7) | |
-| `FIRST_FRAME_DISPLAYED` | RuntimeCore | the first `frameDisplayed` from the wrapper: the frame is in the window's layer. The glass is at most one display refresh later | |
+| `WRAPPER_PROCESS_START` | launcher, recorded by apkrund | kernel start time of the launcher (`proc_pidinfo(PROC_PIDTBSDINFO)`) | |
+| `APP_LAUNCH_REQUEST` | launcher, recorded by apkrund | `openSession` sent ([wrapper.md](wrapper.md) §5.2) | `xpcDelayMs` |
+| `DISPLAY_ATTACHED` | RuntimeCore `DisplayPool` | lease ready ([display-and-windowing.md](display-and-windowing.md) §3) | `slot`, `displayID`, `reused` |
+| `ACTIVITY_STARTED` | RuntimeCore | agent reports the activity resumed | `processStarted` |
+| `FIRST_FRAME` | RuntimeCore | first `frameReady` on the session scanout ([graphics.md](graphics.md) §7) | |
+| `FIRST_FRAME_DISPLAYED` | RuntimeCore | first `frameDisplayed` from the wrapper | |
 | `WRAPPER_GENERATE_START`, `WRAPPER_GENERATE_END`, `WRAPPER_REFRESH_END`, `WRAPPER_APPROVAL_END` | WrapperCore | [wrapper.md](wrapper.md) §14 | `result`, `durationMs`, `kind` |
 | `PACKAGE_IMPORT_START`, `PACKAGE_INSPECTED`, `PACKAGE_INSTALL_START`, `PACKAGE_INSTALL_COMPLETE`, `PACKAGE_ROLLBACK_COMPLETE` | APKStoreCore | [package-store.md](package-store.md) §13 | `bytes`, `splits`, `status` |
 | `UPDATE_CHECK_START`, `UPDATE_CHECK_END`, `UPDATE_DOWNLOAD_START`, `UPDATE_DOWNLOAD_END`, `UPDATE_INSTALL_START`, `UPDATE_INSTALL_END`, `UPDATE_HEALTH_END`, `UPDATE_ROLLBACK_END` | UpdateCore | [update-system.md](update-system.md) §14 | `provider`, `result`, `bytes` |
 | `CLIPBOARD_PUSH`, `NOTIFICATION_DELIVERED`, `FILE_TRANSFER` | IntegrationCore | [desktop-integration.md](desktop-integration.md) §13 | `durationMs`, `bytes` |
-| `SELF_UPDATE_CHECK_END`, `HOST_UPDATE_PREPARE_START`, `HOST_UPDATE_PREPARED`, `HOST_UPDATED` | RuntimeHost `MaintenanceService`, `SelfUpdateProbe` | [runtime-maintenance.md](runtime-maintenance.md) §12 | `result`, `fromBuild`, `toBuild`, `durationMs` |
-| `IMAGE_CHECK_END`, `IMAGE_DOWNLOAD_START`, `IMAGE_DOWNLOAD_END`, `IMAGE_INSTALL_END`, `IMAGE_MIGRATION_START`, `IMAGE_MIGRATION_END`, `IMAGE_ROLLBACK_END` | RuntimeHost `ImageUpdateCoordinator` | [runtime-maintenance.md](runtime-maintenance.md) §12 | `imageVersion`, `result`, `bytes`, `durationMs` |
+| `SELF_UPDATE_CHECK_END`, `HOST_UPDATE_PREPARE_START`, `HOST_UPDATE_PREPARED`, `HOST_UPDATED` | `MaintenanceService`, `SelfUpdateProbe` | [runtime-maintenance.md](runtime-maintenance.md) §12 | `result`, `fromBuild`, `toBuild`, `durationMs` |
+| `IMAGE_CHECK_END`, `IMAGE_DOWNLOAD_START`, `IMAGE_DOWNLOAD_END`, `IMAGE_INSTALL_END`, `IMAGE_MIGRATION_START`, `IMAGE_MIGRATION_END`, `IMAGE_ROLLBACK_END` | `ImageUpdateCoordinator` | [runtime-maintenance.md](runtime-maintenance.md) §12 | `imageVersion`, `result`, `bytes`, `durationMs` |
 
-The launcher passes its two times in `OpenSessionRequest.launchTiming { processStart, requestSent }` (continuous-clock nanoseconds, [../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.3). apkrund records them as `WRAPPER_PROCESS_START` and `APP_LAUNCH_REQUEST` in the session's timeline, so one process holds the whole launch.
-
-Signpost intervals (not in the timeline): `gpu.flush`, `gpu.present` ([graphics.md](graphics.md) §7), `input.translate`, `input.route` ([input.md](input.md) §8).
+- The launcher passes `OpenSessionRequest.launchTiming { processStart, requestSent }` (continuous-clock nanoseconds, [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.3). apkrund records `WRAPPER_PROCESS_START` and `APP_LAUNCH_REQUEST` in the session timeline.
+- Interval-only signposts, not in the timeline: `gpu.flush`, `gpu.present` ([graphics.md](graphics.md) §7), `input.translate`, `input.route` ([input.md](input.md) §8).
 
 ### 4.3 Perf records
 
-apkrund writes one record per launch and per boot with `PerfRecordWriter`. These files contain no personal data beyond package IDs, and they give real-world numbers without any telemetry: nothing leaves the Mac unless the user attaches a diagnostics report.
+apkrund writes one record per launch and one per boot. They hold no personal data beyond package IDs. Nothing leaves the Mac unless the user attaches a report.
 
-`perf/launches.jsonl`, one line per session launch, written at `FIRST_FRAME_DISPLAYED` or when the session ends before it:
-
-```json
-{"v":1,"recordedAt":"2026-09-28T10:15:02Z","packageID":"io.apkrun.fixture.hellotext","versionCode":3,
- "sessionID":"s-12","operationID":"3f9a1c2e-…","launchState":"warm","windowMode":"secondaryDisplay",
- "build":"1.0 (1000)","image":"2026.10.0-cf16373615-arm64","gpuProfile":"drmVirgl",
- "markers":{"WRAPPER_PROCESS_START":0,"APP_LAUNCH_REQUEST":138.2,"DISPLAY_ATTACHED":412.9,
-            "ACTIVITY_STARTED":1104.5,"FIRST_FRAME":1188.0,"FIRST_FRAME_DISPLAYED":1196.3},
- "totalMs":1196.3,"outcome":"shown"}
-```
+`perf/launches.jsonl` gets one line per session launch, at `FIRST_FRAME_DISPLAYED` or when the session ends first. Keys: `v` (1), `recordedAt`, `packageID`, `versionCode`, `sessionID`, `operationID`, `launchState`, `windowMode`, `build`, `image`, `gpuProfile`, `markers` (ms relative to `WRAPPER_PROCESS_START`), `totalMs`, `outcome` (`shown`, `ended(<reason>)`, `failed(<code>)`).
 
 | `launchState` | Meaning | Target |
 |---|---|---|
-| `hot` | the app process was already running (a window reopened) | — |
+| `hot` | app process already running (window reopened) | — |
 | `warm` | Android `ready`, app process not running | NFR-PERF-01: p50 ≤ 1.5 s, p95 ≤ 3 s |
-| `suspended` | Android was `suspended` and resumed for this launch | NFR-PERF-01 + 0.5 s ([runtime-daemon.md](runtime-daemon.md) §5) |
+| `suspended` | Android was `suspended` and resumed | NFR-PERF-01 + 0.5 s ([runtime-daemon.md](runtime-daemon.md) §5) |
 | `cold` | Android was stopped and booted for this launch | NFR-PERF-02: p50 ≤ 40 s |
-| `firstBoot` | the provisioning boot | excluded from statistics |
+| `firstBoot` | provisioning boot | excluded from statistics |
 
-- Times are milliseconds relative to `WRAPPER_PROCESS_START`. `outcome` is `shown`, `ended(<reason>)`, or `failed(<code>)`.
-- `perf/boots.jsonl`, one line per boot, with the same `v` schema version ([runtime-maintenance.md](runtime-maintenance.md) §5): `VM_START` as 0, then `KERNEL_START`, `ANDROID_INIT`, `SYSTEM_SERVER_READY`, `BOOT_COMPLETED`, `AGENT_CONNECTED` (both agents), `RUNTIME_READY`, plus `bootKind`, `gpuProfile`, `memoryGiB`, `cpuCount`, and the outcome.
-- Retention: at apkrund start, a file with more than the limit (§3.3) is rewritten atomically with the newest records.
+`perf/boots.jsonl` gets one line per boot with the same `v`: markers `VM_START` (as 0), `KERNEL_START`, `ANDROID_INIT`, `SYSTEM_SERVER_READY`, `BOOT_COMPLETED`, `AGENT_CONNECTED` (both agents), `RUNTIME_READY`; plus `bootKind`, `gpuProfile`, `memoryGiB`, `cpuCount`, `outcome` ([runtime-maintenance.md](runtime-maintenance.md) §5). At apkrund start, a file over its limit (§3.3) is rewritten atomically with the newest records.
 
 ---
 
 ## 5. Metrics
 
-`MetricsSnapshot` is collected on demand: for `apkrun doctor --deep`, for diagnostics bundles, and by the performance harness through `perfStatistics` (§9.3). There is no background polling. The one periodic sampler (`apkrundCPU`, once per second) runs only while a scanout is presenting or a statistics subscriber exists, so an idle apkrund does no periodic work (NFR-PERF-06).
+`MetricsSnapshot` is collected on demand: for `apkrun doctor --deep`, bundles, and `perfStatistics` (§9.3). There is no background polling. The one periodic sampler (`apkrundCPU`, once per second) runs only while a scanout is presenting or a statistics subscriber exists (NFR-PERF-06).
 
-| Metric | Source | Notes |
-|---|---|---|
-| VM memory | configured size (`VMDefinition`), balloon target, guest `MemTotal` and `MemAvailable` from the agent's `Health.memory` ([guest-protocol.md](guest-protocol.md) §7.4), host footprint of the Virtualization XPC service process (`proc_pid_rusage`, `ri_phys_footprint`) | finding the VZ service process reliably is verified in #070 (§13) |
-| `system_server`, `SurfaceFlinger`, `zygote`/`zygote64`, each app process | `CollectDiagnostics` item `DUMPSYS_MEMINFO` (`dumpsys meminfo -c`): PSS and RSS per process | on demand only; one call costs about 1 s of guest CPU |
-| Host graphics memory | GraphicsCore `resourceMemory` and high-water mark, SurfacePool IOSurface bytes (`IOSurfaceGetAllocSize`), `MTLDevice.currentAllocatedSize` | [graphics.md](graphics.md) §5.4, §6.3 |
-| apkrund memory | `task_vm_info.phys_footprint` and `resident_size` | |
-| apkrund CPU | `task_info` thread times, sampled as above | NFR-PERF-06 |
+| Metric | Source |
+|---|---|
+| VM memory | `VMDefinition` size, balloon target, guest `MemTotal` and `MemAvailable` from `Health.memory` ([guest-protocol.md](guest-protocol.md) §7.4), host footprint of the Virtualization XPC service (`proc_pid_rusage`, `ri_phys_footprint`; OQ-06) |
+| guest processes (`system_server`, `SurfaceFlinger`, `zygote`/`zygote64`, apps) | `CollectDiagnostics` item `DUMPSYS_MEMINFO` (`dumpsys meminfo -c`): PSS and RSS. On demand; about 1 s of guest CPU |
+| host graphics memory | `resourceMemory` and high-water mark, SurfacePool IOSurface bytes (`IOSurfaceGetAllocSize`), `MTLDevice.currentAllocatedSize` ([graphics.md](graphics.md) §5.4, §6.3) |
+| apkrund memory and CPU | `task_vm_info.phys_footprint`, `resident_size`; `task_info` thread times |
 
-Graphics metrics are defined in [graphics.md](graphics.md) §7 (`fps`, `guestFlushRate`, `flushToReady`, `readyToDisplayed`, `presentGPUTime`, `droppedFrames`, `hostReadbacks`, `guestReadbacks`, `cpuPixelCopies`, `resourceMemory`, `gpuUtilization`). Input counters are in [input.md](input.md) §11. Store and update metrics are in [package-store.md](package-store.md) §13 and [update-system.md](update-system.md) §14. The snapshot includes all of them, grouped by subsystem.
+Graphics metrics (defined in [graphics.md](graphics.md) §7): `fps`, `guestFlushRate`, `flushToReady`, `readyToDisplayed`, `presentGPUTime`, `droppedFrames`, `hostReadbacks`, `guestReadbacks`, `cpuPixelCopies`, `resourceMemory`, `gpuUtilization`. Input counters: [input.md](input.md) §11. Store and update metrics: [package-store.md](package-store.md) §13 and [update-system.md](update-system.md) §14.
 
 ---
 
-## 6. Redaction (NFR-SEC-05, #060)
+## 6. Redaction (NFR-SEC-05)
 
-A diagnostics report must be safe to post in a public GitHub issue. Redaction is layered. Each layer assumes the layers before it can fail.
+A report must be safe to post in a public issue. Four layers apply; each assumes the earlier ones can fail.
 
 ### 6.1 Layer 1: never collected
 
-The bundle has no code path that reads these, so they cannot leak:
+The bundle has no code path that reads:
 
-| Never collected | Why it matters |
-|---|---|
-| Clipboard contents (host and guest) | #060 |
-| Notification titles and text | private messages |
-| Files the user shared, dropped, imported, or saved; the contents of shared folders | #060 "user files" |
-| Android app data: `/data/data`, `/data/user*`, `/sdcard`, app databases, app caches, `userdata.img` | #060 "app private data" |
-| Android accounts (`dumpsys account`), Wi-Fi configuration, keystore, lock settings | credentials |
-| Keychain items (update provider tokens), `~/.ssh`, browser data | #060 "tokens, passwords" |
-| Google credentials | APKRun ships no Google services. Any `google` account data on a user-modified image is covered by the account rule above |
-| IME text and key events | typed passwords |
-| Mac hardware serial number, hardware UUID, provisioning UDID | device identifiers |
-| Screenshots of app windows | may show anything |
+- Clipboard contents; notification titles and text; IME text and key events.
+- Files the user shared, dropped, imported, or saved; contents of shared folders.
+- Android app data: `/data/data`, `/data/user*`, `/sdcard`, app databases and caches, `userdata.img`.
+- Android accounts (`dumpsys account`), Wi-Fi configuration, keystore, lock settings. Google account data on a user-modified image falls under the account rule; APKRun ships no Google services.
+- Keychain items, `~/.ssh`, browser data. Google credentials. Mac serial number, hardware UUID, provisioning UDID. Screenshots of app windows.
 
 ### 6.2 Layer 2: allowlists for structured data
 
-Structured sources are copied field by field from an allowlist, not filtered by a blocklist:
+Structured sources are copied field by field from an allowlist, never filtered by a blocklist.
 
-- **getprop:** the agent returns only allowlisted properties, and the host filters again with the same list. Allowed: `ro.build.fingerprint`, `ro.build.id`, `ro.build.type`, `ro.build.version.*`, `ro.product.cpu.abilist*`, `ro.product.model`, `ro.product.device`, `ro.hardware*`, `ro.boot.hardware.*` (egl, gralloc, vulkan), `ro.opengles.version`, `ro.kernel.version`, `ro.apkrun.*` (image identity), `sys.boot_completed`, `init.svc.*` (service states), `dalvik.vm.heap*`, `persist.sys.locale`, `debug.hwui.renderer`. Everything else, including `ro.serialno` and `ro.boot.serialno`, is left out.
-- **Configuration:** global settings ([../03-reference/configuration.md](../03-reference/configuration.md)) and per-package settings are copied by key. `sharedFolders.roots` becomes a count plus last path components.
-- **Package records:** package ID, label, version name and code, state, installer and update owner, provider type and host, signer digest truncated to 12 hex, sizes. Provider configuration values other than type and host are left out.
-- **Unified log entries:** every message is cut at U+001F (§3.2), so only the public text remains even when a private-data logging profile is installed.
-- **Wrapper registry:** paths are reduced to their last component, and bookmarks are removed ([wrapper.md](wrapper.md) §14).
-- **Bootconfig and instance data:** `androidboot.serialno`, the instance UUID, the VM machine identifier, and the MAC address are replaced by stable placeholders (`<serial-1>`, `<uuid-1>`), so the same value is recognizable across files of one report ([android-image.md](android-image.md) §14).
+- **getprop:** the agent and the host both keep only `ro.build.fingerprint`, `ro.build.id`, `ro.build.type`, `ro.build.version.*`, `ro.product.cpu.abilist*`, `ro.product.model`, `ro.product.device`, `ro.hardware*`, `ro.boot.hardware.*` (egl, gralloc, vulkan), `ro.opengles.version`, `ro.kernel.version`, `ro.apkrun.*`, `sys.boot_completed`, `init.svc.*`, `dalvik.vm.heap*`, `persist.sys.locale`, `debug.hwui.renderer`. `ro.serialno` and `ro.boot.serialno` are left out.
+- **Configuration:** settings are copied by key ([configuration.md](../03-reference/configuration.md)). `sharedFolders.roots` becomes a count and last path components.
+- **Package records:** package ID, label, version name and code, state, installer and update owner, provider type and host, signer digest truncated to 12 hex, sizes. Other provider configuration is left out.
+- **Unified log entries:** cut at U+001F (§3.2).
+- **Wrapper registry:** paths reduced to the last component; bookmarks removed ([wrapper.md](wrapper.md) §14).
+- **Bootconfig and instance data:** `androidboot.serialno`, the instance UUID, the VM machine identifier, and the MAC address become `<serial-1>`, `<uuid-1>`, and so on, stable within one report ([android-image.md](android-image.md) §14).
 
 ### 6.3 Layer 3: structural reduction of free text
 
-Applied by `Redactor` to every text file in the bundle (logs, console output, logcat, dumpsys):
+`Redactor` applies these rules to every text file (logs, console, logcat, dumpsys):
 
 | Rule | Replacement |
 |---|---|
-| The user's home directory | `~` |
-| The account name (`NSUserName()`), full name (`NSFullUserName()`), computer name and local host name (`SCDynamicStoreCopyComputerName`, `SCDynamicStoreCopyLocalHostName`) | `<user>`, `<user-name>`, `<computer>` |
-| Paths inside the home directory other than `~/Library/Application Support/APKRun`, `~/Library/Logs/APKRun`, and `/Applications/APKRun.app` | `~/…/<last component>` |
-| URLs | `scheme://host/…`: path, query, fragment, and user info are removed. Hosts of APKRun's own endpoints are kept with their path (they carry no user data) |
-| E-mail addresses | `<email>` |
-| IPv4 and IPv6 addresses except loopback, link-local, and the VM's NAT subnet | `<ip>` |
+| home directory | `~` |
+| `NSUserName()`, `NSFullUserName()`, computer and local host name (`SCDynamicStoreCopyComputerName`, `SCDynamicStoreCopyLocalHostName`) | `<user>`, `<user-name>`, `<computer>` |
+| paths in the home directory except `~/Library/Application Support/APKRun`, `~/Library/Logs/APKRun`, `/Applications/APKRun.app` | `~/…/<last component>` |
+| URLs | `scheme://host/…`; path, query, fragment, and user info removed. APKRun's own endpoint hosts keep their path |
+| e-mail addresses | `<email>` |
+| IPv4 and IPv6, except loopback, link-local, and the VM's NAT subnet | `<ip>` |
 | MAC addresses | `<mac>` |
-| Android `content://` URIs and intent data in dumpsys output | `content://<authority>/…` |
+| Android `content://` URIs and intent data in dumpsys | `content://<authority>/…` |
 
 ### 6.4 Layer 4: secret patterns and known secrets
 
-The last line of defense, also applied to every text file:
+Also applied to every text file:
 
 | Pattern | Examples |
 |---|---|
-| `key: value` and `key=value` where the key matches `(?i)(authorization|bearer|token|access_token|refresh_token|id_token|api[_-]?key|secret|client_secret|password|passwd|pwd|cookie|set-cookie|session)` | HTTP headers, query strings that survived, config dumps |
+| `key: value` and `key=value` where the key matches `(?i)(authorization\|bearer\|token\|access_token\|refresh_token\|id_token\|api[_-]?key\|secret\|client_secret\|password\|passwd\|pwd\|cookie\|set-cookie\|session)` | HTTP headers, surviving query strings, config dumps |
 | JSON Web Tokens: `eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}` | |
 | Provider tokens: `gh[pousr]_[A-Za-z0-9]{36,}`, `github_pat_[A-Za-z0-9_]{50,}`, `ya29\.[0-9A-Za-z_-]+`, `AIza[0-9A-Za-z_-]{35}`, `AKIA[0-9A-Z]{16}`, `xox[abprs]-[0-9A-Za-z-]{10,}` | GitHub, Google, AWS, Slack |
 | PEM private keys: `-----BEGIN [A-Z ]*PRIVATE KEY-----` … `-----END [A-Z ]*PRIVATE KEY-----` | |
-| Base64 runs of 64 characters or more that are not part of a known structured field | opaque blobs |
-| **Known secrets:** the exact values of the secrets APKRun stores (update provider tokens from the Keychain, read by `DiagnosticsService` only for this purpose and never written anywhere), in raw, URL-encoded, base64, and UTF-16 forms | the strongest check for our own secrets |
+| Base64 runs of 64 characters or more outside a known structured field | opaque blobs |
+| **Known secrets:** exact values of APKRun's stored secrets (update provider tokens from the Keychain). `DiagnosticsService` reads them only for this check and never writes them. Matched in raw, URL-encoded, base64, and UTF-16 forms | APKRun's own secrets |
 
-Matches become `<redacted:rule>`. The manifest records counts per rule (§8.2), never the matched values.
+Matches become `<redacted:rule>`. The manifest records counts per rule (§8.2), never values.
 
 ### 6.5 Verification and failure
 
-- After redaction, the writer re-scans each file with the layer 4 rules. A hit of a **known secret** means a redaction bug: the file is dropped, `omitted` records `redactionFailed`, and the bundle is still produced. Pattern hits after redaction are impossible by construction and are treated the same way.
-- `RedactionRules.version` is recorded in the manifest. Changing a rule increases it.
-- The redactor never runs on the local log files. `ConsoleLogWriter` and the mirrors keep full local data ([vm.md](vm.md) §6.4); redaction happens only when a report is built.
+- After redaction, each file is re-scanned with the layer 4 rules. A **known secret** hit is a redaction bug: the file is dropped, `omitted` records `redactionFailed`, and the bundle is still produced. Other hits after redaction are handled the same way.
+- `RedactionRules.version` goes into the manifest; changing a rule increases it.
+- Local logs are never redacted. Redaction happens only when a report is built ([vm.md](vm.md) §6.4).
 
 ---
 
-## 7. Health model and `apkrun doctor` (#059, FR-OPS-01, NFR-OBS-02, NFR-OBS-03)
+## 7. Health model and `apkrun doctor` (FR-OPS-01, NFR-OBS-02, NFR-OBS-03)
 
 ### 7.1 Types
 
 ```swift
 public enum HealthState: String, Sendable, Codable { case pass, info, warning, failure, skipped }
-
 public enum HealthGroup: String, Sendable, Codable, CaseIterable {
     case host, backgroundService, virtualization, android, graphics, guest,
          store, updates, applications, macApps, integrations, maintenance
 }
-
 public enum HealthRequirement: Sendable { case host, daemon, runningRuntime }   // what the check needs
 public enum HealthCost: Sendable { case quick, deep }                            // deep: --deep only
 
@@ -503,211 +437,165 @@ public protocol HealthCheck: Sendable {
     var group: HealthGroup { get }
     var requirement: HealthRequirement { get }
     var cost: HealthCost { get }
-    var fix: HealthFix? { get }                     // a safe automatic fix, if any (§7.5)
+    var fix: HealthFix? { get }                     // safe automatic fix, if any (§7.5)
     var title: LocalizedText { get }
     func run(_ context: HealthContext) async -> HealthResult
 }
-
 public struct HealthResult: Sendable, Codable {
     public var id: HealthCheckID
     public var group: HealthGroup
     public var state: HealthState
     public var title: LocalizedText                 // "Boot completed"
-    public var detail: String?                      // public-safe: "31 s", "stopped at systemServer after 180 s"
+    public var detail: String?                      // public-safe: "31 s"
     public var error: ErrorInfo?                    // code, message, remediation, action (§2)
     public var fixAvailable: Bool
-    public var lastKnown: LastKnown?                // for skipped checks: the last result and its time
+    public var lastKnown: LastKnown?                // skipped checks: last result and time
     public var measuredAt: Date
 }
-
 public struct HealthReport: Sendable, Codable {
     public var generatedAt: Date
     public var build: BuildInfo
     public var imageVersion: String?
     public var runtimeRunning: Bool
     public var verdict: HealthVerdict               // §7.2
-    public var results: [HealthResult]              // ordered by group, then registration order
+    public var results: [HealthResult]              // by group, then registration order
 }
 ```
 
-- Each process has a `HealthCheckRegistry`. apkrund's registry is filled at startup by RuntimeHost with the checks of every module. The CLI and APKRun.app have a registry with only the host checks (§7.3).
-- `HealthResult.error` is empty for `pass`, `info`, and `skipped` results. A `warning` or `failure` carries it whenever there is a next step: the GUI shows its remediation and action on the row, and `apkrun doctor` prints its hint. The entry of each check is listed in [../03-reference/error-catalog.md](../03-reference/error-catalog.md) §20.2.
-- A quick check must finish in 2 s. A deep check has 60 s. The budget includes time spent waiting for a concurrency slot. A check that times out returns `warning` with `detail = "check timed out"` and no `error`. Checks run concurrently, at most 8 at a time. Checks that need the guest share one agent round trip where possible (`Health`, [guest-protocol.md](guest-protocol.md) §7.4).
-- Checks with `requirement == .runningRuntime` never start Android. While Android is stopped they return `skipped` with "Android is not running" and `lastKnown` (for example "last boot completed in 31 s, today 10:02"). Opening Troubleshooting or running `apkrun doctor` does not start Android ([host-ui.md](host-ui.md) §1).
-- A check with `cost == .deep` is `skipped` unless `--deep` was requested. Checks with `.daemon` or `.runningRuntime` are skipped when apkrund is unavailable; host checks and `apkrund.registration` still run. Skipped results have no `error`. The failed registration or reachability row carries the service remediation.
-- `HealthCheckRegistry.run(deep:context:)` preserves registration order within each `HealthGroup` and sorts groups by `HealthGroup.allCases`. Check IDs are unique in a registry. The production concurrency limit is 8. Caller cancellation returns an empty result; a timed-out check is cancelled, and a task that does not cooperate with cancellation continues to hold its slot until it exits.
-- `HealthContext` supplies daemon/runtime availability, the prior result map, `BuildInfo`, `APKRunPaths`, a diagnostics clock, and a `HostProbe`. All host reads, process invocations, and Security/ServiceManagement calls made by `HostChecks` go through that injected probe.
-- The verdict input contains the runtime state (`stopped`, `ready`, `suspended`, `failed`, or `other`), provisioning completion, the boot-loop guard, and the last boot error code. `other` with no higher-priority finding yields `degraded`; it never claims the runtime is healthy.
-- **Live checks.** A subset re-evaluates when its source state changes (no polling) and publishes `healthChanged(HealthResult)` on the `health` topic of `subscribe` ([../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.4): `runtime.state`, `runtime.boot`, `agent.*`, `vm.network`, `graphics.renderer`, `graphics.memory`, `runtime.memoryPressure`, `store.packages`, `store.hostSpace`, `wrappers.status`. The main window header and the menu bar show "Needs attention" while any live check is `warning` or `failure` ([host-ui.md](host-ui.md) §5, §12).
+- apkrund's `HealthCheckRegistry` is filled at startup by RuntimeHost with every module's checks. The CLI and APKRun.app register only host checks (§7.3).
+- `HealthResult.error` is empty for `pass`, `info`, and `skipped`. A `warning` or `failure` carries it when there is a next step. Check entries are in [error-catalog.md](../03-reference/error-catalog.md) §20.2.
+- Budgets: a quick check finishes in 2 s, a deep check in 60 s, both including the wait for a slot. A timed-out check returns `warning` with `detail = "check timed out"` and no `error`. At most 8 checks run at once. Guest checks share one `Health` round trip where possible ([guest-protocol.md](guest-protocol.md) §7.4).
+- Checks with `requirement == .runningRuntime` never start Android. While it is stopped they return `skipped` with "Android is not running" and `lastKnown`. Troubleshooting and `apkrun doctor` never start Android ([host-ui.md](host-ui.md) §1).
+- Checks with `cost == .deep` are `skipped` unless `--deep`. `.daemon` and `.runningRuntime` checks are skipped when apkrund is unavailable; host checks and `apkrund.registration` still run. Skipped results have no `error`.
+- `HealthCheckRegistry.run(deep:context:)` keeps registration order within a group and sorts groups by `HealthGroup.allCases`. IDs are unique. Caller cancellation returns an empty result. A timed-out check is cancelled; one that ignores cancellation keeps its slot until it exits.
+- `HealthContext` provides daemon and runtime availability, prior results, `BuildInfo`, `APKRunPaths`, a clock, and a `HostProbe`. All host reads, process calls, and Security and ServiceManagement calls go through the probe.
+- Verdict input: runtime state (`stopped`, `ready`, `suspended`, `failed`, `other`), provisioning completion, the boot-loop guard, and the last boot error code. `other` with no higher finding gives `degraded`, never "healthy".
+- **Live checks** (no polling) publish `healthChanged(HealthResult)` on the `health` topic ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.4): `runtime.state`, `runtime.boot`, `agent.*`, `vm.network`, `graphics.renderer`, `graphics.memory`, `runtime.memoryPressure`, `store.packages`, `store.hostSpace`, `wrappers.status`. While one is `warning` or `failure`, the window header and menu bar show "Needs attention" ([host-ui.md](host-ui.md) §5, §12).
 
 ### 7.2 Verdict (FR-OPS-01)
 
-The report's verdict is the first row that applies:
+The first row that applies wins:
 
 | Verdict | Condition | Status line |
 |---|---|---|
 | `hostUnsupported` | a `host.*` check or `vm.virtualizationSupported` fails | "APKRun can't run on this Mac" |
 | `serviceUnavailable` | `apkrund.registration` or `apkrund.reachable` fails | "Background service not running" |
-| `notSetUp` | `runtime.provisioning` is not complete, or `image.current` fails | "Setup not finished" |
-| `graphicsFailure` | `graphics.renderer` fails (renderer initialization failed or the renderer was lost in the current or last boot), or the last boot failed with a `GraphicsFailure` | "Graphics failed to start" |
-| `bootFailure` | `runtime.state` is `failed`, or `runtime.boot` fails (the last boot failed and no boot has succeeded since), or the boot-loop guard is set | "Android failed to start" plus the boot phase reached |
-| `agentUnavailable` | Android is `ready` and `agent.guest` or `agent.store` fails | "Guest Agent unavailable" / "Store Agent unavailable" |
-| `degraded` | any other failure, or any warning | "Needs attention (‹n› warnings)" |
-| `stopped` | no failures or warnings, Android is stopped | "Healthy · Android is not running" |
-| `healthy` | no failures or warnings, Android is `ready` or `suspended` | "Healthy" |
+| `notSetUp` | `runtime.provisioning` incomplete, or `image.current` fails | "Setup not finished" |
+| `graphicsFailure` | `graphics.renderer` fails (initialization failed, or lost in the current or last boot), or the last boot failed with a `GraphicsFailure` | "Graphics failed to start" |
+| `bootFailure` | `runtime.state` is `failed`; or `runtime.boot` fails (last boot failed, none succeeded since); or the boot-loop guard is set | "Android failed to start" plus the boot phase |
+| `agentUnavailable` | Android `ready` and `agent.guest` or `agent.store` fails | "Guest Agent unavailable" / "Store Agent unavailable" |
+| `degraded` | any other failure or warning | "Needs attention (‹n› warnings)" |
+| `stopped` | no failures or warnings; Android stopped | "Healthy · Android is not running" |
+| `healthy` | no failures or warnings; Android `ready` or `suspended` | "Healthy" |
 
-- `graphicsFailure` comes before `bootFailure`, because a renderer failure also fails the boot, and the graphics verdict carries the better remediation ("Start in Graphics Safe Mode", [graphics.md](graphics.md) §9).
-- When the verdict is `degraded` and Android is stopped, the status line adds "· Android is not running", so the stopped state stays visible.
-- For `degraded`, the status line counts warning rows; if only failures remain it says "Needs attention". For `bootFailure`, a non-empty `runtime.boot.detail` is appended only when that row is a failure, so a previous successful boot cannot supply the phase of a later failure.
-- CLI exit codes ([cli.md](cli.md) §3.3): `healthy` and `stopped` → 0; `degraded` without failures → 3; everything else → 1.
+- `graphicsFailure` precedes `bootFailure`: a renderer failure also fails the boot, and the graphics remediation is better ("Start in Graphics Safe Mode", [graphics.md](graphics.md) §9).
+- `degraded` with Android stopped adds "· Android is not running". With only failures left, the line says "Needs attention".
+- For `bootFailure`, `runtime.boot.detail` is appended only when that row is a failure.
+- CLI exit codes ([cli.md](cli.md) §3.3): `healthy`, `stopped` → 0; `degraded` without failures → 3; otherwise → 1.
 
-### 7.3 Host checks (DiagnosticsCore `HostChecks`)
+### 7.3 Host checks
 
-These need neither apkrund nor RuntimeHost. The CLI and APKRun.app run them directly when apkrund is unreachable ([cli.md](cli.md) §4.8), and RuntimeHost's `HostRequirementsCheck` builds on them for provisioning ([runtime-daemon.md](runtime-daemon.md) §9.1).
+These need neither apkrund nor RuntimeHost. The CLI and APKRun.app run them directly when apkrund is unreachable ([cli.md](cli.md) §4.8). `HostRequirementsCheck` builds on them for provisioning ([runtime-daemon.md](runtime-daemon.md) §9.1).
 
 | Check | Group | Pass condition | Remediation on failure |
 |---|---|---|---|
 | `host.appleSilicon` | host | `sysctl hw.optional.arm64 == 1` and `sysctl.proc_translated == 0` | "APKRun needs a Mac with Apple silicon" |
 | `host.macOSVersion` | host | macOS 27 or later | "Update macOS" |
-| `host.hypervisor` | virtualization | `sysctl kern.hv_support == 1`. apkrund additionally checks `VZVirtualMachine.isSupported` as `vm.virtualizationSupported` | "Virtualization is not available on this Mac (APKRun can't run inside a virtual machine)" |
-| `host.appLocation` | host | APKRun.app is in `/Applications` or `~/Applications` and not translocated | "Move APKRun to the Applications folder" |
-| `host.appSignature` (deep) | host | `SecStaticCodeCheckValidity` of APKRun.app with its designated requirement, including nested code | "Reinstall APKRun" |
-| `host.componentVersions` | host | apkrund, the CLI, and the generic launcher in the bundle all have the same build as APKRun.app; executable build numbers come from embedded signing-information metadata, without running the bundled executables | "Reinstall APKRun" |
-| `host.dataVolume` | host | the data root is on APFS and has at least 10 GiB free (warning below) | "Free up space" / "Move APKRun's data to an APFS volume" |
-| `host.memory` | host | physical memory ≥ 8 GiB; below 8 GiB is a warning | "APKRun works best with 16 GB or more" |
-| `apkrund.registration` | backgroundService | APKRun.app: `SMAppService.status == .enabled`. CLI: `launchctl print gui/<uid>/<label>` succeeds, with `<label>` from `BuildInfo` | `requiresApproval` → "Allow APKRun in System Settings → General → Login Items & Extensions" (`openLoginItemsSettings`); not registered → "Open APKRun to finish setup" |
-| `apkrund.reachable` | backgroundService | broker `hello` answers within 5 s with the same API major version | "Restart the background service" (Troubleshooting) |
-| `apkrund.version` | backgroundService | apkrund's build equals the client's build | while apkrund is in `restartPending` ([runtime-maintenance.md](runtime-maintenance.md) §3.6): "An APKRun update is waiting for your Android apps to close. Close them, or choose Restart Now." Otherwise "Quit and reopen APKRun" |
+| `host.hypervisor` | virtualization | `sysctl kern.hv_support == 1`. apkrund also checks `VZVirtualMachine.isSupported` as `vm.virtualizationSupported` | "Virtualization is not available on this Mac (APKRun can't run inside a virtual machine)" |
+| `host.appLocation` | host | in `/Applications` or `~/Applications`, not translocated | "Move APKRun to the Applications folder" |
+| `host.appSignature` (deep) | host | `SecStaticCodeCheckValidity` of APKRun.app with its designated requirement, nested code included | "Reinstall APKRun" |
+| `host.componentVersions` | host | apkrund, CLI, and launcher builds equal APKRun.app's. Read from embedded signing metadata, without running executables | "Reinstall APKRun" |
+| `host.dataVolume` | host | data root on APFS with ≥ 10 GiB free (warning below) | "Free up space" / "Move APKRun's data to an APFS volume" |
+| `host.memory` | host | physical memory ≥ 8 GiB (warning below) | "APKRun works best with 16 GB or more" |
+| `apkrund.registration` | backgroundService | APKRun.app: `SMAppService.status == .enabled`. CLI: `launchctl print gui/<uid>/<label>` succeeds (`<label>` from `BuildInfo`) | `requiresApproval`: "Allow APKRun in System Settings → General → Login Items & Extensions" (`openLoginItemsSettings`). Not registered: "Open APKRun to finish setup" |
+| `apkrund.reachable` | backgroundService | broker `hello` answers within 5 s with the same API major | "Restart the background service" |
+| `apkrund.version` | backgroundService | apkrund build equals the client build | `restartPending`: "An APKRun update is waiting for your Android apps to close. Close them, or choose Restart Now." Otherwise "Quit and reopen APKRun" ([runtime-maintenance.md](runtime-maintenance.md) §3.6) |
 | `apkrund.crashLoop` | backgroundService | fewer than 3 unclean exits in 10 minutes ([runtime-daemon.md](runtime-daemon.md) §2.5). Without apkrund: counted from `~/Library/Logs/DiagnosticReports/apkrund-*.ips` | "Create a diagnostics report and report the problem" |
 
-The `HealthResult.error` of these checks is `runtime.hostRequirementsNotMet` with one item (`host.appleSilicon`, `host.macOSVersion`, `host.hypervisor`, and `host.dataVolume` on a volume that is not APFS), `runtime.serviceUnavailable` (`apkrund.registration`, `apkrund.reachable`), or a finding of `DiagnosticsFailure` (§2.1) for the other checks.
-
-When apkrund is unreachable, the report lists every non-host check other than `apkrund.registration` as `skipped` with "Background service not running". Skipped results have no `error`; the failed `apkrund.registration` or `apkrund.reachable` row carries the service remediation. The host checks run directly in the client.
+- Errors: `host.appleSilicon`, `host.macOSVersion`, `host.hypervisor`, and `host.dataVolume` (on non-APFS) give `runtime.hostRequirementsNotMet` with one item each. `apkrund.registration` and `apkrund.reachable` give `runtime.serviceUnavailable`. The others give a `DiagnosticsFailure` (§2.1).
+- Without apkrund, every non-host check except `apkrund.registration` is `skipped` with "Background service not running". The failed `apkrund.registration` or `apkrund.reachable` row carries the service remediation.
 
 ### 7.4 Check catalogue
 
-Checks are implemented by their owner module, as part of the task that builds the checked feature. #061 adds the health model, the verdict function (§7.2), and `HostChecks` with the `host.*` checks and `apkrund.registration`. #059 adds the report plumbing, the output, the host-only mode, and the other `apkrund.*` checks. The owning documents define the exact conditions.
+Owner modules implement their checks with their feature's task ([issues/README.md](../04-plan/issues/README.md) §3). The health model, verdict function, `HostChecks`, and `apkrund.registration` come with #061. The report plumbing, output, host-only mode, and the other `apkrund.*` checks come with #059.
 
 | Group (doctor heading) | Checks | Defined in |
 |---|---|---|
 | Host | `host.appleSilicon`, `host.macOSVersion`, `host.appLocation`, `host.appSignature`, `host.componentVersions`, `host.dataVolume`, `host.memory` | §7.3 |
-| Background Service | `apkrund.registration`, `apkrund.reachable`, `apkrund.version`, `apkrund.crashLoop` | §7.3, [runtime-daemon.md](runtime-daemon.md) §12 |
+| Background Service | `apkrund.registration`, `apkrund.reachable`, `apkrund.version`, `apkrund.crashLoop` | §7.3 |
 | Virtualization | `host.hypervisor`, `vm.virtualizationSupported`, `vm.state`, `vm.network`, `vm.consoleWriter` | [vm.md](vm.md) |
 | Android | `runtime.provisioning`, `image.current`, `image.instance`, `image.kind`, `image.migration`, `image.recoveryPoint`, `image.freeSpace`, `runtime.state`, `runtime.boot`, `runtime.stop`, `runtime.memoryPressure` | [runtime-daemon.md](runtime-daemon.md) §12, [android-image.md](android-image.md) §14.3 |
 | Graphics | `graphics.device`, `graphics.renderer`, `graphics.guestDriver` (deep), `graphics.present`, `graphics.memory`, `graphics.safeMode` | below, [graphics.md](graphics.md) |
-| Guest | `agent.guest`, `agent.store`, `agent.input`, `agent.ime`, `agent.developerMode` | below, [runtime-daemon.md](runtime-daemon.md) §12, [input.md](input.md) §11 |
-| Store | `store.journal`, `store.pending`, `store.ownership`, `store.externallyUpdated`, `store.hostSpace` | [package-store.md](package-store.md) §13 |
+| Guest | `agent.guest`, `agent.store`, `agent.input`, `agent.ime`, `agent.developerMode` | below, [input.md](input.md) §11 |
+| Store | `store.journal`, `store.pending`, `store.ownership`, `store.externallyUpdated`, `store.hostSpace`, `store.packages` | [package-store.md](package-store.md) §13 |
 | Updates | `updates.scheduler`, `updates.providers`, `updates.waiting`, `updates.failed` | [update-system.md](update-system.md) §14 |
-| Applications | `store.packages` (rendered as "‹n› installed", plus the packages that need attention) | [package-store.md](package-store.md) §13 |
 | Mac Apps | `wrappers.template`, `wrappers.registry`, `wrappers.status`, `wrappers.launcher`, `wrappers.registration` | [wrapper.md](wrapper.md) §14 |
 | Integrations | `integrations.capabilities`, `integrations.notificationListener`, `integrations.browserRole`, `integrations.sharedFolders`, `integrations.microphone`, `integrations.time` | [desktop-integration.md](desktop-integration.md) §13 |
-| APKRun Updates | `maintenance.selfUpdate`, `maintenance.imageUpdate` | [runtime-maintenance.md](runtime-maintenance.md) |
+| APKRun Updates | `maintenance.selfUpdate`, `maintenance.imageUpdate` | [runtime-maintenance.md](runtime-maintenance.md) §12 |
 
-Checks defined here, because no other document owns them:
+Checks defined here:
 
 | Check | Requirement | Pass | Warning | Failure |
 |---|---|---|---|---|
-| `graphics.device` | runningRuntime | virtio-gpu attached with the expected features and scanout count for the GPU profile ([graphics.md](graphics.md) §4.1, §9) | — | device missing or feature negotiation failed: `graphics.deviceSetupFailed` |
-| `graphics.renderer` | daemon (last known) / runningRuntime | virglrenderer and ANGLE (Metal backend) initialized; detail shows their versions and the Metal device name | one `rendererLost` recovered by a restart in the last 24 h | `rendererInitFailed`, or `rendererLost` twice in 24 h. Remediation: `startGraphicsSafeMode` |
-| `graphics.guestDriver` (deep) | runningRuntime | `DUMPSYS_SURFACEFLINGER` reports a GLES renderer string that contains `virgl` (profile `drmVirgl`) | — | another renderer while the profile is `drmVirgl` (Android fell back to software rendering): `graphics.softwareRendering` |
-| `graphics.present` | runningRuntime | `hostReadbacks == 0` and, on `drmVirgl`, `cpuPixelCopies == 0` since boot (NFR-PERF-05) | either counter non-zero (a regression: report it): `graphics.presentationSlowPath` | — |
-| `graphics.memory` | runningRuntime | below the limits of [graphics.md](graphics.md) §5.4 | a limit was reached: `graphics.memoryLimitReached` | — |
-| `graphics.safeMode` | daemon | `graphics.safeMode` off | on: `graphics.safeModeOn` ("Graphics safe mode is on. Apps are slower.") | — |
-| `agent.input` | runningRuntime | the agent's input stream is connected | `disconnected` ([input.md](input.md) §11) or `input.dropped.invalid` above 0.1 % of events since boot: `runtime.inputDegraded` | — |
-| `agent.ime` | runningRuntime | the APKRun input method is selected (`Health.ime_selected`) | not selected (fixable, §7.5): `runtime.inputMethodNotSelected` | — |
-| `agent.developerMode` | runningRuntime | `Health.adb_enabled` matches `developer.enabled` | ADB is on: `info` "Developer mode: ADB on 127.0.0.1:6520" | ADB is on while developer mode is off (security, [../01-architecture/security-model.md](../01-architecture/security-model.md)): `runtime.adbEnabledUnexpectedly` |
+| `graphics.device` | runningRuntime | virtio-gpu attached with the expected features and scanout count for the GPU profile ([graphics.md](graphics.md) §4.1, §9) | — | missing or negotiation failed: `graphics.deviceSetupFailed` |
+| `graphics.renderer` | daemon (last known) / runningRuntime | virglrenderer and ANGLE (Metal) initialized; detail shows versions and Metal device name | one `rendererLost`, recovered by restart in 24 h | `rendererInitFailed`, or `rendererLost` twice in 24 h. Remediation `startGraphicsSafeMode` |
+| `graphics.guestDriver` (deep) | runningRuntime | `DUMPSYS_SURFACEFLINGER` GLES renderer contains `virgl` (profile `drmVirgl`) | — | other renderer on `drmVirgl`: `graphics.softwareRendering` |
+| `graphics.present` | runningRuntime | `hostReadbacks == 0`, and on `drmVirgl` `cpuPixelCopies == 0`, since boot (NFR-PERF-05) | either non-zero (regression): `graphics.presentationSlowPath` | — |
+| `graphics.memory` | runningRuntime | below the limits of [graphics.md](graphics.md) §5.4 | limit reached: `graphics.memoryLimitReached` | — |
+| `graphics.safeMode` | daemon | safe mode off | on: `graphics.safeModeOn` ("Graphics safe mode is on. Apps are slower.") | — |
+| `agent.input` | runningRuntime | input stream connected | `disconnected` ([input.md](input.md) §11), or `input.dropped.invalid` above 0.1 % of events since boot: `runtime.inputDegraded` | — |
+| `agent.ime` | runningRuntime | APKRun input method selected (`Health.ime_selected`) | not selected (fixable, §7.5): `runtime.inputMethodNotSelected` | — |
+| `agent.developerMode` | runningRuntime | `Health.adb_enabled` matches `developer.enabled` | ADB on: `info` "Developer mode: ADB on 127.0.0.1:6520" | ADB on while developer mode off ([security-model.md](../01-architecture/security-model.md)): `runtime.adbEnabledUnexpectedly` |
 
 ### 7.5 Fixes (`--fix`)
 
-A fix is offered only when it is safe: idempotent, no data loss, no change to a user choice, and no restart of Android that would close windows.
+A fix must be idempotent, lose no data, change no user choice, and not restart Android in a way that closes windows.
 
 | Check | Fix |
 |---|---|
 | `wrappers.registration` | re-register the wrapper with LaunchServices (`LSRegisterURL`) |
 | `agent.ime` | ask the Guest Agent to select the APKRun input method again |
-| `integrations.notificationListener`, `integrations.browserRole` | ask the Guest Agent to restore the grant or role (custom image, privileged agent; [desktop-integration.md](desktop-integration.md)) |
-| `apkrund.registration` | CLI: `open -a APKRun --args --register-runtime` after a confirmation ([cli.md](cli.md) §4.1). APKRun.app: `SMAppService.register()` |
-| `apkrund.version` | restart apkrund (`launchctl kickstart -k gui/<uid>/io.apkrun.apkrund`), only while Android is stopped. Otherwise the fix is not offered and the remediation says to stop Android first |
+| `integrations.notificationListener`, `integrations.browserRole` | ask the Guest Agent to restore the grant or role ([desktop-integration.md](desktop-integration.md)) |
+| `apkrund.registration` | CLI: `open -a APKRun --args --register-runtime` after confirmation ([cli.md](cli.md) §4.1). APKRun.app: `SMAppService.register()` |
+| `apkrund.version` | `launchctl kickstart -k gui/<uid>/io.apkrun.apkrund`, only while Android is stopped. Otherwise not offered; the remediation says to stop Android first |
 
-`apkrun doctor --fix` runs the fixes of every check in `warning` or `failure` that has one, prints "Fixed: ‹title›" or the error, then runs the whole report again. APKRun.app shows a **Fix** button on those rows.
+`apkrun doctor --fix` runs the fixes of every `warning` or `failure` check that has one, prints "Fixed: ‹title›" or the error, and runs the whole report again. APKRun.app shows **Fix** on those rows.
 
 ### 7.6 Control endpoint operations
 
 | Operation | Result | Notes |
 |---|---|---|
-| `healthReport(HealthRequest{ deep, checks? })` | `WireHealthReport` | `checks` limits the run to some IDs (the GUI uses it for **Run Again** on one row) |
-| `applyHealthFixes(HealthFixRequest{ checks })` | `WireHealthReport` | runs the fixes, then a full report |
+| `healthReport(HealthRequest{ deep, checks? })` | `WireHealthReport` | `checks` limits the run (**Run Again** on one row) |
+| `applyHealthFixes(HealthFixRequest{ checks })` | `WireHealthReport` | fixes, then a full report |
 | `createDiagnostics(DiagnosticsRequest)` | `OperationHandle` → `DiagnosticsResult` | §8.1 |
 | `perfStatistics(PerfStatisticsRequest{ reset })` | `WirePerfStatistics` | §9.3 |
-| `guestLog(GuestLogRequest{ follow })` | stream of `GuestLogChunk` | `apkrun logs --guest` (§3.5). Developer mode only, otherwise `runtime.developerModeRequired`. Never starts Android. Built in #032 |
+| `guestLog(GuestLogRequest{ follow })` | stream of `GuestLogChunk` | §3.5. Developer mode only, else `runtime.developerModeRequired`. Never starts Android |
 
-All are on the control endpoint only, not on wrapper endpoints ([../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2). A wrapper's **Report a Problem…** opens APKRun.app instead (§8.5).
+These are on the control endpoint only, not on wrapper endpoints ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2). A wrapper's **Report a Problem…** opens APKRun.app (§8.5).
 
 ### 7.7 Output
 
-Human output has headings per group, one line per check, and the status at the end. Rows that pass show their title (and detail). Other rows add the remediation on an indented line. `--deep` adds a **Metrics** block (§5).
+`apkrun doctor [--deep] [--fix] [--json]` prints a heading per group, one line per check, and the status last. Passing rows show title and detail; other rows add an indented remediation. `--deep` adds a **Metrics** block (§5).
 
-```text
-APKRun Doctor                          APKRun 1.0 (1000) · Android image 2026.10.0-cf16373615-arm64
-
-Host
-✓ Apple silicon (Mac15,6)
-✓ macOS 27.0 (27A5301)
-✓ APKRun is in Applications
-
-Background Service
-✓ Running (apkrund 1.0)
-
-Virtualization
-✓ Available
-
-Android
-✓ Runtime image 2026.10.0 (custom)
-✓ Boot completed (31 s)
-
-Graphics
-✓ virtio-gpu (3 displays in use)
-✓ VirGL
-✓ virglrenderer 1.1.1 · ANGLE / Metal (Apple M3 Pro)
-
-Guest
-✓ Guest Agent connected (1.0.3)
-✓ Store Agent connected (1.0.3)
-
-Store
-✓ Package store consistent
-✓ Update checks on schedule
-
-Applications
-✓ 4 installed
-
-Mac Apps
-⚠ “Hello GL” was moved to the Trash
-  → Create the Mac app again: APKRun → Hello GL → Mac App
-
-Status
-Needs attention (1 warning)
-```
-
-- Symbols: ✓ pass, ℹ info, ⚠ warning, ✕ failure, – skipped (with the reason). Color only on a TTY without `NO_COLOR` ([cli.md](cli.md) §3.2).
-- Groups whose checks all pass collapse to one line in APKRun.app's Troubleshooting list; the CLI prints every line.
-- `--json`: `{ "schemaVersion": 1, "result": <WireHealthReport> }`, with stable check IDs, states, and error codes. Titles and details are in the user's language; scripts should use the IDs.
+- Symbols: ✓ pass, ℹ info, ⚠ warning, ✕ failure, – skipped (with reason). Color only on a TTY without `NO_COLOR` ([cli.md](cli.md) §3.2).
+- The Troubleshooting list of APKRun.app collapses groups whose checks all pass to one line. The CLI prints every line.
+- `--json`: `{ "schemaVersion": 1, "result": <WireHealthReport> }` with stable IDs, states, and error codes. Titles are in the user's language.
 
 ---
 
-## 8. Diagnostics bundle (#060, FR-OPS-02)
+## 8. Diagnostics bundle (FR-OPS-02)
 
 ### 8.1 Flow
 
-1. The client asks for a destination: the CLI uses `--output` or `~/Desktop/APKRun-Diagnostics-<yyyyMMdd-HHmmss>.zip` ([cli.md](cli.md) §4.8). APKRun.app shows a Save panel with that name (§8.5).
-2. The client opens the file for writing and passes the `FileHandle` in `DiagnosticsRequest{ output, includeLogcat, deep, focusPackage? }`. apkrund never opens a user-chosen path itself, so it needs no TCC access to Desktop or Documents.
-3. `DiagnosticsService` creates a staging directory in apkrund's `$TMPDIR` (mode 0700), runs the contributors (§8.2) concurrently with a time budget each, then runs `Redactor` over the staged files (§6), writes `summary.txt` and `manifest.json`, streams the ZIP into the handle with `ZipWriter` (deflate through Compression.framework), and deletes the staging directory. The ZIP file is created with mode 0600.
-4. Progress is reported through the `OperationHandle` (stages: collecting, redacting, writing). On cancel, apkrund truncates the output to 0 bytes. It has only the handle, not the path, so the client deletes the file ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §4.7).
-5. The result has the summary text, the size, and the omitted items. The CLI prints the path and the summary. APKRun.app shows **Show in Finder**.
+1. The client picks the destination. `apkrun diagnostics` uses `--output`, or `~/Desktop/APKRun-Diagnostics-<yyyyMMdd-HHmmss>.zip` ([cli.md](cli.md) §4.8). APKRun.app shows a Save panel with that name (§8.5).
+2. The client passes the output's `FileHandle` in `DiagnosticsRequest{ output, includeLogcat, deep, focusPackage? }`. apkrund never opens a user-chosen path.
+3. `DiagnosticsService` creates a staging directory in `$TMPDIR` (mode 0700) and runs the contributors (§8.2) concurrently, each within its budget. It runs `Redactor` (§6), writes `summary.txt` and `manifest.json`, streams the ZIP into the handle with `ZipWriter` (deflate through Compression.framework), and deletes the staging directory. The ZIP is mode 0600.
+4. Progress stages: `collecting`, `redacting`, `writing`. On cancel, apkrund truncates the output to 0 bytes; the client deletes the file ([runtime-api.md](../03-reference/runtime-api.md) §4.7).
+5. The result has the summary, size, and omitted items. The CLI prints the path and summary; APKRun.app shows **Show in Finder**.
 
-- **Always a result (FR-OPS-02).** A contributor that fails or exceeds its budget is recorded in `omitted` with the reason. The bundle is produced whenever the writer itself works: in `failed` state, after a boot failure, with the Guest Agent down, with no image installed.
-- Budgets: 10 s per host contributor, the `CollectDiagnostics` timeout of 60 s for the guest items together ([guest-protocol.md](guest-protocol.md) §6), 45 s for `log show`. p95 for a whole bundle on a healthy runtime: ≤ 60 s. Size target: ≤ 100 MiB compressed (caps below).
-- Nothing is uploaded. There is no upload code in APKRun. The user attaches the file to a bug report themselves ([../05-development/workflow.md](../05-development/workflow.md), issue template).
+- **Always a result (FR-OPS-02).** A contributor that fails or overruns goes to `omitted`. The bundle is produced in `failed` state, after a boot failure, with the Guest Agent down, and with no image.
+- Budgets: 10 s per host contributor; 60 s for the guest items together ([guest-protocol.md](guest-protocol.md) §6); 45 s for `log show`. Healthy runtime: p95 ≤ 60 s. Size ≤ 100 MiB compressed.
+- Nothing is uploaded. The user attaches the file to a bug report ([workflow.md](../05-development/workflow.md)).
 
 ### 8.2 Contents
 
@@ -716,42 +604,41 @@ APKRun-Diagnostics-20260928-101502/
 ├── summary.txt                     human-readable summary (§8.3)
 ├── manifest.json                   format, options, file list, omitted items, redaction counts
 ├── host/
-│   ├── environment.json            Mac model identifier, chip, memory, macOS version and build, displays (count, scales),
-│   │                               locale and region, free space and file system of the data volume
-│   ├── versions.json               BuildInfo of APKRun.app, apkrund, CLI, launcher template; image version; agent versions
-│   ├── health.json, health.txt     the HealthReport (deep when requested) and its doctor rendering
-│   ├── config.json                 global settings (allowlisted keys, §6.2)
+│   ├── environment.json            Mac model, chip, memory, macOS version and build, displays, locale, data volume
+│   ├── versions.json               BuildInfo of APKRun.app, apkrund, CLI, launcher template; image and agent versions
+│   ├── health.json, health.txt     HealthReport (deep when requested) and its doctor rendering
+│   ├── config.json                 global settings (allowlisted keys)
 │   ├── metrics.json                MetricsSnapshot (§5)
 │   ├── logs/unified.ndjson         APKRun subsystems, last 24 h, newest 30 MiB (or mirrors/ when log show failed)
 │   ├── logs/mirrors/               apkrund.log*
-│   ├── crash-reports/              .ips files of apkrund, APKRun, APKRunMenuBar, apkrun, APKRunLauncher; last 7 days, at most 20
-│   └── perf/                       launches.jsonl and boots.jsonl (newest 500 / 50 records)
+│   ├── crash-reports/              .ips of apkrund, APKRun, APKRunMenuBar, apkrun, APKRunLauncher; last 7 days, at most 20
+│   └── perf/                       launches.jsonl, boots.jsonl (newest 500 / 50)
 ├── runtime/
-│   ├── status.json                 RuntimeStatus, agent states, sessions, display pool snapshot (as `apkrun info --displays`)
+│   ├── status.json                 RuntimeStatus, agent states, sessions, display pool (as `apkrun info --displays`)
 │   ├── daemon.json                 apkrund run record: clean-exit flag, unclean exits, boot history
 │   ├── boot-phases.json            BootPhaseDetector events of the last 5 boots
-│   ├── console/                    boot-<ts>.log of the last 5 boots and the last 8 MiB of console.log
-│   ├── crash/                      the last 3 failure snapshots (§3.3)
-│   ├── graphics.json               GPU profile, Metal device name and family, virglrenderer and ANGLE versions, statistics (graphics.md §7)
-│   ├── input.json                  input counters (input.md §11)
-│   └── image/                      image store state, manifest summary, bootconfig and cmdline (placeholders, §6.2), migration state
+│   ├── console/                    boot-<ts>.log of the last 5 boots; last 8 MiB of console.log
+│   ├── crash/                      last 3 failure snapshots (§3.3)
+│   ├── graphics.json               GPU profile, Metal device name and family, virglrenderer and ANGLE versions, statistics
+│   ├── input.json                  input counters
+│   └── image/                      image store state, manifest summary, bootconfig and cmdline (placeholders), migration state
 ├── guest/                          only when the Guest Agent answered, or from a logcat capture file
 │   ├── getprop.txt                 allowlisted properties (§6.2)
 │   ├── logcat.txt                  filtered (§8.3), or full with --include-logcat
 │   ├── dumpsys-{window,display,input,activity,surfaceflinger,meminfo}.txt
-│   ├── tombstones.txt              list only: time, process name, signal. Tombstone contents are never collected
+│   ├── tombstones.txt              list only: time, process name, signal
 │   └── agent.log, store.log
 ├── packages/
 │   ├── packages.json               allowlisted package records (§6.2)
 │   ├── settings.json               per-package settings (allowlisted keys)
-│   ├── journal-tail.jsonl          the last 500 store journal entries (paths reduced)
-│   └── updates.json                update phase, last result, and the last 10 history entries per package
+│   ├── journal-tail.jsonl          last 500 store journal entries (paths reduced)
+│   └── updates.json                update phase, last result, last 10 history entries per package
 ├── wrappers/registry.json          paths reduced to the last component, bookmarks removed
 ├── integrations/status.json        capabilities, enabled integrations per package (booleans), shared folder count
-└── maintenance/state.json          HostState, SelfUpdateStatus, the host-update marker, Images/update-state.json (runtime-maintenance.md §12)
+└── maintenance/state.json          HostState, SelfUpdateStatus, host-update marker, Images/update-state.json (runtime-maintenance.md §12)
 ```
 
-- Every section comes from a `DiagnosticsContributor` owned by the module that knows the data:
+- Each section comes from a `DiagnosticsContributor` owned by the module that knows the data:
 
   ```swift
   public protocol DiagnosticsContributor: Sendable {
@@ -761,9 +648,9 @@ APKRun-Diagnostics-20260928-101502/
   }
   ```
 
-  RuntimeCore contributes `runtime/` and `guest/`, GraphicsCore `runtime/graphics.json`, InputCore `runtime/input.json`, ImageCore `runtime/image/`, APKStoreCore `packages/`, UpdateCore `packages/updates.json`, WrapperCore `wrappers/`, IntegrationCore `integrations/`, RuntimeHost `maintenance/`, and RuntimeHost and DiagnosticsCore `host/`.
-- `DiagnosticsBundleBuilder` accepts only files under the bundle's own tree and only text or JSON. Every file goes through the redactor. Binary files are not accepted, with one exception: `.ips` crash reports, which are JSON text and are redacted like other text.
-- `focusPackage` (CLI `--package <id>`; GUI: the package selected from **Report a Problem…**) adds that package's full update history and its last 20 launch records, and orders its issues first in the summary. It does not add app data.
+- Owners: RuntimeCore `runtime/` and `guest/`; GraphicsCore `runtime/graphics.json`; InputCore `runtime/input.json`; ImageCore `runtime/image/`; APKStoreCore `packages/`; UpdateCore `packages/updates.json`; WrapperCore `wrappers/`; IntegrationCore `integrations/`; RuntimeHost `maintenance/`; RuntimeHost and DiagnosticsCore `host/`.
+- `DiagnosticsBundleBuilder` accepts only files under the bundle tree, only text or JSON, and runs every file through the redactor. The one exception is `.ips` crash reports, which are JSON text.
+- `focusPackage` (CLI `--package <id>`; GUI: the package picked in **Report a Problem…**) adds that package's full update history and its last 20 launch records, and lists its issues first in the summary. It adds no app data.
 - `manifest.json`:
 
   ```json
@@ -777,17 +664,17 @@ APKRun-Diagnostics-20260928-101502/
     "counters": { "diagnostics.mirrorDropped": 0 } }
   ```
 
-  The report ID is random. It is not linked to the Mac or the user.
+- The report ID is random and not linked to the Mac or the user.
 
-### 8.3 Guest data and boot failures
+### 8.3 Guest data, summary, and boot failures
 
-- **Android running and the Guest Agent connected:** `CollectDiagnostics` (operation 73, [guest-protocol.md](guest-protocol.md) §7.1) with items `GETPROP`, `LOGCAT`, `DUMPSYS_WINDOW`, `DUMPSYS_DISPLAY`, `DUMPSYS_INPUT`, `DUMPSYS_ACTIVITY`, `DUMPSYS_SURFACEFLINGER`, `DUMPSYS_MEMINFO`, `TOMBSTONE_LIST`, `AGENT_LOG`, and `max_bytes` 16 MiB per item. The payloads arrive over the bulk stream. The agent itself leaves out non-allowlisted properties. The host applies every rule of §6 regardless.
-- **Logcat filter (default):** the agent runs `logcat -d -b main,system,crash -v threadtime,uid,UTC,year`. The host keeps entries from system UIDs (below 10000), entries with APKRun tags, and from app UIDs only the crash-buffer lines of a fatal exception (the `FATAL EXCEPTION` line, `Process:`, the exception line, and the stack frames). Other app log lines are dropped, because apps may log anything. `--include-logcat` (GUI: "Include Android app logs") keeps all entries, still redacted, and the sheet warns that they may contain information from the user's apps.
-- **Android failed or stopped:** the bundle has the console logs of the last 5 boots, the boot phases, and the failure snapshots of [runtime-daemon.md](runtime-daemon.md) §3.6. Their `logcat -d` part goes through the same filter.
-- **Logcat capture after a failed boot:** when `daemon.json` records that the last boot failed, RuntimeCore attaches the logcat console (`hvc2`) as `.log("logcat")` for the next boot and writes `guest/logcat-<timestamp>.log` ([android-image.md](android-image.md) §7.1). The bundle includes the newest capture file, filtered like other logcat data. Developer mode captures on every boot.
-- APKRun never starts Android to build a report. The summary tells the user when guest data is missing and why ("Android was not running").
+- **Android running, Guest Agent connected:** `CollectDiagnostics` (operation 73, capability `diagnostics.v1`, [guest-protocol.md](guest-protocol.md) §7.1) with items `GETPROP`, `LOGCAT`, `DUMPSYS_WINDOW`, `DUMPSYS_DISPLAY`, `DUMPSYS_INPUT`, `DUMPSYS_ACTIVITY`, `DUMPSYS_SURFACEFLINGER`, `DUMPSYS_MEMINFO`, `TOMBSTONE_LIST`, `AGENT_LOG`; `max_bytes` 16 MiB per item. The agent omits non-allowlisted properties; the host applies §6 regardless.
+- **Logcat filter (default):** the agent runs `logcat -d -b main,system,crash -v threadtime,uid,UTC,year`. The host keeps system-UID entries (UID below 10000) and APKRun-tagged entries. From app UIDs it keeps only a fatal exception's crash-buffer lines: `FATAL EXCEPTION`, `Process:`, the exception line, and stack frames. Other app lines are dropped. `--include-logcat` (GUI: "Include Android app logs") keeps everything, still redacted; the sheet warns about app information.
+- **Android failed or stopped:** console logs of the last 5 boots, boot phases, and failure snapshots ([runtime-daemon.md](runtime-daemon.md) §3.6). Their `logcat -d` part goes through the same filter.
+- **Failed boot:** when `daemon.json` records a failed last boot, RuntimeCore attaches the logcat console (`hvc2`) as `.log("logcat")` for the next boot and writes `guest/logcat-<timestamp>.log` ([android-image.md](android-image.md) §7.1). Developer mode captures on every boot.
+- APKRun never starts Android to build a report. The summary says when guest data is missing and why.
 
-`summary.txt` (English, so that a report is readable by maintainers; the GUI shows the localized health report):
+`summary.txt` is in English, for maintainers. Its parts, in order: title (creation time, report ID, operation ID); status line with remediation; build line (APKRun, apkrund, CLI, launcher, image, agents); health rows that are not `pass`; recent problems; apps line; privacy line. Example:
 
 ```text
 APKRun Diagnostics Report
@@ -797,20 +684,12 @@ Status: Android failed to start
   The last start stopped at "system services" after 180 s (runtime.bootTimedOut).
   Suggested: Start in Graphics Safe Mode (Settings → Troubleshooting).
 
-APKRun 1.0 (1000) · apkrund 1.0 (1000) · CLI 1.0 (1000) · launcher 1.0
-Android image 2026.10.0-cf16373615-arm64 (custom) · Guest Agent 1.0.3 · Store Agent 1.0.3
-Mac15,6 · Apple M3 Pro · 36 GB · macOS 27.0 (27A5301) · 2 displays
-
 Health: 1 failure, 2 warnings (see host/health.txt)
   ✕ runtime.boot           last boot failed: timeout at systemServer
   ⚠ graphics.renderer      renderer lost once in the last 24 h
-  ⚠ wrappers.status        1 Mac app is missing
 
 Recent problems (last 7 days, from logs)
   2026-09-28 10:02  runtime.bootTimedOut                 op 91ab22c0
-  2026-09-27 18:40  update.healthCheckFailed  org.example.notes 2.1 → rolled back to 2.0
-
-Apps: 4 installed, 1 needs attention · last launches: warm p50 1.2 s (12 launches)
 
 Privacy
   Not collected: clipboard, notification text, your files, app data, accounts, passwords, Keychain items.
@@ -818,37 +697,35 @@ Privacy
   Omitted: guest logs (Android was not running).
 ```
 
-"Recent problems" comes from `error`-level entries (their `err=` fields) in the collected logs. "Last launches" comes from `launches.jsonl`.
+"Recent problems" are the `error`-level entries (their `err=` fields) in the collected logs. The apps line comes from the package store and `launches.jsonl`.
 
 ### 8.4 Host-only bundle
 
-When apkrund is unreachable, the CLI ([cli.md](cli.md) §4.8) and APKRun.app build the bundle themselves with DiagnosticsCore:
+When apkrund is unreachable, the CLI ([cli.md](cli.md) §4.8) and APKRun.app build the bundle with DiagnosticsCore: `mode: "hostOnly"`, `createdBy: "cli"` or `"app"`.
 
-- `mode: "hostOnly"`, `createdBy: "cli"` or `"app"`.
-- Included: `host/` (environment, versions from the bundle's Info.plist files, the host checks of §7.3, the output of `launchctl print gui/<uid>/io.apkrun.apkrund`, `log show`, mirrors, crash reports, perf records, allowlisted `settings.json`), `runtime/daemon.json`, `runtime/console/`, `runtime/crash/`, and `packages/packages.json` from reading `Packages/*/metadata.json` with the same key allowlist (read-only; only apkrund writes under `Packages/`).
-- Not included: live status, guest data, statistics, the wrapper registry (it needs WrapperCore to reduce correctly; its file name is listed in `omitted`).
-- The same redactor and verification run (§6).
+- Included: `host/` (environment; versions from Info.plist files; §7.3 host checks; `launchctl print gui/<uid>/io.apkrun.apkrund`; `log show`; mirrors; crash reports; perf records; allowlisted `settings.json`), `runtime/daemon.json`, `runtime/console/`, `runtime/crash/`, and `packages/packages.json`, read from `Packages/*/metadata.json` with the same allowlist. Read-only: only apkrund writes under `Packages/`.
+- Not included: live status, guest data, statistics, and the wrapper registry. Its file name goes to `omitted`, because reducing it needs WrapperCore.
 
-### 8.5 GUI flow (#060 with [host-ui.md](host-ui.md) §9.8)
+### 8.5 GUI flow
 
-1. Settings → Troubleshooting → **Create Diagnostics Report…**, a failed step's **Report…** in onboarding, the launcher's **Report a Problem…** (Help menu and error screens), or the URL `apkrun://report?package=<id>` open the report sheet. The URL only opens the sheet; creating the report still needs a click ([host-ui.md](host-ui.md) §3.1).
-2. The sheet lists what is included and what is never collected (§6.1), offers **Include Android app logs** (off by default) and the focus package (preselected when opened from a wrapper), and has **Create Report…**.
-3. The Save panel suggests `~/Desktop/APKRun-Diagnostics-<timestamp>.zip`. Progress shows in the sheet with **Cancel**.
-4. Done: **Show in Finder** and **Copy Summary** (the text of `summary.txt`), plus a link to the project's issue page in the browser.
+1. Settings → Troubleshooting → **Create Diagnostics Report…**, a failed step's **Report…** in onboarding, the launcher's **Report a Problem…** (Help menu and error screens), or `apkrun://report?package=<id>` opens the report sheet. The URL only opens the sheet; creating the report needs a click ([host-ui.md](host-ui.md) §3.1).
+2. The sheet lists what is included and never collected (§6.1). It offers **Include Android app logs** (off by default) and the focus package (preselected from a wrapper), and has **Create Report…**.
+3. The Save panel suggests `~/Desktop/APKRun-Diagnostics-<timestamp>.zip`. Progress shows in the sheet, with **Cancel**.
+4. When done: **Show in Finder**, **Copy Summary** (the text of `summary.txt`), and a link to the project's issue page.
 
 ---
 
-## 9. Performance harness (#070)
+## 9. Performance harness
 
 ### 9.1 Goals
 
-- Measure the NFR-PERF targets in a repeatable way and track them over time.
-- Break every launch and boot into the marker segments of §4, so a regression points to one step ([display-and-windowing.md](display-and-windowing.md) §9 budget).
-- Run nightly on the lab Mac and on demand on a developer Mac. It is not part of per-PR CI, because it needs Virtualization.framework, a GPU, and minutes of runtime.
+- Measure NFR-PERF targets repeatably and track them over time.
+- Split every launch and boot into the marker segments of §4, so a regression points to one step ([display-and-windowing.md](display-and-windowing.md) §9).
+- Run nightly on a lab Mac and on demand on a developer Mac. Not in per-PR CI: it needs Virtualization.framework, a GPU, and minutes of runtime.
 
 ### 9.2 The tool
 
-`apkrun-perf` is a Swift executable target in `Tests/PerformanceTests/`. It links RuntimeClient and DiagnosticsCore only and drives the product like a user: through the CLI, `NSWorkspace`, and synthesized events.
+`apkrun-perf` is a Swift executable in `Tests/PerformanceTests/`. It links RuntimeClient and DiagnosticsCore only, and drives the product like a user (CLI, `NSWorkspace`, synthesized events).
 
 ```text
 swift run apkrun-perf <scenario> [--runs <n>] [--warmup <n>] [--output <dir>] [--baseline <file>]
@@ -856,46 +733,44 @@ scenarios: warm-launch, suspended-launch, cold-launch, input-latency, hellogl-fp
            update-check-launch, boot-phases, memory, all
 ```
 
-Preconditions, checked before every run and recorded in the results: AC power; Low Power Mode off; `ProcessInfo.thermalState == .nominal`; display awake (`caffeinate -d` held by the harness); no other virtual machines running; APKRun Release configuration (in the lab, signed with the lab identity); fixture apps installed from `Tests/Fixtures/AndroidApps` and their Mac apps generated into a temporary folder with `apkrun wrap <package> --output <dir>`. A failed precondition stops the run with a message rather than producing misleading numbers.
-
-Staging: #070 (M4) builds the harness before `apkrun wrap` exists (#075, M7). Until #075, the launch scenarios open the generic launcher (`APKRunLauncher.app --package <id>`, #068) with `NSWorkspace`, and `results.json` records the launch path (`launcher` or `wrapper`). Numbers from the two paths are not compared with each other. `update-check-launch` needs update checks (#037) and the update scheduler (#074); until both exist it is reported as `skipped` with that reason.
-
-The input scenario synthesizes events with `CGEvent.postToPid`, which needs the Accessibility permission for the harness on the lab Mac ([../05-development/environment-setup.md](../05-development/environment-setup.md)).
+- Preconditions, checked before every run and recorded in the results: AC power; Low Power Mode off; `ProcessInfo.thermalState == .nominal`; display awake (`caffeinate -d`); no other virtual machines; APKRun Release configuration; fixture apps from `Tests/Fixtures/AndroidApps` installed, with Mac apps generated by `apkrun wrap <package> --output <dir>` into a temporary folder. A failed precondition stops the run with a message and no numbers.
+- Staging: until `apkrun wrap` exists (#075), launch scenarios open the generic launcher (`APKRunLauncher.app --package <id>`, #068) through `NSWorkspace`. `results.json` records the path (`launcher` or `wrapper`); the two paths' numbers are never compared. `update-check-launch` needs #037 and #074; until both exist it is `skipped` with that reason.
+- `input-latency` synthesizes events with `CGEvent.postToPid`, which needs the harness's Accessibility permission on the lab Mac ([environment-setup.md](../05-development/environment-setup.md)).
 
 ### 9.3 Scenarios
 
 | Scenario | Procedure | Measure | Target |
 |---|---|---|---|
-| `warm-launch` | Android `ready`. For each run: `apkrun stop <package>`, wait 2 s, open the HelloText Mac app with `NSWorkspace.openApplication`, wait for its record in `launches.jsonl`, close the window. 3 warm-up runs, then 30 | `t0` (the harness's `openApplication` call) → `FIRST_FRAME_DISPLAYED`, and each marker segment | NFR-PERF-01: p50 ≤ 1.5 s, p95 ≤ 3 s |
-| `suspended-launch` | as above, but wait until `VM_PAUSED` first (`runtime.idleSuspendMinutes` set to 1 for the run) | the same, plus `VM_RESUMED` → `ready` | NFR-PERF-01 + 0.5 s; resume p50 ≤ 500 ms ([runtime-daemon.md](runtime-daemon.md) §5) |
-| `cold-launch` | `apkrun runtime stop`, then open HelloText. 10 runs | `t0` → `FIRST_FRAME_DISPLAYED`, boot phases from `boots.jsonl` | NFR-PERF-02: p50 ≤ 40 s |
-| `input-latency` | HelloText in front. 1,000 synthetic clicks and 1,000 key presses at 20 Hz | host segments from `perfStatistics` (`input.translate`, `input.route`) plus the agent's `receive_to_inject` from `InputAck` ([input.md](input.md) §8) | NFR-PERF-03: p95 ≤ 16 ms |
-| `hellogl-fps` | HelloGL in a 1080 × 2400 pixel window for 60 s after 5 s of warm-up | `fps` (10 s averages), `droppedFrames`, `hostReadbacks`, `cpuPixelCopies`, `presentGPUTime` | NFR-PERF-04: ≥ 55 fps average; NFR-PERF-05: readbacks = 0 |
-| `idle-cpu` | no app open; wait for `VM_PAUSED`; sample apkrund CPU time with `proc_pid_rusage` at the start and after 300 s | CPU time ÷ wall time | NFR-PERF-06: < 1 % |
-| `update-check-launch` | the `update-repos` fixture provider answers after 5 s. Trigger checks for 10 packages (`apkrun update --check-only`), then run `warm-launch` 30 times while they run | launch p50 and p95 compared with `warm-launch` of the same session | NFR-PERF-07: p50 difference ≤ 50 ms (within noise); no launch waits on a check |
-| `boot-phases` | 10 cold boots without launching an app (`apkrun runtime start`) | each boot segment of §4.3 | tracked against the baseline (input for reducing NFR-PERF-02) |
-| `memory` | after `warm-launch`, collect `MetricsSnapshot` with `DUMPSYS_MEMINFO` | the memory metrics of §5 | tracked only; no v1 target |
+| `warm-launch` | Android `ready`. Each run: `apkrun stop <package>`, wait 2 s, open HelloText's Mac app with `NSWorkspace.openApplication`, wait for its `launches.jsonl` record, close the window. 3 warm-ups, 30 runs | `t0` (the `openApplication` call) → `FIRST_FRAME_DISPLAYED`, per segment | NFR-PERF-01: p50 ≤ 1.5 s, p95 ≤ 3 s |
+| `suspended-launch` | as above, after `VM_PAUSED` (`runtime.idleSuspendMinutes` = 1) | the same, plus `VM_RESUMED` → `ready` | NFR-PERF-01 + 0.5 s; resume p50 ≤ 500 ms ([runtime-daemon.md](runtime-daemon.md) §5) |
+| `cold-launch` | `apkrun runtime stop`, then open HelloText. 10 runs | `t0` → `FIRST_FRAME_DISPLAYED`; boot phases from `boots.jsonl` | NFR-PERF-02: p50 ≤ 40 s |
+| `input-latency` | HelloText in front; 1,000 clicks and 1,000 key presses at 20 Hz | `input.translate`, `input.route` (`perfStatistics`); `receive_to_inject` from `InputAck` ([input.md](input.md) §8) | NFR-PERF-03: p95 ≤ 16 ms |
+| `hellogl-fps` | HelloGL in a 1080 × 2400 window, 60 s after 5 s warm-up | `fps` (10 s averages), `droppedFrames`, `hostReadbacks`, `cpuPixelCopies`, `presentGPUTime` | NFR-PERF-04: ≥ 55 fps; NFR-PERF-05: readbacks 0 |
+| `idle-cpu` | no app; wait for `VM_PAUSED`; apkrund CPU time (`proc_pid_rusage`) at start and after 300 s | CPU time ÷ wall time | NFR-PERF-06: < 1 % |
+| `update-check-launch` | `update-repos` fixture answers after 5 s; check 10 packages (`apkrun update --check-only`); `warm-launch` 30 times meanwhile | launch p50 and p95 against `warm-launch` of the same session | NFR-PERF-07: p50 difference ≤ 50 ms; no launch waits on a check |
+| `boot-phases` | 10 cold boots without an app (`apkrun runtime start`) | each boot segment of §4.3 | tracked against baseline |
+| `memory` | after `warm-launch`, `MetricsSnapshot` with `DUMPSYS_MEMINFO` | §5 memory metrics | tracked only; no v1 target |
 
-`perfStatistics(reset:)` (§7.6) returns the aggregated host-side values the harness cannot see from outside: input latency histograms, per-session graphics statistics, and marker durations. `reset: true` clears the aggregates at the start of a scenario.
+`perfStatistics(reset:)` (§7.6) returns host-side values the harness cannot see: input histograms, per-session graphics statistics, and marker durations. `reset: true` clears them at a scenario's start.
 
 ### 9.4 Results and regressions
 
-- Output: `<output>/<timestamp>-<build>/results.json` (every sample, the preconditions, the Mac model, macOS build, APKRun build, image version) and `summary.md` (a table per scenario with p50, p95, target, and baseline).
-- Baselines: `Tests/PerformanceTests/baselines/<model identifier>.json`, updated only by a reviewed PR that states why.
-- A nightly run fails when an NFR target is missed, or when a p50 is more than 15 % worse than the baseline (10 % for `hellogl-fps`, where lower is worse). The failure names the marker segment that grew the most.
-- Reference Mac for the NFR numbers: the lowest-tier Mac in the lab (M1 with 16 GB). Other lab Macs report for information ([../04-plan/open-questions.md](../04-plan/open-questions.md)).
+- Output: `<output>/<timestamp>-<build>/results.json` (every sample, preconditions, Mac model, macOS and APKRun builds, image version) and `summary.md` (per scenario: p50, p95, target, baseline).
+- Baselines: `Tests/PerformanceTests/baselines/<model identifier>.json`, changed only by a reviewed pull request that states why.
+- A nightly run fails when an NFR target is missed, or a p50 is more than 15 % worse than baseline (10 % for `hellogl-fps`, where lower is worse). The failure names the segment that grew most.
+- Reference Mac: the lowest-tier lab Mac, M1 with 16 GB ([open-questions.md](../04-plan/open-questions.md) OQ-02).
 
 ---
 
-## 10. Compatibility database (#090, FR-OPS-06)
+## 10. Compatibility database (FR-OPS-06)
 
 ### 10.1 Purpose and rules
 
-The database records how well known apps work on APKRun and which settings help. It uses the levels of [../00-product/scope.md](../00-product/scope.md) §4.
+The database records how well known apps work on APKRun and which settings help. It uses the levels of [scope.md](../00-product/scope.md) §4.
 
-- It ships inside APKRun.app (`Contents/Resources/compatibility.json`) and changes only with APKRun updates. APKRun does not download it separately, and nothing is sent about which apps a user installs. The app's code signature covers the file.
-- It is advice. It never blocks an install. Blocking conditions stay in the inspection checks of [package-store.md](package-store.md) §4.6.
-- Owner: APKStoreCore (`CompatibilityDatabase`, loaded by apkrund at start from the bundle it lives in: `Contents/Helpers/apkrund` → `Contents/Resources/`).
+- It ships in APKRun.app (`Contents/Resources/compatibility.json`) and changes only with APKRun updates. APKRun never downloads it, and nothing is sent about installed apps. The code signature covers it.
+- It is advice and never blocks an install. Blocking conditions stay in [package-store.md](package-store.md) §4.6.
+- Owner: APKStoreCore (`CompatibilityDatabase`). apkrund loads it from `Contents/Helpers/apkrund` → `Contents/Resources/`.
 
 ### 10.2 Format
 
@@ -922,132 +797,63 @@ The database records how well known apps work on APKRun and which settings help.
 }
 ```
 
-- `signerDigests` (optional): the entry applies only to builds signed by one of these certificates, so a different app that reuses a package name does not get the advice.
-- `versionCodes` (optional, inclusive, `null` = open): the entry applies to these versions. When several entries match, the one with the narrowest range wins.
-- `recommendedSettings` may use only per-package settings keys ([../03-reference/package-metadata-json.md](../03-reference/package-metadata-json.md)): `window.*`, `input.*`, `integrations.*` (only to turn an integration off), `update.healthCheckLaunch`. A schema test rejects other keys.
-- `source`: `lab` (the compatibility runs, §10.4) or `report` (a user report a maintainer reproduced).
-- The JSON Schema is `Tests/Compatibility/compatibility.schema.json`. CI validates the database against it.
+- `signerDigests` (optional): the entry applies only to builds signed by these certificates.
+- `versionCodes` (optional, inclusive, `null` = open): when several entries match, the narrowest range wins.
+- `recommendedSettings` may use only per-package keys ([package-metadata-json.md](../03-reference/package-metadata-json.md)): `window.*`, `input.*`, `integrations.*` (only to turn an integration off), `update.healthCheckLaunch`. A schema test rejects other keys.
+- `source`: `lab` (§10.4) or `report` (a user report a maintainer reproduced).
+- Schema: `Tests/Compatibility/compatibility.schema.json`. CI validates the database against it.
 
 ### 10.3 Use in the product
 
-- **Setting resolution.** `PackageSettingsResolver` applies the precedence of [../03-reference/configuration.md](../03-reference/configuration.md) §3.2, per key: a global switch that turns an integration off (`integrations.enabled.<name> = false`) wins over everything, then the package's stored value, then the database recommendation for the installed version, then the built-in default. A recommendation never turns on an integration that a global switch turns off. Recommendations are not copied into `settings.json`, so a corrected database entry takes effect after the APKRun update, and **Reset** returns to the recommendation. Values copied at the first record (`wrapper.json`, `integrations.defaults.*`) that equal the built-in default are not written either, so they do not hide a recommendation ([../03-reference/configuration.md](../03-reference/configuration.md) §3.3). Settings show "Recommended for this app" next to values that come from the database ([host-ui.md](host-ui.md) §7).
-- **Display.** The add flow's review shows the user-facing label (Works / Works with limitations / Unsupported) and the known issues ([host-ui.md](host-ui.md) §6). The app page shows them under General. `apkrun inspect` and `apkrun info <package>` include a `compatibility` field. An app with no entry shows nothing ("not tested" is the normal case).
-- `unsupported` apps can still be installed. The review says why the app is unsupported and changes the button to **Install Anyway**.
-- The `compatibility` value in RuntimeAPI is `CompatibilityInfo{ level, label, issues, recommendedKeys }` ([../03-reference/runtime-api.md](../03-reference/runtime-api.md)).
+- **Setting resolution:** `PackageSettingsResolver` applies [configuration.md](../03-reference/configuration.md) §3.2 per key. A global integration switch set to off (`integrations.enabled.<name> = false`) wins. Then the stored package value, the database recommendation for the installed version, and the built-in default. A recommendation never turns on an integration that is off globally. Recommendations are not copied into `settings.json`, so a corrected entry takes effect with the APKRun update, and **Reset** returns to the recommendation. Values copied at the first record (`wrapper.json`, `integrations.defaults.*`) that equal the default are not written ([configuration.md](../03-reference/configuration.md) §3.3). Settings marks database values "Recommended for this app" ([host-ui.md](host-ui.md) §7).
+- **Display:** the add-flow review shows the label (Works / Works with limitations / Unsupported) and issues ([host-ui.md](host-ui.md) §6); the app page shows them under General. `apkrun inspect` and `apkrun info <package>` include a `compatibility` field. No entry shows nothing.
+- `unsupported` apps can still be installed. The review says why, and the button becomes **Install Anyway**.
+- RuntimeAPI carries `CompatibilityInfo{ level, label, issues, recommendedKeys }` ([runtime-api.md](../03-reference/runtime-api.md)).
 
 ### 10.4 Maintaining the data
 
-- `Tests/Compatibility/apps.json` lists the apps of the compatibility runs: the fixture apps, the 50-APK F-Droid corpus ([package-store.md](package-store.md) §16), and a sample of popular apps the maintainers install by hand.
-- A run (nightly for the corpus, before each release for the full list) installs each app, launches it in the standard window mode, checks for a non-blank first frame within 20 s, runs a 60 s smoke test (`monkey` with a fixed seed through ADB in developer mode), checks the integrations the app uses, and repeats in the compatibility window mode when the standard mode fails. The output is a proposed level and issues per app.
-- A maintainer reviews the proposals and commits them to `Tests/Compatibility/database/compatibility.json`. The build copies it into APKRun.app.
-- Users report apps with the "App compatibility" issue template ([../05-development/workflow.md](../05-development/workflow.md)). A report becomes an entry only after a maintainer reproduces it.
-
----
-
-## 11. Implementation steps
-
-### #061 Diagnostics foundation (M0; depends on #001)
-
-1. `APKRunPaths` and `BuildInfo` (version and build from the bundle's Info.plist; git commit injected at build time).
-2. `LogSubsystem`, per-subsystem category enums, `LogMessage` with mandatory privacy, `Sensitive<T>`, `APKLogger` with the U+001F rendering and structured fields (§3.2). `LogMirrorWriter` with rotation (§3.3), used by apkrund only.
-3. `OperationID`, `OperationContext` (task-local), propagation helpers for XPC headers and the guest envelope.
-4. `APKRunError`, `ErrorDomain`, `ErrorParameter`, `UnderlyingError`, `RemediationAction`. `errors.json` with the first entries (`vm.*`, `cli.*`), `scripts/errorgen.swift` for the Swift and Markdown outputs, and `ErrorPresenter` for the GUI, launcher, and CLI formats of §2.3.
-5. `PerfMarker`, `Perf.mark`, `Perf.interval`, `PerfTimeline`. `PerfRecordWriter` comes with #070.
-6. `HealthCheck`, `HealthResult`, `HealthReport`, `HealthCheckRegistry`, the verdict function (§7.2), and `HostChecks` (§7.3). Modules add their checks as they are built. `DiagnosticsContext` (§1), with `DiagnosticsContext.testing()` in `DiagnosticsCoreTestSupport`.
-7. `scripts/check-logging.sh` (no `os.Logger`, `Logger(`, `print(`, `NSLog`, or `os_log` outside DiagnosticsCore; every inline `APKLogger` interpolation has a privacy argument and does not use a `Sensitive` value) in CI (#062). Its self-test checks each forbidden form and an allowed logging fixture.
-8. The CLI uses the error presentation from its first command (`apkrun version`, [cli.md](cli.md) §6.2).
-9. Acceptance: unit tests (§12) pass. `apkrun version` logs one entry under `io.apkrun.cli` that `log show` finds. A deliberately invalid CLI argument prints the three-line error format and exits 64.
-
-### #070 Performance harness (M4; depends on #031, #068)
-
-1. `PerfRecordWriter` in apkrund, `launches.jsonl` and `boots.jsonl` (§4.3); `OpenSessionRequest.launchTiming` in RuntimeAPI and the launcher; `FIRST_FRAME_DISPLAYED`.
-2. `perfStatistics` on the control endpoint (§7.6): input histograms, graphics statistics per session, marker aggregates.
-3. `MetricsSampler` (§5), including the search for the Virtualization service process and its verification.
-4. `apkrun-perf` with the preconditions and all scenarios of §9.3. For `memory`, this task adds `CollectDiagnostics` (operation 73, capability `diagnostics.v1`, [guest-protocol.md](guest-protocol.md) §7.1) on the host and in the Guest Agent's `DiagnosticsService`, with the bulk transfer, the 16 MiB item cap, the 60 s timeout, and the one item `DUMPSYS_MEMINFO`. #059 and #060 add the other items.
-5. Results and summary output, baselines for the lab Macs, and the nightly job with the regression rule (§9.4).
-6. Acceptance: two consecutive runs of `warm-launch` on the reference Mac agree within 10 % at p50. The segments add up to the total within 5 ms. The first report of every scenario is attached to the #070 issue and becomes the initial baseline.
-
-### #059 `apkrun doctor` (M11; depends on #031, #034, #036)
-
-1. `DiagnosticsService` in RuntimeHost with apkrund's registry, filled with every module's checks. Missing module checks are completed here: `graphics.*` and `agent.*` of §7.4 and the `apkrund.*` checks. `graphics.guestDriver` needs the `CollectDiagnostics` item `DUMPSYS_SURFACEFLINGER`, which this task adds on both sides (operation 73 exists since #070).
-2. `healthReport` and `applyHealthFixes` in RuntimeAPI with wire types and round-trip tests. The live checks publish on the `health` topic.
-3. CLI `apkrun doctor [--deep] [--fix] [--json]` with `DoctorFormatter` (§7.7) and the exit codes (§7.2). Host-only mode when apkrund is unreachable.
-4. APKRun.app Troubleshooting list ([host-ui.md](host-ui.md) §9.8) with **Run Again**, **Deep Check**, and **Fix** buttons. The "Needs attention" state in the header and the menu bar.
-5. Fixes of §7.5.
-6. Acceptance (FR-OPS-01, #059): the scenarios of §12 T2-4 produce the verdicts `stopped`, `bootFailure`, `graphicsFailure`, `agentUnavailable`, and `healthy`, each with the expected remediation. Doctor on a healthy runtime finishes in ≤ 3 s (quick) and never starts Android.
-
-### #060 Diagnostics bundle (M11; depends on #004, #059)
-
-1. `Redactor` with all layers (§6), the rules version, and the verification pass.
-2. `ZipWriter`, `DiagnosticsBundleBuilder`, `DiagnosticsBundleWriter`, `summary.txt` and `manifest.json` generation.
-3. `DiagnosticsContributor` implementations in each module (§8.2), with budgets.
-4. The remaining `CollectDiagnostics` items of §8.3 (every item except `DUMPSYS_MEMINFO` from #070 and `DUMPSYS_SURFACEFLINGER` from #059), on the host and in the Guest Agent ([guest-components.md](guest-components.md)); the logcat filter; and the logcat capture after a failed boot (§8.3).
-5. `createDiagnostics` on the control endpoint with file-handle output and progress.
-6. CLI `apkrun diagnostics` and the host-only bundle (§8.4). GUI sheet and `apkrun://report` (§8.5). The launcher's **Report a Problem…**.
-7. Acceptance (FR-OPS-02, #060): a bundle is produced while healthy, after a boot failure, with the Guest Agent unavailable (`APKRUN_RUNTIME_FAULT=rejectAgent:guest`, as in §12 T2-4 (d)), and with apkrund not running. The secret fixture test (§12 T2-6) passes. The bundle of a healthy runtime is ≤ 100 MiB and takes ≤ 60 s.
-
-### #090 Compatibility database (M12; depends on #059)
-
-1. Schema, `CompatibilityDatabase` loader and matcher, `PackageSettingsResolver`, and the `compatibility` field in the RuntimeAPI package DTOs.
-2. UI in the add flow, the app page, and Settings ("Recommended for this app"); CLI fields in `inspect` and `info`.
-3. `Tests/Compatibility/`: `apps.json`, the run script, and the proposal output. The first run over the corpus and the fixture apps seeds the database, together with the #029 results ([display-and-windowing.md](display-and-windowing.md) §8).
-4. The "App compatibility" issue template.
-5. Acceptance: an app with a `compatibilityMode` entry opens in the compatibility window mode without any user setting; a user's explicit choice overrides it; an entry with a different signer digest does not apply; the file ships in the release bundle and passes schema validation in CI.
+- `Tests/Compatibility/apps.json` lists the run's apps: fixture apps, the 50-APK F-Droid corpus ([package-store.md](package-store.md) §16), and popular apps that maintainers install by hand.
+- A run (nightly for the corpus, before each release for the full list) installs each app and launches it in standard window mode. It requires a non-blank first frame within 20 s, runs a 60 s `monkey` smoke test with a fixed seed through ADB in developer mode, and checks the integrations the app uses. If standard mode fails, it repeats in compatibility window mode. Output: a proposed level and issues per app.
+- A proposal enters `Tests/Compatibility/database/compatibility.json` only after a maintainer checks it. The build copies that file into APKRun.app.
+- Users report apps with the "App compatibility" issue template ([workflow.md](../05-development/workflow.md)). A report becomes an entry only after a maintainer reproduces it.
 
 ---
 
 ## 12. Tests
 
-The IDs are stable names used by the task entries. They do not state the tier; the Tier column does ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2).
+Test IDs are stable names that task entries cite. Tiers follow [test-strategy.md](../04-plan/test-strategy.md) §2.
 
-| ID | Tier | Test |
+| ID | Tier | What is tested |
 |---|---|---|
-| T1-1 | T0 | `LogMessage`: every privacy mode renders the expected public and full texts; U+001F appears only when there are private values; structured fields come from `OperationContext` |
-| T1-2 | T1 | compile-fail tests (a `swift build` of small fixture files in CI): interpolation without privacy, and interpolating a `Sensitive` value, do not compile |
-| T1-3 | T1 | `LogMirrorWriter`: rotation at 10 MiB, drop counting when the buffer is full, mode 0600, no private values in the file |
-| T1-4 | T0 | error catalog: every code has `en` and `ja` text (release), every placeholder is declared, no code equals a health check ID, every `cliExit` is valid; `errorgen` output is current |
-| T1-5 | T0 | `ErrorPresenter`: CLI three-line format, JSON error object with `cause`, Copy Details line without paths |
-| T1-6 | T0 | health verdict table (§7.2) for every combination of the conditions, including `graphicsFailure` before `bootFailure` and the stopped suffix |
-| T1-7 | T0 | `Redactor`: each rule of §6.2–§6.4 on fixture text; placeholders are stable within one report; known secrets in raw, URL-encoded, base64, and UTF-16 forms; verification drops a file that still contains a known secret |
-| T1-8 | T0 | logcat filter: system UID lines kept, app UID lines dropped, fatal exception lines of app processes kept; `--include-logcat` keeps everything |
-| T1-9 | T0 | `PerfRecordWriter`: record format, relative times, retention rewrite; `launchState` classification |
-| T1-10 | T0 | `CompatibilityDatabase` matching (signer, version range, narrowest range wins) and settings resolution order |
-| T2-1 | T1 | host-only doctor and bundle with apkrund unregistered (run as a separate macOS test user account; relocating `APKRUN_HOME` does not work, because commands other than `apkrun dev` ignore it, [cli.md](cli.md) §3.6) |
-| T2-2 | T1 | `apkrun logs` with and without `log show` access (mirror fallback) |
-| T2-3 | T2 | `OperationID` of `apkrun install` appears in the CLI, apkrund, and Store Agent logs |
-| T2-4 | T2 | FR-OPS-01 scenarios: (a) runtime stopped → `stopped`; (b) boot failure with the test image flag that stops boot (`androidboot.apkrun.test.fail_boot=1`) → `bootFailure` with the phase; (c) renderer failure through the fault hook `APKRUN_GRAPHICS_FAULT=rendererInit` → `graphicsFailure`; (d) apkrund rejecting the Guest Agent handshake through `APKRUN_RUNTIME_FAULT=rejectAgent:guest` (the agent is persistent on the custom image, so stopping it is not reliable) → `agentUnavailable`. Fault hooks are compiled into debug builds only, like `APKRUN_STORE_FAULT` ([package-store.md](package-store.md) §16); (e) healthy → `healthy` |
-| T2-5 | T2 | bundle while healthy, after (b), with the Guest Agent unavailable (d), and without apkrund: every expected file or `omitted` reason is present; the ZIP opens with `ditto -x -k` |
-| T2-6 | T2 | **secret fixture test** (#060): fixture secrets `APKRUN-FIXTURE-SECRET-<n>` planted in a provider token (test Keychain), a URL query, a log message argument marked `.private`, the console (`/dev/kmsg` write from test bundle S, [../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.5), app logcat (HelloClipboard logs its clipboard text), the clipboard and a notification (HelloClipboard, HelloNotification), a shared folder file name, a wrapper path, the Mac user name (test account name contains a fixture string), and getprop (`persist.apkrun.test.secret`). The unzipped bundle, searched in raw, URL-encoded, base64, and UTF-16 forms, contains none of them, with and without `--include-logcat` |
+| T1-1 | T0 | `LogMessage`: each privacy mode renders the expected texts; U+001F only with private values; structured fields from `OperationContext` |
+| T1-2 | T1 | compile-fail (a `swift build` of small fixture files in CI): interpolation without privacy, and of a `Sensitive` value, do not compile |
+| T1-3 | T1 | `LogMirrorWriter`: rotation at 10 MiB; drop counting when full; mode 0600; no private values in the file |
+| T1-4 | T0 | catalog: every domain case has an entry; `en` and `ja` in release builds (#092); placeholders declared; no code equals a health check ID; `cliExit` valid and equal to `CLI/apkrun/Support/ExitCodes.swift`; `errorgen` output current |
+| T1-5 | T0 | `ErrorPresenter`: three-line CLI format; JSON with `cause`; Copy Details without paths |
+| T1-6 | T0 | verdict (§7.2) for every combination, including `graphicsFailure` before `bootFailure` and the stopped suffix |
+| T1-7 | T0 | `Redactor`: each rule of §6.2–§6.4; stable placeholders; known secrets in raw, URL-encoded, base64, UTF-16; verification drops a file that holds a known secret |
+| T1-8 | T0 | logcat filter: system UID lines kept; app UID lines dropped; app fatal-exception lines kept; `--include-logcat` keeps all |
+| T1-9 | T0 | `PerfRecordWriter`: record format, relative times, retention rewrite, `launchState` classes |
+| T1-10 | T0 | `CompatibilityDatabase`: signer, version range, narrowest range; resolution order |
+| T2-1 | T1 | host-only doctor and bundle with apkrund unregistered. Run as a separate macOS test account: `APKRUN_HOME` relocation does not work, because commands other than `apkrun dev` ignore it ([cli.md](cli.md) §3.6) |
+| T2-2 | T1 | `apkrun logs` with and without `log show` access |
+| T2-3 | T2 | the `OperationID` of `apkrun install` appears in CLI, apkrund, and Store Agent logs |
+| T2-4 | T2 | FR-OPS-01: (a) runtime stopped → `stopped`; (b) `androidboot.apkrun.test.fail_boot=1` → `bootFailure` with the phase; (c) `APKRUN_GRAPHICS_FAULT=rendererInit` → `graphicsFailure`; (d) `APKRUN_RUNTIME_FAULT=rejectAgent:guest` → `agentUnavailable`; (e) healthy → `healthy`. Fault hooks are compiled into debug builds only, like `APKRUN_STORE_FAULT` ([package-store.md](package-store.md) §16) |
+| T2-5 | T2 | bundle while healthy, after (b), with the Guest Agent unavailable (d), and without apkrund: each expected file or `omitted` reason present; ZIP opens with `ditto -x -k` |
+| T2-6 | T2 | **secret fixture test** (#060): secrets `APKRUN-FIXTURE-SECRET-<n>` planted in a provider token, URL query, `.private` log argument, console (`/dev/kmsg` from test bundle S, [test-strategy.md](../04-plan/test-strategy.md) §3.5), app logcat and clipboard and notification (HelloClipboard, HelloNotification), shared-folder file name, wrapper path, Mac user name, and getprop `persist.apkrun.test.secret`. None may appear in the unzipped bundle, in raw, URL-encoded, base64, or UTF-16 form, with or without `--include-logcat` |
 | T2-7 | T2 | `--fix` for `wrappers.registration` and `agent.ime` |
-| T3-1 | T3 | perf harness scenarios of §9.3 on the reference Mac (NFR-PERF-01…07) |
-| T3-2 | T3 | doctor and bundle from APKRun.app's Troubleshooting pane, including **Report a Problem…** from a wrapper |
+| T3-1 | T3 | performance scenarios of §9.3 on the reference Mac (NFR-PERF-01…07) |
+| T3-2 | T3 | doctor and bundle from the Troubleshooting pane, including **Report a Problem…** from a wrapper |
+
+Where the tests live: T0 in each module's `Packages/<Module>/Tests/`; T1 and T2 in `Tests/IntegrationTests/`; the harness in `Tests/PerformanceTests/`; compatibility schema tests in `Tests/Compatibility/`.
 
 ---
 
 ## 13. Open items
 
-| Item | Plan |
-|---|---|
-| Identifying the Virtualization.framework XPC service process that hosts APKRun's VM (for the host-side VM footprint, §5) | #070 tries matching by process name, user, and start time right after `VM_START`. If it is unreliable, the metric is reported as unavailable |
-| `log show` may need an administrator account | On macOS 27.0 (26A428), an unprivileged command in an `admin`-group account read an APKRun entry. `sudo -n` required a password and no non-admin account was available, so OQ-04 remains open. The mirrors (§3.3) cover the gap either way |
-| `logcat -v uid` output on the Android 17 image | verify in #060 on the stock image; if the UID is missing, filter by the PID → UID map from `ps -A -o PID,UID` collected at the same time |
-| Package IDs in reports reveal which apps a user has | included by default because support needs them (#060); the sheet says so. Revisit if users ask for an option to exclude them ([../04-plan/open-questions.md](../04-plan/open-questions.md)) |
-| The reference Mac for NFR numbers (§9.4) | confirm the lab hardware before #070 ([../04-plan/open-questions.md](../04-plan/open-questions.md)) |
-| `gpuUtilization` through IOKit accelerator statistics is not a documented API | best effort; reported as unavailable when the key is missing |
-
----
-
-## 14. Verification log
-
-Filled in by the tasks. Each entry records the date, the macOS build, the image build (or the test Linux guest), and the result.
-
-| Question | Task | Result |
-|---|---|---|
-| How does `log show` behave for standard users on macOS 27? | #061 | 2026-09-29, macOS 27.0 (26A428): the command run without `sudo` from an `admin`-group account returned the `io.apkrun.cli` version entry. `sudo -n` required a password; a non-admin account was unavailable, so OQ-04 remains open (§3.5) |
-| Does `logcat -v uid` print the UID on the Android 17 image, or is the `ps` fallback used? | #060 | pending (§8.3, OQ-05) |
-| Can the Virtualization.framework XPC service process of APKRun's VM be identified? | #070 | pending (§5, OQ-06) |
-| Is `gpuUtilization` from the IOKit accelerator statistics usable? | #070 | pending (§5, OQ-07) |
-| The first report of every scenario on the reference Mac (the initial baseline) | #070 | pending (§9.4) |
-| Two consecutive `warm-launch` runs agree within 10 % at p50, and the segments add up to the total within 5 ms | #070 | pending (§11 #070) |
-| Quick doctor time (≤ 3 s) and deep doctor time on a healthy runtime | #059 | pending (§7) |
-| Size (≤ 100 MiB) and time (≤ 60 s) of the bundle of a healthy runtime | #060 | pending (§8.1) |
+- [OQ-02](../04-plan/open-questions.md): reference Mac for NFR numbers. Working default: the lowest-tier lab Mac, M1 with 16 GB (§9.4).
+- [OQ-03](../04-plan/open-questions.md): package IDs in bundles. Working default: included, and the sheet says so (§8.5).
+- [OQ-04](../04-plan/open-questions.md): `log show` for non-admin users. Working default: file mirrors (§3.3) cover the gap either way.
+- [OQ-05](../04-plan/open-questions.md): whether `logcat -v uid` prints the UID on the Android 17 image. Fallback: a PID → UID map from `ps -A -o PID,UID` (§8.3).
+- [OQ-06](../04-plan/open-questions.md): identifying the Virtualization.framework XPC process (§5). Working default: match by process name, user, and start time right after `VM_START`; otherwise report the VM footprint as unavailable.
+- [OQ-07](../04-plan/open-questions.md): `gpuUtilization` from IOKit accelerator statistics, not a documented API. Working default: best effort; unavailable when the key is missing (§5).

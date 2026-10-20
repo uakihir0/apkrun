@@ -1,33 +1,27 @@
-# Runtime Daemon Design (apkrund, RuntimeHost, RuntimeSupervisor)
+# Runtime Daemon (apkrund, RuntimeHost, RuntimeSupervisor)
 
-| Field | Value |
-|---|---|
-| Status | Baseline |
-| Tasks | #031, #032, #066, #069. Hooks for #059 (health), #070 (perf markers), #085 (time sync) |
-| Related | [../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md), [../01-architecture/state-machines.md](../01-architecture/state-machines.md), [vm.md](vm.md), [android-image.md](android-image.md), [runtime-maintenance.md](runtime-maintenance.md), [guest-protocol.md](guest-protocol.md), [display-and-windowing.md](display-and-windowing.md), [diagnostics.md](diagnostics.md), [../03-reference/runtime-api.md](../03-reference/runtime-api.md), [../03-reference/configuration.md](../03-reference/configuration.md) |
-
-This document covers the daemon process `apkrund` and the parts of RuntimeCore that keep Android alive: the process lifecycle, the startup and recovery order, `RuntimeSupervisor` (boot, readiness, stop, failure), guest agent supervision, the idle policy, host sleep and wake, `SessionRegistry`, the XPC server, and first-run provisioning. The process table, launchd registration, and the broker authentication scheme are defined in [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md). They are not repeated here.
+This document covers `apkrund` and the RuntimeCore parts that keep Android running: the process lifecycle, startup and crash recovery, `RuntimeSupervisor` (boot, readiness, stop, failure), guest agent supervision, the idle policy, host sleep and wake, sessions, the XPC server, and first-run provisioning. The process table, launchd registration, and broker authentication are in [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md). The XPC types and operations are in [runtime-api.md](../03-reference/runtime-api.md).
 
 ---
 
 ## 1. Responsibilities
 
-This section lists what apkrund coordinates. The table shows who implements each item. apkrund itself is only the composition root.
+apkrund is only the composition root. The module in each row implements the item.
 
 | Item | Implemented by | Design |
 |---|---|---|
-| VM lifecycle | `VMController` (VirtualMachineCore), driven by `RuntimeSupervisor` | [vm.md](vm.md), §3 |
+| VM lifecycle | `VMController` (VirtualMachineCore), driven by `RuntimeSupervisor` | §3, [vm.md](vm.md) |
 | Android readiness | `RuntimeSupervisor`, `BootPhaseDetector` (RuntimeCore) | §3 |
-| Application lifecycle | `SessionRegistry` (RuntimeCore) + Guest Agent | §7, [display-and-windowing.md](display-and-windowing.md) |
+| Application lifecycle | `SessionRegistry` (RuntimeCore) and the Guest Agent | §7 |
 | Display allocation | `DisplayPool` (RuntimeCore) | [display-and-windowing.md](display-and-windowing.md) §3 |
-| Window lifecycle | the wrapper owns the window (ADR-0006). apkrund sends `windowRequest` events | [display-and-windowing.md](display-and-windowing.md) §7 |
-| Package install/update | APKStoreCore, UpdateCore | [package-store.md](package-store.md), [update-system.md](update-system.md) |
+| Window lifecycle | The wrapper owns its window (ADR-0006). apkrund sends `windowRequest` events | [display-and-windowing.md](display-and-windowing.md) §7 |
+| Package install and update | APKStoreCore, UpdateCore | [package-store.md](package-store.md), [update-system.md](update-system.md) |
 | Update scheduling | `UpdateScheduler` (UpdateCore) | [update-system.md](update-system.md) §3 |
 | Guest communication | `GuestAgentSupervisor`, `StoreAgentSupervisor` (RuntimeCore) | §4, [guest-protocol.md](guest-protocol.md) §13 |
 | macOS integration | IntegrationCore | [desktop-integration.md](desktop-integration.md) |
 | Diagnostics | DiagnosticsCore | [diagnostics.md](diagnostics.md) |
 
-apkrund does **not** render UI, own windows, or accept input from anything but XPC clients. It has no NSApplication. It links AppKit only for `NSWorkspace`, through one adapter in RuntimeHost (`WorkspaceOpener`): `NSWorkspace.openApplication(at:configuration:)` to open a wrapper (§7.2), and `NSWorkspace.open(_:)` to open a forwarded link in the default browser or mail app ([desktop-integration.md](desktop-integration.md) §7.2).
+apkrund has no `NSApplication`, and it accepts input only from XPC clients. It links AppKit only for `NSWorkspace`, through one adapter, `WorkspaceOpener`. `NSWorkspace.openApplication(at:configuration:)` opens a wrapper (§7.2). `NSWorkspace.open(_:)` opens a forwarded link ([desktop-integration.md](desktop-integration.md) §7.2).
 
 ---
 
@@ -35,121 +29,102 @@ apkrund does **not** render UI, own windows, or accept input from anything but X
 
 ### 2.1 What starts apkrund
 
-| Trigger | Mechanism | What apkrund does after startup (§2.2) |
+The daemon source is `Daemon/apkrund`, a thin `main.swift` that builds `RuntimeHost`. It is embedded in `APKRun.app/Contents/Helpers/`.
+
+| Trigger | Mechanism | After startup |
 |---|---|---|
-| A client connects to `io.apkrun.apkrund.xpc` | launchd on-demand launch through `MachServices` | serve the request |
-| User login | `RunAtLoad` | apply `runtime.startPolicy` (§5.4). With the default `onDemand` and nothing to do, it exits after the exit grace period (§2.4) |
-| Periodic wake | `StartInterval` 3600 s (launchd starts the job if it is not running) | `UpdateScheduler` runs any check that is due ([update-system.md](update-system.md) §3), then the process exits after the grace period. It never boots the VM for a check. The only boot for updates is the opt-in `updates.startRuntimeToInstall` ([update-system.md](update-system.md) §3.5) |
-| Crash | `KeepAlive.SuccessfulExit = false` | crash recovery (§2.5) |
+| A client connects to `io.apkrun.apkrund.xpc` | launchd on-demand launch (`MachServices`) | Serves the request |
+| User login | `RunAtLoad` | Applies `runtime.startPolicy` (§5.4). With `onDemand` and nothing to do, it exits after the grace period (§2.4) |
+| Periodic wake | `StartInterval` 3600 s | `UpdateScheduler` runs due checks ([update-system.md](update-system.md) §3), then exits after the grace period. It never boots the VM for a check. Only the opt-in `updates.startRuntimeToInstall` boots it ([update-system.md](update-system.md) §3.5) |
+| Crash | `KeepAlive.SuccessfulExit = false` | Crash recovery (§2.5) |
 
-The daemon exits with status 0 after a controlled startup failure that prevents
-the broker from being constructed. This avoids a persistent restart loop for
-a stable bundle or signing error. A later Mach-service request or scheduled
-`StartInterval` retries startup; an unexpected process crash still exits
-unsuccessfully and is restarted by launchd.
+Exit status 0 follows a startup failure that prevents the broker from being constructed. This stops a restart loop for a stable bundle or signing error. A later request or `StartInterval` retries startup. An unexpected crash exits non-zero, and launchd restarts the job.
 
-launchd job keys added to the plist in [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §1.1:
+Job keys in the plist ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §1.1):
 
-| Key | Value | Why |
+| Key | Value | Effect |
 |---|---|---|
-| `RunAtLoad` | `true` | preboot at login and startup recovery of interrupted package transactions happen without a client |
-| `StartInterval` | `3600` | update checks while no APKRun process runs (FR-UPD, NFR-PERF-07). The job exits again when there is nothing to do |
-| `ExitTimeOut` | `45` | launchd waits this long after `SIGTERM` (logout, shutdown, `unregister()`) before `SIGKILL`. A graceful Android shutdown needs up to 40 s (§3.5) |
+| `RunAtLoad` | `true` | Preboot and recovery of interrupted package transactions run without a client |
+| `StartInterval` | `3600` | Update checks run while no APKRun process runs (FR-UPD, NFR-PERF-07) |
+| `ExitTimeOut` | `45` | launchd sends `SIGKILL` 45 s after `SIGTERM`. A graceful Android shutdown needs up to 40 s (§3.5) |
 
 ### 2.2 Startup sequence (`RuntimeHost.start()`)
 
-The order is fixed. Each step logs `host.startup.<step>` with its duration. Target: the XPC listener is resumed within 300 ms of process start when no recovery work is pending (measured in #031, logged as `DAEMON_READY`).
+Each step logs `host.startup.<step>` with its duration. The XPC listener resumes within 300 ms of process start when no recovery work is pending. The `DAEMON_READY` marker records the resume.
 
-| # | Step | Module | Fatal on failure? |
+| # | Step | Module | On failure |
 |---|---|---|---|
-| 1 | Resolve `APKRunPaths`, bootstrap logging, install `SIGTERM` handler (§2.4) | DiagnosticsCore | yes (exit 70) |
-| 2 | Acquire the instance lock (§2.3) | RuntimeHost | yes: another owner runs. Exit 0 if the owner is another apkrund, otherwise serve the broker with `RuntimeFailure.instanceLocked` |
-| 3 | Read `Runtime/daemon.json`; detect an unclean previous exit (§2.5); write the new `running` record | RuntimeHost | no |
-| 4 | Load `settings.json` and `state.json`, migrating older schemas forward. A newer schema than this binary understands → host startup failure. Then `MaintenanceService.start()`: read `Runtime/maintenance.json` and apply its startup rules (the host state may become `updating`), and start `BundleWatcher` ([runtime-maintenance.md](runtime-maintenance.md) §3.6, §5) | DiagnosticsCore, RuntimeHost | degraded (see below) |
-| 5 | `ImageStore.open()`: delete `Images/.installing-*`, resolve `current`/`previous`, recover an interrupted migration ([android-image.md](android-image.md) §12.3) | ImageCore | degraded |
-| 6 | `PackageStore.open()`: replay `Packages/journal.jsonl`. Steps that need the guest are queued as post-boot work (§3.4) ([package-store.md](package-store.md) §5) | APKStoreCore | degraded |
-| 7 | Load `Wrappers/registry.json` | WrapperCore | degraded |
-| 8 | Construct RuntimeCore: `RuntimeSupervisor` (state `stopped`), `DisplayPool`, `SessionRegistry`, `InputRouter`, agent supervisors | RuntimeCore | yes |
-| 9 | Construct `UpdateScheduler` (timers only), IntegrationCore, `ImageUpdateCoordinator` (reconciles its phase with `RuntimeImageState`), and `SelfUpdateProbe`. When `state.json.lastRuntimeBuild` is lower than this build, queue the post-update tasks ([runtime-maintenance.md](runtime-maintenance.md) §3.8, §4.3) | UpdateCore, IntegrationCore, RuntimeHost | degraded |
-| 10 | Register the power observer (§6), the memory pressure source (§5.5), and the `IdleController` (§5) | RuntimeCore | no |
-| 11 | Resume the XPC listener (§8) | RuntimeHost | yes |
-| 12 | Apply `runtime.startPolicy` (§5.4). Skipped while the host state is not `normal` | RuntimeCore | no |
+| 1 | Resolve `APKRunPaths`, bootstrap logging, install the `SIGTERM` handler (§2.4) | DiagnosticsCore | Exit 70 |
+| 2 | Acquire the instance lock (§2.3) | RuntimeHost | Exit 0 if another apkrund owns it. Otherwise serve the broker with `RuntimeFailure.instanceLocked` |
+| 3 | Read `Runtime/daemon.json`, detect an unclean previous exit (§2.5), write the `running` record | RuntimeHost | Continue |
+| 4 | Load `settings.json` and `state.json`, migrating older schemas. A newer schema is a host startup failure. Then `MaintenanceService.start()` reads `Runtime/maintenance.json`, applies its startup rules (the host state may become `updating`), and starts `BundleWatcher` ([runtime-maintenance.md](runtime-maintenance.md) §3.6, §5) | DiagnosticsCore, RuntimeHost | Degraded |
+| 5 | `ImageStore.open()`: delete `Images/.installing-*`, resolve `current` and `previous`, recover an interrupted migration ([android-image.md](android-image.md) §12.3) | ImageCore | Degraded |
+| 6 | `PackageStore.open()`: replay `Packages/journal.jsonl`. Steps that need the guest become post-boot work (§3.4) ([package-store.md](package-store.md) §5) | APKStoreCore | Degraded |
+| 7 | Load `Wrappers/registry.json` | WrapperCore | Degraded |
+| 8 | Construct RuntimeCore: `RuntimeSupervisor` (state `stopped`), `DisplayPool`, `SessionRegistry`, `InputRouter`, agent supervisors | RuntimeCore | Fatal. A Guest Agent bundle load failure is degraded (below) |
+| 9 | Construct `UpdateScheduler` (timers only), IntegrationCore, `ImageUpdateCoordinator` (reconciles its phase with `RuntimeImageState`), and `SelfUpdateProbe`. If `state.json.lastRuntimeBuild` is older than this build, queue the post-update tasks ([runtime-maintenance.md](runtime-maintenance.md) §3.8, §4.3) | UpdateCore, IntegrationCore, RuntimeHost | Degraded |
+| 10 | Register the power observer (§6), the memory pressure source (§5.5), and `IdleController` (§5) | RuntimeCore | Continue |
+| 11 | Resume the XPC listener (§8) | RuntimeHost | Fatal |
+| 12 | Apply `runtime.startPolicy` (§5.4). Skipped unless the host state is `normal` | RuntimeCore | Continue |
 
-The listener is published immediately after steps 1–3, before steps 4–10, so
-clients can inspect host status while slower recovery runs. `runtimeStatus`
-remains available during this interval. Lifecycle start and stop requests wait
-for host initialization to finish; if initialization fails, they receive the
-recorded startup failure. Step 11 records the listener's actual resume time
-even though it is performed early.
+The listener is published after steps 1–3, so clients can read status during slower recovery. Step 11 records the actual resume time. Start and stop requests wait for initialization and then receive any recorded startup failure.
 
-"Degraded" means: apkrund keeps running and serves the broker, but `runtimeStatus` returns `RuntimeFailure.hostStartupFailed(step:)`, and operations that need the failed component return the same error. The GUI and `apkrun doctor` show it with the remediation from the error catalog. apkrund never crash-loops because of bad data on disk.
-
-In #031, failure to load the Guest Agent bundle before constructing
-`RuntimeSupervisor` is reported as degraded step 8. The broker remains
-available so clients can inspect the startup failure; runtime start returns
-that failure. A failure to construct the runtime supervisor itself remains
-fatal.
+**Degraded** means apkrund keeps serving the broker. `runtimeStatus` returns `RuntimeFailure.hostStartupFailed(step:)`, and operations that need the failed component return the same error. Bad data on disk never causes a crash loop. A Guest Agent bundle load failure before step 8 is degraded; a failure to construct `RuntimeSupervisor` is fatal.
 
 ### 2.3 Instance lock
 
-- `Runtime/instance.lock`, taken with `flock(LOCK_EX | LOCK_NB)` for the process lifetime. The file contains the owner (`apkrund` or `apkrun-dev`), PID, and binary path, for error messages only.
-- The embedded mode (`apkrun dev …`, §10) takes the same lock. This is how "`apkrun dev` refuses to run while apkrund owns the user's runtime instance" ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §1.2) is enforced. `apkrun dev` with `APKRUN_HOME` pointing at another root uses a different lock and may run next to apkrund. It prints a memory warning.
-- `flock` locks are released by the kernel when the process dies, so a crash never leaves a stale lock.
+- `Runtime/instance.lock` is held with `flock(LOCK_EX | LOCK_NB)` for the process lifetime. It records the owner (`apkrund` or `apkrun-dev`), the PID, and the binary path, for error messages only.
+- `apkrun dev` (§10) takes the same lock. This is how `apkrun dev` refuses to run while apkrund owns the user's runtime ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §1.2). With `APKRUN_HOME` set to another root, it uses a different lock, may run next to apkrund, and prints a memory warning.
+- The kernel releases the lock when the process dies, so a crash never leaves a stale lock.
 
 ### 2.4 Exit rules
 
 apkrund exits with status 0 when **all** of these hold for 2 minutes (the exit grace period):
 
-- `RuntimeState == stopped`
-- no XPC connections (GUI, menu bar, CLI, wrappers)
-- no `RuntimeActivityAssertion` (§5.1) and no operation in flight
-- `UpdateScheduler` has no work due within the grace period, and no image feed check, self-update probe, or image download is in flight or due ([runtime-maintenance.md](runtime-maintenance.md) §3.4, §4.2, §4.4)
+- `RuntimeState == stopped`.
+- No XPC connections (GUI, menu bar, CLI, wrappers).
+- No `RuntimeActivityAssertion` (§5.1) and no operation in flight.
+- No `UpdateScheduler` work due within the grace period, and no image feed check, self-update probe, or image download in flight or due ([runtime-maintenance.md](runtime-maintenance.md) §3.4, §4.2, §4.4).
 
-Two maintenance exits skip the grace period ([runtime-maintenance.md](runtime-maintenance.md) §3.5, §3.6): after `prepareForHostUpdate` has replied, apkrund exits 0 one second later. In `restartPending`, apkrund stops Android and exits 0 as soon as no session, background task, or operation is left.
+Two maintenance exits skip the grace period ([runtime-maintenance.md](runtime-maintenance.md) §3.5, §3.6). After `prepareForHostUpdate` replies, apkrund exits 0 one second later. In `restartPending`, it stops Android and exits 0 once no session, background task, or operation is left. launchd does not restart after status 0.
 
-Exit status 0 is not restarted by launchd. The next client connection, the next login, or the next `StartInterval` starts apkrund again.
+On `SIGTERM` (logout, shutdown, `SMAppService.unregister()`, `launchctl bootout`):
 
-`SIGTERM` (logout, system shutdown, `SMAppService.unregister()`, `launchctl bootout`):
+1. Reject new XPC connections. Racing lifecycle operations fail with `runtime.hostShuttingDown`; status stays available and reports `shuttingDown`. Drain accepted package mutations and session operations, then stop the headless session service, remove the Guest Agent observers, and stop Android.
+2. `RuntimeSupervisor.stop(reason: .hostShutdown)` with a 40 s deadline (§3.5). Sessions end with `.runtimeStopped`.
+3. Flush logs, write `daemon.json` with `cleanExit = true`, close the connections, and exit 0.
 
-1. Reject new XPC connections while existing clients drain. Lifecycle operations that race with shutdown get `RuntimeControlError` code `runtime.hostShuttingDown`; status remains available to connected clients and reports `shuttingDown`. Drain accepted package mutations and session operations before shutting down the daemon-owned headless session service, removing Guest Agent observers, and stopping Android. An accepted package mutation may finish a required Android start while shutdown waits for it.
-2. `RuntimeSupervisor.stop(reason: .hostShutdown)` with a 40 s deadline (§3.5). Sessions end with `.runtimeStopped`. Wrappers show nothing new: during logout they are quitting too.
-3. Flush logs, write `daemon.json` with `cleanExit = true`, close the XPC connections, and exit 0.
+At the deadline the VM is force-stopped (`VMController.stop()`). Userdata is written through the host page cache, so only unflushed data is lost.
 
-If the deadline passes, the VM is force-stopped (`VMController.stop()`), which is still better than launchd's `SIGKILL` at 45 s: userdata is written through the host page cache, so a forced VM stop loses only data Android had not yet flushed.
+### 2.5 Unclean exit and crash recovery
 
-### 2.5 Unclean exit and crash recovery (NFR-REL-02)
+`Runtime/daemon.json` (NFR-REL-02):
 
-`Runtime/daemon.json`:
+| Key | Meaning |
+|---|---|
+| `schemaVersion` | `1` |
+| `pid` | PID of the owning process. Do not use it to infer ownership |
+| `startedAt`, `version` | Start time (ISO 8601) and APKRun build, for example `0.2.0 (200)` |
+| `cleanExit` | `false` at start. A clean `SIGTERM` exit (§2.4) writes `true` |
+| `recentUncleanExits` | Times of unclean exits, the last 10 |
+| `bootHistory` | One entry per boot: `imageVersion`, `kind` (for example `cold`), and `phasesMs` with the keys `kernel`, `init`, `systemServer`, `bootCompleted`, and `agentsConnecting` |
 
-```json
-{
-  "schemaVersion": 1,
-  "pid": 4711,
-  "startedAt": "2026-09-28T09:12:03Z",
-  "version": "0.2.0 (200)",
-  "cleanExit": false,
-  "recentUncleanExits": ["2026-09-28T08:55:10Z"],
-  "bootHistory": [ { "imageVersion": "2026.10.0-cf16373615-arm64", "kind": "cold", "phasesMs": { "kernel": 900, "init": 3100, "systemServer": 9800, "bootCompleted": 21500, "agentsConnecting": 23900 } } ]
-}
-```
+After the new process acquires the instance lock, `cleanExit == false` means the previous apkrund crashed or was killed. Lock ownership shows that the prior daemon no longer owns the runtime. Do not infer this from the PID, which may be reused.
 
-On startup, after the new process acquires the exclusive instance lock, `cleanExit == false` means the previous apkrund crashed or was killed. Lock ownership establishes that the prior daemon no longer owns the runtime; do not infer this from the recorded PID, which may have been reused:
-
-- Log `host.previousExitUnclean` (fault level) and append the time to `recentUncleanExits` (last 10 kept).
-- Record the newest `~/Library/Logs/DiagnosticReports/apkrund-*.ips` path in `$APKRUN_HOME/Diagnostics/index.json`, retaining the latest 20 paths, so `apkrun diagnostics` can include it ([diagnostics.md](diagnostics.md)).
-- The VM died with the process (the Virtualization.framework helper processes exit with their owner). Nothing of the VM needs cleanup. Android repairs userdata on the next boot (f2fs checkpoint and fsck) like after a power loss.
-- Remove stale ADB forwards (`localabstract:apkrun-*`, [guest-protocol.md](guest-protocol.md) §13.2) and run `adb disconnect 127.0.0.1:6520` in development builds.
+- Log `host.previousExitUnclean` at fault level. Append the time to `recentUncleanExits`.
+- Record the newest `~/Library/Logs/DiagnosticReports/apkrund-*.ips` path in `$APKRUN_HOME/Diagnostics/index.json`, keeping the latest 20, so `apkrun diagnostics` can include it ([diagnostics.md](diagnostics.md) §8).
+- The VM exits with the process, because the Virtualization.framework helpers exit with their owner. Android repairs userdata on the next boot, as after a power loss.
+- Remove stale ADB forwards (`localabstract:apkrun-*`, [guest-protocol.md](guest-protocol.md) §13.2). In development builds, also run `adb disconnect 127.0.0.1:6520`.
 - Steps 5 and 6 of §2.2 recover image migrations and package transactions.
-- 3 unclean exits within 10 minutes: health `apkrund.crashLoop = failing`. apkrund keeps serving the broker but refuses automatic boots (§3.6) until the user starts the runtime explicitly (GUI "Start Android", `apkrun runtime start`). This stops a crash in, for example, the renderer from turning into a boot/crash loop driven by wrapper retries.
+- Three unclean exits within 10 minutes set health `apkrund.crashLoop = failing`. apkrund then refuses automatic boots (§3.6) until the user starts the runtime explicitly (GUI "Start Android" or `apkrun runtime start`).
 
-The client side of a crash is in [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.5: wrappers reconnect with backoff and go through a cold launch.
+Wrappers reconnect with backoff and cold-launch ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.5).
 
 ### 2.6 Development builds and debugging
 
-- Debug builds use separate identities, so a development build never replaces an installed release: bundle IDs get the suffix `.dev` (`io.apkrun.APKRun.dev`), the LaunchAgent label and Mach service become `io.apkrun.apkrund.dev` and `io.apkrun.apkrund.dev.xpc`, and `APKRUN_HOME` defaults to `~/Library/Application Support/APKRun-Dev/`. RuntimeClient picks the service name from the build configuration ([../05-development/build-system.md](../05-development/build-system.md)).
-- `scripts/dev/install-dev-app.sh` copies the built app to `~/Applications/APKRun Dev.app` and re-registers the agent (`APKRun --register-runtime`). Registering from DerivedData works too, but every clean build moves the path.
-- Debugging the daemon: Xcode scheme "apkrund (attach)" uses "Wait for the executable to be launched". Then `launchctl kickstart -k gui/$(id -u)/io.apkrun.apkrund.dev` restarts it under the debugger.
-- `launchctl print gui/$(id -u)/io.apkrun.apkrund.dev` shows the job state, last exit status, and PID. `apkrun doctor` reports the same data through `SMAppService.status` and `daemon.json`.
+- Debug builds use separate identities and never replace a release. Bundle IDs end in `.dev` (`io.apkrun.APKRun.dev`). The LaunchAgent label and Mach service are `io.apkrun.apkrund.dev` and `io.apkrun.apkrund.dev.xpc`. `APKRUN_HOME` defaults to `~/Library/Application Support/APKRun-Dev/`. RuntimeClient picks the service name from the build configuration ([build-system.md](../05-development/build-system.md)).
+- `scripts/dev/install-dev-app.sh` copies the app to `~/Applications/APKRun Dev.app` and re-registers the agent (`APKRun --register-runtime`).
+- Debug with the Xcode scheme "apkrund (attach)". `launchctl kickstart -k gui/$(id -u)/io.apkrun.apkrund.dev` restarts the daemon under the debugger. `launchctl print` shows the job state and PID.
 
 ---
 
@@ -189,11 +164,10 @@ public struct ReadyRuntime: Sendable {
 }
 ```
 
-`RuntimeState` and its transitions are normative in [state-machines.md](../01-architecture/state-machines.md) §2.
-
-- `ensureReady` in `stopped` starts a boot. In `booting` it waits. In `suspended` it resumes (§5.3). In `stopping` it waits for `stopped`, then boots. `failed` lasts only while the diagnostics snapshot is captured (§3.6). A caller arriving then waits for `stopped` and boots, subject to the boot-loop guard.
+- [state-machines.md](../01-architecture/state-machines.md) §2 defines `RuntimeState` and its transitions.
+- `ensureReady` in `stopped` boots. In `booting` it waits. In `suspended` it resumes (§5.3). In `stopping` it waits for `stopped`, then boots. In `failed` (only while the diagnostics snapshot is captured, §3.6) it waits for `stopped`, then boots, subject to the boot-loop guard.
 - Cancelling the waiting task does not cancel the boot. A boot that nobody waits for completes, and the idle policy takes over.
-- `ensureReady` with `StartReason.session` is refused while the boot-loop guard is active (§3.6). Explicit starts (`cli`, and `user` for a start from APKRun.app or the menu bar) clear the guard.
+- `ensureReady(.session)` is refused while the boot-loop guard is set (§3.6). Explicit starts (`cli`, and `user` from APKRun.app or the menu bar) clear the guard.
 
 ### 3.2 Boot sequence (cold start)
 
@@ -205,7 +179,7 @@ ensureReady(reason)
   3. GraphicsCore: create the virtio-gpu device model and the renderer thread; apply graphics.safeMode (graphics.md §9)
   4. VirtualMachineCore: VMController.start(definition)           PerfMarker VM_START
   5. attach ConsoleLogWriter → BootPhaseDetector (§3.3)
-  6. start the ADB bridge: guest vsock 5555 ↔ 127.0.0.1:6520 (#015; connects succeed once adbd listens)
+  6. start the ADB bridge: guest vsock 5555 ↔ 127.0.0.1:6520 (connects succeed once adbd listens)
   7. agents (§4): development → after .bootCompleted, GuestAgentProvisioner installs/starts guestd over ADB
                   custom image → connect attempts start at .systemServer (persistent apps start before boot completes)
   8. booting(.agentsConnecting) → all required agents accepted (guest-protocol.md §5)   PerfMarker AGENT_CONNECTED (per agent)
@@ -214,42 +188,40 @@ ensureReady(reason)
      resume all ensureReady waiters; release assertion .boot; IdleController starts counting (§5)
 ```
 
-Timeouts:
-
 | Timeout | Default | Setting | Result |
 |---|---|---|---|
 | Whole boot, normal | 180 s | `runtime.bootTimeoutSeconds` | `failed(.bootTimedOut(phase))` |
-| Whole boot, first boot of an instance or of a new image | 900 s | `runtime.firstBootTimeoutSeconds` | same. Android formats userdata and runs dexopt ([android-image.md](android-image.md) §5.2, §12.3) |
+| Whole boot, first boot of an instance or of a new image | 900 s | `runtime.firstBootTimeoutSeconds` | Same. Android formats userdata and runs dexopt ([android-image.md](android-image.md) §5.2, §12.3) |
 | No phase progress (stall) | 90 s (first boot: 600 s) | — | `failed(.bootStalled(phase))` |
-| Required agent readiness after `.bootCompleted` (boot confirmation, first-boot settings, ADB, development provisioning, handshake, and initial snapshot) | 30 s | — | `failed(.requiredAgentUnavailable(agent))` |
+| Required agent readiness after `.bootCompleted` (boot confirmation, first-boot settings, ADB, development provisioning, handshake, initial snapshot) | 30 s | — | `failed(.requiredAgentUnavailable(agent))` |
 
-Immediate failures during boot: the console shows `Kernel panic - not syncing` (`failed(.kernelPanic)`), the console shows `VIRTUAL_DEVICE_BOOT_FAILED` (`failed(.androidBootFailed)`), `VMState → failed` (`failed(.vm(…))`), or GraphicsCore reports `rendererInitFailed` (`failed(.graphics(…))`).
+An immediate failure ends the boot. `Kernel panic - not syncing` on the console gives `failed(.kernelPanic)`. `VIRTUAL_DEVICE_BOOT_FAILED` gives `failed(.androidBootFailed)`. `VMState → failed` gives `failed(.vm(…))`. GraphicsCore's `rendererInitFailed` gives `failed(.graphics(…))`.
 
 ### 3.3 BootPhaseDetector
 
-`BootPhaseDetector` consumes console lines (from `ConsoleLogWriter`, which already splits lines) and readiness signals from ADB or the agents. It emits phase changes. Phases are monotonic: a phase may be skipped when its signal is not observable, but never re-entered.
+`BootPhaseDetector` reads console lines from `ConsoleLogWriter`, which already splits them, and readiness signals from ADB or the agents. It emits phase changes. Phases are monotonic: a phase may be skipped when its signal is not observable, but it is never re-entered.
 
-| Phase entered | Signal (console, every image) | Signal (ADB, development) | Signal (agent) | Perf marker |
+| Phase entered | Console signal (every image) | ADB signal (development) | Agent signal | Perf marker |
 |---|---|---|---|---|
-| `.kernel` | first console byte after `VM_START`. On VZ hvc0 starts when first-stage init loads `virtio_console` (about 0.18 s of uptime); the kernel's earlier lines, including `Booting Linux on physical CPU`, are not replayed (observed 2026-10-08). On crosvm, U-Boot's banner comes first | — | — | `KERNEL_START` |
-| `.init` | the first line from init, `init: ` after the kmsg prefix. On VZ that is `init: Loaded kernel module /lib/modules/virtio_pci.ko` (0.32 s). `init: init first stage started!` is printed before hvc0 exists on VZ, so it is not used | — | — | `ANDROID_INIT` |
-| `.systemServer` | `init: starting service 'zygote'` (this is zygote's start; no console line marks SystemServer's start; 0.95–1.48 s on VZ). Visibility of init's kmsg lines depends on the console log level | `getprop sys.system_server.start_count` non-empty (polled every 500 ms once `adb` connects) | — | `SYSTEM_SERVER_READY` |
-| `.bootCompleted` | `VIRTUAL_DEVICE_BOOT_COMPLETED`, written by the guest's `GceEventReporter` (confirmed on VZ: 7.5 s on a first boot, 3.9–4.7 s later) | `getprop sys.boot_completed` = `1` | `Hello.android` / `SystemState.boot_completed` ([guest-protocol.md](guest-protocol.md) §7.2) | `BOOT_COMPLETED` |
-| `.agentsConnecting` | — | — | entered right after `.bootCompleted` | — |
+| `.kernel` | First console byte after `VM_START`. On VZ, `hvc0` appears late in first-stage init, so earlier kernel lines are not seen. On crosvm, U-Boot's banner comes first | — | — | `KERNEL_START` |
+| `.init` | First line from init (`init: ` after the kmsg prefix). `init: init first stage started!` precedes `hvc0` on VZ, so it is not used | — | — | `ANDROID_INIT` |
+| `.systemServer` | `init: starting service 'zygote'`. No console line marks SystemServer's start | `getprop sys.system_server.start_count` is non-empty (polled every 500 ms) | — | `SYSTEM_SERVER_READY` |
+| `.bootCompleted` | `VIRTUAL_DEVICE_BOOT_COMPLETED`, written by the guest's `GceEventReporter` | `getprop sys.boot_completed` = `1` | `Hello.android` / `SystemState.boot_completed` ([guest-protocol.md](guest-protocol.md) §7.2) | `BOOT_COMPLETED` |
+| `.agentsConnecting` | — | — | Right after `.bootCompleted` | — |
 
-- The console strings and their timing on VZ are in [android-image.md](android-image.md) §7.7, observed in the 2026-10-08 direct-boot spike (IR-306). The crosvm records of `Images/reference/16373615/boot-signals.json` remain for comparison; their timings come from a nested-virtualization host that ran about 100 times slower (IR-305). The detector's patterns live in one table (`BootSignals.swift`), with golden tests over captured VZ console logs.
-- The first signal that arrives wins. For example, on the custom image with `adbd` stopped, `.bootCompleted` comes from the console marker or from the Guest Agent.
-- Progress for the placeholder window: `BootProgressEstimator` divides elapsed time by the median duration of each phase over the last 5 boots of the same kind (`daemon.json bootHistory`). Without history it uses fixed weights. Progress is never shown as a percentage above 95 % before `ready`.
+- The console strings and their VZ behavior are in [android-image.md](android-image.md) §7.7. The patterns live in one table (`BootSignals.swift`), with golden tests over captured VZ console logs.
+- The first signal that arrives wins. With `adbd` stopped on a custom image, `.bootCompleted` comes from the console marker or from the Guest Agent.
+- `BootProgressEstimator` divides elapsed time by the median duration of each phase over the last 5 boots of the same kind (`bootHistory`, §2.5). Without history it uses fixed weights. Before `ready`, progress never shows above 95 %.
 
 ### 3.4 Readiness and post-boot setup
 
-`ready` means all of the following. Nothing else gates it.
+`ready` requires all of the following. Nothing else gates it.
 
 1. `VMState == running`, and `.bootCompleted` was seen.
 2. Every **required** agent completed the handshake with an accepted protocol version. Development (stock image): the Guest Agent. Custom image: the Guest Agent and the Store Agent. The development IME channel is not required: it connects when Android binds the IME ([input.md](input.md) §5.6).
-3. `GetSnapshot` returned, and `DisplayPool` reconciled with it: every secondary display known to Android that has no lease is cleared and its scanout disabled ([display-and-windowing.md](display-and-windowing.md) §3).
-4. Host-owned configuration was pushed (§4.2): display policies, developer mode, locale and time zone, time sync ([desktop-integration.md](desktop-integration.md) §9), integration settings.
-5. Post-boot work queued at startup ran, or was re-queued with a reason. For example, a package transaction that needs the Store Agent to finish ([package-store.md](package-store.md) §5). Post-boot work never blocks `ready` for longer than 5 s. Longer work runs after `ready`, under an activity assertion.
+3. `GetSnapshot` returned, and `DisplayPool` reconciled with it. Every secondary display that Android knows and that has no lease is cleared, and its scanout is disabled ([display-and-windowing.md](display-and-windowing.md) §3).
+4. Host-owned configuration was pushed (§4.2): display policies, developer mode, locale and time zone, time sync ([desktop-integration.md](desktop-integration.md) §9), and integration settings.
+5. Post-boot work queued at startup ran, or was re-queued with a reason ([package-store.md](package-store.md) §5). Post-boot work never blocks `ready` for more than 5 s. Longer work runs after `ready`, under an activity assertion.
 
 ### 3.5 Stop sequence
 
@@ -270,23 +242,23 @@ stop(reason, force)
 ```
 
 - With `reason == .hostShutdown` the whole sequence has a 40 s deadline (§2.4). Step 6 then goes straight to `stop()` when the deadline is near.
-- Without a Guest Agent (it is unreachable), step 4 is skipped.
+- Without a Guest Agent, step 4 is skipped.
 - Every stop logs the path it took (`graceful`, `powerButton`, `forced`) and its duration. `apkrun doctor` warns when the last 3 stops were forced.
-- While a package install is active, RuntimeHost rejects user stop, restart, and reset with `runtime.invalidTransition`. Daemon shutdown drains the install before stopping Android. API 1.8 keeps that reservation until the tracked install reaches a terminal result.
+- While a package install is active, RuntimeHost rejects user stop, restart, and reset with `runtime.invalidTransition`. Daemon shutdown drains the install before it stops Android. This reservation lasts until the tracked install reaches a terminal result.
 
 ### 3.6 Failure handling and automatic restart
 
 When the supervisor enters `failed(f)`:
 
-1. Capture a diagnostics snapshot into `~/Library/Logs/APKRun/crash/<timestamp>-runtime/`: the console tail (last 2 MiB), the last 200 `BootPhaseDetector` events, agent health, GraphicsCore statistics, and `logcat -d` if ADB is still reachable (5 s limit) ([diagnostics.md](diagnostics.md) §8).
-2. `VMController.stop()` if the VM still runs, then `reset()`. The state becomes `stopped` (state-machines.md §2: "automatic after diagnostics capture").
+1. Capture a diagnostics snapshot in `~/Library/Logs/APKRun/crash/<timestamp>-runtime/`: the console tail (last 2 MiB), the last 200 `BootPhaseDetector` events, agent health, GraphicsCore statistics, and `logcat -d` (5 s limit) ([diagnostics.md](diagnostics.md) §8).
+2. `VMController.stop()` if the VM still runs, then `reset()`. The state becomes `stopped` ([state-machines.md](../01-architecture/state-machines.md) §2).
 3. Sessions have already ended with `.error(f)` or `.runtimeStopped`.
 
-Automatic restart (`runtime.autoRestart`, default `true`): if at least one session was `running` when the failure happened, the supervisor performs **one** cold boot and the affected wrappers retry `openSession` ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.5). A second failure within 10 minutes is not retried. The wrapper shows "Android stopped unexpectedly" with **Restart**, **Troubleshooting…**, and **Report…**.
+Automatic restart (`runtime.autoRestart`, default `true`): if a session was `running`, the supervisor performs **one** cold boot, and the affected wrappers retry `openSession` ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.5). A second failure within 10 minutes is not retried. The wrapper shows "Android stopped unexpectedly" with **Restart**, **Troubleshooting…**, and **Report…**.
 
-Boot-loop guard: 3 runtime failures (or unclean apkrund exits, §2.5) within 10 minutes set `bootLoopBlocked`. While it is set, `ensureReady(.session)` throws `RuntimeFailure.bootLoop`, and the GUI offers Restart, graphics safe mode ([graphics.md](graphics.md) §9), and "Reset Android" (§9.5). An explicit start clears the guard.
+Boot-loop guard: 3 runtime failures (or unclean apkrund exits, §2.5) within 10 minutes set `bootLoopBlocked`. While it is set, `ensureReady(.session)` throws `RuntimeFailure.bootLoop`. The GUI offers Restart, graphics safe mode ([graphics.md](graphics.md) §9), and "Reset Android" (§9.5). An explicit start clears the guard.
 
-`GraphicsFailure.rendererLost` while `ready` is handled as a failure with automatic restart ([graphics.md](graphics.md) §8).
+`GraphicsFailure.rendererLost` while `ready` is a failure that triggers automatic restart ([graphics.md](graphics.md) §8).
 
 ---
 
@@ -294,7 +266,7 @@ Boot-loop guard: 3 runtime failures (or unclean apkrund exits, §2.5) within 10 
 
 ### 4.1 Connection state
 
-Each agent supervisor ([guest-protocol.md](guest-protocol.md) §13.1) has its own state, reported as health and in `runtimeStatus`:
+Each agent supervisor ([guest-protocol.md](guest-protocol.md) §13.1) has its own state. The state appears in health and in `runtimeStatus`.
 
 ```swift
 enum AgentConnectionState: Sendable, Equatable {
@@ -307,66 +279,55 @@ enum AgentConnectionState: Sendable, Equatable {
 }
 ```
 
-- `connecting` and `reconnecting` retry with backoff from 100 ms doubling to 2 s ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3.1).
-- `incompatible` fails the boot with `RuntimeFailure.agentIncompatible` (NFR-REL-04). The remediation depends on the side: "Update APKRun" when the guest is newer, "Update Android" when the host is newer.
-- In development mode the supervisor also restarts the agent process through `GuestAgentProvisioner` ([guest-components.md](guest-components.md) §3.3). On the custom image Android restarts the persistent app by itself.
+- `connecting` and `reconnecting` retry with backoff from 100 ms, doubling up to 2 s ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3.1).
+- `incompatible` fails the boot with `RuntimeFailure.agentIncompatible` (NFR-REL-04). The remedy is "Update APKRun" when the guest is newer and "Update Android" when the host is newer.
+- In development mode the supervisor restarts the agent through `GuestAgentProvisioner` ([guest-components.md](guest-components.md) §3.3). On the custom image, Android restarts the persistent app itself.
 
 ### 4.2 Reconnect and reconciliation
 
-Rule: **the host is the source of truth for configuration, the guest for Android state.** After every handshake (first connect and reconnect):
+Rule: **the host is the source of truth for configuration, and the guest is the source of truth for Android state.** After every handshake (first connect and reconnect):
 
 1. `GetSnapshot` ([guest-protocol.md](guest-protocol.md) §6). The supervisor replaces its view of displays, tasks, focus, and packages.
-2. Push host-owned configuration again: `SetDisplayPolicy` for every leased display, `FocusDisplay` for the focused session, notification forwarding and URL redirect settings, `SetLocale`/`SetTimeZone`. A reconnect after an agent crash therefore restores the agent's settings without the sessions noticing.
+2. Push host-owned configuration again: `SetDisplayPolicy` for every leased display, `FocusDisplay` for the focused session, notification forwarding and URL redirect settings, and `SetLocale` and `SetTimeZone`.
 3. Reconcile sessions (`SessionRegistry`):
 
 | Snapshot shows | Session state before | Action |
 |---|---|---|
-| display present, the session's tasks present | running, backgrounded | continue |
-| display present, no tasks of the package | running, backgrounded | end with `.appExited` (the app finished during the disconnect) |
-| display present, no tasks | launching | send `LaunchApplication` again (it is idempotent: `BROUGHT_TO_FRONT` if it had started) |
-| display missing | any | end with `.error(.displayLost)` and release the lease (the scanout is reset) |
+| Display present, the session's tasks present | running, backgrounded | Continue |
+| Display present, no tasks of the package | running, backgrounded | End with `.appExited` (the app finished during the disconnect) |
+| Display present, no tasks | launching | Send `LaunchApplication` again (idempotent: `BROUGHT_TO_FRONT` if it had started) |
+| Display missing | any | End with `.error(.displayLost)` and release the lease (the scanout is reset) |
 
 4. Send `InputEvent.cancelAll` to every leased display, so no touch stays down across the gap ([input.md](input.md) §7).
 
-The supervisor keeps the agent non-ready while snapshot handlers reconcile
-host state. Events received while a handler runs are applied to the candidate
-snapshot, then handlers run again; handlers registered during that pass are
-also invoked before readiness. Once the snapshot and handlers are
-current, buffered events are published in order and queued requests may resume.
-Handlers are idempotent host-side reconciliation; guest operations such as a
-retry of `LaunchApplication` are scheduled to run after this barrier. Opening a
-new input channel also requires the agent to be ready, so input cannot bypass
-reconciliation. A handler must not wait for input-router cleanup that can
-send guest requests: detach the local route during the callback and complete
-`sessionEnded` after readiness resumes, or the reconnect barrier can wait on
-itself.
+The agent stays non-ready while snapshot handlers reconcile host state. Events received during a handler update the candidate snapshot, and the handlers run again. Buffered events publish in order once the snapshot is current, and guest operations such as a retried `LaunchApplication` run after this barrier. A handler must not wait for input-router cleanup that sends guest requests: it detaches the local route in the callback and completes `sessionEnded` after readiness resumes.
 
 ### 4.3 Operations during a disconnect
 
 - Frames keep flowing. The graphics path does not depend on the agent.
 - Input is dropped and counted (`input.droppedWhileDisconnected`). Text events are dropped too. The wrapper shows no error for gaps shorter than 2 s.
-- Requests that need the agent wait for an in-progress reconnect for up to 5 s, then throw `RuntimeFailure.guestAgentUnavailable` ([display-and-windowing.md](display-and-windowing.md) §10). The request stays unsent while it waits. Once submitted to the connection, it is never replayed after a disconnect because the guest may already have performed it. Stopping the supervisor or cancelling the caller wakes a queued request promptly; RuntimeCore reports the existing typed `GuestProtocolFailure.agentUnavailable` for either case.
-- A required agent that stays unreachable for more than 30 s while `ready` moves the runtime to `failed(.requiredAgentUnavailable(agent))` (§3.6). The deadline starts with the first non-ready connection state and continues across reconnect attempts. A completed handshake and `GetSnapshot` resynchronization cancels the deadline; a later outage starts a fresh 30 s interval. Stopping the runtime cancels the monitor before it can report a failure. RuntimeSupervisor publishes the failure state before teardown and returns to `stopped` after cleanup, so a later `ensureReady` can retry.
-- Hung guest watchdog: the agent misses pings, ADB is unreachable, and the console is silent, all for 60 s while `ready` → `failed(.guestUnresponsive)`.
+- A request that needs the agent waits up to 5 s for an in-progress reconnect, then throws `RuntimeFailure.guestAgentUnavailable` ([display-and-windowing.md](display-and-windowing.md) §10). A waiting request is unsent. A submitted request is never replayed, because the guest may have performed it. Stop or cancellation wakes a queued request at once with `GuestProtocolFailure.agentUnavailable`.
+- A required agent unreachable for more than 30 s while `ready` moves the runtime to `failed(.requiredAgentUnavailable(agent))` (§3.6). The deadline spans reconnect attempts and is cancelled by a completed handshake and `GetSnapshot`. The failure is published before teardown, and the runtime returns to `stopped`, so a later `ensureReady` can retry.
+- Hung guest watchdog: if the agent misses pings, ADB is unreachable, and the console is silent, all for 60 s while `ready`, the runtime moves to `failed(.guestUnresponsive)`.
 
 ---
 
-## 5. Idle policy (#069)
+## 5. Idle policy
 
-`IdleController` (RuntimeCore, actor) decides when to suspend (VM paused) and when to stop the runtime. It implements FR-VM-10 and is the only component that calls `VMController.pause()` outside host sleep (§6). [vm.md](vm.md) and [graphics.md](graphics.md) §8 reference this section.
+`IdleController` (RuntimeCore, actor) decides when to suspend (pause the VM) and when to stop the runtime. It implements FR-VM-10. It is the only component that calls `VMController.pause()` outside host sleep (§6).
 
 ### 5.1 Activity
 
-The runtime is **active** while any of these exist. Idle time counts only while none exists.
+The runtime is **active** while any source below exists. Idle time counts only while none exists.
 
 | Source | How it is tracked |
 |---|---|
 | An app session in any state except `ended` (`backgrounded` counts) | `SessionRegistry` |
-| A task kept alive by `window.closeBehavior = keepRunning` ([display-and-windowing.md](display-and-windowing.md) §7.6) | `ActivityKind.backgroundTask`, held until the task vanishes or the package is terminated |
-| Store operations: install, uninstall, gentle update install, icon rendering, metadata refresh | `ActivityKind.storeOperation`, held by APKStoreCore for the operation |
+| A task kept alive by `window.closeBehavior = keepRunning` ([display-and-windowing.md](display-and-windowing.md) §7.6) | `ActivityKind.backgroundTask`, until the task vanishes or the package is terminated |
+| Install, uninstall, gentle update install, icon rendering, metadata refresh | `ActivityKind.storeOperation`, held by APKStoreCore for the operation |
 | Diagnostics collection, image migration, first-run provisioning | `.diagnostics`, `.migration`, `.provisioning` |
-| An ADB client connected through the bridge (developer mode) | `.adbClient`, held by the ADB bridge while a TCP connection to 127.0.0.1:6520 is open |
-| `apkrun runtime start --hold` (keeps the runtime ready until the CLI exits or is interrupted) | `.cli` |
+| An ADB client connected through the bridge (developer mode) | `.adbClient`, while a TCP connection to 127.0.0.1:6520 is open |
+| `apkrun runtime start --hold` (until the CLI exits or is interrupted) | `.cli` |
 
 ```swift
 public struct ActivityKind: RawRepresentable, Sendable, Hashable {   // "storeOperation", "backgroundTask", …
@@ -381,36 +342,24 @@ public final class RuntimeActivityAssertion: Sendable {
 }
 ```
 
-In RuntimeCore, `IdleController.assertActivity(_:)` emits an `activityBegan`
-action before returning the assertion so the lifecycle owner can make the
-runtime ready. Lifecycle actions are delivered serially; pending idle actions
-are discarded when activity begins, and every assertion acquired during the
-idle-to-active transition waits for the same `activityBegan` action to finish.
-Action handlers must not acquire activity assertions, directly or through
-child tasks: waiting for an assertion from inside the serialized action handler
-would wait on the handler's own queue. Activity owners acquire assertions
-before requesting lifecycle work. Explicit release and deinitialization both
-drop the hold. The concrete session, store, ADB, diagnostics, migration,
-provisioning, and CLI owners acquire these assertions as they are integrated
-in #069.
+`IdleController.assertActivity(_:)` emits an `activityBegan` action before it returns the assertion, so the lifecycle owner makes the runtime ready. Lifecycle actions run serially, and pending idle actions are discarded when activity begins. Action handlers never acquire assertions, directly or in child tasks. Owners acquire assertions before they request lifecycle work.
 
-Not activity: open GUI, menu bar, or CLI connections that only observe; update checks and downloads (UpdateCore works while the runtime is stopped; installs take a `storeOperation` assertion when they run).
+Not activity: GUI, menu bar, or CLI connections that only observe, and update checks and downloads (UpdateCore works while the runtime is stopped).
 
-Consequence: an Android app closed with `stop` receives no notifications while the runtime is suspended. Messaging and music apps need `keepRunning`. The Settings UI says so next to the option.
+An app closed with `stop` receives no notifications while the runtime is suspended. Messaging and music apps need `keepRunning`. The Settings UI says so.
 
 ### 5.2 Timers and settings
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `runtime.idleSuspendMinutes` | 10 | idle time until `ready → suspended`. `0` = never suspend |
-| `runtime.idleStopMinutes` | 60 | idle time (counted from when idleness began, including suspended time) until the runtime stops. `0` = never stop |
+| `runtime.idleSuspendMinutes` | 10 | Idle time until `ready → suspended`. `0` = never suspend |
+| `runtime.idleStopMinutes` | 60 | Idle time, counted from when idleness began and including suspended time, until the runtime stops. `0` = never stop |
 | `runtime.startPolicy` | `onDemand` | `onDemand` or `atLogin` (§5.4) |
 
-- Idle time is measured with `SuspendingClock`, which does not advance while the Mac sleeps. A lid closed overnight does not count as 8 hours of idleness.
-- `idleStopMinutes` below `idleSuspendMinutes` is treated as "stop without suspending first".
-- If both deadlines are equal, the suspend action is delivered before the stop action.
-- Settings changes apply immediately: the controller recomputes its deadline.
-- RuntimeCore's `IdleController` keeps one one-shot clock sleep for the next enabled deadline. It emits `suspend` and `stop` actions to the lifecycle owner rather than polling. A settings update replaces that one-shot sleep while preserving the idle start instant.
+- Idle time uses `SuspendingClock`, which does not advance while the Mac sleeps. A lid closed overnight does not count as idle time.
+- `idleStopMinutes` below `idleSuspendMinutes` means "stop without suspending first". If both deadlines are equal, the suspend action is delivered before the stop action.
+- A settings change applies at once: the controller recomputes its deadline.
+- `IdleController` keeps one one-shot clock sleep for the next enabled deadline. It emits `suspend` and `stop` actions to the lifecycle owner rather than polling. A settings update replaces that sleep and keeps the idle start instant.
 
 ### 5.3 Suspend and resume
 
@@ -427,59 +376,55 @@ resume (suspended, ensureReady or an activity assertion)
   4. state: suspended → ready
 ```
 
-- Resume target: `VM_RESUMED` → `ready` p50 ≤ 500 ms, so a launch from `suspended` stays within NFR-PERF-01 plus 0.5 s. #070 measures it.
-- A pause or resume error from VZ moves the runtime to `failed(.vm(.pauseFailed/.resumeFailed))` (§3.6).
-- The memory balloon is not inflated before a pause in v1. Whether reclaiming guest free memory before suspending is worth the slower next launch (Android's lmkd kills cached processes) is measured in #069/#070 and recorded in [../04-plan/open-questions.md](../04-plan/open-questions.md).
+- Target: `VM_RESUMED` → `ready` p50 ≤ 500 ms, so a launch from `suspended` stays within NFR-PERF-01 plus 0.5 s. #070 measures it.
+- A VZ pause error gives `failed(.vm(.pauseFailed))`, and a resume error gives `failed(.vm(.resumeFailed))` (§3.6).
+- The memory balloon is not inflated before a pause in v1 (OQ-32).
 
 ### 5.4 Preboot (`runtime.startPolicy`)
 
 - `onDemand` (default): the runtime boots on the first request that needs Android.
-- `atLogin`: when apkrund starts at login (§2.1), it calls `ensureReady(.preboot)`, with a 60 s delay after login so that it does not compete with other login items. After `ready` the normal idle rules apply. The first app launch is then warm (runtime `ready`) or a resume (runtime `suspended`), instead of a cold boot.
-- Preboot is skipped on battery power when the battery is below 30 % (`IOPSCopyPowerSourcesInfo`), and during `bootLoopBlocked`.
+- `atLogin`: 60 s after login, when apkrund starts at login (§2.1), it calls `ensureReady(.preboot)`. The delay keeps it from competing with other login items. After `ready`, the normal idle rules apply. The first app launch is then warm or a resume, not a cold boot.
+- Preboot is skipped on battery power below 30 % (`IOPSCopyPowerSourcesInfo`) and during `bootLoopBlocked`.
 
 ### 5.5 Host memory pressure
 
 `DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical])`:
 
 - `.critical` while the runtime is `ready` and no session is visible (every session `backgrounded`, or none) → suspend at once, without waiting for the idle timer. `backgroundTask` assertions prevent this, because suspending would stop the audio the user chose to keep.
-- `.warning` → log and health `runtime.memoryPressure = warning`. No action.
+- `.warning` → log, and set health `runtime.memoryPressure = warning`. No other action.
 
-### 5.6 CPU budget while suspended (NFR-PERF-06)
+### 5.6 CPU budget while suspended
 
-While `suspended`, apkrund must stay below 1 % CPU. Rules that make this true:
+While `suspended`, apkrund stays below 1 % CPU (NFR-PERF-06). These rules make that true:
 
-- No polling anywhere. Console reading blocks on the pipe. XPC, ADB bridge, and agent sockets are event driven.
-- Agent pings and request timers stop (`paused`).
-- GraphicsCore statistics timers stop (`WillPause`). No display link runs in apkrund.
-- `IdleController` uses one one-shot timer for the next deadline. `UpdateScheduler` uses one one-shot timer with leeway ≥ 60 s.
-- Acceptance (#069): `top -l 61 -s 1 -pid <apkrund>` with the runtime suspended and no clients connected. The average CPU of the last 60 samples is below 1 %.
+- No polling: console reading blocks on the pipe, and XPC, the ADB bridge, and agent sockets are event driven.
+- Agent pings and request timers stop (`paused`). GraphicsCore statistics timers stop. No display link runs.
+- `IdleController` and `UpdateScheduler` each use one one-shot timer. The scheduler's leeway is at least 60 s.
 
 ---
 
-## 6. Host sleep and wake (#069, FR-VM-11)
+## 6. Host sleep and wake
 
-`PowerObserver` (RuntimeCore) registers with `IORegisterForSystemPower` and handles the messages on a dedicated serial queue. apkrund has no NSApplication, so it uses IOKit rather than `NSWorkspace` notifications ([vm.md](vm.md) §9.4).
+`PowerObserver` (RuntimeCore) registers with `IORegisterForSystemPower` (FR-VM-11) and handles messages on a dedicated serial queue. apkrund has no NSApplication, so it uses IOKit rather than `NSWorkspace` notifications ([vm.md](vm.md) §9.4).
 
 | Message | Action |
 |---|---|
 | `kIOMessageCanSystemSleep` (idle sleep request) | `IOAllowPowerChange`. APKRun never vetoes sleep |
-| `kIOMessageSystemWillSleep` | if the VM is running: record `resumeAfterWake = true`, suspend (§5.3 steps 1–2) without changing the idle timers, then `IOAllowPowerChange`. The pause must finish within 5 s. If it does not, acknowledge anyway and log `power.pauseLate`. macOS waits at most 30 s for the acknowledgement |
-| `kIOMessageSystemWillNotSleep` | undo: resume if this handler paused the VM |
-| `kIOMessageSystemHasPoweredOn` | if `resumeAfterWake`: resume (§5.3), including the time sync. The runtime state returns to what it was before sleep (`ready`) |
+| `kIOMessageSystemWillSleep` | If the VM is running: record `resumeAfterWake = true`, suspend (§5.3 steps 1–2) without changing the idle timers, then `IOAllowPowerChange`. The pause must finish within 5 s. If it does not, acknowledge anyway and log `power.pauseLate`. macOS waits at most 30 s for the acknowledgement |
+| `kIOMessageSystemWillNotSleep` | Undo: resume if this handler paused the VM |
+| `kIOMessageSystemHasPoweredOn` | If `resumeAfterWake`: resume (§5.3), including the time sync. The runtime state returns to `ready` |
 
-- A VM already `suspended` by the idle policy stays suspended across sleep and wake.
-- Sleep while booting: the boot is paused with the VM. The boot timeouts use `SuspendingClock` too, so sleep does not cause `bootTimedOut`.
-- Sessions stay open across sleep. The wrapper keeps showing the last frame ([graphics.md](graphics.md) §8).
-- Dark wakes (Power Nap, maintenance) also deliver `kIOMessageSystemHasPoweredOn`. v1 resumes on every wake. If #069 measures pause/resume churn during dark wakes, the fallback is to resume lazily on the first request or `visibilityChanged(true)` ([../04-plan/open-questions.md](../04-plan/open-questions.md)).
-- Time sync after wake is required, because Android's wall clock does not advance while the VM is paused. Acceptance (#069): after `pmset sleepnow` and a wake 2 minutes later, the guest wall clock is within 2 s of the host within 5 s of wake (checked with `adb shell date +%s` in development builds).
+- A VM that the idle policy suspended stays suspended across sleep and wake.
+- A boot in progress pauses with the VM. Boot timeouts use `SuspendingClock`, so sleep never causes `bootTimedOut`.
+- Sessions stay open, and the wrapper keeps showing the last frame ([graphics.md](graphics.md) §8).
+- Dark wakes also deliver `kIOMessageSystemHasPoweredOn`. v1 resumes on every wake (OQ-33).
+- Time sync after wake is required, because the guest clock does not advance while paused (§14).
 
 ---
 
-## 7. Sessions (`SessionRegistry`)
+## 7. Sessions
 
-`SessionRegistry` (RuntimeCore, actor) owns `AppSessionState` ([state-machines.md](../01-architecture/state-machines.md) §3) and the mapping session ↔ package ↔ client connection ↔ display lease ↔ Android task IDs. Display and window details are in [display-and-windowing.md](display-and-windowing.md).
-
-The registry grows over several tasks. #026 builds a minimal registry for embedded sessions on display 0, in the CLI process. #028 moves sessions to `DisplayPool` leases, and #030 runs two sessions at once. #032 adds what this section needs from apkrund: client connections, authorization, takeover, and orphaned sessions (§7.1–§7.3).
+`SessionRegistry` (RuntimeCore, actor) owns `AppSessionState` ([state-machines.md](../01-architecture/state-machines.md) §3). It maps session ↔ package ↔ client connection ↔ display lease ↔ Android task IDs. Display details are in [display-and-windowing.md](display-and-windowing.md).
 
 ### 7.1 `openSession`
 
@@ -498,193 +443,94 @@ openSession(request, client)                              PerfMarker APP_LAUNCH_
   (async, after reply) UpdateCore.noteLaunched(package)                          never on this path (NFR-PERF-07)
 ```
 
-- The descriptor is returned at step 5 (surfaces exist). The client learns the rest through the session event `stateChanged` ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §6.3). The wrapper shows the placeholder window until the first frame ([display-and-windowing.md](display-and-windowing.md) §7.3).
-- A cold boot shows `booting(progress)` from §3.3 in the placeholder.
-- A pending package transaction for the same package (for example a gentle update that started just before the click) is awaited up to 30 s in the phase `waitingForPackage`, with the placeholder text "Updating ‹App›…". The gentle update rules make this rare ([update-system.md](update-system.md)).
+- The descriptor is returned at step 5, when surfaces exist. Later state arrives as the session event `stateChanged` ([runtime-api.md](../03-reference/runtime-api.md) §6.3). The wrapper shows its placeholder until the first frame ([display-and-windowing.md](display-and-windowing.md) §7.3); a cold boot shows `booting(progress)` there (§3.3).
+- A pending package transaction for the same package is awaited up to 30 s in phase `waitingForPackage`, with the placeholder text "Updating ‹App›…" ([update-system.md](update-system.md)).
 
 ### 7.2 `launch` and `terminate` for control clients
 
-Wrappers open sessions. Control clients (GUI, menu bar, CLI) do not own windows, so they call:
+Control clients (GUI, menu bar, CLI) do not own windows, so they call:
 
-- `launch(packageID)`: apkrund resolves the window owner and opens it with `NSWorkspace.openApplication(at:configuration:)`:
-  1. the registered wrapper for the package (`Wrappers/registry.json`), if its bundle still exists and its cdhash matches;
-  2. otherwise the generic launcher `APKRun.app/Contents/Helpers/APKRunLauncher.app` with the arguments `--package <id>` (#068). It is signed with APKRun's identity and uses the `.control` endpoint.
-  The launched process calls `openSession`. `launch` returns when that session reaches `running` (or fails), so `apkrun launch` can print the result and the first-frame time.
-- `terminate(packageID)`: ends the session (the wrapper receives `windowRequest(.close)`), stops keep-running tasks, and sends `StopApplication(FORCE_STOP)` to the Guest Agent. The session ends with `.userClosed`. Without a session, it sends `StopApplication(FORCE_STOP)` only when Android is already ready; it never starts Android. Closing a window continues to use `StopApplication(FINISH_TASKS)`.
-
-#032's acceptance, "CLI launches HelloText through XPC without direct VM ownership", is tested with `apkrun launch io.apkrun.fixture.hellotext` (§13).
+- `launch(packageID)`: apkrund opens the window owner with `NSWorkspace.openApplication(at:configuration:)`. The owner is the registered wrapper for the package (`Wrappers/registry.json`) if its bundle exists and its cdhash matches. Otherwise it is the generic launcher `APKRun.app/Contents/Helpers/APKRunLauncher.app --package <id>`, signed with APKRun's identity, using the `.control` endpoint. The launched process calls `openSession`. `launch` returns when the session is `running` or has failed.
+- `terminate(packageID)`: ends the session (the wrapper receives `windowRequest(.close)`), stops keep-running tasks, and sends `StopApplication(FORCE_STOP)` to the Guest Agent. The session ends with `.userClosed`. Without a session, it sends `StopApplication(FORCE_STOP)` only when Android is already ready, and it never starts Android. Closing a window uses `StopApplication(FINISH_TASKS)`.
 
 ### 7.3 Client disconnects
 
-- A wrapper connection that is invalidated without `closeSession` (the wrapper crashed or was killed) makes the session **orphaned** for 3 s. If a wrapper for the same package calls `openSession` within that time, it re-attaches (§7.1 step 2). Otherwise the session is closed with the package's `window.closeBehavior`.
-- A control client that disconnects while waiting for `launch` changes nothing. The launched wrapper keeps its session.
-- Subscriptions (§8.4) end with their connection.
+- A wrapper connection invalidated without `closeSession` makes the session **orphaned** for 3 s. A wrapper for the same package that calls `openSession` in that time re-attaches (§7.1 step 2). Otherwise the session closes with the package's `window.closeBehavior`.
+- A control client that disconnects while waiting for `launch` changes nothing. Subscriptions (§8.4) end with their connection.
 
 ### 7.4 Runtime stop and failure
 
-`RuntimeState → stopping/stopped/failed` ends every session (`.runtimeStopped` or `.error(f)`). Queued sessions (`waitingForRuntime`) stay queued across a `stopping` (they wait for the next boot) but end with `.error(f)` on `failed`. Automatic restart (§3.6) lets the wrappers retry.
+`stopping` and `stopped` end every session with `.runtimeStopped`. `failed` ends every session with `.error(f)`. Queued sessions (`waitingForRuntime`) stay queued across `stopping` and wait for the next boot. On `failed` they end with `.error(f)`. Automatic restart (§3.6) lets the wrappers retry.
 
 ---
 
-## 8. XPC server (#032)
+## 8. XPC server
 
 ### 8.1 Components
 
 | Component | Serves | Notes |
 |---|---|---|
 | `XPCBrokerListener` | Mach service `io.apkrun.apkrund.xpc` | `hello`, `requestEndpoint`, `requestApproval` only ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2) |
-| `ControlEndpoint` | one-use anonymous listener per grant, with the selected APKRun client signing requirement | full `RuntimeService` |
-| `WrapperEndpoint(bundleID)` | one anonymous listener per registered wrapper, created lazily, with `identifier` + `cdhash` requirement | session API for its own package, `runtimeStatus` |
-| `EventHub` | all endpoints | fan-out of `RuntimeEvent` topics to subscribers (§8.4) |
-| `XPCRuntimeExporter` | — | adapts the `RuntimeService` Swift protocol to the `@objc` protocols of RuntimeAPI. The same `EmbeddedRuntimeService` instance serves XPC and embedded mode |
+| `ControlEndpoint` | One-use anonymous listener per grant, with the signing requirement of the selected APKRun client | Full `RuntimeService` |
+| `WrapperEndpoint(bundleID)` | One anonymous listener per registered wrapper, created lazily, with `identifier` and `cdhash` requirements | Session API for its own package, and `runtimeStatus` |
+| `EventHub` | All endpoints | Fan-out of `RuntimeEvent` topics to subscribers (§8.4) |
+| `XPCRuntimeExporter` | — | Adapts the `RuntimeService` Swift protocol to the `@objc` protocols of RuntimeAPI. The same `EmbeddedRuntimeService` instance serves XPC and embedded mode |
 
-Control listeners are created per grant, expire after 5 seconds if unused, and accept one connection. Wrapper endpoints are created when a wrapper asks for one and dropped 10 minutes after their last connection closes. Re-registration (new cdhash after re-approval) replaces the listener.
+Control listeners are created per grant, expire after 5 seconds if unused, and accept one connection. Wrapper endpoints are created when a wrapper asks for one, and they are dropped 10 minutes after their last connection closes. Re-registration (a new cdhash after re-approval) replaces the listener.
 
 ### 8.2 Request rules
 
-1. Decode `APIRequestHeader` first. Major version mismatch → `RuntimeFailure.apiVersionMismatch`. Undecodable payload → `RuntimeFailure.malformedRequest` (logged with the client kind, never with the payload).
-2. Authorize by endpoint kind, not by claims in the payload. A wrapper request for another package → `RuntimeFailure.notAuthorized` and a security log entry.
+1. Decode `APIRequestHeader` first. A major version mismatch gives `RuntimeFailure.apiVersionMismatch`. An undecodable payload gives `RuntimeFailure.malformedRequest`. Log the client kind, never the payload.
+2. Authorize by endpoint kind, never by claims in the payload. A wrapper request for another package gives `RuntimeFailure.notAuthorized` and a security log entry.
 3. Hop from the XPC queue to the owning actor immediately. No work runs on the XPC queue.
-4. Every reply is sent exactly once. `ReplyGuard` wraps the reply block: a second call asserts in debug, and a guard released without a reply answers `RuntimeFailure.internal`.
-5. The operation ID from the header is attached to every log line and perf marker caused by the request (NFR-OBS-01).
-6. Per-request timeouts are defined by the operation ([../03-reference/runtime-api.md](../03-reference/runtime-api.md)). Operations that can take long return early (§8.3).
-7. Limits: 64 requests in flight per connection, and 8 control connections at once. Above that → `RuntimeFailure.busy`.
+4. Every reply is sent exactly once. `ReplyGuard` asserts in debug builds on a second call, and it answers `RuntimeFailure.internal` when released without a reply.
+5. The operation ID from the header is attached to every log line and perf marker that the request causes (NFR-OBS-01).
+6. Per-request timeouts are defined by each operation ([runtime-api.md](../03-reference/runtime-api.md)). Long operations return early (§8.3).
+7. Limits: 64 requests in flight per connection, and 8 control connections at once. Above either limit, the request fails with `RuntimeFailure.busy`.
 
 ### 8.3 Long-running operations
 
-Long-running operations return an `OperationHandle { operationID }` right away. `OperationKind` lists them ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §4.7): the store operations (`install`, `uninstall`, `update`, …), `setup`, `resetAndroid`, `runtimeStop`, `runtimeRestart`, the image operations, the wrapper operations, and `diagnostics`. Progress and the result arrive on the `operations` event topic. `cancel(operationID)` is best effort: each operation documents its cancellation points (for example, an install can be cancelled until `CommitInstall`).
+Long operations return an `OperationHandle { operationID }` at once. `OperationKind` lists them ([runtime-api.md](../03-reference/runtime-api.md) §4.7): store operations (`install`, `uninstall`, `update`, …), `setup`, `resetAndroid`, `runtimeStop`, `runtimeRestart`, image and wrapper operations, and `diagnostics`. Progress and results arrive on the `operations` topic. `cancel(operationID)` is best effort. Each operation documents its cancellation points. Operations outlive their client: a dropped connection does not cancel, but Ctrl-C in `apkrun install` does.
 
-Operations survive the client that started them. `apkrun install foo.apk` followed by Ctrl-C cancels (the CLI sends `cancel` on `SIGINT`). A dropped connection does not.
-
-The first tracked install slice is API 1.8. `beginInstallImported` returns
-its handle before runtime startup, and the daemon retains the operation and
-its terminal result in memory. A matching operation ID and request payload
-joins the existing operation, so recovering from a lost start reply does not
-send a second PackageInstaller request. The in-memory registry holds every
-running operation and the most recent 50 finished operations. Until
-`EventHub` is implemented, the CLI polls `operationStatus`.
-Concurrent callers share one runtime-start attempt, so simultaneous installs
-do not race the supervisor while Android is booting.
-
-The current Store Agent install method is one transaction call and exposes no
-`CommitInstall` callback. RuntimeHost accepts cancellation while Android is
-starting, while it checks whether the target app has an active session, while
-PackageStore waits for its mutation lock, and while it validates the ticket and
-queries Android's current package version, and waits for the Store Agent
-channel to be ready. When the app is open, the install fails with
-`store.packageInUse`; the user closes the window and retries. Otherwise
-RuntimeHost reports `notCancellable` after channel setup, immediately before
-`StoreAgentChannel.install`. The guest request is journaled before channel
-setup; if cancellation or channel setup failure prevents the call, PackageStore
-aborts that journal entry and preserves the import ticket. After the call
-starts, PackageStore continues through guest-result reconciliation and journal
-commit/abort. This is more conservative than the normative `CommitInstall`
-cancellation point; track the finer boundary when the Store Agent exposes it.
-
-For tracked `--forget`, RuntimeHost keeps cancellation available while
-PackageStore waits for the mutation lock and validates the managed record. It
-reports `notCancellable` immediately before the host-only forget transaction
-is journaled; this operation does not start Android or close an app session.
-
-`EmbeddedPackageService` also reserves the package before awaiting session
-state or the RuntimeHost mutation-boundary callback. A launch already admitted
-by that service drains before the active-session check; later launches fail
-with `store.operationInProgress` until the package mutation returns. RuntimeHost
-binds the service to the daemon's session owner before the check, so the check
-observes the live daemon session registry rather than an embedded fallback.
-
-RuntimeAPI 1.9 adds topic subscriptions and sequenced event delivery. API 1.10
-adds package-install event payloads. API 1.11 adds tracked uninstalls and their
-committed package-removal event. The
-control endpoint verifies the exported event sink before subscribing.
-RuntimeHost reads one `RuntimeSupervisor.events` stream from supervisor
-creation, ignores console and logcat payloads, and publishes runtime state
-changes in stream order. Each state carries a supervisor-local monotonic
-revision. RuntimeHost tracks the status snapshot revision separately from the
-event reader's revision: `runtimeStatus` refreshes from the supervisor's
-revisioned snapshot, while delayed state events are still published in stream
-order. This keeps a delayed event from rolling the daemon's status cache back
-without dropping a state transition.
-
-While Android boots, RuntimeHost samples `BootProgressEstimator` every 100 ms
-and publishes `runtime.bootProgress` with the phase, fraction, elapsed time,
-and boot purpose. The hub coalesces it to at most 10 deliveries per second per
-subscriber. Stop transitions preserve the documented `StopReason` in
-`RuntimeState.stopping(reason)` and the wire event. RuntimeHost also publishes
-`started`, install-boundary `progress`, and terminal `finished` events for
-tracked installs. The hub bounds queued events and unacknowledged batches,
-removes subscriptions on unsubscribe or connection close, and emits
-`resyncRequired` when it must discard queued data. RuntimeClient replays
-subscriptions after reconnect and reports a local resync marker when events
-may have been missed.
-
-This is a partial EventHub implementation: `runtime`, `operations`, and
-successful package install and removal changes have publishers. Other topic
-publishers, package progress, streams, session callbacks, other long
-operations, and bounded operation-specific deadlines remain outstanding under
-#032 and #068 (IR-1390–IR-1395).
+- **Tracked installs.** `beginInstallImported` returns its handle before runtime startup. The daemon holds running operations and the 50 most recent finished ones, with their results, in memory. A matching operation ID and request payload joins the existing operation, so a lost start reply never sends a second PackageInstaller request. Concurrent callers share one runtime-start attempt.
+- **Install cancellation.** The Store Agent install is one transaction call with no `CommitInstall` callback. Cancellation is accepted until just before `StoreAgentChannel.install`. RuntimeHost reports `notCancellable` after channel setup, immediately before that call. An app with an open window makes the install fail with `store.packageInUse`; the user closes the window and retries. The guest request is journaled before channel setup. A cancellation or setup failure before the call aborts the entry and keeps the import ticket. After the call starts, PackageStore reconciles the guest result and commits or aborts the journal. This is more conservative than the `CommitInstall` cancellation point of [package-store.md](package-store.md) §5.
+- **Forget.** `--forget` is cancellable until the host-only forget transaction is journaled. It never starts Android or closes a session.
+- **Package reservation.** `EmbeddedPackageService` reserves the package before it awaits session state or the mutation-boundary callback. An admitted launch drains first. Later launches fail with `store.operationInProgress` until the package mutation returns.
+- **Tracked uninstalls.** `beginUninstallPackage` ends the package's session with `.packageUninstalled` before the Store Agent uninstall, and publishes `packages.removed` only after the store transaction commits. The event records the retained-data policy. Operation snapshots carry a fingerprint of the canonical request, so a reconnect can verify the same package and data policy. Stop, restart, reset, and shutdown wait for the uninstall. A launch admitted before it drains before session closure; later launches are rejected until it reaches a terminal result. Before session closure starts, cancellation skips the close and the window stays open. Before `StoreAgentChannel.uninstall`, cancellation appends an abort, and Android is never called. A cancellation that races a close already running may close the window while the package stays installed. `EmbeddedPackageService` holds its package gate through this interval, so no launch can intervene between session closure and the store mutation.
+- **Revisions and boot progress.** RuntimeHost reads `RuntimeSupervisor.events` in stream order. Each state carries a monotonic revision, and `runtimeStatus` reads the revisioned snapshot, so a delayed event never rolls status back. Stop transitions keep the `StopReason` in `RuntimeState.stopping(reason)` and in the wire event. While Android boots, RuntimeHost samples `BootProgressEstimator` every 100 ms and publishes `runtime.bootProgress`. Tracked installs publish `started`, install-boundary `progress`, and `finished`. The hub bounds queued events and emits `resyncRequired` when it discards data. RuntimeClient replays subscriptions after a reconnect and reports a resync marker when events may have been missed.
 
 ### 8.4 Events
 
-- `subscribe(topics)` registers the client's exported `RuntimeEventSink` for the nine topics of [../03-reference/runtime-api.md](../03-reference/runtime-api.md) §16.1: `runtime` (state, boot progress), `sessions`, `packages`, `updates`, `operations`, `health`, `maintenance` (host state, APKRun update status, Android system update phase; [runtime-maintenance.md](runtime-maintenance.md) §8.3), `wrappers`, and `integrations`. Health results go only to `health`. `unsubscribe(topics)` removes topics. Both are idempotent.
-- Stream operations (`guestLog`, `notificationRelay`, `hostNotifications`) deliver their items to the same sink under a stream ID. `closeStream(streamID)` ends a stream and is idempotent ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §16.4).
-- Session events for a wrapper (`frameReady`, `surfacesReplaced`, `imeStateChanged`, …) go only to the session's own connection, never through topics.
-- Coalescing: for `runtime` boot progress, `operations` progress, and `health`, only the latest value per key is delivered, at most 10 per second per subscriber. State changes and results are never coalesced.
-- A subscriber whose connection is invalidated is removed at once.
-- API 1.10 publishes `runtime` state and boot-progress events, `operations`
-  events for tracked package installs, and `packages.installed` or
-  `packages.updated` after a successful synchronous or tracked install. The
-  remaining topic publishers are part of the wire contract but are still
-  pending #032; streams and per-session callbacks are pending #032/#068.
-- API 1.11 adds the tracked `beginUninstallPackage` operation. RuntimeHost ends
-  the package's active session with `.packageUninstalled` before the Store Agent
-  uninstall, then publishes `packages.removed` only after the store transaction
-  commits. The event records the retained-data policy. Operation snapshots carry
-  an optional fingerprint of the canonical request so a reconnect can verify
-  that a retained operation used the same package and data policy. `--forget`
-  stays host-only, does not start Android, and emits no removal event. Uninstall
-  work shares the package-mutation lifecycle reservation, so stop, restart,
-  reset, and daemon shutdown wait for it. A launch already admitted for the same
-  package drains before session closure; later launches are rejected until the
-  uninstall reaches a terminal result. Cancellation remains available while the
-  PackageStore waits for its mutation lock and validates the managed record
-  before the active session closes. PackageStore checks cancellation immediately
-  before invoking the session-close callback. Cancellation remains available
-  while the session closes, the pending guest request is journaled, and
-  RuntimeAccess obtains a Store Agent channel. PackageStore invokes the boundary
-  callback immediately before `StoreAgentChannel.uninstall`; if cancellation
-  wins, it appends an abort and never calls Android. If cancellation is observed
-  before session closure starts, the callback is skipped and the window stays
-  open. If cancellation races with or arrives during an already-running close,
-  the window may close while the package remains installed. `EmbeddedPackageService`
-  holds its package gate through the same interval, including for direct service
-  callers, so actor reentrancy cannot admit a new launch between session closure
-  and the store mutation.
+- `subscribe(topics)` registers the client's exported `RuntimeEventSink` for the nine topics of [runtime-api.md](../03-reference/runtime-api.md) §16.1: `runtime`, `sessions`, `packages`, `updates`, `operations`, `health`, `maintenance` ([runtime-maintenance.md](runtime-maintenance.md) §8.3), `wrappers`, and `integrations`. Health results go only to `health`. `unsubscribe(topics)` removes topics. Both are idempotent. The control endpoint verifies the sink before subscribing.
+- Stream operations (`guestLog`, `notificationRelay`, `hostNotifications`) deliver items to the same sink under a stream ID. `closeStream(streamID)` ends a stream ([runtime-api.md](../03-reference/runtime-api.md) §16.4).
+- Session events (`frameReady`, `surfacesReplaced`, `imeStateChanged`, …) go only to the session's own connection.
+- For `runtime` boot progress, `operations` progress, and `health`, only the latest value per key is delivered, at most 10 per second per subscriber. State changes and results are never coalesced. An invalidated subscriber is removed at once.
+- A successful install publishes `packages.installed` or `packages.updated`. A successful tracked uninstall publishes `packages.removed`.
 
 ### 8.5 The CLI as a client
 
-The CLI uses RuntimeClient like every other client. Its only special behavior: commands that need apkrund and find it unregistered (`SMAppService.status != .enabled`) print `APKRun's background service is not set up. Open APKRun once, or run: apkrun setup` and exit with status 69 (EX_UNAVAILABLE). The full command set is in [cli.md](cli.md).
+The CLI uses RuntimeClient like every other client. If apkrund is unregistered (`SMAppService.status != .enabled`), a command that needs it prints `APKRun's background service is not set up. Open APKRun once, or run: apkrun setup` and exits with status 69 (EX_UNAVAILABLE). The full command set is in [cli.md](cli.md).
 
 ### 8.6 Runtime, session, and stream operations
 
-The request and reply types are in [../03-reference/runtime-api.md](../03-reference/runtime-api.md). These operations of the control and wrapper endpoints have no other design section:
+The request and reply types are in [runtime-api.md](../03-reference/runtime-api.md). These operations of the control and wrapper endpoints have no other design section:
 
 | Operation | Behavior | Task |
 |---|---|---|
-| `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime` | the wire names of `ensureReady`, `stop`, `restart`, and `reset` (§3.1). `startRuntime` uses `.cli` for the CLI and `.user` for APKRun.app and the menu bar. `resetRuntime` clears `failed` and the boot-loop guard and deletes nothing (runtime-api.md §5.2) | #031 (`startRuntime`, `stopRuntime`), #032 (the others) |
-| `runtimeInfo` | `apkrun info` without a package: versions, state, resource use, and the display pool size ([cli.md](cli.md) §4.1) | #032, #028 |
-| `listSessions` | the open sessions (§7) with package, display, phase, and point size. Used by `apkrun status`, the menu bar, and **Use Current Size** | #032 |
-| `restartApp` | a session channel request for Android → Restart ‹App› ([wrapper.md](wrapper.md) §5.6): `StopApplication`, then `LaunchApplication` on the same display. The session stays open | #044 |
-| `listOperations` | the running operations and the last 50 finished ones (§8.3). Used by `apkrun operations list` | #032 |
-| `unsubscribe`, `closeStream` | the counterparts of `subscribe` and of the stream operations (§8.4) | #032 |
+| `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime` | The wire names of `ensureReady`, `stop`, `restart`, and `reset` (§3.1). `startRuntime` uses `.cli` for the CLI and `.user` for APKRun.app and the menu bar. `resetRuntime` clears `failed` and the boot-loop guard, and deletes nothing ([runtime-api.md](../03-reference/runtime-api.md) §5.2) | #031 (`startRuntime`, `stopRuntime`), #032 (the others) |
+| `runtimeInfo` | `apkrun info` without a package: versions, state, resource use, and display pool size ([cli.md](cli.md) §4.1) | #032, #028 |
+| `listSessions` | Open sessions (§7) with package, display, phase, and point size. Used by `apkrun status`, the menu bar, and **Use Current Size** | #032 |
+| `restartApp` | Session channel request for Android → Restart ‹App› ([wrapper.md](wrapper.md) §5.6): `StopApplication`, then `LaunchApplication` on the same display. The session stays open | #044 |
+| `listOperations` | Running operations and the last 50 finished ones (§8.3). Used by `apkrun operations list` | #032 |
+| `unsubscribe`, `closeStream` | Counterparts of `subscribe` and of the stream operations (§8.4) | #032 |
 
 ---
 
-## 9. First-run provisioning (#066)
+## 9. First-run provisioning
 
 ### 9.1 Host requirements
 
-`HostRequirementsCheck` (RuntimeHost) returns every failed requirement at once. It runs DiagnosticsCore's host checks (`host.appleSilicon`, `host.macOSVersion`, `host.hypervisor`, `host.dataVolume`, `host.memory`, [diagnostics.md](diagnostics.md) §7.3), which `apkrun doctor` also runs without apkrund, and adds the checks that need Virtualization.framework or the image size:
+`HostRequirementsCheck` (RuntimeHost) returns every failed requirement at once. It runs the DiagnosticsCore host checks (`host.appleSilicon`, `host.macOSVersion`, `host.hypervisor`, `host.dataVolume`, `host.memory`, [diagnostics.md](diagnostics.md) §7.3), which `apkrun doctor` also runs without apkrund. It adds the checks that need Virtualization.framework or the image size:
 
 | Requirement | Check | Failure message (remediation) |
 |---|---|---|
@@ -692,12 +538,12 @@ The request and reply types are in [../03-reference/runtime-api.md](../03-refere
 | macOS 27 or later | `ProcessInfo.operatingSystemVersion` | "Update macOS" |
 | Virtualization available | `VZVirtualMachine.isSupported` (false inside most VMs) | "Virtualization is not available on this Mac (APKRun can't run inside a virtual machine)" |
 | APFS volume for the data root | `URLResourceValues.volumeSupportsFileCloning` on `APKRunPaths.root` | "Move APKRun's data to an APFS volume" ([android-image.md](android-image.md) §5.1) |
-| Free disk | expanded image size + 4 GiB (initial userdata) + 10 GiB margin | "Free up ‹n› GB" |
-| Memory | physical memory ≥ 8 GiB; the VM default is lowered to fit 50 % ([vm.md](vm.md) §10) | warning only |
+| Free disk | Expanded image size + 4 GiB (initial userdata) + 10 GiB margin | "Free up ‹n› GB" |
+| Memory | Physical memory ≥ 8 GiB. The VM default is lowered to fit 50 % ([vm.md](vm.md) §10) | Warning only |
 
 ### 9.2 Flow
 
-The GUI's onboarding (host-ui.md) and `apkrun setup` drive the same steps. Registration must run in APKRun.app (SMAppService registers the calling app's agent). Everything after it runs in apkrund, as the long-running operation `setup` (§8.3).
+The onboarding in [host-ui.md](host-ui.md) and `apkrun setup` run the same steps. Registration must run in APKRun.app, because SMAppService registers the calling app's agent. Everything after it runs in apkrund, as the long-running operation `setup` (§8.3).
 
 ```text
 APKRun.app first launch
@@ -729,52 +575,32 @@ public enum ProvisioningState: Sendable, Equatable, Codable {
 ```
 
 - Each step is idempotent and records completion in `state.json`. `setup` after an interruption (quit, crash, sleep) continues at the first incomplete step.
-- On failure the GUI shows the step, the error, and **Try Again** / **Report…**. A failed first boot keeps the instance, so "Try Again" boots again without re-cloning. After 2 failed first boots the GUI offers **Start Over**, which sends `setup` with `recreateInstance = true` ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §5.4).
-- `RuntimeService` operations that need Android return `RuntimeFailure.notProvisioned` until `complete`. Wrappers show "APKRun needs to finish setup" with an **Open APKRun** button.
+- On failure the GUI shows the step, the error, and **Try Again** / **Report…**. A failed first boot keeps the instance, so **Try Again** boots again without cloning. After 2 failed first boots, the GUI offers **Start Over**, which sends `setup` with `recreateInstance = true` ([runtime-api.md](../03-reference/runtime-api.md) §5.4).
+- Operations that need Android return `RuntimeFailure.notProvisioned` until `complete`. Wrappers show "APKRun needs to finish setup" with an **Open APKRun** button.
 
 ### 9.3 Image sources
 
 | Source | When | How |
 |---|---|---|
-| Local bundle directory; a local `.aar` from #058 (M10) | development and M4–M9 builds, and later for manual installs | chosen in the onboarding sheet, `apkrun setup --image <path>`, or `apkrun dev image install <dir>`. `.aar` files need the archive install of #058 ([runtime-maintenance.md](runtime-maintenance.md) §4.5) |
-| Release feed | from #087 (M10) | `ImageFeedClient` selects the newest compatible image of the channel and `ImageDownloader` downloads it ([runtime-maintenance.md](runtime-maintenance.md) §4.1–§4.5, [android-image.md](android-image.md) §10.4). The onboarding shows the size and a progress bar. First-run downloads ignore the rollout percentage and the expensive-network rule, but ask first on an expensive network |
+| Local bundle directory, or a `.aar` | Development builds and manual installs | Chosen in the onboarding sheet, with `apkrun setup --image <path>`, or with `apkrun dev image install <dir>`. A `.aar` installs as an archive ([runtime-maintenance.md](runtime-maintenance.md) §4.5) |
+| Release feed | Release builds | `ImageFeedClient` selects the newest compatible image of the channel, and `ImageDownloader` downloads it ([runtime-maintenance.md](runtime-maintenance.md) §4.1–§4.5, [android-image.md](android-image.md) §10.4). The onboarding shows the size and a progress bar. First-run downloads ignore the rollout percentage and the expensive-network rule, but ask first on an expensive network |
 
 The image is not bundled inside APKRun.app. Its size would make every APKRun update a multi-GB download.
 
-### 9.4 Acceptance of #066
-
-On a fresh macOS user account (registration, the Login Items approval, and the data root are per user, so a fresh `APKRUN_HOME` is not enough) and a newly registered agent, with a local image bundle. This is checklist C10-3 ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §8):
-
-1. Open APKRun.app, go through onboarding, and pick the bundle. No terminal command is used.
-2. Onboarding reaches `complete`. `apkrun runtime status` shows `ready`.
-3. Install HelloText by drag and drop. Open it (through the generic launcher of #068, because wrappers come in M7). The first frame appears.
-4. Quit APKRun.app during `firstBoot`, reopen it: setup continues at `firstBoot`.
-
-The total time of steps 1–2 and the first-boot duration are recorded in the #066 report.
-
 ### 9.5 Reset Android
 
-Settings → Troubleshooting → **Reset Android…** (and `apkrun runtime reset --erase`) deletes all Android data. It requires typing the confirmation "Reset".
+Settings → Troubleshooting → **Reset Android…**, and `apkrun runtime reset --erase`, delete all Android data. The user must type `Reset`.
 
 1. `stop(.reset, force: true)`.
-2. Create a recovery point (kept for 7 days) unless the user unticks "Keep a backup for 7 days". No operation restores this recovery point in v1 ([../04-plan/open-questions.md](../04-plan/open-questions.md) OQ-41). Settings → Storage and `apkrun image recovery-points` list and delete it.
+2. Create a recovery point kept for 7 days, unless the user unticks "Keep a backup for 7 days". No operation restores it in v1 (OQ-41). Settings → Storage and `apkrun image recovery-points` list and delete it.
 3. Delete `userdata.img`, provision again ([android-image.md](android-image.md) §5.1), and run the first boot.
-4. Provisioning writes a new `userdataGeneration`. After `ready`, APKStoreCore's reconciliation finds every package missing from the new generation, marks it `installed` → `needsReinstall(.userdataReset)`, and reinstalls it from `Packages/<id>/current/` under a `storeOperation` assertion ([package-store.md](package-store.md) §9.2). App data is lost. Settings and wrappers stay valid. Adopted packages without an artifact cannot be restored, and they are listed as `broken(.removedInAndroid)` with the Remove action.
+4. Provisioning writes a new `userdataGeneration`. After `ready`, APKStoreCore's reconciliation changes every package missing from the new generation from `installed` to `needsReinstall(.userdataReset)` and reinstalls it from `Packages/<id>/current/` under a `storeOperation` assertion ([package-store.md](package-store.md) §9.2). App data is lost. Settings and wrappers stay valid. Adopted packages without an artifact are listed as `broken(.removedInAndroid)` with the Remove action.
 
 ---
 
-## 10. Embedded mode and the move to apkrund (#031)
+## 10. Embedded mode
 
-Before #031, `apkrun dev …` runs everything in the CLI process ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §1.2). The move keeps logic unchanged:
-
-| Before #031 (M1–M3) | After #031/#032 (M4+) |
-|---|---|
-| `apkrun dev boot` constructs `RuntimeHost` in the CLI, takes the instance lock, and runs the VM | `apkrund` constructs the same `RuntimeHost`. `apkrun runtime start` asks it over XPC |
-| `apkrun dev launch` opens a window in the CLI process (`WindowingCore` + `EmbeddedRuntimeService`) | `apkrun launch` asks apkrund, which opens the wrapper or the generic launcher (§7.2) |
-| No idle policy, no sleep handling (the CLI process exits with the VM) | §5, §6 |
-| Diagnostics in the terminal and in `~/Library/Logs/APKRun/` | same logs. `apkrun logs --follow` runs `log stream` on the host, without apkrund ([cli.md](cli.md) §4.8) |
-
-`apkrun dev` keeps working after M4 for development: booting test images (`APKRUN_HOME` elsewhere), `--gpu`, `--window` console views, and running the Linux test guest. It refuses to touch the user's instance while apkrund holds the lock (§2.3).
+`apkrun dev` runs the runtime in the CLI process. This works in development builds only (`APKRUN_EMBEDDED_RUNTIME`), with the same `RuntimeHost` and logs as apkrund. It does not replace apkrund for other commands: they ask apkrund over XPC (§8.5), and `apkrun launch` asks apkrund, which opens the wrapper or the generic launcher (§7.2). `apkrun dev` refuses to use the user's instance while apkrund holds the lock (§2.3). `apkrun dev power sleep|wake` sends the sleep and wake messages of §6 to a running `apkrun dev boot` ([cli.md](cli.md) §5).
 
 ---
 
@@ -854,123 +680,50 @@ public enum ServiceUnavailableReason: String, Sendable, Codable {
 }
 ```
 
-Error domain `runtime`. Codes, user messages, and remediations are in [../03-reference/error-catalog.md](../03-reference/error-catalog.md). User-facing text never contains console excerpts. They go to the diagnostics snapshot (§3.6).
+Error domain `runtime`. Codes, user messages, and remediations are in [error-catalog.md](../03-reference/error-catalog.md). User-facing text never contains console excerpts. Those go to the diagnostics snapshot (§3.6).
 
 ---
 
 ## 12. Logging, metrics, health
 
-- Subsystem `io.apkrun.runtime`, categories `host` (startup, exit, recovery), `supervisor` (states, boot phases), `agents`, `idle`, `power`, `sessions`, `display` ([display-and-windowing.md](display-and-windowing.md) §10), `xpc`.
-- Perf markers set here (the full list is in [diagnostics.md](diagnostics.md) §4): `DAEMON_READY`, `KERNEL_START`, `ANDROID_INIT`, `SYSTEM_SERVER_READY`, `BOOT_COMPLETED`, `AGENT_CONNECTED`, `RUNTIME_READY`, `VM_PAUSED`, `VM_RESUMED`, `APP_LAUNCH_REQUEST`, `DISPLAY_ATTACHED`, `ACTIVITY_STARTED`, `FIRST_FRAME`. `VM_START` comes from VirtualMachineCore.
-- Health checks (DiagnosticsCore `HealthCheck`, used by `apkrun doctor` in #059). The `apkrund.*` checks run in the client, because apkrund cannot report that it is unreachable. The exact conditions and remediations are in [diagnostics.md](diagnostics.md) §7.3:
+- Subsystem `io.apkrun.runtime`. Categories: `host` (startup, exit, recovery), `supervisor` (states, boot phases), `agents`, `idle`, `power`, `sessions`, `display` ([display-and-windowing.md](display-and-windowing.md) §10), and `xpc`.
+- Perf markers set here. The full list is in [diagnostics.md](diagnostics.md) §4: `DAEMON_READY`, `KERNEL_START`, `ANDROID_INIT`, `SYSTEM_SERVER_READY`, `BOOT_COMPLETED`, `AGENT_CONNECTED`, `RUNTIME_READY`, `VM_PAUSED`, `VM_RESUMED`, `APP_LAUNCH_REQUEST`, `DISPLAY_ATTACHED`, `ACTIVITY_STARTED`, `FIRST_FRAME`. `VM_START` comes from VirtualMachineCore.
+- Health checks (DiagnosticsCore `HealthCheck`, used by `apkrun doctor`). The `apkrund.*` checks run in the client, because apkrund cannot report that it is unreachable. The conditions and remediations are in [diagnostics.md](diagnostics.md) §7.3:
 
 | Check | Healthy | Degraded / failing |
 |---|---|---|
 | `apkrund.registration` | `SMAppService.status == .enabled` | `requiresApproval`, `notRegistered`, `notFound` |
-| `apkrund.reachable` | the broker answers `hello` within 5 s with the same API major version | no answer, or an incompatible major version |
-| `apkrund.version` | apkrund's build equals the client's build | a different build; `restartPending` while an APKRun update waits for Android to stop ([runtime-maintenance.md](runtime-maintenance.md) §3.6) |
-| `apkrund.crashLoop` | < 3 unclean exits in 10 min | ≥ 3 (§2.5) |
-| `runtime.state` | `ready` or `suspended` or `stopped` | `failed(f)` with the failure code |
-| `runtime.boot` | last boot within the timeout | last boot failed (the failure's code), or took > 2× the median (`runtime.slowBoot`) |
-| `runtime.stop` | last stop graceful | last 3 stops forced (§3.5): `runtime.stopsForced` |
-| `agent.guest`, `agent.store` | `connected` | `reconnecting` > 5 s, stopped reconnecting after protocol violations ([guest-protocol.md](guest-protocol.md) §12.2), or restarted 3 times in a minute ([guest-components.md](guest-components.md) §3.3): `runtime.requiredAgentUnavailable`. `incompatible`: `runtime.agentIncompatible` |
-| `runtime.memoryPressure` | normal | warning, critical (§5.5): `runtime.hostMemoryPressure` |
-| `runtime.provisioning` | `complete` | incomplete step |
-
----
-
-## 13. Implementation steps
-
-### #031 Introduce apkrund (M4)
-
-1. Add the `Daemon/apkrund` target: a thin `main.swift` that builds `RuntimeHost` and calls `RunLoop.main.run()`. Embed it in `APKRun.app/Contents/Helpers/` with the plist from [../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §1.1 plus the launchd keys of §2.1.
-2. Implement `RuntimeHost.start()` in the order of §2.2, the instance lock (§2.3), `daemon.json` and unclean-exit handling (§2.5), and the exit rules with `SIGTERM` handling (§2.4).
-3. Move VM ownership from the CLI to apkrund: `RuntimeSupervisor` with the boot sequence (§3.2), `BootPhaseDetector` with golden tests over the #064 console captures (§3.3), readiness (§3.4), stop (§3.5), and failure handling (§3.6).
-4. Agent supervision and reconciliation (§4) on top of #072's `GuestAgentSupervisor`. The broker listener with the version handshake and the first control operations `runtimeStatus`, `runtime start`, and `runtime stop` ([../03-reference/runtime-api.md](../03-reference/runtime-api.md)). Startup step 11 needs the listener, and the T2 tests need a way to start and stop the runtime. #032 builds the rest of the API around these three without changing their shape.
-5. Registration in APKRun.app (`SMAppService`; re-registration when the agent is not `.enabled` or the embedded plist hash changed, [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §1.1, [runtime-maintenance.md](runtime-maintenance.md) §3.7 step 2). #057 moves this check into `AgentRegistrar`.
-6. Acceptance:
-   - closing APKRun.app does not stop the runtime while an app is active (HelloText stays interactive for 5 minutes after the GUI quits). Before #068 there is no app window over XPC, so #031 starts HelloText on display 0 through the test's `AdbClient`, and "interactive" means an injected tap is answered by HelloText's `click <n>` line. This is the headless form of G6 ([../04-plan/roadmap.md](../04-plan/roadmap.md) §2); #032 adds the warm-launch condition and #068 runs the full check with the window.
-   - `kill -9 $(pgrep apkrund)` during a session: launchd restarts apkrund within 15 s, the wrapper reconnects and gets HelloText back through a cold launch (NFR-REL-02), and `daemon.json` records the unclean exit.
-   - Logout with a running session: Android shuts down gracefully (`graceful` in the stop log).
-
-### #032 XPC runtime API (M4)
-
-1. Define the DTOs and `@objc` protocols in RuntimeAPI ([../03-reference/runtime-api.md](../03-reference/runtime-api.md)): `runtimeStatus`, `install`, `launch`, `terminate`, `list`, `packageInfo` (the wire operation for FR-RT-01's application metadata query), plus `subscribe`, `cancel`, `runtime start/stop`, the session channel, and the operations of §8.6 that name #032.
-2. Implement the broker and the endpoints (§8.1), request rules (§8.2), long-running operations (§8.3), and `EventHub` (§8.4).
-3. RuntimeClient: `XPCRuntimeService` with the reconnect behavior of process-model §2.5.
-4. Switch the CLI's non-`dev` commands to RuntimeClient (§8.5).
-5. `SessionRegistry`: client connections, the authorization of step 1 of §7.1, takeover, and orphaned sessions (§7.3), on top of the M3 registry (§7).
-6. Acceptance:
-   - `apkrun launch io.apkrun.fixture.hellotext` starts HelloText through XPC. The CLI process does not own a VM (it exits after `launch` returns and the app keeps running; `apkrun runtime status --json` reports `owner: apkrund`).
-   - A test binary signed with another identity is rejected at the control endpoint (ADR-0007 verification).
-   - A wrapper requesting a session for another package gets `notAuthorized`. Wrappers and their real identity check come with #044, so #032 puts the check behind a `WrapperAuthorizer` protocol, and the test uses a Debug fixture authorizer that maps a test bundle ID to one package. #044 replaces it.
-   - G6 condition 3: a warm launch after the runtime is `ready` writes no boot markers.
-   - Until #068 there is no launcher window. In Debug builds, `APKRUN_TEST_HEADLESS_LAUNCH=1` makes `launch` open a session owned by apkrund on a pool display that discards its frames. The hook is listed in [../03-reference/configuration.md](../03-reference/configuration.md) §5.1 and [../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.3 while it exists, the Release string check fails a Release build that contains it, and #068 removes it.
-
-### #066 First-run provisioning (M4)
-
-1. `HostRequirementsCheck` (§9.1).
-2. The `setup` operation and `ProvisioningState` (§9.2) with resumable steps, using ImageCore install and provisioning from #065.
-3. The onboarding sheet in APKRun.app (host-ui.md) and `apkrun setup --image`.
-4. Reset Android (§9.5).
-5. Acceptance: §9.4.
-
-### #069 Idle policy and sleep/wake (M4)
-
-1. `IdleController` with activity sources, `RuntimeActivityAssertion`, timers, and settings (§5.1–§5.2). T0 tests with a manual clock.
-2. Suspend and resume (§5.3), preboot (§5.4), memory pressure (§5.5).
-3. `PowerObserver` (§6). `apkrun dev power sleep|wake` injects the same messages into the running `apkrun dev boot` for T2 tests ([cli.md](cli.md) §5).
-4. Time sync after resume and wake: `SyncTime` through the Guest Agent, and in development builds on the stock userdebug image the ADB fallback ([desktop-integration.md](desktop-integration.md) §9; the full locale and time feature is #085).
-5. Acceptance:
-   - With `runtime.idleSuspendMinutes = 1` and no sessions, the runtime is `suspended` after 1 minute, and apkrund CPU is below 1 % (§5.6).
-   - Opening HelloText from `suspended` shows the first frame. `VM_RESUMED → RUNTIME_READY` p50 ≤ 500 ms over 20 runs.
-   - With `runtime.idleStopMinutes = 2`, the runtime stops gracefully and apkrund exits after the grace period when no client is connected.
-   - A `keepRunning` task, a connected `adb shell`, and a running install each prevent the suspend.
-   - The sleep and wake check in §6.
-
-### Health hooks for #059
-
-The checks in §12 are implemented with the components above. #059 adds them to `apkrun doctor` and the GUI's Troubleshooting pane.
+| `apkrund.reachable` | The broker answers `hello` within 5 s with the same API major version | No answer, or an incompatible major version |
+| `apkrund.version` | apkrund's build equals the client's build | A different build; `restartPending` while an APKRun update waits for Android to stop ([runtime-maintenance.md](runtime-maintenance.md) §3.6) |
+| `apkrund.crashLoop` | Fewer than 3 unclean exits in 10 min | 3 or more (§2.5) |
+| `runtime.state` | `ready`, `suspended`, or `stopped` | `failed(f)` with the failure code |
+| `runtime.boot` | Last boot within the timeout | Last boot failed (the failure's code), or took more than 2× the median (`runtime.slowBoot`) |
+| `runtime.stop` | Last stop graceful | Last 3 stops forced (§3.5): `runtime.stopsForced` |
+| `agent.guest`, `agent.store` | `connected` | `reconnecting` for more than 5 s, stopped reconnecting after protocol violations ([guest-protocol.md](guest-protocol.md) §12.2), or restarted 3 times in a minute ([guest-components.md](guest-components.md) §3.3): `runtime.requiredAgentUnavailable`. `incompatible`: `runtime.agentIncompatible` |
+| `runtime.memoryPressure` | `normal` | `warning`, `critical` (§5.5): `runtime.hostMemoryPressure` |
+| `runtime.provisioning` | `complete` | Incomplete step |
 
 ---
 
 ## 14. Tests
 
-| Tier | Test | Task |
+| Tier | What is tested | Where |
 |---|---|---|
-| T0 | `RuntimeState` edges (state-machines.md §2); `IdleController` with a manual clock (activity sources, both timers, settings change, `0` = never, sleep not counted); `BootPhaseDetector` golden tests over captured console logs; `BootProgressEstimator`; `ReplyGuard`; exit-rule evaluation | #031, #069 |
-| T1 | `RuntimeHost` startup order with fake modules, including degraded steps; instance lock contention between two processes; XPC server with `NSXPCListener.anonymous()` in-process: version mismatch, authorization per endpoint kind, 65th in-flight request rejected, long-operation handle and cancel; `SessionRegistry` with a fake runtime: queued sessions, orphan re-attach, takeover, reconciliation table (§4.2) | #031, #032 |
-| T2 | Real VM: cold boot to `ready` with markers; stop paths (graceful, power button, forced); agent kill and reconnect with session continuity; suspend/resume with time sync; injected sleep/wake; CPU budget while suspended; `kill -9 apkrund` recovery; boot-loop guard with test bundle P, whose kernel panics on a missing init ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.5) | #031, #032, #069 |
-| T3 | Gate G6: runtime stays warm under apkrund with the GUI closed (staged over #031, #032, and #068); warm launch KPI (with #070); real `pmset sleepnow` sleep and wake; onboarding on a fresh macOS user account (#066) | #031, #032, #068, #066, #069, #070 |
+| T0 | `RuntimeState` edges ([state-machines.md](../01-architecture/state-machines.md) §2). `IdleController` with a manual clock (activity sources, both timers, settings change, `0` = never, sleep not counted). `BootPhaseDetector` golden tests over captured console logs. `BootProgressEstimator`. `ReplyGuard`. Exit rules | `Packages/RuntimeCore/Tests/RuntimeCoreTests/`, `Packages/RuntimeHost/Tests/RuntimeHostTests/` |
+| T1 | `RuntimeHost` startup order with fake modules, including degraded steps. Instance lock contention between two processes. XPC server over `NSXPCListener.anonymous()`: version mismatch, authorization per endpoint kind, the 65th in-flight request, long-operation cancel. `SessionRegistry` with a fake runtime: queued sessions, orphan re-attach, takeover, reconciliation (§4.2) | `Packages/RuntimeHost/Tests/` |
+| T2 | Real VM: cold boot to `ready` with markers; stop paths (graceful, power button, forced); agent kill and reconnect with session continuity; suspend and resume with time sync; injected sleep and wake; `kill -9 apkrund` recovery; boot-loop guard with test bundle P, whose kernel panics on a missing init ([test-strategy.md](../04-plan/test-strategy.md) §3.5) | `Tests/IntegrationTests/` |
+| T2 | Acceptance: `kill -9` of apkrund during a session restarts it within 15 s, the wrapper reconnects, and HelloText returns by cold launch (NFR-REL-02). Logout with a session stops Android gracefully. Idle: with `runtime.idleSuspendMinutes = 1` the runtime is `suspended` after 1 minute, and the average of 60 `top -l 61 -s 1 -pid <apkrund>` samples is below 1 %. With `runtime.idleStopMinutes = 2` the runtime stops gracefully. A `keepRunning` task, a connected `adb shell`, or a running install prevents suspend. Resume from `suspended` shows the first frame, and `VM_RESUMED → RUNTIME_READY` has p50 ≤ 500 ms over 20 runs. A warm launch writes no boot markers. `apkrun launch io.apkrun.fixture.hellotext` starts HelloText through XPC, the CLI owns no VM, and `apkrun runtime status --json` reports `owner: apkrund`. A binary signed with another identity is rejected at the control endpoint (ADR-0007). A wrapper requesting another package's session gets `notAuthorized` | `Tests/IntegrationTests/` |
+| T2 | Headless G6: with the GUI closed, HelloText stays interactive for 5 minutes; an injected tap is answered by its `click <n>` line ([roadmap.md](../04-plan/roadmap.md) §2). Debug-only `APKRUN_TEST_HEADLESS_LAUNCH=1` opens a headless session on a pool display ([configuration.md](../03-reference/configuration.md) §5.1); Release builds must not contain it | `Tests/IntegrationTests/` |
+| T3 | Gate G6 with the GUI closed ([roadmap.md](../04-plan/roadmap.md) §2). Warm launch KPI. Real `pmset sleepnow` sleep and wake: the guest clock is within 2 s of the host within 5 s of wake (`adb shell date +%s`). Onboarding on a fresh macOS user account with a local image bundle reaches `complete` without a terminal command, and quitting during `firstBoot` resumes there (checklist C10-3, [test-strategy.md](../04-plan/test-strategy.md) §8) | Manual |
 
 ---
 
 ## 15. Open items
 
-| Item | Plan |
+| Item | Working default |
 |---|---|
-| The console strings of `BootPhaseDetector` are candidates (§3.3) | #064 records the exact strings and their timing from the reference boot ([android-image.md](android-image.md) §7.7, §8). Only the pattern table in `BootSignals.swift` and its golden tests change |
-| Memory balloon before a pause (§5.3, OQ-32) | #069 and #070 measure whether reclaiming guest free memory is worth the slower next launch. Working default: no balloon in v1. A balloon before a pause is also a fallback of R-08 |
-| Pause/resume churn during dark wakes (§6, OQ-33) | #069 measures it. Working default: resume on every wake. Fallback: resume lazily on the first request or on `visibilityChanged(true)` |
-| Restoring the Reset Android recovery point (§9.5, OQ-41) | a Decision before #058. Working default: no restore in v1 |
-| No VM save and restore while VirGL is active (R-07, accepted) | The runtime stays warm with pause and resume (§5), and the perf harness (#070) measures the cold start. Revisit if a later virglrenderer or the Venus track (#096) can rebuild the renderer state |
-
----
-
-## 16. Verification log
-
-Filled in by the tasks. Each entry records the date, the macOS build, the image build (or the test Linux guest), and the result.
-
-| Question | Task | Result |
-|---|---|---|
-| The XPC listener is resumed within 300 ms of process start (`DAEMON_READY`) | #031 | pending (§2.2) |
-| Gate G6: the runtime stays warm under apkrund ([../04-plan/roadmap.md](../04-plan/roadmap.md) §2) | #031 (headless form), #068 (full form) | pending (§13 #031, [display-and-windowing.md](display-and-windowing.md) §12 #068) |
-| After `kill -9` of apkrund, launchd restarts it within 15 s, and the wrapper gets HelloText back | #031 | pending (§2.5) |
-| A binary signed with another identity is rejected at the control endpoint (ADR-0007) | #032 | pending (§13 #032) |
-| The exact boot console strings and their timing | #064 | pending (§3.3) |
-| Time of onboarding steps 1–2 and the first-boot duration | #066 | pending (§9.4) |
-| apkrund CPU stays below 1 % while the runtime is suspended | #069 | pending (§5.6) |
-| `VM_RESUMED` → `ready` p50 ≤ 500 ms over 20 runs | #069, #070 | pending (§5.3) |
-| The guest wall clock is within 2 s of the host within 5 s of wake | #069 | pending (§6) |
-| Memory balloon before a pause | #069, #070 | pending (OQ-32) |
-| Pause/resume churn during dark wakes | #069 | pending (OQ-33) |
+| Console strings of `BootPhaseDetector` (§3.3) | The patterns in `BootSignals.swift` are the working default. Changing them touches only that table and its golden tests |
+| Memory balloon before a pause (§5.3, [OQ-32](../04-plan/open-questions.md)) | No balloon in v1. A balloon is also a fallback of R-08 |
+| Pause and resume churn during dark wakes (§6, [OQ-33](../04-plan/open-questions.md)) | Resume on every wake. Fallback: resume lazily on the first request or on `visibilityChanged(true)` |
+| Restoring the Reset Android recovery point (§9.5, [OQ-41](../04-plan/open-questions.md)) | No restore in v1. The point can be listed and deleted |
+| No VM save and restore while VirGL is active ([R-07](../04-plan/risks.md)) | Accepted. The runtime stays warm with pause and resume (§5). Revisit if a later virglrenderer, or the Venus track (#096), can rebuild the renderer state |

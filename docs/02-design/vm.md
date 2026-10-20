@@ -1,28 +1,24 @@
-# VM Design (VirtualMachineCore)
+# VM (VirtualMachineCore)
 
-| Field | Value |
-|---|---|
-| Status | Design baseline |
-| Related | [../01-architecture/state-machines.md](../01-architecture/state-machines.md) §1, [android-image.md](android-image.md), [graphics.md](graphics.md), [../01-architecture/decisions/0002-virtualization-framework-macos27.md](../01-architecture/decisions/0002-virtualization-framework-macos27.md), [../01-architecture/decisions/0015-direct-kernel-boot.md](../01-architecture/decisions/0015-direct-kernel-boot.md) |
-| Tasks | #002–#007, #011 (topology discovery), #063, #069, #083, #084, #095 |
+VirtualMachineCore turns a validated `VMDefinition` into a running `VZVirtualMachine` and reports its state. This document covers the definition and its validation, the mapping to Virtualization.framework, guest topology, console ports, networking, vsock, the lifecycle, and the test Linux guest.
 
 ---
 
 ## 1. Responsibilities
 
-VirtualMachineCore turns a validated `VMDefinition` into a running `VZVirtualMachine` and reports its state. It knows about CPUs, memory, disks, NAT, vsock, console ports, entropy, balloon, sound, and custom virtio devices that other modules hand in. It knows nothing about Android, APKs, image file names, or what a disk contains.
+VirtualMachineCore handles CPUs, memory, disks, NAT, vsock, console ports, entropy, balloon, sound, and the custom virtio devices that other modules pass in. It knows nothing about Android, APKs, image file names, or disk contents.
 
 Non-goals:
 
-- Choosing *which* files to boot. That is ImageCore, which produces the Android-specific parts of the definition ([android-image.md](android-image.md) §9).
-- Implementing virtio devices. VirtioDeviceCore provides the adapter and GraphicsCore provides virtio-gpu. VirtualMachineCore only attaches them.
-- Deciding when to pause or stop. That is RuntimeCore's idle policy ([runtime-daemon.md](runtime-daemon.md) §5).
+- Choosing which files to boot. ImageCore builds the Android parts of the definition ([android-image.md](android-image.md) §9).
+- Implementing virtio devices. VirtioDeviceCore and GraphicsCore provide them. VirtualMachineCore only attaches them.
+- Deciding when to pause or stop. The RuntimeCore idle policy does ([runtime-daemon.md](runtime-daemon.md) §5).
 
 ## 2. Public API
 
 ```swift
 public struct VMDefinition: Sendable {
-    public var label: String                      // VZVirtualMachineConfiguration.label (macOS 27), e.g. "APKRun Android"
+    public var label: String                      // VZVirtualMachineConfiguration.label (macOS 27)
     public var cpuCount: Int
     public var memorySize: UInt64                 // bytes, multiple of 1 MiB
     public var machineIdentifier: Data?           // VZGenericMachineIdentifier.dataRepresentation; nil = create new
@@ -47,7 +43,7 @@ public struct DiskDefinition: Sendable, Codable, Equatable {
     public var readOnly: Bool
     public var caching: DiskCaching               // .automatic (default) | .cached | .uncached
     public var synchronization: DiskSync          // .full (default for rw) | .fsync | .none (tests only)
-    public var identifier: String?                // VZVirtioBlockDeviceConfiguration.blockDeviceIdentifier (≤ 20 ASCII), visible as /sys/block/vdX/serial
+    public var identifier: String?                // blockDeviceIdentifier (≤ 20 ASCII), visible as /sys/block/vdX/serial
     public var role: String                       // for logs only, e.g. "os", "persistent", "userdata"
 }
 
@@ -61,18 +57,15 @@ public struct ConsolePortDefinition: Sendable, Codable, Equatable {
 
 public struct SoundDefinition: Sendable, Codable, Equatable {
     public var output: Bool                       // VZHostAudioOutputStreamSink
-    public var input: Bool                        // VZHostAudioInputStreamSource (microphone, #084)
+    public var input: Bool                        // VZHostAudioInputStreamSource (microphone, §11)
 }
-```
 
-`VMDefinition` is a value. ImageCore's `AndroidBootPlanner` builds it as `AndroidBootPlan.definition` from the image manifest and `InstanceConfiguration` ([android-image.md](android-image.md) §9.1). RuntimeCore adds the GPU device, and the value is never mutated after validation. `VMDefinition.summary` (a `Codable` projection without device objects) is written to the log and to diagnostics bundles.
-
-```swift
 public actor VMController {
     public init(definition: ValidatedVMDefinition, diagnostics: DiagnosticsContext)
 
     public var state: VMState { get }
     public nonisolated let stateUpdates: AsyncStream<VMState>
+    public nonisolated let networkHealthUpdates: AsyncStream<VMNetworkHealthState>
 
     public func start() async throws
     public func pause() async throws
@@ -82,197 +75,151 @@ public actor VMController {
     public func reset() async throws                   // failed → stopped only; see §9.6
 
     public func connect(vsockPort: UInt32, timeout: Duration) async throws -> VsockConnection
-    public nonisolated func console(_ role: ConsoleRole) -> ConsoleChannel   // read stream + optional writer
+    public nonisolated func console(_ role: ConsoleRole) -> ConsoleChannel
+    public func consoleLogWriterHasFailed() async -> Bool
+    public func consoleLogWriterDroppedByteCount() async -> UInt64
+    public func waitForConsoleLogDrain() async
 }
 
 public struct ValidatedVMDefinition: Sendable { /* only VMDefinitionValidator can create it */ }
 ```
 
-[AGENTS.md](../../AGENTS.md) §6.2 is followed literally: the controller is an actor, the state is explicit (`VMState`), and state is never inferred from a nil `VZVirtualMachine`.
+`VMDefinition` is a value. ImageCore's `AndroidBootPlanner` builds it as `AndroidBootPlan.definition` ([android-image.md](android-image.md) §9.1), and RuntimeCore adds the GPU device. It is never mutated after validation. `VMDefinition.summary` (a `Codable` projection without device objects) goes to logs and diagnostics bundles.
 
-## 3. Validation (`VMDefinitionValidator`, #002)
+The controller is an actor. Its state is the explicit `VMState` enum ([state-machines.md](../01-architecture/state-machines.md) §1). Never infer state from a nil `VZVirtualMachine` ([AGENTS.md](../../AGENTS.md) §6.2).
 
-`VMDefinitionValidator.validate(_:) throws(VMConfigurationFailure) -> ValidatedVMDefinition` runs every local rule below. It builds the `VZVirtualMachineConfiguration` and calls its `validate()` only when the local rules pass; this avoids secondary framework errors from invalid inputs. Errors are collected, not thrown on the first local failure, so `apkrun doctor` can print them all:
+## 3. Validation
+
+`VMDefinitionValidator.validate(_:) throws(VMConfigurationFailure) -> ValidatedVMDefinition` checks every rule below. It calls `VZVirtualMachineConfiguration.validate()` only after the local rules pass. It collects all failures:
 
 - One broken rule is thrown as its own case.
-- Several broken rules are thrown as one `.configurationInvalid([VMConfigurationFailure])`, a flat list in rule order ([../03-reference/error-catalog.md](../03-reference/error-catalog.md) §5.2).
-- `findings(_:) -> [VMConfigurationFailure]` returns the same list without throwing, for `apkrun doctor`.
+- Several broken rules are thrown as `.configurationInvalid([VMConfigurationFailure])`, in rule order ([error-catalog.md](../03-reference/error-catalog.md) §5.2).
+- `findings(_:) -> [VMConfigurationFailure]` returns the same list without throwing. `apkrun doctor` uses it.
 
 | Rule | Failure case |
 |---|---|
-| `VZVirtualMachineConfiguration.minimumAllowedCPUCount ≤ cpuCount ≤ min(maximumAllowedCPUCount, host active processor count)`; if the intersection is empty, no CPU count is allowed | `.cpuCountOutOfRange(requested, allowed)` (`allowed` is the text `none` for an empty intersection) |
+| `minimumAllowedCPUCount ≤ cpuCount ≤ min(maximumAllowedCPUCount, host active processor count)`. An empty intersection allows no CPU count | `.cpuCountOutOfRange(requested, allowed)`; `allowed` is `none` if empty |
 | `memorySize` is a multiple of 1 MiB, within `minimumAllowedMemorySize…maximumAllowedMemorySize` | `.memoryOutOfRange` |
 | `memorySize ≤ 50 %` of physical memory (NFR-RES-01) | `.memoryExceedsHostCap(cap)` |
-| Kernel exists and is an **uncompressed arm64 `Image`**: bytes 0x38–0x3B are `ARM\x64`. gzip (`1f 8b`), lz4 (`02 21 4c 18` / `04 22 4d 18`), and EFI zboot (`MZ`, then `zimg` at offset 4) are rejected, and so is anything else, including other architectures (VZLinuxBootLoader has no decompressor on arm64; the VM would hang) | `.kernelMissing(url)`, `.kernelNotUncompressedImage(detected)` with `detected` one of `.gzip`, `.lz4`, `.zboot`, `.unknown` |
+| Kernel exists and is an **uncompressed arm64 `Image`**: bytes 0x38–0x3B are `ARM\x64`. Reject gzip (`1f 8b`), lz4 (`02 21 4c 18` / `04 22 4d 18`), EFI zboot (`MZ`, `zimg` at offset 4), and anything else. VZLinuxBootLoader cannot decompress, and the VM would hang | `.kernelMissing(url)`, `.kernelNotUncompressedImage(detected)` with `.gzip`, `.lz4`, `.zboot`, or `.unknown` |
 | initrd exists if given, size ≤ 512 MiB | `.initrdMissing`, `.initrdTooLarge` |
 | Command line ≤ 2048 bytes, ASCII | `.commandLineInvalid` |
-| Every disk URL exists and is a regular file. Android sparse images (magic `0xED26FF3A`) are rejected: VZ needs raw (or ASIF) images | `.diskMissing(role)`, `.diskIsAndroidSparse(role)` |
+| Every disk URL exists and is a regular file. Reject Android sparse images (magic `0xED26FF3A`): VZ needs raw or ASIF | `.diskMissing(role)`, `.diskIsAndroidSparse(role)` |
 | Every disk is readable by the process | `.diskNotReadable(role)` |
-| No disk URL appears twice, compared after resolving symlinks (VZ would open it twice) | `.duplicateDisk(role)` |
-| A read-write disk is writable by the process; a read-only disk is opened read-only | `.diskNotWritable(role)` |
-| `.none` disk synchronization mode is reserved for tests and rejected in production definitions | `.diskSyncModeTestOnly(role)` |
+| No disk URL appears twice, compared after resolving symlinks | `.duplicateDisk(role)` |
+| A read-write disk is writable by the process. A read-only disk is opened read-only | `.diskNotWritable(role)` |
+| `.none` synchronization is rejected in production definitions | `.diskSyncModeTestOnly(role)` |
 | `identifier` ≤ 20 ASCII characters | `.diskIdentifierInvalid` |
 | `consolePorts` is non-empty and `[0]` is `.systemConsole` | `.missingSystemConsole` |
 | MAC address is a valid locally administered unicast address | `.invalidMACAddress` |
 | `machineIdentifier`, when present, decodes with `VZGenericMachineIdentifier(dataRepresentation:)` | `.machineIdentifierInvalid` |
-| Each custom-device descriptor has a nonempty name and at least one queue; VZ adapter count and configuration checks are in #063 | `.customDeviceInvalid(name, reason)` |
-| `sound.input == true` only when `NSMicrophoneUsageDescription` is present in the host bundle | `.microphoneUsageDescriptionMissing` |
-| `VZVirtualMachineConfiguration.validate()` after local rules pass | `.frameworkRejected(underlying)` |
-
-Tests (T0): one test per rule, including kernel magic detection with real gzip, lz4, and `Image` headers (fixture headers are 64 bytes, not whole kernels).
-
-**Opt-in unentitled `swift test` probe:** On 2026-10-07 UTC, the
-`VirtualMachineCoreSystemTests.vzConfigurationValidationReportsProcessEntitlement`
-test ran with
-`APKRUN_TEST_LINUX_DIR=/tmp/apkrun-test-linux-codex swift test --scratch-path /tmp/apkrun-swiftpm-codex --filter vzConfigurationValidationReportsProcessEntitlement`
-on arm64 Mac17,9 (macOS 27.0.1, build `26A434`; Xcode 27.0, build
-`27A266a`). The probe uses `VMDefinitionBuilder` and the production
-`VZConfigurationBuilder` with the pinned kernel
-(`e31110ab7979cee4cddcb975b36ab4f1231e98114eb8c360aeeffa00a6adbbc4`) and
-initramfs
-(`5eaacf941c1ebd9e81699dfaa7e7583e50e559a33df3e2a82f5e8bd31cce5e7f`).
-`SecTaskCopyValueForEntitlement` confirmed that the test process had no
-`com.apple.security.virtualization` entitlement, while
-`VZVirtualMachine.isSupported` was true. `validate()` returned
-`VZErrorDomain` code 2, and `NSLocalizedFailureReasonErrorKey` explicitly said
-the process lacked that entitlement; `NSDebugDescriptionErrorKey` was absent.
-The test passed and did not create a `VZVirtualMachine`. The default
-unentitled validation paths continue to use the framework-validator fake; this
-opt-in system test probes the real validator, and #003's signed T2 test host
-covers the entitled path.
+| Each custom device has a nonempty name and at least one queue. VZ adapter checks are part of #063 | `.customDeviceInvalid(name, reason)` |
+| `sound.input == true` only with `NSMicrophoneUsageDescription` in the host bundle | `.microphoneUsageDescriptionMissing` |
+| `VZVirtualMachineConfiguration.validate()`, after the local rules pass | `.frameworkRejected(underlying)` |
 
 ## 4. Mapping to Virtualization.framework
 
 | `VMDefinition` | VZ configuration | Notes |
 |---|---|---|
-| platform | `VZGenericPlatformConfiguration` with `machineIdentifier` | The identifier is created once per instance and stored in `instance.json`. Nested virtualization stays off. |
+| platform | `VZGenericPlatformConfiguration` with `machineIdentifier` | Created once per instance, stored in `instance.json`. Nested virtualization off |
 | `boot` | `VZLinuxBootLoader(kernelURL:)`, `initialRamdiskURL`, `commandLine` | Direct kernel boot ([ADR-0015](../01-architecture/decisions/0015-direct-kernel-boot.md)) |
-| `cpuCount`, `memorySize` | `cpuCount`, `memorySize` | |
-| `disks[i]` | `VZVirtioBlockDeviceConfiguration(attachment: VZDiskImageStorageDeviceAttachment(url:readOnly:cachingMode:synchronizationMode:))`, `blockDeviceIdentifier` | Order preserved in `storageDevices` |
-| `network` | one `VZVirtioNetworkDeviceConfiguration` + `VZNATNetworkDeviceAttachment` per entry, with its `macAddress`, in array order | No bridged networking (restricted entitlement). The Android definition has three entries in Cuttlefish's order (§7) |
-| `vsockEnabled` | one `VZVirtioSocketDeviceConfiguration` | VZ allows one vsock device per VM |
-| `consolePorts[i]` | ports 0–9: one `VZVirtioConsoleDeviceSerialPortConfiguration` each, with `VZFileHandleSerialPortAttachment`. Ports 10 and up: the ports of one `VZVirtioConsoleDeviceConfiguration`, each with `isConsole = true` | See §6.1 for the single-port devices and VZ's limit of 10 |
+| `disks[i]` | `VZVirtioBlockDeviceConfiguration` with `VZDiskImageStorageDeviceAttachment(url:readOnly:cachingMode:synchronizationMode:)` and `blockDeviceIdentifier` | Array order kept |
+| `networks[i]` | One `VZVirtioNetworkDeviceConfiguration` and `VZNATNetworkDeviceAttachment` each, with its MAC, in array order | No bridged networking (restricted entitlement). Android uses three (§7) |
+| `vsockEnabled` | One `VZVirtioSocketDeviceConfiguration` | VZ allows one per VM |
+| `consolePorts[i]` | Ports 0–9: one `VZVirtioConsoleDeviceSerialPortConfiguration` each. Ports 10 and up: ports of one `VZVirtioConsoleDeviceConfiguration`, each with `isConsole = true` | §6.1 |
 | `entropy` | `VZVirtioEntropyDeviceConfiguration` | |
-| `memoryBalloon` | `VZVirtioTraditionalMemoryBalloonDeviceConfiguration` | Not driven in v1. Present so a later release can reclaim memory without an image change |
+| `memoryBalloon` | `VZVirtioTraditionalMemoryBalloonDeviceConfiguration` | Not driven in v1, so a later release can reclaim memory without an image change |
 | `sound` | `VZVirtioSoundDeviceConfiguration` with output and/or input streams | [desktop-integration.md](desktop-integration.md) §8 |
-| `customDevices` | `customVirtioDevices` (macOS 27) | Built by VirtioDeviceCore from each `VirtioDeviceModel` |
-| `builtInDisplay` (development only) | `VZVirtioGraphicsDeviceConfiguration` with one `VZVirtioGraphicsScanoutConfiguration`, and no view | Only the `headless` GPU profile of M1 bring-up sets it: the stock image cannot boot without a DRM device ([android-image.md](android-image.md) §9.1). Never set together with the GraphicsCore virtio-gpu device, and never in a release bundle |
-| (not used) | `keyboards`, `pointingDevices`, `directorySharingDevices`, `usbControllers`, and `graphicsDevices` outside `builtInDisplay` | Graphics is our own virtio-gpu; input is guest-side injection ([ADR-0013](../01-architecture/decisions/0013-input-via-guest-injection.md)); file sharing goes through the Guest Agent ([desktop-integration.md](desktop-integration.md) §6) |
+| `customDevices` | `customVirtioDevices` (macOS 27), built by VirtioDeviceCore | |
+| `builtInDisplay` | `VZVirtioGraphicsDeviceConfiguration` with one scanout and no view | Development only, with the `headless` GPU profile of M1 bring-up ([android-image.md](android-image.md) §9.1). Never set with the GraphicsCore virtio-gpu device, and never in a release bundle |
+| (not used) | `keyboards`, `pointingDevices`, `directorySharingDevices`, `usbControllers`, `graphicsDevices` | Graphics is our virtio-gpu. Input is guest-side injection ([ADR-0013](../01-architecture/decisions/0013-input-via-guest-injection.md)). File sharing goes through the Guest Agent ([desktop-integration.md](desktop-integration.md) §6) |
 
-All VZ objects are created and called on the controller's private serial `DispatchQueue` (`io.apkrun.vm.queue`), as VZ requires. The actor hops onto that queue with `withCheckedThrowingContinuation`.
+All VZ objects are created and called on the serial queue `io.apkrun.vm.queue`. The controller actor hops onto it with `withCheckedThrowingContinuation`.
 
 ## 5. Guest-visible topology
 
-What the guest sees on VZ (confirmed by #011 on macOS 27.0.1 (26A434); the capture is `Images/reference/vz/26A434/topology.txt`):
+Observed on macOS 27.0.1 (build 26A434). The capture is `Images/reference/vz/<macOS build>/topology.txt`. The T2 suite re-checks it on each new macOS build (R-16).
 
-- One `pci-host-ecam-generic` PCIe host bridge (ECAM at `0x40000000`, platform device `40000000.pci`, host bridge `0000:00:00.0` with vendor `0x106b`). There are no virtio-mmio nodes, so every virtio device is a PCI function. The device tree has the top-level nodes `chosen`, `clock`, `cpus`, `gic`, `gpio-keys`, `hypervisor`, `memory`, `pci`, `pl031`, `pl061`, `psci`, and `timer`.
-- GICv3, PSCI via `hvc`, the arm64 architected timer, PL031 RTC, a PL061 GPIO wired to `gpio-keys` as the power button.
-- No PL011 UART. The console is `hvc0` (virtio-console).
-- RAM starts at `0x70000000`.
+- One `pci-host-ecam-generic` PCIe host bridge: ECAM at `0x40000000`, platform device `40000000.pci`. There are no virtio-mmio nodes, so every virtio device is a PCI function.
+- GICv3, PSCI via `hvc`, the arm64 timer, a PL031 RTC, and a PL061 GPIO wired to `gpio-keys` as the power button.
+- No PL011 UART. The console is `hvc0` (virtio-console). RAM starts at `0x70000000`.
 
-Consequences for Android:
+Consequences:
 
-- `androidboot.boot_devices` must name the PCI host bridge's platform device (crosvm uses `10000.pci`; the VZ value is `40000000.pci`, observed on macOS 27.0.1 (26A434) from `readlink -f /sys/block/vda` and recorded by #011). All virtio-blk disks sit under that one bridge, so a single value covers `os.img` and `userdata.img` ([android-image.md](android-image.md) §5.3).
-- The signed #005 T2 test on arm64 macOS 27.0 (26A428) observed guest-visible block-device serial order following the configuration arrays for both `[ro, rw]` and `[rw, ro]`. This is a measured result for that OS build, not a product dependency: nothing in APKRun relies on `vdX` letters or PCI slot numbers. Android finds partitions by GPT name, and our code finds disks by `blockDeviceIdentifier` if it ever needs to.
-- The discovered topology (`lspci -nn`, `/sys/bus/pci/devices`, `/proc/device-tree` dump) is committed to `Images/reference/vz/<macOS build>/topology.txt` by #011 and re-checked by the T2 suite on each new macOS build (R-16).
+- `androidboot.boot_devices` names the bridge's platform device: `40000000.pci` on VZ (crosvm uses `10000.pci`). All virtio-blk disks sit under it, so one value covers `os.img` and `userdata.img` ([android-image.md](android-image.md) §5.3).
+- Nothing relies on `vdX` letters or PCI slot numbers. Android finds partitions by GPT name. Code finds a disk by `blockDeviceIdentifier`.
 
 ## 6. Console ports
 
-### 6.1 Why single-port devices
+### 6.1 Single-port devices
 
-Cuttlefish's HALs open fixed device nodes (`/dev/hvc3` for keymaster and so on; the full map is in [android-image.md](android-image.md) §7). crosvm creates one single-port virtio-console device per port. Linux numbers them `hvc0…hvcN` in probe order. We do the same with `VZVirtioConsoleDeviceSerialPortConfiguration`, one per entry of `consolePorts`.
+Cuttlefish HALs open fixed nodes such as `/dev/hvc3` ([android-image.md](android-image.md) §7). crosvm creates one single-port virtio-console device per port, and Linux numbers them `hvc0…hvcN` in probe order. VirtualMachineCore does the same for ports 0–9. Do not use named multiport ports for HAL ports: they appear as `/dev/vportNpM`, which the HALs do not open.
 
-The alternative, one `VZVirtioConsoleDeviceConfiguration` with named multiport ports, gives `/dev/vportNpM` nodes, which the Cuttlefish HALs don't use. It stays available for our own future use (named ports would be self-describing).
+**VZ limit.** `validate()` rejects more than 10 single-port console devices. Android needs 20. Ports 10 and up are ports of one `VZVirtioConsoleDeviceConfiguration`, each with `isConsole = true`. The guest turns each into an hvc device, so they become hvc10, hvc11, … after the single-port devices. The split is internal to `VZConfigurationBuilder`. `VMDefinition.consolePorts` stays one ordered list.
 
-**VZ's limit.** `validate()` rejects more than 10 `VZVirtioConsoleDeviceSerialPortConfiguration`s ("Number of Virtio console serial port devices is greater than the maximum number supported"; macOS 27.0.1, 26A434). Android needs 20 ports. VirtualMachineCore therefore attaches ports 0–9 as single-port devices and ports 10 and up as the ports of one multiport `VZVirtioConsoleDeviceConfiguration`, each with `isConsole = true`. The guest's virtio-console driver turns every port the host marks as a console into an hvc device, so those ports become hvc10, hvc11, …, after the ten single-port devices. In the 2026-10-08 Android boot, the sensors HAL's frames on `/dev/hvc18` arrived on port 18, so the order matched the array order there; #095 verifies all 20 ports with markers (§6.2). The split is internal to `VZConfigurationBuilder`: `VMDefinition.consolePorts` stays one ordered list.
+### 6.2 Port numbering must be verified
 
-### 6.2 Port numbering must be verified, not assumed
+Apple does not document the order in which VZ assigns PCI functions to serial ports. Therefore:
 
-Apple does not document the order in which VZ assigns PCI functions to serial ports. So:
+1. The test Linux guest attaches `[.systemConsole, .service("test-1"), .service("test-2")]`. The host writes `APKRUN-PORT-<i>\n` to ports 1 and 2 only, never to the system console outside `apkrun dev console` (§6.3). The guest `/init` reads `/dev/hvc1` and `/dev/hvc2` and prints the marker it saw. A T2 test asserts the mapping.
+2. The T2 suite checks all 20 ports with markers, using a guest-side probe in the test initramfs. Android relies on the mapping only after this check (#095).
+3. If VZ numbering is not the array order, `ConsolePortPlan` (RuntimeCore) reorders the array to match the Cuttlefish map. The map is data, not scattered constants.
 
-1. #004 (M0) attaches three ports to the test Linux guest: `[.systemConsole, .service("test-1"), .service("test-2")]`. The host writes `APKRUN-PORT-<i>\n` into the `.service` ports 1 and 2 only, because it never writes to the system console outside `apkrun dev console` (§6.3). Port 0 is identified by the kernel console output that arrives on its pipe. The guest's `/init` reads `/dev/hvc1` and `/dev/hvc2` and prints which marker it saw. The mapping is asserted in a T2 test.
-2. #095 repeats this with all 20 ports, using a small guest-side probe run from the test initramfs, before the Android boot relies on it.
-3. If VZ numbering is not the array order, `ConsolePortPlan` (RuntimeCore) re-orders the array so that the guest numbering matches the Cuttlefish map. The mapping is data, never scattered constants.
-
-**Observed on the reference Mac.** On 2026-10-05 UTC, arm64 macOS 27.0
-(26A428) reported `hvc1=APKRUN-PORT-1` and `hvc2=APKRUN-PORT-2` in the signed
-#004 T2 test. This confirms array order on this OS build; #095 still verifies
-all 20 ports, and the product must not depend on this observation across OS
-releases.
+The product must not depend on array order across macOS releases. Step 2 runs on each new macOS build (R-16).
 
 ### 6.3 Attachments and sinks
 
 Each port gets a `VZFileHandleSerialPortAttachment` built from two pipes:
 
-- **Guest → host:** the guest writes into the pipe's write end. `ConsoleChannel` reads the nonblocking read end with `DispatchSourceRead`, caps normal readiness work at 1 MiB per callback, and publishes an `AsyncStream<Data>`.
-- **Host → guest:** a second pipe. For `.systemConsole` and `.service` ports the host may write. For `.log` and `.silent` ports the host never writes and keeps the write end open, so guest reads block instead of seeing EOF.
+- **Guest → host:** `ConsoleChannel` reads the nonblocking read end with `DispatchSourceRead`, caps the work of one readiness callback at 1 MiB, and publishes an `AsyncStream<Data>`.
+- **Host → guest:** for `.systemConsole` and `.service` ports the host may write. For `.log` and `.silent` ports the host never writes and keeps the write end open, so guest reads block instead of seeing EOF.
 
-Host input writes do not hold the channel lifecycle lock while waiting for pipe
-capacity. Detaching a channel rejects new writes, closes the guest-readable end
-to release any blocked host writer, waits for admitted writes to finish, and
-then closes the remaining pipe endpoints. The host input descriptor suppresses
-`SIGPIPE` so a concurrent guest shutdown becomes a typed write failure instead
-of terminating the host process.
+Host writes do not hold the lifecycle lock while they wait for pipe capacity. Detaching rejects new writes, closes the guest-readable end to release a blocked writer, waits for admitted writes, and then closes the other endpoints. The host input descriptor suppresses `SIGPIPE`, so a guest shutdown becomes a typed write failure.
 
-`ConsoleChannel` publishes chunks of at most 64 KiB through a bounded buffer of
-64 chunks per subscriber. The default policy preserves the oldest queued chunks;
-a consumer that needs a diagnostic tail can select the newest chunks instead.
-Each `ConsoleByteStream` reports its own `droppedByteCount`, and the channel
-also exposes the total across subscribers. Consumers must treat a nonzero count
-as incomplete output. The Linux test harness uses the oldest policy for parsing
-test records and the newest policy for its bounded 4 MiB failure attachment,
-which also includes both stream loss counts. Consumers that need the same
-output subscribe before the guest starts; a stream created before the first
-subscriber receives the buffered prefix. After the VZ driver releases the VM
-on its queue, the channel closes the guest-output writer and lets the read
-source drain the pipe to EOF before ending the stream. A stream drain barrier
-runs on the read queue after one bounded failure snapshot: at most 4 MiB and
-50 ms, stopping earlier at `EAGAIN`. The log subscription keeps its 64-chunk
-data limit plus one reserved control slot for the marker, so a full data buffer
-cannot reject or displace it. A waiter arriving after an earlier marker was
-queued waits for that marker and then gets a fresh snapshot and marker of its
-own. This keeps a continuous guest writer from delaying failure publication
-indefinitely; later bytes continue through normal read callbacks and the
-periodic log sync. Each channel is bound to its VM's serial queue and cannot be
-attached again after detachment.
+Buffering rules:
+
+- `ConsoleChannel` publishes chunks of at most 64 KiB through a bounded buffer of 64 chunks per subscriber. The default policy keeps the oldest chunks. A diagnostic tail selects the newest.
+- Each `ConsoleByteStream` reports `droppedByteCount`, and the channel exposes the total. A nonzero count means incomplete output.
+- A consumer that needs all output subscribes before the guest starts. A stream created before the first subscriber receives the buffered prefix.
+- The log subscription has 64 data chunks plus one reserved control slot, so a full data buffer cannot displace the failure marker.
+- When the VM is released, the channel closes the guest-output writer and drains the pipe to EOF before it ends the stream. A failure snapshot reads at most 4 MiB and waits at most 50 ms, stopping earlier at `EAGAIN`. A waiter that arrives after a queued marker waits for it and then gets a fresh snapshot and marker. This keeps a continuous guest writer from delaying failure publication.
+- A channel is bound to its VM's serial queue and cannot be attached again after detachment.
 
 | Role | Guest → host data goes to | Host writes |
 |---|---|---|
-| `.systemConsole` (hvc0) | `ConsoleLogWriter` → `~/Library/Logs/APKRun/vm/console.log` and `BootPhaseDetector` | Only in `apkrun dev console` (interactive debugging) |
-| `.log(name)` (e.g. hvc2 logcat) | `ConsoleLogWriter(name)` → `~/Library/Logs/APKRun/guest/<name>-<timestamp>.log` (enabled in developer mode and diagnostics capture; otherwise discarded) | Never |
+| `.systemConsole` (hvc0) | `ConsoleLogWriter` → `~/Library/Logs/APKRun/vm/console.log`, and `BootPhaseDetector` | Only in `apkrun dev console` |
+| `.log(name)` | `ConsoleLogWriter(name)` → `~/Library/Logs/APKRun/guest/<name>-<timestamp>.log` in developer mode and diagnostics capture; otherwise discarded | Never |
 | `.silent(name)` | Discarded, counted in metrics | Never |
 | `.service(name)` | A host-side service substitute ([android-image.md](android-image.md) §7) | Yes |
 
 ### 6.4 `ConsoleLogWriter`
 
-- A dedicated bounded `ConsoleChannel` subscription feeds the writer asynchronously, so disk I/O does not run on the pipe reader. The dropped-byte count includes stream drops and guest bytes the writer cannot confirm in every required destination. Bytes awaiting a successful `fsync` after a synchronization error remain counted until a later successful sync. Either condition reports an incomplete log through `vm.consoleWriter`.
-- Each record is prefixed with wall-clock time (ISO 8601, milliseconds) and host monotonic time since `VM_START`: `yyyy-MM-dd'T'HH:mm:ss.SSSZ +<seconds>.<milliseconds> `. A partial line is terminated and written at the next 250 ms flush; subsequent bytes start a new record.
-- Complete records are written in bounded batches, ending a batch before the 64 KiB guest-byte threshold or a rotation boundary. Each record retains its own timestamp. A guest line longer than the 64 KiB record limit is split into newline-terminated records.
-- Rotation at 20 MiB keeps five generations (`console.log`, `console.1.log`, …, `console.4.log`).
-- Also writes a per-boot copy `vm/boot-<yyyyMMdd'T'HHmmss'Z'>.log`; the newest five boots are kept.
-- Buffered writes are flushed and `fsync`ed every 250 ms or 64 KiB, whichever comes first, and when the VM fails or its console stream closes during stop/reset. Before publishing `.failed`, the controller performs the bounded read-queue snapshot, waits for all bytes yielded to the log subscription through its ordered barrier, then flushes and synchronizes both files. Serial logs must survive a VM or host-process crash (NFR-REL-05).
-- The `vm/` directory is mode `0700`; current, rotated, and per-boot log files are mode `0600`.
-- Invalid UTF-8 is written as-is (the file is bytes). The os_log mirror escapes it.
-- Never parses or redacts. Redaction happens only when a diagnostics bundle is built ([diagnostics.md](diagnostics.md) §6).
+- A bounded subscription feeds the writer asynchronously, so disk I/O never runs on the pipe reader. Dropped bytes include stream drops and bytes the writer cannot write to every required destination. Bytes awaiting a successful `fsync` after a sync error stay counted until a later sync succeeds. Either condition reports `vm.consoleWriter` (§14).
+- Each record starts with the ISO 8601 wall-clock time (milliseconds) and the host monotonic time since `VM_START`: `yyyy-MM-dd'T'HH:mm:ss.SSSZ +<seconds>.<milliseconds> `. A partial line is written at the next 250 ms flush, and later bytes start a new record.
+- Records are written in bounded batches that end before the 64 KiB threshold or a rotation boundary. A guest line longer than 64 KiB is split into newline-terminated records.
+- Rotation at 20 MiB keeps five generations: `console.log`, `console.1.log` … `console.4.log`. A per-boot copy `vm/boot-<yyyyMMdd'T'HHmmss'Z'>.log` keeps the newest five boots.
+- Buffered writes are flushed and `fsync`ed every 250 ms or 64 KiB, whichever comes first, and when the VM fails or its console closes during stop or reset. Before publishing `.failed`, the controller takes the failure snapshot (§6.3), waits for the bytes yielded to the log subscription, and then flushes and syncs both files. Serial logs must survive a VM or host-process crash (NFR-REL-05).
+- The `vm/` directory is mode `0700`. Log files are mode `0600`. Invalid UTF-8 is written as is, and the os_log mirror escapes it.
+- The writer never parses or redacts. Redaction happens only when a diagnostics bundle is built ([diagnostics.md](diagnostics.md) §6).
 
-## 7. Networking (#006)
+## 7. Networking
 
-- `VMDefinition.network` is an ordered list of NAT NICs, one virtio-net device each. The test Linux guest uses one. The Android definition uses three in Cuttlefish's order: the mobile NIC, the ethernet NIC, and the `virt_wifi` backing NIC ([android-image.md](android-image.md) §7.4). The guest gets an address from VZ's DHCP (typically `192.168.64.0/24`), and DNS is served by the host. No entitlement is needed.
-- Each MAC address is generated once (`VZMACAddress.randomLocallyAdministered()`) and stored in `instance.json`, so the guest sees stable interfaces across boots. The Android `virt_wifi` NIC is the exception: its MAC is derived from `androidboot.wifi_mac_prefix`, because the guest's `setup_wifi` rewrites the interface to that MAC and vmnet drops frames from a source MAC it did not assign (observed 2026-10-08).
-- `VMController.networkHealthUpdates` publishes the initial network state, each attachment loss, and recovery when a new start clears the failure. The live diagnostics service re-runs `vm.network` from these events and publishes the resulting `healthChanged` event ([diagnostics.md](diagnostics.md) §7.1, #059).
-- No inbound port forwarding exists or is needed. Host → guest traffic uses vsock (§8).
-- Cuttlefish expects particular interface names (for example, Wi-Fi via `virt_wifi` over `eth2`). One NIC is not enough for the stock image; the three-NIC plan above gave a validated Wi-Fi network in the 2026-10-08 spike, and #095 verifies it ([android-image.md](android-image.md) §7.4).
-- Test (#006): T0 uses the fake driver to verify that an attachment disconnect is logged, leaves the VM `running`, and degrades `vm.network`; the next start restores the check. T2 verifies that the Linux test guest gets a DHCP lease and fetches `http://<gateway>:<port>/generate_204` from a host HTTP server (204), while `vm.network` remains passing. T2 needs no Internet access. Resolving a public name and fetching `https://connectivitycheck.gstatic.com/generate_204` is a T3 network check ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2.5).
+- `VMDefinition.networks` is an ordered list of NAT NICs, one virtio-net device each. The test guest uses one. The Android definition uses three, in Cuttlefish order: the mobile NIC, the ethernet NIC, and the `virt_wifi` backing NIC ([android-image.md](android-image.md) §7.4). Guests get a DHCP lease from VZ (typically `192.168.64.0/24`), and the host serves DNS. No entitlement is needed.
+- Each MAC is generated once (`VZMACAddress.randomLocallyAdministered()`) and stored in `instance.json`. The exception is the `virt_wifi` NIC, whose MAC derives from `androidboot.wifi_mac_prefix`. The guest's `setup_wifi` rewrites the interface to that MAC, and vmnet drops frames from a source MAC it did not assign.
+- `VMController.networkHealthUpdates` publishes the initial state, each attachment loss, and each recovery. A new start clears the failure. The live diagnostics service re-runs `vm.network` from these events ([diagnostics.md](diagnostics.md) §7.1).
+- There is no inbound port forwarding. Host → guest traffic uses vsock (§8).
 
-## 8. vsock (#007)
+## 8. vsock
 
-- One `VZVirtioSocketDevice`. Guest CID is 3, host CID is 2.
-- **Outbound only in v1:** the host calls `connect(toPort:)` on the device ([../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3.1).
-- `VMController.connect(vsockPort:timeout:)` wraps the completion handler with a timeout (a `Task` race; VZ has no timeout parameter). A connection that completes after the timeout is closed immediately.
-- `VsockConnection` keeps a strong reference to the `VZVirtioSocketConnection`. The file descriptor is only valid while that object lives, so the reference must not be dropped while `DispatchIO` uses the fd. Its serial stream channel reads in ordered 64 KiB chunks and caps unread buffered input at 1 MiB. At the cap it issues a one-byte probe to detect peer EOF without growing the buffer; if the peer sends more data, the connection closes and reads throw `bufferedInputLimitExceeded` after buffered bytes are drained. A single event consumer preserves data and EOF order; the channel low-water limit is one byte so small reads are delivered promptly. `read(upTo:)` checks cancellation before returning buffered data, and pending-read cancellation is arbitrated against data delivery before bytes are consumed. It returns available bytes, `write(_:)` writes the supplied data, and `closed` completes after peer EOF or local close.
-- A VZ error in `NSPOSIXErrorDomain` with `ECONNREFUSED` maps to `.vsockPortNotListening(port)`; other errors map to `VMFailure.vsockConnectFailed(port, underlying)`. Virtualization.framework documents that `connect(toPort:)` does nothing if the guest has no listener, so a caller may instead time out. On the reference macOS 27 host, the T2 unused-port probe returned `NSPOSIXErrorDomain` code 54 (`ECONNRESET`), so this case remains `.vsockConnectFailed`. The LinuxGuest readiness probe retries refused, timed-out, and observed startup `ECONNRESET` attempts with backoff for at most five seconds. Its T2 attachment records the typed unused-port outcome and VZ domain/code when the framework calls back with an error; if no callback arrives before the deadline, it records the timeout and that no VZ error was returned. Calling connect when vsock is disabled reports `.vsockDeviceNotConfigured`; if VZ does not expose the configured device, it reports `.vsockDeviceUnavailable`.
-- **`VsockLoopbackForwarder`** (generic, used for ADB, #015): listens on `127.0.0.1:<hostPort>` with a POSIX IPv4 socket bound to the loopback address only. For each accepted TCP connection it opens `connect(vsockPort:)` and splices both directions; when the guest connection cannot be opened, the TCP connection closes at once. RuntimeCore configures it as `guest 5555 ↔ 127.0.0.1:<port>`, only in developer mode, where `<port>` is the boot's `BootOptions.adbHostPort`. The product uses 6520. A test run may choose another port, and `0` asks the kernel for a free one ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.10). It never binds to a non-loopback interface (NFR-SEC-06). Network.framework is not used: on macOS 27 `NWListener` rejects `requiredLocalEndpoint` with `EINVAL`, and `requiredInterfaceType = .loopback` still leaves the socket on every address ([implementation-review.md](../04-plan/implementation-review.md) IR-315). Before binding, the forwarder connects to the port once: a listener on any address of that port is reported as `vm.loopbackPortInUse`. `SO_REUSEADDR` is set only after that probe, because a connection in TIME_WAIT from the previous run would otherwise block a restart.
-- Test (T2, #007): the test guest runs a small vsock echo server (`socat VSOCK-LISTEN:7000,fork EXEC:cat` from the test initramfs). The test sends 1 MiB and compares, checks the bounded typed result for an unused port, checks disconnect detection when the guest closes, and verifies that `VMController.stop()` closes a live host connection.
+- One `VZVirtioSocketDevice`. Guest CID 3, host CID 2.
+- Outbound only in v1: the host calls `connect(toPort:)` ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3.1).
+- `VMController.connect(vsockPort:timeout:)` races the completion handler against a timeout, because VZ has no timeout parameter. A late completion is closed at once.
+- `VsockConnection` keeps a strong reference to the `VZVirtioSocketConnection`. The file descriptor is valid only while that object lives.
+- Reads: the stream reads in ordered 64 KiB chunks and caps unread buffered input at 1 MiB. At the cap it probes for peer EOF with a one-byte read. More data than the cap closes the connection, and reads throw `bufferedInputLimitExceeded` after the buffered bytes drain. Data and EOF keep their order. The low-water mark is one byte, so small reads are delivered promptly. `read(upTo:)` checks cancellation first. `write(_:)` writes the data. `closed` completes after peer EOF or local close.
+- Errors: `NSPOSIXErrorDomain` `ECONNREFUSED` maps to `.vsockPortNotListening(port)`. Other VZ errors, including `ECONNRESET`, map to `VMFailure.vsockConnectFailed(port, underlying)`. With no listener, VZ may do nothing, so a caller may time out (`.vsockConnectTimedOut`). Connect with vsock disabled reports `.vsockDeviceNotConfigured`. If VZ does not expose the device, it reports `.vsockDeviceUnavailable`.
+- The LinuxGuest readiness probe retries refused, timed-out, and startup `ECONNRESET` attempts with backoff for at most five seconds.
+- **`VsockLoopbackForwarder`** (generic; ADB uses it, #015) listens on `127.0.0.1:<hostPort>` only, with a POSIX IPv4 socket. Each TCP connection opens `connect(vsockPort:)` and copies both directions. If the guest connection fails, the TCP connection closes at once. RuntimeCore configures `guest 5555 ↔ 127.0.0.1:<port>` in developer mode only, where `<port>` is `BootOptions.adbHostPort` (6520 in the product; `0` asks for a free port). It never binds a non-loopback address (NFR-SEC-06). Do not use Network.framework: on macOS 27 it cannot bind loopback only.
+- Before binding, the forwarder connects to the port once. A listener on any address of that port is reported as `vm.loopbackPortInUse`. `SO_REUSEADDR` is set only after that probe, so a TIME_WAIT connection does not block a restart.
 
 ## 9. Lifecycle
 
@@ -290,62 +237,43 @@ start()
        otherwise → state: running, then process buffered guest/device events
 ```
 
-The VZ delegate uses `VMStartupEventBuffer` to buffer callbacks on the VM queue
-while `start` is pending, then returns them with the start completion. This
-preserves callback order even when the controller's event-stream consumer is
-scheduled later. If start succeeds, the first buffered stop error is classified
-as `.startFailed`; subsequent reports are ignored after the terminal
-transition. If the start completion itself fails, its error is the
-`startFailed` cause and buffered events are discarded.
+The delegate buffers callbacks on the VM queue (`VMStartupEventBuffer`) while `start` is pending, and returns them with the start completion, so callback order holds. If start succeeds, the first buffered stop error becomes `.startFailed`, and later reports are ignored after the terminal transition. If the start completion fails, its error is the cause, and buffered events are discarded.
 
-`KERNEL_START` is recorded by RuntimeCore's `BootPhaseDetector` when the first console line arrives (Linux prints `Booting Linux on physical CPU` first).
+RuntimeCore's `BootPhaseDetector` records `KERNEL_START` on the first console line (`Booting Linux on physical CPU`).
 
 ### 9.2 Delegate mapping
 
 | VZ callback | Transition |
 |---|---|
 | `guestDidStop(_:)` | `running/paused/stopping → stopped` |
-| `virtualMachine(_:didStopWithError:)` | while `starting`, buffer for `failed(.startFailed(underlying))`; while `running/paused/stopping`, `→ failed(.stoppedWithError(underlying))` |
-| `virtualMachine(_:networkDevice:attachmentWasDisconnectedWithError:)` | stays `running`; logged; health `vm.network = degraded` |
+| `virtualMachine(_:didStopWithError:)` | `starting`: buffer for `failed(.startFailed(underlying))`. `running/paused/stopping`: `→ failed(.stoppedWithError(underlying))` |
+| `virtualMachine(_:networkDevice:attachmentWasDisconnectedWithError:)` | Stays `running`. Logged. Health `vm.network = degraded` |
 
-For a spontaneous `guestDidStop`, `VMController` records `.stopped` before it
-awaits VZ resource release. During an explicit forced stop, the event completes
-the stop request but the controller remains `.stopping` until the VZ stop
-completion callback arrives; only then are the driver and console attachments
-released and the state changed to `.stopped`. Public lifecycle calls therefore
-cannot reach a machine that is being detached, and a later `start()` waits for
-the release barrier before making a new driver.
+On a spontaneous `guestDidStop`, `VMController` records `.stopped` before it awaits VZ resource release. During an explicit forced stop, the event completes the stop request, but the controller stays `.stopping` until the VZ stop completion arrives. Only then are the driver and console attachments released and the state set to `.stopped`. A later `start()` waits for that release barrier.
 
-The #063 LinuxGuest T2 probe on arm64 macOS 27.0 build 26A428 recorded the
-guest console's first boot, reboot marker, and second boot in order. The
-serialized VZ callback stream recorded `WillReset` between the custom device's
-first and second `DRIVER_OK`; VZ did not report `guestDidStop` in that run. The
-harness then explicitly stopped the VM. These are per-stream observations for
-the tested OS build, not a cross-version promise.
+### 9.3 Stopping Android
 
-### 9.3 Stopping Android correctly
+`requestGuestStop()` maps to `VZVirtualMachine.requestStop()`, a **power-button press** through the PL061 GPIO. Android reads a short press as "screen off", not shutdown. Therefore:
 
-`requestGuestStop()` maps to `VZVirtualMachine.requestStop()`, which delivers a **power-button press** through the PL061 GPIO. Android interprets a short power press as "screen off", not "shut down". Therefore:
-
-- RuntimeCore stops Android through the Guest Agent (`Shutdown` RPC → `PowerManager.shutdown`) or, in development, `adb shell reboot -p`. RuntimeCore does not send the `Shutdown` RPC yet ([implementation-review.md](../04-plan/implementation-review.md) IR-562), so developer mode is the only graceful path today. Android powers off via PSCI `SYSTEM_OFF`, which VZ reports as `guestDidStop`.
-- If `guestDidStop` has not arrived after 20 s, RuntimeCore calls `VMController.stop()` (forced). In developer mode a forced stop is logged as a warning, and the next boot runs normally (f2fs/ext4 recover; Android's userdata checkpointing handles the rest).
-- In developer mode the 20 s run from the start of the `reboot -p` request, which goes over ADB and over the serial shell when ADB fails. The wait runs whenever a channel was tried, even when its reply was lost, because the request may have reached Android. Only a stop that no channel could try forces at once. A cancelled stop keeps the deadline, because the VM still has to stop ([implementation-review.md](../04-plan/implementation-review.md) IR-560, IR-568, IR-571). Outside developer mode no request is sent, so the stop forces at once (IR-562). The rule is `AndroidStopSequence` in RuntimeCore.
-- A forced stop that has not completed after 10 s fails with `VMFailure.stopTimedOut`, and the state becomes `failed` ([../01-architecture/state-machines.md](../01-architecture/state-machines.md) §1).
-- `requestGuestStop()` is required for the test Linux guest. Its initramfs discovers the PL061 GPIO chip with `gpiodetect`, confirms the active line request with `gpioinfo`, and maps a rising edge on offset 6 to `poweroff -f` (§12). The T2 log verified that event on `gpiochip0` offset 6 on macOS 27.0 (26A428).
+- RuntimeCore stops Android through the Guest Agent `Shutdown` RPC (`PowerManager.shutdown`, [guest-protocol.md](guest-protocol.md) §7.1). In development it may also run `adb shell reboot -p`. Android powers off through PSCI `SYSTEM_OFF`, which VZ reports as `guestDidStop`.
+- If `guestDidStop` has not arrived after 20 s, RuntimeCore calls `VMController.stop()` (forced). In developer mode a forced stop logs a warning. The next boot runs normally: f2fs and ext4 recover, and Android's userdata checkpointing covers the rest.
+- In developer mode the 20 s deadline runs from the start of the `reboot -p` request, sent over ADB, or over the serial shell if ADB fails. The wait runs whenever a channel was tried, even if its reply was lost, because the request may have reached Android. Only a stop that no channel could try forces at once. A cancelled stop keeps the deadline, because the VM still has to stop. Outside developer mode no request is sent, so the stop forces at once. The rule is `AndroidStopSequence` (RuntimeCore).
+- A forced stop not completed after 10 s fails with `VMFailure.stopTimedOut` and the state becomes `failed` ([state-machines.md](../01-architecture/state-machines.md) §1).
+- The test Linux guest needs `requestGuestStop()` (§12). Its `/init` maps a rising edge on GPIO offset 6 to `poweroff -f`.
 
 ### 9.4 Pause and resume
 
-- `pause()` / `resume()` wrap `VZVirtualMachine.pause/resume`. Custom devices get `WillPause`/`WillResume` delegate callbacks; GraphicsCore stops presenting while paused ([graphics.md](graphics.md) §8).
-- The guest clock does not advance correctly across a pause as far as Android is concerned. After `resume()`, RuntimeCore asks the Guest Agent to resync wall-clock time ([desktop-integration.md](desktop-integration.md) §9). VirtualMachineCore only reports the pause duration.
-- Host sleep: RuntimeCore's `PowerObserver` registers with `IORegisterForSystemPower` (apkrund has no NSApplication, so `NSWorkspace` notifications are not used). It pauses a running VM before acknowledging `kIOMessageSystemWillSleep` and resumes it on `kIOMessageSystemHasPoweredOn` ([runtime-daemon.md](runtime-daemon.md) §6). We don't rely on VZ's implicit behaviour during host sleep (FR-VM-11, #069).
+- `pause()` and `resume()` wrap `VZVirtualMachine.pause` and `resume`. Custom devices get `WillPause` and `WillResume` callbacks. GraphicsCore stops presenting while paused ([graphics.md](graphics.md) §8).
+- After `resume()`, RuntimeCore asks the Guest Agent to resync wall-clock time ([desktop-integration.md](desktop-integration.md) §9). VirtualMachineCore only reports the pause duration.
+- Host sleep: RuntimeCore's `PowerObserver` registers with `IORegisterForSystemPower`. apkrund has no NSApplication, so `NSWorkspace` notifications are not used. It pauses a running VM before acknowledging `kIOMessageSystemWillSleep` and resumes on `kIOMessageSystemHasPoweredOn` ([runtime-daemon.md](runtime-daemon.md) §6). The design does not rely on VZ's implicit behavior during host sleep (FR-VM-11).
 
 ### 9.5 Save and restore
 
-Not used. The VirGL renderer state lives in host GL contexts and cannot be serialized, so the virtio-gpu device sets `supportsSaveRestore = false`, which makes the VM non-saveable (R-07). Cold-boot time is reduced by trimming the boot instead (NFR-PERF-02).
+Not used. VirGL renderer state lives in host GL contexts and cannot be serialized. The virtio-gpu device sets `supportsSaveRestore = false`, so the VM is not saveable (R-07). Cold-boot time is reduced by trimming the boot (NFR-PERF-02).
 
 ### 9.6 Reset
 
-`failed → stopped` happens only through `reset()`, after the diagnostics capture ([../01-architecture/state-machines.md](../01-architecture/state-machines.md) §1). `reset()` releases the `VZVirtualMachine`, closes pipes, and flushes console logs. If a forced-stop framework callback is still pending, reset waits up to the forced-stop timeout. If it remains pending, reset returns `VMFailure.stopTimedOut` and retains the failed VM and its resources; callers may retry after the callback completes. Releasing the VM while Virtualization.framework still owns an in-flight lifecycle call is unsafe.
+`failed → stopped` happens only through `reset()`, after the diagnostics capture ([state-machines.md](../01-architecture/state-machines.md) §1). `reset()` releases the `VZVirtualMachine`, closes pipes, and flushes console logs. If a forced-stop callback is pending, reset waits up to the forced-stop timeout (10 s). If it stays pending, reset returns `VMFailure.stopTimedOut`, keeps the failed VM and its resources, and the caller may retry. Releasing a VM while Virtualization.framework still owns a lifecycle call is unsafe.
 
 ## 10. Memory and CPU defaults
 
@@ -355,41 +283,31 @@ Not used. The VirGL renderer state lives in host GL contexts and cannot be seria
 | Memory | 4 GiB | 3 GiB … 50 % of physical memory | `runtime.memoryGiB`, copied into `instance.json` before each boot |
 | Balloon | present, idle | — | — |
 
-Changing either takes effect on the next VM start. The UI states that. Measurements for NFR-RES-04 come from #070.
+A change takes effect at the next VM start, and the UI says so.
 
-## 11. Sound (#083, #084)
+## 11. Sound
 
 - Output: one `VZVirtioSoundDeviceStreamConfiguration` output stream with `VZHostAudioOutputStreamSink`, attached whenever audio is enabled globally (default on).
-- Input: one input stream with `VZHostAudioInputStreamSource`, attached only while at least one package has the microphone integration in effect ([desktop-integration.md](desktop-integration.md) §8.2). The VM configuration is fixed at start, so turning the microphone on for the first package, or off for the last one, needs a runtime restart. The UI says so and offers **Restart Android Now** / **Later** ([host-ui.md](host-ui.md) §7.4).
-- Open question for #084 (OQ-29): whether macOS shows the microphone TCC prompt at VM start or only when the guest opens a capture stream. The attach-only-when-enabled rule is chosen so that neither case surprises users.
-- Whether the Cuttlefish arm64 kernel carries `virtio_snd` is verified in #083 (OQ-38, [android-image.md](android-image.md) §7.5).
+- Input: one stream with `VZHostAudioInputStreamSource`, attached only while at least one package has the microphone integration in effect ([desktop-integration.md](desktop-integration.md) §8.2). The configuration is fixed at start. Enabling the microphone for the first package, or disabling it for the last, needs a runtime restart. The UI offers **Restart Android Now** / **Later** ([host-ui.md](host-ui.md) §7.4).
 
-## 12. Test Linux guest (M0: #003–#007)
+## 12. Test Linux guest
 
-M0 needs a small Linux guest that exercises every device before Android is involved.
+The test Linux guest exercises every device before Android is involved.
 
-- **Kernel:** a pinned, prebuilt arm64 kernel with virtio PCI, blk, net, console, vsock (`vmw_vsock_virtio_transport`), rng, and DRM virtio-gpu available as built-ins or modules. Candidate: Alpine `linux-virt` (pinned version and SHA-256 in `ThirdParty/ThirdParty.lock.json`). `scripts/fetch-test-linux.sh` downloads it, verifies the hash, and decompresses it if the kernel file is gzip-compressed (the validator rejects compressed kernels, §3). In the pinned 6.18.54 build, `af_packet` is a module required by BusyBox `udhcpc`.
-- **initramfs:** built by `scripts/build-test-initramfs.sh` from a pinned Alpine minirootfs plus the needed kernel modules, `socat`, `libgpiod`, `ssl_client` and its OpenSSL libraries, our `/init` script (`Tests/Fixtures/linux/init`), and the network-error classifier (`Tests/Fixtures/linux/network-errors.sh`), and the Mesa virgl packages and kmscube of `Tests/Fixtures/linux/virgl-packages.list`, pinned from Alpine v3.23 because v3.24 Mesa has no virgl driver (IR-500). `scripts/tools/initramfs-manifest.py` checks those packages, the paths of `virgl-paths.list`, and the DT_NEEDED sonames of the ELF files they install, then writes `initramfs.manifest.json` next to the archive (IR-505). `/init`:
-  1. mounts proc/sys/dev, loads modules;
-  2. unless it will power off after the tests, finds the GPIO chip labeled PL061 and starts `gpiomon` for rising edges on offset 6. It uses `gpioinfo` to verify that the line is held by the monitor before reporting readiness. If the chip or line request is unavailable, it reports an init failure and attempts to power off rather than booting without a stop path;
-  3. prints `APKRUN-TEST: boot ok` to `hvc0`, then reports `powerinput ok` after the GPIO line request is confirmed;
-  4. runs the device checks requested on the command line (`apkrun.test=blk,net,vsock,ports,rng,gpu,virgl`; `rng` is added by #063, `gpu` by #019, and `gpu-hotplug` runs the R-01 spike (IR-256) by #019, `virgl` by the renderer integration step in [graphics.md](graphics.md) §12) and prints `APKRUN-TEST: <name> ok|fail <detail>` per check. The #004 flood check prints its requested `APKRUN-FLOOD <i>` lines followed by `APKRUN-TEST: flood ok lines=<n>`;
-  5. prints `APKRUN-TEST: done`, then triggers `apkrun.test.panic=1` when requested. Otherwise it powers off when `apkrun.test.poweroff=1`, or keeps the serial shell available while waiting for the VZ power input. On the rising GPIO edge, it powers off.
-- For the `net` check, `/init` brings `eth0` up and runs `udhcpc` with `/etc/udhcpc/apkrun.script`. That script delegates lease setup to Alpine's default udhcpc script and atomically records the assigned address, router, and DNS server. The guest fetches `/generate_204` from a host HTTP server; the T3 variant also resolves `connectivitycheck.gstatic.com` and fetches its HTTPS `generate_204` endpoint. External output is capped at 4 KiB; output beyond the cap fails and cannot be classified as `external`. With no HTTP response, only a recognized BusyBox `wget` socket-connect line or its exact `download timed out` line, without a TLS/client diagnostic, is eligible for `external` classification. Socket-connect failures and download timeouts retain distinct details; only the same classified failure on one retry is skipped. Other HTTPS-client/TLS errors remain test failures. The host harness rejects any failed check record before accepting `done`.
-- **Disks:** `Tests/Fixtures/linux/` scripts create a small raw test disk at test time (read-only and read-write variants with known content).
-- The T2 test harness (`Tests/IntegrationTests/LinuxGuestTests`) boots this guest with `EmbeddedRuntimeService`-free plumbing (just VirtualMachineCore) and asserts on the `APKRUN-TEST:` lines. Timeout 60 s.
-- The pinned Alpine 6.18.54 kernel has `CONFIG_GPIO_CDEV=y` and `CONFIG_GPIO_PL061=m`, but no `CONFIG_KEYBOARD_GPIO`. The initramfs uses the GPIO character-device API through `libgpiod`; it does not depend on the keyboard input driver. A captured T2 console identified `gpiochip0 [20060000.pl061]` and showed a rising event on offset 6 after `requestGuestStop()`. `gpiochip` is resolved by its PL061 label; only the verified offset is monitored.
-- The test harness caps parsed-record buffering at 256 records. If a guest emits faster than the consumer can read, missing boot/check/done records fail the test instead of growing host memory without limit.
+- **Kernel:** a pinned arm64 kernel (Alpine `linux-virt`; version and SHA-256 in `ThirdParty/ThirdParty.lock.json`) with virtio PCI, blk, net, console, vsock (`vmw_vsock_virtio_transport`), rng, and DRM virtio-gpu, built in or as modules. `scripts/fetch-test-linux.sh` verifies the hash and decompresses gzip (the validator rejects compressed kernels, §3). `af_packet` must be available as a module for BusyBox `udhcpc`.
+- **initramfs:** `scripts/build-test-initramfs.sh` builds it from a pinned Alpine minirootfs, the kernel modules, `socat`, `libgpiod`, `ssl_client`, `Tests/Fixtures/linux/init`, `Tests/Fixtures/linux/network-errors.sh`, and the Mesa virgl packages and kmscube in `Tests/Fixtures/linux/virgl-packages.list`. The virgl packages are pinned to Alpine v3.23, because v3.24 Mesa has no virgl driver. `scripts/tools/initramfs-manifest.py` checks the packages, the paths in `virgl-paths.list`, and the DT_NEEDED sonames, then writes `initramfs.manifest.json` next to the archive.
+- **`/init`:**
+  1. Mounts proc, sys, and dev, and loads modules.
+  2. Unless the run powers off after the tests, finds the GPIO chip labeled `PL061` and starts `gpiomon` for rising edges on offset 6. It uses `gpioinfo` to confirm the monitor holds the line before reporting readiness. If the chip or line is unavailable, it reports an init failure and powers off, rather than boot without a stop path.
+  3. Prints `APKRUN-TEST: boot ok` to `hvc0`, then `powerinput ok` once the line request is confirmed.
+  4. Runs the checks named on the command line (`apkrun.test=blk,net,vsock,ports,rng,gpu,virgl,…`) and prints `APKRUN-TEST: <name> ok|fail <detail>` for each. `gpu-hotplug` runs the R-01 spike. The flood check prints `APKRUN-FLOOD <i>` lines and then `APKRUN-TEST: flood ok lines=<n>`.
+  5. Prints `APKRUN-TEST: done`. It triggers `apkrun.test.panic=1` when requested. Otherwise it powers off when `apkrun.test.poweroff=1`, or keeps the serial shell open while it waits for the VZ power input. A rising GPIO edge powers it off.
+- **Network check:** `/init` brings `eth0` up and runs `udhcpc` with `/etc/udhcpc/apkrun.script`, which delegates to Alpine's default script and atomically records the address, router, and DNS server. The guest fetches `/generate_204` from a host HTTP server. External output is capped at 4 KiB; output beyond it fails. Without an HTTP response, only a recognized BusyBox `wget` socket-connect line, or the exact `download timed out` line with no TLS or client diagnostic, is classified `external`. Socket-connect failures and timeouts keep distinct details, and only the same classified failure on one retry is skipped. Other HTTPS or TLS errors fail the test. The host harness rejects any failed check record before it accepts `done`.
+- **Disks:** the `Tests/Fixtures/linux/` scripts create small raw read-only and read-write test disks with known content.
+- **GPIO:** the pinned kernel has `CONFIG_GPIO_CDEV=y` and `CONFIG_GPIO_PL061=m`, but no `CONFIG_KEYBOARD_GPIO`. The initramfs uses the GPIO character-device API through `libgpiod`. It finds the chip by its PL061 label and monitors only offset 6.
+- **Harness:** `Tests/IntegrationTests/LinuxGuestTests` boots the guest with VirtualMachineCore only, and asserts on `APKRUN-TEST:` lines with a 60 s timeout. Parsed records are capped at 256. Missing boot, check, or done records fail the test instead of growing memory. The harness reads the console with the oldest-chunks policy for records, and keeps the newest 4 MiB as its failure attachment.
 
-`TestGuestLineParser` joins serial bytes across read boundaries, ignores
-non-marker kernel output, and recognizes `APKRUN-TEST: boot ok`,
-`APKRUN-TEST: <name> ok|fail <detail>`, and `APKRUN-TEST: done`. It accepts
-LF and CRLF lines, recognizes a marker appended to the final unterminated
-kernel message, and parses a final record at EOF. To bound memory when a guest
-never terminates a line, records longer than 64 KiB are discarded through the
-next newline and counted.
-
-The same guest is reused by #063 (test virtio device) and #019 (virtio-gpu probing with the Linux DRM driver) before Android.
+`TestGuestLineParser` joins serial bytes across read boundaries and ignores non-marker kernel output. It recognizes `APKRUN-TEST: boot ok`, `APKRUN-TEST: <name> ok|fail <detail>`, and `APKRUN-TEST: done`. It accepts LF and CRLF, recognizes a marker appended to an unterminated final kernel line, and parses a final record at EOF. Records longer than 64 KiB are discarded through the next newline and counted.
 
 ## 13. Errors
 
@@ -418,79 +336,37 @@ public enum VMFailure: APKRunError {
 }
 ```
 
-Codes, messages, and remediations are listed in [../03-reference/error-catalog.md](../03-reference/error-catalog.md) (domain `vm`). `VZErrorInfo` is a `Sendable` copy of the `NSError` (domain, code, description).
+Codes, messages, and remediations are in [error-catalog.md](../03-reference/error-catalog.md) (domain `vm`). `VZErrorInfo` is a `Sendable` copy of the `NSError` (domain, code, description).
 
 ## 14. Logging and metrics
 
-- Subsystem `io.apkrun.vm`, categories `lifecycle`, `config`, `console`, `vsock`, `network`, and `virtio` (VirtioDeviceCore: `DRIVER_OK`, notifications, resets).
+- Subsystem `io.apkrun.vm`. Categories `lifecycle`, `config`, `console`, `vsock`, `network`, and `virtio` (VirtioDeviceCore: `DRIVER_OK`, notifications, resets).
 - Every transition is logged with the operation ID that caused it.
-- `PerfMarker.vmStart` at `start()`. Other boot markers come from RuntimeCore ([diagnostics.md](diagnostics.md) §4).
-- Health (`HealthCheck` in DiagnosticsCore): `vm.state`, `vm.network` (warning `vm.networkAttachmentLost` after a disconnect), `vm.consoleWriter` (write errors or dropped log bytes: warning `vm.consoleLogWriteFailed`), `vm.virtualizationSupported`.
+- `PerfMarker.vmStart` is recorded at `start()`. Other boot markers come from RuntimeCore ([diagnostics.md](diagnostics.md) §4).
+- Health (`HealthCheck` in DiagnosticsCore): `vm.state`; `vm.network` (warning `vm.networkAttachmentLost`); `vm.consoleWriter` (warning `vm.consoleLogWriteFailed` on write errors or dropped bytes); `vm.virtualizationSupported`.
 
 ## 15. Tests
 
-| Tier | Test | Task |
-|---|---|---|
-| T0 | Validator rules (§3); state machine edges; MAC/identifier persistence | #002 |
-| T0 | VZ delegate buffers start callbacks in order, resumes stream delivery after start completion, and discards buffered events when completion fails; controller maps a buffered start failure | #003 |
-| T0 | `ConsoleLogWriter` rotation and fsync policy (with an injected clock and file system) | #004 |
-| T1 | `ConsoleChannel` with real pipes (`.log` and `.silent` ports are never written); `ConsoleLogWriter` against a real directory (file modes, rotation on disk) | #004 |
-| T1 | the disk rules of §3 with real files and permissions | #005 |
-| T1 | `VsockConnection` over a `socketpair` | #007 |
-| T0 | The developer stop of §9.3: the forced stop after the deadline with the VM ending stopped, no forced stop when the graceful stop finishes in time, a cancelled stop keeping the deadline, no forced wait without a request, the channel choice, and the 20 s deadline (`AndroidStopSequenceTests`) | #015 |
-| T2 | Linux test guest: boot + console marker | #003, #004 |
-| T2 | SIGINT to `apkrun dev boot` takes the graceful `reboot -p` path (script in #015 Notes, not a suite test) | #015 |
-| T2 | Start completion versus delegate callback after VZ machine construction, with a successful guest-stop positive control | #003 |
-| T2 | Linux test guest: persisted marker, three-port numbering, forced stop during flood, and kernel panic capture | #004 |
-| T2 | block read-only/read-write | #005 |
-| T2 | DHCP lease, host HTTP 204 endpoint, and live `vm.network` health | #006 |
-| T2 | vsock echo, unused-port result, guest disconnect, readiness, VM-stop cleanup | #007 |
-| T2 | console port numbering | #004, #095 |
-| T2 | pause/resume | #069 |
-| T3 | Gate check G1 (`Tests/AcceptanceTests/G1LinuxBoot`, [../04-plan/test-strategy.md](../04-plan/test-strategy.md) §5): the pass conditions of [../04-plan/roadmap.md](../04-plan/roadmap.md) §2, 10 boots in a row | #003 |
-| T3 | Network check: the Linux test guest resolves a public name and fetches `https://connectivitycheck.gstatic.com/generate_204`; after one retry, repeated DNS, recognized socket-connect failures, or the exact BusyBox `wget: download timed out` error without TLS/client diagnostics are classified as `external` when no HTTP response was received (nightly) | #006 |
+- **T0**, `Packages/VirtualMachineCore/Tests/VirtualMachineCoreTests/`: one test per validator rule with real gzip, lz4, and `Image` headers (`VMDefinitionValidatorTests`, `KernelImageInspectorTests`); state edges (`VMStateTests`); MAC and identifier persistence (`MachineIdentityTests`); start-callback buffering and the mapping of a buffered start failure (`VMStartupEventBufferTests`, `VMControllerTests`); console log rotation and fsync policy with an injected clock and file system (`ConsoleLogWriterTests`); line parsing (`TestGuestLineParserTests`); health checks (`VMHealthChecksTests`).
+- **T0**, `Packages/RuntimeCore/Tests/RuntimeCoreTests/AndroidStopSequenceTests.swift`: the developer stop of §9.3, including the 20 s deadline, the forced stop after it, a cancelled stop keeping the deadline, and the channel choice.
+- **T1**, `Packages/VirtualMachineCore/Tests/VirtualMachineCoreSystemTests/`: `ConsoleChannel` with real pipes (`.log` and `.silent` never written); `ConsoleLogWriter` on a real directory (modes, rotation); the §3 disk rules with real files and permissions; `VsockConnection` over a `socketpair`, including the 1 MiB cap and the EOF probe; `VsockLoopbackForwarder`; the entitlement probe of `validate()`.
+- **T2**, `Tests/IntegrationTests/LinuxGuestTests/`, with the signed test host:
+  - boot marker and power-off (`BootTests`);
+  - persisted marker, three-port numbering, forced stop during flood, kernel panic capture (`ConsoleTests`);
+  - all 20 ports with markers (`ConsolePortTests`, §6.2);
+  - read-only and read-write disks, persistence across VMs, journal replay after forced stop (`BlockTests`);
+  - the Android disk layout (`AndroidDiskLayoutTests`);
+  - DHCP lease, host HTTP 204, live `vm.network` (`NetworkTests`);
+  - vsock echo of 1 MiB, unused-port error, guest disconnect, readiness, VM-stop cleanup (`VsockTests`);
+  - start completion versus delegate callback, with a guest-stop positive control (`StartFailureProbeTests`).
+- **T3**, `Tests/AcceptanceTests/G1LinuxBoot/`: gate G1, ten boots in a row, each stopped through the guest power button ([roadmap.md](../04-plan/roadmap.md) §2).
+- **T3, nightly**, `Tests/AcceptanceTests/Network/`: the guest resolves a public name and fetches `https://connectivitycheck.gstatic.com/generate_204`. Repeated DNS failures, recognized socket-connect failures, or the exact BusyBox timeout (§12) are classified `external` when no HTTP response arrived.
+- **Manual:** SIGINT to `apkrun dev boot` takes the graceful `reboot -p` path. This runs outside the suite.
 
 ## 16. Open items
 
-| Item | Plan |
-|---|---|
-| VZ serial port numbering is not documented (§6.2) | #004 checks three ports on the test Linux guest, #095 all 20 ports. If the order is not the array order, `ConsolePortPlan` re-orders the array |
-| Device order and the PCI host bridge's platform device name (§5) | discovered by #011 and committed to `Images/reference/vz/<macOS build>/topology.txt`. Nothing relies on `vdX` letters or slot numbers |
-| Whether `VZVirtualMachineConfiguration.validate()` runs in an unentitled `swift test` process (§3) | #002 verified that validation returns an explicit missing-entitlement error on an unentitled process; T0 uses the framework-validator fake, and the signed `IntegrationTests` bundle hosted by `APKRunTestHost` exercises the entitled path ([../05-development/build-system.md](../05-development/build-system.md) §2.2) |
-| How VZ reports a start failure: the `start` completion error, `didStopWithError`, or both (§9.1, §9.2) | #003 records the completion result and delegate events for configuration rejection and a missing kernel after VZ driver creation. If #005 introduces a start-failure case from disk attachment, record that separately there. A second report of the same failure must not cause a second transition |
-| Whether macOS shows the microphone prompt at VM start or at the first capture (OQ-29, §11) | #084. The input stream is attached only while a package uses it, so neither answer changes the design |
-| Whether the stock Cuttlefish arm64 kernel carries `virtio_snd` (OQ-38, §11) | #083. If not, the custom image adds it ([android-image.md](android-image.md) §7.5) |
-| Virtualization.framework behavior changes on new macOS builds (R-16) | the T2 suite and the topology check run on every new macOS build ([../04-plan/risks.md](../04-plan/risks.md)) |
-
-## 17. Verification log
-
-Filled in by the tasks. Each entry records the date, the macOS build, the guest (test Linux guest or Android image build), and the result.
-
-| Question | Task | Result |
-|---|---|---|
-| Alpine ARM64 Linux boot marker and guest power-off | #003 | 2026-09-29, MacBook Pro, macOS 27.0 (26A428): `LinuxGuestBootTests.testBootMarkerAndGuestPowerOff` passed on the pinned guest with an Apple Development-signed test host |
-| LinuxGuest T2 suite using artifacts outside the checkout | #003 | 2026-09-30, MacBook Pro, macOS 27.0 (26A428): the signed test host read `/tmp/apkrun-test-linux-explicit-20260930` from its Info.plist without a file-access prompt; boot marker, failed-start/reset, forced-stop, and bounded-capture tests passed; `requestGuestStop()` timed out after 10 s, then forced stop succeeded |
-| TCC path-guard checks for LinuxGuest artifact paths | #003 | 2026-09-30, MacBook Pro, macOS 27.0 (26A428): seven script tests rejected direct `~/Documents` paths, symlink aliases, a missing-component/parent-reference alias, and a caller-overridden `HOME`; three path-only `LinuxGuestArtifactDirectoryTests` XTests passed (no VM start) with artifacts, DerivedData, and xcresult under `/tmp`; the default-path symlink into Documents was rejected; no file-access prompt appeared |
-| PL061 power input and G1 ten-boot behavior | #003 | 2026-09-30, MacBook Pro, macOS 27.0 (26A428): hvc0 showed a rising event on `gpiochip0` offset 6; after adding a line-owner readiness check, all LinuxGuest T2 tests and direct G1 acceptance on branch `codex` passed, including ten request-stop boots. The signed CLI smoke from `/tmp` printed boot/powerinput/done and exited 0 without a file-access prompt. The clean-`main` `scripts/run-gate.sh G1` run remains pending |
-| G1 signed acceptance regression on branch `codex` | #003 | 2026-10-07 UTC, arm64 MacBook Pro, macOS 27.0.1 (26A434), commit `c497480`: the signed `AcceptanceTests` G1 configuration passed 4 tests, skipped 1 test assigned to the Network configuration, and had 0 failures. `testTenBootsStopThroughTheGuestPowerButton` and `testFailedStartCanBeReset` both passed. The skipped case was `testGuestResolvesDNSAndReachesExternalHTTPSProbe`. Result bundle `/tmp/apkrun-g1-codex-current.xcresult`. This was a direct test-plan run on `codex`; the clean-`main` `scripts/run-gate.sh G1` gate remains pending |
-| Boot marker stability after one missing serial record | #003 | 2026-09-30, MacBook Pro, macOS 27.0 (26A428): one full T2 run's raw hvc0 attachment contained `APKRUN-TEST: done` but not `boot ok`; an isolated signed T2 run and 10 consecutive repetitions then passed, as did the boot test in the final full-suite rerun. The missing record was not reproduced; see IR-052 |
-| `validate()` without the virtualization entitlement | #002 | 2026-10-07 UTC, arm64 Mac17,9, macOS 27.0.1 (26A434), Xcode 27.0 (27A266a): the opt-in `swift test` probe used the production builder with the pinned kernel and initramfs (SHA-256 values recorded in §3); `SecTaskCopyValueForEntitlement` confirmed no virtualization entitlement and no query error; `validate()` returned `VZErrorDomain/2` with an explicit missing-entitlement failure reason; the test passed; no `VZVirtualMachine` was created |
-| Error reporting of a failed start (completion vs delegate) | #003 | 2026-10-07 UTC, arm64 MacBook Pro, macOS 27.0.1 (26A434): signed T2 positive control completed `start` successfully, recorded `guestDidStop`, and reached VZ state `stopped`; after validating and constructing a VZ machine, deleting its kernel made `start` complete with `VZErrorDomain/2`, with no delegate callback observed during the following 2 seconds, and the VM reached terminal state `error`. The source probe and production configuration-rejection/reset test passed 2/2; result bundle `/tmp/apkrun-start-probe-final-3.xcresult`. This is a bounded observation for this build, not proof that no later callback can occur. T0 exercises production VZ delegate buffer/stream routing and separately verifies that buffered `didStopWithError` maps to `.startFailed` with one terminal transition |
-| Full LinuxGuest regression after start-failure event buffering | #003 | 2026-10-07 UTC, arm64 MacBook Pro, macOS 27.0.1 (26A434), Xcode 27.0 (27A266a), commit `d31e7e3`: the signed `LinuxGuest` T2 configuration passed 33/33 tests with `APKRUN_CI=1`; no failures or skips. Result bundle `/tmp/apkrun-linuxguest-full-final.xcresult`. This is branch verification; the clean-`main` G1 gate remains pending |
-| Serial port numbering with three ports | #004 | 2026-10-06 UTC, arm64 MacBook Pro, macOS 27.0 (26A428): signed `LinuxGuestConsoleTests` passed; guest-visible hvc1/hvc2 numbering matched attachment-array order |
-| Read-only disks are read-only in the guest | #005 | 2026-10-05 UTC, arm64 MacBook Pro, macOS 27.0 (26A428): `LinuxGuestBlockTests.testReadOnlyDiskAndReadWriteDiskPersistAcrossNewVM` passed; the guest verified the read-only image and rejected writes |
-| Disk persistence, journal recovery, read-only enforcement, and guest-visible device order | #005 | 2026-10-05 UTC, arm64 MacBook Pro, macOS 27.0 (26A428): 80 `VirtualMachineCoreTests` and 18 `VirtualMachineCoreSystemTests` passed; the pinned initramfs SHA-256 is `0f50a6b9abcfa8229c7686180b8edf365e1f204bed4eeccc435b4f0e729b4f43`; signed `LinuxGuestBlockTests` passed 3/3, including token persistence after a new VM, forced-stop ext4 journal replay, and both normal and reversed guest-visible serial orders (`/tmp/apkrun-blk-signed-T2.xcresult` on the test host) |
-| NAT network: DHCP lease and a host-local HTTP fetch | #006 | 2026-10-06, arm64 MacBook Pro, macOS 27.0 (26A428): signed `LinuxGuestNetworkTests` passed 3/3; `hvc0` showed a DHCP lease, `http=204`, and `done`; all captured `vm.network` updates were available and the health check passed |
-| NAT network: external DNS and HTTPS fetch | #006 | 2026-10-06, arm64 MacBook Pro, macOS 27.0 (26A428): signed run `apkrun-network-t3-20261006-a.xcresult` returned public DNS, `http=204`, `ext=204`, and `done`; final run `apkrun-network-t3-20261006-g.xcresult` had 2 passed, 0 failed, and 1 `external` skip after `wget: download timed out` repeated on both attempts. The scheduled `main` nightly has not run |
-| vsock echo, unused-port error, guest disconnect, listener readiness, and VM-stop cleanup | #007 | 2026-10-06, arm64 MacBook Pro, macOS 27.0 (26A428): 102 `VirtualMachineCoreTests`, 23 `VirtualMachineCoreSystemTests`, and the signed `LinuxGuestVsockTests` T2 suite (5/5) passed. T1 filled the 1 MiB read buffer before peer EOF and verified the one-byte probe detected closure; a separate case verified over-limit input closes with `bufferedInputLimitExceeded`. T2 echoed 1 MiB, connected to both readiness ports, observed guest close within 1 s, and confirmed `VMController.stop()` closes a live connection. Port 7999 returned `vm.vsockConnectFailed` with `NSPOSIXErrorDomain` code 54 (`ECONNRESET`); the test attachment records the typed result and VZ log. Initial `ECONNRESET` connect attempts to ports 7000/7001 recovered on retry. Final result bundle: `/private/tmp/apkrun-vsock-readiness-final.xcresult` |
-| Signed LinuxGuest regression, log routing, and VZ queue confinement at the #003 acceptance commit | #003 | 2026-10-08 UTC, arm64 Mac17,9, macOS 27.0.1 (26A434), Xcode 27.0: the signed `LinuxGuest` suite passed 29 of 29 with `APKRUN_CI=1` at `ef9b729`, with no skips, and 29 of 29 at `d98823f` before the two fixes. Live unified-log transitions are `io.apkrun.vm` / `lifecycle` with operation IDs (`d98823f` had shown `health`). Result bundles `/tmp/apkrun-003-linuxguest.xcresult` and `/tmp/apkrun-003-linuxguest-2.xcresult`. Records: M00 #003 Notes, IR-281, IR-282 |
-| Missing Linux test artifacts: skip without `APKRUN_CI`, fail with it | #003 | 2026-10-08 UTC, same host: with an empty `APKRUN_TEST_LINUX_DIR`, the `LinuxGuest` suite reported 29 tests with 24 skipped and 0 failures, and with `APKRUN_CI=1` the same 24 tests failed. Each message names `scripts/fetch-test-linux.sh` and `scripts/build-test-initramfs.sh` |
-| G1 acceptance test plan on the `codex` branch | #003 | 2026-10-08 UTC, same host, commit `ef9b729`: 5 tests, 1 configuration-scoped skip (the Network case), 0 failures. `testTenBootsStopThroughTheGuestPowerButton` passed in 3.079 s and `testFailedStartCanBeReset` passed. This run does not close G1, which needs the reference Mac and a clean `main` (IR-283) |
-| `apkrun dev linux` live exits and instance lock | #003 | 2026-10-08 UTC, same host, embedded CLI built with `EmbeddedRuntime` and signed with `apkrun-dev.entitlements`, at `ef9b729`: smoke exit 0 with `boot ok`, `powerinput ok`, `done`; `--tests rng` exit 0 with `rng ok`; a second instance started while the first held the lock exited 75 (`runtime.instanceLocked`); `--tests nosuchcheck` exited 1 (`runtime.devLinuxCheckFailed`), with the failing line on stdout only (IR-286) |
-| VZ console device limit; Android on 10 + 10 ports; `boot_devices`; three NICs on the stock image | spike (IR-306) | 2026-10-08 UTC, arm64 Mac17,9 (M5 Pro), macOS 27.0.1 (26A434), build 16373615: `validate()` accepts 10 single-port console devices and rejects 11; 10 single-port devices plus one multiport device with 10 console ports validate and boot. Android saw hvc0–hvc19, and the sensors HAL's `/dev/hvc18` frames arrived on port 18. `/sys/block/vda` is under `40000000.pci`. With three NAT NICs and `virt_wifi`, `wlan0` got a DHCP lease and a validated network. Guest `reboot` restarts inside the same `VZVirtualMachine`; `reboot -p` ends in `guestDidStop`. Harness: `Experiments/vz-android-boot/` |
-| Guest-visible topology and `androidboot.boot_devices` value | #011 | 2026-10-09 UTC, macOS 27.0.1 (26A434): signed `LinuxGuestAndroidDiskLayoutTests.testAndroidDiskLayout` passed with the two Android disks; both are under `/sys/devices/platform/40000000.pci/pci0000:00/`, with 512-byte logical blocks and the serials `apkrun-ro` and `apkrun-rw`. The capture is `Images/reference/vz/26A434/topology.txt` (§5) |
-| Serial port numbering with 20 ports, verified with markers; network on the stock image | #095 | pending (§6.2, §7). The spike observation is in the first row |
-| Pause and resume across host sleep | #069 | pending (§9.4) |
-| `virtio_snd` in the stock kernel | #083 | pending (OQ-38) |
-| Microphone prompt timing | #084 | pending (OQ-29) |
-| Ctrl-C stop path and the forced fallback after 20 s | #015 | 2026-10-10 UTC, arm64 Mac, macOS 27.0.1 (26A434), Xcode 27.0: T0 `AndroidStopSequenceTests` passed, and a mutation that skips the wait failed its fallback and in-time tests. T2 SIGINT run on the embedded `apkrun dev boot` (signed with `apkrun-dev.entitlements`, guest APK from `scripts/build-guest.sh`): ready in 11.8 s, `sys.boot_completed` = 1 over ADB, SIGINT, exit 0 after 1.71 s, guest `reboot: Power down`. A second run on the final code (`e4965e0`) gave exit 0 after 1.35 s. The AndroidADB configuration passed 2 of 2 on the final code (in-process graceful stop under 20 s). The forced fallback has no real-guest run (IR-563). See [M01 #015](../04-plan/issues/M01-android-bring-up.md#015-adb-debugging-over-vsock) Notes |
+- Whether the microphone prompt appears at VM start or at first capture (OQ-29, §11). #084 decides.
+- Whether the stock arm64 kernel carries `virtio_snd` (OQ-38, §11). If not, the custom image adds it ([android-image.md](android-image.md) §7.5). #083 decides.
+- RuntimeCore does not send the Guest Agent `Shutdown` RPC yet (§9.3), so only developer mode stops Android gracefully. #034 and #035 hold it.
+- Pause and resume across host sleep is not verified on hardware (§9.4). #069 holds it.
+- Whether VZ reports a start failure through the start completion, `didStopWithError`, or both (§9.1, §9.2). The controller accepts either path and never makes a second transition. Not verified across macOS builds (R-16).

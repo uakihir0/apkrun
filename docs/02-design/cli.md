@@ -1,39 +1,30 @@
 # Command-Line Tool (`apkrun`)
 
-| Field | Value |
-|---|---|
-| Status | Baseline |
-| Related | [runtime-daemon.md](runtime-daemon.md) §8.5, §10, [package-store.md](package-store.md) §11.4, [update-system.md](update-system.md) §11.3, [wrapper.md](wrapper.md) §12.2, [desktop-integration.md](desktop-integration.md) §11, [diagnostics.md](diagnostics.md), [runtime-maintenance.md](runtime-maintenance.md), [host-ui.md](host-ui.md), [../03-reference/runtime-api.md](../03-reference/runtime-api.md), [../03-reference/error-catalog.md](../03-reference/error-catalog.md), [../03-reference/configuration.md](../03-reference/configuration.md) |
-| Tasks | #001 (skeleton), #027 (store commands, embedded), #032 (switch to RuntimeClient), #075 (`wrap`), #059 (`doctor`), #060 (`diagnostics`), and the command parts of every task that names a command below |
-
-`apkrun` is the scripting and development interface to APKRun. It is a client of apkrund like APKRun.app ([runtime-daemon.md](runtime-daemon.md) §8.5). Everything it can do, apart from the `dev` commands, the GUI can do too.
-
-This page is the complete command set. Subsystem documents show the commands they own. Those listings are summaries of this page.
+`apkrun` is the scripting and development interface to APKRun. Like APKRun.app, it is a client of apkrund ([runtime-daemon.md](runtime-daemon.md) §8.5). Everything it does, except the `dev` commands, the GUI can do too. This document is the complete command set. Subsystem documents list only the commands they own, as summaries of this page.
 
 ---
 
 ## 1. Principles
 
-1. **One code path.** Every non-`dev` command calls a `RuntimeService` operation through `RuntimeClient`. The CLI never touches `~/Library/Application Support/APKRun/`, never runs `adb`, and never talks to the VM ([../01-architecture/modules.md](../01-architecture/modules.md) §2, the CI lint of [package-store.md](package-store.md) §15).
-2. **Same words as the GUI.** Error messages and remediations come from the error catalog. Plural forms and translations come from the String Catalog ([host-ui.md](host-ui.md) §13).
-3. **Scriptable.** Stable exit codes (§3.3), `--json` for every command that prints data (§3.2), no prompts without a terminal (§3.4).
-4. **Safe by default.** Destructive commands ask for confirmation unless `--yes` is given ([../01-architecture/security-model.md](../01-architecture/security-model.md) §3.1).
+1. **One code path.** Every non-`dev` command calls a `RuntimeService` operation through `RuntimeClient`. The CLI never touches `~/Library/Application Support/APKRun/`, never runs `adb`, and never talks to the VM ([modules.md](../01-architecture/modules.md) §2).
+2. **Same words as the GUI.** Error messages and remediations come from the error catalog. Translations come from the String Catalog ([host-ui.md](host-ui.md) §13).
+3. **Scriptable.** Stable exit codes (§3.3), `--json` for every command that prints data (§3.2), and no prompts without a terminal (§3.4).
+4. **Safe by default.** Destructive commands ask for confirmation unless `--yes` is given ([security-model.md](../01-architecture/security-model.md) §3.1).
 
 ---
 
 ## 2. Build, installation, and authorization
 
-- Source: `CLI/apkrun`, built with swift-argument-parser ([../01-architecture/modules.md](../01-architecture/modules.md) §1). Dependencies: `RuntimeClient`, `RuntimeAPI`, `DiagnosticsCore`. With the build flag `APKRUN_EMBEDDED_RUNTIME` (development builds only), `RuntimeHost`, `WindowingCore`, and `InputCore` as well, for the `dev` commands ([runtime-daemon.md](runtime-daemon.md) §10).
-- Installed location: `APKRun.app/Contents/Resources/bin/apkrun` ([../01-architecture/filesystem-layout.md](../01-architecture/filesystem-layout.md) §4). The binary is signed with APKRun's identity, so apkrund's control endpoint accepts it ([../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2).
-- To put it on `PATH`, Settings → Advanced → **Install Command-Line Tool…** ([host-ui.md](host-ui.md) §9.9) shows, with a **Copy** button:
+- Source: `CLI/apkrun`, built with swift-argument-parser ([modules.md](../01-architecture/modules.md) §1). Dependencies: `RuntimeClient`, `RuntimeAPI`, `DiagnosticsCore`. Development builds with the flag `APKRUN_EMBEDDED_RUNTIME` also link `RuntimeHost`, `WindowingCore`, and `InputCore`, for the `dev` commands ([runtime-daemon.md](runtime-daemon.md) §10).
+- Installed at `APKRun.app/Contents/Resources/bin/apkrun` ([filesystem-layout.md](../01-architecture/filesystem-layout.md) §4). APKRun's identity signs the binary, so apkrund's control endpoint accepts it ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2).
+- Settings → Advanced → **Install Command-Line Tool…** ([host-ui.md](host-ui.md) §9.9) shows this command, with a **Copy** button:
 
   ```sh
   sudo ln -sf "/Applications/APKRun.app/Contents/Resources/bin/apkrun" /usr/local/bin/apkrun
   ```
 
-  A symlink keeps the signature valid (the kernel checks the real file). A copied binary also works until APKRun updates. After an update, `apkrun` detects that its version differs from apkrund's and prints a hint to use the symlink.
+  A symlink keeps the signature valid, because the kernel checks the real file. A copied binary works until APKRun updates. After an update, `apkrun` detects that its version differs from apkrund's and prints a hint to use the symlink.
 - Development builds install as `apkrun-dev` from `scripts/dev/install-dev-app.sh` and talk to `io.apkrun.apkrund.dev.xpc` ([runtime-daemon.md](runtime-daemon.md) §2.6).
-- **Before #032** (M0–M3), the commands marked **E** in §4 run with the embedded runtime in the CLI process ([runtime-daemon.md](runtime-daemon.md) §10). #032 switches them to RuntimeClient without changing their syntax or output.
 
 ---
 
@@ -44,17 +35,17 @@ This page is the complete command set. Subsystem documents show the commands the
 - `apkrun <command> [<subcommand>] [arguments] [options]`. Long options only, except `-y` (`--yes`), `-h` (`--help`), and `-v` (`--verbose`).
 - `<package>` is an Android package name (`com.example.app`). It is validated against the package-name grammar before any request is sent.
 - `<spec>` (update source) is `local:<path>`, `direct:<https-url>`, `fdroid[:<repository-url>#<fingerprint>]`, or `github:<owner>/<name>[:<asset-glob>][@prerelease]` ([update-system.md](update-system.md) §11.3).
-- File arguments are opened by the CLI and passed as file handles. apkrund never opens a path given on the command line ([package-store.md](package-store.md) §4.1). Relative paths resolve against the current directory.
-- Shell completion: `apkrun --generate-completion-script zsh|bash|fish` (swift-argument-parser). Package arguments complete from `apkrun list --json`.
+- The CLI opens file arguments and passes them as file handles. apkrund never opens a path given on the command line ([package-store.md](package-store.md) §4.1). Relative paths resolve against the current directory.
+- `apkrun --generate-completion-script zsh|bash|fish` generates completion. Package arguments complete from `apkrun list --json`.
 
 ### 3.2 Output
 
 | Stream | Content |
 |---|---|
-| stdout | the result: tables, key/value blocks, or JSON |
-| stderr | progress, warnings, errors, and prompts |
+| stdout | The result: tables, key/value blocks, or JSON |
+| stderr | Progress, warnings, errors, and prompts |
 
-- Human output adapts to the terminal width and uses color only when stdout is a TTY and `NO_COLOR` is not set (`--no-color` forces it off).
+- Human output adapts to the terminal width. Color is used only when stdout is a TTY and `NO_COLOR` is unset. `--no-color` turns color off.
 - `--json` prints one JSON document on stdout and nothing else there:
 
   ```json
@@ -62,8 +53,8 @@ This page is the complete command set. Subsystem documents show the commands the
   { "schemaVersion": 1, "error": { "code": "store.downgradeRefused", "message": "…", "remediation": "…", "operationID": "…" } }
   ```
 
-  `result` is the RuntimeAPI DTO of the operation encoded with the rules of [../03-reference/runtime-api.md](../03-reference/runtime-api.md) (camelCase keys, ISO 8601 dates, `versionCode` as a number, digests as `sha256:` and lowercase hex; runtime-api.md §4.2, §4.3). New fields may appear in minor versions. Removing or renaming a field increments `schemaVersion`.
-- `--quiet` prints only the essential result (for `install`, the package ID; for `wrap`, the bundle path).
+  `result` is the RuntimeAPI DTO of the operation, encoded by [runtime-api.md](../03-reference/runtime-api.md) §4.2–§4.3: camelCase keys, ISO 8601 dates, `versionCode` as a number, and digests as `sha256:` plus lowercase hex. Minor versions may add fields. Removing or renaming a field increments `schemaVersion`.
+- `--quiet` prints only the essential result: the package ID for `install`, the bundle path for `wrap`.
 - `--verbose` adds the operation ID and timings to human output.
 
 ### 3.3 Exit codes
@@ -71,20 +62,20 @@ This page is the complete command set. Subsystem documents show the commands the
 | Code | Name | When |
 |---|---|---|
 | 0 | success | |
-| 1 | failure | the operation failed with a typed error (code in the message and in JSON) |
-| 2 | partial | the main step succeeded and a follow-up failed (installed but the Mac app could not be created; some packages of `update` failed) |
+| 1 | failure | The operation failed with a typed error. The code is in the message and in JSON |
+| 2 | partial | The main step succeeded and a follow-up failed: installed but the Mac app could not be created, or some packages of `update` failed |
 | 3 | warnings | `doctor` found warnings but no failures |
-| 4 | not found | an unknown package, wrapper, operation (`runtime.operationNotFound`), or setting key |
-| 5 | refused | refused by policy: downgrade, other signer, not authorized, blocked by a dialog the user declined |
-| 64 | usage | invalid arguments (`EX_USAGE`, swift-argument-parser's validation failure) |
+| 4 | not found | Unknown package, wrapper, operation (`runtime.operationNotFound`), or setting key |
+| 5 | refused | Refused by policy: downgrade, other signer, not authorized, or a dialog the user declined |
+| 64 | usage | Invalid arguments (`EX_USAGE`) |
 | 69 | unavailable | apkrund is not set up ([runtime-daemon.md](runtime-daemon.md) §8.5) or not reachable (`EX_UNAVAILABLE`) |
-| 70 | internal | `RuntimeFailure.internal`, malformed replies (`EX_SOFTWARE`) |
-| 75 | try again | `RuntimeFailure.busy`, the instance lock is held by another owner (`EX_TEMPFAIL`) |
+| 70 | internal | `RuntimeFailure.internal`, or a malformed reply (`EX_SOFTWARE`) |
+| 75 | try again | `RuntimeFailure.busy`, or the instance lock is held by another owner (`EX_TEMPFAIL`) |
 | 130 | interrupted | Ctrl-C cancelled the operation (§3.5) |
 
-The mapping from error domains and codes to exit codes is not a hand-written table. `CLI/apkrun/Support/ExitCodes.swift` reads each entry's `cliExit` from the generated catalog (`ErrorCatalog.generated.swift`, [../03-reference/error-catalog.md](../03-reference/error-catalog.md) §19.1), so it can't drift from the catalog. Every catalog code maps to exactly one exit code, except a transparent container entry, which maps to `"cause"`: the exit code of its cause ([../03-reference/error-catalog.md](../03-reference/error-catalog.md) §3.5).
+The mapping is generated, not hand-written. `CLI/apkrun/Support/ExitCodes.swift` reads each entry's `cliExit` from `ErrorCatalog.generated.swift` ([error-catalog.md](../03-reference/error-catalog.md) §19.1). Each catalog code maps to exactly one exit code. A transparent container entry maps to `"cause"`, which is the exit code of its cause ([error-catalog.md](../03-reference/error-catalog.md) §3.5).
 
-Errors that the CLI raises itself, before or after a request to apkrund, belong to the `cli` domain ([../03-reference/error-catalog.md](../03-reference/error-catalog.md) §16):
+Errors that the CLI raises itself belong to the `cli` domain ([error-catalog.md](../03-reference/error-catalog.md) §16):
 
 ```swift
 public enum CLIFailure: APKRunError {
@@ -106,83 +97,71 @@ public enum FileProblem: String, Sendable, Codable {
 }
 ```
 
-swift-argument-parser's usage failures (unknown commands, missing arguments, unknown options) are caught by the root command and rendered through `cli.invalidArguments` with exit 64. The parser's raw diagnostic is not logged or included in the error.
+swift-argument-parser usage failures (unknown commands, missing arguments, unknown options) are caught by the root command and rendered through `cli.invalidArguments` with exit 64. The parser's raw diagnostic is neither logged nor included in the error.
 
 ### 3.4 Confirmations and non-interactive use
 
 - Commands that change or delete data show what will happen and ask `Continue? [y/N]` on the terminal.
 - `--yes` answers yes. Without a TTY on stdin and without `--yes`, the command fails with `cli.confirmationRequired` (exit 1) and names the flag. A command never waits for input that cannot come.
-- Reset Android asks the user to type `Reset`, like the GUI ([runtime-daemon.md](runtime-daemon.md) §9.5). `--yes` replaces the typing.
+- Reset Android requires typing `Reset`, as the GUI does ([runtime-daemon.md](runtime-daemon.md) §9.5). `--yes` replaces the typing.
 
 ### 3.5 Long-running operations
 
-Operations that return an `OperationHandle` ([runtime-daemon.md](runtime-daemon.md) §8.3):
+For operations that return an `OperationHandle` ([runtime-daemon.md](runtime-daemon.md) §8.3):
 
 - The CLI subscribes to the `operations` topic, shows a progress line on stderr (TTY only), and waits for the result.
 - **Ctrl-C** sends `cancel(operationID)` and waits up to 10 s for the cancellation result. A second Ctrl-C exits at once and leaves the operation to finish or cancel on its own. Exit code 130.
-- `--detach` prints the operation ID and exits 0 as soon as the operation has started. `apkrun operations wait <id>` picks it up again. Both `install` and `operations wait` accept `--detach`.
+- `--detach` prints the operation ID and exits 0 as soon as the operation has started. `apkrun operations wait <id>` resumes waiting. `install` and `operations wait` accept `--detach`.
 
 ### 3.6 Environment
 
 | Variable | Effect |
 |---|---|
-| `NO_COLOR` | no color |
-| `APKRUN_HOME` | `dev` commands only: the data root for the embedded runtime ([../01-architecture/filesystem-layout.md](../01-architecture/filesystem-layout.md)). Ignored by other commands, because apkrund owns its paths |
+| `NO_COLOR` | No color |
+| `APKRUN_HOME` | `dev` commands only: the data root for the embedded runtime ([filesystem-layout.md](../01-architecture/filesystem-layout.md)). Other commands ignore it, because apkrund owns its paths |
 | `APKRUN_LOG_LEVEL` | `dev` commands only: `debug` or `info` for the in-process runtime |
 
 ---
 
 ## 4. Command reference
 
-**E**: available in embedded mode before #032. **Task**: the task that introduces the command. Details and semantics are in the linked design sections. This section defines the syntax, output, and edge cases the CLI owns.
+**Task** is the task that introduces the command. Details are in the linked design sections. This section defines the syntax, output, and edge cases that the CLI owns.
 
 ### 4.1 Setup, status, and runtime
 
 | Command | Task | Behavior |
 |---|---|---|
-| `apkrun version [--json]` | #001 | CLI version, build, and, when reachable, apkrund's version and the installed Android image version. `apkrun --version` prints only the CLI version |
-| `apkrun setup [--image <path>] [--yes]` | #066 | first-run provisioning ([runtime-daemon.md](runtime-daemon.md) §9). If apkrund is not registered, it opens `APKRun.app --register-runtime` (only the app bundle can register its agent with SMAppService) and waits up to 5 minutes for the user's approval in System Settings, printing the instructions. Then it runs `setup` with the image source: `--image` takes a bundle directory or an `.aar`; without it, release builds use the image feed (#087) and development builds fail with a hint to pass `--image`. Progress shows the `ProvisioningState` steps. Resumes at the first incomplete step. Already complete: prints "Setup is complete." and exits 0 |
-| `apkrun status [--json]` | #032 | the menu bar summary ([host-ui.md](host-ui.md) §12): runtime state, running apps, updates available, developer mode, microphone in use |
-| `apkrun runtime status [--json]` | #031 (initial control surface); #032 (full status) | #031 reports daemon/runtime state, boot progress, startup failure, boot-loop guard, daemon PID, and image version. #032 adds owner, uptime, idle timers, and agent connections |
-| `apkrun runtime start [--hold] [--timeout <s>]` | #031 (initial control surface); #032 (options) | #031 starts Android and returns when it is ready. #032 adds boot-time output, `--hold` activity ([runtime-daemon.md](runtime-daemon.md) §5.1), and `--timeout` |
-| `apkrun runtime stop [--force] [--yes]` | #031 (initial control surface); #032 (options) | #031 gracefully stops Android while leaving apkrund available. #032 adds session/install confirmation and the `--force` path ([runtime-daemon.md](runtime-daemon.md) §3.5) |
-| `apkrun runtime restart [--yes]` | #032 | sends one authenticated `restartRuntime` request; apkrund stops and starts Android under one lifecycle reservation. It asks for confirmation before restarting; until the status API reports active sessions, it asks on every restart. `--yes` skips the prompt. The synchronous reply is the final runtime status; operation handles, progress events, and daemon-side cancellation remain outstanding. A client timeout or caller cancellation can end the wait without stopping the daemon restart, so check `apkrun runtime status` before retrying |
-| `apkrun runtime reset` | #032 | clears the automatic boot-loop guard without starting or stopping Android or deleting Android data. Reports the current runtime state |
-| `apkrun runtime reset --erase [--no-backup] [--yes]` | #066 | **Reset Android** ([runtime-daemon.md](runtime-daemon.md) §9.5): deletes all Android data. Creates a 7-day recovery point unless `--no-backup`. Asks to type `Reset` |
-| `apkrun info [<package>] [--runtime] [--displays] [--json]` | #032; display snapshots remain #028 | without a package: CLI version/build, daemon and Android state, and image version. `--runtime` adds the additional fields currently exposed by `RuntimeHostStatus`. Memory/CPU reporting needs a resource-status API, and `--displays` returns an actionable unavailable error until the daemon exposes display snapshots. This initial status view does not complete the planned runtime overview or #028 |
+| `apkrun version [--json]` | #001 | CLI version and build. When apkrund is reachable, also its version and the installed Android image version. `apkrun --version` prints only the CLI version |
+| `apkrun setup [--image <path>] [--yes]` | #066 | First-run provisioning ([runtime-daemon.md](runtime-daemon.md) §9). If apkrund is not registered, opens `APKRun.app --register-runtime` (only the app bundle can register its agent) and waits up to 5 minutes for approval in System Settings, printing the instructions. Then runs `setup` with the image source. `--image` takes a bundle directory or an `.aar`. Without it, release builds use the image feed (#087) and development builds fail with a hint to pass `--image`. Shows the `ProvisioningState` steps and resumes at the first incomplete step. When already complete, prints "Setup is complete." and exits 0 |
+| `apkrun status [--json]` | #032 | The menu bar summary ([host-ui.md](host-ui.md) §12): runtime state, running apps, available updates, developer mode, and microphone in use |
+| `apkrun runtime status [--json]` | #031, #032 | Daemon and runtime state, boot progress, startup failure, boot-loop guard, daemon PID, and image version. Also the owner, uptime, idle timers, and agent connections |
+| `apkrun runtime start [--hold] [--timeout <s>]` | #031, #032 | Starts Android and returns when it is ready. Prints boot progress on stderr. `--hold` keeps the runtime ready until the CLI exits or is interrupted ([runtime-daemon.md](runtime-daemon.md) §5.1). `--timeout` limits the wait |
+| `apkrun runtime stop [--force] [--yes]` | #031, #032 | Gracefully stops Android and leaves apkrund running. Asks for confirmation when sessions or installs are active. `--force` skips the busy check ([runtime-daemon.md](runtime-daemon.md) §3.5) |
+| `apkrun runtime restart [--yes]` | #032 | Sends one authenticated `restartRuntime` request. apkrund stops and starts Android under one lifecycle reservation. Asks before restarting unless `--yes` is given. Until `runtimeStatus` reports active sessions, the prompt appears on every restart. The reply is the final runtime status. A client timeout or cancellation can end the wait without stopping the restart, so check `apkrun runtime status` before retrying |
+| `apkrun runtime reset` | #032 | Clears the automatic boot-loop guard. Does not start or stop Android, and does not delete Android data. Reports the current runtime state |
+| `apkrun runtime reset --erase [--no-backup] [--yes]` | #066 | **Reset Android** ([runtime-daemon.md](runtime-daemon.md) §9.5): deletes all Android data. Creates a 7-day recovery point unless `--no-backup`. Requires typing `Reset` (§3.4) |
+| `apkrun info [--runtime] [--displays] [--json]` | #032, #028 | Without a package: CLI version and build, daemon and Android state, and image version. `--runtime` adds the fields of `RuntimeHostStatus`. `--displays` shows display snapshots (#028). Until the daemon exposes them, it fails with an unavailable error that gives the remediation |
 
 ### 4.2 Apps
 
 | Command | Task | Behavior |
 |---|---|---|
-| `apkrun install <file>… [--yes] [--provider <spec>] [--updates automatic\|notify\|manual] [--wrap [--output <dir>]] [--detach]` | #027 **E**, #073, #037 (`--provider`, `--updates`), #075 (`--wrap`), #032 (`--detach`) | imports the files as one package ([package-store.md](package-store.md) §4), prints the preview (name, package, version, signer digest, size, warnings, relation), asks, and installs. In the API 1.8 daemon-backed slice, `--detach` returns the install operation ID after the daemon accepts it; use `apkrun operations wait <id>` to inspect the result. `--provider` sets authority `apkrun` with the mode `automatic`, or `notifyOnly` with `--updates notify`. `--updates manual` sets authority `manual` (`InstallOptions.authority`) and keeps a given provider unused. Without either flag, the defaults of [update-system.md](update-system.md) §2.4 apply. The alternate flag spellings (`--update auto\|notify\|manual`, `--update-provider direct --update-url <url>`) map to the current options ([update-system.md](update-system.md) §11.3). `--wrap` also creates the Mac app (as `apkrun wrap`). Refused relations (downgrade, other signer) exit 5 with the store's message. A same-set preview confirms and reinstalls until the guest can report installed APK byte digests. |
-| `apkrun uninstall <package> [--keep-data] [--keep-wrapper] [--forget] [--yes]` | #027 **E**, #076 | [package-store.md](package-store.md) §8. The Mac app goes to the Trash unless `--keep-wrapper`. `--forget` removes the record without Android (when Android cannot start) |
-| `apkrun list [--all] [--json]` | #027 target; initial daemon query in #032 | queries apkrund over `RuntimeControlClient` XPC. Managed records are listed by default. `--all` includes packages from the daemon's current or cached Android inventory without starting Android |
-| `apkrun info <package> [--json]` | #027 target; initial daemon query in #032 | queries apkrund over `RuntimeControlClient` XPC for the package summary, version, state, managed flag, update authority, stored APK count/bytes, and known Android data size. Wrapper paths, signer details, settings, update source, and compatibility details remain part of the broader #027/#090 scope |
-| `apkrun inspect <file>… [--json]` | #073, #090 | `inspectFile`: the host preview only ([package-store.md](package-store.md) §4.3, §11.1), with `compatibility` when the database has an entry (#090). Needs apkrund but never starts Android, and nothing is installed |
-| `apkrun launch <package> [--json]` | #032 | `launch(packageID)` ([runtime-daemon.md](runtime-daemon.md) §7.2). Opens the Mac app (or the generic launcher) and returns when the session is `running`. Until #068 supplies a window frame, the Debug headless hook reports the session state; first-frame timing is available with the launcher window |
+| `apkrun install <file>… [--yes] [--provider <spec>] [--updates automatic\|notify\|manual] [--wrap [--output <dir>]] [--detach]` | #027, #073, #037, #075, #032 | Imports the files as one package ([package-store.md](package-store.md) §4). Prints the preview (name, package, version, signer digest, size, warnings, relation), asks, and installs. `--provider` sets authority `apkrun` with mode `automatic`, or `notifyOnly` with `--updates notify`. `--updates manual` sets authority `manual` (`InstallOptions.authority`) and leaves a given provider unused. Without either flag, the defaults of [update-system.md](update-system.md) §2.4 apply. The alternate spellings `--update auto\|notify\|manual` and `--update-provider direct --update-url <url>` map to the same options ([update-system.md](update-system.md) §11.3). `--wrap` also creates the Mac app, as `apkrun wrap` does. `--detach` prints the install operation ID once the daemon accepts the install; `apkrun operations wait <id>` shows the result. Refused relations (downgrade, other signer) exit 5 with the store's message. A preview of the same APK set as the stored artifacts still asks and then reinstalls, because PackageManager does not report installed APK byte digests |
+| `apkrun uninstall <package> [--keep-data] [--keep-wrapper] [--forget] [--yes]` | #027, #076 | [package-store.md](package-store.md) §8. The Mac app goes to the Trash unless `--keep-wrapper`. `--forget` removes the record without Android, for when Android cannot start |
+| `apkrun list [--all] [--json]` | #027, #032 | Queries apkrund over XPC. Lists managed records by default. `--all` also lists packages from the daemon's current or cached Android inventory, without starting Android |
+| `apkrun info <package> [--json]` | #027, #032 | Queries apkrund over XPC for the package summary: version, state, managed flag, update authority, stored APK count and bytes, and known Android data size. Wrapper paths, signer details, settings, update source, and compatibility come from #027 and #090 |
+| `apkrun inspect <file>… [--json]` | #073, #090 | `inspectFile`: host preview only ([package-store.md](package-store.md) §4.3, §11.1), with `compatibility` when the database has an entry (#090). Needs apkrund but never starts Android. Installs nothing |
+| `apkrun launch <package> [--json]` | #032 | `launch(packageID)` ([runtime-daemon.md](runtime-daemon.md) §7.2). Opens the Mac app or the generic launcher, and returns when the session is `running` or has failed. Prints the result and the first-frame time |
 | `apkrun stop <package>` | #032 | `terminate(packageID)`: closes the window and stops the app |
 | `apkrun repair <package> [--yes]` | #076 | `repairPackage` for a `broken` package ([package-store.md](package-store.md) §11.1) |
 | `apkrun rollback <package> [--allow-data-loss] [--yes]` | #043 | `rollbackPackage` ([update-system.md](update-system.md) §8.5) |
 | `apkrun adopt <package>` | #073 | `adoptPackage` for an unmanaged package ([package-store.md](package-store.md) §9.3) |
-| `apkrun settings <package> list [--json]` | #079 | every per-package key with its effective value and its source: `user`, `recommended` (compatibility database, #090), `default`, or `globalSwitch` ([../03-reference/package-metadata-json.md](../03-reference/package-metadata-json.md) §3, [../03-reference/configuration.md](../03-reference/configuration.md) §3.2) |
-| `apkrun settings <package> get <key>` | #079 | one value |
-| `apkrun settings <package> set <key> <value>` | #079 | `updatePackageSettings(id, patch)`. The value is parsed by the key's type (bool: `true`/`false`/`on`/`off`; enums by name; numbers). Invalid values exit 64 with the allowed values. Prints "applies the next time ‹App› opens" where that is true |
-| `apkrun settings <package> reset (<key> \| --all)` | #079 | removes the stored value. The effective value falls back to the compatibility recommendation, else the default ([../03-reference/configuration.md](../03-reference/configuration.md) §3.2) |
+| `apkrun settings <package> list [--json]` | #079 | Every per-package key with its effective value and its source: `user`, `recommended` (compatibility database, #090), `default`, or `globalSwitch` ([package-metadata-json.md](../03-reference/package-metadata-json.md) §3, [configuration.md](../03-reference/configuration.md) §3.2) |
+| `apkrun settings <package> get <key>` | #079 | One value |
+| `apkrun settings <package> set <key> <value>` | #079 | `updatePackageSettings(id, patch)`. The value is parsed by the key's type: bool (`true`, `false`, `on`, `off`), enums by name, numbers. Invalid values exit 64 and list the allowed values. Prints "applies the next time ‹App› opens" where that is true |
+| `apkrun settings <package> reset (<key> \| --all)` | #079 | Removes the stored value. The effective value falls back to the compatibility recommendation, else the default ([configuration.md](../03-reference/configuration.md) §3.2) |
 
-The first daemon-backed `install` path is available in the normal CLI build.
-It opens up to 20 regular files and transfers their handles over control XPC,
-prints each selected file's size and SHA-256 along with the signing status, and
-confirms before sending `installImported`. A preview that matches the stored
-artifact set still asks before proceeding and reapplies the APK set through
-PackageInstaller: PackageManager currently reports package metadata and signing
-digests but not the installed APK byte digests needed to prove an exact match.
-Preview/import leaves Android stopped; install starts it on demand. This first
-slice accepts manual update authority only. The provider, update, wrapper,
-operation-progress, and cancellation options remain in their listed follow-up
-tasks. Because the current import/install replies are synchronous, an XPC
-disconnect does not show whether an install finished; query package state
-before retrying.
+The daemon-backed `install` path opens up to 20 regular files and passes their handles over control XPC. It prints each file's size and SHA-256 with the signing status, then confirms before `installImported`. Preview and import leave Android stopped; install starts it on demand. A dropped connection during `install` can leave the outcome unknown, so query the package state before retrying.
 
 ### 4.3 Updates
 
@@ -190,29 +169,30 @@ The syntax is in [update-system.md](update-system.md) §11.3. CLI-owned details:
 
 | Command | Task | Behavior |
 |---|---|---|
-| `apkrun update [--check-only] [--json]` | #037 (`--check-only`), #074 | checks every `apkrun` package. Prints one line per package: up to date, available, installed, waiting ("will update when ‹App› quits"), failed. Exit 2 if some failed |
-| `apkrun update <package> [--now] [--file <apk>…]` | #038, #040 | checks and installs one package (user-initiated rules, [update-system.md](update-system.md) §7.3). The app is open: without `--now`, the command prints "will update when ‹App› quits" and returns, and the operation keeps waiting in apkrund until the app quits (`apkrun operations cancel` ends the wait). `--now` (`closeRunningApp`) asks nothing: it closes the app, installs, and reopens the app. `--file` is a manual update from files |
-| `apkrun update policy <package> --mode automatic\|notify\|manual [--provider <spec> \| --no-provider]` | #037, #039 | `setUpdatePolicy` ([update-system.md](update-system.md) §2.3). #037 attaches and removes providers; #039 adds the full rules and refusals |
-| `apkrun update authority <package> apkrun\|manual\|external` | #039 | `setUpdateAuthority` ([update-system.md](update-system.md) §2.1). `external` hands the updates to another installer inside Android and gives up APKRun's update ownership. `apkrun` needs a kept update source (`update.providerNotConfigured`) |
-| `apkrun update skip <package> <versionCode>` | #043 | skips a version |
+| `apkrun update [--check-only] [--json]` | #037, #074 | Checks every `apkrun` package. Prints one line per package: up to date, available, installed, waiting ("will update when ‹App› quits"), or failed. Exit 2 if some failed |
+| `apkrun update <package> [--now] [--file <apk>…]` | #038, #040 | Checks and installs one package ([update-system.md](update-system.md) §7.3). If the app is open and `--now` is absent, prints "will update when ‹App› quits" and returns; the operation keeps waiting in apkrund until the app quits. `apkrun operations cancel` ends the wait. `--now` (`closeRunningApp`) asks nothing: it closes the app, installs, and reopens it. `--file` makes a manual update from files |
+| `apkrun update policy <package> --mode automatic\|notify\|manual [--provider <spec> \| --no-provider]` | #037, #039 | `setUpdatePolicy` ([update-system.md](update-system.md) §2.3). Attaches and removes providers, and applies the full rules and refusals |
+| `apkrun update authority <package> apkrun\|manual\|external` | #039 | `setUpdateAuthority` ([update-system.md](update-system.md) §2.1). `external` hands updates to another installer inside Android and gives up APKRun's update ownership. `apkrun` needs a kept update source (`update.providerNotConfigured`) |
+| `apkrun update skip <package> <versionCode>` | #043 | Skips a version |
 | `apkrun update unskip <package> <versionCode>` | #043 | `unskipVersion`: the version can be offered again ([update-system.md](update-system.md) §8.4) |
-| `apkrun update history [<package>] [--limit <n>] [--json]` | #037 | from `Updates/history.jsonl` |
+| `apkrun update history [<package>] [--limit <n>] [--json]` | #037 | Reads `Updates/history.jsonl` |
 
 ### 4.4 Mac apps (wrappers)
 
-The syntax, the import/install table, and the alternate flag spellings are in [wrapper.md](wrapper.md) §12.2 (`apkrun wrap`, `apkrun wrapper list|info|refresh|remove|verify|approve`). CLI-owned details:
+The syntax, the import and install table, and the alternate flag spellings are in [wrapper.md](wrapper.md) §12.2 (`apkrun wrap`, `apkrun wrapper list|info|refresh|remove|verify|approve`).
 
-- `apkrun wrap` prints the bundle path on success. With `--json`, the `WrapperInfo` DTO.
+- `apkrun wrap` prints the bundle path on success. With `--json`, it prints the `WrapperInfo` DTO.
 - The CLI resolves `--output` and checks that it exists and is a directory. When apkrund reports `destinationNotAccessible`, the CLI places the staged wrapper itself ([wrapper.md](wrapper.md) §6.3), because the CLI runs with the user's own file access.
+- `apkrun wrap <package> --distribution` (#088) builds a distribution wrapper ([wrapper.md](wrapper.md) §11).
 - `apkrun wrapper approve <path>` shows the same facts as the GUI prompt ([host-ui.md](host-ui.md) §10.1) and asks. `--yes` approves without asking.
 
 ### 4.5 Integrations
 
 | Command | Task | Behavior |
 |---|---|---|
-| `apkrun integrations status <package> [--json]` | #053 | `integrationStatus`: per integration the setting, the effective decision, support on the image, and the macOS permission ([desktop-integration.md](desktop-integration.md) §11) |
-| `apkrun shared-folders list [--json]` | #082 | shared roots with their access and availability |
-| `apkrun shared-folders add <path> [--read-write]` | #082 | the CLI creates the security-scoped bookmark from the path it opened, then calls `addSharedFolder` |
+| `apkrun integrations status <package> [--json]` | #053 | `integrationStatus`: per integration, the setting, the effective decision, support on the image, and the macOS permission ([desktop-integration.md](desktop-integration.md) §11) |
+| `apkrun shared-folders list [--json]` | #082 | Shared roots with their access and availability |
+| `apkrun shared-folders add <path> [--read-write]` | #082 | The CLI creates the security-scoped bookmark from the path it opened, then calls `addSharedFolder` |
 | `apkrun shared-folders remove <path\|id>` | #082 | `removeSharedFolder` |
 
 Per-package integration settings use `apkrun settings <package> set integrations.<key> <value>`.
@@ -221,10 +201,10 @@ Per-package integration settings use `apkrun settings <package> set integrations
 
 | Command | Task | Behavior |
 |---|---|---|
-| `apkrun config list [--json]` | #032 | every global key ([../03-reference/configuration.md](../03-reference/configuration.md)) with its value and default |
-| `apkrun config get <key>` | #032 | one value |
-| `apkrun config set <key> <value>` | #032 | validated like `settings set`. Keys that apply at the next Android start say so (`runtime.memoryGiB`, `runtime.cpuCount`, `audio.output`, `graphics.safeMode`, `developer.enabled`). `runtime.userdataGiB` says "Applies after Reset Android." |
-| `apkrun config reset (<key> \| --all)` | #032 | back to the default |
+| `apkrun config list [--json]` | #032 | Every global key ([configuration.md](../03-reference/configuration.md)) with its value and default |
+| `apkrun config get <key>` | #032 | One value |
+| `apkrun config set <key> <value>` | #032 | Validated like `settings set`. Keys that apply at the next Android start say so: `runtime.memoryGiB`, `runtime.cpuCount`, `audio.output`, `graphics.safeMode`, `developer.enabled`. `runtime.userdataGiB` says "Applies after Reset Android." |
+| `apkrun config reset (<key> \| --all)` | #032 | Back to the default |
 
 ### 4.7 Android image and APKRun updates
 
@@ -232,14 +212,14 @@ Owned by [runtime-maintenance.md](runtime-maintenance.md).
 
 | Command | Task | Behavior |
 |---|---|---|
-| `apkrun image list [--json]` | #058 | installed images (`current`, `previous`), their versions, state, and recovery points |
-| `apkrun image check [--json]` | #087 | checks the image feed now (user-initiated: ignores the interval and the rollout) and prints the update phase, the candidate, and any "needs a newer APKRun" note ([runtime-maintenance.md](runtime-maintenance.md) §4.2). Exit 0 |
-| `apkrun image install (<file.aar> \| --latest) [--yes]` | #058, #087 | installs a signed image archive, or downloads and installs the feed's candidate, then applies it: the migration of [android-image.md](android-image.md) §12.3. Only the missing steps run. Asks when apps are open, and before retrying a rejected version; `--yes` answers both. Ctrl-C during the download keeps the partial file ([runtime-maintenance.md](runtime-maintenance.md) §4.4–§4.8). Unpacked bundle directories are `apkrun dev image install` |
+| `apkrun image list [--json]` | #058 | Installed images (`current`, `previous`), their versions and state, and recovery points |
+| `apkrun image check [--json]` | #087 | Checks the image feed now. User-initiated: it ignores the interval and the rollout. Prints the update phase, the candidate, and any "needs a newer APKRun" note ([runtime-maintenance.md](runtime-maintenance.md) §4.2). Exit 0 |
+| `apkrun image install (<file.aar> \| --latest) [--yes]` | #058, #087 | Installs a signed image archive, or downloads and installs the feed's candidate, then applies it: the migration of [android-image.md](android-image.md) §12.3. Only the missing steps run. Asks when apps are open and before retrying a rejected version; `--yes` answers both. Ctrl-C during the download keeps the partial file ([runtime-maintenance.md](runtime-maintenance.md) §4.4–§4.8). Unpacked bundle directories use `apkrun dev image install` |
 | `apkrun image rollback [--yes]` | #058 | "Go back to the previous Android version" from the recovery point. Warns that data written since the migration is lost |
-| `apkrun image recovery-points list \| delete <id>` | #058 | recovery points ([android-image.md](android-image.md) §12.2) |
-| `apkrun self-update check [--json]` | #057 | apkrund checks the APKRun appcast (user-initiated) and prints "APKRun 1.3.0 is available (you have 1.2.0). Open APKRun to install it." or "APKRun is up to date." Exit 0 in both cases; `--json` has `available`. Exit 69 when apkrund can't be reached ([runtime-maintenance.md](runtime-maintenance.md) §3.4) |
-| `apkrun self-update install` | #057 | opens `apkrun://settings/general`, where Sparkle installs the update. The CLI doesn't wait. Installing is done in APKRun.app, because Sparkle replaces the app bundle |
-| `apkrun self-update finish [--yes]` | #057 | when APKRun was replaced while Android apps were open (`restartPending`): restarts Android on the new build. Asks when apps are open. Prints "Nothing to finish." otherwise ([runtime-maintenance.md](runtime-maintenance.md) §3.6) |
+| `apkrun image recovery-points list \| delete <id>` | #058 | Recovery points ([android-image.md](android-image.md) §12.2) |
+| `apkrun self-update check [--json]` | #057 | apkrund checks the APKRun appcast (user-initiated) and prints "APKRun 1.3.0 is available (you have 1.2.0). Open APKRun to install it." or "APKRun is up to date." Exit 0 in both cases. `--json` has `available`. Exit 69 when apkrund cannot be reached ([runtime-maintenance.md](runtime-maintenance.md) §3.4) |
+| `apkrun self-update install` | #057 | Opens `apkrun://settings/general`, where Sparkle installs the update. The CLI does not wait. Installing happens in APKRun.app, because Sparkle replaces the app bundle |
+| `apkrun self-update finish [--yes]` | #057 | When APKRun was replaced while Android apps were open (`restartPending`), restarts Android on the new build. Asks when apps are open. Otherwise prints "Nothing to finish." ([runtime-maintenance.md](runtime-maintenance.md) §3.6) |
 
 ### 4.8 Diagnostics
 
@@ -247,45 +227,49 @@ Owned by [diagnostics.md](diagnostics.md).
 
 | Command | Task | Behavior |
 |---|---|---|
-| `apkrun doctor [--deep] [--fix] [--json]` | #059 | runs the health checks and prints them grouped by subsystem in the format, each with ✓ / ℹ / ⚠ / ✕ / – (not checked) and a remediation. `--deep` adds slow checks (image hashes, wrapper signatures). `--fix` runs the safe automatic fixes the checks declare (for example re-registering a wrapper with LaunchServices). Exit 0 healthy or stopped, 3 warnings only, 1 failures ([diagnostics.md](diagnostics.md) §7.2). Without apkrund, the CLI runs the host checks of DiagnosticsCore itself ([diagnostics.md](diagnostics.md) §7) and reports every other check as "background service not running" with its remediation |
-| `apkrun diagnostics [--output <path>] [--include-logcat] [--package <id>] [--deep] [--json]` | #060 | creates the diagnostics ZIP ([diagnostics.md](diagnostics.md) §8). `--include-logcat` keeps all Android app log lines (still redacted). `--package` adds that app's update history and launch records. `--deep` uses the deep health checks. Default output: `~/Desktop/APKRun-Diagnostics-<timestamp>.zip`. Prints the path and the summary. Works after a boot failure. Without apkrund, the CLI builds a host-only bundle with DiagnosticsCore's writer and redaction ([diagnostics.md](diagnostics.md) §8.4) |
-| `apkrun logs [--follow] [--since <duration>] [--subsystem <name>] [--level info\|debug] [--json]` | #061 | host logs: defaults to the last hour; `--since` accepts durations through 30 days. Runs `/usr/bin/log show` or `log stream` with the predicate `subsystem BEGINSWITH "io.apkrun"` and formats the entries. `--follow` waits for the stream subscription notice or first output before reading history, buffers live entries during that query with 4,096-entry and 4 MiB limits, and uses `--since` only for the initial history. NDJSON records larger than 1 MiB are discarded through the next newline. After a stream exit, it retries and runs a catch-up query from one second before the last covered instant after the replacement stream is ready. The checkpoint advances only through time covered jointly by a complete history query and the stream. Occurrence-aware duplicate removal preserves identical independent records. `--json` emits single-line NDJSON and escapes Unicode formatting scalars. If unified logging fails or returns no matching entries, it reads the public file mirrors in `~/Library/Logs/APKRun/`; if neither source is readable, it exits with `cli.logsUnavailable`. If a stream cannot become ready after three attempts, it runs a one-shot history query with mirror fallback and exits ([diagnostics.md](diagnostics.md) §3) |
-| `apkrun logs --guest [--follow]` | #032 | guest logcat from the logcat console port through apkrund ([android-image.md](android-image.md) §7.1). Needs developer mode |
+| `apkrun doctor [--deep] [--fix] [--json]` | #059 | Runs the health checks and prints them grouped by subsystem, each with ✓ / ℹ / ⚠ / ✕ / – (not checked) and a remediation. `--deep` adds slow checks (image hashes, wrapper signatures). `--fix` runs the safe automatic fixes that the checks declare, for example re-registering a wrapper with LaunchServices. Exit 0 when healthy or stopped, 3 for warnings only, 1 for failures ([diagnostics.md](diagnostics.md) §7.2). Without apkrund, runs DiagnosticsCore's host checks ([diagnostics.md](diagnostics.md) §7) and reports every other check as "background service not running" with its remediation |
+| `apkrun diagnostics [--output <path>] [--include-logcat] [--package <id>] [--deep] [--json]` | #060 | Creates the diagnostics ZIP ([diagnostics.md](diagnostics.md) §8). `--include-logcat` keeps all Android app log lines, still redacted. `--package` adds that app's update history and launch records. `--deep` uses the deep health checks. Default output: `~/Desktop/APKRun-Diagnostics-<timestamp>.zip`. Prints the path and the summary. Works after a boot failure. Without apkrund, builds a host-only bundle with DiagnosticsCore's writer and redaction ([diagnostics.md](diagnostics.md) §8.4) |
+| `apkrun logs [--follow] [--since <duration>] [--subsystem <name>] [--level info\|debug] [--json]` | #061 | Host logs. See the rules below the table |
+| `apkrun logs --guest [--follow]` | #032 | Guest logcat from the logcat console port, through apkrund ([android-image.md](android-image.md) §7.1). Needs developer mode (`developerModeRequired`) |
+
+`apkrun logs` rules:
+
+- The default is the last hour. `--since` accepts durations up to 30 days.
+- The command runs `/usr/bin/log show`, or `log stream` with `--follow`, with the predicate `subsystem BEGINSWITH "io.apkrun"`, and formats the entries ([diagnostics.md](diagnostics.md) §3).
+- `--follow` waits for the stream's subscription notice or first output before it reads history. It buffers live entries during that query, up to 4,096 entries and 4 MiB. `--since` applies only to the initial history.
+- NDJSON records over 1 MiB are discarded through the next newline.
+- After a stream exits, the command retries. It then runs a catch-up query from one second before the last covered instant, once the replacement stream is ready. The checkpoint advances only through time that both a complete history query and the stream cover. Duplicate removal is occurrence-aware, so identical independent records are kept.
+- `--json` emits single-line NDJSON and escapes Unicode formatting scalars.
+- If unified logging fails or matches nothing, the command reads the public file mirrors in `~/Library/Logs/APKRun/`. If neither source is readable, it exits with `cli.logsUnavailable`.
+- If a stream is not ready after three attempts, it runs a one-shot history query with mirror fallback and exits.
 
 ### 4.9 Operations
 
 | Command | Task | Behavior |
 |---|---|---|
-| `apkrun operations list [--json]` | #032 | running and recent (last 50) long-running operations with ID, kind, package, progress, and result |
-| `apkrun operations wait <id> [--detach]` | #032 | waits and exits with the operation's result code; `--detach` prints the current snapshot and leaves the operation running |
+| `apkrun operations list [--json]` | #032 | Running and recent (last 50) long-running operations, with ID, kind, package, progress, and result |
+| `apkrun operations wait <id> [--detach]` | #032 | Waits and exits with the operation's result code. `--detach` prints the current snapshot and leaves the operation running |
 | `apkrun operations cancel <id>` | #032 | `cancel(operationID)` |
 
 ---
 
 ## 5. Development commands (`apkrun dev`)
 
-Available in development builds only (`APKRUN_EMBEDDED_RUNTIME`). They run the runtime inside the CLI process ([runtime-daemon.md](runtime-daemon.md) §10) and refuse to use the user's instance while apkrund holds the lock (exit 75). They use `APKRUN_HOME` (default `~/Library/Application Support/APKRun-Dev/`).
+Available in development builds only (`APKRUN_EMBEDDED_RUNTIME`). They run the runtime inside the CLI process ([runtime-daemon.md](runtime-daemon.md) §10). They refuse to use the user's instance while apkrund holds the lock (exit 75). They use `APKRUN_HOME` (default `~/Library/Application Support/APKRun-Dev/`).
 
 | Command | Task | Behavior |
 |---|---|---|
-| `apkrun dev linux [--kernel <path>] [--initrd <path>] [--tests <list>] [--flood-lines <n>] [--window] [--stats] [--timeout <s>]` | #003–#007, #019, #022, #023 (`--window`, `--stats`) | boots the test Linux guest ([vm.md](vm.md) §12). `--tests blk,net,vsock,ports,rng,gpu,virgl` sets `apkrun.test=`. With `--tests flood`, `--flood-lines` sets `apkrun.test.flood=<n>` (1–10,000,000; default 10,000,000); using the option without `flood` is an error. Prints the `APKRUN-TEST:` lines and exits 0 only if every requested check printed `ok`. `--window` shows scanout 0 in a development window. `--stats` adds an overlay with the fps and the readback counters ([graphics.md](graphics.md) §7) |
-| `apkrun dev image install <dir>` | #065 | verifies a signed runtime image bundle directory, installs it under `Images/<version>/`, and makes it current. Provisions the instance when there is none. Holds the instance lock. An `.aar` arrives with #058 ([android-image.md](android-image.md) §10.3, [../03-reference/runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §8.3) |
-| `apkrun dev boot [--gpu none\|swiftshader\|virgl] [--window] [--stats] [--no-animations] [--guest-transport vsock\|adb] [--wait-ready]` | #012–#014, #021, #022, #023 | boots Android. It boots `current`, which `apkrun dev image install` sets (#065). `--bundle` existed from #012 until #065, which removed it. `--gpu` selects the GPU profile ([graphics.md](graphics.md) §9): `none` is the development-only `headless` profile (#012), `swiftshader` is `guestSwiftshader` (#021), and `virgl` is `drmVirgl` (#022). `none` stays the default until the drmVirgl boot is verified on the VM (IR-584). `--window` shows display 0 (#023) and binds the development input route to it (#024), so the window's pointer events reach the Guest Agent. `--stats` adds the overlay of `dev linux --stats`. Streams boot phases. Stays in the foreground until Ctrl-C, which stops Android gracefully. While it runs, it serves hvc0, and hvc1 in developer mode, on the Unix sockets `$APKRUN_HOME/Runtime/dev-console/<port>.sock` (mode 0600, removed at stop; #014). It always boots in developer mode, provisions the instance when there is none, writes the logcat port to `<logs>/guest/logcat-<timestamp>.log`, and prints state changes on standard error. Added in #012: `--reset` provisions a fresh instance first, `--stop-when-ready` stops Android once it is ready, `--console` copies hvc0 to standard output, and `--cpus`, `--memory-gib`, and `--userdata-gib` size a new instance |
-| `apkrun dev console [--kernel <path>] [--initrd <path>]` | #004, #014 | In M0 (#004), boots the Linux test guest and connects an interactive raw terminal to hvc0. The terminal output writer uses nonblocking writes and checks cancellation while waiting for space; it restores the original descriptor flags before leaving raw mode and includes unwritten bytes in the output-loss warning. Ctrl-] requests guest shutdown; after 20 seconds it force-stops the VM. It prints `runtime.devConsoleOutputDropped` with at least the known bytes lost through stream buffering or terminal writes; the count is a lower bound when cleanup stops after the bounded drain. If both stop and reset fail, it stops terminal output and restores the terminal immediately, reports `runtime.devConsoleCleanupPending`, and retains the instance lock while waiting for VM release. From #014, the command attaches to the running Android `apkrun dev boot` through its console socket; `--android-shell` selects hvc1 in developer mode ([android-image.md](android-image.md) §7.1), and it exits 69 when no `apkrun dev boot` process owns the instance |
-| `apkrun dev launch [--display 0\|secondary] [--no-window] <apk\|package>…` | #072, #024, #026, #029, #030 | boots Android if needed, installs each APK through `AdbClient`, and launches each app through the Guest Agent (`LaunchApplication`). With #072 it only printed the launch result. From #024 the development window of #023 is the default, with input on display 0: the window's pointer events reach the app, and Android keeps running until the window closes or Ctrl-C. From #026 a close during boot stops Android before install or launch; after launch starts, the Guest Agent finishes package tasks before Android stops. `--no-window` restores the #072 behavior, so Android stops once the launch is done and the result is printed. From #026 each app gets its own window. `--display secondary` (#029) uses a pool display, and several apps (#030) run side by side ([display-and-windowing.md](display-and-windowing.md) §12) |
-| `apkrun dev displays` | #028 | starts one embedded virgl guest and an interactive prompt; enter `add --size <w>x<h> --dpi <n>`, `list`, `remove <scanout>`, or `quit` while the process is running |
-| `apkrun dev power sleep \| wake` | #069 | injects host sleep and wake messages ([runtime-daemon.md](runtime-daemon.md) §6) of the running `apkrun dev boot`. Like `dev console`, it does not run a runtime and does not take the instance lock: it writes the request to the control socket `$APKRUN_HOME/Runtime/dev-console/control.sock` of the process that owns the instance, which calls `DeveloperService.injectPower` ([../03-reference/runtime-api.md](../03-reference/runtime-api.md)). Fails with exit 69 when no `apkrun dev boot` process owns the instance |
-| `apkrun dev adb [<args>…]` | #015 | runs the developer's `adb` as `adb -s 127.0.0.1:6520 <args>` against the dev instance, with the terminal attached. It finds `adb` in `$ANDROID_HOME/platform-tools` and then on `PATH`, connects the endpoint once (up to 2 s) so that adb knows the device, and passes adb's exit status through. It does not take the instance lock, and it does not start Android. With no `adb`, it fails with `runtime.adbExecutableMissing` (exit 69, [environment-setup.md](../05-development/environment-setup.md) §2.5). APKRun does not ship `adb` |
+| `apkrun dev linux [--kernel <path>] [--initrd <path>] [--tests <list>] [--flood-lines <n>] [--window] [--stats] [--timeout <s>]` | #003–#007, #019, #022, #023 | Boots the test Linux guest ([vm.md](vm.md) §12). `--tests blk,net,vsock,ports,rng,gpu,virgl` sets `apkrun.test=`. With `--tests flood`, `--flood-lines` sets `apkrun.test.flood=<n>` (1–10,000,000; default 10,000,000). Using `--flood-lines` without `flood` is an error. Prints the `APKRUN-TEST:` lines and exits 0 only if every requested check printed `ok`. `--window` shows scanout 0 in a development window. `--stats` adds an overlay with the fps and readback counters ([graphics.md](graphics.md) §7) |
+| `apkrun dev image install <dir>` | #065 | Verifies a signed runtime image bundle directory, installs it under `Images/<version>/`, and makes it current. Provisions the instance when there is none. Holds the instance lock. `.aar` archives use `apkrun image install` (§4.7) ([android-image.md](android-image.md) §10.3, [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §8.3) |
+| `apkrun dev boot [--gpu none\|swiftshader\|virgl] [--window] [--stats] [--no-animations] [--guest-transport vsock\|adb] [--wait-ready]` | #012–#014, #021, #022, #023 | Boots Android from `current`, which `apkrun dev image install` sets. `--gpu` selects the GPU profile ([graphics.md](graphics.md) §9): `none` is the development-only `headless` profile, `swiftshader` is `guestSwiftshader`, and `virgl` is `drmVirgl`. The default is `none`. `--window` shows display 0 and binds the development input route to it, so pointer events reach the Guest Agent. `--stats` adds the overlay of `dev linux --stats`. Streams boot phases. Stays in the foreground until Ctrl-C, which stops Android gracefully. While it runs, it serves hvc0, and hvc1 in developer mode, on Unix sockets `$APKRUN_HOME/Runtime/dev-console/<port>.sock` (mode 0600, removed at stop). It always boots in developer mode, provisions the instance when there is none, writes the logcat port to `<logs>/guest/logcat-<timestamp>.log`, and prints state changes on standard error. `--reset` provisions a fresh instance first, `--stop-when-ready` stops Android once it is ready, `--console` copies hvc0 to standard output, and `--cpus`, `--memory-gib`, and `--userdata-gib` size a new instance |
+| `apkrun dev console [--kernel <path>] [--initrd <path>] [--android-shell]` | #004, #014 | Connects an interactive raw terminal to hvc0 through the console socket of the running `apkrun dev boot`. `--android-shell` selects hvc1 in developer mode ([android-image.md](android-image.md) §7.1). Exits 69 when no `apkrun dev boot` owns the instance. Ctrl-] requests guest shutdown; after 20 s the VM is force-stopped. Output lost to stream buffering or terminal writes is reported as `runtime.devConsoleOutputDropped`, with the known byte count as a lower bound. If stop and reset both fail, the command stops terminal output and restores the terminal at once, reports `runtime.devConsoleCleanupPending`, and keeps the instance lock until the VM is released |
+| `apkrun dev launch [--display 0\|secondary] [--no-window] <apk\|package>…` | #072, #024, #026, #029, #030 | Boots Android if needed, installs each APK through `AdbClient`, and launches each app through the Guest Agent (`LaunchApplication`). The development window is the default, with input on display 0: its pointer events reach the app, and Android keeps running until the window closes or Ctrl-C. A close during boot stops Android before install or launch. After launch starts, the Guest Agent finishes package tasks before Android stops. `--no-window` makes Android stop once the launch is done, and prints the result. Each app gets its own window. `--display secondary` uses a pool display, and several apps run side by side |
+| `apkrun dev displays` | #028 | Starts one embedded virgl guest and an interactive prompt. Enter `add --size <w>x<h> --dpi <n>`, `list`, `remove <scanout>`, or `quit` while the process runs |
+| `apkrun dev power sleep \| wake` | #069 | Injects host sleep or wake messages ([runtime-daemon.md](runtime-daemon.md) §6) into the running `apkrun dev boot`. Like `dev console`, it does not run a runtime and does not take the instance lock. It writes the request to the control socket `$APKRUN_HOME/Runtime/dev-console/control.sock`, and the owning process calls `DeveloperService.injectPower` ([runtime-api.md](../03-reference/runtime-api.md)). Exits 69 when no `apkrun dev boot` owns the instance |
+| `apkrun dev adb [<args>…]` | #015 | Runs the developer's `adb` as `adb -s 127.0.0.1:6520 <args>` against the dev instance, with the terminal attached. It finds `adb` in `$ANDROID_HOME/platform-tools`, then on `PATH`, and connects the endpoint once (up to 2 s) so adb knows the device. It passes adb's exit status through. It does not take the instance lock and does not start Android. Without `adb` it fails with `runtime.adbExecutableMissing` (exit 69, [environment-setup.md](../05-development/environment-setup.md) §2.5). APKRun does not ship `adb` |
 
-For `apkrun dev launch <apk>`, the source APK is limited to 2 GiB, matching
-the package store's per-file transfer limit ([package-store.md](package-store.md)
-§4.2–§4.3). Larger files fail before `aapt2` staging.
-
-In Debug builds, `apkrun dev linux` honors `APKRUN_TEST_LINUX_DIR`; it must be
-an absolute path so the artifact scripts, CLI, and hosted T2 tests select the
-same directory even when they run from different working directories. Release
-builds ignore this test-only override and use `/tmp/apkrun-test-linux` unless
-the kernel and initramfs paths are supplied directly.
+- For `apkrun dev launch <apk>`, the source APK is limited to 2 GiB, the package store's per-file transfer limit ([package-store.md](package-store.md) §4.2–§4.3). Larger files fail before `aapt2` staging.
+- In Debug builds, `apkrun dev linux` honors `APKRUN_TEST_LINUX_DIR`. It must be an absolute path, so the artifact scripts, the CLI, and hosted T2 tests select the same directory from any working directory. Release builds ignore this test-only override and use `/tmp/apkrun-test-linux` unless the kernel and initramfs paths are given.
 
 ---
 
@@ -306,55 +290,21 @@ CLI/apkrun/
 - Commands are `AsyncParsableCommand`s. They get a `RuntimeService` from a factory, so T0 tests run them against a fake `RuntimeService` and compare stdout, stderr, and the exit code with golden files.
 - All user-facing strings are catalog keys ([host-ui.md](host-ui.md) §13). JSON keys are never localized.
 
-### 6.2 Implementation steps
-
-| Task | Steps | Acceptance |
-|---|---|---|
-| #001 | root command, `version`, `--help`, the output and exit-code support | the CLI prints version and help |
-| #003–#007, #014, #019–#023, #026–#030 | the `dev` commands of §5 as each task needs them | the task's T2 test runs through the command |
-| #027 | `install`, `uninstall` over the package service; `list` and `info` reach the daemon through XPC; prompts, `--yes`, `--json` | [package-store.md](package-store.md) §15 #027 |
-| #032 | `RuntimeControlClient` XPC for `status`, `runtime …`, `info`, `list`, `launch`, and `stop`; `config …`, `operations …`, and unavailable handling (exit 69) | [runtime-daemon.md](runtime-daemon.md) §13 #032 |
-| #066 | `setup`, `runtime reset --erase` | [runtime-daemon.md](runtime-daemon.md) §9.4 |
-| #073 | `inspect`, `adopt`, the relation output of `install` | [package-store.md](package-store.md) §15 #073 |
-| #037–#040, #043, #074 | `update …`, `rollback`, the update flags of `install` | [update-system.md](update-system.md) §15 |
-| #044 | `wrapper approve` | [wrapper.md](wrapper.md) §7.3, §15 #044 |
-| #075 | `wrap`, `install --wrap`, `wrapper verify`, `wrapper info` | [wrapper.md](wrapper.md) §15 #075 |
-| #076 | `wrapper list`, `wrapper refresh`, `wrapper remove` | [wrapper.md](wrapper.md) §15 #076 |
-| #088 | `wrap <package> --distribution` | [wrapper.md](wrapper.md) §11, [../04-plan/issues/M12-v1-release.md](../04-plan/issues/M12-v1-release.md) #088 |
-| #090 | the `compatibility` field of `info` and `inspect`, the `recommended` source in `settings list` | [diagnostics.md](diagnostics.md) §10.3 |
-| #079 | `settings …` | every key of package-metadata-json §3 round-trips through `set` and `get` |
-| #053, #082 | `integrations status`, `shared-folders …` | [desktop-integration.md](desktop-integration.md) §14 |
-| #057, #058, #087 | `self-update check\|install\|finish`, `image …` | [runtime-maintenance.md](runtime-maintenance.md) |
-| #059, #060, #061 | `doctor`, `diagnostics`, `logs` | [diagnostics.md](diagnostics.md) |
-| #092 | Japanese strings | every human message of the golden tests exists in Japanese |
-
 ### 6.3 Tests
 
-| Tier | Test | Task |
+| Tier | What is tested | Where |
 |---|---|---|
-| T0 | golden output (human and JSON) per command against a fake `RuntimeService`, including every error path. Argument validation (package names, specs, sizes) | each task of §6.2, for its commands |
-| T0 | exit-code table vs error catalog: every entry's `cliExit`, with `"cause"` resolved through the chain | #061 |
-| T0 | non-interactive rules: no TTY and no `--yes` → `cli.confirmationRequired` | #027 (the first prompts) |
-| T1 | Ctrl-C during `install` cancels the operation (fake service records `cancel`) | #032 (`OperationHandle.cancel`) |
-| T2 | the acceptance commands of each task against real apkrund | each task of §6.2 |
+| T0 | Golden output (human and JSON) per command against a fake `RuntimeService`, including every error path. Argument validation (package names, specs, sizes) | `CLI/apkrun/Tests/` |
+| T0 | Exit-code table against the error catalog: every entry's `cliExit`, with `"cause"` resolved through the chain | `Packages/DiagnosticsCore/Tests/DiagnosticsCoreTests/ErrorCatalogTests.swift` |
+| T0 | Non-interactive rules: no TTY and no `--yes` gives `cli.confirmationRequired` | `CLI/apkrun/Tests/` |
+| T1 | Ctrl-C during `install` cancels the operation (the fake service records `cancel`) | `CLI/apkrun/Tests/` |
+| T2 | The acceptance commands of each task against a real apkrund | `Tests/IntegrationTests/` |
 
 ---
 
 ## 7. Open items
 
-| Item | Plan |
+| Item | Working default |
 |---|---|
-| How `log show` behaves for a standard (non-admin) user on macOS 27 (§4.8, OQ-04) | #061 checks it. Working default: the file mirrors cover the gap either way. If `log show` fails, `apkrun logs` reads the file mirrors in `~/Library/Logs/APKRun/` ([diagnostics.md](diagnostics.md) §3.3) |
-| Where the image feed and the APKRun appcast are hosted (§4.1, §4.7, OQ-01) | decided before #057 and #087. Until then the host is the `<updates host>` placeholder. `apkrun setup` without `--image` in release builds, `image check`, `image install --latest`, and `self-update check` depend on it |
-
----
-
-## 8. Verification log
-
-Filled in by the tasks. Each entry records the date, the macOS build, the image build (or the test Linux guest), and the result.
-
-| Question | Task | Result |
-|---|---|---|
-| The **E** commands keep their syntax and output after the switch to RuntimeClient | #032 | pending (§2) |
-| `log show` with the `io.apkrun` predicate on macOS 27 (OQ-04) | #061 | 2026-09-29, macOS 27.0 (26A428): an unprivileged command from an `admin`-group account returned one `io.apkrun.cli` entry. A non-admin account was unavailable, so OQ-04 remains open (§4.8) |
-| `apkrun setup` without `--image` in a release build provisions from the image feed | #087 | pending (§4.1) |
+| How `log show` behaves for a standard (non-admin) user on macOS 27 (§4.8, [OQ-04](../04-plan/open-questions.md)) | The file mirrors cover the gap either way. If `log show` fails, `apkrun logs` reads the file mirrors ([diagnostics.md](diagnostics.md) §3.3) |
+| Where the image feed and the APKRun appcast are hosted (§4.1, §4.7, [OQ-01](../04-plan/open-questions.md)) | Decide before #057 and #087. Until then the host is the `<updates host>` placeholder. `apkrun setup` without `--image` in release builds, `image check`, `image install --latest`, and `self-update check` depend on it |

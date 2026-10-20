@@ -1,10 +1,6 @@
-# Graphics Design (VirtioDeviceCore + GraphicsCore)
+# Graphics Design
 
-| Field | Value |
-|---|---|
-| Status | Design baseline |
-| Related | [display-and-windowing.md](display-and-windowing.md), [vm.md](vm.md), [android-image.md](android-image.md) §6.2, [../01-architecture/decisions/0002-virtualization-framework-macos27.md](../01-architecture/decisions/0002-virtualization-framework-macos27.md), [../01-architecture/decisions/0004-virgl-first-graphics.md](../01-architecture/decisions/0004-virgl-first-graphics.md), [../01-architecture/decisions/0005-multi-display-window-model.md](../01-architecture/decisions/0005-multi-display-window-model.md), [../01-architecture/decisions/0006-wrapper-owned-window-iosurface.md](../01-architecture/decisions/0006-wrapper-owned-window-iosurface.md) |
-| Tasks | #018–#023, #063, #028 (scanout enable/disable), #067 (modes/EDID), #070 (frame statistics), #091 (fuzzing), #096 (Vulkan, post-v1) |
+This document specifies the virtio-gpu device (`VirtioDeviceCore` and `GraphicsCore`), the VirGL renderer and its C bridge (`GraphicsBridge`), and the presentation of scanouts into IOSurfaces. It covers the frame path, the virtio-gpu protocol, renderer limits, scanouts, GPU profiles, metrics, lifecycle, errors, and tests. Display mapping and windows are in [display-and-windowing.md](display-and-windowing.md).
 
 ---
 
@@ -12,17 +8,17 @@
 
 | Component | Module | Owns | Must not |
 |---|---|---|---|
-| Custom virtio adapter | `VirtioDeviceCore` | Wrapping `VZCustomVirtioDevice*`: descriptors, feature negotiation, config space updates, queue draining, element completion, guest memory mapping, shared memory regions, a test entropy device (#063) | know about GPUs |
-| virtio-gpu device model | `GraphicsCore` | virtio-gpu command decoding and validation, resources and backing, contexts, fences, scanouts, EDID, cursor queue | know about windows, sessions, or Android packages |
-| Renderer | `GraphicsCore` + `GraphicsBridge` (C/Objective-C target) | The render thread, virglrenderer, EGL/ANGLE on Metal, the 2D renderer for non-VirGL profiles | be called from any thread other than the render thread |
-| Presentation | `GraphicsCore` | `SurfacePool` (IOSurface triple buffers per scanout), the per-frame GPU blit, frame scheduling, frame statistics, readback counters | own `NSWindow`s (WindowingCore) or decide which scanout belongs to which app (RuntimeCore `DisplayPool`) |
-| Renderer libraries | `ThirdParty/` → `Contents/Frameworks/VirGLRuntime/` | Pinned builds of virglrenderer, libepoxy, and ANGLE, plus patches (#020) | — |
+| Custom virtio adapter | `VirtioDeviceCore` | Wrapping `VZCustomVirtioDevice*`: descriptors, feature negotiation, config space updates, queue draining, element completion, guest memory mapping, shared memory regions, the test entropy device | know about GPUs |
+| virtio-gpu device model | `GraphicsCore` | Command decoding and validation, resources and backing, contexts, fences, scanouts, EDID, cursor queue | know about windows, sessions, or Android packages |
+| Renderer | `GraphicsCore` + `GraphicsBridge` | The render thread, virglrenderer, EGL/ANGLE on Metal, the 2D renderer for the `guestSwiftshader` profile | be called from any thread other than the render thread |
+| Presentation | `GraphicsCore` | `SurfacePool` (three IOSurfaces per scanout), the per-frame GPU blit, frame scheduling, statistics, readback counters | own `NSWindow`s (WindowingCore) or decide which scanout belongs to which app (RuntimeCore `DisplayPool`) |
+| Renderer libraries | `ThirdParty/` → `Contents/Frameworks/VirGLRuntime/` | Pinned builds of virglrenderer, libepoxy, and ANGLE, with patches | — |
 
-Out of scope here:
+Out of scope:
 
 - Mapping displays to sessions and windows, density, and resize policy: [display-and-windowing.md](display-and-windowing.md).
-- Buffer handoff to the wrapper process and the `frameDisplayed` release protocol: [display-and-windowing.md](display-and-windowing.md) §5.
-- Vulkan: §10 (post-v1, #096).
+- Buffer handoff to the wrapper and the `frameDisplayed` release protocol: [display-and-windowing.md](display-and-windowing.md) §5.
+- Vulkan: §10.
 
 ### 1.1 Frame path
 
@@ -39,75 +35,43 @@ render thread ─▶ virglrenderer ─▶ ANGLE (GLES 3.0) ─▶ Metal    Graph
 borrow scanout texture ─▶ 1 GPU blit ─▶ IOSurface[i] of SurfacePool(scanout)
       │ GPU completion
       ▼
-ScanoutEvent.frameReady(scanout, i, seq) ─▶ RuntimeCore ─▶ XPC frameReady ─▶ wrapper layer.contents
+ScanoutFrame.frameReady(generation, i, seq) ─▶ RuntimeCore ─▶ XPC frameReady ─▶ wrapper layer.contents
 ```
 
-The normal path has no CPU copy of pixel data and no GPU→CPU readback (FR-GFX-05, NFR-PERF-05). RiftVM reports about 60 fps with 0.4–0.8 ms per present in a specific Omarchy/Hyprland run; that is upstream evidence, not an APKRun measurement or a universal target. RiftVM blits into a `CAMetalLayer` drawable in the same process, while APKRun blits into an IOSurface that another process presents ([ADR-0006](../01-architecture/decisions/0006-wrapper-owned-window-iosurface.md), [riftvm-analysis.md](riftvm-analysis.md) §7).
+The normal path has no CPU copy of pixel data and no GPU→CPU readback (FR-GFX-05, NFR-PERF-05). The blit writes an IOSurface that the wrapper process presents. RiftVM blits into a `CAMetalLayer` drawable of its own process; APKRun does not ([ADR-0006](../01-architecture/decisions/0006-wrapper-owned-window-iosurface.md), [riftvm-analysis.md](riftvm-analysis.md) §3).
 
 ---
 
-## 2. RiftVM as a technical reference (#018)
+## 2. RiftVM as a technical reference
 
-The planned RiftVM v1.0.4 source tag is not present in the upstream tag list checked for #018. The available reference is `riftvm-v0.6.1`, pinned to commit `51f19193b1d3326b2e164d37a2a59e9970375170` in `ThirdParty/ThirdParty.lock.json` (IR-188). The tag contains a Custom VirGL implementation used by RiftVM's normal VM graphics path; its maintained architecture covers general Linux VMs as well as its Omarchy integration. APKRun analyzes the low-level `Experiments/VZVirtioGPUPrototype` package, its production caller, and the pinned renderer build inputs. This source is not treated as equivalent to the unavailable v1.0.4 release or as APKRun's product architecture.
+### 2.1 What APKRun takes from RiftVM
 
-### 2.1 What RiftVM provides (research baseline)
+APKRun uses the pinned RiftVM source (`riftvm-v0.6.1`, lock entry `riftvm`) as a reference only. [riftvm-analysis.md](riftvm-analysis.md) records the source identity and the reuse decision for each file.
 
-| Area | RiftVM `riftvm-v0.6.1` prototype at `51f19193` |
-|---|---|
-| Device | device ID 16, PCI class `0x03` / subclass `0x80`, two queues (control and cursor); one scanout and one capset in the device config |
-| Features | `VIRTIO_GPU_F_VIRGL` and `VIRTIO_GPU_F_EDID`; no resource blobs, `CONTEXT_INIT`, or shared-memory regions |
-| Guest memory | `guestMemoryMapping(atPhysicalAddress:length:)` mappings are retained with each resource's backing and released on detach/reset/stop |
-| Renderer | virglrenderer `960bd6674a25a438da2aac8a0af8c6d6e2b3a77e`, libepoxy `1b6d7db184bb1a0d9af0e200e06a0331028eaaae`, ANGLE `2d91f554ab55bd1bef6998ab4094f60ae3e7feb5` (Metal) |
-| Threading | serial VZ device queue, one dedicated renderer thread for virglrenderer/ANGLE, and bounded main-thread presentation (`LatestFrameScheduler`: one in flight plus the newest pending frame) |
-| Fences | `CONTEXT_INIT` is not offered; host completions are serialized into the guest's single timeline and time out after two seconds |
-| Scanout | borrows the VirGL texture, wraps the destination `CAMetalDrawable` texture in an ANGLE `EGLImage`, then GPU-blits; same-process `CAMetalLayer`, no IOSurface pool |
-| Patches | RiftVM's MSAA downgrade patch (`scripts/virgl-patches/`); the macOS and recipe patches are applied by RiftVM's `scripts/prepare-virgl-sources.sh`. APKRun's adopted set, its lineage, and its differences from RiftVM are in §5.1 and [riftvm-analysis.md](riftvm-analysis.md) §4 |
-| Limits | 8192 px texture edge, 256 MiB buffer, 4096 resources, 256 contexts, 4 GiB renderer budget, 4 GiB total guest backing; the full set is in [riftvm-analysis.md](riftvm-analysis.md) §2.2, and the APKRun differences are in §7 |
-| Save/restore | Disabled for VirGL (renderer state cannot be serialized) |
-| Input | GPU prototype does not implement input. A separate experimental `virtio-input` probe is not a production backend; RiftVM uses USB and its Guest Agent/uinput path |
-| Performance | Upstream reports ≈ 60 fps and 0.4–0.8 ms per present for a specific Omarchy/Hyprland run; not measured by APKRun |
-| Source files | `VirtioGPUDevice.swift`, `VirtioGPUProtocol.swift`, `VirGLRenderer.swift`, `RiftVMVirGLRuntime.swift`, `CVirGLBridge.c`, `ActiveContextSet.h`, `RendererExecutor.swift`, `LatestFrameScheduler.swift`, and the production caller `VMCustomVirGLGraphics.swift`; the build scripts `scripts/virgl-runtime-pins.sh`, `prepare-virgl-sources.sh`, and `build-virgl-runtime-from-source.sh`; and the tests `Tests/CVirGLBridgeTests/` and `Tests/RiftVMCoreTests/VMVirGLPresentationTests.swift`. File-by-file reuse decisions are in [riftvm-analysis.md](riftvm-analysis.md) §5 |
+- **Reused as patterns:** the custom virtio device on Virtualization.framework; the features `VIRTIO_GPU_F_VIRGL` and `VIRTIO_GPU_F_EDID`; the renderer pins and patches (§5.1); the EGL/ANGLE initialization sequence (§5.2); the dedicated render thread with fence polling (§4.7); and latest-frame coalescing (§6.2).
+- **Rejected:** one scanout (§4.1 needs 16); `CAMetalLayer` presentation (the wrapper is another process, [ADR-0006](../01-architecture/decisions/0006-wrapper-owned-window-iosurface.md)); RiftVM's resource limits (§5.4 sets its own); its 2-second fence timeout (APKRun counts stalls, §6.2); its `glReadPixels` diagnostic sampling (it breaks the zero-readback rule, §7); and its virtio-input probe (input uses USB and the Guest Agent, [ADR-0013](../01-architecture/decisions/0013-input-via-guest-injection.md)).
 
-### 2.2 #018 deliverable
+### 2.2 Analysis scope
 
-#018 writes `docs/02-design/riftvm-analysis.md`. It analyzes the RiftVM source at the full commit recorded in `ThirdParty/ThirdParty.lock.json` as `riftvm` and covers, for each step of the flow:
-
-| Step | Questions the analysis answers |
-|---|---|
-| `VZCustomVirtioDevice` | configuration values, delegate methods used, which queue callbacks arrive on, DRIVER_OK handling, reset handling |
-| virtqueue handling | draining loop, how descriptor chains are read and written, error paths, `returnToQueue` discipline |
-| virtio-gpu commands | which commands are implemented, which return errors, how the control header and fences are handled |
-| resource creation | 2D vs 3D paths, formats, limits enforcement |
-| resource backing | how `ATTACH_BACKING` entries are mapped, mapping lifetime, invalidation on reset |
-| VirGL | virglrenderer init flags and callbacks, context management, capsets, fence callback and polling |
-| scanout | `SET_SCANOUT`/`RESOURCE_FLUSH` flow, texture borrowing, Y-flip and format handling |
-| ANGLE | EGL display creation (Metal platform), context sharing, `EGL_METAL_TEXTURE_ANGLE` import, the Metal device used |
-| Metal | presentation, synchronization with the GPU, frame pacing |
-| cursor | cursor queue handling |
-
-Plus: per file, its license header and whether we copy it (§2.3), adapt it, or rewrite it. The list of patches applied to the renderer libraries, and why. Known bugs and TODOs in the RiftVM code. Differences we must introduce (multi-scanout, IOSurface pools, hotplug, 2D profile, security validation).
-
-Acceptance: the document identifies the exact source components required for APKRun.
+[riftvm-analysis.md](riftvm-analysis.md) covers each step of the flow: the custom virtio device, virtqueues, virtio-gpu commands, resource creation and backing, VirGL, scanout, ANGLE, Metal, and cursor.
 
 ### 2.3 Reuse rules
 
-- Copied or adapted RiftVM files keep the MIT notice at the top plus the line `Derived from RiftVM <commit> (MIT)`. The notice is also included in `ThirdPartyNotices.html` ([../05-development/legal-and-licensing.md](../05-development/legal-and-licensing.md)).
-- Code is adapted to our module boundaries: device-agnostic parts go to `VirtioDeviceCore`, and the virtio-gpu parts go to `GraphicsCore`. We do not keep RiftVM's app structure.
-- The #018 pin is `ships: reference`: the source is recorded for analysis only and is not built, imported, copied, or distributed. The MSAA code copied into the virglrenderer patch set is an exception, which IR-410 records. If a later task copies or adapts RiftVM code, it changes the lock entry to `ships: derived`, preserves the required notices, and still never imports the RiftVM package.
+- Copied or adapted RiftVM files keep the MIT notice at the top and the line `Derived from RiftVM <commit> (MIT)`. The notice is also in `ThirdPartyNotices.html` ([legal-and-licensing.md](../05-development/legal-and-licensing.md)).
+- Code follows APKRun's module boundaries. Device-agnostic parts go to `VirtioDeviceCore`, and virtio-gpu parts go to `GraphicsCore`. RiftVM's app structure is not kept.
+- The RiftVM lock entry is `ships: reference`: the source is not built, imported, copied, or distributed. The exception is the MSAA patch `virglrenderer/0002` (§5.1), which ships. A later task that copies or adapts RiftVM code changes the entry to `ships: derived`, keeps the notices, and never imports the RiftVM package.
 
 ---
 
-## 3. VirtioDeviceCore (#063, #019)
+## 3. VirtioDeviceCore
 
-### 3.1 Platform API recap (macOS 27)
+### 3.1 Platform API (macOS 27)
 
-- `VZVirtualMachineConfiguration.customVirtioDevices: [VZCustomVirtioDeviceConfiguration]`.
-- The configuration takes `deviceID` (UInt16), `PCIClassID`/`PCISubclassID` (UInt8), `virtioQueueCount`, `mandatoryFeatures`/`optionalFeatures` (`VZVirtioFeatureSet`, two 32-bit subsets; `VIRTIO_F_VERSION_1` is always set), `deviceSpecificConfiguration` (initial config bytes), `sharedMemoryRegions`, `provider`, and `supportsSaveRestore` (default `NO`; setting it without implementing the save/restore delegate methods raises an exception).
-- The provider is `VZCustomVirtioDeviceDelegateProvider(deviceQueue:delegate:)`. The delegate receives `didCreateDevice`, and the device delegate receives `didReceiveNotificationForQueue`, `DidAcceptDriverOk`, `WillStop`, `WillPause`, `WillResume`, `WillReset`, and the save/restore methods. Everything runs on `deviceQueue`, in the process that owns the `VZVirtualMachine` (apkrund).
-- `VZCustomVirtioDevice.queueAtIndex:` and `negotiatedFeatures` are valid only after DRIVER_OK. `guestMemoryMappingAtPhysicalAddress:length:` mappings become invalid after reset, reboot, or stop. `requestDeviceReset` sets DEVICE_NEEDS_RESET. `updateDeviceSpecificConfiguration:completionHandler:` replaces the config bytes with data of the **same size**.
-- `VZVirtioQueue.nextElement` disables notifications until the queue is drained, so callers must loop until it returns `nil`. Element `readBuffers` are zero-copy views of guest memory. `returnToQueue` must be called exactly once. Apple warns about time-of-check/time-of-use (the guest can change memory after we read it).
-- The configuration delegate's `didCreateDevice` callback runs on the VM's serial queue and must set `device.delegate` before returning. The configured device queue serializes all later device and device-delegate operations.
-- Not available: a "raise interrupt" call (completion and config updates are the only signals), and any callback for **guest writes to config space**. `maximumAllowedSharedMemoryRegionCount` is not documented.
+- `VZVirtualMachineConfiguration.customVirtioDevices` takes `VZCustomVirtioDeviceConfiguration`: device ID, PCI class and subclass, `virtioQueueCount`, `mandatoryFeatures`/`optionalFeatures` (`VZVirtioFeatureSet`; `VIRTIO_F_VERSION_1` is always set), `deviceSpecificConfiguration`, `sharedMemoryRegions`, `provider`, and `supportsSaveRestore` (default `NO`; setting it without the save/restore delegate methods raises an exception).
+- All device callbacks run on the provider's `deviceQueue`, in apkrund, which owns the `VZVirtualMachine`. `didCreateDevice` runs on the VM's serial queue and must set `device.delegate` before it returns.
+- `queueAtIndex:` and `negotiatedFeatures` are valid only after DRIVER_OK. Guest memory mappings become invalid after reset, reboot, or stop. `requestDeviceReset` sets DEVICE_NEEDS_RESET. `updateDeviceSpecificConfiguration` replaces the config bytes with data of the **same size**.
+- `VZVirtioQueue.nextElement` suppresses notifications until the queue is empty, so callers loop until it returns `nil`. Element buffers are zero-copy views of guest memory, and `returnToQueue` is called exactly once. The guest can change memory after it is read.
+- Not available: a raise-interrupt call (completion and config updates are the only signals) and any callback for guest writes to config space. `maximumAllowedSharedMemoryRegionCount` is not documented.
 
 ### 3.2 API
 
@@ -136,6 +100,7 @@ public protocol VirtioDeviceModel: AnyObject, Sendable {
     func deviceWillPause()
     func deviceWillResume()
     func deviceWillReset()
+    func deviceWillInvalidateGuestMemory()          // before reset or stop drops the mappings
     func deviceWillStop()
 }
 
@@ -170,65 +135,37 @@ public struct VirtioElement: ~Copyable {
 public struct PendingElement: ~Copyable, Sendable {
     public consuming func complete()
 }
+
+public struct GuestMemory {
+    public var byteCount: Int { get }
+    public func copyBytes(at offset: Int, count: Int) throws(VirtioFailure) -> [UInt8]
+    public func writeBytes(_ bytes: [UInt8], at offset: Int) throws(VirtioFailure)
+    public func hostMemory() throws(VirtioFailure) -> UnsafeMutableRawBufferPointer   // for the renderer
+}
 ```
 
-`VirtioDeviceModel` lifecycle methods default to no-ops. Implementations run on
-the per-device queue. A context is not `Sendable`, so synchronous queue,
-feature, and guest-memory operations cannot be moved into an asynchronous task.
-When asynchronous work needs to update configuration, obtain
-`configurationUpdater` on the device queue before creating the task. Configuration
-updates are serialized per device and tied to the current reset generation;
-reset or release completes outstanding requests with `.notReady`. Each model
-callback receives a context bound to that generation. Its `configurationUpdater`
-carries the captured generation across an actor hop, so a delayed update from a
-previous generation fails with `.notReady` even after the device reaches
-`DRIVER_OK` again. Synchronous queue access, feature inspection, and guest-memory
-mapping also carry that generation: an old context fails with `.notReady` after
-reset even if the device is ready again. A stale `requestReset` is ignored.
+`VirtioDeviceModel` lifecycle methods default to no-ops. Callbacks run on the per-device queue. `VirtioDeviceContext` is not `Sendable`, so queue, feature, and guest-memory calls cannot move into an asynchronous task. To update configuration from async work, obtain `configurationUpdater` on the device queue first. Updates are serialized per device and tied to the reset generation. A reset or release completes outstanding requests with `.notReady`. A context from an earlier generation fails with `.notReady` for queue, feature, guest-memory, and configuration calls, even after the device reaches DRIVER_OK again. A stale `requestReset` is ignored.
 
-`VirtioElement` is non-copyable and device-queue confined. `PendingElement` is
-also non-copyable, but is `Sendable` so a renderer fence may carry it to another
-queue; its completion is always returned to the device queue. For an API that
-requires a copyable escaping closure, `PendingElement` can transfer its storage
-to a package-scoped, lock-protected one-shot completion token. The token keeps
-the abandonment diagnostic and schedules late completion through the same
-device-queue path.
+`PendingElement` is `Sendable`, so a renderer fence can carry it to another queue. Its completion always returns to the device queue. For an API that needs a copyable escaping closure, `PendingElement` moves its storage into a package-scoped, lock-protected one-shot `PendingElementCompletionToken`.
 
 Design rules:
 
-- **One device queue per device** (a serial `DispatchQueue` with `.userInteractive` QoS). VZ objects (`VZCustomVirtioDevice`, queues, elements) are touched only on it.
-- **Keep the VZ callback objects alive.** The configuration provider's delegate and `VZCustomVirtioDevice.delegate` are weak references. The VM driver retains the adapter and model through VM release. `didCreateDevice` is the one callback on the VM queue; it only stores the device and sets its delegate before returning. Before releasing the machine, the driver drains each device queue, stops the model, invalidates guest-backed state, and clears the weak delegate.
-- **Copy, then validate.** Request bytes are copied out of guest memory exactly once (`copyReadable`) before any field is validated. Validated values are never re-read from guest memory. This is the TOCTOU rule from Apple's documentation.
-- **Drain without throwing.** `VZVirtioQueue` suppresses notifications until `nextElement()` returns `nil`. The `drain` body therefore cannot throw out of the loop; it handles each element's failure locally and completes the element before the next iteration.
-- **Exactly-once completion.** `VirtioElement` and `PendingElement` are non-copyable, so the type system prevents completing either handle twice. A copyable `PendingElementCompletionToken` supports escaping callbacks; its lock-backed one-shot gate traps at runtime if `complete()` is called a second time (covered by a T0 process-exit test). A double `returnToQueue` raises an exception in VZ. In debug builds, dropping a live handle without completing it schedules/returns the VZ element to keep the guest queue usable, then raises an assertion. Reset or stop invalidates pending elements first, so dropping a handle that the adapter has already invalidated is a no-op and does not assert.
-- **Guest memory mappings** are cached per device and invalidated on reset/stop before the model lifecycle callback. A `GuestMemory` value checks bounds on every access, and every length is checked for overflow (`gpa + len` must not wrap).
-- **Features** are expressed as a `UInt64` and split into `subset0` (bits 0–31) and `subset1` (bits 32–63) only in the VZ adapter.
-- A `FakeVirtioQueue` and `FakeGuestMemory` live in the `VirtioDeviceCoreTestSupport` target so device models can be unit-tested (T0) without a VM.
+- **One serial device queue per device** (`.userInteractive`). VZ objects are touched only on it.
+- **Keep VZ callback objects alive.** The VZ delegate references are weak, so the VM driver retains the adapter and model until release. Before release, the driver drains each device queue, stops the model, invalidates guest-backed state, and clears the weak delegate.
+- **Copy, then validate.** Request bytes are copied once (`copyReadable`) before any field is validated. Validated values are never re-read from guest memory.
+- **Drain without throwing.** The `drain` body handles each element's failure locally and completes it before the next iteration.
+- **Exactly-once completion.** The non-copyable handles prevent a second completion at compile time. The token traps at runtime when completed twice. Dropping a live handle in a debug build returns the VZ element and then asserts. Reset or stop invalidates pending elements first, so dropping an invalidated handle does nothing.
+- **Guest memory** mappings are cached per device and invalidated on reset or stop before the model's lifecycle callback. `GuestMemory` checks bounds on every access, and every length is checked for overflow (`gpa + len` must not wrap).
+- **Features** are a `UInt64`. Only the VZ adapter splits them into `subset0` (bits 0–31) and `subset1` (bits 32–63).
+- `FakeVirtioQueue` and `FakeGuestMemory` (`VirtioDeviceCoreTestSupport`) let device models run T0 tests without a VM.
 
-### 3.3 Test entropy device (#063)
+### 3.3 Test entropy device
 
-Following the WWDC26 sample, VirtioDeviceCore ships `EntropyTestDevice`: deviceID 4 (virtio-rng), PCI class 0x10, one queue, no features. It fills each writable buffer from a deterministic generator seeded by the test (so the guest can check the bytes). It is used only in T2 tests.
+`EntropyTestDevice` (device ID 4, virtio-rng; PCI class `0x10`; one queue; no features) fills each writable buffer from a deterministic generator seeded by the test. It is used only in T2 tests.
 
-Acceptance (#063): the Linux test guest ([vm.md](vm.md) §12), with the built-in VZ entropy device disabled, lists `virtio_rng.0` in `/sys/class/misc/hw_random/rng_available`. It reads 64 KiB from `/dev/hwrng` that match the seeded sequence. After a device reset (driver unbind and bind), a second read works. A context retained from the prior generation rejects queue access, feature inspection, and guest-memory mapping after the device is ready again; a reset request through that stale context does not disrupt the current generation. A real guest-memory mapping retained by the test model rejects access as invalidated during both the reset and stop callbacks. On the tested shutdown path VZ sends `WillReset` before `WillStop`, so the mapping observed during `WillStop` was already invalidated by the preceding reset; the adapter also runs its invalidation barrier on `WillStop`. The host log shows `DRIVER_OK`, notifications, and reset in order.
+On macOS 27.0, VZ reports a guest reboot as `WillReset` between the first and second `DRIVER_OK`, without `guestDidStop`. On the shutdown path, `WillReset` may precede `WillStop`. The adapter invalidates mappings before `WillStop` in any case. This is one OS build's behavior, not a guarantee.
 
-The separate forced-stop probe retains a live mapping and a deferred VZ queue
-element until VM stop. The adapter invalidates both before the model's stop
-callback; a callback timeline records `DRIVER_OK`, mapping creation, and
-`WillStop` with no intervening `WillReset`. The probe then attempts completion
-through the old handle after stop. This covers the stop invalidation path
-without an earlier guest reset.
-
-On arm64 macOS 27.0 build 26A428, the Linux test guest's `reboot -f` produced a
-guest console sequence of the first boot, reboot marker, and second boot. In the
-same run, the serialized VZ callback stream contained `WillReset` between the
-device's first and second `DRIVER_OK`; the VM did not report `guestDidStop`. The
-integration harness then forced the VM to stop after observing the second boot.
-These are per-stream observations on that OS build, not a cross-version
-guarantee.
-
----
-
-## 4. virtio-gpu device (#019, #021)
+## 4. virtio-gpu device
 
 ### 4.1 Identity and features
 
@@ -239,224 +176,216 @@ guarantee.
 | Queues | 0 = controlq, 1 = cursorq |
 | Offered features (profile `drmVirgl`) | `VIRTIO_GPU_F_VIRGL` (bit 0), `VIRTIO_GPU_F_EDID` (bit 1) |
 | Offered features (profile `guestSwiftshader`, §9) | `VIRTIO_GPU_F_EDID` only |
-| Not offered in v1 | `VIRTIO_GPU_F_RESOURCE_UUID` (2), `VIRTIO_GPU_F_RESOURCE_BLOB` (3), `VIRTIO_GPU_F_CONTEXT_INIT` (4); Vulkan track only (§10) |
+| Not offered in v1 | `VIRTIO_GPU_F_RESOURCE_UUID` (2), `VIRTIO_GPU_F_RESOURCE_BLOB` (3), `VIRTIO_GPU_F_CONTEXT_INIT` (4). Vulkan track only (§10) |
 | Config space (16 bytes, little-endian) | `events_read`, `events_clear`, `num_scanouts` = 16, `num_capsets` (2 with VirGL: `VIRGL`, `VIRGL2`; 0 otherwise) |
 | Save/restore | `supportsSaveRestore = false` ([vm.md](vm.md) §9.5, R-07) |
 
-`num_scanouts` is fixed at 16 (the virtio-gpu maximum) because the config size and contents cannot change in a way the guest would re-read at probe. Unused scanouts report `enabled = 0`, and Linux shows their connectors as disconnected.
+`num_scanouts` is fixed at 16 (the virtio-gpu maximum), because the guest reads the config size once at probe. Unused scanouts report `enabled = 0`, and Linux shows their connectors as disconnected.
 
 ### 4.2 Commands
 
-Wire structures and constants come from Linux `include/uapi/linux/virtio_gpu.h` (the canonical source; section 5.7 of the virtio 1.2 spec describes them). `VirtioGPUProtocol.swift` defines them as fixed-layout Swift structs with explicit little-endian decoding. It never casts guest memory to struct pointers.
+Wire structures and constants come from Linux `include/uapi/linux/virtio_gpu.h` (virtio 1.2, section 5.7). `VirtioGPUProtocol` defines them as fixed-layout Swift structs with explicit little-endian decoding. It never casts guest memory to struct pointers.
 
-Every request starts with `virtio_gpu_ctrl_hdr` (24 bytes: `type`, `flags`, `fence_id`, `ctx_id`, `ring_idx`, padding). If `flags & VIRTIO_GPU_FLAG_FENCE`, the response must not be returned before the fence completes, and the response header echoes the flag and `fence_id`.
+Every request starts with `virtio_gpu_ctrl_hdr` (24 bytes: `type`, `flags`, `fence_id`, `ctx_id`, `ring_idx`, padding). If `flags & VIRTIO_GPU_FLAG_FENCE` is set, the response is not returned before the fence completes, and it echoes the flag and `fence_id`.
 
-| Command | Code | v1 handling |
+| Command | Code | Handling |
 |---|---|---|
-| `GET_DISPLAY_INFO` | 0x0100 | returns 16 `pmodes` (rect, enabled, flags) from `ScanoutTable`; **clears `events_read`** (§4.3) |
-| `RESOURCE_CREATE_2D` | 0x0101 | VirGL profile: `virgl_renderer_resource_create` (2D target). 2D profile: host-memory resource (§9) |
+| `GET_DISPLAY_INFO` | 0x0100 | 16 `pmodes` (rect, enabled, flags) from `ScanoutTable`; clears `events_read` (§4.3) |
+| `RESOURCE_CREATE_2D` | 0x0101 | VirGL: `virgl_renderer_resource_create` (2D target). 2D profile: host-memory resource (§9) |
 | `RESOURCE_UNREF` | 0x0102 | detach from scanouts, release backing, unref in the renderer |
-| `SET_SCANOUT` | 0x0103 | bind resource + rect to a scanout. `resource_id = 0` disables the scanout from the guest side |
-| `RESOURCE_FLUSH` | 0x0104 | presents the flushed rect of every scanout bound to the resource (§6.2) |
-| `TRANSFER_TO_HOST_2D` | 0x0105 | VirGL profile: `virgl_renderer_transfer_write_iov`. 2D profile: copy from backing (counted, §7) |
-| `RESOURCE_ATTACH_BACKING` | 0x0106 | validate the entry list (≤ 16384 entries, each page range inside guest RAM), map, `virgl_renderer_resource_attach_iov` |
+| `SET_SCANOUT` | 0x0103 | bind resource and rect to a scanout; `resource_id = 0` disables it |
+| `RESOURCE_FLUSH` | 0x0104 | present the flushed rect of every scanout bound to the resource (§6.2) |
+| `TRANSFER_TO_HOST_2D` | 0x0105 | VirGL: `virgl_renderer_transfer_write_iov`. 2D profile: counted copy (§7) |
+| `RESOURCE_ATTACH_BACKING` | 0x0106 | validate (≤ 16384 entries, each inside guest RAM), map, `virgl_renderer_resource_attach_iov` |
 | `RESOURCE_DETACH_BACKING` | 0x0107 | detach iov, drop mappings |
 | `GET_CAPSET_INFO` | 0x0108 | `virgl_renderer_get_cap_set` for `VIRGL` (1) and `VIRGL2` (2) |
-| `GET_CAPSET` | 0x0109 | `virgl_renderer_fill_caps`. Any version from 0 to the cached maximum gets the cached capset, and a higher version gets `ERR_INVALID_PARAMETER` (IR-504). The Linux driver forwards the version that userspace passes, and Mesa 25.2.7 passes 0 for capset 2 |
+| `GET_CAPSET` | 0x0109 | `virgl_renderer_fill_caps`. Versions 0 to the cached maximum get the cached capset; higher versions get `ERR_INVALID_PARAMETER` |
 | `GET_EDID` | 0x010a | generated EDID for the scanout (§6.4) |
 | `RESOURCE_ASSIGN_UUID`, `RESOURCE_CREATE_BLOB`, `SET_SCANOUT_BLOB` | 0x010b–0x010d | `ERR_UNSPEC` (features not offered) |
 | `CTX_CREATE` / `CTX_DESTROY` | 0x0200 / 0x0201 | `virgl_renderer_context_create` / `_destroy` (≤ 256 contexts) |
 | `CTX_ATTACH_RESOURCE` / `CTX_DETACH_RESOURCE` | 0x0202 / 0x0203 | renderer calls |
-| `RESOURCE_CREATE_3D` | 0x0204 | `virgl_renderer_resource_create` with the requested target, format, bind, and size (limits §5.4) |
-| `TRANSFER_TO_HOST_3D` / `TRANSFER_FROM_HOST_3D` | 0x0205 / 0x0206 | renderer transfers. `FROM_HOST` is a guest-requested readback, counted separately (§7) |
-| `SUBMIT_3D` | 0x0207 | command stream copied into a host buffer (≤ 4 MiB per submit), then `virgl_renderer_submit_cmd` |
+| `RESOURCE_CREATE_3D` | 0x0204 | `virgl_renderer_resource_create` with the requested target, format, bind, and size (§5.4) |
+| `TRANSFER_TO_HOST_3D` / `TRANSFER_FROM_HOST_3D` | 0x0205 / 0x0206 | renderer transfers; `FROM_HOST` is a counted readback (§7) |
+| `SUBMIT_3D` | 0x0207 | command stream copied (≤ 4 MiB), then `virgl_renderer_submit_cmd` |
 | `RESOURCE_MAP_BLOB` / `RESOURCE_UNMAP_BLOB` | 0x0208 / 0x0209 | `ERR_UNSPEC` |
-| `UPDATE_CURSOR` / `MOVE_CURSOR` (cursorq) | 0x0300 / 0x0301 | acknowledged and recorded for diagnostics only (§4.6) |
+| `UPDATE_CURSOR` / `MOVE_CURSOR` (cursorq) | 0x0300 / 0x0301 | acknowledged; last values kept for diagnostics (§4.6) |
 
 Responses: `OK_NODATA` (0x1100), `OK_DISPLAY_INFO` (0x1101), `OK_CAPSET_INFO` (0x1102), `OK_CAPSET` (0x1103), `OK_EDID` (0x1104). Errors: `ERR_UNSPEC` (0x1200), `ERR_OUT_OF_MEMORY` (0x1201), `ERR_INVALID_SCANOUT_ID` (0x1202), `ERR_INVALID_RESOURCE_ID` (0x1203), `ERR_INVALID_CONTEXT_ID` (0x1204), `ERR_INVALID_PARAMETER` (0x1205).
 
 Guest errors never crash apkrund. A malformed request gets an error response and a rate-limited log line (`io.apkrun.graphics`, category `device`, at most 10 per second, with a counter for the rest). An element whose writable part is too small for a response header is completed with zero bytes written.
 
-In #019, the device answers `GET_DISPLAY_INFO` and `GET_EDID` only. Every other command gets an error response, cursor commands included (IR-249). The v1 handling in the table above applies from #022 and #023.
+### 4.3 Display change events
 
-### 4.3 Display change events without a config-write callback
+The Linux driver learns of display changes this way: the device sets `VIRTIO_GPU_EVENT_DISPLAY` in `events_read` and raises a config-change interrupt. The driver reads `events_read`, sends `GET_EDID` and `GET_DISPLAY_INFO`, triggers a DRM hotplug event, and writes the handled bits to `events_clear`, which clears `events_read`.
 
-The Linux driver learns about display changes like this: the device sets `VIRTIO_GPU_EVENT_DISPLAY` in `events_read` and raises a config-change interrupt. The driver's config-changed work reads `events_read`, sends `GET_EDID` (if negotiated) and `GET_DISPLAY_INFO`, triggers a DRM hotplug event, and finally writes the handled bits to `events_clear`. The device is expected to clear `events_read` when it sees the `events_clear` write.
+VZ has no callback for config-space writes, so the device cannot see `events_clear`. The workaround ([ADR-0002](../01-architecture/decisions/0002-virtualization-framework-macos27.md)):
 
-VZ provides no callback for config-space writes, so the device cannot see `events_clear`. The workaround ([ADR-0002](../01-architecture/decisions/0002-virtualization-framework-macos27.md)):
-
-1. When RuntimeCore enables, disables, or changes the mode of a scanout (§6.1), `ScanoutTable` increments `displayGeneration` and GraphicsCore calls `updateConfigurationSpace` with `events_read = VIRTIO_GPU_EVENT_DISPLAY`.
-2. When the device processes `GET_DISPLAY_INFO`, it answers with the current table and records `reportedGeneration = displayGeneration`. If no newer change is pending, it writes `events_read = 0` back with `updateConfigurationSpace`.
+1. When RuntimeCore enables, disables, or changes a scanout's mode (§6.1), `ScanoutTable` increments `displayGeneration`, and GraphicsCore calls `updateConfigurationSpace` with `events_read = VIRTIO_GPU_EVENT_DISPLAY`.
+2. When the device processes `GET_DISPLAY_INFO`, it records `reportedGeneration = displayGeneration`. If no newer change is pending, it writes `events_read = 0`.
 3. If a change arrives after the response was built (`displayGeneration > reportedGeneration`), `events_read` is set again, and the guest does another round.
-4. The guest's later write to `events_clear` has no effect, which is harmless. `events_read` may already be 0 by then.
 
-Open point, verified first in #019 and then with Android in #028: **does `updateDeviceSpecificConfiguration` raise a config-change interrupt in the guest?** (R-01). The spike boots the Linux test guest, flips a scanout from disabled to enabled, and checks for the `virtio_gpu` hotplug in `dmesg` and a new connector status in `/sys/class/drm/card0-*/status`. If no interrupt is raised, the fallbacks in order are:
+Open point R-01: whether `updateDeviceSpecificConfiguration` raises a config-change interrupt in the Android guest. The Linux test guest reacts to it. If Android does not, the fallbacks in order are:
 
-- **A.** The Guest Agent forces a re-probe: it writes `detect` to the connector's DRM sysfs `status` attribute, after asking the host which scanouts changed. This needs a privileged domain (custom image, M5), plus a driver path that re-reads the display info. #028 must check the second part, because `virtio_gpu`'s connector detection reads cached info.
-- **B.** All pool scanouts are enabled at boot with a small placeholder mode. The Guest Agent then hides unused ones from app placement. This costs guest memory and composition work.
-- **C.** Fixed display count (display 0 plus N configured at boot), chosen per boot. This is a product regression and is recorded in R-04.
+- **A.** The Guest Agent forces a re-probe by writing `detect` to the connector's DRM sysfs `status` attribute, after asking the host which scanouts changed. This needs a privileged domain on the custom image, and the driver must re-read the display info.
+- **B.** All pool scanouts are enabled at boot with a small placeholder mode, and the Guest Agent hides unused ones from app placement. This costs guest memory and composition work.
+- **C.** A fixed display count (display 0 plus N configured at boot), chosen per boot. This is a product regression ([risks.md](../04-plan/risks.md) R-04).
 
 ### 4.4 Resources and backing
 
-`ResourceTable` (device-queue confined; the renderer owns the GPU side):
+`ResourceTable` (device-queue confined) holds one `GPUResource` per guest resource ID:
 
 ```swift
 struct GPUResource {
     let id: UInt32
-    let kind: Kind                    // .virgl(target, format, bind, w, h, depth, arraySize, lastLevel, nrSamples, flags) | .host2D(format, w, h)
+    let kind: GPUResourceKind         // .virgl(target, format, bind, w, h, depth, arraySize, lastLevel, nrSamples, flags) | .host2D(format, w, h)
     var backing: [GuestMemory]        // from ATTACH_BACKING; empty until attached
     var scanouts: Set<ScanoutID>      // bound by SET_SCANOUT
     var byteEstimate: UInt64          // for the global memory limit
 }
 ```
 
-Rules:
+- Resource IDs are guest-chosen, non-zero, and unused. Reuse of a live ID returns `ERR_INVALID_RESOURCE_ID`.
+- Sizes use checked arithmetic (`width × height × bpp` in `UInt64`) and stay within §5.4. Formats are limited to the virgl formats the renderer supports.
+- `ATTACH_BACKING` maps every entry. An entry outside guest RAM, or a total shorter than the resource needs, fails with `ERR_INVALID_PARAMETER` and keeps no partial state.
+- On `deviceWillReset` the table is cleared, mappings are dropped, the renderer is reset (all contexts destroyed), and scanout bindings are cleared. Pools and host scanout configuration (§6.1) survive, because they are host decisions.
 
-- Resource IDs are guest-chosen and must be non-zero and unused. Reuse of a live ID returns `ERR_INVALID_RESOURCE_ID`.
-- Size checks use checked arithmetic (`width × height × bpp` in `UInt64`, and must be ≤ limits in §5.4). Formats are limited to the virgl/virtio-gpu formats the renderer supports.
-- `ATTACH_BACKING` maps every entry. Entries that are not within guest RAM, or whose total length is shorter than the resource needs, fail with `ERR_INVALID_PARAMETER`, and no partial state is kept.
-- On `deviceWillReset` the table is cleared, all mappings are dropped, the renderer is reset (all contexts destroyed, `virgl_renderer_reset`), and scanout bindings are cleared. Pools and host-side scanout configuration (§6.1) survive a reset, because they are host decisions.
+On the VirGL path, `RESOURCE_ATTACH_BACKING` passes each range's host memory (`GuestMemory.hostMemory()`) to `gb_resource_attach_backing`, which calls `virgl_renderer_resource_attach_iov`. virglrenderer reads and writes the guest pages in place, and the bridge copies only the range array. The pages stay attached until `RESOURCE_DETACH_BACKING` or `RESOURCE_UNREF`, and they must stay mapped until then. Reset and stop do not detach. Before a reset or stop invalidates the mappings, `deviceWillInvalidateGuestMemory` drains the render thread. The renderer then drops its resources, and the bridge frees the range arrays without touching guest memory.
 
-**Built in #022.** On the virgl path, `RESOURCE_ATTACH_BACKING` maps every entry and passes the host memory of each range (`GuestMemory.hostMemory()` in VirtioDeviceCore) to `virgl_renderer_resource_attach_iov`, through `gb_resource_attach_backing`. virglrenderer reads and writes the guest pages in place, and no copy is made (IR-836). The bridge owns the array of ranges. The pages stay attached until `DETACH_BACKING` calls `virgl_renderer_resource_detach_iov`, and `UNREF` detaches before it unrefs. The pages must stay mapped until then. Reset and stop do not detach. Before a reset or a stop invalidates the guest mappings, the adapter calls the model's `deviceWillInvalidateGuestMemory`, and GraphicsCore drains the render thread there, so no queued work reads the pages after that (IR-850). The renderer then drops its resources, and the bridge frees the arrays without touching the guest memory (IR-843). The 2D (`guestSwiftshader`) path keeps its copies. The explicit `TRANSFER_TO_HOST` still gathers its box, and the copy is counted as `guestUploadBytes` ([implementation-review.md](../04-plan/implementation-review.md) IR-465, superseded for the virgl path by IR-836). Buffers (`target` 0) are sized in bytes, so the 8192 limit applies to textures only, and the byte estimate is the level-0 size times depth and layers, without mip levels (IR-468).
+The 2D (`guestSwiftshader`) path keeps a host shadow buffer per 2D resource. `TRANSFER_TO_HOST_2D` copies into it and counts a CPU pixel copy. Explicit `TRANSFER_TO_HOST` counts its gathered bytes as `guestUploadBytes`. Buffers (`target` 0) are sized in bytes, so the 8192 limit applies to textures only. The byte estimate is the level-0 size times depth and layers, without mip levels.
 
 ### 4.5 Contexts, submissions, and fences
 
-- Without `CONTEXT_INIT`, all fences are on one global timeline and complete in order. The device keeps a FIFO of deferred elements `(fenceID, PendingElement)`.
-- For a fenced command, the render thread calls `virgl_renderer_create_fence(fenceID, ctxID)` after executing it. virglrenderer's `write_fence(fenceID)` callback (on the render thread) reports the highest completed fence. The device then completes every deferred element with `fenceID ≤ completed`, in order.
-- Fence progress requires `virgl_renderer_poll()`. On macOS, virglrenderer's thread-sync mode depends on Linux eventfd and is not available. The render thread therefore polls after every batch and every 1 ms while fences are outstanding (a `DispatchSourceTimer` on the render thread's run loop, stopped when the FIFO is empty).
-- Unfenced commands are completed as soon as they execute. The controlq is processed strictly in order, so a response never overtakes an earlier fenced command in a way the guest could observe.
+- Without `CONTEXT_INIT`, all fences are on one global timeline. Elements that wait for a fence are kept in one ordered queue (`ControlCompletionQueue`). Only the head completes, so no response overtakes an earlier fenced command.
+- For a fenced command, the render thread calls `virgl_renderer_create_fence(fenceID, ctxID)` after it executes the command. The `write_fence` callback reports the highest completed fence. Every element with `fenceID ≤ completed` then completes in order.
+- Fence progress needs `virgl_renderer_poll()`. On macOS, virglrenderer's thread-sync mode depends on Linux eventfd and is not available. The render thread polls after every batch and every 1 ms while fences are outstanding.
+- Unfenced commands complete as soon as they execute.
 
 ### 4.6 Cursor queue
 
-The Android `drm_virgl` configuration composes in client mode (`hwcomposer.mode=client`) and does not use a hardware cursor plane. The host shows the macOS cursor, and pointer input is injected by the Guest Agent ([input.md](input.md)). `UPDATE_CURSOR` and `MOVE_CURSOR` are acknowledged immediately, and the last values are kept for diagnostics. In #019 the device answers cursor commands with an error response until the cursor path of #023 exists (IR-249).
+Android composes in client mode (`hwcomposer.mode=client`) and uses no hardware cursor plane. The host shows the macOS cursor, and pointer input is injected by the Guest Agent ([input.md](input.md)). `UPDATE_CURSOR` and `MOVE_CURSOR` get an OK response, and their last values are kept for diagnostics.
 
 ### 4.7 Threading
 
 | Thread | Does | Never does |
 |---|---|---|
-| device queue (serial `DispatchQueue`) | VZ callbacks; drains queues; copies and validates requests; batches them into `RenderCommand`s; writes responses and completes elements | call virglrenderer, EGL, or Metal |
-| render thread (one dedicated `Thread`, QoS `.userInteractive`, own run loop) | owns the EGL display, all EGL contexts, virglrenderer; executes commands in order; polls fences; performs present blits; creates the GPU-completion fences | touch VZ objects |
-| completion waiter (one `Thread`) | waits on EGL sync objects for present blits, then emits `frameReady` | GL calls other than `eglClientWaitSync` |
+| device queue (serial `DispatchQueue`) | VZ callbacks; drains queues; copies and validates requests; batches them into renderer commands; writes responses; completes elements | call virglrenderer, EGL, or Metal |
+| render thread (one dedicated `Thread`, QoS `.userInteractive`) | owns the EGL display, all EGL contexts, and virglrenderer; executes commands in order; polls fences; performs present blits; creates GPU-completion fences | touch VZ objects |
+| present waiter (serial queue `io.apkrun.graphics.present-waiter`) | waits for present blits and emits `frameReady`. Each fence poll runs on the render thread | make GL or EGL calls itself |
 
-Commands flow device queue → render thread in batches (one batch per queue drain). Completions flow back in batches through a lock-free single-producer/single-consumer ring and a `DispatchQueue.async` on the device queue. virglrenderer is not thread-safe, and all of its callbacks arrive on the render thread.
-
-**Built in #022.** The waiting controlq elements sit in one ordered queue that the render thread completes. Each completion calls `PendingElementCompletionToken.complete()`, and VirtioDeviceCore moves the return to the device queue, so the SPSC ring above is not built (IR-466). The completion waiter belongs to #023, because it waits for present blits (IR-467). `TRANSFER_FROM_HOST_3D` runs on the device queue and waits for the render thread, because only the device queue may write guest memory (IR-464). The render thread is a `Thread` that waits on an `NSCondition`, and it polls fences every millisecond only while one is outstanding (IR-470).
+Commands flow from the device queue to the render thread in batches, one per queue drain. Each completed element calls `PendingElementCompletionToken.complete()`, and the return to the guest queue runs on the device queue. virglrenderer is not thread-safe, and all its callbacks run on the render thread. `TRANSFER_FROM_HOST_3D` runs on the device queue and waits for the render thread, because only the device queue writes guest memory. The render thread waits on an `NSCondition`, and it polls fences every millisecond only while one is outstanding.
 
 ---
 
-## 5. Renderer (GraphicsBridge + VirGLRuntime) (#020, #022)
+## 5. Renderer (GraphicsBridge + VirGLRuntime)
 
 ### 5.1 Libraries
 
-| Library | Revision (initial pin) | License | Role |
+| Library | Revision (pin) | License | Role |
 |---|---|---|---|
-| virglrenderer | 960bd667 + APKRun patches | MIT | decodes VirGL command streams; manages GL objects |
-| libepoxy | 1b6d7db | MIT | GL/EGL function dispatch for virglrenderer |
-| ANGLE | 2d91f554, Metal backend only | BSD-3-Clause | EGL + GLES 3.0 on Metal |
-| ANGLE DEPS | astc-encoder 2319d9c4, vulkan-headers c0fe12c8, zlib e00f7038 | Apache-2.0, Apache-2.0, Zlib | listed in the lock for their notices; equal to ANGLE's `DEPS` revisions at the pinned commit; `gclient sync` still runs in the work area (IR-190) |
-| depot_tools | f7083527 | BSD-3-Clause | build helper, run only from its own work area (IR-190) |
-| PyYAML | 49790e73 (`6.0.3`) | MIT | pinned pure-Python build tooling used by virglrenderer’s Meson configuration |
+| virglrenderer | `960bd667` + APKRun patches | MIT | decodes VirGL command streams; manages GL objects |
+| libepoxy | `1b6d7db` | MIT | GL/EGL function dispatch for virglrenderer |
+| ANGLE | `2d91f554`, Metal backend only | BSD-3-Clause | EGL and GLES 3.0 on Metal |
+| ANGLE DEPS | astc-encoder `2319d9c4`, vulkan-headers `c0fe12c8`, zlib `e00f7038` | Apache-2.0, Apache-2.0, Zlib | in the lock for their notices; equal to ANGLE's `DEPS` at the pinned commit |
+| depot_tools | `f7083527` | BSD-3-Clause | build helper, run only in its own work area |
+| PyYAML | `49790e73` (`6.0.3`) | MIT | locked tool for virglrenderer's Meson configuration |
 
-- Pins, build flags, and patch lists live in `ThirdParty/ThirdParty.lock.json`. The build scripts are `ThirdParty/build/build-angle.sh`, `build-libepoxy.sh`, and `build-virglrenderer.sh`, driven by `scripts/build-third-party.sh virgl-runtime` ([../05-development/build-system.md](../05-development/build-system.md) §6).
-- The virglrenderer build imports PyYAML only from the exact locked source checkout. It does not depend on a developer’s user-site packages or Homebrew Python modules.
-- Outputs are dylibs with `@rpath` install names, placed in `ThirdParty/out/virgl-runtime/<lock hash>-<environment hash>/`. They are embedded into `APKRun.app/Contents/Frameworks/VirGLRuntime/` and signed inside-out with the app.
-- The ANGLE Metal build needs about 11 GB of dependencies. CI caches the outputs by the lock hash and the detected Xcode, SDK, Metal, compiler, Python, pinned PyYAML, Meson, Ninja, pkg-config, and Git identities. A change to the locked inputs or the build environment selects a different cache directory.
-- RiftVM's reference build flags, recipe archive identities, and patch-by-patch lineage are recorded in [riftvm-analysis.md](riftvm-analysis.md) §4. Its virglrenderer, libepoxy, and ANGLE source commits match the initial pins above. The listed patches are the adopted #020 inputs; their application, clean build, cache reuse, and tests passed as recorded in §16 / IR-191. #018 did not repeat that build.
-- Adopted initial patches:
-  1. `virglrenderer/0001-add-macos-metal-support.patch` carries the macOS Metal path from the pinned recipe (including broader Venus source changes, while APKRun sets `venus=false`). `0002-downgrade-unsupported-msaa.patch` keeps rendering available by reducing unsupported multisample resources to single-sample storage, losing antialiasing. `0003-link-metal-runtime.patch` is an APKRun downstream addition that links CoreFoundation and the Objective-C runtime.
-  2. `libepoxy/0001-improve-library-detection.patch` resolves the bundled ANGLE EGL/GLES dylibs and enables EGL on Apple platforms; `0002-disable-desktop-extensions-on-gles.patch` fixes GLES entry-point selection; `0003-enable-egl-platform-display.patch` enables EGL 1.5 client-version lookup for `eglGetPlatformDisplay`.
-  3. `angle/0001-fix-metal-boolean-mix.patch` emits Metal `select` for boolean-selector `mix` and raises the Metal shader UBO limit from 12 to 16.
-- The RiftVM MIT notice covers RiftVM-authored source only. Renderer component licenses and recipe-patch provenance/notices remain tracked separately for the #093 legal review.
-- Differences found by #018 in the adopted inputs. The side-by-side flags and the patch crosswalk are in [riftvm-analysis.md](riftvm-analysis.md) §4.
-  - Build flags. #020 passes the lock's `buildFlags` unchanged. Against RiftVM it adds virglrenderer `-Dplatforms=egl`, libepoxy `-Dglx=no`, and ANGLE `mac_deployment_target="27.0"`, which are open for review in IR-413. It also lists ANGLE's DEPS components in the lock for their notices, while `gclient sync` still runs in the work area (IR-190). It gives ANGLE to virglrenderer through generated pkg-config files.
-  - Patch lineage. `virglrenderer/0001` is one regenerated diff of the recipe patch; with `0002` applied, it gives the same source tree as the recipe patch plus RiftVM's MSAA patch. `virglrenderer/0002` is RiftVM MIT code carried from RiftVM `f615e16`, not from the pinned commit, and it ships in the runtime; that is copied RiftVM code under [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.1 (IR-410). `angle/0001` omits the recipe's Vulkan-backend hunk, which the Metal-only build does not compile (IR-411). `libepoxy/0001` names the bundled dylibs with `@rpath`, as IR-190 requires.
-  - Patch headers. None of the carried patches (`virglrenderer/0001`, `virglrenderer/0002`, `angle/0001`, `libepoxy/0001`–`0003`) records whether it was sent upstream, which [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.2 requires (IR-412).
-- APKRun sets virglrenderer `venus=false`. The host Venus/Vulkan backend is outside v1; the guest uses the documented GLES/VirGL path. This differs from the RiftVM recipe and is recorded for maintainer review in [implementation-review.md](../04-plan/implementation-review.md) IR-190.
-- `scripts/build-third-party.sh virgl-runtime` validates the lock before looking up the cache, rejects patch paths that escape the patch tree, fetches clean pinned sources, applies the listed patches, then builds in separate work directories. Its manifest verifies artifact hashes, the arm64-only architecture, the macOS 27.0 minimum, `@rpath` install names, `@loader_path` runpaths, and every bundled dependency target. A cache hit is reused only when both lock and environment identities match and every output verifies.
-- #020 acceptance: a fresh checkout produces the libraries with `scripts/build-third-party.sh virgl-runtime` and no manual file editing. This is checked in CI.
+- Pins, build flags, and patch lists live in `ThirdParty/ThirdParty.lock.json`. `scripts/build-third-party.sh virgl-runtime` builds the libraries from clean pinned sources with the listed patches ([build-system.md](../05-development/build-system.md) §6). It verifies every output: arm64 only, the macOS 27.0 minimum, `@rpath` install names, `@loader_path` runpaths, and bundled dependencies. A cache hit is reused only when the lock and environment identities match. A fresh checkout builds with no manual edits, and CI checks this.
+- Outputs go to `ThirdParty/out/virgl-runtime/<lock hash>-<environment hash>/`, are embedded in `APKRun.app/Contents/Frameworks/VirGLRuntime/`, and are signed with the app. The ANGLE Metal build needs about 11 GB of dependencies.
+
+Adopted patches (APKRun's initial set):
+
+1. `virglrenderer/0001-add-macos-metal-support.patch`: the macOS Metal path of the pinned RiftVM recipe. It also contains Venus source changes, but APKRun sets `venus=false`. `0002-downgrade-unsupported-msaa.patch`: unsupported multisample resources fall back to single-sample storage, so rendering continues without antialiasing. Its code is RiftVM-authored (MIT) and ships in the runtime. `0003-link-metal-runtime.patch`: an APKRun addition that links CoreFoundation and the Objective-C runtime.
+2. `libepoxy/0001-improve-library-detection.patch`: resolves the bundled ANGLE dylibs by `@rpath` and enables EGL on Apple platforms. `0002-disable-desktop-extensions-on-gles.patch`: GLES entry-point selection. `0003-enable-egl-platform-display.patch`: the EGL 1.5 client-version lookup for `eglGetPlatformDisplay`.
+3. `angle/0001-fix-metal-boolean-mix.patch`: Metal `select` for boolean-selector `mix`, and the Metal shader UBO limit raised from 12 to 16. It omits the recipe's Vulkan hunk, which the Metal-only build does not compile.
+
+Patches carry the license of the component they change ([legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.2). None of the carried patches records whether it was sent upstream, which that section requires. The RiftVM MIT notice covers RiftVM-authored source only.
+
+Build flags. #020 passes the lock's `buildFlags` unchanged. They differ from RiftVM's reference flags in `mac_deployment_target`, `-Dglx=no`, `-Dplatforms=egl`, and `-Dvenus=false` (guest Vulkan is outside v1, §10). ANGLE and libepoxy reach Meson through generated pkg-config files. The full comparison is in [riftvm-analysis.md](riftvm-analysis.md) §4.
 
 ### 5.2 GraphicsBridge
 
-A C target (`Packages/GraphicsCore/Sources/GraphicsBridge`, with Objective-C for Metal interop). Swift talks only to this interface, never to virglrenderer or EGL headers directly:
+`Packages/GraphicsCore/Sources/GraphicsBridge/` is a C target (with Objective-C for Metal). Swift calls only `include/GraphicsBridge.h`, never virglrenderer or EGL headers. The header is the source of the names below:
 
 ```c
 typedef struct gb_renderer gb_renderer;
-
-typedef struct {
-    void (*write_fence)(void *user, uint32_t fence_id);     // render thread
-    void (*log)(void *user, int level, const char *message);
-} gb_callbacks;
+typedef struct { void (*write_fence)(void *user, uint32_t fence_id);
+                 void (*log)(void *user, int level, const char *message); } gb_callbacks;
 
 int  gb_renderer_create(const gb_callbacks *cb, void *user, gb_renderer **out);   // EGL (ANGLE Metal) + virgl_renderer_init
 int  gb_renderer_destroy(gb_renderer *r);
 int  gb_renderer_reset(gb_renderer *r);
-int  gb_renderer_metal_device(gb_renderer *r, void **out);  // id<MTLDevice> ANGLE uses (EGL_ANGLE_device_metal)
+int  gb_renderer_metal_device(gb_renderer *r, void **out);                       // ANGLE's MTLDevice
+const char *gb_status_description(int status);
 
-int  gb_capset_info(gb_renderer *r, uint32_t capset_id, uint32_t *max_version, uint32_t *max_size);
+int  gb_capset_info(gb_renderer *r, uint32_t capset_id, uint32_t *max_version, uint32_t *max_size_bytes);
 int  gb_capset_fill(gb_renderer *r, uint32_t capset_id, uint32_t version, void *out, size_t out_size_bytes);
-
 int  gb_ctx_create(gb_renderer *r, uint32_t ctx_id, const char *name);
 int  gb_ctx_destroy(gb_renderer *r, uint32_t ctx_id);
 int  gb_ctx_attach_resource(gb_renderer *r, uint32_t ctx_id, uint32_t res_id);
 void gb_ctx_detach_resource(gb_renderer *r, uint32_t ctx_id, uint32_t res_id);
-int  gb_submit(gb_renderer *r, uint32_t ctx_id, const void *cmd, uint32_t size_bytes);
+int  gb_submit(gb_renderer *r, uint32_t ctx_id, const void *commands, size_t size_bytes);
+int  gb_submit_with_result(gb_renderer *r, uint32_t ctx_id, const void *commands,
+                           size_t size_bytes, int *virgl_result);                // test-only replay
 
 int  gb_resource_create(gb_renderer *r, const gb_resource_args *args);
 void gb_resource_unref(gb_renderer *r, uint32_t res_id);
 int  gb_resource_attach_backing(gb_renderer *r, uint32_t res_id, const gb_backing_range *ranges, size_t count);
 void gb_resource_detach_backing(gb_renderer *r, uint32_t res_id);
-int  gb_transfer_write(gb_renderer *r, const gb_transfer_args *args);   // TO_HOST
-int  gb_transfer_read(gb_renderer *r, const gb_transfer_args *args);    // FROM_HOST
+int  gb_transfer_write(gb_renderer *r, const gb_transfer_args *args, void *buffer, size_t buffer_bytes);  // TO_HOST
+int  gb_transfer_read(gb_renderer *r, const gb_transfer_args *args, void *buffer, size_t buffer_bytes);   // FROM_HOST
 
 int  gb_create_fence(gb_renderer *r, uint32_t fence_id, uint32_t ctx_id);
 void gb_poll(gb_renderer *r);
 
-/// Blits the scanout rect of `res_id` into `dst` (an IOSurface-backed MTLTexture). The rows keep their order (IR-1102).
-/// Returns an EGL sync handle to wait on (completion waiter thread).
-int  gb_present_blit(gb_renderer *r, uint32_t res_id, gb_rect src, void *dst_mtl_texture, void **out_sync);
-int  gb_wait_sync(gb_renderer *r, void *sync, uint64_t timeout_ns);
+int  gb_present_target_create(gb_renderer *r, void *iosurface, uint32_t width, uint32_t height, gb_present_target **out);
+void gb_present_target_destroy(gb_renderer *r, gb_present_target *target);
+int  gb_present_blit(gb_renderer *r, uint32_t res_id, uint32_t x, uint32_t y, uint32_t width, uint32_t height,
+                     gb_present_target *target, void **out_sync);
+int  gb_sync_wait(gb_renderer *r, void *sync, uint64_t timeout_ns);             // GB_OK, GB_SYNC_TIMEOUT, or error
+void gb_sync_destroy(gb_renderer *r, void *sync);
 ```
+
+Status values are `GB_OK = 0` and negative `GB_E_*` codes. `GB_E_WRONG_THREAD` is returned for a call from another thread. `GB_E_RENDERER_ALREADY_EXISTS` refuses a second renderer. `GB_E_BUFFER_TOO_SMALL` refuses an undersized capset buffer. `GB_SYNC_TIMEOUT` (1) means the fence has not signaled.
 
 Implementation notes:
 
-- EGL display: `eglGetPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE, …, EGL_PLATFORM_ANGLE_TYPE_ANGLE = EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE)`. The pinned RiftVM prototype then calls `eglInitialize`, binds `EGL_OPENGL_ES_API`, and creates a 1 × 1 pbuffer config with GLES 2/3 support and 8-bit RGBA channels. Its `virgl_renderer_init` uses callback version 4 and **flags `0`**, with GL context create/destroy, make-current, fence, and EGL-display callbacks. It does not pass `VIRGL_RENDERER_USE_EGL` or `VIRGL_RENDERER_USE_SURFACELESS`; details are in [riftvm-analysis.md](riftvm-analysis.md) §2–§4.
-- `GraphicsBridge` loads the four app-bundled dylibs from `Contents/Frameworks/VirGLRuntime` only after finding an `.app` with one of the exact `CFBundleIdentifier`/`APKRunBuildIdentity` pairs: `io.apkrun.APKRun`/`release`, `io.apkrun.APKRun.updatetest`/`updatetest`, or (in Debug) `io.apkrun.APKRun.dev`/`dev`. ReleaseUpdateTest shares the Release package configuration, so its identity must be selected from the app's Info.plist at runtime. The resolver rejects a runtime directory or library symlink that resolves outside the bundle. Debug builds can override this with `APKRUN_VIRGL_RUNTIME_PATH` and otherwise search the repository's verified `ThirdParty/out/virgl-runtime/current` cache. The T1 renderer test sets that debug override from its source location because SwiftPM's test runner executable lives under `.build/`; a separate resolver test exercises valid bundle identities and rejects identity mismatches and symlink escapes.
-- virglrenderer has one process-wide renderer state. `GraphicsBridge` holds a process mutex while admitting one renderer, copies the public callback table into its opaque renderer, and keeps virglrenderer’s callback table alive until cleanup. Creation records the owner thread; every public renderer operation checks that thread and returns a typed status without changing state on mismatch. Callers serialize access and finish all in-flight calls, including rejected off-thread calls, before destroying the renderer; a handle is invalid after successful destruction. Callbacks run on the renderer thread. Callbacks and the ANGLE `MTLDevice` remain valid through renderer destruction. `gb_renderer_reset` invalidates guest-derived IDs; callers discard them before submitting more work.
-- `gb_capset_fill` requires the caller's output-buffer length. The bridge re-queries the maximum capset size and rejects an undersized buffer before calling virglrenderer.
-- The IOSurface-backed Metal textures must be created on **ANGLE's `MTLDevice`**, queried with `EGL_ANGLE_device_metal` (`eglQueryDisplayAttribEXT(EGL_DEVICE_EXT)` → `eglQueryDeviceAttribEXT(EGL_METAL_DEVICE_ANGLE)`). On multi-GPU Macs this avoids cross-device copies.
-- `gb_present_blit`: `virgl_renderer_borrow_texture_for_scanout` gives the GL texture of the resource. The blit maps each row to the same row: the destination keeps the guest's row order, and T1 (`ScanoutPresentRendererTests`) compares every pixel of two buffers with the guest's pixels. No vertical flip is applied (IR-1102). The destination `MTLTexture` is imported once per pool buffer as an `EGLImage` (`EGL_METAL_TEXTURE_ANGLE`) and attached to an FBO. `glBlitFramebuffer` performs the copy with Y-flip and format conversion. Then an EGL fence sync is created and `glFlush` is called.
-- RiftVM's prototype instead blits to a same-process `CAMetalLayer` drawable. Its inspected `glBlitFramebuffer` call uses increasing Y coordinates and has no explicit vertical reversal or separate format-conversion step. This does not change APKRun's intended blit; #023 verifies the wrapper-facing IOSurface orientation and pixel layout.
-
-**Built in #022.** Every call of this section except the present functions (#023) is declared in `GraphicsBridge.h`. `gb_create_gl_context` gives every context the root context's objects, because virglrenderer creates context 0 unshared and its transfers would otherwise miss the textures of the root (IR-463).
+- **EGL.** `eglGetPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE, …, EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE)`, `eglInitialize`, `EGL_OPENGL_ES_API`, a 1 × 1 pbuffer config with GLES 2/3 and 8-bit RGBA, and a root GLES context. `virgl_renderer_init` uses callback version 4 and **flags `0`**, and passes neither `VIRGL_RENDERER_USE_EGL` nor `VIRGL_RENDERER_USE_SURFACELESS`.
+- **Loading.** The four dylibs load from `Contents/Frameworks/VirGLRuntime` only for an app whose `CFBundleIdentifier` and `APKRunBuildIdentity` (Info.plist) match one of: `io.apkrun.APKRun`/`release`, `io.apkrun.APKRun.updatetest`/`updatetest`, or (Debug) `io.apkrun.APKRun.dev`/`dev`. A runtime directory or library symlink that resolves outside the bundle is rejected. Debug builds may override the directory with `APKRUN_VIRGL_RUNTIME_PATH`, and otherwise use `ThirdParty/out/virgl-runtime/current`.
+- **One renderer per process.** Creation records the owner thread. A call from another thread returns `GB_E_WRONG_THREAD` without changing state. Callers finish all in-flight calls, including rejected ones, before `gb_renderer_destroy`. A handle is invalid after a successful destroy. Callbacks run on the render thread.
+- **Reset.** `gb_renderer_reset` invalidates guest-derived IDs. Callers discard them.
+- **Contexts.** Every context shares the root context's GL objects, because virglrenderer's context 0 is unshared.
+- **Present targets.** Targets are BGRA8 textures on **ANGLE's `MTLDevice`** (queried with `EGL_ANGLE_device_metal`), backed by the IOSurface. This avoids cross-device copies on multi-GPU Macs. Each target is imported once into GL as a framebuffer's color attachment on the root context.
+- **Blit.** `gb_present_blit` takes the scanout resource's GL texture (`virgl_renderer_borrow_texture_for_scanout`) and copies the rect with `glBlitFramebuffer` and `GL_NEAREST`, scaling to the target. The copy keeps the guest's row order: no vertical flip. It then calls `glFlush` and creates an EGL fence. No pixels are mapped into host memory.
+- **Fence waits.** ANGLE rejects a wait with no current context, so `gb_sync_wait` makes the root context current, waits, and restores the caller's context.
 
 ### 5.3 What the guest gets
 
-- GLES 3.0 through Mesa virgl (`ro.opengles.version=196608`). There is no Vulkan (`ro.cpuvulkan.version=0`, and the Cuttlefish source says "No hardware Vulkan support, yet" for virgl). The bootconfig keys are in [android-image.md](android-image.md) §6.2.
-- The guest's Mesa userspace (EGL, GLES, and the `virgl` gallium driver) is built from Mesa 26.1.8 with the NDK r28c, outside the AOSP tree. The build is `scripts/guest/build-mesa-android.sh`, and the decision is [ADR-0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md). The Mesa libraries are added to `vendor_a` offline by `python3 -m apkrun_image inject-vendor` ([android-image.md](android-image.md) §1.2, #099). That partition is not booted, and the top-level vbmeta that covers it is not signed again yet (IR-625).
-- The GL renderer string seen by apps contains `virgl`. #022 checks it with `dumpsys SurfaceFlinger | grep -i GLES` and HelloGL's reported renderer.
-- ANGLE-imposed limits (for example on MSAA and some formats) show up as GLES 3.0 capability limits. Apps that require GLES 3.1+ or Vulkan land in a lower compatibility level ([../00-product/scope.md](../00-product/scope.md) §4).
+- GLES 3.0 through Mesa virgl (`ro.opengles.version=196608`). The guest has no Vulkan (`ro.cpuvulkan.version=0`). The bootconfig keys are in [android-image.md](android-image.md) §6.2.
+- The guest userspace (EGL, GLES, and the `virgl` gallium driver) is Mesa 26.1.8, built with NDK r28c outside the AOSP tree by `scripts/guest/build-mesa-android.sh` ([ADR-0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md)). `python3 -m apkrun_image inject-vendor` adds the Mesa libraries to `vendor_a` offline ([android-image.md](android-image.md) §1.2). The inject step does not re-sign the top-level vbmeta that covers `vendor_a`.
+- The GL renderer string seen by apps contains `virgl`.
+- ANGLE-imposed limits show up as GLES 3.0 capability limits. Apps that require GLES 3.1 or Vulkan run at a lower compatibility level ([scope.md](../00-product/scope.md) §4).
 
 ### 5.4 Limits
 
-Enforced by `ResourceTable` before calling the renderer. Values start as RiftVM's and are configurable in development builds only (`graphics.limits.*` in [../03-reference/configuration.md](../03-reference/configuration.md)).
+`ResourceTable` enforces these before it calls the renderer. Values are configurable in development builds only (`graphics.limits.*`, [configuration.md](../03-reference/configuration.md)).
 
 | Limit | Value | Error |
 |---|---|---|
 | Total resource memory (estimate) | 2 GiB | `ERR_OUT_OF_MEMORY` |
-| Single resource / buffer | 256 MiB | `ERR_OUT_OF_MEMORY` |
+| Single resource or buffer | 256 MiB | `ERR_OUT_OF_MEMORY` |
 | Width or height | ≤ 8192 px | `ERR_INVALID_PARAMETER` |
 | Contexts | ≤ 256 | `ERR_UNSPEC` |
 | Live resources | ≤ 65536 | `ERR_OUT_OF_MEMORY` |
 | Backing entries per attach | ≤ 16384 | `ERR_INVALID_PARAMETER` |
 | `SUBMIT_3D` size | ≤ 4 MiB | `ERR_INVALID_PARAMETER` |
 
-Reaching a memory limit is logged with the current totals, and the `graphics.memory` health value turns yellow ([diagnostics.md](diagnostics.md)).
+Also enforced: `lastLevel` ≤ 13; sample count ≤ 16; a transfer extent of at most one resource's 256 MiB; at most 4 Mi row runs per transfer; a nonzero stride holds at least one row. Formats are an allow-list of virgl formats with a known size: uncompressed and 4 × 4 block-compressed. Any other format gets `ERR_INVALID_PARAMETER`.
 
-**Built in #022.** The table takes the limits above, plus the ones that the spec does not set: `lastLevel` at most 13, a sample count at most 16, a transfer extent of at most one resource's 256 MiB, and at most 4 Mi row runs per transfer (IR-468). A nonzero stride must hold one row (IR-473). The formats are an allow-list of the virgl formats whose size is known, with uncompressed and 4 × 4 block-compressed layouts. Any other format gets `ERR_INVALID_PARAMETER` (IR-469).
+Reaching a memory limit is logged with the current totals, and the `graphics.memory` health value turns yellow ([diagnostics.md](diagnostics.md)).
 
 ---
 
-## 6. Scanouts and presentation (#023, #028, #067)
+## 6. Scanouts and presentation
 
 ### 6.1 ScanoutTable and host control
 
@@ -465,100 +394,102 @@ The host decides which scanouts exist and what mode they offer. The guest decide
 ```swift
 public struct ScanoutID: Hashable, Sendable { public let rawValue: Int }   // 0...15
 
-public struct DisplayMode: Sendable, Equatable {
+public struct DisplayMode: Equatable, Sendable {
     public var widthPixels: Int                    // ≤ 4095 while EDID uses a detailed timing descriptor (§6.4)
     public var heightPixels: Int
     public var refreshHz: Int                      // 60
     public var dotsPerInch: Int                    // encoded as physical size in the EDID
 }
 
-public actor ScanoutController {
-    public func configure(_ id: ScanoutID, mode: DisplayMode) async throws(GraphicsFailure)   // enabled = true, display event (§4.3)
-    public func disable(_ id: ScanoutID) async throws(GraphicsFailure)                        // enabled = false, display event
-    public func attach(_ pool: SurfacePool, to id: ScanoutID)       // start presenting this scanout
-    public func detachPool(from id: ScanoutID) -> SurfacePool?      // stop presenting (flushes still complete)
-    public func setPresenting(_ id: ScanoutID, _ presenting: Bool)  // false while the consumer is not visible (display-and-windowing.md §5.2 rules 4–5)
-    public func requestPresent(_ id: ScanoutID)                     // re-blit the bound resource now, without a guest flush
-    public nonisolated var events: AsyncStream<ScanoutEvent> { get }
-    public func statistics(_ id: ScanoutID) -> FrameStatistics
+public protocol ScanoutController: Sendable {
+    func configure(_ scanout: ScanoutID, mode: DisplayMode) throws(GraphicsFailure)  // enable; display event (§4.3)
+    func disable(_ scanout: ScanoutID)                                              // disable; display event
+    func attach(_ scanout: ScanoutID, width: Int, height: Int) throws(GraphicsFailure) -> ScanoutPoolHandle
+    func reconfigure(_ scanout: ScanoutID, mode: DisplayMode, width: Int, height: Int)
+        throws(GraphicsFailure) -> ScanoutPoolHandle                                // new pool after a mode change
+    func detachPool(_ scanout: ScanoutID, generation: UInt64?)                     // a generation mismatch leaves the newer pool
 }
 
-public enum ScanoutEvent: Sendable {
-    case guestBound(ScanoutID, resourceSize: PixelSize)   // SET_SCANOUT with a resource
-    case guestUnbound(ScanoutID)                          // SET_SCANOUT with resource 0
-    case frameReady(ScanoutID, bufferIndex: Int, sequence: UInt64, hostTime: UInt64)
-    case frameDropped(ScanoutID, sequence: UInt64)
-    case deviceReset
+public struct ScanoutPoolHandle: Sendable {
+    public let generation: UInt64
+    public let surfaces: [IOSurface]               // in buffer order
+    public let frames: AsyncStream<ScanoutFrame>
+    public func frameDisplayed(sequence: UInt64)   // the consumer's acknowledgement (§6.3)
+}
+
+public enum ScanoutFrame: Equatable, Sendable {
+    case frameReady(generation: UInt64, bufferIndex: Int, sequence: UInt64)
 }
 ```
 
-- Scanout 0 is configured at device creation with the image's default display mode, so Android has its primary display from the first boot. The mode comes from `lcd_density` and the reference capture ([android-image.md](android-image.md) §6.2).
-- `DisplayPool` (RuntimeCore) calls `configure` and `disable` for scanouts 1…15. It maps scanouts to Android display IDs after the Guest Agent reports `DisplayAdded` ([display-and-windowing.md](display-and-windowing.md), [../01-architecture/state-machines.md](../01-architecture/state-machines.md) §4).
-- A scanout with no attached pool still accepts `SET_SCANOUT` and `RESOURCE_FLUSH`. The flush is completed without a blit. This is how the hidden display 0 costs nothing on the host in `secondaryDisplay` mode ([ADR-0005](../01-architecture/decisions/0005-multi-display-window-model.md)).
+`ScanoutTable` holds 16 `ScanoutState` values (`isEnabled`, `mode`) and `displayGeneration`. `VirtioGPUScanoutController(device:)` is the production implementation.
+
+- Scanout 0 is enabled when the device is created, with the image's default display mode, so Android has its primary display from the first boot. The mode comes from `lcd_density` and the reference capture ([android-image.md](android-image.md) §6.2).
+- `DisplayPool` (RuntimeCore) calls `configure` and `disable` for scanouts 1…15. It maps scanouts to Android display IDs after the Guest Agent reports `DisplayAdded` ([display-and-windowing.md](display-and-windowing.md), [state-machines.md](../01-architecture/state-machines.md) §4).
+- A scanout with no attached pool still accepts `SET_SCANOUT` and `RESOURCE_FLUSH`, and the flush completes without a blit. A hidden display 0 therefore costs nothing on the host in `secondaryDisplay` mode ([ADR-0005](../01-architecture/decisions/0005-multi-display-window-model.md)).
 
 ### 6.2 Present on `RESOURCE_FLUSH`
 
-For each scanout bound to the flushed resource and with a pool attached:
+For each scanout bound to the flushed resource that has a pool attached:
 
-1. **Pick a buffer.** `SurfacePool.acquireForRender()` returns a free buffer index. If none is free (the consumer still holds the others), the present waits as the scanout's single pending present, and it runs as soon as a buffer frees. A newer flush replaces a pending present, and the replaced frame counts as dropped (latest frame wins, like RiftVM's `LatestFrameScheduler`). An offered buffer is never overwritten ([display-and-windowing.md](display-and-windowing.md) §5.2 rule 1). At most one blit per scanout is in flight.
-2. **Blit.** On the render thread, `gb_present_blit(resource, rect, pool.texture(i))`. The source rect is the scanout rect from `SET_SCANOUT`. If the resource size differs from the pool size (during a resize), the blit scales to the pool size and logs once per mode change.
-3. **Complete the guest's flush.** The flush response is sent after the blit is flushed to the GPU queue, not after it has executed and not after display. The flush of a replaced pending present is completed when it is replaced, and a flush on a scanout that is not presenting is completed at once. The guest HWC paces itself with its own vsync timer, so the host does not add back-pressure. The ordering of the blit against later guest rendering relies on ANGLE's Metal backend using one command queue per display. #023 verifies there is no tearing with HelloGL's alternating-color test (§12).
-4. **GPU completion.** The fence of the blit is checked on the render thread, with the root context current, and a waiter asks for each check and polls again after 1 ms. Each 100 ms without a signal is a stall, which is counted and logged. Then the buffer is offered and `frameReady(scanout, i, seq, hostTime)` is emitted. The IOSurface content is complete before any consumer sees the index. The first design waited on the sync from the waiter thread. ANGLE rejects that wait with `EGL_BAD_CONTEXT` (0x3006) when the calling thread has no current context, so the wait runs on the render thread (IR-1101).
+1. **Pick a buffer.** `acquire()` returns a free buffer index. If none is free, the present waits as the scanout's single pending present, and runs when a buffer frees. A newer flush replaces a pending present, and the replaced frame counts as dropped (latest frame wins). An offered or displayed buffer is never overwritten ([display-and-windowing.md](display-and-windowing.md) §5.2 rule 1). At most one blit per scanout is in flight.
+2. **Blit.** On the render thread, `gb_present_blit` copies the scanout rect from `SET_SCANOUT` into the target. If the resource size differs from the pool size during a resize, the blit scales to the pool size and logs once per mode change.
+3. **Complete the guest's flush.** The flush response is sent after the blit is flushed to the GPU queue, not after execution or display. A replaced pending present completes its flush when it is replaced. A flush on a scanout that is not presenting completes at once. The guest HWC paces itself with its own vsync, so the host adds no back-pressure. The order of the blit against later guest rendering relies on ANGLE's Metal backend using one command queue per display.
+4. **GPU completion.** The blit's fence is polled on the render thread, with the root context current, once per 1 ms. Each 100 ms without a signal is a stall: it is counted and logged, and the wait goes on. When the fence signals, the buffer is offered and `frameReady(generation, bufferIndex, sequence)` is emitted. The IOSurface content is complete before any consumer sees the index. A failed blit is counted (`failedBlits`), and its buffer is freed without an offer.
 
-Pixel formats: guest scanout resources are 32-bit (`B8G8R8X8`/`B8G8R8A8`/`R8G8B8A8` variants). Pool buffers are always `BGRA8Unorm` in sRGB. The blit converts, and alpha is forced opaque for X formats.
+Guest scanout resources are 32-bit (`B8G8R8X8`, `B8G8R8A8`, or `R8G8B8A8`). Pool buffers are `BGRA8Unorm` in sRGB. The blit converts the format, and X formats are forced opaque.
 
 ### 6.3 SurfacePool
 
-```swift
-public final class SurfacePool: Sendable {
-    public init(pixelSize: PixelSize, bufferCount: Int = 3, device: any MTLDevice) throws(GraphicsFailure)
-    public let generation: UInt64                  // increases on every reallocation
-    public let pixelSize: PixelSize
-    public var surfaces: [IOSurface] { get }       // sent to the wrapper once per generation
-    func acquireForRender() -> Int?                // render thread
-    func markReady(_ index: Int, sequence: UInt64)
-    public func consumerDisplayed(upTo sequence: UInt64)   // from the wrapper's frameDisplayed (display-and-windowing.md §5)
-}
-```
+`SurfacePool` (internal to GraphicsCore, `Display/SurfacePool.swift`) holds three buffers (`bufferCount = 3`):
 
-- IOSurface properties: width and height in pixels, `BGRA`, bytes-per-row aligned to 64 (`IOSurfaceAlignProperty`), not global (`kIOSurfaceIsGlobal` is not set, so it is shared only by XPC handle). The Metal texture for each surface is created once (`makeTexture(descriptor:iosurface:plane:)` on ANGLE's device) and imported into EGL once.
-- Buffer states: `free → rendering → offered(seq) → displayed(seq) → free`. `markReady` moves a buffer to `offered`, and `consumerDisplayed` moves it to `displayed`. The state machine and its rules for when the wrapper may hold a buffer are in [display-and-windowing.md](display-and-windowing.md) §5.2, and the code uses its state names. GraphicsCore implements them. The wrapper only sends `frameDisplayed`.
-- A resize allocates a new pool (a new generation). The old pool is released when the consumer acknowledges `surfacesReplaced`, or after 1 s.
-- Memory: 3 × width × height × 4 bytes per displayed scanout (for 1440×3120 that is about 54 MiB). This is reported in frame statistics and in `apkrun info --runtime`.
+- IOSurfaces are `BGRA`, with bytes per row aligned to 64 (`IOSurfaceAlignProperty`), and are not global (`kIOSurfaceIsGlobal` is unset). A wrapper receives them only through an XPC handle.
+- The Metal texture of each surface is created once on ANGLE's device and imported into EGL once.
+- `generation` increases on every reallocation. A resize allocates a new pool. The old pool is released when the consumer acknowledges `surfacesReplaced`, or after 1 s.
+- Buffer states (`PresentBufferState`): `free → rendering → offered(sequence) → displayed(sequence) → free`. `markReady` moves a buffer to `offered`, and `consumerDisplayed(upTo:)` moves it to `displayed`. The rules for when the wrapper may hold a buffer are in [display-and-windowing.md](display-and-windowing.md) §5.2. The wrapper only sends `frameDisplayed`.
+- Memory: 3 × width × height × 4 bytes per displayed scanout (1440 × 3120 is about 54 MiB). It is reported in the frame statistics and in `apkrun info --runtime`.
 
 ### 6.4 EDID
 
 `EDIDGenerator` produces a 128-byte EDID 1.4 base block per scanout:
 
-- Manufacturer `APK`, product code = scanout index, serial = scanout index. The name descriptor is `APKRun <index>`.
-- One detailed timing descriptor with the preferred mode (`widthPixels × heightPixels` at `refreshHz`, CVT reduced-blanking timings). Detailed timings have 12-bit active fields, so the limit is 4095 pixels per dimension. [display-and-windowing.md](display-and-windowing.md) keeps display modes within that limit (it renders at a lower scale when a window's backing size is larger). A DisplayID extension block for larger modes is post-v1.
-- Physical size in mm (the base block in cm, and the detailed timing in mm), computed from `dotsPerInch`. Android derives the per-display DPI from it through the HWC. The exact effect on the density of secondary displays is verified in #067.
-- A range-limits descriptor (24–120 Hz vertical, 20–255 kHz horizontal, 660 MHz maximum pixel clock) and the checksum. The 20 kHz lower bound admits the 240 × 300 px mode for 320 × 400 dp at zoom 0.75; the timing generator extends vertical blanking for short modes to meet it while still rejecting the 1024 × 768 mode at 24 Hz. This is an APKRun timing adjustment on top of CVT reduced blanking and needs maintainer review. Unit tests compare against golden EDIDs and decode them with a reference decoder (edid-decode output committed as test data).
-- The geometry resolver checks the resulting detailed timing, not only its 4095-pixel active-field limit. When the 60 Hz timing exceeds the pixel-clock or horizontal-frequency range, it lowers `renderScale` to the largest expressible mode.
+- Manufacturer `APK`. The product code and serial are the scanout index. The name descriptor is `APKRun <index>`.
+- One detailed timing descriptor for the preferred mode (CVT reduced blanking). Its active fields are 12 bits wide, so each dimension is at most 4095 px. [display-and-windowing.md](display-and-windowing.md) keeps modes within that limit by rendering at a lower scale. A DisplayID extension for larger modes is post-v1.
+- Physical size in mm, from `dotsPerInch`. Android derives the per-display DPI from it through the HWC. The effect on secondary displays is OQ-39 (§15).
+- A range-limits descriptor: 24–120 Hz vertical, 20–255 kHz horizontal, 660 MHz maximum pixel clock; then the checksum. The 20 kHz lower bound admits the 240 × 300 px mode, so short modes get extra vertical blanking. The timing generator still rejects 1024 × 768 at 24 Hz. This adjustment is APKRun's, on top of CVT reduced blanking. Unit tests compare golden EDIDs with a reference decoder.
+- The geometry resolver checks the resulting timing against the pixel-clock and horizontal-frequency range. If 60 Hz does not fit, it lowers `renderScale` to the largest expressible mode.
+
+### 6.5 Development window
+
+The development window (`apkrun dev boot --gpu virgl --window`) shows display 0 in an `NSWindow`. It uses WindowingCore's IOSurface layer in-process, the same code the wrapper uses later.
+
+The development window (#023) is **fixed-size**: display 0 keeps the image's default mode, and the window scales the layer with aspect fit. Runtime mode changes and pool reallocation belong to #067 (§6.1, §6.4).
 
 ---
 
-## 7. Frame statistics and counters (#023, #070)
+## 7. Frame statistics and counters
 
-The graphics metrics are FPS, frame latency, dropped frames, CPU utilization, GPU utilization, resource copies, and CPU readbacks. GraphicsCore records the following per scanout and globally, and exposes them through `ScanoutController.statistics` and the diagnostics snapshot.
+Metrics are recorded per scanout and globally. They are exposed through the presenter and device statistics and through the diagnostics snapshot. The code names are `PresentStatistics` (per presenter: `framesPresented`, `droppedFrames`, `presentStalls`, `failedBlits`) and `GraphicsCounters` (per device: `hostReadbacks`, `guestReadbacks`, `guestReadbackBytes`, `guestUploadBytes`, `cpuPixelCopies`, `cpuPixelCopyBytes`, `rendererFailures`).
 
-| Metric | Definition | Where it is measured |
+| Metric | Definition | Measured in |
 |---|---|---|
-| `fps` | `frameReady` events per second (1 s window, plus a 10 s average) | completion waiter |
-| `guestFlushRate` | `RESOURCE_FLUSH` per second (higher than `fps` means frames are dropped or coalesced) | device queue |
+| `fps` | `frameReady` events per second (1 s window, 10 s average) | present waiter |
+| `guestFlushRate` | `RESOURCE_FLUSH` per second; above `fps` means frames were dropped or coalesced | device queue |
 | `flushToReady` | host time from flush decode to `frameReady` (p50/p95) | device queue + waiter |
 | `readyToDisplayed` | `frameReady` to the wrapper's `frameDisplayed` (p50/p95) | RuntimeCore → GraphicsCore |
-| `presentGPUTime` | EGL sync wait duration (upper bound for the blit's GPU time) | waiter |
+| `presentGPUTime` | EGL sync wait duration (upper bound of the blit's GPU time) | present waiter |
 | `droppedFrames` | frames replaced before display | scheduler |
-| `hostReadbacks` | GPU→CPU reads of pixel data performed by the host on its own initiative. **Must be 0 on the normal path** (NFR-PERF-05) | every code path that could read back increments it |
-| `guestReadbacks` | `TRANSFER_FROM_HOST_3D` count and bytes (app-requested, e.g. `glReadPixels`) | device queue |
-| `rendererFailures` | Failures returned by `VirGLBackend` renderer work after construction: command and render work, fence creation, reset, and destroy (IR-460) | render thread |
-| `cpuPixelCopies` | CPU copies of pixel data on the present path (2D profile only; must be 0 in `drmVirgl`) | 2D renderer |
+| `hostReadbacks` | GPU→CPU pixel reads the host makes on its own initiative. **Must stay 0 on the normal path** (NFR-PERF-05) | device |
+| `guestReadbacks` | `TRANSFER_FROM_HOST_3D` count and bytes (app-requested, for example `glReadPixels`) | device queue |
+| `rendererFailures` | renderer work that failed after construction: commands, fences, reset, destroy | render thread |
+| `cpuPixelCopies` | CPU copies of pixel data on the present path. Only the 2D profile may make them; it must be 0 in `drmVirgl` | 2D renderer |
 | `resourceMemory`, `contexts`, `resources` | current totals and high-water marks | `ResourceTable` |
-| `apkrundCPU` | process CPU time (`task_info`) sampled each second | DiagnosticsCore |
-| `gpuUtilization` | best effort: IOKit accelerator `PerformanceStatistics` "Device Utilization %" | DiagnosticsCore |
+| `apkrundCPU` | process CPU time (`task_info`), sampled each second | DiagnosticsCore |
+| `gpuUtilization` | best effort: IOKit accelerator "Device Utilization %" (OQ-07) | DiagnosticsCore |
 
-Signposts (`io.apkrun.graphics`, category `present`): an interval `gpu.flush` (decode to completion) and an interval `gpu.present` (blit to `frameReady`). The `FIRST_FRAME` perf marker for a session is emitted by RuntimeCore on the first `frameReady` of the session's scanout ([diagnostics.md](diagnostics.md) §4).
+The test-only readback, compiled only with `APKRUN_TEST_READBACK` (the `TestReadback` trait in tests), reads pixels for the replay and tearing tests. It is not counted, and it never runs on the normal path.
+
+Signposts (`io.apkrun.graphics`, category `present`): an interval `gpu.flush` (decode to completion) and an interval `gpu.present` (blit to `frameReady`). RuntimeCore emits the `FIRST_FRAME` perf marker on the first `frameReady` of a session's scanout ([diagnostics.md](diagnostics.md) §4).
 
 ---
 
@@ -566,158 +497,77 @@ Signposts (`io.apkrun.graphics`, category `present`): an interval `gpu.flush` (d
 
 | Event | GraphicsCore action |
 |---|---|
-| VM configuration | `VirtioGPUDevice` created with a profile (§9). The render thread starts, and `gb_renderer_create` runs **before the VM starts**, so an EGL/ANGLE failure is reported as `GraphicsFailure.rendererInitFailed` before Android boots |
-| DRIVER_OK (`deviceDidStart`) | queues become available; config space already holds `num_scanouts`/`num_capsets` |
-| `WillPause` | stop blits: flushes still complete, pools receive no new frames. In-flight blits finish. Statistics timers pause. The renderer and resources stay |
-| `WillResume` | resume blits. The next guest flush produces a frame. If no flush arrives within 100 ms, the last presented buffer stays on screen (nothing to redraw) |
-| `WillReset` (guest reboot or reset) | complete or abandon deferred elements (abandoned elements are not returned; VZ discards them on reset), clear `ResourceTable`, drop mappings, `gb_renderer_reset`, clear scanout bindings, emit `.deviceReset`. Host scanout configuration and pools are kept |
+| VM configuration | `VirtioGPUDevice` is created with a profile (§9). The render thread starts, and `gb_renderer_create` runs **before the VM starts**. An EGL or ANGLE failure is reported as `GraphicsFailure.rendererInitFailed` before Android boots |
+| DRIVER_OK (`deviceDidStart`) | queues become available. Config space already holds `num_scanouts` and `num_capsets` |
+| `WillPause` | stop blits. Flushes still complete, but pools receive no new frames. In-flight blits finish. Statistics timers pause. The renderer and resources stay |
+| `WillResume` | resume blits. The next guest flush produces a frame. If no flush arrives within 100 ms, the last presented buffer stays on screen |
+| `WillReset` (guest reboot or reset) | complete or abandon deferred elements (VZ discards abandoned ones on reset), clear `ResourceTable`, drop mappings, `gb_renderer_reset`, clear scanout bindings, emit `.deviceReset`. Host scanout configuration and pools are kept |
 | `WillStop` | as reset, then destroy the renderer, stop the render thread, and release pools |
-| Save/restore | unsupported (`supportsSaveRestore = false`). VM save/restore is therefore unavailable while this device is attached (R-07, [vm.md](vm.md) §9.5) |
+| Save/restore | unsupported (`supportsSaveRestore = false`). VM save and restore are unavailable while this device is attached (R-07, [vm.md](vm.md) §9.5) |
 
-Pause and resume are driven by RuntimeCore's idle policy ([runtime-daemon.md](runtime-daemon.md) §5). While paused, the wrapper keeps showing the last frame.
+Pause and resume follow RuntimeCore's idle policy ([runtime-daemon.md](runtime-daemon.md) §5). While paused, the wrapper keeps showing the last frame.
 
 Failure policy:
 
-- An EGL/GL error inside a guest context is logged, and the command returns `ERR_UNSPEC`. The guest's Mesa usually recovers or kills the app.
-- `GraphicsFailure.rendererLost` (ANGLE reports context loss, or a Metal device is removed): all resources are gone. GraphicsCore emits it, and RuntimeCore restarts Android (VM stop and start) with a diagnostics snapshot. The Linux `virtio_gpu` driver does not recover from DEVICE_NEEDS_RESET, so `requestReset` is not used for recovery.
-- virglrenderer runs inside apkrund. A crash in it crashes apkrund, and the VM with it. launchd restarts apkrund (NFR-REL-02). The renderer cannot be moved out of process in v1, because guest memory mappings exist only in the process that owns the VM. This is recorded as a security consideration (§11).
-
----
+- An EGL or GL error in a guest context is logged, and the command returns `ERR_UNSPEC`.
+- `GraphicsFailure.rendererLost` (context loss, or the Metal device is removed) means all resources are gone. GraphicsCore emits it, and RuntimeCore restarts Android (VM stop and start) with a diagnostics snapshot. `requestReset` is not used for recovery, because the Linux `virtio_gpu` driver does not recover from DEVICE_NEEDS_RESET.
+- virglrenderer runs inside apkrund, so a crash there takes down apkrund and the VM. launchd restarts apkrund (NFR-REL-02). The renderer cannot move out of process in v1, because guest memory mappings exist only in the process that owns the VM (§11).
 
 ## 9. GPU profiles and the software fallback
 
-| Profile | Device features | Guest configuration (bootconfig, [android-image.md](android-image.md) §6.2) | Host renderer | Use |
+| Profile | Device features | Guest configuration | Host renderer | Use |
 |---|---|---|---|---|
-| `drmVirgl` (default) | VIRGL + EDID | `egl=mesa`, `gralloc=minigbm`, `hwcomposer=ranchu`, `hwcomposer.mode=client`, `display_finder_mode=drm`, `cpuvulkan.version=0`, `opengles.version=196608`, and the composer APEX key `com.android.hardware.graphics.composer.ranchu` (android-image.md §6.2) | virglrenderer + ANGLE | product path |
-| `guestSwiftshader` | EDID only (no VIRGL) | Cuttlefish's `guest_swiftshader` set (ANGLE on SwiftShader in the guest, GLES 3.1, Vulkan via SwiftShader), keys copied from the reference capture of that profile ([android-image.md](android-image.md) §8.2) | 2D renderer: dumb/2D resources copied from guest backing into the pool buffer on flush (`cpuPixelCopies` > 0) | debugging, bring-up before #022, and the documented Graphics Safe Mode if VirGL breaks on a user's Mac |
-| `headless` (development only) | no GraphicsCore device. VZ's own 2D `VZVirtioGraphicsDeviceConfiguration` (one 720×1280 scanout, no view) provides the DRM device | the `guest_swiftshader` set of the launcher capture (`egl=angle`, `gralloc=minigbm`, `hwcomposer=ranchu`, `display_finder_mode=drm`, `vulkan=pastel`, the ANGLE feature overrides, `opengles.version=196609`) ([android-image.md](android-image.md) §9.1) | none: nothing on the Mac shows the scanout | M1 bring-up before the virtio-gpu device renders (#012–#017, `apkrun dev boot --gpu none`). Never in a release bundle |
+| `drmVirgl` (default) | VIRGL + EDID | the bootconfig of `gpuProfiles.drmVirgl` in the layout (§9.1, §9.2) | virglrenderer + ANGLE | product path |
+| `guestSwiftshader` | EDID only | Cuttlefish's `guest_swiftshader` set ([android-image.md](android-image.md) §8.2) | 2D renderer: 2D resources are copied from guest backing into the pool buffer on flush (`cpuPixelCopies` > 0) | debugging, bring-up, Graphics Safe Mode |
+| `headless` (development only) | no GraphicsCore device; VZ's own 2D device (one 720 × 1280 scanout) provides the DRM device | the launcher capture's `guest_swiftshader` set ([android-image.md](android-image.md) §9.1) | none | bring-up (`apkrun dev boot --gpu none`). Never in a release bundle |
 
-- The profile is chosen per boot: `BootOptions.gpuProfile` ([android-image.md](android-image.md) §9.1). Changing it requires restarting Android, because the bootconfig changes.
-- RuntimeCore attaches the `VirtioGPUDevice` for `guestSwiftshader` (#021), the VirGL device of `VirtioGPUDevice.virgl()` for `drmVirgl` (#022), and no device for `headless` (#021). The device must offer every entry of the profile's `requiredHostCapabilities` in the bundle manifest ([../03-reference/runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.7). A profile that the bundle does not list starts no renderer, and a device that lacks a required feature is refused. Both refusals happen before the VM starts, with `runtime.gpuProfileUnavailable`. The renderer of `drmVirgl` starts before the instance is read (§8). A renderer that fails to start ends the boot as `runtime.graphics`, with the `GraphicsFailure` of §13.1 as its cause. The guest would stall without its VirGL features, so no profile is attached without the feature it needs (IR-380, IR-580).
-- The user-facing setting is `graphics.safeMode` (off by default, [../03-reference/configuration.md](../03-reference/configuration.md)). It appears in Settings → Troubleshooting and is suggested by `apkrun doctor` after repeated `rendererInitFailed` or `rendererLost`. The UI and diagnostics show clearly that it is a slow fallback.
-- There is no automatic fallback in v1. Silent fallback would hide regressions and make performance reports meaningless.
-- The 2D renderer uses a plain Metal path (`replaceRegion` into the pool texture from the mapped guest backing). It is the only place where `cpuPixelCopies` may be non-zero. #022 builds it, and `boot_completed` with `guestSwiftshader` is part of #022's T2 suite.
-- `VZVirtioGraphicsDeviceConfiguration` (VZ's own 2D device, one scanout) is not used for `drmVirgl` or `guestSwiftshader`, because it cannot provide multiple scanouts ([ADR-0002](../01-architecture/decisions/0002-virtualization-framework-macos27.md)). It serves only the development `headless` profile, which ADR-0002 already allows as a debugging fallback. A profile with no DRM device at all cannot boot the stock image: zygote and SurfaceFlinger abort without an EGL implementation, and `init.cutf_cvm.rc` waits for `/dev/dri/card0` in `early-init` (2026-10-08, IR-307).
-
-**Built in #022.** The `guestSwiftshader` device keeps each 2D resource in a host shadow buffer, and `TRANSFER_TO_HOST_2D` copies the rectangle into it as a counted CPU pixel copy. The flush completes without a blit, because the pool arrives in #023 (IR-474). RuntimeCore attaches the `drmVirgl` device from the host side (IR-580). The `drmVirgl` boot results are in the #022 notes in [M02-graphics.md](../04-plan/issues/M02-graphics.md), not here.
+- The profile is chosen per boot: `BootOptions.gpuProfile` (`GPUProfileID`; [android-image.md](android-image.md) §9.1). A change restarts Android, because the bootconfig changes.
+- RuntimeCore attaches `VirtioGPUDevice` for `guestSwiftshader`, `VirtioGPUDevice.virgl()` for `drmVirgl`, and no device for `headless`. The device must offer every entry of the profile's `requiredHostCapabilities` ([runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.7). A profile the bundle does not list starts no renderer, and a device that lacks a required feature is refused. Both refusals happen before the VM starts, with `runtime.gpuProfileUnavailable`. A renderer that fails to start ends the boot as `runtime.graphics`, with the `GraphicsFailure` (§13.1) as its cause.
+- `graphics.safeMode` is the user-facing fallback (off by default, [configuration.md](../03-reference/configuration.md)). It appears in Settings → Troubleshooting, and `apkrun doctor` suggests it after repeated `rendererInitFailed` or `rendererLost`. The UI says that it is a slow fallback.
+- There is no automatic fallback in v1. A silent fallback would hide regressions.
+- The 2D renderer uses a plain Metal path (`replaceRegion` into the pool texture from the mapped guest backing). It is the only place where `cpuPixelCopies` may be non-zero.
+- `VZVirtioGraphicsDeviceConfiguration` (one scanout) is not used for `drmVirgl` or `guestSwiftshader`, because it cannot provide multiple scanouts ([ADR-0002](../01-architecture/decisions/0002-virtualization-framework-macos27.md)). It serves only `headless`. A profile with no DRM device cannot boot the stock image: zygote and SurfaceFlinger abort without an EGL implementation, and `init.cutf_cvm.rc` waits for `/dev/dri/card0` in `early-init`.
 
 ### 9.1 drmVirgl components
 
-Each component names the file that decides it, the step that builds or stages it, and its state in the stock image. A value that is not listed here is not claimed.
+Each component names the file that decides it. A value not listed here is not claimed.
 
-- **Mesa (guest EGL, GLES, and gallium).** The source of truth is the `mesa` and `ndk` entries of group `guest-mesa` in [ThirdParty.lock.json](../../ThirdParty/ThirdParty.lock.json): Mesa 26.1.8 at commit `0fadfea4`, built with the flags of that entry (among them `-Dgallium-drivers=virgl`, `-Dplatforms=android`, `-Degl-lib-suffix=_mesa`, and `-Dgles-lib-suffix=_mesa`), and the Android NDK r28c (`28.2.13676358`). [ADR-0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) decides the build route. `scripts/guest/build-mesa-android.sh` builds it and ships `libEGL_mesa.so`, `libGLESv2_mesa.so`, `libGLESv1_CM_mesa.so`, and `libgallium_dri.so` (its `shipped_libraries` variable, and `SHIPPED` in `scripts/guest/mesa_android.py`). `python3 -m apkrun_image inject-vendor --mesa <dir>` installs the four in `/vendor/lib64/egl/` of `vendor_a` (`MESA_LIBRARIES` and `MESA_TARGET_DIRECTORY` in `Images/tools/apkrun_image/vendor_inject.py`). The build output stages them as `vendor/lib64/<name>`, but the guest path is `/vendor/lib64/egl/<name>`. The stock image has no Mesa library: its `/vendor/lib64/egl/` holds `libEGL_emulation.so`, `libGLESv1_CM_emulation.so`, and `libGLESv2_emulation.so` ([guest-egl-diagnostic.txt](../../Images/reference/16373615/incomplete/target-20261004T161206Z-1646389/guest-egl-diagnostic.txt)). The `alpine-mesa*` entries of group `test-linux` are a different Mesa, for the Linux test guest, and are not the Android guest Mesa.
-- **VirGL.** On the host, the renderer is the `virglrenderer` (`960bd667`, with three patches), `libepoxy` (`1b6d7db`), and `angle` (`2d91f554`, Metal) entries of group `virgl-runtime`, built by `scripts/build-third-party.sh virgl-runtime` (§5.1). In the guest, the driver is Mesa's `virgl` gallium driver inside `libgallium_dri.so`. The device offers `VIRTIO_GPU_F_VIRGL` and `VIRTIO_GPU_F_EDID` (§4.1), which the layout lists as the `requiredHostCapabilities` `virgl` and `edid`. `VirtioGPUDevice.virgl()` creates the device.
-- **gralloc.** `androidboot.hardware.gralloc=minigbm` (layout). Mesa does not build GBM (`-Dgbm=disabled`, ADR-0018 §4), so the guest gralloc is the image's minigbm. The stock build has the same value in its launcher capture ([internal-bootconfig.txt](../../Images/reference/16373615/incomplete/default-20261001T120904-49816/internal-bootconfig.txt)), the APEX `com.google.cf.gralloc.apex` in `vendor_a` ([aidl-init-inventory.json](../../Images/reference/16373615/aidl-init-inventory.json)), and the allocator `android.hardware.graphics.allocator-service.minigbm`, which starts at boot ([host-logcat.txt](../../Images/reference/16373615/incomplete/target-20261007T193655-32887/host-logcat.txt)). The repository does not record which file of the APEX holds that allocator. The #099 receipt names `/lib64/libminigbm_gralloc.so` and `/lib64/hw/mapper.minigbm.so` in `vendor_a`, but it is on branch `task/099-mesa-virgl-guest-image`, not on `main`.
-- **HWC.** `androidboot.hardware.hwcomposer=ranchu`, `androidboot.hardware.hwcomposer.mode=client`, and the composer APEX key `com.android.hardware.graphics.composer.ranchu` (layout). The stock image has the APEX `com.android.hardware.graphics.composer.ranchu.apex` (rc `etc/hwc3-apex.rc`) and also `com.android.hardware.graphics.composer.drm_hwcomposer.apex` (rc `etc/hwc3-drm.apex.rc`), both in `vendor_a` ([aidl-init-inventory.json](../../Images/reference/16373615/aidl-init-inventory.json)). The drmVirgl profile names the ranchu APEX. How init treats the `drm_hwcomposer` APEX was not checked.
-- **DRM path.** `androidboot.hardware.hwcomposer.display_finder_mode=drm` (layout). The device is virtio-gpu (device ID 16, §4.1), bound by the Linux `virtio_gpu` driver, and its primary node is `/dev/dri/card0`. The stock reference capture (Cuttlefish) shows `Initialized virtio_gpu 0.1.0 ... on minor 0`, and init waits for `/dev/dri/card0` ([kernel.log](../../Images/reference/16373615/incomplete/default-20261001T120904-49816/kernel.log)). The #099 2026.10.2 T2 diagnostic rerun observed `/dev/dri/card0` (226:0, `graphics_device`) and `/dev/dri/renderD128` (226:128, `gpu_device`), both mode 0666 and owned by `system:graphics` ([boot-evidence.md](../../Images/reference/variants/2026.10.2-cf16373615-arm64/boot-evidence.md)). These node observations do not establish a successful SurfaceFlinger open; the same run failed its DRM probe and EGL initialization (IR-1277, IR-1328). RuntimeCore attaches the device for `drmVirgl` (IR-580).
+- **Mesa (guest EGL, GLES, gallium).** `androidboot.hardware.egl=mesa`. The source of truth is the `mesa` and `ndk` entries of group `guest-mesa` in [ThirdParty.lock.json](../../ThirdParty/ThirdParty.lock.json): Mesa 26.1.8 at commit `0fadfea4`, with that entry's flags (among them `-Dgallium-drivers=virgl`, `-Dplatforms=android`, `-Degl-lib-suffix=_mesa`, `-Dgles-lib-suffix=_mesa`), and NDK r28c (`28.2.13676358`). `scripts/guest/build-mesa-android.sh` ships `libEGL_mesa.so`, `libGLESv2_mesa.so`, `libGLESv1_CM_mesa.so`, and `libgallium_dri.so` (`SHIPPED` in `scripts/guest/mesa_android.py`). `python3 -m apkrun_image inject-vendor --mesa <dir>` installs them in `/vendor/lib64/egl/` of `vendor_a` (`MESA_LIBRARIES`, `MESA_TARGET_DIRECTORY` in `Images/tools/apkrun_image/vendor_inject.py`). The build stages them as `vendor/lib64/<name>`. The stock image has no Mesa library: its `/vendor/lib64/egl/` holds the `_emulation` libraries. The `alpine-mesa*` entries of group `test-linux` are the Linux test guest's Mesa.
+- **VirGL.** The host renderer is `virglrenderer` (`960bd667`), `libepoxy` (`1b6d7db`), and `angle` (`2d91f554`, Metal) of group `virgl-runtime` (§5.1). The guest driver is Mesa's `virgl` gallium driver in `libgallium_dri.so`. The device offers `VIRTIO_GPU_F_VIRGL` and `VIRTIO_GPU_F_EDID` (§4.1).
+- **gralloc.** `androidboot.hardware.gralloc=minigbm`. Mesa does not build GBM (`-Dgbm=disabled`, [ADR-0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md)). The image's minigbm comes from the APEX `com.google.cf.gralloc.apex` in `vendor_a`, and its allocator `android.hardware.graphics.allocator-service.minigbm` starts at boot.
+- **HWC.** `androidboot.hardware.hwcomposer=ranchu`, `androidboot.hardware.hwcomposer.mode=client`, and the composer APEX key `com.android.hardware.graphics.composer.ranchu`. The stock image also has `com.android.hardware.graphics.composer.drm_hwcomposer.apex`. How init treats it is not verified.
+- **DRM path.** `androidboot.hardware.hwcomposer.display_finder_mode=drm`. The device is virtio-gpu (device ID 16, §4.1), bound by `virtio_gpu`, with the primary node `/dev/dri/card0`, which init waits for.
 
-### 9.2 Source of truth and reproduction
+### 9.2 Source of truth
 
-`gpuProfiles.drmVirgl.bootconfig` in [the layout](../../Images/tools/layouts/cuttlefish-phone-arm64.json) is the source of the eight keys in §9.1. Seven of the eight values come from Cuttlefish revision `9bb9c72` (`crosvm_manager.cpp`, source SHA-256 `ec273ead`), as recorded in `graphics-props-from-source.txt` under the git-ignored `Images/work/`. The composer key comes from the stock launcher capture. That file is not committed, so the derivation cannot be checked from the repository (IR-400). The layout's `gpuProfilesComment` explains the composer key and the omitted `display_framebuffer_format` (IR-401).
+`gpuProfiles.drmVirgl.bootconfig` in [cuttlefish-phone-arm64.json](../../Images/tools/layouts/cuttlefish-phone-arm64.json) is the source of the eight keys in §9.1. Seven of them come from Cuttlefish revision `9bb9c72` (`crosvm_manager.cpp`). The composer key comes from the stock launcher capture, which is not committed, so the repository cannot check that value. The layout's `gpuProfilesComment` explains the composer key and why `display_framebuffer_format` is omitted.
 
-The boot bootconfig merges five layers: vendor, image, GPU profile, platform, and instance. The bundle writes the first two to `boot/bootconfig.txt` and the profile to `gpuProfiles` in `manifest.json` (`Images/tools/apkrun_image/bundle.py`). `AndroidBootPlanner.prepareBoot` (ImageCore) merges all five, and `merge_bootconfig_layers` in `Images/tools/apkrun_image/bootconfig.py` applies the same rules in Python. The offline checks below cover the first three layers.
+The boot bootconfig merges five layers: vendor, image, GPU profile, platform, and instance. The bundle writes the first two to `boot/bootconfig.txt` and the profile to `gpuProfiles` in `manifest.json` (`Images/tools/apkrun_image/bundle.py`). `AndroidBootPlanner.prepareBoot` (ImageCore) merges all five. `merge_bootconfig_layers` in `Images/tools/apkrun_image/bootconfig.py` applies the same rules in Python. The offline golden test covers the first three layers (§14).
 
-1. **T0 golden.** The test `test_the_drm_virgl_bootconfig_follows_from_the_committed_layout` in `Images/tools/tests/test_bundle.py` builds the fixture bundle from the committed fixture archive, merges the three layers, and compares the result with `Images/tools/tests/fixtures/gpu-profiles/drm-virgl-bootconfig.txt` (15 keys, SHA-256 `f9f72d06cd6fd101ea8f9890f114169c565904e16a989d3dc36e29519414e516`). The vendor layer comes from the fixture archive's `vendor_boot`, and the image layer and the fixed AVB values come from the test module, so the golden does not hold the stock vendor or vbmeta values. Run it from `Images/tools` with `python3 -m pytest tests/test_bundle.py -k drm_virgl`.
-2. **Stock build.** From the pinned archive `aosp_cf_arm64_only_phone-img-16373615.zip` (SHA-256 `051caf8072ba9fb417e05999de2984752e44e13ce70b6c49c669f0a73db85c18`, the value in `android-image.json`), kept in one directory with its `fetch.json`, run from `Images/tools`: `python3 -m apkrun_image bundle --manifest ../manifests/16373615/android-image.json --source <download dir> --inventory ../manifests/16373615/inventory.json --layout layouts/cuttlefish-phone-arm64.json --image-version 2026.10.0 --sign-key <key> --out <new dir>`. A test key such as `../../Tests/Fixtures/signing/test-image-ed25519` is enough for this check. The bundle's `boot/bootconfig.txt` has SHA-256 `35402a0233725b1bbf65decad917e0b355ec494793cd173baf3d35061874bf43`, and its `manifest.json` has `e9656581354697e7a53785d466339c122f48d0b61c2565c63b04ef880d8cb5f2`. Merging the three layers as the T0 test does gives 40 keys with SHA-256 `9fad63195b5bc5ae568891c36624b5caa7d5a4971f99cecd50859cbbd3aee86e`. Two independent builds gave the same three hashes. The merge for this record was a one-off script, not a committed command (IR-973).
-3. **Committed capture.** The merged text agrees with the committed launcher capture of the same build ([internal-bootconfig.txt](../../Images/reference/16373615/incomplete/default-20261001T120904-49816/internal-bootconfig.txt)) on 22 of the 26 shared keys. The four exceptions are `androidboot.cpuvulkan.version`, `androidboot.hardware.egl`, and `androidboot.opengles.version` (the profile's values, which differ from the guest_swiftshader set), and `androidboot.wifi_impl` (decided in [android-image.md](android-image.md) §6.2).
+The `drmVirgl` values differ from the `guestSwiftshader` set in `androidboot.cpuvulkan.version`, `androidboot.hardware.egl`, and `androidboot.opengles.version`.
 
 ---
 
-## 10. Vulkan track (#096, post-v1)
+## 10. Vulkan track (post-v1)
 
-Not a v1 blocker. The notes below record what the research found, so the post-v1 work starts from facts:
+Vulkan is not a v1 blocker. Venus (Vulkan over virtio-gpu) and native contexts need `VIRTIO_GPU_F_RESOURCE_BLOB` and `VIRTIO_GPU_F_CONTEXT_INIT`, plus a host-visible shared memory region. On macOS 27 that is a `VZVirtioSharedMemoryRegionConfiguration` (region ID 1) and `VZVirtioSharedMemoryRegion.mapMemory(_:atOffset:size:)`, which is page-aligned and completes on the device queue.
 
-- Venus (Vulkan over virtio-gpu) and native contexts need `VIRTIO_GPU_F_RESOURCE_BLOB` and `VIRTIO_GPU_F_CONTEXT_INIT`, plus a host-visible shared memory region. On macOS 27 that is a `VZVirtioSharedMemoryRegionConfiguration` (region ID 1 for virtio-gpu host-visible memory) and `VZVirtioSharedMemoryRegion.mapMemory(_:atOffset:size:)` (page-aligned, completion on the device queue). libkrun maps blobs into its shared memory region the same way on Hypervisor.framework.
-- The host side would be virglrenderer's venus backend on MoltenVK (as in UTM and krunkit), or gfxstream.
-- The first spike checks `maximumAllowedSharedMemoryRegionCount` (≥ 1 required) and whether mapping IOSurface- or Metal-heap-backed memory into the region works.
-- Guest side: Cuttlefish/Android would need a Venus-capable Mesa build and the matching bootconfig (`vulkan` APEX selection, [android-image.md](android-image.md) §6.2), which means a custom image.
-- `CONTEXT_INIT` also brings per-context fence timelines (`ring_idx`), which would lift the in-order fence limitation of §4.5.
+- The host side would be virglrenderer's venus backend on MoltenVK, or gfxstream.
+- The guest needs a Venus-capable Mesa build and the matching bootconfig (`vulkan` APEX selection, [android-image.md](android-image.md) §6.2). That means a custom image.
+- `CONTEXT_INIT` also brings per-context fence timelines (`ring_idx`). They would lift the in-order fence limit of §4.5.
+- Unknown: `maximumAllowedSharedMemoryRegionCount` (it must be ≥ 1), and whether IOSurface- or Metal-heap-backed memory can be mapped into the region. The first Vulkan spike checks both.
 
 ---
 
 ## 11. Security considerations
 
-The guest is untrusted from the host's point of view ([../01-architecture/security-model.md](../01-architecture/security-model.md)). The virtio-gpu device and virglrenderer parse guest-controlled data in apkrund, which holds the virtualization entitlement and the user's files.
+The guest is untrusted from the host's point of view ([security-model.md](../01-architecture/security-model.md)). The virtio-gpu device and virglrenderer parse guest-controlled data in apkrund, which holds the virtualization entitlement and the user's files.
 
-- Every guest value is validated after copying (§3.2), with checked arithmetic. There are no struct casts over guest memory.
-- Limits (§5.4) bound memory use.
-- virglrenderer's command decoder is the largest attack surface. It is pinned, its patches are reviewed, and upstream security fixes are tracked (Dependabot-like check in CI against the upstream repository; [../05-development/build-system.md](../05-development/build-system.md) §6).
-- Fuzzing (#091): a libFuzzer target over `VirtioGPUProtocol` decoding and `ResourceTable` (runs in CI, T1), and a virgl command-stream fuzzer run against the renderer in a separate test process.
-- A renderer crash takes down apkrund (§8). Moving the renderer to a separate process is post-v1 research. It would need guest-memory sharing across processes, which VZ does not offer.
-
----
-
-## 12. Implementation steps
-
-Each step lists what to build and how it is verified. Steps within a task are in order.
-
-### #018 RiftVM analysis (M2)
-
-1. Pin the available RiftVM reference tag `riftvm-v0.6.1` at its full commit in `ThirdParty.lock.json` (source only; not built; substitution recorded in IR-188).
-2. Read the files in §2.1 and the architecture document. Write `docs/02-design/riftvm-analysis.md` with the table in §2.2 filled in, file by file.
-3. List the patches and exact build flags for virglrenderer, libepoxy, and ANGLE used by RiftVM. They seed #020.
-4. Update §2.1 and §5.1 of this document if the analysis finds differences.
-
-### #063 VirtioDeviceCore + test device (M0)
-
-1. `VirtioDeviceDescriptor`, `VirtioDeviceModel`, `VirtioDeviceContext`, `VirtioQueue`, `VirtioElement`, `GuestMemory` (§3.2), and the VZ adapter that builds `VZCustomVirtioDeviceConfiguration` from a descriptor.
-2. Fakes (`FakeVirtioQueue`, `FakeGuestMemory`) and T0 tests: drain loop, compile-time exactly-once semantics for noncopyable handles, deferred completion from an async task or completion token, a process-exit test for duplicate token completion, debug exit tests for forgotten handles, bounds and overflow checks, feature splitting.
-3. `EntropyTestDevice` (§3.3). Extend the Linux test guest's `/init` with the `rng` check.
-4. T2: acceptance in §3.3, including live guest-memory and deferred-element invalidation during forced VM stop.
-
-### #019 virtio-gpu device layer (M2)
-
-1. `VirtioGPUProtocol` structs and decoding for every command in §4.2, with T0 tests from golden request/response byte vectors (taken from Linux driver traces in the Linux test guest).
-2. `VirtioGPUDevice` with feature negotiation, config space, `GET_DISPLAY_INFO`, `GET_EDID` (EDID generator §6.4), and error responses for everything else. No renderer yet.
-3. `ScanoutTable` with scanout 0 enabled at a fixed test mode.
-4. T2 with the Linux test guest (`apkrun.test=gpu`): `lspci`/sysfs shows vendor 1af4 device 1050, `dmesg` shows `virtio_gpu` initialized with 16 scanouts, `/sys/class/drm/card0-Virtual-1/status` is `connected`, and the EDID read from `/sys/class/drm/card0-Virtual-1/edid` equals the generated one. This is the acceptance: a Linux guest detects a virtio GPU device.
-5. Spike for §4.3: enable scanout 1 at runtime and check that the guest sees the hotplug. Record the result in R-01 and in §4.3.
-
-### #020 Renderer libraries (M2)
-
-1. Build scripts for ANGLE (Metal only), libepoxy, and virglrenderer with pins and patches from #018. Outputs go to `ThirdParty/out/virgl-runtime/<hash>/`.
-2. `GraphicsBridge` skeleton: `gb_renderer_create`/`destroy` and capset queries.
-3. T1: a host-only test creates the renderer, queries the `VIRGL2` capset, creates a context, and destroys everything (needs a Metal device; skipped with a clear message otherwise).
-4. CI job: clean build of the runtime libraries from the lock file, with caching.
-
-### Renderer integration with the Linux test guest (M2, #022 and #023)
-
-Before Android, prove VirGL end to end with Linux:
-
-1. (#022) Add Mesa's virgl Gallium driver and `kmscube` to the Linux test initramfs. The packages are pinned from Alpine v3.23, because v3.24 Mesa has no virgl driver (IR-500); `scripts/tools/initramfs-manifest.py` checks them and writes the manifest (IR-505).
-2. (#022) `apkrun dev linux --tests virgl` runs `kmscube -c 60` headless on scanout 0. The check passes when kmscube reports the `virgl` renderer, its final report says `Rendered 59 frames`, the count that kmscube reports for 60 frames (IR-506), and `rendererFailures` is 0 after the guest stops. The T2 test also samples at most 4096 bytes from resource 4's attached backing once before its first renderer submission; the sample retains counts only and must contain at least 864 sampled bytes and one nonzero byte (IR-1334). This confirms that the mapped backing exposed nonzero guest memory at sample time. It does not tie those bytes to that submission, a particular transfer, or rendered pixels. The host also reads `hostReadbacks` from the device, but that counter has no increment path yet (IR-816). The recorded command stream is the input of the T1 replay test (§14). The `kmscube` stream is recorded by the Linux run with the recorder attached (IR-812), and the replay of step 3 runs on it and on the synthetic fixture (IR-514, IR-812).
-   The opt-in lifecycle test starts a long-running `kmscube` and pauses it after resource 4 is attached. A guest handshake holds reset or stop until the host pauses the VM; the serialized `deviceWillPause()` callback drains renderer work before the host snapshots the still-attached backing and resumes the guest (IR-1335). The test confirms reset/reboot and forced-stop behavior, but does not prove that a renderer operation was pending at invalidation or correlate the sampled bytes with a transfer.
-3. (#023) `apkrun dev linux --tests virgl --window` shows `kmscube` in the development window of #023. Acceptance: the cube animates at ≥ 55 fps and `hostReadbacks = 0`.
-
-### #021 Android detects virtio-gpu (M2)
-
-1. Attach `VirtioGPUDevice` in the Android `VMDefinition`. RuntimeCore appends it to the boot plan's definition for the requested GPU profile ([android-image.md](android-image.md) §9.1), and `apkrun dev boot --gpu swiftshader` requests `guestSwiftshader`.
-2. Boot Android and capture `dmesg`, `/sys/class/drm`, and `/sys/bus/virtio/devices/*/device`. The sysfs reads run as root on the development image, because SELinux denies the shell the connector status (IR-384). The kernel log falls back to the hvc0 console (IR-385).
-3. Acceptance: `virtio_gpu` binds, `card0` exists with 16 `Virtual-N` connectors, and `Virtual-1` (scanout 0) is `connected` while the others are `disconnected`.
-
-### #022 Android VirGL (M2)
-
-1. Complete the 3D command set (§4.2, §4.4, §4.5): contexts, 3D resources, submit, transfers, fences, and polling.
-2. Boot with the `drmVirgl` profile bootconfig.
-3. The 2D renderer of §9 for `guestSwiftshader`, so that profile reaches `boot_completed` too.
-4. The Linux steps 1–2 above.
-5. Acceptance: SurfaceFlinger starts with GLES through virgl (`dumpsys SurfaceFlinger` shows the virgl GLES renderer), no SwiftShader/ANGLE-in-guest libraries are loaded by SurfaceFlinger (`/proc/<pid>/maps`), and `sys.boot_completed=1`.
-
-### #023 SurfaceFlinger to Metal (M2, gate G3)
-
-1. `SurfacePool`, the present path (§6.2), the completion waiter, and statistics (§7).
-2. `apkrun dev boot --gpu virgl --window` shows display 0 in a development `NSWindow`. It uses WindowingCore's IOSurface layer in-process, the same code the wrapper uses later.
-3. The window is **fixed-size**: display 0 keeps the image's default mode, and the window scales the layer with aspect fit. This is the explicit resize behavior #023 asks for; runtime resize comes with #067.
-4. HelloGL (Tests/Fixtures/AndroidApps) runs, and the frame-statistics overlay (`--stats`) shows fps and counters.
-5. Acceptance: the Android display is visible in a macOS window, GPU-accelerated (`drmVirgl`), `hostReadbacks = 0` and `cpuPixelCopies = 0` over a 60 s HelloGL run, HelloGL ≥ 55 fps average (NFR-PERF-04), and no tearing in HelloGL's alternating-color test (a host-side check samples pool buffers in a **test-only** readback mode, which exists only in builds with the `APKRUN_TEST_READBACK` flag and is excluded from the counter).
-
-### Later tasks that extend graphics
-
-- #028: `ScanoutController.configure`/`disable` used by `DisplayPool`; the hotplug path with Android (§4.3 fallbacks if needed).
-- #067: mode changes at runtime (new EDID and display event), pool reallocation, the DPI → EDID mapping.
-- #068: pools shared with the wrapper over XPC ([display-and-windowing.md](display-and-windowing.md) §5).
-- #070: the perf harness reads the statistics in §7.
-- #091: fuzzing (§11).
+- Every guest value is validated after it is copied (§3.2), with checked arithmetic. There are no struct casts over guest memory.
+- The limits of §5.4 bound memory use.
+- virglrenderer's command decoder is the largest attack surface. It is pinned, its patches are listed in the lock, and upstream security fixes are tracked ([build-system.md](../05-development/build-system.md) §6).
+- Fuzzing (#091): a libFuzzer target over `VirtioGPUProtocol` decoding and `ResourceTable` (T1, in CI), and a virgl command-stream fuzzer that runs the renderer in a separate test process.
+- A renderer crash takes down apkrund (§8). Moving the renderer to a separate process is post-v1 research. It would need guest memory sharing across processes, which VZ does not offer.
 
 ---
 
@@ -727,90 +577,50 @@ Before Android, prove VirGL end to end with Linux:
 
 | Case | Meaning | Remediation shown |
 |---|---|---|
-| `rendererInitFailed(stage, detail)` | EGL/ANGLE/virglrenderer initialization failed (stage: `egl`, `metal`, `virgl`) | update macOS / APKRun; try Graphics Safe Mode; attach diagnostics |
-| `rendererOperationFailed(operation, detail)` | a renderer-related operation or host setup step failed, including capset, resource, context, command submit, transfer, fence, presentation, reset, teardown, or a call from the wrong thread | restart Android; attach diagnostics if it continues |
+| `rendererInitFailed(stage, detail)` | EGL, ANGLE, or virglrenderer initialization failed (`stage`: `egl`, `metal`, `virgl`) | update macOS or APKRun; try Graphics Safe Mode; attach diagnostics |
+| `rendererOperationFailed(operation, detail)` | a renderer operation failed (capset, resource, context, submit, transfer, fence, presentation, reset, teardown), or a call came from the wrong thread | restart Android; attach diagnostics if it continues |
 | `rendererLost(reason)` | context loss or GPU removal | Android restarts automatically |
-| `libraryMissing(name)` | VirGLRuntime dylib missing or invalid signature | reinstall APKRun |
+| `libraryMissing(name)` | VirGLRuntime dylib missing or its signature invalid | reinstall APKRun |
 | `scanoutInvalid(ScanoutID)` | host requested a scanout outside 0…15 | bug report |
-| `modeUnsupported(DisplayMode)` | mode exceeds EDID/limit constraints | bug report (DisplayPool should have clamped) |
+| `modeUnsupported(DisplayMode)` | mode exceeds EDID or limit constraints | bug report (DisplayPool should have clamped) |
 | `poolAllocationFailed(PixelSize)` | IOSurface or Metal texture creation failed | close other apps; attach diagnostics |
 | `configUpdateFailed(detail)` | `updateConfigurationSpace` failed | Android display changes may not apply; restart Android |
-| `deviceNotReady` | a host request arrived before DRIVER_OK | retried by DisplayPool after `.guestBound` or boot completion |
-| `deviceSetupFailed` | health finding of `graphics.device`, never thrown: the device is missing or feature negotiation failed | start in Graphics Safe Mode; attach diagnostics |
-| `softwareRendering` | health finding of `graphics.guestDriver`, never thrown: Android fell back to software rendering | restart Android; attach diagnostics |
-| `presentationSlowPath` | health finding of `graphics.present`, never thrown: a readback or CPU copy counter is non-zero (§7) | bug report |
-| `memoryLimitReached` | health finding of `graphics.memory`, never thrown: a memory limit was reached (§5.4) | close some Android app windows |
-| `safeModeOn` | health finding of `graphics.safeMode`, never thrown: the `guestSwiftshader` profile is in use (§9) | turn it off in Settings → Troubleshooting |
+| `deviceNotReady` | a host request arrived before DRIVER_OK | DisplayPool retries after the scanout is configured or the boot completes |
+| `deviceSetupFailed` | health finding `graphics.device` (never thrown): device missing or feature negotiation failed | start in Graphics Safe Mode; attach diagnostics |
+| `softwareRendering` | health finding `graphics.guestDriver` (never thrown): Android fell back to software rendering | restart Android; attach diagnostics |
+| `presentationSlowPath` | health finding `graphics.present` (never thrown): a readback or CPU copy counter is non-zero (§7) | bug report |
+| `memoryLimitReached` | health finding `graphics.memory` (never thrown): a memory limit was reached (§5.4) | close some Android app windows |
+| `safeModeOn` | health finding `graphics.safeMode` (never thrown): the `guestSwiftshader` profile is in use (§9) | turn it off in Settings → Troubleshooting |
 
-Guest-caused errors are virtio-gpu error responses, not `GraphicsFailure`s (§4.2). The catalogue with codes is in [../03-reference/error-catalog.md](../03-reference/error-catalog.md).
+Guest-caused errors are virtio-gpu error responses, not `GraphicsFailure` values (§4.2). The catalog with codes is in [error-catalog.md](../03-reference/error-catalog.md).
 
 ### 13.2 Logging
 
-Subsystem `io.apkrun.graphics`, categories `device` (negotiation, commands, guest errors), `renderer` (virglrenderer/ANGLE log callback, context lifecycle), `present` (pools, frames, stalls), and `stats` (periodic summary every 60 s while any scanout is presenting). Per-command logging is available at debug level only, and is off in release builds.
+Subsystem `io.apkrun.graphics`, with categories `device` (negotiation, commands, guest errors), `renderer` (virglrenderer and ANGLE log callback, context lifecycle), `present` (pools, frames, stalls), and `stats` (a summary every 60 s while any scanout presents). Per-command logging is at debug level only and is off in release builds.
 
 ---
 
 ## 14. Tests
 
-| Tier | Test | Task |
-|---|---|---|
-| T0 | VirtioDeviceCore fakes: drain, compile-time exactly-once handles, deferred completion (including actor and completion-token hops), duplicate token completion trap, forgotten-handle exit checks, bounds, features | #063 |
-| T0 | `VirtioGPUProtocol` decode/encode for every command, including truncated and oversized inputs; golden vectors from Linux traces | #019 |
-| T0 | `ResourceTable` limits and overflow, backing validation, reset clearing | #019, #022 |
-| T0 | Display event logic (§4.3): generation counter, clearing on `GET_DISPLAY_INFO`, change during an in-flight query | #019, #028 |
-| T0 | EDID generator against golden files and a decoder | #019, #067 |
-| T0 | Frame scheduler and `SurfacePool` state machine (drop policy, generation change) | #023, #068 |
-| T1 | GraphicsBridge renderer create/destroy, capsets (needs Metal) | #020 |
-| T1 | Replay the synthetic fixture `Tests/Fixtures/graphics/synthetic-virgl-session.json` through the device and compare the scanout hash exactly using test-only readback (IR-514 to IR-516). An optional Linux `kmscube` recording replays every operation and requires no renderer failures or rejected submits, but uses zero-filled backing, has no scanout identity or reference image, and does not read back its output; it does not claim `kmscube` pixel equivalence (IR-1343). Both require Metal | #022 |
-| T1 | Fuzz targets for protocol decoding (time-boxed in CI) | #091 |
-| T2 | Linux test guest: `rng`, `gpu` (probe, EDID, hotplug spike), `virgl` (kmscube headless with `rendererFailures = 0`, then in a window) | #063, #019, #022, #023 |
-| T2 | Android: `virtio_gpu` binding, VirGL SurfaceFlinger, boot_completed with `drmVirgl` and with `guestSwiftshader` | #021, #022, §9 |
-| T3 | Gate G3: HelloGL visible, ≥ 55 fps, zero host readbacks, no tearing | #023 |
-
----
+- **T0, `VirtioDeviceCore`** (`Packages/VirtioDeviceCore/Tests/VirtioDeviceCoreTests/`): drain loop; deferred completion through async and token hops; duplicate token completion and forgotten handles (exit tests); bounds, overflow, and feature split.
+- **T0, `GraphicsCore`** (`Packages/GraphicsCore/Tests/GraphicsCoreTests/`): `VirtioGPUProtocol` decode and encode for every command, including truncated and oversized input, with golden vectors from Linux traces (`Tests/Fixtures/graphics/virtio-gpu-vectors.json`); `ResourceTable` limits, overflow, backing, and reset; display events (§4.3); EDID golden files; the latest-frame scheduler and `SurfacePool` state machine.
+- **T1, GraphicsBridge** (`Packages/GraphicsCore/Tests/GraphicsCoreSystemTests/GraphicsRendererSystemTests.swift`): renderer create and destroy, capsets, and contexts on a Metal device. **T1, present** (`ScanoutPresentRendererTests`): a flush of the real VirGL renderer presents the guest pixels in order, pixel-exact, with no readback.
+- **T1, replay** (`VirGLRoundTripSystemTests.swift`): the synthetic fixture `Tests/Fixtures/graphics/synthetic-virgl-session.json` replays through the device, and its scanout hash must match exactly through the test-only readback. The optional `kmscube` recording replays every operation with no renderer failure and no rejected submit. It makes no pixel claim. Both need Metal.
+- **T1, fuzzing:** protocol decoding and `ResourceTable`, time-boxed in CI (#091).
+- **T2, Linux test guest** (`Tests/IntegrationTests/LinuxGuestTests/`): `EntropyDeviceTests` (`virtio_rng.0` listed in `/sys/class/misc/hw_random/rng_available`; 64 KiB from `/dev/hwrng` matches the seeded sequence; a second read works after reset; a live mapping and a stale context are rejected after reset and stop); `GPUDeviceTests` (probe, EDID, hotplug); `VirglTests` (`kmscube` headless with `rendererFailures = 0` after shutdown, then in a window).
+- **T2, Android** (`Tests/IntegrationTests/AndroidGraphicsTests/`): `virtio_gpu` binding, VirGL SurfaceFlinger, and `boot_completed` with `drmVirgl` and with `guestSwiftshader`.
+- **RuntimeCore:** `AndroidGraphicsDevicesTests` (T0) and `AndroidGraphicsDevicesRendererTests` (T1, `Packages/RuntimeCore/Tests/RuntimeCoreTests/`): `drmVirgl` attaches one device with `edid` and `virgl`; an unlisted profile starts no renderer.
+- **Offline bootconfig:** `test_the_drm_virgl_bootconfig_follows_from_the_committed_layout` in `Images/tools/tests/test_bundle.py` (`-k drm_virgl`).
+- **T3, gate G3** (`Tests/AcceptanceTests/G3GraphicsTests/`, `scripts/run-gate.sh G3`): HelloGL visible, at least 55 fps, zero host readbacks, no tearing.
 
 ## 15. Open items
 
-| Item | Plan |
-|---|---|
-| What VZ does on a guest reboot is not documented: a device reset and a second boot, or `guestDidStop` (§3.3) | #063 observes it with the Linux test guest and records it in §3.3 and R-01 |
-| `maximumAllowedSharedMemoryRegionCount` is not documented (§3.1) | v1 offers no shared-memory region (§4.1). The first Vulkan spike in #096 checks that the count is ≥ 1 (§10) |
-| Does `updateDeviceSpecificConfiguration` raise a config-change interrupt in the guest (§4.3, R-01) | #019 runs the spike with the Linux test guest, and #028 repeats it with Android. If not, fallback A (the Guest Agent forces a DRM connector re-probe on the custom image; #028 checks that the driver re-reads the display info), then B (all pool scanouts enabled at boot), then C (a fixed display count per boot, R-04) |
-| Which RiftVM recipe patches APKRun should carry or reimplement (§5.1) | #020 checks the pinned macOS and ANGLE/libepoxy recipe patches against APKRun's own pinned sources; adopt only the required, license-reviewed changes. The source flags and EGL init behavior are recorded in [riftvm-analysis.md](riftvm-analysis.md) |
-| The present ordering relies on ANGLE's Metal backend using one command queue per display (§6.2) | #023 checks that HelloGL's alternating-color test shows no tearing |
-| How the EDID physical size affects the density of secondary displays (§6.4, OQ-39) | #067. Working default: the density is set with `setDisplayPolicy` only, and the result is recorded in §6.4 |
-| Whether `gpuUtilization` from the IOKit accelerator statistics is usable (§7, OQ-07) | #070 checks it on the reference Mac. Working default: best effort, reported as unavailable when the key is missing |
-| virglrenderer and ANGLE render common apps correctly (§5, R-02) | #020, #022, #023, then the compatibility runs of #090. Fallback: the `guestSwiftshader` profile through Graphics Safe Mode (§9). There is no automatic fallback |
-| One render thread serves several displays at 60 fps within the present budget (§4.7, §7, R-03) | #023 measures one display and #030 two in the embedded runtime; #068 and #070 measure the XPC path in apkrund. Fallback: a lower frame rate for background windows, one renderer context thread per display if virglrenderer allows it, or revised targets through an ADR |
-| Multi-scanout with the ranchu HWC: runtime hotplug, and mode changes that keep the display ID (§6.1, §6.4, R-04) | #028 (hotplug) and #067 (mode change). Fallback: a fixed pool size per boot (§4.3, fallback C) and the resize fallbacks of [display-and-windowing.md](display-and-windowing.md) §7.1 |
-| Host memory of the renderer and of one pool per display (§5.4, §6.3, R-08) | #028 and #070 measure it. Fallback: lower defaults and smaller pools |
-| No VM save/restore while this device is attached (§8, R-07, accepted) | revisited if a later virglrenderer or the Vulkan track (#096) can rebuild the renderer state |
-
----
-
-## 16. Verification log
-
-Filled in by the tasks. Each entry records the date, the macOS build, the image build (or the test Linux guest), and the result.
-
-| Question | Task | Result |
-|---|---|---|
-| Custom virtio API with `EntropyTestDevice`: queue validity before DRIVER_OK, same-size config updates, reset and stop mapping invalidation, deferred completion, guest reboot | #063 | 2026-10-05, arm64 MacBook Pro, macOS 27.0 build 26A428 / Xcode 27.0 build 27A266a: VirtioDeviceCore and VirtualMachineCore T0 passed (26 and 71 tests); clean filtered-copy Xcode integration build passed; LinuxGuest T2 passed 10 XCTest cases and 6 observer tests. The forced-stop callback attachment records `DRIVER_OK → mapping creation → WillStop`; it contains no `WillReset` between mapping creation and stop. The live mapping is rejected and the old deferred-element completion is attempted after stop. Reboot evidence records the guest console order and VZ callback order independently. Full repository checks passed; the final hostile review's completion-token documentation finding was corrected and a regression test added. See IR-193. |
-| RiftVM source analysis: `riftvm-v0.6.1` commit `51f19193b1d3326b2e164d37a2a59e9970375170`, source/build flags, license and APKRun differences | #018 | 2026-10-07: analysis updated after hostile review with command responses, resource-estimate limits, scanout/mode behavior, GPU-profile and display-topology differences, and a patch-by-patch #020 crosswalk. The source-only lock check passed and its MIT copy was manually compared with the pinned source. #020's separate clean build, cache reuse, and tests are recorded below / IR-191; #018 did not repeat them. No RiftVM VM/Android/Metal presentation test; maintainer review pending (IR-188). 2026-10-10 (re-check, no build and no VM): the upstream files at `51f19193` were re-read through the GitHub API and matched [riftvm-analysis.md](riftvm-analysis.md) §2–§5; the tag `riftvm-v0.6.1` peels to that commit. The analysis gained the flow-step crosswalk (§2.4), the #020 flags and patch deviations (§4), the renderer license table (§4), and the build and test inventory (§5). The recipe and source archives matched their pins; the virglrenderer patch sequences were applied to the pinned source. `scripts/check-lock.sh` passed with `riftvm` as a source-only reference, and `riftvm` is in no build group. New review items: IR-410 (copied RiftVM MSAA code and its notice rule), IR-411 (ANGLE Vulkan hunk), IR-412 (patch upstream status), IR-413 (flags beyond RiftVM's). |
-| The Linux test guest detects the virtio GPU: vendor 1af4 device 1050, 16 scanouts, `Virtual-1` connected, EDID equal to the generated one | #019 | 2026-10-08, arm64 MacBook Pro, macOS 27.0.1 build 26A434, signed `IntegrationTests` host, `LinuxGuest` run: 29 of 29 passed. The `gpu` check passed, and its EDID SHA-256 equals `scanout-00-1024x768-60.edid` (`GPUDeviceTests`). The driver's 28 exchanges are committed as `virtio-gpu-linux-trace.json`. |
-| Config-change interrupt from `updateDeviceSpecificConfiguration`: hotplug of scanout 1 on the Linux test guest | #019 | 2026-10-08, same run. The host enabled scanout 1 3.0 s after DRIVER_OK. The guest's `gpu-hotplug` check reported `scanout1=connected` after about 4 s and 5 s in two runs. Linux part positive. The driver re-reads display info on a config-change event, so the update raised one (inference). Android stays with #028 (IR-256). |
-| Clean build of the runtime libraries from the lock file; renderer create, `VIRGL2` capset, context lifecycle, and recreation on the host | #020 | 2026-10-05, arm64 macOS 27.0 build 26A428 / Xcode 27.0 build 27A266a: clean native build and verified cache hit (IR-191); GraphicsBridge T0 (3 tests), host T1 (2 tests) normal/ASan/UBSan, Release bundle check, and full repository checks passed. Hostile review found no actionable P1/P2; callers must quiesce before destroy (IR-192). Maintainer review pending. |
-| `kmscube` on the Linux test guest: `virgl` renderer and `hostReadbacks = 0` headless (#022), ≥ 55 fps in the development window (#023) | #022, #023 | 2026-10-10, Apple M5 Pro Mac (macOS 27.0.1 build 26A434; the ANGLE renderer string names the M5 Pro), Linux test guest with the Alpine v3.23 Mesa 25.2.7 virgl packages and the v3.24 kernel 6.18.54, through the `LinuxGuest` T2 test `VirglTests` (`xcodebuild test-without-building`, signed test host). The guest logged `kmscube: renderer: "virgl"` and `kmscube: Rendered 59 frames` (60 requested), printed `APKRUN-TEST: virgl ok renderer=virgl requested=60 reported=59`, and the host read `hostReadbacks == 0`. The first attempts failed for three reasons, each fixed: the v3.24 Mesa has no virgl driver (IR-500), the strict GET_CAPSET rule (IR-504), and the frame count (IR-506). The ≥ 55 fps part is #023. Caveat (2026-10-11, IR-813): on replay of this run's recording, the host renderer rejects all 61 `submit` calls of the kmscube context, so this check does not show that virglrenderer drew the stream. Its `hostReadbacks = 0` is not a measurement, because nothing increments that counter (IR-816). |
-| Android binds `virtio_gpu`: `card0` with 16 `Virtual-N` connectors, only `Virtual-1` connected | #021 | 2026-10-10, Mac17,9 (arm64), macOS 27.0.1 build 26A434 / Xcode 27.0 build 27A266a, image `2026.10.0-cf16373615-arm64` (build 16373615), `guestSwiftshader`: `AndroidGraphicsTests.testVirtioGPUBinds` passed in 13.7 s. Device ID 16 (`virtio18`) is bound to `virtio_gpu`: the kernel logs `[drm] number of scanouts: 16` and `Initialized virtio_gpu 0.1.0`, with `+edid -virgl`. `card0` has 16 connectors, and only `card0-Virtual-1` is `connected` (the others are `disconnected`). The captures (`kernel-log.txt`, `drm-connectors.txt`, `virtio-devices.txt`, `summary.txt`, `hvc0-console.log`) are in the bundle's `android-graphics` directory. The 2D commands return `VIRTIO_GPU_RESP_ERR_UNSPEC` until #022. The capture came while the boot was in `booting(systemServer)`. A CLI boot with this profile reached `sys.boot_completed=1` at kernel time 8.5 s (`cli-swiftshader-boot.log`, IR-390). The sysfs reads run as root (IR-384). `AndroidGraphicsRefusalTests` checks that `drmVirgl` is refused before any file changes (IR-380). |
-| SurfaceFlinger uses GLES through virgl, no guest SwiftShader or ANGLE libraries, `sys.boot_completed=1` | #022 | 2026-10-11, ODM-overlay development variant, enforcing SELinux: `sys.boot_completed=1`, SurfaceFlinger reported `Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8`, and its process map had no SwiftShader or in-guest ANGLE library (IR-961). This validates the diagnostic development overlay only; product SELinux policy remains for #035. |
-| Host side of #022, without a VM: the 3D command set, transfers, fences, limits, the 2D path of `guestSwiftshader`, the recorder, and a texture round trip through the real renderer | #022 | 2026-10-10, Apple silicon Mac, macOS 27.0.1 build 26A434 / Xcode 27.0 build 27A266a, no VM started. GraphicsCore T0 passed (138 tests, `swift test --filter GraphicsCoreTests`). GraphicsCore T1 passed (7 tests; 8 with `--traits TestReadback`), including the upload and readback through context 0 (IR-463), the fence retirement above 2^31, and the replay of a recorded session on a fresh renderer. An adversarial review found seven defects, all fixed, each with a test; IR-460 to IR-479 record the decisions. RuntimeCore `AndroidGraphicsDevicesTests` passed (4 tests). The HelloGL fixture built offline, and its signer matches the fixture key. `hostReadbacks` stays 0 on every path, because nothing reads back on the host. This is not the guest result: the rows above stay pending until the VM runs. |
-| Synthetic fixture pixel readback and KMSCube operation replay (IR-514 to IR-516, IR-812 to IR-850) | #022 | 2026-10-10, Apple silicon Mac, macOS 27.0.1 build 26A434 / Xcode 27.0 build 27A266a, no VM started. `swift test --traits TestReadback --filter VirGLRendererSuite`: 7 tests passed and 1 skipped (the regeneration test, which runs only with `APKRUN_REGENERATE_FIXTURES=1`). `theSyntheticSessionReplaysOnTheDeviceAndItsScanoutMatches` reads the 16 × 16 synthetic target and matches the expected image exactly (SHA-256 `41172b76…`). The later optional KMSCube replay test traverses recorded renderer operations; it does not read back scanout pixels. The historical 25,763,085-byte recording (149 operations, SHA-256 `0f7010c7…`) was replayed with test-only readback enabled, but its KMSCube test did not call the readback API: all 61 `submit` calls were rejected before the `attach_iov` fix (IR-813), and after the fix the operations passed without a pixel comparison. Any `hostReadbacks` and `guestReadbacks` zeros are guards that cannot move on replay (IR-816). The T0 suite passed 139 tests; on 2026-10-11, it passed 142 tests including recorder/replay regressions |
-| The drmVirgl device of the boot, without a VM: RuntimeCore attaches one VirGL device with `edid` and `virgl` and two capsets, the real renderer starts and is released twice in one process, the bootconfig of §9 and the device list of the plan are as the design says, an unlisted profile starts no renderer, and a renderer failure of the device step is returned as `RuntimeBootFailure.graphics` (the supervisor-level path, which ends the boot as `runtime.graphics`, is not tested here: IR-583) | #022 | 2026-10-10, Apple silicon Mac, macOS 27.0.1 build 26A434, no VM started. `swift test --filter RuntimeCoreTests`: 145 passed, including the two T1 tests of `AndroidGraphicsDevicesRendererTests` (serialized, with `APKRUN_VIRGL_RUNTIME_PATH` set by the test). `ImageCoreTests`: 89 passed, including `androidBootPlannerBuildsTheDrmVirglBootOfTheDesign`. `DiagnosticsCoreTests`: 92 passed. `RuntimeHostTests`: 10 passed. The boot on the VM is not run: the drmVirgl criteria of #022 stay open (IR-580) |
-| Gate G3: HelloGL ≥ 55 fps average, `hostReadbacks = 0` and `cpuPixelCopies = 0` over 60 s, no tearing | #023 | 2026-10-16, Apple M5 Pro, macOS 27.0.1 / Xcode 27.0: `scripts/run-gate.sh G3` passed at `7241003`; one AcceptanceTests case passed and the evidence checker exited 0. HelloGL averaged 59.99 fps across 61 events over ten minutes, with one PID observed each minute, 0 mixed frames in 408 alternating-phase samples, and no renderer crash lines. Both counters stayed at 0 across 685 statistics lines. The 480×312, 1797.512-second full-screen source remains local because intervals without the APKRun window include unrelated desktop content. Five 138×118 APKRun-window samples are committed at `docs/04-plan/evidence/G3/apkrun-window-samples.mp4`; the source intervals have a median frame interval of 60 fps and no gap over 50 ms, with no visible full-window tear or stutter in the reviewed samples. C01-6 is checked on this bounded sampled review; the low-resolution samples limit the visual claim (IR-1344). |
-| Hotplug with Android, and whether fallback A makes the driver re-read the display info | #028 | Pending Android execution. Host scanout events and Guest Agent display correlation are implemented; no Android hotplug result or fallback A/B/C choice is recorded (§4.3, IR-1376) |
-| A runtime mode change keeps the display ID; density from `SetDisplayPolicy` and EDID physical size (OQ-39) | #067 | Partial (2026-10-19, IR-1372): code waits for display 0's requested mode and applies policy before publishing a new pool; Android guest mode stability and density readback remain pending (§6.4, display-and-windowing.md §7.1) |
-| Two displays: fps, present time p95, and memory; `gpuUtilization` availability (OQ-07) | #030, #070 | The embedded two-window launch path is implemented (IR-1378); a live two-display run and all performance measurements remain pending (§7) |
-| `maximumAllowedSharedMemoryRegionCount`, and mapping IOSurface- or Metal-heap-backed memory into a shared-memory region | #096 | pending (§10) |
-| Focused Linux VirGL regression check: `kmscube` reports `virgl` and `rendererFailures == 0` after shutdown | #022 | 2026-10-16, Apple M5 Pro Mac (arm64, macOS 27.0.1 build 26A434 / Xcode 27.0 build 27A266a), signed `LinuxGuest` test host, Alpine v3.23 Mesa 25.2.7 virgl packages and the v3.24 kernel 6.18.54: `VirglTests.testKmscubeRunsHeadlesslyThroughVirglWithoutRendererFailures` passed (1 test, 1.228 s) with `renderer=virgl`, `requested=60 reported=59`, and the post-shutdown `rendererFailures == 0` assertion. The result is `/tmp/apkrun-022-renderer-zero-final-20261016.xcresult`. It does not prove pixel output or close IR-849's guest-pointer and attached-backing lifecycle checks. `hostReadbacks == 0` remains uninstrumented (IR-816). |
-| Live resource 4 backing sample before the first Linux VirGL submission | #022 | 2026-10-16, Apple M5 Pro Mac (arm64, macOS 27.0.1 build 26A434 / Xcode 27.0 build 27A266a), signed `LinuxGuest` test host, Alpine v3.23 Mesa 25.2.7 virgl packages and the v3.24 kernel 6.18.54: `VirglTests.testKmscubeHasNonzeroResource4BackingWithoutRendererFailures` passed (1 test, 1.205 s). The test observed at least 864 bytes within its 4096-byte sample and at least one nonzero byte, and asserted `renderer=virgl`, `requested=60 reported=59`, and `rendererFailures == 0` after shutdown. Result: `/tmp/apkrun-022-backing-observer-20261016.xcresult`. This is partial evidence of nonzero mapped guest memory only; it does not identify a known canary, tie the bytes to a specific transfer or submission, compare pixels, or close IR-849's reset/stop ordering check. `hostReadbacks == 0` remains uninstrumented (IR-816). |
-| Attached resource 4 backing across paused Linux VirGL reset and stop | #022 | 2026-10-16, Apple M5 Pro Mac (arm64, macOS 27.0.1 build 26A434 / Xcode 27.0 build 27A266a), signed `LinuxGuest` test host, Alpine v3.23 Mesa 25.2.7 virgl packages and the v3.24 kernel 6.18.54: `testForcedStopCompletesWithPausedKmscubeAndAttachedVirGLBacking` passed (1.081 s), and `testGuestResetCompletesWithPausedKmscubeAndAttachedVirGLBacking` passed (1.506 s), 2.587 s total. The guest paused `kmscube`; `VMController.pause()` ran the serialized renderer drain, and the tests verified the still-attached resource 4 sample before releasing the stop/reset handshake. Reset observed the second guest boot; forced stop observed the guest marker before the harness stopped the VM. Result: `/tmp/apkrun-022-lifecycle/VirGL-lifecycle-fifo-renamed-final.xcresult`; initramfs SHA-256 `6e77e146b25bfed2d90fa5cd8ab0091c6a36721d6deb99cc7edda217e7fdd20f`. This is partial lifecycle evidence only: it does not prove a renderer operation was pending at invalidation or correlate a known guest canary/transfer. IR-849 remains open (IR-1335). |
-| The scanout is presented through an IOSurface pool into a macOS window: T0 and T1 results, the first boot's stall, and the counters | #023 | 2026-10-12, Apple silicon Mac (macOS 27.0, Xcode 27.0): T0 `GraphicsCoreTests` 174 passed (25 new) and `WindowingCoreTests` 10 passed; T1 `aFlushOfTheVirGLRendererPresentsTheGuestPixelsInOrderWithTheirOrientation` passed, pixel-exact in two buffers, `hostReadbacks` and `cpuPixelCopies` 0. Two drmVirgl boots with the window. Boot 1 stalled in `booting(systemServer)` while the event loop ran inside a main-actor job (IR-1103). Boot 2 reached the window with the statistics line at 0 frames, and SurfaceFlinger aborted in the guest before any flush (IR-1106). The HelloGL boot (IR-1200 to IR-1208; odm4 bundle, `drmVirgl`, `--window --stats`, one boot): the renderer event is `virgl`, 728 statistics lines have every counter at 0, HelloGL averages 59.96 fps over 10 minutes, and 40 alternating-colour window captures show no mixed frame (IR-1205). Gate G3 passed on `7dfa317` (IR-1225): pool-buffer sampling found 0 mixed frames in 320 alternating samples; HelloGL averaged 59.98 fps over 61 ten-minute events. The 2026-10-16 rerun at `7241003` passed again with 59.99 fps, 0 mixed frames in 408 alternating samples, and 0 renderer crash lines. Its C01-6 sampled visual review is recorded in IR-1344; five 138×118 APKRun-window samples are committed at `docs/04-plan/evidence/G3/apkrun-window-samples.mp4`, while the full-screen source remains local because intervals without the APKRun window include unrelated desktop content. |
+- R-01: the Android guest's reaction to a configuration update, which decides whether §4.3 fallback A, B, or C applies.
+- R-04: multi-scanout with the ranchu HWC (runtime hotplug and mode changes that keep the display ID). Fallbacks: §4.3 C, and the resize fallbacks of [display-and-windowing.md](display-and-windowing.md) §7.1.
+- R-04: no scanout event stream exists in the code yet. The design names `ScanoutEvent` (`guestBound`, `guestUnbound`, `frameDropped`, `deviceReset`), but RuntimeCore learns of frames only through `ScanoutPoolHandle.frames`.
+- R-02: virglrenderer and ANGLE render common apps correctly. Fallback: the `guestSwiftshader` profile through Graphics Safe Mode (§9). There is no automatic fallback.
+- R-03: one render thread serves several displays at 60 fps. Fallbacks: a lower frame rate for background windows, one renderer thread per display if virglrenderer allows it, or revised targets through an ADR.
+- R-08: host memory of the renderer and of one pool per display (§5.4, §6.3). Fallback: lower defaults and smaller pools.
+- R-07: no VM save and restore while this device is attached. Accepted; revisit if a later virglrenderer or the Vulkan track (§10) can rebuild the renderer state.
+- OQ-39: how the EDID physical size affects the density of secondary displays (§6.4). Working default: set the density with `setDisplayPolicy` only.
+- OQ-07: whether `gpuUtilization` from the IOKit accelerator statistics is usable (§7). Working default: best effort, reported as unavailable when the key is missing.

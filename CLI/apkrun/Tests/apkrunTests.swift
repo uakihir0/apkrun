@@ -33,12 +33,153 @@ import Testing
 #if !APKRUN_EMBEDDED_RUNTIME
     @Test func daemonInstallCommandParsesConfirmationAndJSONFlags() async throws {
         let command = try await APKRunCommand.asyncParseAsRoot([
-            "install", "example.apk", "--yes", "--json",
+            "install", "example.apk", "--yes", "--json", "--detach",
         ])
 
         #expect((command as? InstallCommand)?.files == ["example.apk"])
         #expect((command as? InstallCommand)?.yes == true)
         #expect((command as? InstallCommand)?.json == true)
+        #expect((command as? InstallCommand)?.detach == true)
+    }
+
+    @Test func operationsCommandsParseListWaitAndCancel() async throws {
+        let list = try await APKRunCommand.asyncParseAsRoot(["operations", "list", "--json"])
+        #expect((list as? OperationsListCommand)?.json == true)
+
+        let operationID = "41f9ed7b-a123-4ebd-9a61-7a2be9465780"
+        let wait = try await APKRunCommand.asyncParseAsRoot([
+            "operations", "wait", operationID, "--detach",
+        ])
+        #expect((wait as? OperationsWaitCommand)?.id == operationID)
+        #expect((wait as? OperationsWaitCommand)?.detach == true)
+
+        let cancel = try await APKRunCommand.asyncParseAsRoot([
+            "operations", "cancel", operationID, "--json",
+        ])
+        #expect((cancel as? OperationsCancelCommand)?.id == operationID)
+        #expect((cancel as? OperationsCancelCommand)?.json == true)
+    }
+
+    @Test func operationPollingWaitsForTerminalSnapshotAndRejectsUnknownResult() async throws {
+        let operationID = RuntimeAPI.OperationID()
+        let packageID = try #require(RuntimePackageID(rawValue: "com.example.app"))
+        let summary = RuntimePackageSummary(
+            packageID: packageID,
+            displayName: "Example",
+            versionCode: 42
+        )
+        let queue = FakeOperationStatusQueue([
+            OperationSnapshot(
+                operationID: operationID,
+                kind: .install,
+                startedAt: Date(timeIntervalSince1970: 1),
+                progress: OperationProgress(stage: "startingRuntime")
+            ),
+            OperationSnapshot(
+                operationID: operationID,
+                kind: .install,
+                startedAt: Date(timeIntervalSince1970: 1),
+                result: .succeeded(.package(summary)),
+                finishedAt: Date(timeIntervalSince1970: 2)
+            ),
+        ])
+
+        let finished = try await OperationCommandOutput.waitForTerminalSnapshot(
+            operationID: operationID,
+            progressToStderr: false,
+            pollInterval: .zero,
+            query: { id in await queue.next(id) },
+            sleep: { _ in }
+        )
+        #expect(try OperationCommandOutput.installedPackage(from: finished, expectedPackageID: packageID) == summary)
+
+        let unknown = OperationSnapshot(
+            operationID: operationID,
+            kind: .install,
+            startedAt: Date(timeIntervalSince1970: 1),
+            result: .unknown,
+            finishedAt: Date(timeIntervalSince1970: 2)
+        )
+        do {
+            try OperationCommandOutput.requireSuccess(unknown)
+            Issue.record("an unknown operation result unexpectedly counted as success")
+        } catch let failure as RuntimeWireError {
+            #expect(failure.code == "runtime.operationResultUnknown")
+            #expect(ExitCodes.code(for: failure) != ExitCodes.success)
+        }
+    }
+
+    @Test func missingOperationRemainsNotFoundAndNeverBecomesSuccess() async {
+        let missing = RuntimeWireError.runtime(
+            "operationNotFound",
+            message: "That operation doesn't exist or has expired."
+        )
+        let failure = await OperationCommandOutput.commandFailure(missing)
+
+        #expect(failure.code == "runtime.operationNotFound")
+        #expect(ExitCodes.code(for: failure) == ExitCodes.notFound)
+    }
+
+    @Test func unknownOperationOutputAndCancellationDispositionNeverSucceed() throws {
+        let operationID = RuntimeAPI.OperationID()
+        let unknownOutput = OperationSnapshot(
+            operationID: operationID,
+            kind: .install,
+            startedAt: Date(timeIntervalSince1970: 1),
+            result: .succeeded(.unknown),
+            finishedAt: Date(timeIntervalSince1970: 2)
+        )
+        #expect(throws: RuntimeWireError.self) {
+            try OperationCommandOutput.requireSuccess(unknownOutput)
+        }
+        #expect(throws: RuntimeWireError.self) {
+            try OperationCommandOutput.checkCancelResult(.unknown)
+        }
+        #expect(throws: RuntimeWireError.self) {
+            try OperationCommandOutput.checkCancelResult(.alreadyFinished(.unknown))
+        }
+    }
+
+    @Test func operationInstallResultMustContainTheExpectedPackage() async throws {
+        let operationID = RuntimeAPI.OperationID()
+        let expectedPackageID = try #require(RuntimePackageID(rawValue: "com.example.expected"))
+        let otherPackageID = try #require(RuntimePackageID(rawValue: "com.example.other"))
+        let summary = RuntimePackageSummary(
+            packageID: otherPackageID,
+            displayName: "Other",
+            versionCode: 7
+        )
+        let snapshot = OperationSnapshot(
+            operationID: operationID,
+            kind: .install,
+            startedAt: Date(timeIntervalSince1970: 1),
+            result: .succeeded(.package(summary)),
+            finishedAt: Date(timeIntervalSince1970: 2)
+        )
+
+        do {
+            _ = try OperationCommandOutput.installedPackage(
+                from: snapshot,
+                expectedPackageID: expectedPackageID
+            )
+            Issue.record("an install result for another package unexpectedly counted as success")
+        } catch let failure as RuntimeWireError {
+            #expect(failure.code == "runtime.operationResultUnknown")
+        }
+    }
+
+    @Test func operationListSanitizesProgressBeforeTerminalOutput() {
+        let operation = OperationSnapshot(
+            operationID: RuntimeAPI.OperationID(),
+            kind: .install,
+            startedAt: Date(timeIntervalSince1970: 1),
+            progress: OperationProgress(message: "Installing\u{001B}[2J\nAPK")
+        )
+
+        let text = OperationCommandOutput.listText([operation])
+        #expect(text.contains("Installing�[2J�APK"))
+        #expect(!text.contains("\u{001B}"))
+        #expect(!text.contains("\nAPK"))
     }
 
     @Test func daemonInstallRejectsMoreThanTwentyInputFilesBeforeOpeningThem() {
@@ -116,29 +257,53 @@ import Testing
         )
     }
 
-    @Test func daemonInstallTimeoutExplainsHowToCheckBeforeRetrying() async throws {
+    @Test func daemonInstallPreDispatchTimeoutDoesNotClaimInstallMayHaveCompleted() async throws {
         let packageID = try #require(RuntimePackageID(rawValue: "com.example.app"))
         let failure = await DaemonInstallSupport.installFailure(
             RuntimeControlClientError.requestTimedOut(operation: "installImported"),
             packageID: packageID
         )
 
-        #expect(failure.code == "runtime.operationResultUnknown")
-        #expect(failure.remediation?.contains("apkrun info com.example.app") == true)
-        #expect(failure.remediation?.contains("before retrying") == true)
+        #expect(failure.code == "runtime.requestTimedOut")
     }
 
     @Test func daemonInstallTransportFailureExplainsThatInstallMayHaveCompleted() async throws {
         let packageID = try #require(RuntimePackageID(rawValue: "com.example.app"))
+        let operationID = RuntimeAPI.OperationID()
         let failure = await DaemonInstallSupport.installFailure(
-            RuntimeControlClientError.operationResultUnknown(operation: "installImported"),
-            packageID: packageID
+            RuntimeControlClientError.operationResultUnknown(operation: "beginInstallImported"),
+            packageID: packageID,
+            operationID: operationID
         )
 
         #expect(failure.code == "runtime.operationResultUnknown")
         #expect(failure.message.contains("could not confirm"))
+        #expect(failure.remediation?.contains("apkrun operations wait \(operationID.wireValue)") == true)
         #expect(failure.remediation?.contains("apkrun info com.example.app") == true)
         #expect(failure.remediation?.contains("before retrying") == true)
+    }
+#endif
+
+#if !APKRUN_EMBEDDED_RUNTIME
+    private actor FakeOperationStatusQueue {
+        private var snapshots: [OperationSnapshot]
+
+        init(_ snapshots: [OperationSnapshot]) {
+            self.snapshots = snapshots
+        }
+
+        func next(_ operationID: RuntimeAPI.OperationID) -> OperationSnapshot {
+            guard !snapshots.isEmpty else {
+                return OperationSnapshot(
+                    operationID: operationID,
+                    kind: .install,
+                    startedAt: Date(timeIntervalSince1970: 1),
+                    result: .unknown,
+                    finishedAt: Date(timeIntervalSince1970: 2)
+                )
+            }
+            return snapshots.removeFirst()
+        }
     }
 #endif
 

@@ -20,6 +20,9 @@
         @Flag(name: .long, help: "Print the result as JSON.")
         var json = false
 
+        @Flag(name: .long, help: "Return after the install operation has started.")
+        var detach = false
+
         mutating func run() async throws {
             let urls = try DaemonInstallSupport.inputFiles(files)
             let handles = try urls.map { try DaemonInstallSupport.openRegularFile(at: $0) }
@@ -68,16 +71,52 @@
                 options: RuntimeInstallOptions(allowDowngrade: allowDowngrade)
             )
 
-            let result: RuntimePackageSummary
+            let operationID = OperationID()
+            let handle: OperationHandle
             do {
-                // Do not retry this request after a transport failure: Android may have completed it.
-                result = try await client.installImported(installRequest)
+                handle = try await client.beginInstallImported(
+                    installRequest,
+                    operationID: operationID
+                )
             } catch {
                 throw await DaemonInstallSupport.installFailure(
                     error,
-                    packageID: preview.packageID
+                    packageID: preview.packageID,
+                    operationID: operationID
                 )
             }
+
+            if detach {
+                if json {
+                    try DaemonInstallSupport.writeJSON(handle)
+                } else {
+                    Output.write(
+                        "Started install operation \(handle.operationID.wireValue). "
+                            + "Wait with `apkrun operations wait \(handle.operationID.wireValue)`."
+                    )
+                }
+                return
+            }
+
+            let snapshot: OperationSnapshot
+            do {
+                snapshot = try await OperationCommandOutput.waitForTerminalSnapshot(
+                    using: client,
+                    operationID: handle.operationID,
+                    progressToStderr: OperationCommandOutput.shouldShowProgress
+                )
+            } catch {
+                throw await DaemonInstallSupport.installWaitFailure(
+                    error,
+                    packageID: preview.packageID,
+                    operationID: handle.operationID
+                )
+            }
+
+            let result = try OperationCommandOutput.installedPackage(
+                from: snapshot,
+                expectedPackageID: preview.packageID
+            )
 
             if json {
                 try DaemonInstallSupport.writeJSON(result)
@@ -222,23 +261,68 @@
 
         static func installFailure(
             _ error: any Error,
-            packageID: RuntimePackageID
+            packageID: RuntimePackageID,
+            operationID: OperationID? = nil
         ) async -> RuntimeWireError {
             if let clientError = error as? RuntimeControlClientError {
                 switch clientError {
-                case .operationResultUnknown, .requestTimedOut, .requestCancelled:
-                    return RuntimeWireError(
-                        domain: "runtime",
-                        code: clientError.codeForInstallFailure,
-                        message: "APKRun could not confirm whether the install completed.",
-                        remediation:
-                            "Check `apkrun info \(packageID.rawValue)` before retrying; Android may have completed the install."
-                    )
+                case .operationResultUnknown:
+                    return uncertainInstallResult(packageID: packageID, operationID: operationID)
+                case .remoteFailure(let code, _) where code == "runtime.operationNotFound":
+                    return uncertainInstallResult(packageID: packageID, operationID: operationID)
                 default:
                     break
                 }
             }
+            if let wireError = error as? RuntimeWireError,
+                wireError.code == "runtime.operationResultUnknown"
+                    || wireError.code == "runtime.operationNotFound"
+            {
+                return uncertainInstallResult(packageID: packageID, operationID: operationID)
+            }
             return await RuntimeStatusOutput.commandFailure(error)
+        }
+
+        static func installWaitFailure(
+            _ error: any Error,
+            packageID: RuntimePackageID,
+            operationID: OperationID
+        ) async -> RuntimeWireError {
+            if let clientError = error as? RuntimeControlClientError {
+                switch clientError {
+                case .transportFailure, .requestTimedOut, .requestCancelled, .operationResultUnknown,
+                    .malformedReply, .invalidRemoteProxy:
+                    return uncertainInstallResult(packageID: packageID, operationID: operationID)
+                case .remoteFailure(let code, _) where code == "runtime.operationNotFound":
+                    return uncertainInstallResult(packageID: packageID, operationID: operationID)
+                default:
+                    break
+                }
+            }
+            if let wireError = error as? RuntimeWireError,
+                wireError.code == "runtime.operationResultUnknown"
+                    || wireError.code == "runtime.operationNotFound"
+            {
+                return uncertainInstallResult(packageID: packageID, operationID: operationID)
+            }
+            return await RuntimeStatusOutput.commandFailure(error)
+        }
+
+        private static func uncertainInstallResult(
+            packageID: RuntimePackageID,
+            operationID: OperationID?
+        ) -> RuntimeWireError {
+            let operationHint =
+                operationID.map {
+                    "Run `apkrun operations wait \($0.wireValue)` to check the retained operation result. "
+                } ?? ""
+            return RuntimeWireError(
+                domain: "runtime",
+                code: "runtime.operationResultUnknown",
+                message: "APKRun could not confirm whether the install completed.",
+                remediation: operationHint
+                    + "Check `apkrun info \(packageID.rawValue)` before retrying; Android may have completed the install."
+            )
         }
 
         private static func relationName(_ relation: RuntimeImportRelation) -> String {
@@ -275,20 +359,4 @@
         let result: Value
     }
 
-    extension RuntimeControlClientError {
-        fileprivate var codeForInstallFailure: String {
-            switch self {
-            case .requestTimedOut:
-                "runtime.operationResultUnknown"
-            case .operationResultUnknown:
-                "runtime.operationResultUnknown"
-            case .requestCancelled:
-                "runtime.operationResultUnknown"
-            case .transportFailure:
-                "runtime.serviceUnavailable"
-            default:
-                "runtime.internal"
-            }
-        }
-    }
 #endif

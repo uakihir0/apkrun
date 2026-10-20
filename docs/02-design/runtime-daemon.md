@@ -272,7 +272,7 @@ stop(reason, force)
 - With `reason == .hostShutdown` the whole sequence has a 40 s deadline (§2.4). Step 6 then goes straight to `stop()` when the deadline is near.
 - Without a Guest Agent (it is unreachable), step 4 is skipped.
 - Every stop logs the path it took (`graceful`, `powerButton`, `forced`) and its duration. `apkrun doctor` warns when the last 3 stops were forced.
-- While a package install is active, RuntimeHost rejects user stop, restart, and reset with `runtime.invalidTransition`. Daemon shutdown drains the install before stopping Android. The operation API will later provide bounded wait and cancellation behavior (#032).
+- While a package install is active, RuntimeHost rejects user stop, restart, and reset with `runtime.invalidTransition`. Daemon shutdown drains the install before stopping Android. API 1.8 keeps that reservation until the tracked install reaches a terminal result.
 
 ### 3.6 Failure handling and automatic restart
 
@@ -555,6 +555,25 @@ Control listeners are created per grant, expire after 5 seconds if unused, and a
 Long-running operations return an `OperationHandle { operationID }` right away. `OperationKind` lists them ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §4.7): the store operations (`install`, `uninstall`, `update`, …), `setup`, `resetAndroid`, `runtimeStop`, `runtimeRestart`, the image operations, the wrapper operations, and `diagnostics`. Progress and the result arrive on the `operations` event topic. `cancel(operationID)` is best effort: each operation documents its cancellation points (for example, an install can be cancelled until `CommitInstall`).
 
 Operations survive the client that started them. `apkrun install foo.apk` followed by Ctrl-C cancels (the CLI sends `cancel` on `SIGINT`). A dropped connection does not.
+
+The first tracked install slice is API 1.8. `beginInstallImported` returns
+its handle before runtime startup, and the daemon retains the operation and
+its terminal result in memory. A matching operation ID and request payload
+joins the existing operation, so recovering from a lost start reply does not
+send a second PackageInstaller request. The in-memory registry holds every
+running operation and the most recent 50 finished operations. Until
+`EventHub` is implemented, the CLI polls `operationStatus`.
+Concurrent callers share one runtime-start attempt, so simultaneous installs
+do not race the supervisor while Android is booting.
+
+The current Store Agent install method is one transaction call and exposes no
+`CommitInstall` callback. Therefore this first slice accepts cancellation
+while Android is starting, then reports `notCancellable` immediately before
+entering PackageStore's guest-install transaction. PackageStore continues
+through guest-result reconciliation and journal commit/abort. The public
+RuntimeAPI operation types are present, but event delivery, bounded
+operation-specific deadlines, and long operations other than install remain
+outstanding under #032 (IR-1390 and IR-1391).
 
 ### 8.4 Events
 

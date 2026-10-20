@@ -98,7 +98,7 @@ apkrund sets the requirement on each anonymous listener with `NSXPCListener.setC
 
 ```swift
 public enum RuntimeAPI {
-    public static let version = APIVersion(major: 1, minor: 7)       // the control and wrapper protocols
+    public static let version = APIVersion(major: 1, minor: 8)       // the control and wrapper protocols
     public static let wrapperMajors: [Int] = [1]                     // served on the wrapper endpoint: N and N−1
     public static let brokerRevision = 2                              // additive-only broker protocol
     public static let maintenanceRevision = 1                         // additive-only MaintenanceControl
@@ -115,6 +115,7 @@ public struct APIVersion: Codable, Sendable, Comparable { public var major: Int;
 - Version `1.5` adds `resetRuntime` to the authenticated control endpoint. Its versioned request clears a runtime failure and the boot-loop guard, returns the current runtime status, and does not delete Android data.
 - Version `1.6` adds `restartRuntime` to the authenticated control endpoint. One versioned request stops and starts Android and returns the final runtime status.
 - Version `1.7` adds authenticated `importPackage` and `installImported` control calls. Import passes opened `FileHandle`s beside its versioned JSON request, returns the existing package preview, and does not start Android. Install starts Android on demand and returns the package summary. The first implementation is synchronous and manual-authority only; the operation handles and progress events in §8.1 remain the target behavior.
+- Version `1.8` adds `beginInstallImported`, `cancelOperation`, `listOperations`, and `operationStatus`. The daemon retains running operations and the last 50 finished operations in memory; the synchronous `installImported` selector remains for existing clients. The first tracked operation is manual-authority install, and CLI clients poll snapshots until event subscriptions are available.
 - `components.json` of a release records `"runtimeAPI": { "current": "M.m", "wrapperMajors": [N−1, N] }` ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.3). A major is dropped only as that section allows.
 - The #031 `RuntimeHostStatus` includes optional `guestAgentState` and `guestAgentProtocolVersion` fields. Clients accept their absence as `nil`.
 
@@ -487,7 +488,7 @@ the fallback parameter.
 | `runtime.internal` | a reply guard was released without a reply, or an unexpected error | server |
 | `runtime.serviceUnavailable` | the broker or endpoint cannot be reached (§3.6) | client |
 | `runtime.requestTimedOut` | no reply within the deadline + 5 s (§4.6) | client |
-| `runtime.operationResultUnknown` | the `installImported` connection is lost after dispatch, so completion is unknown (§4.6) | client |
+| `runtime.operationResultUnknown` | the legacy `installImported` reply is lost after dispatch, or API 1.8 cannot recover its operation ID from daemon history (§4.6) | client |
 
 `runtime.serviceUnavailable` (with `ServiceUnavailableReason` `notRegistered`, `requiresApproval`, `notRunning`) and `runtime.requestTimedOut` are cases of `RuntimeFailure` ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §11) that RuntimeClient raises. It never receives them from the server.
 
@@ -520,18 +521,25 @@ Exceptions to the default deadlines:
 | `prepareForHostUpdate` | 3 min (apkrund waits up to 2 min for store transactions) |
 | `restartForUpdate`, `stopRuntime` in `restartPending` | 60 s |
 
-`importPackage` and `installImported` are currently synchronous first-slice
-calls, so no bounded client deadline or daemon-side cancellation is available
-yet. The intended L-operation contract remains: return an `OperationHandle`
-within 5 s, report progress on `operations`, and apply the operation-specific
-deadline. If the XPC connection closes during the current implementation, the
-daemon may continue. The CLI must inspect package state before retrying an
-install whose reply was lost. This implementation gap is recorded as IR-1388
-in the plan review log; it does not change the target contract.
+`importPackage` remains a synchronous first-slice call. API 1.8 starts
+`installImported` through `beginInstallImported`, which returns an
+`OperationHandle` while the daemon retains the work and its status. CLI clients
+poll `operationStatus`; event delivery and operation deadlines are still
+outstanding. Cancellation is accepted while Android is starting and before
+the daemon calls PackageStore to begin the guest installation. The current
+Store Agent API exposes install as one transaction call, so the daemon reports
+`notCancellable` from that point and lets PackageStore reconcile the guest
+result and journal. The synchronous API 1.7 selector remains available during
+this migration. See IR-1390 and IR-1391 in the implementation review log.
 
 The client waits the deadline plus 5 s. Then it fails the call with `runtime.requestTimedOut(operation:)` and invalidates the connection (§3.5). If the caller cancels its task while waiting for `restartRuntime`, RuntimeClient returns `runtime.cancelled` and invalidates that connection. This cancels only the client's wait: XPC disconnection does not cancel the daemon-side restart, so check `runtimeStatus` before retrying. The current client does not know the daemon's effective boot timeout, so it uses the maximum supported first-boot timeout, stop deadline, and 5 s grace as a hard upper bound. The daemon's own boot timeout normally ends the request sooner.
 
-For the synchronous first-slice `installImported` call, an XPC transport failure or unusable reply after dispatch returns `runtime.operationResultUnknown`. The daemon may have completed the PackageInstaller operation. Check `apkrun info <package>` before retrying; RuntimeClient never replays an install automatically.
+If the `beginInstallImported` reply is lost, RuntimeClient reconnects and
+queries the same operation ID; it never resends the install. If the daemon
+restarted or the operation aged out before its state could be recovered, the
+client returns `runtime.operationResultUnknown`. Check `apkrun info <package>`
+before a user-approved retry; RuntimeClient never replays an install
+automatically. An XPC disconnect does not cancel daemon work.
 
 ### 4.7 Long operations and cancellation
 
@@ -1196,7 +1204,11 @@ Store semantics: [../02-design/package-store.md](../02-design/package-store.md) 
 | Operation | Request → Reply | Clients | Kind | Events | Design |
 |---|---|---|---|---|---|
 | `importPackage` | `RuntimeImportPackageControlRequest` + `[FileHandle]` → `RuntimeImportPackageControlReply` (`RuntimeImportPreview` or `RuntimeWireError`) | C | L target; synchronous first slice | — (operation events remain outstanding) | [../02-design/package-store.md](../02-design/package-store.md) §4 |
-| `installImported` | `RuntimeInstallImportedControlRequest` → `RuntimeInstallImportedControlReply` (`RuntimePackageSummary` or `RuntimeWireError`) | C | L target; synchronous first slice | — (package and operation events remain outstanding) | package-store §6.2 |
+| `installImported` | `RuntimeInstallImportedControlRequest` → `RuntimeInstallImportedControlReply` (`RuntimePackageSummary` or `RuntimeWireError`) | C | L target; synchronous compatibility path | — | package-store §6.2 |
+| `beginInstallImported` | `RuntimeBeginInstallImportedControlRequest` → `OperationHandle` | C | L | `operations.*` target; first slice polls snapshots | package-store §6.2 |
+| `cancelOperation` | `RuntimeCancelOperationControlRequest` → `CancelReply` | C | U | — | §4.7 |
+| `listOperations` | `RuntimeListOperationsControlRequest` → `[OperationSnapshot]` | C | Q | — | §4.7 |
+| `operationStatus` | `RuntimeOperationStatusControlRequest` → `OperationSnapshot` | C | Q | — | §4.7 |
 | `cancelImport` | `CancelImportRequest { ticket }` → `Empty` | C | U | — | package-store §11.1 |
 | `inspectFile` | `ImportPackageRequest` + files → `OperationHandle` (`inspect`) → `.importPreview(ImportPreview)` | C | L | `operations.*` | package-store §4.3 |
 | `listPackages` | `ListPackagesRequest { filter }` → `PackageListResult` | C | Q | — | package-store §9 |
@@ -1238,8 +1250,9 @@ public struct InstallOptions: Codable, Sendable {
 public struct CancelImportRequest: Codable, Sendable { public var ticket: ImportTicket }
 ```
 
-The API 1.7 control endpoint wraps these existing package bodies in the
-versioned control header. Its first implementation replies synchronously:
+API 1.7 wraps the existing package bodies in a versioned control header. API
+1.8 adds the operation endpoints while preserving the synchronous install
+selector for compatibility:
 
 ```swift
 public struct RuntimeImportPackageControlRequest: Codable, Sendable {
@@ -1261,6 +1274,17 @@ public struct RuntimeInstallImportedControlReply: Codable, Sendable {
     public var result: RuntimePackageSummary?
     public var error: RuntimeWireError?
 }
+
+public struct RuntimeBeginInstallImportedControlRequest: Codable, Sendable {
+    public var header: APIRequestHeader
+    public var request: RuntimeInstallImportedRequest
+}
+
+public struct OperationHandle: Codable, Sendable {
+    public var operationID: OperationID
+    public var parent: OperationID?
+    public var kind: OperationKind
+}
 ```
 
 - `RuntimeImportPreview` includes the current signer digests, selected APK file
@@ -1272,9 +1296,10 @@ public struct RuntimeInstallImportedControlReply: Codable, Sendable {
 - Normal `apkrun install` currently sends `authority: .manual` and
   `createWrapper: false`. `--yes` skips only the confirmation prompt; it does
   not skip package identity, signer, version, ABI, SDK, split, or hash checks.
-- Import and install currently return the preview or summary directly. The
-  target `OperationHandle`, progress events, cancellation, and operation
-  deadline remain outstanding; see IR-1388 in the implementation review log.
+- Import still returns its preview directly. The tracked install stores a
+  package summary on success, a typed error on failure, or `cancelled` when
+  cancelled before PackageStore starts the guest operation. The event topic
+  and bounded operation deadline remain outstanding.
 
 - `ImportPreview` and `ImportRelation` are the store's types, copied field for field ([../02-design/package-store.md](../02-design/package-store.md) §4.7). `icon` is a PNG (Base64).
 - The client shows the preview and asks before an install that changes package state. `apkrun install --yes` skips that question. The server does not know whether the user was asked. A `sameAsInstalled` preview means the imported APK bytes match the managed host artifact record; it does not prove that Android still has those bytes. The current guest API returns package metadata and signing digests but not installed APK byte digests, so the CLI confirms and reapplies this set through PackageInstaller.

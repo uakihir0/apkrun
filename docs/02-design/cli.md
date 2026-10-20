@@ -120,7 +120,7 @@ Operations that return an `OperationHandle` ([runtime-daemon.md](runtime-daemon.
 
 - The CLI subscribes to the `operations` topic, shows a progress line on stderr (TTY only), and waits for the result.
 - **Ctrl-C** sends `cancel(operationID)` and waits up to 10 s for the cancellation result. A second Ctrl-C exits at once and leaves the operation to finish or cancel on its own. Exit code 130.
-- `--detach` prints the operation ID and exits 0 as soon as the operation has started. `apkrun operations wait <id>` picks it up again.
+- `--detach` prints the operation ID and exits 0 as soon as the operation has started. `apkrun operations wait <id>` picks it up again. Both `install` and `operations wait` accept `--detach`.
 
 ### 3.6 Environment
 
@@ -155,7 +155,7 @@ Operations that return an `OperationHandle` ([runtime-daemon.md](runtime-daemon.
 
 | Command | Task | Behavior |
 |---|---|---|
-| `apkrun install <file>… [--yes] [--provider <spec>] [--updates automatic\|notify\|manual] [--wrap [--output <dir>]]` | #027 **E**, #073, #037 (`--provider`, `--updates`), #075 (`--wrap`) | imports the files as one package ([package-store.md](package-store.md) §4), prints the preview (name, package, version, signer digest, size, warnings, relation), asks, and installs. `--provider` sets authority `apkrun` with the mode `automatic`, or `notifyOnly` with `--updates notify`. `--updates manual` sets authority `manual` (`InstallOptions.authority`) and keeps a given provider unused. Without either flag, the defaults of [update-system.md](update-system.md) §2.4 apply. The alternate flag spellings (`--update auto\|notify\|manual`, `--update-provider direct --update-url <url>`) map to the current options ([update-system.md](update-system.md) §11.3). `--wrap` also creates the Mac app (as `apkrun wrap`). Refused relations (downgrade, other signer) exit 5 with the store's message. A same-set preview confirms and reinstalls until the guest can report installed APK byte digests. |
+| `apkrun install <file>… [--yes] [--provider <spec>] [--updates automatic\|notify\|manual] [--wrap [--output <dir>]] [--detach]` | #027 **E**, #073, #037 (`--provider`, `--updates`), #075 (`--wrap`), #032 (`--detach`) | imports the files as one package ([package-store.md](package-store.md) §4), prints the preview (name, package, version, signer digest, size, warnings, relation), asks, and installs. In the API 1.8 daemon-backed slice, `--detach` returns the install operation ID after the daemon accepts it; use `apkrun operations wait <id>` to inspect the result. `--provider` sets authority `apkrun` with the mode `automatic`, or `notifyOnly` with `--updates notify`. `--updates manual` sets authority `manual` (`InstallOptions.authority`) and keeps a given provider unused. Without either flag, the defaults of [update-system.md](update-system.md) §2.4 apply. The alternate flag spellings (`--update auto\|notify\|manual`, `--update-provider direct --update-url <url>`) map to the current options ([update-system.md](update-system.md) §11.3). `--wrap` also creates the Mac app (as `apkrun wrap`). Refused relations (downgrade, other signer) exit 5 with the store's message. A same-set preview confirms and reinstalls until the guest can report installed APK byte digests. |
 | `apkrun uninstall <package> [--keep-data] [--keep-wrapper] [--forget] [--yes]` | #027 **E**, #076 | [package-store.md](package-store.md) §8. The Mac app goes to the Trash unless `--keep-wrapper`. `--forget` removes the record without Android (when Android cannot start) |
 | `apkrun list [--all] [--json]` | #027 target; initial daemon query in #032 | queries apkrund over `RuntimeControlClient` XPC. Managed records are listed by default. `--all` includes packages from the daemon's current or cached Android inventory without starting Android |
 | `apkrun info <package> [--json]` | #027 target; initial daemon query in #032 | queries apkrund over `RuntimeControlClient` XPC for the package summary, version, state, managed flag, update authority, stored APK count/bytes, and known Android data size. Wrapper paths, signer details, settings, update source, and compatibility details remain part of the broader #027/#090 scope |
@@ -257,7 +257,7 @@ Owned by [diagnostics.md](diagnostics.md).
 | Command | Task | Behavior |
 |---|---|---|
 | `apkrun operations list [--json]` | #032 | running and recent (last 50) long-running operations with ID, kind, package, progress, and result |
-| `apkrun operations wait <id>` | #032 | waits and exits with the operation's result code |
+| `apkrun operations wait <id> [--detach]` | #032 | waits and exits with the operation's result code; `--detach` prints the current snapshot and leaves the operation running |
 | `apkrun operations cancel <id>` | #032 | `cancel(operationID)` |
 
 ---

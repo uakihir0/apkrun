@@ -22112,3 +22112,85 @@ initial VM stop would otherwise interrupt an install before that drain.
 Operation deadlines and cancellation remain part of the outstanding #032
 operation API.
 
+## IR-1390: Track package installs before the guest call
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #032 |
+| Affected documents | [runtime-api.md](../03-reference/runtime-api.md) §§2, 4.6–4.7, 8.1–8.2; [runtime-daemon.md](../02-design/runtime-daemon.md) §§3.5, 8.3; [M04](issues/M04-daemon-and-guest-protocol.md) #032 |
+
+**Choices.** API 1.8 adds `beginInstallImported`, `cancelOperation`,
+`listOperations`, and `operationStatus`, while retaining the synchronous
+API 1.7 install selector for compatibility. RuntimeHost stores operation
+snapshots in memory, keeps all running entries and the latest 50 finished
+entries, and joins a repeated start only when both its operation ID and
+encoded install request match. Reusing the ID with another payload is a
+malformed request. The install reservation is acquired before the operation
+handle is returned and remains held until a terminal result.
+
+Cancellation is accepted while Android starts. It becomes unavailable just
+before PackageStore enters its guest install transaction. The current Store
+Agent call does not expose the design's `CommitInstall` boundary; once the
+guest call starts, PackageStore must reconcile an ambiguous result and finish
+its journal instead of being interrupted.
+
+Cancelled operation tasks report the terminal `cancelled` result rather than
+wrapping the cancellation error as an install failure. RuntimeHost also shares
+an in-flight runtime start between concurrent callers. A second install can
+therefore wait for the same Android boot instead of losing the race to
+`RuntimeSupervisor.ensureReady`.
+
+**Reason.** A short start reply lets callers recover from an XPC reply loss by
+querying the same operation ID without replaying a package install. Keeping
+the existing selector avoids changing the meaning of an API 1.7 call during
+the migration. The conservative cancellation boundary preserves PackageStore
+recovery invariants while this increment removes the long install from the
+client's in-flight XPC request. Sharing the runtime start makes overlapping
+installs and explicit starts converge on one boot attempt.
+
+**Risk for review.** The exact cancellation boundary is earlier than the
+target `CommitInstall` point and may leave Android booted when a user cancels
+during startup. Operation records disappear on daemon restart and after they
+fall out of the last-50 history; a missing record is not proof that an
+install did not happen. The operation-kind enum has the documented values,
+but only `import` and `install` have daemon implementations in this slice.
+Newer enum cases decode as `unknown`; clients cannot encode those fallback
+cases.
+
+## IR-1391: Poll operation snapshots until EventHub exists
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #032 |
+| Affected documents | [runtime-api.md](../03-reference/runtime-api.md) §§4.6–4.8, 8.1; [runtime-daemon.md](../02-design/runtime-daemon.md) §§8.3–8.4; [cli.md](../02-design/cli.md) §3.5 |
+
+**Choices.** The first operation client uses `operationStatus` polling for
+completion and `listOperations` for discovery. `OperationProgress.message`
+is a plain optional string because RuntimeAPI has not yet added the
+`WireLocalizedText` type. The current status result transports the package
+summary or typed failure; it does not depend on an event callback surviving
+an XPC reconnect. Polling runs every two seconds, and progress is written to
+stderr only for a TTY. `install --detach` and `operations wait --detach`
+return the current handle or snapshot while daemon work continues. The first
+Ctrl-C requests cancellation and keeps polling for up to ten seconds; a second
+Ctrl-C exits immediately.
+
+**Reason.** The current control endpoint has no exported event sink or
+subscription registry. Polling uses the status endpoint already required by
+the RuntimeAPI design and lets the install command use daemon-owned work
+without first building the full multi-topic EventHub. The two-second interval
+keeps operation state responsive while limiting idle XPC traffic; TTY-only
+progress avoids changing redirected command output. Detach allows a long
+first boot or package install to outlive the shell, while SIGINT still gives
+interactive users a cancellation path.
+
+**Risk for review.** Polling is less responsive and causes repeated XPC
+requests while the operation runs. This is a migration step: implement
+`EventHub`, progress coalescing, and reconnection subscriptions in #032, then
+move the CLI from polling to events without changing operation IDs or
+snapshots. If cancellation is no longer available or cannot be confirmed
+within ten seconds, the operation can continue; the CLI points to its wait
+command so the user can inspect it later.
+

@@ -460,6 +460,15 @@ public actor PackageStore {
         activeTickets.remove(ticket)
     }
 
+    /// Returns the package identity of an open import ticket without starting Android.
+    public func packageIDForImportTicket(_ ticket: UUID) throws -> PackageID {
+        try requireOpen()
+        guard let manifest = tickets[ticket] else {
+            throw PackageStoreFailure.importTicketNotFound
+        }
+        return manifest.preview.packageID
+    }
+
     /// Installs a new package or reinstalls a retained-data package from an import ticket.
     public func installImported(ticket: UUID) async throws -> PackageRecord {
         try await installImportedWithOutcome(ticket: ticket).record
@@ -506,6 +515,14 @@ public actor PackageStore {
 
     /// Uninstalls a package, optionally retaining its Android app data and package record.
     public func uninstall(packageID: PackageID, keepData: Bool = false) async throws {
+        _ = try await uninstallWithOutcome(packageID: packageID, keepData: keepData)
+    }
+
+    /// Uninstalls a package and returns whether post-commit trash cleanup needs to be retried.
+    public func uninstallWithOutcome(
+        packageID: PackageID,
+        keepData: Bool = false
+    ) async throws -> PackageUninstallOutcome {
         try requireWritable()
         guard let runtimeAccess else { throw PackageStoreFailure.runtimeUnavailable }
         guard operationsInProgress.insert(packageID).inserted else {
@@ -570,12 +587,17 @@ public actor PackageStore {
         try injectFault(kind: "uninstall", step: "guestUninstallRequested")
         try appendStep(transaction, kind: "uninstall", step: "guestUninstalled")
         try injectFault(kind: "uninstall", step: "guestUninstalled")
-        try finishUninstall(
-            transaction: transaction,
-            packageID: packageID,
-            directory: directory,
-            keepData: keepData
-        )
+        guard
+            let cleanupDeferred = try finishUninstall(
+                transaction: transaction,
+                packageID: packageID,
+                directory: directory,
+                keepData: keepData
+            )
+        else {
+            throw PackageStoreFailure.packageNotFound
+        }
+        return PackageUninstallOutcome(keptData: keepData, cleanupDeferred: cleanupDeferred)
     }
 
     /// Removes APKRun's record and artifacts without issuing an Android uninstall.
@@ -1114,12 +1136,13 @@ public actor PackageStore {
         try purgeTrash()
     }
 
+    @discardableResult
     private func finishUninstall(
         transaction: String,
         packageID: PackageID,
         directory: String,
         keepData: Bool
-    ) throws {
+    ) throws -> Bool? {
         let packageDirectory = packagesDirectory.appendingPathComponent(directory, isDirectory: true)
         if keepData {
             let currentRecord = records[packageID]
@@ -1135,7 +1158,7 @@ public actor PackageStore {
             }
             guard var record = currentRecord else {
                 try appendAbort(transaction, reason: "packageRecordMissing")
-                return
+                return nil
             }
             record.state = .uninstalledKeepingData
             record.artifacts = ArtifactSlots(currentMatchesAndroid: false)
@@ -1169,7 +1192,13 @@ public actor PackageStore {
         }
         try injectFault(kind: "uninstall", step: "filesRemoved")
         try appendTerminal(transaction, op: "commit")
-        try purgeTrash()
+        do {
+            try injectFault(kind: "uninstall", step: "trashCleanup")
+            try purgeTrash()
+            return false
+        } catch {
+            return true
+        }
     }
 
     private func makeRecord(

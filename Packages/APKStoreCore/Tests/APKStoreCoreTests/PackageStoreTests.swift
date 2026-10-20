@@ -177,6 +177,7 @@ private actor CompletionFlag {
     try await store.open()
     let preview = try await store.importPackage(files: [input])
 
+    #expect(try await store.packageIDForImportTicket(preview.ticket) == preview.packageID)
     let packages = try await store.listManagedPackages()
     #expect(packages.isEmpty)
     #expect(preview.packageID.rawValue == "io.apkrun.fixture.hellotext")
@@ -856,7 +857,9 @@ private actor CompletionFlag {
     #expect(FileManager.default.fileExists(atPath: current.appendingPathComponent("artifact.json").path))
     #expect(FileManager.default.fileExists(atPath: packageDirectory.appendingPathComponent("metadata.json").path))
 
-    try await store.uninstall(packageID: record.packageId, keepData: true)
+    let retainedOutcome = try await store.uninstallWithOutcome(packageID: record.packageId, keepData: true)
+    #expect(retainedOutcome.keptData)
+    #expect(!retainedOutcome.cleanupDeferred)
     let retained = try #require(try await store.listManagedPackages().first)
     #expect(retained.state == .uninstalledKeepingData)
     #expect(!FileManager.default.fileExists(atPath: current.path))
@@ -868,10 +871,42 @@ private actor CompletionFlag {
     #expect(restore.previousVersionCode == 7)
     #expect(restore.restoredRetainedData)
     #expect(reinstalled.state == .installed)
-    try await store.uninstall(packageID: record.packageId)
+    let removedOutcome = try await store.uninstallWithOutcome(packageID: record.packageId)
+    #expect(!removedOutcome.keptData)
+    #expect(!removedOutcome.cleanupDeferred)
     #expect(try await store.listManagedPackages().isEmpty)
     #expect(await channel.lastKeepData == false)
     #expect(!FileManager.default.fileExists(atPath: packageDirectory.path))
+}
+
+@Test func packageStoreReturnsCommittedUninstallWhenTrashCleanupFails() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let channel = FakeStoreChannel()
+    let runtime = FakeStoreRuntime(channel: channel)
+    let store = PackageStore(
+        packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
+        runtimeAccess: runtime,
+        inspector: { _ in facts() },
+        faultInjector: { kind, step in
+            guard kind == "uninstall", step == "trashCleanup" else { return }
+            throw SimulatedGuestFailure.installFailedBeforeCommit
+        }
+    )
+    try await store.open()
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let preview = try await store.importPackage(files: [input])
+    let installed = try await store.installImportedWithOutcome(ticket: preview.ticket)
+
+    let outcome = try await store.uninstallWithOutcome(
+        packageID: installed.record.packageId,
+        keepData: true
+    )
+
+    #expect(outcome.keptData)
+    #expect(outcome.cleanupDeferred)
+    #expect(try await store.listManagedPackages().first?.state == .uninstalledKeepingData)
 }
 
 @Test func packageStoreUsesLiveAndroidVersionForInstallOutcomeAndDowngradeChecks() async throws {

@@ -1047,6 +1047,20 @@ public struct PackageInstallOutcome: Sendable {
     }
 }
 
+/// The committed package-store result of one uninstall transaction.
+public struct PackageUninstallOutcome: Sendable, Equatable {
+    /// Whether Android app data was retained.
+    public let keptData: Bool
+    /// Whether cleanup after the durable uninstall commit must be retried.
+    public let cleanupDeferred: Bool
+
+    /// Creates an uninstall outcome.
+    public init(keptData: Bool, cleanupDeferred: Bool = false) {
+        self.keptData = keptData
+        self.cleanupDeferred = cleanupDeferred
+    }
+}
+
 /// Identifies a package directory whose persisted metadata cannot be read safely.
 ///
 /// `detail` is a stable, non-sensitive reason code. It never contains decoded package

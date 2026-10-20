@@ -45,6 +45,8 @@ private struct RuntimeTrackedOperation {
 /// The host acquires the same instance lock used by `apkrun dev`, records its process state,
 /// opens the current image, and creates one RuntimeSupervisor. Runtime start remains on demand.
 public actor RuntimeHost {
+    nonisolated let eventHub = RuntimeEventHub()
+
     private let paths: APKRunPaths
     private let buildInfo: BuildInfo
     private let environment: [String: String]
@@ -549,6 +551,7 @@ public actor RuntimeHost {
             isCancellable: true,
             task: nil
         )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: requestedID)
         let task = Task { [weak self] in
             guard let self else { return }
             if let diagnosticsID = DiagnosticsCore.OperationID(wire: requestedID.wireValue) {
@@ -569,17 +572,24 @@ public actor RuntimeHost {
     }
 
     /// Returns running operations and up to fifty recently finished operations.
-    func listOperations() -> [OperationSnapshot] {
-        trackedOperations.values
+    func listOperations(
+        beginSnapshotBarrier: @Sendable () -> Void = {}
+    ) -> [OperationSnapshot] {
+        beginSnapshotBarrier()
+        return trackedOperations.values
             .map(\.snapshot)
             .sorted { $0.startedAt > $1.startedAt }
     }
 
     /// Returns a retained operation snapshot.
-    func operationStatus(_ operationID: WireOperationID) throws(RuntimeWireError) -> OperationSnapshot {
+    func operationStatus(
+        _ operationID: WireOperationID,
+        beginSnapshotBarrier: @Sendable () -> Void = {}
+    ) throws(RuntimeWireError) -> OperationSnapshot {
         guard let operation = trackedOperations[operationID] else {
             throw Self.operationNotFoundError
         }
+        beginSnapshotBarrier()
         return operation.snapshot
     }
 
@@ -703,6 +713,10 @@ public actor RuntimeHost {
             )
         )
         trackedOperations[operationID] = operation
+        eventHub.publishOperationEvent(
+            .progress(operationID, operation.snapshot.progress ?? OperationProgress()),
+            operationID: operationID
+        )
     }
 
     private func finishOperation(_ operationID: WireOperationID, result: OperationResult) {
@@ -728,6 +742,10 @@ public actor RuntimeHost {
             finishedAt: Date()
         )
         trackedOperations[operationID] = operation
+        eventHub.publishOperationEvent(
+            .finished(operationID, result),
+            operationID: operationID
+        )
         pruneFinishedOperations()
     }
 

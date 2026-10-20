@@ -80,7 +80,7 @@ public final class RuntimeXPCServer: @unchecked Sendable {
             clientRequirements[item.kind.rawValue] = item.requirement
         }
 
-        let connectionRegistry = RuntimeXPCConnectionRegistry()
+        let connectionRegistry = RuntimeXPCConnectionRegistry(eventHub: host.eventHub)
         let brokerDelegate = BrokerListenerDelegate(
             host: host,
             buildInfo: buildInfo,
@@ -189,6 +189,7 @@ private struct RuntimeXPCConnectionRecord {
     let connection: NSXPCConnection
     let kind: RuntimeXPCConnectionKind
     let controlListener: RuntimeXPCControlListener?
+    let outputQueue: DispatchQueue
     var activeRequests = 0
 }
 
@@ -265,6 +266,7 @@ private enum RuntimeXPCRequestAdmission {
 
 private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
     private let lock = NSLock()
+    private let eventHub: RuntimeEventHub
     private var connections: [ObjectIdentifier: RuntimeXPCConnectionRecord] = [:]
     private var acceptingNewConnections = true
     private var acceptingLifecycleRequests = true
@@ -276,6 +278,10 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
     private var activeRequests = 0
     private var requestDrainWaiters: [CheckedContinuation<Void, Never>] = []
 
+    init(eventHub: RuntimeEventHub) {
+        self.eventHub = eventHub
+    }
+
     func register(
         _ connection: NSXPCConnection,
         kind: RuntimeXPCConnectionKind,
@@ -283,6 +289,9 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         reservationID: UUID? = nil
     ) -> Bool {
         let identifier = ObjectIdentifier(connection)
+        let outputQueue = DispatchQueue(
+            label: "io.apkrun.RuntimeHost.xpc-output.\(UUID().uuidString)"
+        )
         lock.lock()
         expireControlReservations()
         let controlListener: RuntimeXPCControlListener?
@@ -311,7 +320,8 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         connections[identifier] = RuntimeXPCConnectionRecord(
             connection: connection,
             kind: kind,
-            controlListener: controlListener
+            controlListener: controlListener,
+            outputQueue: outputQueue
         )
         lastActivity = ContinuousClock.now
         lock.unlock()
@@ -320,6 +330,18 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
             self?.remove(identifier)
         }
         return true
+    }
+
+    func outputQueue(for connectionID: ObjectIdentifier) -> DispatchQueue? {
+        lock.lock()
+        defer { lock.unlock() }
+        return connections[connectionID]?.outputQueue
+    }
+
+    func isRegistered(_ connectionID: ObjectIdentifier) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !closed && connections[connectionID] != nil
     }
 
     func reserveControlConnection(
@@ -442,6 +464,7 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         lock.lock()
         closed = true
         let records = Array(self.connections.values)
+        let connectionIDs = Array(connections.keys)
         let reservedListeners = reservedControlConnections.values.flatMap { reservations in
             reservations.values.map(\.controlListener)
         }
@@ -450,6 +473,7 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         reservedControlConnections.removeAll()
         lastActivity = ContinuousClock.now
         lock.unlock()
+        eventHub.removeAll(connectionIDs: connectionIDs)
         for controlListener in records.compactMap(\.controlListener) + reservedListeners {
             controlListener.listener.invalidate()
         }
@@ -493,6 +517,7 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         }
         lock.unlock()
         record?.controlListener?.listener.invalidate()
+        eventHub.remove(connectionID: identifier)
     }
 }
 
@@ -1016,12 +1041,19 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
             argumentIndex: 1,
             ofReply: false
         )
+        connection.remoteObjectInterface = NSXPCInterface(with: RuntimeEventSink.self)
+        let eventHub = host.eventHub
+        let remoteSink =
+            connection.remoteObjectProxyWithErrorHandler { _ in
+                eventHub.remove(connectionID: connectionID)
+            } as? any RuntimeEventSink
         connection.exportedInterface = controlInterface
         connection.exportedObject = ControlService(
             host: host,
             clientKind: clientKind,
             connectionRegistry: connectionRegistry,
-            connectionID: connectionID
+            connectionID: connectionID,
+            eventSink: remoteSink.map(RuntimeEventSinkReference.init(value:))
         )
         connection.resume()
         listener.invalidate()
@@ -1048,6 +1080,8 @@ extension RuntimeBeginInstallImportedControlRequest: VersionedControlRequest {}
 extension RuntimeCancelOperationControlRequest: VersionedControlRequest {}
 extension RuntimeListOperationsControlRequest: VersionedControlRequest {}
 extension RuntimeOperationStatusControlRequest: VersionedControlRequest {}
+extension RuntimeSubscribeControlRequest: VersionedControlRequest {}
+extension RuntimeUnsubscribeControlRequest: VersionedControlRequest {}
 
 enum RuntimeControlOperation {
     case runtimeStatus
@@ -1065,6 +1099,8 @@ enum RuntimeControlOperation {
     case cancelOperation
     case listOperations
     case operationStatus
+    case subscribe
+    case unsubscribe
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1082,6 +1118,13 @@ enum RuntimeControlOperation {
             case .app, .menuBar, .cli:
                 true
             case .launcher, .wrapper:
+                false
+            }
+        case .subscribe, .unsubscribe:
+            switch clientKind {
+            case .app, .menuBar, .cli, .launcher:
+                true
+            case .wrapper:
                 false
             }
         case .listPackages:
@@ -1114,21 +1157,28 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     private let clientKind: RuntimeClientKind
     private let connectionRegistry: RuntimeXPCConnectionRegistry
     private let connectionID: ObjectIdentifier
+    private let eventSink: RuntimeEventSinkReference?
+    private let outputQueue: DispatchQueue
 
     init(
         host: RuntimeHost,
         clientKind: RuntimeClientKind,
         connectionRegistry: RuntimeXPCConnectionRegistry,
-        connectionID: ObjectIdentifier
+        connectionID: ObjectIdentifier,
+        eventSink: RuntimeEventSinkReference?
     ) {
         self.host = host
         self.clientKind = clientKind
         self.connectionRegistry = connectionRegistry
         self.connectionID = connectionID
+        self.eventSink = eventSink
+        outputQueue =
+            connectionRegistry.outputQueue(for: connectionID)
+            ?? DispatchQueue(label: "io.apkrun.RuntimeHost.xpc-output-fallback.\(UUID().uuidString)")
     }
 
     func runtimeStatus(_ request: Data, reply: @escaping (Data) -> Void) {
-        let response = XPCDataReply(reply)
+        let response = makeReplyHandler(reply, snapshotBarrier: true)
         let admission = connectionRegistry.beginRequest(on: connectionID, allowDuringShutdown: true)
         guard case .accepted(let pending) = admission else {
             response.send(Self.errorReply(for: Self.rejection(for: admission).controlError))
@@ -1145,12 +1195,13 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 response.send(Self.errorReply(for: failure))
                 return
             }
+            response.beginSnapshotBarrier()
             response.send(Self.encode(RuntimeControlReply(status: await host.status())))
         }
     }
 
     func startRuntime(_ request: Data, reply: @escaping (Data) -> Void) {
-        let response = XPCDataReply(reply)
+        let response = makeReplyHandler(reply)
         let admission = connectionRegistry.beginRequest(on: connectionID)
         guard case .accepted(let pending) = admission else {
             response.send(Self.errorReply(for: Self.rejection(for: admission).controlError))
@@ -1177,7 +1228,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     }
 
     func stopRuntime(_ request: Data, reply: @escaping (Data) -> Void) {
-        let response = XPCDataReply(reply)
+        let response = makeReplyHandler(reply)
         let admission = connectionRegistry.beginRequest(on: connectionID)
         guard case .accepted(let pending) = admission else {
             response.send(Self.errorReply(for: Self.rejection(for: admission).controlError))
@@ -1204,7 +1255,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     }
 
     func restartRuntime(_ request: Data, reply: @escaping (Data) -> Void) {
-        let response = XPCDataReply(reply)
+        let response = makeReplyHandler(reply)
         let admission = connectionRegistry.beginRequest(on: connectionID)
         guard case .accepted(let pending) = admission else {
             response.send(Self.errorReply(for: Self.rejection(for: admission).controlError))
@@ -1231,7 +1282,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     }
 
     func resetRuntime(_ request: Data, reply: @escaping (Data) -> Void) {
-        let response = XPCDataReply(reply)
+        let response = makeReplyHandler(reply)
         let admission = connectionRegistry.beginRequest(on: connectionID)
         guard case .accepted(let pending) = admission else {
             response.send(Self.errorReply(for: Self.rejection(for: admission).controlError))
@@ -1258,7 +1309,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     }
 
     func listPackages(_ request: Data, reply: @escaping (Data) -> Void) {
-        let response = XPCDataReply(reply)
+        let response = makeReplyHandler(reply, snapshotBarrier: true)
         let admission = connectionRegistry.beginRequest(on: connectionID)
         guard case .accepted(let pending) = admission else {
             response.send(
@@ -1286,6 +1337,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 return
             }
             do {
+                response.beginSnapshotBarrier()
                 let result = try await host.listPackages(
                     RuntimeListPackagesRequest(filter: decoded.filter)
                 )
@@ -1298,7 +1350,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     }
 
     func packageInfo(_ request: Data, reply: @escaping (Data) -> Void) {
-        let response = XPCDataReply(reply)
+        let response = makeReplyHandler(reply, snapshotBarrier: true)
         let admission = connectionRegistry.beginRequest(on: connectionID)
         guard case .accepted(let pending) = admission else {
             response.send(
@@ -1326,6 +1378,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 return
             }
             do {
+                response.beginSnapshotBarrier()
                 let details = try await host.packageInfo(
                     RuntimePackageRequest(packageID: decoded.packageID)
                 )
@@ -1338,7 +1391,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     }
 
     func importPackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void) {
-        let response = XPCDataReply(reply)
+        let response = makeReplyHandler(reply)
         let admission = connectionRegistry.beginRequest(on: connectionID)
         guard case .accepted(let pending) = admission else {
             response.send(
@@ -1387,7 +1440,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     }
 
     func installImported(_ request: Data, reply: @escaping (Data) -> Void) {
-        let response = XPCDataReply(reply)
+        let response = makeReplyHandler(reply)
         let admission = connectionRegistry.beginRequest(on: connectionID)
         guard case .accepted(let pending) = admission else {
             response.send(
@@ -1422,7 +1475,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     }
 
     func beginInstallImported(_ request: Data, reply: @escaping (Data) -> Void) {
-        let response = XPCDataReply(reply)
+        let response = makeReplyHandler(reply)
         let admission = connectionRegistry.beginRequest(on: connectionID)
         guard case .accepted(let pending) = admission else {
             response.send(
@@ -1474,7 +1527,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     }
 
     func cancelOperation(_ request: Data, reply: @escaping (Data) -> Void) {
-        let response = XPCDataReply(reply)
+        let response = makeReplyHandler(reply)
         let admission = connectionRegistry.beginRequest(on: connectionID)
         guard case .accepted(let pending) = admission else {
             response.send(
@@ -1517,7 +1570,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     }
 
     func listOperations(_ request: Data, reply: @escaping (Data) -> Void) {
-        let response = XPCDataReply(reply)
+        let response = makeReplyHandler(reply, snapshotBarrier: true)
         let admission = connectionRegistry.beginRequest(on: connectionID)
         guard case .accepted(let pending) = admission else {
             response.send(
@@ -1546,13 +1599,19 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 return
             }
             response.send(
-                Self.encode(RuntimeListOperationsControlReply(result: await host.listOperations()))
+                Self.encode(
+                    RuntimeListOperationsControlReply(
+                        result: await host.listOperations(beginSnapshotBarrier: {
+                            response.beginSnapshotBarrier()
+                        })
+                    )
+                )
             )
         }
     }
 
     func operationStatus(_ request: Data, reply: @escaping (Data) -> Void) {
-        let response = XPCDataReply(reply)
+        let response = makeReplyHandler(reply, snapshotBarrier: true)
         let admission = connectionRegistry.beginRequest(on: connectionID)
         guard case .accepted(let pending) = admission else {
             response.send(
@@ -1585,7 +1644,12 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 return
             }
             do {
-                let result = try await host.operationStatus(decoded.operationID)
+                let result = try await host.operationStatus(
+                    decoded.operationID,
+                    beginSnapshotBarrier: {
+                        response.beginSnapshotBarrier()
+                    }
+                )
                 response.send(Self.encode(RuntimeOperationStatusControlReply(result: result)))
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
@@ -1594,8 +1658,130 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         }
     }
 
+    func subscribe(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID, allowDuringShutdown: true)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeSubscribeControlReply(
+                        error: Self.rejection(for: admission).wireError
+                    )))
+            return
+        }
+        Task { [connectionRegistry = self.connectionRegistry, connectionID = self.connectionID] in
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .subscribe,
+                as: RuntimeSubscribeControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeSubscribeControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimeSubscribeControlRequest.self, from: request) else {
+                response.send(Self.encode(RuntimeSubscribeControlReply(error: Self.malformedWireError)))
+                return
+            }
+            guard await verifyEventSink(eventSink) else {
+                response.send(
+                    Self.encode(
+                        RuntimeSubscribeControlReply(
+                            error: .runtime(
+                                "malformedRequest",
+                                message: "The client event receiver is unavailable."
+                            )
+                        )
+                    )
+                )
+                return
+            }
+            do {
+                let topics = try host.eventHub.subscribe(
+                    connectionID: connectionID,
+                    clientKind: clientKind,
+                    topics: decoded.topics,
+                    sink: eventSink,
+                    outputQueue: outputQueue,
+                    isConnectionOpen: { [weak connectionRegistry, connectionID] in
+                        connectionRegistry?.isRegistered(connectionID) == true
+                    }
+                )
+                response.send(Self.encode(RuntimeSubscribeControlReply(result: topics)))
+            } catch let error as RuntimeWireError {
+                response.send(Self.encode(RuntimeSubscribeControlReply(error: error)))
+            } catch {
+                response.send(Self.encode(RuntimeSubscribeControlReply(error: Self.internalWireError)))
+            }
+        }
+    }
+
+    private func verifyEventSink(_ sink: RuntimeEventSinkReference?) async -> Bool {
+        guard let sink else { return false }
+        return await withCheckedContinuation { continuation in
+            let gate = XPCEventSinkHandshakeGate(continuation)
+            let timeout = DispatchWorkItem {
+                gate.complete(false)
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(1), execute: timeout)
+            outputQueue.async {
+                sink.value.handshake { available in
+                    timeout.cancel()
+                    gate.complete(available)
+                }
+            }
+        }
+    }
+
+    func unsubscribe(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID, allowDuringShutdown: true)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeUnsubscribeControlReply(
+                        error: Self.rejection(for: admission).wireError
+                    )))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .unsubscribe,
+                as: RuntimeUnsubscribeControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeUnsubscribeControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeUnsubscribeControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(Self.encode(RuntimeUnsubscribeControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try host.eventHub.unsubscribe(
+                    connectionID: connectionID,
+                    clientKind: clientKind,
+                    topics: decoded.topics
+                )
+                response.send(Self.encode(RuntimeUnsubscribeControlReply()))
+            } catch let error as RuntimeWireError {
+                response.send(Self.encode(RuntimeUnsubscribeControlReply(error: error)))
+            } catch {
+                response.send(Self.encode(RuntimeUnsubscribeControlReply(error: Self.internalWireError)))
+            }
+        }
+    }
+
     func launch(_ request: Data, reply: @escaping (Data) -> Void) {
-        let response = XPCDataReply(reply)
+        let response = makeReplyHandler(reply)
         let admission = connectionRegistry.beginRequest(on: connectionID)
         guard case .accepted(let pending) = admission else {
             let error = Self.rejection(for: admission).wireError
@@ -1630,7 +1816,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     }
 
     func terminate(_ request: Data, reply: @escaping (Data) -> Void) {
-        let response = XPCDataReply(reply)
+        let response = makeReplyHandler(reply)
         let admission = connectionRegistry.beginRequest(on: connectionID)
         guard case .accepted(let pending) = admission else {
             response.send(Self.encode(RuntimeTerminateControlReply(error: Self.rejection(for: admission).wireError)))
@@ -1661,6 +1847,48 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 response.send(Self.encode(RuntimeTerminateControlReply(error: wireError)))
             }
         }
+    }
+
+    private func makeReplyHandler(
+        _ reply: @escaping (Data) -> Void,
+        snapshotBarrier: Bool = false
+    ) -> XPCDataReply {
+        let eventHub = host.eventHub
+        let connectionID = self.connectionID
+        let beginSnapshotBarrier: (@Sendable () -> Void)?
+        if snapshotBarrier {
+            beginSnapshotBarrier = { [eventHub, connectionID] in
+                eventHub.beginSnapshotBarrier(connectionID: connectionID)
+            }
+        } else {
+            beginSnapshotBarrier = nil
+        }
+        let beforeSend: (@Sendable () -> Void)?
+        let sendAfterBarrier: (@Sendable (@escaping @Sendable () -> Void) -> Void)?
+        if snapshotBarrier {
+            beforeSend = { [eventHub] in
+                eventHub.flush(connectionID: connectionID)
+            }
+            sendAfterBarrier = { [eventHub, outputQueue] sendReply in
+                eventHub.endSnapshotBarrier(
+                    connectionID: connectionID,
+                    outputQueue: outputQueue,
+                    reply: sendReply
+                )
+            }
+        } else {
+            beforeSend = { [eventHub] in
+                eventHub.flush(connectionID: connectionID)
+            }
+            sendAfterBarrier = nil
+        }
+        return XPCDataReply(
+            reply,
+            outputQueue: outputQueue,
+            beforeSend: beforeSend,
+            beginSnapshotBarrier: beginSnapshotBarrier,
+            sendAfterBarrier: sendAfterBarrier
+        )
     }
 
     private static let maximumRequestSize = 1024 * 1024
@@ -1774,18 +2002,89 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
 
 private final class XPCDataReply: @unchecked Sendable {
     private let lock = NSLock()
-    private var handler: ((Data) -> Void)?
+    private var handler: ReplyHandler?
+    private let outputQueue: DispatchQueue?
+    private let beforeSend: (@Sendable () -> Void)?
+    private let startSnapshotBarrier: (@Sendable () -> Void)?
+    private let sendAfterBarrier: (@Sendable (@escaping @Sendable () -> Void) -> Void)?
+    private var snapshotBarrierStarted = false
 
-    init(_ handler: @escaping (Data) -> Void) {
-        self.handler = handler
+    init(
+        _ handler: @escaping (Data) -> Void,
+        outputQueue: DispatchQueue? = nil,
+        beforeSend: (@Sendable () -> Void)? = nil,
+        beginSnapshotBarrier: (@Sendable () -> Void)? = nil,
+        sendAfterBarrier: (@Sendable (@escaping @Sendable () -> Void) -> Void)? = nil
+    ) {
+        self.handler = ReplyHandler(handler)
+        self.outputQueue = outputQueue
+        self.beforeSend = beforeSend
+        startSnapshotBarrier = beginSnapshotBarrier
+        self.sendAfterBarrier = sendAfterBarrier
+    }
+
+    func beginSnapshotBarrier() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard handler != nil, !snapshotBarrierStarted else { return }
+        startSnapshotBarrier?()
+        snapshotBarrierStarted = startSnapshotBarrier != nil
     }
 
     func send(_ data: Data) {
         lock.lock()
         let handler = self.handler
         self.handler = nil
+        let snapshotBarrierStarted = self.snapshotBarrierStarted
+        self.snapshotBarrierStarted = false
         lock.unlock()
-        handler?(data)
+        guard let handler else {
+            return
+        }
+        if snapshotBarrierStarted, let sendAfterBarrier {
+            let sendReply: @Sendable () -> Void = {
+                handler.send(data)
+            }
+            sendAfterBarrier(sendReply)
+            return
+        }
+        beforeSend?()
+        if let outputQueue {
+            outputQueue.async {
+                handler.send(data)
+            }
+        } else {
+            handler.send(data)
+        }
+    }
+
+    private final class ReplyHandler: @unchecked Sendable {
+        private let handler: (Data) -> Void
+
+        init(_ handler: @escaping (Data) -> Void) {
+            self.handler = handler
+        }
+
+        func send(_ data: Data) {
+            handler(data)
+        }
+    }
+}
+
+private final class XPCEventSinkHandshakeGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    init(_ continuation: CheckedContinuation<Bool, Never>) {
+        self.continuation = continuation
+    }
+
+    func complete(_ available: Bool) {
+        lock.lock()
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(returning: available)
     }
 }
 

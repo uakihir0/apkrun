@@ -53,6 +53,48 @@ public enum PackageStoreFailure: Error, Equatable, Sendable {
     case io
 }
 
+private struct GuestUninstallBoundaryFailure: Error, @unchecked Sendable {
+    let underlying: any Error
+}
+
+private struct GuestInstallBoundaryFailure: Error, @unchecked Sendable {
+    let underlying: any Error
+}
+
+private final class GuestInstallBoundaryState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var hasPassed = false
+
+    func markPassed() {
+        lock.lock()
+        hasPassed = true
+        lock.unlock()
+    }
+
+    func didPass() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return hasPassed
+    }
+}
+
+private final class GuestUninstallBoundaryState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var hasPassed = false
+
+    func markPassed() {
+        lock.lock()
+        hasPassed = true
+        lock.unlock()
+    }
+
+    func didPass() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return hasPassed
+    }
+}
+
 /// Owns package artifacts, records, and the transaction journal.
 ///
 /// `packagesDirectory` is the APKRun `Packages/` directory. Supplying it directly keeps tests
@@ -64,6 +106,14 @@ public actor PackageStore {
 
     /// Debug-only transaction hook used by crash-recovery tests and fault injection.
     public typealias FaultInjector = @Sendable (_ kind: String, _ step: String) throws -> Void
+    /// Runs under the package mutation lock after validating the managed package.
+    public typealias BeforeUninstall = @Sendable () async throws -> Void
+    /// Runs after the package transaction and Store Agent channel are ready, before the guest call.
+    public typealias BeforeGuestUninstall = @Sendable () async throws -> Void
+    /// Runs after the Store Agent channel is ready, immediately before the guest install call.
+    public typealias BeforeGuestInstall = @Sendable () async throws -> Void
+    /// Runs under the package mutation lock after validating the managed package.
+    public typealias BeforeForget = @Sendable () async throws -> Void
 
     private struct TicketManifest: Codable, Sendable {
         var preview: PackageImportPreview
@@ -475,7 +525,10 @@ public actor PackageStore {
     }
 
     /// Installs a new package or retained-data package and reports its committed prior state.
-    public func installImportedWithOutcome(ticket: UUID) async throws -> PackageInstallOutcome {
+    public func installImportedWithOutcome(
+        ticket: UUID,
+        beforeGuestInstall: BeforeGuestInstall? = nil
+    ) async throws -> PackageInstallOutcome {
         try requireWritable()
         guard let manifest = try verifiedTicket(ticket) else {
             throw PackageStoreFailure.importTicketNotFound
@@ -484,9 +537,19 @@ public actor PackageStore {
             guard existing.state == .uninstalledKeepingData else {
                 throw PackageStoreFailure.packageAlreadyInstalled
             }
-            return try await performInstall(manifest, kind: "reinstall", from: existing.versionCode)
+            return try await performInstall(
+                manifest,
+                kind: "reinstall",
+                from: existing.versionCode,
+                beforeGuestInstall: beforeGuestInstall
+            )
         }
-        return try await performInstall(manifest, kind: "firstInstall", from: nil)
+        return try await performInstall(
+            manifest,
+            kind: "firstInstall",
+            from: nil,
+            beforeGuestInstall: beforeGuestInstall
+        )
     }
 
     /// Reinstalls the package in a ticket over its current version.
@@ -495,7 +558,10 @@ public actor PackageStore {
     }
 
     /// Reinstalls a package and reports the prior state validated by its install transaction.
-    public func reinstallWithOutcome(ticket: UUID) async throws -> PackageInstallOutcome {
+    public func reinstallWithOutcome(
+        ticket: UUID,
+        beforeGuestInstall: BeforeGuestInstall? = nil
+    ) async throws -> PackageInstallOutcome {
         try requireWritable()
         guard let manifest = try verifiedTicket(ticket) else {
             throw PackageStoreFailure.importTicketNotFound
@@ -509,7 +575,8 @@ public actor PackageStore {
         return try await performInstall(
             manifest,
             kind: "reinstall",
-            from: existing.versionCode
+            from: existing.versionCode,
+            beforeGuestInstall: beforeGuestInstall
         )
     }
 
@@ -521,7 +588,9 @@ public actor PackageStore {
     /// Uninstalls a package and returns whether post-commit trash cleanup needs to be retried.
     public func uninstallWithOutcome(
         packageID: PackageID,
-        keepData: Bool = false
+        keepData: Bool = false,
+        beforeUninstall: BeforeUninstall? = nil,
+        beforeGuestUninstall: BeforeGuestUninstall? = nil
     ) async throws -> PackageUninstallOutcome {
         try requireWritable()
         guard let runtimeAccess else { throw PackageStoreFailure.runtimeUnavailable }
@@ -537,6 +606,8 @@ public actor PackageStore {
             throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
         }
         guard let record = records[packageID] else { throw PackageStoreFailure.packageNotFound }
+        try Task.checkCancellation()
+        try await beforeUninstall?()
 
         let operation = UUID()
         let transaction = Self.makeTransactionID(at: clock())
@@ -565,11 +636,27 @@ public actor PackageStore {
         )
         try injectFault(kind: "uninstall", step: "begin")
         try appendStep(transaction, kind: "uninstall", step: "guestUninstallRequested")
+        let boundaryState = GuestUninstallBoundaryState()
         do {
             try await runtimeAccess.withStoreAgent(operation) { channel in
+                if let beforeGuestUninstall {
+                    do {
+                        try await beforeGuestUninstall()
+                    } catch {
+                        throw GuestUninstallBoundaryFailure(underlying: error)
+                    }
+                }
+                boundaryState.markPassed()
                 try await channel.uninstall(packageID, keepData: keepData)
             }
+        } catch let boundaryFailure as GuestUninstallBoundaryFailure {
+            try appendAbort(transaction, reason: "uninstallNotStarted")
+            throw boundaryFailure.underlying
         } catch let uninstallFailure {
+            guard boundaryState.didPass() else {
+                try appendAbort(transaction, reason: "uninstallNotStarted")
+                throw uninstallFailure
+            }
             let guestPackage: StorePackageInfo?
             do {
                 guestPackage = try await queryPackage(packageID, through: runtimeAccess)
@@ -601,7 +688,10 @@ public actor PackageStore {
     }
 
     /// Removes APKRun's record and artifacts without issuing an Android uninstall.
-    public func forget(packageID: PackageID) async throws {
+    public func forget(
+        packageID: PackageID,
+        beforeForget: BeforeForget? = nil
+    ) async throws {
         try requireWritable()
         guard operationsInProgress.insert(packageID).inserted else {
             throw PackageStoreFailure.operationInProgress
@@ -617,6 +707,8 @@ public actor PackageStore {
             throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
         }
         guard records[packageID] != nil else { throw PackageStoreFailure.packageNotFound }
+        try Task.checkCancellation()
+        try await beforeForget?()
 
         let resolvesUnverifiedUninstall = !ambiguousUninstallTransactionIDs(for: packageID).isEmpty
 
@@ -849,7 +941,8 @@ public actor PackageStore {
     private func performInstall(
         _ manifest: TicketManifest,
         kind: String,
-        from: VersionCode?
+        from: VersionCode?,
+        beforeGuestInstall: BeforeGuestInstall?
     ) async throws -> PackageInstallOutcome {
         guard let runtimeAccess else { throw PackageStoreFailure.runtimeUnavailable }
         let preview = manifest.preview
@@ -929,8 +1022,24 @@ public actor PackageStore {
         try injectFault(kind: kind, step: "guestCommitRequested")
 
         let info: StorePackageInfo
+        let boundaryState = GuestInstallBoundaryState()
         do {
             info = try await runtimeAccess.withStoreAgent(operationID) { channel in
+                if let beforeGuestInstall {
+                    do {
+                        try Task.checkCancellation()
+                        try await beforeGuestInstall()
+                    } catch {
+                        throw GuestInstallBoundaryFailure(underlying: error)
+                    }
+                } else {
+                    do {
+                        try Task.checkCancellation()
+                    } catch {
+                        throw GuestInstallBoundaryFailure(underlying: error)
+                    }
+                }
+                boundaryState.markPassed()
                 return try await channel.install(
                     StoreInstallRequest(
                         packageID: packageID,
@@ -940,7 +1049,14 @@ public actor PackageStore {
                     files: Self.artifactURLs(in: incoming, set: preview.artifactSet)
                 )
             }
+        } catch let boundaryFailure as GuestInstallBoundaryFailure {
+            try appendAbort(transaction, reason: "installNotStarted")
+            throw boundaryFailure.underlying
         } catch {
+            guard boundaryState.didPass() else {
+                try appendAbort(transaction, reason: "guestInstallNotStarted")
+                throw error
+            }
             var committedInfo: StorePackageInfo?
             do {
                 committedInfo = try await queryPackage(packageID, through: runtimeAccess)

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 
@@ -11,11 +12,46 @@ private enum SimulatedGuestFailure: Error {
     case queryUnavailable
 }
 
+private actor UninstallBoundaryProbe {
+    private(set) var observedGuestRequest = false
+    private(set) var wasEntered = false
+    private(set) var sessionEndWasEntered = false
+
+    func record(guestRequestPresent: Bool) {
+        wasEntered = true
+        observedGuestRequest = guestRequestPresent
+    }
+
+    func recordSessionEnd() {
+        sessionEndWasEntered = true
+    }
+}
+
+private actor MutationBoundaryProbe {
+    private(set) var wasEntered = false
+    private(set) var sawTransactionBegin = false
+    private(set) var sawGuestRequest = false
+    private(set) var packageInfoQueryCount = 0
+
+    func record(
+        sawTransactionBegin: Bool = false,
+        sawGuestRequest: Bool = false,
+        packageInfoQueryCount: Int = 0
+    ) {
+        wasEntered = true
+        self.sawTransactionBegin = sawTransactionBegin
+        self.sawGuestRequest = sawGuestRequest
+        self.packageInfoQueryCount = packageInfoQueryCount
+    }
+}
+
 private actor FakeStoreChannel: StoreAgentChannel {
     nonisolated let capabilities: StoreCapabilities = [.install, .metadata, .downgradeReinstall]
 
     private var packages: [PackageID: StorePackageInfo] = [:]
     private(set) var lastKeepData: Bool?
+    private(set) var installCallCount = 0
+    private(set) var packageInfoCallCount = 0
     private var installThrowsAfterCommit = false
     private var installThrowsBeforeCommit = false
     private var queryThrows = false
@@ -37,6 +73,14 @@ private actor FakeStoreChannel: StoreAgentChannel {
 
     func configureInstallFailureBeforeCommit() {
         installThrowsBeforeCommit = true
+    }
+
+    func resetInstallCallCount() {
+        installCallCount = 0
+    }
+
+    func resetPackageInfoCallCount() {
+        packageInfoCallCount = 0
     }
 
     func makeQueriesAvailable() {
@@ -72,6 +116,7 @@ private actor FakeStoreChannel: StoreAgentChannel {
     }
 
     func install(_ request: StoreInstallRequest, files: [URL]) async throws -> StorePackageInfo {
+        installCallCount += 1
         #expect(!files.isEmpty)
         #expect(files.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
         if installThrowsBeforeCommit {
@@ -116,6 +161,7 @@ private actor FakeStoreChannel: StoreAgentChannel {
     }
 
     func packageInfo(_ package: PackageID) async throws -> StorePackageInfo? {
+        packageInfoCallCount += 1
         if queryThrows {
             throw SimulatedGuestFailure.queryUnavailable
         }
@@ -138,21 +184,69 @@ private actor FakeStoreChannel: StoreAgentChannel {
 private actor FakeStoreRuntime: StoreRuntimeAccess {
     private let channel: FakeStoreChannel
     private let generation: UUID
+    private let acquisitionGate: StoreAgentAcquisitionGate?
 
-    init(channel: FakeStoreChannel, generation: UUID = UUID()) {
+    init(
+        channel: FakeStoreChannel,
+        generation: UUID = UUID(),
+        acquisitionGate: StoreAgentAcquisitionGate? = nil
+    ) {
         self.channel = channel
         self.generation = generation
+        self.acquisitionGate = acquisitionGate
     }
 
     func withStoreAgent<T: Sendable>(
         _ operation: UUID,
         _ body: @Sendable (any StoreAgentChannel) async throws -> T
     ) async throws -> T {
-        try await body(channel)
+        await acquisitionGate?.beforeChannelAcquisition()
+        try Task.checkCancellation()
+        return try await body(channel)
     }
 
     func userdataGeneration() async -> UUID? {
         generation
+    }
+}
+
+private actor StoreAgentAcquisitionGate {
+    private var callsUntilPause: Int?
+    private var isPaused = false
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+    private var pauseWaiter: CheckedContinuation<Void, Never>?
+
+    func pause(after calls: Int) {
+        callsUntilPause = calls
+    }
+
+    func beforeChannelAcquisition() async {
+        guard let callsUntilPause else { return }
+        if callsUntilPause > 1 {
+            self.callsUntilPause = callsUntilPause - 1
+            return
+        }
+
+        self.callsUntilPause = nil
+        isPaused = true
+        pauseWaiter?.resume()
+        pauseWaiter = nil
+        await withCheckedContinuation { continuation in
+            releaseWaiter = continuation
+        }
+    }
+
+    func waitUntilPaused() async {
+        guard !isPaused else { return }
+        await withCheckedContinuation { continuation in
+            pauseWaiter = continuation
+        }
+    }
+
+    func release() {
+        releaseWaiter?.resume()
+        releaseWaiter = nil
+        isPaused = false
     }
 }
 
@@ -907,6 +1001,303 @@ private actor CompletionFlag {
     #expect(outcome.keptData)
     #expect(outcome.cleanupDeferred)
     #expect(try await store.listManagedPackages().first?.state == .uninstalledKeepingData)
+}
+
+@Test func packageStoreCallsInstallBoundaryAfterChannelSetupImmediatelyBeforeGuestCall() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let channel = FakeStoreChannel()
+    let packagesDirectory = temporary.appendingPathComponent("Packages", isDirectory: true)
+    let store = PackageStore(
+        packagesDirectory: packagesDirectory,
+        runtimeAccess: FakeStoreRuntime(channel: channel),
+        inspector: { _ in facts() }
+    )
+    try await store.open()
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let preview = try await store.importPackage(files: [input])
+    let journalURL = packagesDirectory.appendingPathComponent("journal.jsonl")
+    let boundary = MutationBoundaryProbe()
+    await channel.resetPackageInfoCallCount()
+
+    do {
+        _ = try await store.installImportedWithOutcome(
+            ticket: preview.ticket,
+            beforeGuestInstall: {
+                let journal = (try? String(contentsOf: journalURL, encoding: .utf8)) ?? ""
+                await boundary.record(
+                    sawTransactionBegin: journal.contains("\"kind\":\"firstInstall\""),
+                    sawGuestRequest: journal.contains("guestCommitRequested"),
+                    packageInfoQueryCount: await channel.packageInfoCallCount
+                )
+                throw SimulatedGuestFailure.installFailedBeforeCommit
+            }
+        )
+        Issue.record("The test boundary must stop the guest install.")
+    } catch {
+        #expect(error is SimulatedGuestFailure)
+    }
+
+    #expect(await boundary.wasEntered)
+    #expect(await boundary.sawTransactionBegin)
+    #expect(await boundary.sawGuestRequest)
+    #expect(await boundary.packageInfoQueryCount == 1)
+    #expect(await channel.installCallCount == 0)
+    #expect(try await store.listManagedPackages().isEmpty)
+    let journal = try String(contentsOf: journalURL, encoding: .utf8)
+    #expect(journal.contains("installNotStarted"))
+}
+
+@Test func packageStoreDoesNotCallInstallBoundaryWhenCancelledWaitingForMutationLock() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let channel = FakeStoreChannel()
+    let packagesDirectory = temporary.appendingPathComponent("Packages", isDirectory: true)
+    let store = PackageStore(
+        packagesDirectory: packagesDirectory,
+        runtimeAccess: FakeStoreRuntime(channel: channel),
+        inspector: { _ in facts() }
+    )
+    try await store.open()
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let preview = try await store.importPackage(files: [input])
+    let lockURL = packagesDirectory.appendingPathComponent(".mutation.lock")
+    var lock = Darwin.open(
+        lockURL.path,
+        O_RDWR | O_CREAT | O_EXLOCK | O_NONBLOCK,
+        mode_t(0o600)
+    )
+    #expect(lock >= 0)
+    guard lock >= 0 else { return }
+    defer {
+        if lock >= 0 {
+            _ = Darwin.close(lock)
+        }
+    }
+
+    let boundary = MutationBoundaryProbe()
+    let install = Task {
+        try await store.installImportedWithOutcome(
+            ticket: preview.ticket,
+            beforeGuestInstall: { await boundary.record() }
+        )
+    }
+    try await Task.sleep(for: .milliseconds(50))
+    install.cancel()
+    do {
+        _ = try await install.value
+        Issue.record("A cancelled mutation-lock waiter must not start install.")
+    } catch let failure as PackageStoreFailure {
+        #expect(failure == .operationInProgress)
+    }
+
+    _ = Darwin.close(lock)
+    lock = -1
+    #expect(!(await boundary.wasEntered))
+    #expect(await channel.installCallCount == 0)
+    #expect(try await store.listManagedPackages().isEmpty)
+
+    let installed = try await store.installImportedWithOutcome(ticket: preview.ticket)
+    #expect(installed.record.state == .installed)
+}
+
+@Test func packageStoreKeepsInstallCancellableUntilStoreAgentChannelIsReady() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let channel = FakeStoreChannel()
+    let acquisitionGate = StoreAgentAcquisitionGate()
+    let packagesDirectory = temporary.appendingPathComponent("Packages", isDirectory: true)
+    let store = PackageStore(
+        packagesDirectory: packagesDirectory,
+        runtimeAccess: FakeStoreRuntime(channel: channel, acquisitionGate: acquisitionGate),
+        inspector: { _ in facts() }
+    )
+    try await store.open()
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let preview = try await store.importPackage(files: [input])
+    await acquisitionGate.pause(after: 2)
+    let boundary = MutationBoundaryProbe()
+    let install = Task {
+        try await store.installImportedWithOutcome(
+            ticket: preview.ticket,
+            beforeGuestInstall: { await boundary.record() }
+        )
+    }
+
+    await acquisitionGate.waitUntilPaused()
+    install.cancel()
+    await acquisitionGate.release()
+    do {
+        _ = try await install.value
+        Issue.record("Cancellation during channel setup must stop before the guest call.")
+    } catch {
+        #expect(error is CancellationError)
+    }
+
+    #expect(!(await boundary.wasEntered))
+    #expect(await channel.installCallCount == 0)
+    #expect(try await store.listManagedPackages().isEmpty)
+    let journalURL = packagesDirectory.appendingPathComponent("journal.jsonl")
+    let journal = try String(contentsOf: journalURL, encoding: .utf8)
+    #expect(journal.contains("guestInstallNotStarted"))
+
+    let installed = try await store.installImportedWithOutcome(ticket: preview.ticket)
+    #expect(installed.record.state == .installed)
+}
+
+@Test func packageStoreDoesNotCallForgetBoundaryWhenCancelledWaitingForMutationLock() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let channel = FakeStoreChannel()
+    let packagesDirectory = temporary.appendingPathComponent("Packages", isDirectory: true)
+    let store = PackageStore(
+        packagesDirectory: packagesDirectory,
+        runtimeAccess: FakeStoreRuntime(channel: channel),
+        inspector: { _ in facts() }
+    )
+    try await store.open()
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let preview = try await store.importPackage(files: [input])
+    let installed = try await store.installImportedWithOutcome(ticket: preview.ticket)
+    let lockURL = packagesDirectory.appendingPathComponent(".mutation.lock")
+    var lock = Darwin.open(
+        lockURL.path,
+        O_RDWR | O_CREAT | O_EXLOCK | O_NONBLOCK,
+        mode_t(0o600)
+    )
+    #expect(lock >= 0)
+    guard lock >= 0 else { return }
+    defer {
+        if lock >= 0 {
+            _ = Darwin.close(lock)
+        }
+    }
+
+    let boundary = MutationBoundaryProbe()
+    let forget = Task {
+        try await store.forget(
+            packageID: installed.record.packageId,
+            beforeForget: { await boundary.record() }
+        )
+    }
+    try await Task.sleep(for: .milliseconds(50))
+    forget.cancel()
+    do {
+        _ = try await forget.value
+        Issue.record("A cancelled mutation-lock waiter must not start forget.")
+    } catch let failure as PackageStoreFailure {
+        #expect(failure == .operationInProgress)
+    }
+
+    _ = Darwin.close(lock)
+    lock = -1
+    #expect(!(await boundary.wasEntered))
+    #expect(try await store.listManagedPackages().first?.state == .installed)
+}
+
+@Test func packageStoreCallsUninstallBoundaryAfterPreparingTheGuestTransaction() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let channel = FakeStoreChannel()
+    let store = PackageStore(
+        packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
+        runtimeAccess: FakeStoreRuntime(channel: channel),
+        inspector: { _ in facts() }
+    )
+    try await store.open()
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let preview = try await store.importPackage(files: [input])
+    let installed = try await store.installImportedWithOutcome(ticket: preview.ticket)
+    let packageDirectory = temporary.appendingPathComponent("Packages", isDirectory: true)
+    let journalURL = packageDirectory.appendingPathComponent("journal.jsonl")
+    let boundary = UninstallBoundaryProbe()
+
+    do {
+        _ = try await store.uninstallWithOutcome(
+            packageID: installed.record.packageId,
+            beforeUninstall: {
+                await boundary.recordSessionEnd()
+            },
+            beforeGuestUninstall: {
+                let journal = (try? String(contentsOf: journalURL, encoding: .utf8)) ?? ""
+                await boundary.record(guestRequestPresent: journal.contains("guestUninstallRequested"))
+                throw SimulatedGuestFailure.uninstallFailed
+            }
+        )
+        Issue.record("The test boundary must stop the guest uninstall.")
+    } catch {
+        #expect(error is SimulatedGuestFailure)
+    }
+
+    #expect(await boundary.wasEntered)
+    #expect(await boundary.sessionEndWasEntered)
+    #expect(await boundary.observedGuestRequest)
+    #expect(await channel.lastKeepData == nil)
+    #expect(try await store.listManagedPackages().first?.state == .installed)
+    let journal = try String(contentsOf: journalURL, encoding: .utf8)
+    #expect(journal.contains("uninstallNotStarted"))
+}
+
+@Test func packageStoreDoesNotCallUninstallBoundaryWhenCancelledWaitingForMutationLock() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let channel = FakeStoreChannel()
+    let packagesDirectory = temporary.appendingPathComponent("Packages", isDirectory: true)
+    let store = PackageStore(
+        packagesDirectory: packagesDirectory,
+        runtimeAccess: FakeStoreRuntime(channel: channel),
+        inspector: { _ in facts() }
+    )
+    try await store.open()
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let preview = try await store.importPackage(files: [input])
+    let installed = try await store.installImportedWithOutcome(ticket: preview.ticket)
+    let lockURL = packagesDirectory.appendingPathComponent(".mutation.lock")
+    var lock = Darwin.open(
+        lockURL.path,
+        O_RDWR | O_CREAT | O_EXLOCK | O_NONBLOCK,
+        mode_t(0o600)
+    )
+    #expect(lock >= 0)
+    guard lock >= 0 else { return }
+    defer {
+        if lock >= 0 {
+            _ = Darwin.close(lock)
+        }
+    }
+
+    let boundary = UninstallBoundaryProbe()
+    let uninstall = Task {
+        try await store.uninstallWithOutcome(
+            packageID: installed.record.packageId,
+            beforeUninstall: {
+                await boundary.recordSessionEnd()
+            },
+            beforeGuestUninstall: {
+                await boundary.record(guestRequestPresent: false)
+            }
+        )
+    }
+    try await Task.sleep(for: .milliseconds(50))
+    uninstall.cancel()
+    do {
+        _ = try await uninstall.value
+        Issue.record("A cancelled mutation-lock waiter must not start uninstall.")
+    } catch let failure as PackageStoreFailure {
+        #expect(failure == .operationInProgress)
+    }
+
+    _ = Darwin.close(lock)
+    lock = -1
+    #expect(!(await boundary.wasEntered))
+    #expect(!(await boundary.sessionEndWasEntered))
+    #expect(try await store.listManagedPackages().first?.state == .installed)
 }
 
 @Test func packageStoreUsesLiveAndroidVersionForInstallOutcomeAndDowngradeChecks() async throws {

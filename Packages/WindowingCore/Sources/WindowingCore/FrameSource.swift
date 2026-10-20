@@ -48,7 +48,7 @@ public enum FrameSourceEvent: Equatable, Sendable {
 /// Where a display window gets its frames (display-and-windowing.md §5.3).
 ///
 /// In embedded development mode the source is the CLI's adapter over the runtime's developer display. The wrapper gets
-/// the same frames over XPC (#068). The window reads the surfaces and never writes them, and it reports each displayed
+/// the same frames over XPC (#69). The window reads the surfaces and never writes them, and it reports each displayed
 /// frame back through `frameDisplayed`.
 public protocol FrameSource: Sendable {
     /// The latest installed pool.

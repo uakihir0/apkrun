@@ -1,4 +1,4 @@
-"""Replace the data of one linear logical partition in a liblp super image (#099, IR-680).
+"""Replace the data of one linear logical partition in a liblp super image (#99, IR-680).
 
 The writer changes the bytes of one existing linear partition. The geometry, the metadata copies,
 and the partition table stay byte-identical, so the metadata does not change and its checksums stay

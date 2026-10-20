@@ -2,7 +2,7 @@ import DiagnosticsCore
 import Foundation
 import VirtualMachineCore
 
-/// Decides when a boot is complete or has failed (runtime-daemon.md §3.2; #014 step 1).
+/// Decides when a boot is complete or has failed (runtime-daemon.md §3.2; #15 step 1).
 ///
 /// The watch holds no clock. The caller passes the instant of each input, so the whole-boot
 /// timeout and the stall limit can be tested with a test clock. `RuntimeSupervisor` feeds it

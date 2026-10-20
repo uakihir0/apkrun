@@ -89,7 +89,7 @@ private let syntheticBox = VirGLTransfer(
     depth: 1
 )
 
-/// The synthetic replay fixture, `Tests/Fixtures/graphics/synthetic-virgl-session.json` (M02-graphics.md #022 step 3).
+/// The synthetic replay fixture, `Tests/Fixtures/graphics/synthetic-virgl-session.json` (M02-graphics.md #23 step 3).
 /// It is synthetic: no Linux guest run has recorded the `kmscube` stream yet (IR-514).
 private func syntheticFixtureURL() -> URL {
     // This file is Packages/GraphicsCore/Tests/GraphicsCoreSystemTests/VirGLRoundTripSystemTests.swift.
@@ -128,7 +128,7 @@ private let syntheticFixtureSHA256 = "5a3ffaea5130102d90b28456975512f9fd8359f869
     /// with a separate script that applies the box rule of `expectedSyntheticScanout`, and it is pinned here (IR-515).
     private let syntheticScanoutSHA256 = "41172b76173b4dd26e522abf890495d98aff5f9d2cc601ee617d48b4b7343b86"
 
-    /// The environment variable that names the `kmscube` recording of the development Linux run (M02-graphics.md #022
+    /// The environment variable that names the `kmscube` recording of the development Linux run (M02-graphics.md #23
     /// step 3). The recording is 24.6 MiB, so it is not in the repository, and the test skips without the variable.
     private let kmscubeRecordingVariable = "APKRUN_TEST_KMSCUBE_RECORDING"
 
@@ -358,7 +358,7 @@ extension VirGLRendererSuite {
             .enabled(
                 if: MTLCreateSystemDefaultDevice() != nil
                     && ProcessInfo.processInfo.environment[kmscubeRecordingVariable] != nil,
-                "Set APKRUN_TEST_KMSCUBE_RECORDING to the kmscube recording (M02-graphics.md #022 step 3)."
+                "Set APKRUN_TEST_KMSCUBE_RECORDING to the kmscube recording (M02-graphics.md #23 step 3)."
             )
         )
         func theKmscubeSessionReplaysOnTheDeviceWithoutHostReadbacks() throws {

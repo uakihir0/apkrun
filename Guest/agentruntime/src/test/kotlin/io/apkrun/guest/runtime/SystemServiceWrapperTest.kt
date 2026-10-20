@@ -7,7 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The isolation of a system service wrapper (guest-components.md §6.2, #072 acceptance): a method
+ * The isolation of a system service wrapper (guest-components.md §6.2, #73 acceptance): a method
  * that the image does not have makes only its own call unusable, and the other wrappers and calls
  * keep working. The service objects are JDK collections, so the checks run without a framework.
  */

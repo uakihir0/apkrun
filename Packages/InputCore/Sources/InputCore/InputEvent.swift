@@ -80,7 +80,7 @@ public struct MouseButtons: OptionSet, Sendable {
     public static let forward = MouseButtons(rawValue: 16)
 }
 
-/// The `KeyEvent.META_*` modifier bits of Android (used by key events, #025).
+/// The `KeyEvent.META_*` modifier bits of Android (used by key events, #26).
 public struct AndroidMetaState: OptionSet, Sendable {
     /// The `META_*` bits.
     public let rawValue: Int32
@@ -212,7 +212,7 @@ public struct ScrollEvent: Sendable, Equatable {
     }
 }
 
-/// A key event, injected as a key in key mode (#025, `KeyTranslator`).
+/// A key event, injected as a key in key mode (#26, `KeyTranslator`).
 public struct KeyEvent: Sendable, Equatable {
     /// The key goes down or up.
     public enum Action: Sendable, Equatable {
@@ -253,9 +253,9 @@ public enum InputEvent: Sendable, Equatable {
     case mouse(MouseEvent)
     /// A scroll event.
     case scroll(ScrollEvent)
-    /// A key event of key mode (#025).
+    /// A key event of key mode (#26).
     case key(KeyEvent)
-    /// A long press at a position. Not produced in #024 (D6).
+    /// A long press at a position. Not produced in #25 (D6).
     case longPress(DisplayPoint, InputTimestamp)
     /// Cancels the open gestures, releases the pressed buttons, and ends the hover, on the guest.
     case cancelAll(InputTimestamp)

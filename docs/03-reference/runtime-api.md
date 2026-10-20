@@ -589,7 +589,7 @@ Target `RuntimeStatus` replaces `RuntimeHostStatus` for `runtimeStatus`. Fields:
 | `openSession` (target) | `OpenSessionRequest` → `SessionDescriptor` + `[IOSurface]` | W, L | W | session channel, `sessions.opened` | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.1 |
 | `listSessions` (target) | — → `[SessionSummary]` | C | Q | — | [runtime-daemon.md](../02-design/runtime-daemon.md) §8.6 |
 
-APKRun.app and the CLI never open app sessions. They call `launch`, and the launched process opens the session (ADR-0006). Debug builds can use `APKRUN_TEST_HEADLESS_LAUNCH=1` for a daemon-owned headless session until #068 removes it ([configuration.md](configuration.md) §5.1).
+APKRun.app and the CLI never open app sessions. They call `launch`, and the launched process opens the session (ADR-0006). Debug builds can use `APKRUN_TEST_HEADLESS_LAUNCH=1` for a daemon-owned headless session until #69 removes it ([configuration.md](configuration.md) §5.1).
 
 - `RuntimeLaunchResult`: `sessionID` (UUID), `packageID`, `state` (`RuntimeSessionPhase`).
 - `RuntimeSessionPhase` (built): `starting`, `booting`, `waitingForPackage`, `launching`, `running`, `ended`, `unknown`.
@@ -861,7 +861,7 @@ Design: [update-system.md](../02-design/update-system.md) §3, §2.3, §7.3, §8
 
 `SetUpdatePolicyRequest`: `packageID`, `policy` (`UpdatePolicy`: `choice` (`UpdateChoice`), `provider` (`ProviderChange`: `keep`, `set(ProviderSpec)`, `remove`)).
 
-`SetUpdateAuthorityRequest`: `packageID`, `authority` (`AuthorityChoice`: `apkrun`, `manual`, `external`; only #097 sets `googlePlay`).
+`SetUpdateAuthorityRequest`: `packageID`, `authority` (`AuthorityChoice`: `apkrun`, `manual`, `external`; only #98 sets `googlePlay`).
 
 `ProviderSpec`: `spec` (`local:<path>`, `direct:<https-url>`, `fdroid[:<url>#<fingerprint>]`, `github:<owner>/<name>[:<glob>][@prerelease]`), `bookmark` (Data?; required for local), `token` (String?; github only, stored in the Keychain under `io.apkrun.provider.github`, never returned).
 
@@ -972,7 +972,7 @@ The wrapper endpoint serves major N and N−1 (§2.4). Removing an operation fro
 `RemoveWrapperRequest`: `packageID`, `options` (`trash` Bool; false = **Remove from List**).
 
 - `closeRunningApp = true` answers "Quit ‹App› to update its Mac app?". apkrund sends `windowRequest(.close)` and waits 30 s; if the session does not end, the operation fails with `wrapper.wrapperRunning`.
-- If macOS App Management blocks the swap, the refresh fails with `wrapper.refreshBlocked(path, stagingToken:)`. APKRun.app then swaps `Contents` and calls `placeStagedWrapper`. This exists only if #076 finds the block (R-20); otherwise `stagingToken` is removed.
+- If macOS App Management blocks the swap, the refresh fails with `wrapper.refreshBlocked(path, stagingToken:)`. APKRun.app then swaps `Contents` and calls `placeStagedWrapper`. This exists only if #77 finds the block (R-20); otherwise `stagingToken` is removed.
 - `removeWrapper` never deletes; with `trash = true` the bundle goes to the Trash.
 
 ### 10.6 Approval (control side)
@@ -1055,7 +1055,7 @@ Semantics: [desktop-integration.md](../02-design/desktop-integration.md). Per-pa
 
 | Type | Fields |
 |---|---|
-| `ClipItem` | `text` (String?, UTF-8, at most 1 MiB), `html` (String?, at most 1 MiB, with `text`), `image` (`ClipImage`? target #080), `sensitive` (Bool), `digest` (`RuntimeSHA256Digest`), `truncated` (Bool), `trigger` (`paste` or `focus`, client only) |
+| `ClipItem` | `text` (String?, UTF-8, at most 1 MiB), `html` (String?, at most 1 MiB, with `text`), `image` (`ClipImage`? target #81), `sensitive` (Bool), `digest` (`RuntimeSHA256Digest`), `truncated` (Bool), `trigger` (`paste` or `focus`, client only) |
 | `ClipImage` | `png` (Data, at most 16 MiB), `pixelSize` (`PixelSize`, at most 8192 px) |
 | `ClipAck` | `seq` (UInt64) |
 | `ClipboardWritten` | `changeCount` (Int), `digest` |
@@ -1605,5 +1605,5 @@ Error codes this document introduces (`runtime.developerModeRequired`, `wrapper.
 
 | Item | Why it is open | Until then |
 |---|---|---|
-| The `refreshBlocked` fallback (`stagingToken`; APKRun.app swaps `Contents`) | needed only if macOS App Management blocks apkrund's swap; #076 finds out ([risks.md](../04-plan/risks.md) R-20) | §10.5; if #076 finds no block, `stagingToken` is removed |
+| The `refreshBlocked` fallback (`stagingToken`; APKRun.app swaps `Contents`) | needed only if macOS App Management blocks apkrund's swap; #77 finds out ([risks.md](../04-plan/risks.md) R-20) | §10.5; if #77 finds no block, `stagingToken` is removed |
 | Restoring a Reset Android recovery point | no operation or UI restores it ([open-questions.md](../04-plan/open-questions.md) OQ-41) | no restore in v1 (§12.3) |

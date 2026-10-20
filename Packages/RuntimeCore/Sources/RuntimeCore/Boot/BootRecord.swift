@@ -1,7 +1,7 @@
 import DiagnosticsCore
 import Foundation
 
-/// One Android boot in `perf/boots.jsonl` (diagnostics.md §4.3; #014 step 1).
+/// One Android boot in `perf/boots.jsonl` (diagnostics.md §4.3; #15 step 1).
 ///
 /// The markers are milliseconds from `VM_START`. The file holds one JSON object per line, and
 /// the newest `BootRecordLog.retainedRecordCount` records are kept.

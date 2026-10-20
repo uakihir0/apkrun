@@ -1,4 +1,4 @@
-"""Tests for the pinned erofs-utils wrapper and the PAX rebuild (#099).
+"""Tests for the pinned erofs-utils wrapper and the PAX rebuild (#99).
 
 The tests that do not need the tools run everywhere: the dump parser, the PAX tar writer, the
 checks of pinned binaries, and the fetch path on a local bottle. The round-trip tests need a

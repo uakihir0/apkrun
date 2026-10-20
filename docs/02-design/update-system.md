@@ -39,7 +39,7 @@ Each package has exactly one update authority (FR-UPD-01, ADR-0010). It is store
 |---|---|---|---|---|
 | `apkrun` | APKRun, from the attached provider | yes | yes, per the update mode (§2.2) | claimed (`io.apkrun.store`) |
 | `manual` | the user, by supplying a newer APK | no | only user-supplied files | claimed |
-| `googlePlay` | Google Play (post-v1, #097) | no | no | not claimed |
+| `googlePlay` | Google Play (post-v1, #98) | no | no | not claimed |
 | `external` | another installer in Android (adopted packages, [package-store.md](package-store.md) §9.3) | no | no. A user-supplied file asks to switch to `manual` first | not claimed |
 
 Rules:
@@ -47,7 +47,7 @@ Rules:
 - A provider attaches only to an `apkrun` package. Attaching one to a `manual` package makes it `apkrun`. Detaching the provider makes it `manual`.
 - Only changes to and from `googlePlay` and `external` touch Android. The store calls `RelinquishUpdateOwnership` when a package leaves `apkrun` or `manual` ([package-store.md](package-store.md) §6.3).
 - APKRun never installs an update for a `googlePlay` or `external` package in the background. Two automatic updaters never manage the same package.
-- The user changes the authority with `setUpdateAuthority(id, AuthorityChoice)` (§11.1): **Updated by** in the app's settings ([host-ui.md](host-ui.md) §7.5) and `apkrun update authority` (§11.3). The choices are `apkrun`, `manual`, and `external`. Only #097 sets `googlePlay`, and a `googlePlay` package refuses every change (`update.authorityDoesNotAllowUpdates`). Changing to `apkrun` requires a provider in the record, or the call fails with `update.providerNotConfigured`. The change goes through `PackageStore.setUpdateAuthority`.
+- The user changes the authority with `setUpdateAuthority(id, AuthorityChoice)` (§11.1): **Updated by** in the app's settings ([host-ui.md](host-ui.md) §7.5) and `apkrun update authority` (§11.3). The choices are `apkrun`, `manual`, and `external`. Only #98 sets `googlePlay`, and a `googlePlay` package refuses every change (`update.authorityDoesNotAllowUpdates`). Changing to `apkrun` requires a provider in the record, or the call fails with `update.providerNotConfigured`. The change goes through `PackageStore.setUpdateAuthority`.
 - An authority change holds the package's operation lock, so it waits for a running install. An update of the package that has not started its install ends as `skipped(.authorityChanged)`. A staged set that the new authority does not install is discarded. That is a provider update when the package leaves `apkrun`, and every staged set when the package moves to `external`.
 
 ### 2.2 Update mode
@@ -79,7 +79,7 @@ The update mode applies only to `apkrun` packages. It is stored in `settings.jso
 | File import, no provider chosen | `manual` | `automatic` (unused until a provider is attached) | none |
 | File import, provider chosen or detected in the Add sheet (§4.7) | `apkrun` | `automatic` | the chosen provider |
 | `apkrun install … --provider <spec>` | `apkrun` | `automatic`, unless `--updates notify` | from the spec (§11.3) |
-| Portable wrapper bootstrap | from `wrapper.json` `updates.authority`, `updates.mode`, and `updates.provider` when present | same | same. These are initial values only. Later changes live in the package settings, never in the wrapper (#089) |
+| Portable wrapper bootstrap | from `wrapper.json` `updates.authority`, `updates.mode`, and `updates.provider` when present | same | same. These are initial values only. Later changes live in the package settings, never in the wrapper (#90) |
 | Adopted package | `external` | — | none |
 
 ---
@@ -215,7 +215,7 @@ For tests and development. It is hidden in the UI unless developer mode is on. T
 
 A distributor publishes an APKRun manifest over HTTPS (FR-UPD-12). The format is in [direct-provider-manifest.md](../03-reference/direct-provider-manifest.md).
 
-- Configuration: `{url}`. The URL must be HTTPS. Debug builds also accept `http://127.0.0.1` and `http://localhost`, for the local test service (#050).
+- Configuration: `{url}`. The URL must be HTTPS. Debug builds also accept `http://127.0.0.1` and `http://localhost`, for the local test service (#51).
 - `check`: GET with `If-None-Match` and `If-Modified-Since`. `304` → nil. The manifest must be at most 1 MiB of valid JSON that matches the schema, and its `packageId` must equal the package. `versionCode ≤` installed → nil. Cursor = the ETag, or the SHA-256 of the body.
 - Artifact URLs may be relative (resolved against the manifest URL). They must be HTTPS after resolution. Every artifact needs `sha256`. A split uses `"type": "split"` with `"splitName"`. A container uses `"type": "apks"`.
 - Redirects are followed only to HTTPS URLs, at most 5.
@@ -224,9 +224,9 @@ A distributor publishes an APKRun manifest over HTTPS (FR-UPD-12). The format is
 
 ### 4.5 F-Droid provider
 
-Uses F-Droid's signed repository index, v2 (FR-UPD-13). Field names must be verified against the F-Droid index documentation (#051, OQ-18).
+Uses F-Droid's signed repository index, v2 (FR-UPD-13). Field names must be verified against the F-Droid index documentation (#52, OQ-18).
 
-- Configuration: `{repository, fingerprint}`. The default is the main repository `https://f-droid.org/repo`, with the signing-certificate fingerprint `43238d512c1e5eb2d6569f4a3afbf5523418b82e0a3ed1552770abb9a9c9ccab` pinned in the app (verify in #051). Other repositories need their own fingerprint, as in F-Droid's `?fingerprint=` links.
+- Configuration: `{repository, fingerprint}`. The default is the main repository `https://f-droid.org/repo`, with the signing-certificate fingerprint `43238d512c1e5eb2d6569f4a3afbf5523418b82e0a3ed1552770abb9a9c9ccab` pinned in the app (verify in #52). Other repositories need their own fingerprint, as in F-Droid's `?fingerprint=` links.
 - **Index verification.** Download `entry.jar` and read it with ZIPFoundation (ADR-0017). At most 16 entries and 16 MiB in total. Anything else is `providerMetadataInvalid`. Verify the JAR signature: the CMS signature over `META-INF/*.SF` with `CMSDecoder`, the signer certificate's SHA-256 against the pinned fingerprint, the `.SF` digests of `MANIFEST.MF`, and the manifest digest of `entry.json`. A failure is `providerSignatureInvalid`. It is a health error, and the repository provides no update.
 - `entry.json` names the full index (`index-v2.json`) and diffs, each with a SHA-256. The provider downloads the diff from its cached timestamp when one exists. Otherwise it downloads the full index, checks the SHA-256, and merges. Cache: `Providers/cache/fdroid/<first 16 hex of SHA-256(repository)>/`. The index refreshes at most once per check interval, for all packages together.
 - The index is decoded with a streaming JSON reader that keeps only the packages APKRun manages or is asked about. Memory budget: 64 MiB.
@@ -240,13 +240,13 @@ For apps published as GitHub release assets (FR-UPD-13).
 - Configuration: `{repository: "owner/name", assetPattern: "*.apk", channel: "stable" | "prerelease"}`. An optional personal access token is stored in the Keychain (service `io.apkrun.provider.github`). It is never stored in `settings.json` or logged.
 - `check`: `GET https://api.github.com/repos/{owner}/{name}/releases?per_page=10` with `Accept: application/vnd.github+json`, `X-GitHub-Api-Version`, and `If-None-Match`. The chosen release is the newest non-draft release. Pre-releases count only on the `prerelease` channel. The asset is the one whose name matches `assetPattern` (glob). If several match, prefer names containing `arm64-v8a` or `arm64`, then `universal`. If several still match, fail with `ambiguousAsset(names)` so the user can narrow the pattern.
 - The tag and release name are **not** versions. `declaredVersionCode` is nil. The candidate is downloaded and inspected, and V2 (§6) decides.
-- Hash: the asset's `digest` (`sha256:…`) when the API provides it (verify in #052, OQ-18). Otherwise the download is protected only by TLS, and the history entry says "No checksum published".
+- Hash: the asset's `digest` (`sha256:…`) when the API provides it (verify in #53, OQ-18). Otherwise the download is protected only by TLS, and the history entry says "No checksum published".
 - Cursor = release ID + asset ID + asset `updated_at` + size. The cursor prevents a second download of a non-newer asset.
 - Rate limits: `403` or `429` with `x-ratelimit-remaining: 0` → `providerRateLimited(retryAfter: x-ratelimit-reset)`. `304` responses are cheap. Unauthenticated use (60 requests per hour per IP) is enough at the default interval for dozens of packages.
 
 ### 4.7 Provider detection in the Add sheet
 
-When a package is imported without a provider, the Add sheet (#078) may suggest one:
+When a package is imported without a provider, the Add sheet (#79) may suggest one:
 
 - F-Droid: the package ID is in the cached main-repository index **and** a version there has the imported signer.
 - Direct: the portable wrapper or the `apkrun install --provider` spec supplies one.
@@ -438,10 +438,10 @@ The screens are designed in [host-ui.md](host-ui.md). The update system provides
 
 | Surface | Content | Task |
 |---|---|---|
-| Home, package row | "Updates: Automatic / Notify only / Manual". Status: "Up to date", "Update available ‹version›" with **Update Now**, "Updating…", "Will update when ‹App› quits", or "Update failed" | #077 |
-| Package settings → Updates | the choices of §2.3, provider picker and configuration, "Check Now", last check time and result, history, "Roll Back to…", `update.autoRollback`, `update.healthCheckLaunch` | #079 |
-| Menu bar | "Updates: 2 available" and the list with **Update** | #086 |
-| CLI | §11.3 | #074 |
+| Home, package row | "Updates: Automatic / Notify only / Manual". Status: "Up to date", "Update available ‹version›" with **Update Now**, "Updating…", "Will update when ‹App› quits", or "Update failed" | #78 |
+| Package settings → Updates | the choices of §2.3, provider picker and configuration, "Check Now", last check time and result, history, "Roll Back to…", `update.autoRollback`, `update.healthCheckLaunch` | #80 |
+| Menu bar | "Updates: 2 available" and the list with **Update** | #87 |
+| CLI | §11.3 | #75 |
 
 Notifications come from `HostNotifier` in RuntimeHost. Desktop integration uses it too, for apps without a wrapper ([desktop-integration.md](desktop-integration.md) §5.3). apkrund has no user-interface identity. It asks APKRun.app to post notifications over the `hostNotifications` stream. APKRunMenuBar never posts notifications ([host-ui.md](host-ui.md) §11). If APKRun.app is not connected, apkrund opens it in the background (`NSWorkspace.OpenConfiguration.activates = false`, argument `--notify`). APKRun.app posts the pending notifications without opening a window, and quits after 30 s if the user does nothing. Notification actions return through `hostNotificationResponse` ([runtime-api.md](../03-reference/runtime-api.md) §11.3).
 
@@ -543,7 +543,7 @@ Provider specs: `local:<path>`, `direct:<https-url>`, `fdroid[:<repository-url>#
 
 ## 12. Security
 
-- Everything a provider returns is untrusted: manifests, indexes, release JSON, release notes, and APKs. Parsers have size limits: manifest 1 MiB, release JSON 4 MiB, index memory 64 MiB, release notes 16 KiB. They are fuzz targets (#091).
+- Everything a provider returns is untrusted: manifests, indexes, release JSON, release notes, and APKs. Parsers have size limits: manifest 1 MiB, release JSON 4 MiB, index memory 64 MiB, release notes 16 KiB. They are fuzz targets (#92).
 - HTTPS only, with default ATS and certificate validation. There is no certificate pinning, except the F-Droid index signing key, which is an application-level signature. Redirects go only to HTTPS. Debug builds also accept `http://127.0.0.1[:port]` and `http://localhost[:port]` for Direct manifest URLs and F-Droid repositories (§4.4, §4.5). Release builds refuse them when a provider is configured.
 - The APK decides (FR-UPD-14). Provider metadata can cause only a refusal (V5), never an acceptance.
 - No check can be disabled, and there is no "install anyway" (NFR-SEC-04).

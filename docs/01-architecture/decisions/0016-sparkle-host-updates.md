@@ -2,15 +2,15 @@
 
 - Status: Accepted
 - Date: 2026-09-28
-- Related: #057, #087, R-23, R-24, ADR-0007, ADR-0011, [../../02-design/runtime-maintenance.md](../../02-design/runtime-maintenance.md), [../security-model.md](../security-model.md) §7
+- Related: #58, #88, R-23, R-24, ADR-0007, ADR-0011, [../../02-design/runtime-maintenance.md](../../02-design/runtime-maintenance.md), [../security-model.md](../security-model.md) §7
 
 ## Context
 
-APKRun is distributed outside the Mac App Store as a Developer ID signed, notarized app. It needs signed, verified updates for itself (FR-OPS-03, #057). An APKRun update is special in three ways:
+APKRun is distributed outside the Mac App Store as a Developer ID signed, notarized app. It needs signed, verified updates for itself (FR-OPS-03, #58). An APKRun update is special in three ways:
 
 - The bundle contains more than an app. apkrund runs from `Contents/Helpers/` as a LaunchAgent (ADR-0007) and owns the Android VM and its GPU renderer. APKRunMenuBar and the CLI run from the bundle too, and wrappers depend on apkrund's API.
 - A plain "replace the bundle and relaunch" leaves apkrund running old code over new resources, or kills it in the middle of Android I/O.
-- Updates must never touch installed Android apps, their data, or wrapper bundles (#057: "Updater must not modify Android application package metadata").
+- Updates must never touch installed Android apps, their data, or wrapper bundles (#58: "Updater must not modify Android application package metadata").
 
 The Android guest image is a separate update system with its own feed and signing (ADR-0011, [../../02-design/runtime-maintenance.md](../../02-design/runtime-maintenance.md) §4). This ADR covers the APKRun bundle only.
 
@@ -45,5 +45,5 @@ The Android guest image is a separate update system with its own feed and signin
 
 ## Verification
 
-- #057 step 1 checks the pinned Sparkle version: the Info.plist keys `SUVerifyUpdateBeforeExtraction` and `SURequireSignedFeed`, the delegate methods used, the behavior of a postponed update when the app quits, and the signed appcast format. Differences are recorded here and in R-23.
-- The #057 T2 test "APKRun N → N+1" ([../../02-design/runtime-maintenance.md](../../02-design/runtime-maintenance.md) §14) must pass. It checks that `Packages/`, the wrapper bundles, and app data are unchanged, and that the new apkrund runs. Its variant (d) and the unchanged-plist case settle R-24 (launchd picks up the new binary without re-registration).
+- #58 step 1 checks the pinned Sparkle version: the Info.plist keys `SUVerifyUpdateBeforeExtraction` and `SURequireSignedFeed`, the delegate methods used, the behavior of a postponed update when the app quits, and the signed appcast format. Differences are recorded here and in R-23.
+- The #58 T2 test "APKRun N → N+1" ([../../02-design/runtime-maintenance.md](../../02-design/runtime-maintenance.md) §14) must pass. It checks that `Packages/`, the wrapper bundles, and app data are unchanged, and that the new apkrund runs. Its variant (d) and the unchanged-plist case settle R-24 (launchd picks up the new binary without re-registration).

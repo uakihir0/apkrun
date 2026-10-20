@@ -1,4 +1,4 @@
-"""Write the runtime manifest fixtures that Python and Swift both check (#065).
+"""Write the runtime manifest fixtures that Python and Swift both check (#66).
 
 Run from `Images/tools`:
 

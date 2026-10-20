@@ -71,18 +71,18 @@ When a task closes, shorten its entry to the closed format ([../04-plan/issues/R
 |---|---|---|
 | Task | the task title, without a number | `task` |
 | Bug | what goes wrong | `bug` |
-| App compatibility report | app name and what goes wrong | `compatibility` (from #090) |
-| Release | `Release <version>` or `Android <YYYY.MM.N>` | `release`, `image-release` (from #057, #087) |
+| App compatibility report | app name and what goes wrong | `compatibility` (from #91) |
+| Release | `Release <version>` or `Android <YYYY.MM.N>` | `release`, `image-release` (from #58, #88) |
 
 Security vulnerabilities are never reported in a public issue (§3.5).
 
 ### 3.2 Bug report template
 
-#060 adds `.github/ISSUE_TEMPLATE/bug-report.md` with: what happened, what was expected, steps, the summary from **Copy Summary** or `apkrun diagnostics`, `apkrun version`, Mac model and macOS version, the package ID if one app is involved, and an optional diagnostics bundle that the user attaches. APKRun uploads nothing ([../02-design/diagnostics.md](../02-design/diagnostics.md) §8).
+#61 adds `.github/ISSUE_TEMPLATE/bug-report.md` with: what happened, what was expected, steps, the summary from **Copy Summary** or `apkrun diagnostics`, `apkrun version`, Mac model and macOS version, the package ID if one app is involved, and an optional diagnostics bundle that the user attaches. APKRun uploads nothing ([../02-design/diagnostics.md](../02-design/diagnostics.md) §8).
 
 ### 3.3 App compatibility template
 
-#090 adds `.github/ISSUE_TEMPLATE/app-compatibility.md`. Its fields map to a compatibility database entry ([../02-design/diagnostics.md](../02-design/diagnostics.md) §10). A report becomes an entry only after a maintainer reproduces it.
+#91 adds `.github/ISSUE_TEMPLATE/app-compatibility.md`. Its fields map to a compatibility database entry ([../02-design/diagnostics.md](../02-design/diagnostics.md) §10). A report becomes an entry only after a maintainer reproduces it.
 
 ### 3.4 Labels
 
@@ -92,7 +92,7 @@ Security vulnerabilities are never reported in a public issue (§3.5).
 | `needs-verification` | code on `main`, real-Mac verification left (§2.2) | the implementer |
 | `blocked` | waits for a decision or another issue | anyone, with a comment |
 | `bug` | a confirmed defect | anyone |
-| `security` | a security finding filed as a task (#091) | maintainer |
+| `security` | a security finding filed as a task (#92) | maintainer |
 | `ci-policy-approved` | a person approved a CI control change in a pull request (§7.3) | maintainer only |
 
 Tasks that add a workflow add its labels here (for example `release-blocker`, `nightly-failure`).
@@ -276,7 +276,7 @@ Tags are never moved or deleted after a push.
 
 ## 9. APKRun release
 
-The release steps below are complete only after #057, #088, and #087 (§9.7).
+The release steps below are complete only after #58, #89, and #88 (§9.7).
 
 ### 9.1 Release rules
 
@@ -296,7 +296,7 @@ The `release` environment holds `APKRUN_DEVELOPER_ID_P12` and its password, `APK
 
 ### 9.3 Preparing a release
 
-1. Open the issue `Release <version>` with the steps of [../04-plan/test-strategy.md](../04-plan/test-strategy.md) §9.1 and the manual checklist of the version (§8 there). For v1.0 the issue is #094.
+1. Open the issue `Release <version>` with the steps of [../04-plan/test-strategy.md](../04-plan/test-strategy.md) §9.1 and the manual checklist of the version (§8 there). For v1.0 the issue is #95.
 2. In one commit or pull request: set `MARKETING_VERSION`, add `docs/releases/<version>.md` (what changed; for v1.0 also the unfinished `Should` requirements), and commit the reviewed compatibility results.
 3. Dry run: `release.yml` with `dry-run` on `main`.
 4. Tag: `git tag -a v<version> -m "APKRun <version>"` and `git push origin v<version>`.
@@ -317,11 +317,11 @@ A security fix ships as a PATCH through §9.3–§9.5 with `appcast.py add --cri
 
 | Versions | How a release is made |
 |---|---|
-| v0.1–v0.4 (before #057) | The tag (§8.3) and the milestone review are the release. When testers need a build, the maintainer builds the Release configuration from a clean checkout of the tag, signs it with the Developer ID when one is configured, and attaches the zip to a GitHub pre-release. There is no appcast. |
-| v0.5 (after #057, before #088) | `release.yml` runs as a dry run: it writes the signed archive and the signed appcast to `build/release/` and publishes nothing. The app is not notarized. |
-| v1.0 (after #088 and #087) | every step of §9.4, §9.5, and §10 |
+| v0.1–v0.4 (before #58) | The tag (§8.3) and the milestone review are the release. When testers need a build, the maintainer builds the Release configuration from a clean checkout of the tag, signs it with the Developer ID when one is configured, and attaches the zip to a GitHub pre-release. There is no appcast. |
+| v0.5 (after #58, before #89) | `release.yml` runs as a dry run: it writes the signed archive and the signed appcast to `build/release/` and publishes nothing. The app is not notarized. |
+| v1.0 (after #89 and #88) | every step of §9.4, §9.5, and §10 |
 
-No Android image is published before #087.
+No Android image is published before #88.
 
 ### 9.8 Key and certificate changes
 
@@ -373,7 +373,7 @@ Release notes: `docs/releases/android-<YYYY.MM.N>.md`.
 - One task, one owner, one branch or working copy at a time. Two agents never commit to the same branch at the same time.
 - Each agent works in its own clone or `git worktree`, with its own `APKRUN_HOME` for local runs.
 - Stay in the task's `Code` paths. Before touching a path another open task lists, comment on that task's issue.
-- Only one VM runs at a time on a Mac until #098 is done ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.6).
+- Only one VM runs at a time on a Mac until #100 is done ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.6).
 
 ### 11.3 Shared files
 

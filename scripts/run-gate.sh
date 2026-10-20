@@ -70,7 +70,7 @@ if [[ "$gate" == G3 ]]; then
     fi
     g3_virgl="$repo_root/ThirdParty/out/virgl-runtime/current"
     if [[ ! -f "$g3_virgl/libvirglrenderer.1.dylib" ]]; then
-        printf 'run-gate: G3 needs the virgl runtime at %s (ThirdParty, #020)\n' "$g3_virgl" >&2
+        printf 'run-gate: G3 needs the virgl runtime at %s (ThirdParty, #21)\n' "$g3_virgl" >&2
         exit 78
     fi
     rm -rf "$gate_dir/artifacts" "$gate_dir/products" "$gate_dir/screen-recording.mov" "$gate_dir/screen-recording.mp4"
@@ -124,7 +124,7 @@ gate_report_install "$report"
 scripts/generate-project.sh
 scripts/build-test-initramfs.sh
 if [[ "$gate" == G2 ]]; then
-    # G2 boots the stock image from a signed bundle outside ~/Documents (#014, #065).
+    # G2 boots the stock image from a signed bundle outside ~/Documents (#15, #66).
     scripts/build-test-android-bundle.sh
 fi
 # Both gates run the LinuxGuest suite, whose layout test reads the Android disks. Every gate rebuilds them, so no

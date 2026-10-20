@@ -103,7 +103,7 @@ openSession(OpenSessionRequest{ packageID, geometry: DisplayGeometry{ pointSize,
 - `closeSession(policy)` takes `.stop` or `.keepRunning` ([display-and-windowing.md](../02-design/display-and-windowing.md) §7.6). `restartApp()` force-stops the app and launches it again on the same display ([wrapper.md](../02-design/wrapper.md) §5.6). `frameStatistics()` works in developer mode only ([display-and-windowing.md](../02-design/display-and-windowing.md) §7.7).
 - Minimized, occluded, or hidden windows stop presents (`visibilityChanged(false)`).
 - The window process does the AppKit side of desktop integration: pasteboard, notifications, drop target, save panel, and link prompt. apkrund makes every decision ([desktop-integration.md](../02-design/desktop-integration.md) §1).
-- The per-frame event is about 40 bytes. A shared-memory ring with a Mach semaphore is a possible optimization if XPC latency is measured as a bottleneck (#070). It is not implemented.
+- The per-frame event is about 40 bytes. A shared-memory ring with a Mach semaphore is a possible optimization if XPC latency is measured as a bottleneck (#71). It is not implemented.
 
 ### 2.4 Event subscription
 

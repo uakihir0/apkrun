@@ -1,6 +1,6 @@
 # Legal and Licensing
 
-This guide holds the engineering rules for licenses: what APKRun may use, ship, and publish; how notices are produced; and what a release must carry. It is not legal advice. The legal review of these rules is tracked in R-10 ([risks.md](../04-plan/risks.md)). `scripts/check-licenses.sh` (planned, #093) checks the SPDX values of this guide against the license files.
+This guide holds the engineering rules for licenses: what APKRun may use, ship, and publish; how notices are produced; and what a release must carry. It is not legal advice. The legal review of these rules is tracked in R-10 ([risks.md](../04-plan/risks.md)). `scripts/check-licenses.sh` (planned, #94) checks the SPDX values of this guide against the license files.
 
 ---
 
@@ -8,7 +8,7 @@ This guide holds the engineering rules for licenses: what APKRun may use, ship, 
 
 ### 1.1 Status
 
-- The project license is open question OQ-40 ([open-questions.md](../04-plan/open-questions.md)). It is decided in an ADR before the launcher binary is given to other people (#089), and before the v0.4 public demo at the latest ([roadmap.md](../04-plan/roadmap.md) §3.4).
+- The project license is open question OQ-40 ([open-questions.md](../04-plan/open-questions.md)). It is decided in an ADR before the launcher binary is given to other people (#90), and before the v0.4 public demo at the latest ([roadmap.md](../04-plan/roadmap.md) §3.4).
 - Until the ADR is accepted, source files carry no license header, and nothing from outside the project is added except under §3 and §4.
 - The notices of §6 and §7 name the chosen license.
 
@@ -38,7 +38,7 @@ The `kind: stock` image comes from a ci.android.com build ([android-image.md](..
 
 - The release image key never signs a `stock` bundle. `apkrun_image bundle` refuses to write one, and the release workflow refuses to publish one ([runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §7.3).
 - Clients get no feed updates while they run a `stock` image (C7, [runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.2).
-- Every published image is `kind: apkrun`, built from AOSP source (#035; [android-image.md](../02-design/android-image.md) §11), so APKRun controls its notices and source offer (§7).
+- Every published image is `kind: apkrun`, built from AOSP source (#36; [android-image.md](../02-design/android-image.md) §11), so APKRun controls its notices and source offer (§7).
 
 ---
 
@@ -46,12 +46,12 @@ The `kind: stock` image comes from a ci.android.com build ([android-image.md](..
 
 ### 3.1 RiftVM
 
-RiftVM's source is MIT-licensed and serves as a technical reference for the graphics path ([graphics.md](../02-design/graphics.md) §2). #018 copies no RiftVM code. The RiftVM package is never a build dependency or a distributed component.
+RiftVM's source is MIT-licensed and serves as a technical reference for the graphics path ([graphics.md](../02-design/graphics.md) §2). #19 copies no RiftVM code. The RiftVM package is never a build dependency or a distributed component.
 
 | Rule | Detail |
 |---|---|
 | Lock entry | `riftvm`: `kind: source`, `ships: reference`, commit `51f19193b1d3326b2e164d37a2a59e9970375170` (`riftvm-v0.6.1`), `license: MIT`, `licenseFiles: ["LICENSE"]` ([build-system.md](build-system.md) §6.5) |
-| Analysis | #018 records each file's license header and whether it is copied, adapted, or rewritten, in `docs/02-design/riftvm-analysis.md` ([graphics.md](../02-design/graphics.md) §2.2) |
+| Analysis | #19 records each file's license header and whether it is copied, adapted, or rewritten, in `docs/02-design/riftvm-analysis.md` ([graphics.md](../02-design/graphics.md) §2.2) |
 | Copied or adapted file | keeps RiftVM's copyright and MIT notice at the top, then the line `Derived from RiftVM <commit> (MIT)` with the full pinned commit, in `//` comments |
 | Rewritten file | written from our own understanding, with no RiftVM notice. When in doubt, treat the file as adapted |
 | Other license | not copied: rewritten, or its origin becomes its own lock entry (§4) |
@@ -156,7 +156,7 @@ These rules apply to components APKRun distributes or uses as build or test tool
 
 1. A component with runtime impact needs an ADR first ([AGENTS.md](../../AGENTS.md) §6.6; [decisions/README.md](../01-architecture/decisions/README.md)).
 2. The pull request adds the lock entry with `license`, `licenseFiles`, and `ships`, and the license copies of §6.1 ([build-system.md](build-system.md) §6.8).
-3. `scripts/check-licenses.sh` passes in the same pull request (planned, #093; required for every new component).
+3. `scripts/check-licenses.sh` passes in the same pull request (planned, #94; required for every new component).
 4. A pin update re-reads the upstream license files. A changed license updates `license`, and the pull request says so.
 5. A distributed or tooling component whose license is not allowed is replaced or removed. Replacement needs an ADR and its own task.
 
@@ -170,14 +170,14 @@ These rules apply to components APKRun distributes or uses as build or test tool
 |---|---|---|---|
 | virglrenderer, libepoxy | app | MIT | `Contents/Frameworks/VirGLRuntime/` |
 | ANGLE | app | BSD-3-Clause | `angle-astc-encoder`, `angle-vulkan-headers`, `angle-zlib` are separate app entries; the native build checks their `gnTargetPrefixes` against `gn desc` |
-| aapt2 (planned, #027) | app | Apache-2.0 | with the notices of the libraries it links, as shipped with the Maven artifact |
-| Sparkle 2 (planned, #057) | app | MIT | with the external licenses its `LICENSE` lists (ADR-0016) |
+| aapt2 (planned, #28) | app | Apache-2.0 | with the notices of the libraries it links, as shipped with the Maven artifact |
+| Sparkle 2 (planned, #58) | app | MIT | with the external licenses its `LICENSE` lists (ADR-0016) |
 | swift-protobuf, swift-argument-parser | app | Apache-2.0 WITH Swift-exception | GuestProtocol; CLI |
 | ZIPFoundation | app | MIT | APKStoreCore and UpdateCore, reading only (ADR-0017) |
 | Kotlin stdlib, `org.jetbrains:annotations`, kotlinx-coroutines | app, image | Apache-2.0 | the Guest Agent APK (`Resources/guest/`) and the image |
 | protobuf-javalite | app, image | BSD-3-Clause | same |
 | RiftVM | reference | MIT | analysis input only (§3.1) |
-| `libc`, `log`, `android_logger` and their dependencies (planned, #034) | image | MIT OR Apache-2.0 | `apkrun_vsockd`; the product uses AOSP `external/rust/crates`, which carry their own metadata |
+| `libc`, `log`, `android_logger` and their dependencies (planned, #35) | image | MIT OR Apache-2.0 | `apkrun_vsockd`; the product uses AOSP `external/rust/crates`, which carry their own metadata |
 | AOSP, including the prebuilt kernel | image | many; kernel GPL-2.0-only | not lock entries (§4.3); notices and source offer in §7 |
 | `avbtool.py`, AOSP AVB test key | tooling, committed | MIT | vendored, test only (§3.3) |
 | `mkbootimg.py`, `unpack_bootimg.py` | tooling, committed | Apache-2.0 | vendored (§3.3) |
@@ -200,7 +200,7 @@ These rules apply to components APKRun distributes or uses as build or test tool
 
 - `licenseFiles` lists paths inside the upstream source (`COPYING`, `LICENSE`, `NOTICE`).
 - A copy of each is committed as `ThirdParty/licenses/<name>/<file>`. `scripts/release/generate-notices.py --refresh <name>` fetches the pinned source and refreshes the copies. For Gradle and Cargo packages without a license file in the artifact, the copy comes from the upstream repository at the pinned version.
-- The `third-party` CI job runs `scripts/release/generate-notices.py --check`: every shipped app notice has a committed copy, and each `kind: source` app or derived copy matches its pinned source byte for byte. The full check of reference sources and resolved Swift, Gradle, and Cargo packages is planned (#093).
+- The `third-party` CI job runs `scripts/release/generate-notices.py --check`: every shipped app notice has a committed copy, and each `kind: source` app or derived copy matches its pinned source byte for byte. The full check of reference sources and resolved Swift, Gradle, and Cargo packages is planned (#94).
 
 ### 6.2 Generation
 
@@ -225,7 +225,7 @@ The Guest Agent APK is covered by the Kotlin entries. The launcher has no third-
 
 | Check | Where |
 |---|---|
-| allowed license per distributed or tooling entry; a committed copy per lock entry; identified reference licenses; every resolved package listed; RiftVM markers name the pin | `scripts/check-licenses.sh` (planned, #093); T0 tests with a sample lock that lacks one license, and with the real lock |
+| allowed license per distributed or tooling entry; a committed copy per lock entry; identified reference licenses; every resolved package listed; RiftVM markers name the pin | `scripts/check-licenses.sh` (planned, #94); T0 tests with a sample lock that lacks one license, and with the real lock |
 | generator output for a sample lock equals a golden file | T0 script test in `lint` |
 | Release build contains the notices of each `ships: app` and `derived` entry | `scripts/release/check-release-build.sh` ([build-system.md](build-system.md) §3.1) |
 | notices visible in APKRun.app and in the image | test C10-8 ([test-strategy.md](../04-plan/test-strategy.md) §8.7) |
@@ -242,13 +242,13 @@ APKRun.app's Help menu has **Third-Party Notices**, which opens `ThirdPartyNotic
 
 - The product build keeps AOSP's notice generation. Android shows the notices in Settings → About → Legal information.
 - APKRun's additions declare license metadata, so they appear there:
-  - `Guest/product/Android.bp` (planned, #035) has a `license` module with APKRun's license, the default for the product's modules;
+  - `Guest/product/Android.bp` (planned, #36) has a `license` module with APKRun's license, the default for the product's modules;
   - the agent APK imports name a second `license` module with the Kotlin stdlib, kotlinx-coroutines, and protobuf-javalite texts. `build-product.sh` copies the texts from `ThirdParty/licenses/` to `Guest/product/prebuilt/licenses/` (git-ignored), because Soong cannot read paths outside the product directory ([build-system.md](build-system.md) §9);
   - `Guest/vsockd/Android.bp` names APKRun's license; the crates keep their AOSP metadata.
 
 ### 7.2 License data of the image build
 
-After `m dist`, `scripts/aosp/build-product.sh` reads the license metadata of the installed modules from the AOSP SBOM or notice data (exact command fixed by #093). It then:
+After `m dist`, `scripts/aosp/build-product.sh` reads the license metadata of the installed modules from the AOSP SBOM or notice data (exact command fixed by #94). It then:
 
 - fails if an installed module has no license metadata;
 - lists modules with `proprietary` or `by_exception_only` for the decision of §4.3;
@@ -277,7 +277,7 @@ A release bundle without `source-offer.json` is refused for a release key.
 
 ## 8. Google services and app content
 
-- No Google Mobile Services, Google Play, or other Google apps are in any image or bundle (ADR-0001, [scope.md](../00-product/scope.md) §3). Google Play work is #097 (post-v1) and starts with its own legal investigation.
+- No Google Mobile Services, Google Play, or other Google apps are in any image or bundle (ADR-0001, [scope.md](../00-product/scope.md) §3). Google Play work is #98 (post-v1) and starts with its own legal investigation.
 - No ARM translation layer (houdini, ndk_translation) is added, and no integrity bypass (Play Integrity, SafetyNet) is implemented ([scope.md](../00-product/scope.md) §3).
 - Third-party APKs (from the F-Droid corpus or installed by hand) are never committed, attached, uploaded as CI artifacts, or put in bundles. The corpus lives in the runner cache with pinned SHA-256 values ([test-strategy.md](../04-plan/test-strategy.md) §4.1).
 - The compatibility database holds package IDs, signer digests, version code ranges, levels, and APKRun's own issue texts. It holds no APK files and no app assets such as icons ([diagnostics.md](../02-design/diagnostics.md) §10.2).
@@ -290,10 +290,10 @@ A release bundle without `source-offer.json` is refused for a release key.
 | Wrapper | Contains | Rule |
 |---|---|---|
 | Local | the launcher and metadata | stays on the creator's Mac |
-| Portable | also the APK set in `Contents/Resources/bootstrap/` ([wrapper.md](../02-design/wrapper.md) §10) | contains the app. Share it only with the right to redistribute the APK. The GUI and `apkrun wrap --portable` show the portable note below (implemented by #089) |
+| Portable | also the APK set in `Contents/Resources/bootstrap/` ([wrapper.md](../02-design/wrapper.md) §10) | contains the app. Share it only with the right to redistribute the APK. The GUI and `apkrun wrap --portable` show the portable note below (implemented by #90) |
 | Distribution | a portable wrapper signed with Developer ID and notarized ([wrapper.md](../02-design/wrapper.md) §11) | `apkrun wrap --distribution` shows the confirmation below; `--yes` skips it |
 
-Confirmation text (implemented by #088):
+Confirmation text (implemented by #89):
 
 ```text
 This app contains <App name> <version> (<package ID>). You are about to sign it with your
@@ -301,7 +301,7 @@ Developer ID so that other people can install it. Continue only if you have the 
 redistribute this app. You are responsible for that, not APKRun. [y/N]
 ```
 
-Portable note (implemented by #089):
+Portable note (implemented by #90):
 
 ```text
 This Mac app contains <App name> <version> (<package ID>) and is <size>. Share it with other

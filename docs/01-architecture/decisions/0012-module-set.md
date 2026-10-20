@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-28
-- Related: [../modules.md](../modules.md), #062
+- Related: [../modules.md](../modules.md), #63
 
 ## Context
 
@@ -15,7 +15,7 @@ Adopt the module set and dependency graph in [../modules.md](../modules.md):
 - Original modules: VirtualMachineCore, GraphicsCore, RuntimeCore, APKStoreCore, UpdateCore, WrapperCore, IntegrationCore.
 - Additions: DiagnosticsCore, VirtioDeviceCore, InputCore, WindowingCore, GuestProtocol, ImageCore, RuntimeAPI, RuntimeClient, RuntimeHost.
 
-CI enforces the graph (#062).
+CI enforces the graph (#63).
 
 ## Alternatives considered
 

@@ -8,7 +8,7 @@ import android.util.Log
 /**
  * Debug build only, registered in src/debug/AndroidManifest.xml (IR-920). It runs
  * [DebugCounterCommands] and [DebugFixtureCommands] for an ADB broadcast and logs the result under
- * the `APKRUN-FIXTURE` tag. The `DETAILS` broadcast opens the Details screen (#025).
+ * the `APKRUN-FIXTURE` tag. The `DETAILS` broadcast opens the Details screen (#26).
  */
 class DebugCounterReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {

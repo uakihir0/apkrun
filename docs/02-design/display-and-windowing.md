@@ -247,7 +247,7 @@ on frameReady(gen, i, seq, t):
 - The embedded development path feeds the same view through `SurfacePoolFrameSource` in `CLI/apkrun/Dev/`. The presenter attaches to the boot's drmVirgl device before the guest starts (`DevelopmentDisplay` in RuntimeCore, `DeveloperDisplay` in RuntimeHost). The CLI never imports GraphicsCore, and neither does WindowingCore. The adapter reports `frameDisplayed` in process instead of over XPC ([runtime-api.md](../03-reference/runtime-api.md) §15).
 - The AppKit loop runs on the main thread, started from the entry point before its first suspension. A loop run inside a main-actor job or a main-queue block stops the runtime's queue.
 
-**Development window (#023), fixed-size:** display 0 keeps the image's default mode, and the window scales the layer with aspect fit when it is resized ([graphics.md](graphics.md) §6).
+**Development window (#24), fixed-size:** display 0 keeps the image's default mode, and the window scales the layer with aspect fit when it is resized ([graphics.md](graphics.md) §6).
 
 The embedded development path now resolves a 480 × 850 pt initial mode before boot (§6.3). It stays fixed-size until live resize is built (§7.1).
 
@@ -414,7 +414,7 @@ When the app leaves its display (Back from the root activity, or the task finish
 | `secondaryDisplay` (default) | Own pool display (scanouts 1–15) | `display.maxSessions` | Every app unless it misbehaves |
 | `primaryDisplayCompatibility` | Display 0 | One session at a time | Apps that assume the default display, such as those that use `getDefaultDisplay()` metrics or render blank on a secondary display |
 
-- `window.mode` is a per-package setting. Its default comes from the compatibility database (#090) or from the user (Settings → App → Window mode). It changes at the next session start.
+- `window.mode` is a per-package setting. Its default comes from the compatibility database (#91) or from the user (Settings → App → Window mode). It changes at the next session start.
 - A second compatibility session while display 0 is taken fails with `RuntimeFailure.primaryDisplayBusy` and the remediation "Close ‹other app› or switch one of them to the standard window mode".
 - While display 0 is leased, the launcher is behind the app. In the embedded path, the primary scanout stays enabled with its presenter in the development window. Ending the session restores the prior density before the VM stops.
 - In compatibility mode, display 0 shows the status bar and navigation bar. The custom image hides the navigation bar (`config_showNavigationBar = false` overlay). The status bar stays visible in v1 (OQ-35).

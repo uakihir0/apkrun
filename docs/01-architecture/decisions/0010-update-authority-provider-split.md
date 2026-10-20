@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-28
-- Related: #037–#040, #050–#052, #074, [../../02-design/update-system.md](../../02-design/update-system.md)
+- Related: #38–#41, #51–#53, #75, [../../02-design/update-system.md](../../02-design/update-system.md)
 
 ## Context
 
@@ -29,4 +29,4 @@ A package may be updatable from several sources (a local file, a direct URL, F-D
 
 ## Verification
 
-G7 (APK v1 → v2 automatic update with the local provider, #037–#040), plus rollback in #043.
+G7 (APK v1 → v2 automatic update with the local provider, #38–#41), plus rollback in #44.

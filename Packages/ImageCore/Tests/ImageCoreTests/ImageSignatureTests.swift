@@ -3,7 +3,7 @@ import Testing
 
 @testable import ImageCore
 
-/// `Images/tools/tests/fixtures/`, shared with the Python tests (#065).
+/// `Images/tools/tests/fixtures/`, shared with the Python tests (#66).
 private let toolsFixtures: URL = {
     var url = URL(fileURLWithPath: #filePath)
     for _ in 0..<5 {
@@ -14,7 +14,7 @@ private let toolsFixtures: URL = {
 
 private let signingFixtures = toolsFixtures.appendingPathComponent("signing")
 
-/// The test key, which the repository keeps in `Tests/Fixtures/signing` (#065).
+/// The test key, which the repository keeps in `Tests/Fixtures/signing` (#66).
 private let testPublicKey: Data = {
     var url = URL(fileURLWithPath: #filePath)
     for _ in 0..<5 {

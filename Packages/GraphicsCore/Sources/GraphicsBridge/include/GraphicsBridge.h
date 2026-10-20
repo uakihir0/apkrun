@@ -31,7 +31,7 @@ enum {
 };
 
 enum {
-    /* Returned by gb_sync_wait when the timeout expires before the fence signals (#023). */
+    /* Returned by gb_sync_wait when the timeout expires before the fence signals (#24). */
     GB_SYNC_TIMEOUT = 1,
 };
 
@@ -251,7 +251,7 @@ int gb_create_fence(gb_renderer *renderer, uint32_t fence_id, uint32_t ctx_id);
 void gb_poll(gb_renderer *renderer);
 
 /*
- * Presentation (graphics.md §6.2, §6.3; #023). A present target is a BGRA8Unorm texture on
+ * Presentation (graphics.md §6.2, §6.3; #24). A present target is a BGRA8Unorm texture on
  * ANGLE's Metal device that is backed by an IOSurface. The bridge imports it once into GL, as
  * the color attachment of a framebuffer. gb_present_target_create, gb_present_blit, and
  * gb_present_target_destroy run on the render thread. They use the shared root context, so the

@@ -3,7 +3,7 @@ import Testing
 
 @testable import RuntimeCore
 
-/// The readers of the launch replies (#017 T0). The replies in Fixtures/adb are verbatim copies of replies
+/// The readers of the launch replies (#18 T0). The replies in Fixtures/adb are verbatim copies of replies
 /// that the Android 17 guest printed on 2026-10-09: `am start -W`, the resumed-activity section of
 /// `dumpsys activity activities` before and after `am force-stop`, and `dumpsys package`.
 @Test

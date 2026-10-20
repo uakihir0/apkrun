@@ -6,7 +6,7 @@ import GuestProtocol
 import RuntimeAPI
 import RuntimeCore
 
-/// Launches CLI-owned sessions on secondary displays before the daemon has a window client (#032).
+/// Launches CLI-owned sessions on secondary displays before the daemon has a window client (#33).
 ///
 /// This service owns no window. It drains each lease's frame stream and acknowledges frames as discarded, then marks
 /// the session running as soon as Android confirms the launch operation.

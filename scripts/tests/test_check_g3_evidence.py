@@ -84,18 +84,18 @@ class FixedSizeTests(unittest.TestCase):
     def test_the_statement_outside_its_section_fails(self) -> None:
         graphics, windowing = self.pinned_documents()
         windowing = windowing.replace("### 5.3 Wrapper presentation algorithm", "### 5.3 Renamed")
-        windowing += "\n**Development window (#023), fixed-size:** display 0 keeps the image's default mode, and the window scales the layer with aspect fit when it is resized ([graphics.md](graphics.md) §6).\n"
+        windowing += "\n**Development window (#24), fixed-size:** display 0 keeps the image's default mode, and the window scales the layer with aspect fit when it is resized ([graphics.md](graphics.md) §6).\n"
         self.assertFalse(checker.fixed_size_check(self.repository(graphics, windowing))[0])
 
     @staticmethod
     def pinned_documents() -> tuple[str, str]:
         graphics = (
             "# Graphics\n\n### 6.4 EDID\n\nText.\n\n### 6.5 Development window\n\n"
-            "The development window (#023) is **fixed-size**: display 0 keeps the image's default mode, and the window "
+            "The development window (#24) is **fixed-size**: display 0 keeps the image's default mode, and the window "
             "scales the layer with aspect fit.\n\n## 7. Frame statistics and counters\n"
         )
         windowing = (
-            "# Display\n\n### 5.3 Wrapper presentation algorithm\n\n- **Development window (#023), fixed-size:** display 0 "
+            "# Display\n\n### 5.3 Wrapper presentation algorithm\n\n- **Development window (#24), fixed-size:** display 0 "
             "keeps the image's default mode, and the window scales the layer with aspect fit when it is resized "
             "([graphics.md](graphics.md) §6).\n\n### 5.4 Color and format\n"
         )

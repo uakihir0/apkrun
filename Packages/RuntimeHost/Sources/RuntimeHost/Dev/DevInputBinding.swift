@@ -2,7 +2,7 @@ import DiagnosticsCore
 import Foundation
 import RuntimeCore
 
-/// Keeps the development input route bound to the input channel of the Guest Agent (#024, decision D11).
+/// Keeps the development input route bound to the input channel of the Guest Agent (#25, decision D11).
 ///
 /// A router sends on one channel and cannot change it, so the route is bound to a new router over a new channel. The
 /// channel changes when the Guest Agent restarts: the control session then has a new token, and the input connection

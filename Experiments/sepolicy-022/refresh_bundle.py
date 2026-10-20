@@ -1,4 +1,4 @@
-"""Make a development bundle whose boot ramdisk is replaced, with the bundle tool's own functions (#022).
+"""Make a development bundle whose boot ramdisk is replaced, with the bundle tool's own functions (#23).
 
 `python -m apkrun_image bundle-variant` replaces a logical partition of `super`. The boot ramdisk
 is the file `boot/ramdisk.img`, and no command replaces it. This script does what `build_variant`

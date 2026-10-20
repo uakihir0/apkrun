@@ -1,15 +1,15 @@
 # M1 Android bring-up
 
-M1 brings the stock Cuttlefish arm64 userdebug build 16373615 (Android 17, API 37) up on Virtualization.framework with direct kernel boot, and it closes gate G2: the guest reaches `sys.boot_completed=1`, the host detects it, and Android stays stable. A developer reaches the guest with ADB over vsock on host loopback only, and installs, launches, stops, and uninstalls HelloText without a display. The Python tools in `Images/tools/` turn the downloaded artifacts into a signed runtime image bundle, which ImageCore installs. The reference build is 16373615 ([ADR-0003](../../01-architecture/decisions/0003-cuttlefish-base-image.md)). M1 delivers the Android ARM64 boot item of v0.1 ([roadmap.md](../roadmap.md) §3.1); #017 delivers the ADB half of CLI launch, which #027 completes.
+M1 brings the stock Cuttlefish arm64 userdebug build 16373615 (Android 17, API 37) up on Virtualization.framework with direct kernel boot, and it closes gate G2: the guest reaches `sys.boot_completed=1`, the host detects it, and Android stays stable. A developer reaches the guest with ADB over vsock on host loopback only, and installs, launches, stops, and uninstalls HelloText without a display. The Python tools in `Images/tools/` turn the downloaded artifacts into a signed runtime image bundle, which ImageCore installs. The reference build is 16373615 ([ADR-0003](../../01-architecture/decisions/0003-cuttlefish-base-image.md)). M1 delivers the Android ARM64 boot item of v0.1 ([roadmap.md](../roadmap.md) §3.1); #18 delivers the ADB half of CLI launch, which #28 completes.
 
 ---
 
-## #008 Acquire and inventory ARM64 Cuttlefish artifacts
+## #9 Acquire and inventory ARM64 Cuttlefish artifacts
 
 | Field | Value |
 |---|---|
 | Milestone | M1 (v0.1) |
-| Depends on | #001 |
+| Depends on | #2 |
 | Design | [android-image.md](../../02-design/android-image.md) §2, §3.1; [android-image-manifest.md](../../03-reference/android-image-manifest.md) §2–§4; [environment-setup.md](../../05-development/environment-setup.md) §3.1–§3.2 |
 | Code | `Images/tools/apkrun_image/` (`fetch.py`, `inventory.py`, `sparse.py`, `lp.py`), `scripts/inventory-cuttlefish.py`, `Images/manifests/16373615/inventory.json`, `ThirdParty/ThirdParty.lock.json` |
 
@@ -19,12 +19,12 @@ M1 brings the stock Cuttlefish arm64 userdebug build 16373615 (Android 17, API 3
 
 ---
 
-## #009 AndroidImageManifest
+## #10 AndroidImageManifest
 
 | Field | Value |
 |---|---|
 | Milestone | M1 (v0.1) |
-| Depends on | #008 |
+| Depends on | #9 |
 | Design | [android-image.md](../../02-design/android-image.md) §3.2–§3.3; [android-image-manifest.md](../../03-reference/android-image-manifest.md) §7 |
 | Code | `Images/tools/apkrun_image/manifest.py`, `Images/tools/schemas/android-image-manifest.schema.json`, `Images/manifests/16373615/android-image.json`, `Packages/ImageCore/Sources/ImageCore/Manifest/` |
 
@@ -34,12 +34,12 @@ M1 brings the stock Cuttlefish arm64 userdebug build 16373615 (Android 17, API 3
 
 ---
 
-## #064 Reference boot capture
+## #65 Reference boot capture
 
 | Field | Value |
 |---|---|
 | Milestone | M1 (v0.1) |
-| Depends on | #008 |
+| Depends on | #9 |
 | Design | [android-image.md](../../02-design/android-image.md) §7.7, §8; [runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3 |
 | Code | `Images/tools/reference/` (`capture.sh`, `compare_boot.py`, `guest-capture.txt`), `Images/tools/tests/test_compare_boot.py`, `Images/tools/tests/test_reference_capture.py` |
 
@@ -49,12 +49,12 @@ M1 brings the stock Cuttlefish arm64 userdebug build 16373615 (Android 17, API 3
 
 ---
 
-## #010 Extract Android kernel and ramdisk
+## #11 Extract Android kernel and ramdisk
 
 | Field | Value |
 |---|---|
 | Milestone | M1 (v0.1) |
-| Depends on | #008, #009 |
+| Depends on | #9, #10 |
 | Design | [android-image.md](../../02-design/android-image.md) §4.1, §6.1; [0015-direct-kernel-boot.md](../../01-architecture/decisions/0015-direct-kernel-boot.md) |
 | Code | `Images/tools/apkrun_image/` (`bootimg.py`, `kernel.py`, `bootconfig.py`, `avb.py`), `Images/tools/layouts/cuttlefish-phone-arm64.json`, `Images/tools/tests/` |
 
@@ -64,12 +64,12 @@ M1 brings the stock Cuttlefish arm64 userdebug build 16373615 (Android 17, API 3
 
 ---
 
-## #011 GPT disks and partition mapping
+## #12 GPT disks and partition mapping
 
 | Field | Value |
 |---|---|
 | Milestone | M1 (v0.1) |
-| Depends on | #005, #009, #010 |
+| Depends on | #6, #10, #11 |
 | Design | [android-image.md](../../02-design/android-image.md) §4.2, §5.3; [vm.md](../../02-design/vm.md) §4 |
 | Code | `Images/tools/apkrun_image/{sparse,gpt,layout}.py`, `Packages/ImageCore/Sources/ImageCore/Disks/GPTDisk.swift`, `Packages/ImageCore/Sources/ImageCore/Disks/InstanceDiskProvisioner.swift`, `Images/reference/vz/26A434/topology.txt`, `Tests/IntegrationTests/LinuxGuestTests/` |
 
@@ -79,12 +79,12 @@ M1 brings the stock Cuttlefish arm64 userdebug build 16373615 (Android 17, API 3
 
 ---
 
-## #012 Boot the Android kernel
+## #13 Boot the Android kernel
 
 | Field | Value |
 |---|---|
 | Milestone | M1 (v0.1) |
-| Depends on | #010, #011 |
+| Depends on | #11, #12 |
 | Design | [android-image.md](../../02-design/android-image.md) §5.1, §9.1; [vm.md](../../02-design/vm.md) §2–§4; [runtime-daemon.md](../../02-design/runtime-daemon.md) §3.1–§3.3 |
 | Code | `Images/tools/apkrun_image/bundle.py`, `Packages/ImageCore/Sources/ImageCore/Boot/`, `Packages/ImageCore/Sources/ImageCore/Instance/`, `Packages/RuntimeCore/Sources/RuntimeCore/Supervisor/`, `CLI/apkrun/Dev/`, `Tests/IntegrationTests/AndroidBootTests/` |
 
@@ -94,12 +94,12 @@ M1 brings the stock Cuttlefish arm64 userdebug build 16373615 (Android 17, API 3
 
 ---
 
-## #013 Reach Android init
+## #14 Reach Android init
 
 | Field | Value |
 |---|---|
 | Milestone | M1 (v0.1) |
-| Depends on | #012 |
+| Depends on | #13 |
 | Design | [android-image.md](../../02-design/android-image.md) §6.1, §13; [runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3 |
 | Code | `Packages/RuntimeCore/Sources/RuntimeCore/Boot/BootSignals.swift`, `Images/tools/layouts/cuttlefish-phone-arm64.json`, `Tests/IntegrationTests/Support/AndroidShellConsole.swift`, `Tests/IntegrationTests/AndroidBootTests/`, `Images/reference/16373615/expected-differences.yaml` |
 
@@ -109,27 +109,27 @@ M1 brings the stock Cuttlefish arm64 userdebug build 16373615 (Android 17, API 3
 
 ---
 
-## #095 Cuttlefish host-service substitution
+## #96 Cuttlefish host-service substitution
 
 | Field | Value |
 |---|---|
 | Milestone | M1 (v0.1) |
-| Depends on | #013 |
+| Depends on | #14 |
 | Design | [android-image.md](../../02-design/android-image.md) §7.1–§7.4; [vm.md](../../02-design/vm.md) §6.2, §8 |
 | Code | `Images/tools/layouts/cuttlefish-phone-arm64.json` (`consolePorts`, `bootconfig.image`), `Packages/RuntimeCore/Sources/RuntimeCore/Boot/ConsolePortPlan.swift`, `Tests/Fixtures/linux/init`, `Tests/IntegrationTests/AndroidBootTests/`, `Tests/IntegrationTests/LinuxGuestTests/` |
 
 **Goal.** Every Cuttlefish host dependency has a verified substitute. Android userspace does not block or crash-loop on a missing host service, and the guest network works.
 
-**Result.** The layout's `consolePorts` give each port a role. Ports 10–19 share one multiport device, and `RuntimeSupervisor` runs the sensors responder on `hvc18`. KeyMint and Gatekeeper are in-guest, selected by `androidboot.vendor.apex.*` keys. The `APKRUN-PORT` marker check passes for the eight `hvc` ports of the pinned test kernel, so the 20-port check skips; the Android kernel creates `hvc0`–`hvc19`. The `testNetwork` DNS stage runs as root; #035 tracks shell access. Services stay unless they break boot, stability, or resource use. Tests: T0 `ConsolePortPlan` in RuntimeCore tests; T2 `LinuxGuestTests.testTwentyConsolePorts`, `AndroidBootTests.testHostServiceSubstitutes`.
+**Result.** The layout's `consolePorts` give each port a role. Ports 10–19 share one multiport device, and `RuntimeSupervisor` runs the sensors responder on `hvc18`. KeyMint and Gatekeeper are in-guest, selected by `androidboot.vendor.apex.*` keys. The `APKRUN-PORT` marker check passes for the eight `hvc` ports of the pinned test kernel, so the 20-port check skips; the Android kernel creates `hvc0`–`hvc19`. The `testNetwork` DNS stage runs as root; #36 tracks shell access. Services stay unless they break boot, stability, or resource use. Tests: T0 `ConsolePortPlan` in RuntimeCore tests; T2 `LinuxGuestTests.testTwentyConsolePorts`, `AndroidBootTests.testHostServiceSubstitutes`.
 
 ---
 
-## #014 Reach system_server and boot_completed
+## #15 Reach system_server and boot_completed
 
 | Field | Value |
 |---|---|
 | Milestone | M1 (v0.1) |
-| Depends on | #013, #095 |
+| Depends on | #14, #96 |
 | Gate | G2 |
 | Design | [android-image.md](../../02-design/android-image.md) §7.7, §8; [runtime-daemon.md](../../02-design/runtime-daemon.md) §3.2–§3.3; [cli.md](../../02-design/cli.md) §5 |
 | Code | `Packages/RuntimeCore/Sources/RuntimeCore/Boot/`, `Packages/RuntimeCore/Sources/RuntimeCore/Supervisor/RuntimeSupervisor.swift`, `Images/tools/reference/compare_boot.py`, `Tests/AcceptanceTests/G2/`, `Tests/IntegrationTests/AndroidBootTests/`, `scripts/run-gate.sh` |
@@ -140,60 +140,60 @@ M1 brings the stock Cuttlefish arm64 userdebug build 16373615 (Android 17, API 3
 
 ---
 
-## #015 ADB debugging over vsock
+## #16 ADB debugging over vsock
 
 | Field | Value |
 |---|---|
 | Milestone | M1 (v0.1) |
-| Depends on | #014, #007 |
+| Depends on | #15, #8 |
 | Design | [android-image.md](../../02-design/android-image.md) §7.3; [vm.md](../../02-design/vm.md) §9.3; [runtime-daemon.md](../../02-design/runtime-daemon.md) §3.5 |
 | Code | `Packages/RuntimeCore/Sources/RuntimeCore/Android/AdbClient.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Supervisor/RuntimeSupervisor.swift`, `CLI/apkrun/Dev/`, `Tests/IntegrationTests/AndroidADBTests/` |
 
 **Goal.** In developer mode, `adb -s 127.0.0.1:6520` reaches the guest's `adbd` through vsock port 5555, from host loopback only, and the standard ADB commands work.
 
-**Result.** ADB listens on `127.0.0.1` only, and connections to other addresses are refused. With developer mode off, nothing listens on port 6520. `apkrun dev adb [<args>…]` runs ADB commands, and the ADB readiness signals feed `BootPhaseDetector`. Ctrl-C stops Android with `reboot -p` and forces a stop after 20 s. The one-VM rule of [test-strategy.md](../test-strategy.md) §3.6 applies until #098 decides on parallel VM runs. Tests: T0 `AdbClientTests`, `BootPhaseDetectorTests`, and `DevAdbTests`; T1 `VsockLoopbackForwarderSystemTests`; T2 `AndroidADBTests`.
+**Result.** ADB listens on `127.0.0.1` only, and connections to other addresses are refused. With developer mode off, nothing listens on port 6520. `apkrun dev adb [<args>…]` runs ADB commands, and the ADB readiness signals feed `BootPhaseDetector`. Ctrl-C stops Android with `reboot -p` and forces a stop after 20 s. The one-VM rule of [test-strategy.md](../test-strategy.md) §3.6 applies until #100 decides on parallel VM runs. Tests: T0 `AdbClientTests`, `BootPhaseDetectorTests`, and `DevAdbTests`; T1 `VsockLoopbackForwarderSystemTests`; T2 `AndroidADBTests`.
 
 ---
 
-## #065 Runtime image bundle
+## #66 Runtime image bundle
 
 | Field | Value |
 |---|---|
 | Milestone | M1 (v0.1) |
-| Depends on | #014 |
+| Depends on | #15 |
 | Design | [android-image.md](../../02-design/android-image.md) §10.1–§10.3; [runtime-image-manifest.md](../../03-reference/runtime-image-manifest.md) §5; [0011-runtime-image-bundle.md](../../01-architecture/decisions/0011-runtime-image-bundle.md) |
 | Code | `Images/tools/apkrun_image/{bundle,sign}.py`, `Images/tools/schemas/runtime-image-manifest.schema.json`, `Packages/ImageCore/Sources/ImageCore/{Store,Bundle}/`, `CLI/apkrun/Dev/`, `scripts/release/check-release-build.sh` |
 
 **Goal.** One signed, deterministic bundle built from the stock build installs with `apkrun dev image install` into `Images/<imageVersion>/`, and it boots to `boot_completed`.
 
-**Result.** Two builds from the same inputs give identical `SHA256SUMS`, `manifest.json`, and `manifest.sig`. `ImageStore` installs atomically and rejects an untrusted or bad signature, an extra file, and a hash mismatch. Release builds refuse image test and developer keys; the test key `Tests/Fixtures/signing/test-image-ed25519` is for tests only. Not done: compatibility checks (`incompatibleRuntime`, `incompatibleProtocol`) at install and boot (#066, #058); archive install (#058); Release builds refuse every bundle until release image keys exist (#093). Tests: T0 in `Images/tools/tests/` and `Packages/ImageCore/Tests/ImageCoreTests/`; T1 `ImageStore` tests; T2 boot from the installed bundle.
+**Result.** Two builds from the same inputs give identical `SHA256SUMS`, `manifest.json`, and `manifest.sig`. `ImageStore` installs atomically and rejects an untrusted or bad signature, an extra file, and a hash mismatch. Release builds refuse image test and developer keys; the test key `Tests/Fixtures/signing/test-image-ed25519` is for tests only. Not done: compatibility checks (`incompatibleRuntime`, `incompatibleProtocol`) at install and boot (#67, #59); archive install (#59); Release builds refuse every bundle until release image keys exist (#94). Tests: T0 in `Images/tools/tests/` and `Packages/ImageCore/Tests/ImageCoreTests/`; T1 `ImageStore` tests; T2 boot from the installed bundle.
 
 ---
 
-## #016 Install HelloText APK
+## #17 Install HelloText APK
 
 | Field | Value |
 |---|---|
 | Milestone | M1 (v0.1) |
-| Depends on | #015 |
+| Depends on | #16 |
 | Design | [package-store.md](../../02-design/package-store.md) §6.1; [cli.md](../../02-design/cli.md) §5 |
 | Code | `Tests/Fixtures/AndroidApps/` (module `HelloText`), `Tests/Fixtures/signing/test-fixture-a.jks`, `scripts/build-fixtures.sh`, `Packages/RuntimeCore/Sources/RuntimeCore/Android/AdbClient.swift`, `Tests/IntegrationTests/AndroidPackageTests/` |
 
 **Goal.** HelloText builds reproducibly. `adb install` installs it through a PackageInstaller session, PackageManager reports its metadata, and it can be uninstalled.
 
-**Result.** The HelloText fixture is specified in [test-strategy.md](../test-strategy.md) §4.2. `scripts/build-fixtures.sh` writes `Tests/Fixtures/AndroidApps/out/HelloText.apk` (git-ignored), signed with the test-only key `test-fixture-a.jks`. Its `--check-reproducible` mode compares badging, dex hashes, and archive listing. The counter persists across a force-stop, and a debug-only ADB receiver, which release builds omit, reads it. A second uninstall is refused, and a reinstall succeeds. The `input tap` check passes only on an ODM-overlay variant; tapping on the product image waits for #026. Tests: T0 JVM `CounterStoreTest` and `DebugCounterCommandsTest`, and the `AdbClient` parser tests; T1 the reproducibility check; T2 `AndroidPackageTests.testInstallHelloText` and `testUninstallHelloText`.
+**Result.** The HelloText fixture is specified in [test-strategy.md](../test-strategy.md) §4.2. `scripts/build-fixtures.sh` writes `Tests/Fixtures/AndroidApps/out/HelloText.apk` (git-ignored), signed with the test-only key `test-fixture-a.jks`. Its `--check-reproducible` mode compares badging, dex hashes, and archive listing. The counter persists across a force-stop, and a debug-only ADB receiver, which release builds omit, reads it. A second uninstall is refused, and a reinstall succeeds. The `input tap` check passes only on an ODM-overlay variant; tapping on the product image waits for #27. Tests: T0 JVM `CounterStoreTest` and `DebugCounterCommandsTest`, and the `AdbClient` parser tests; T1 the reproducibility check; T2 `AndroidPackageTests.testInstallHelloText` and `testUninstallHelloText`.
 
 ---
 
-## #017 Launch HelloText APK
+## #18 Launch HelloText APK
 
 | Field | Value |
 |---|---|
 | Milestone | M1 (v0.1) |
-| Depends on | #016 |
+| Depends on | #17 |
 | Design | [cli.md](../../02-design/cli.md) §5; [roadmap.md](../roadmap.md) §3.1 |
 | Code | `Packages/RuntimeCore/Sources/RuntimeCore/Android/AdbClient.swift`, `Tests/IntegrationTests/AndroidPackageTests/` |
 
 **Goal.** HelloText's `MainActivity` starts explicitly over ADB, and the process and ActivityManager state show it running. It can then be stopped. No rendering is required.
 
-**Result.** `AdbClient` starts the Activity by component name (`am start -W`), reads `pidof` and `dumpsys activity activities`, and force-stops the app. The tests pass with `--gpu none`. The `apkrun` launch command belongs to #027. Tests: T0 `AdbLaunchParserTests` and the `AdbClient` launch cases; T2 `AndroidPackageTests.testLaunchHelloText` and `testInstallLaunchStopUninstall`.
+**Result.** `AdbClient` starts the Activity by component name (`am start -W`), reads `pidof` and `dumpsys activity activities`, and force-stops the app. The tests pass with `--gpu none`. The `apkrun` launch command belongs to #28. Tests: T0 `AdbLaunchParserTests` and the `AdbClient` launch cases; T2 `AndroidPackageTests.testLaunchHelloText` and `testInstallLaunchStopUninstall`.

@@ -2,7 +2,7 @@ package io.apkrun.fixture.hellotext
 
 /**
  * The debug-only commands of the counter (IR-920). An ADB broadcast sends one, so that the counter can be advanced
- * and read without a tap (#016 criterion 1). Both commands go through the [CounterStore] that the button uses.
+ * and read without a tap (#17 criterion 1). Both commands go through the [CounterStore] that the button uses.
  *
  * The class lives in `main` so that the release unit tests can run it. Only the debug receiver calls it. The
  * release manifest has no receiver, so no broadcast can reach it in the release build.

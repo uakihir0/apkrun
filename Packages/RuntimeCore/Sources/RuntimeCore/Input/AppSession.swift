@@ -4,7 +4,7 @@ import Foundation
 public enum SessionID: Sendable, Hashable {
     /// An app session, whose identifier is the session's UUID (runtime-daemon.md §7).
     case app(UUID)
-    /// A bounded system operation that temporarily needs a display (#028).
+    /// A bounded system operation that temporarily needs a display (#29).
     case system(SystemDisplayUse)
 }
 
@@ -59,7 +59,7 @@ public enum SessionEndReason: Sendable, Equatable {
 
 /// RuntimeCore failure categories that can end an app session.
 public enum SessionFailureCode: String, Sendable, Equatable {
-    /// The only display available in the embedded #026 mode is already in use.
+    /// The only display available in the embedded #27 mode is already in use.
     case displayInUse
     /// The app launch did not produce a task before its deadline.
     case launchTimedOut

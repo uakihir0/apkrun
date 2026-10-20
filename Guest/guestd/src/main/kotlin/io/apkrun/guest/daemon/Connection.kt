@@ -200,7 +200,7 @@ class Connection(
                             "the body is not allowed on the input channel"
                         )
                     }
-                // The bulk channel carries transfers, which arrive with #070 and #080. Until then
+                // The bulk channel carries transfers, which arrive with #71 and #81. Until then
                 // its frames are read and dropped.
                 ChannelKind.CHANNEL_KIND_GUEST_BULK -> Unit
                 else ->

@@ -249,7 +249,7 @@ public actor DevelopmentGuestAgent {
         try? await removeForwards()
     }
 
-    /// The number of `adb shell` commands that this agent's ADB client has started (input.md §11, #024). The input path
+    /// The number of `adb shell` commands that this agent's ADB client has started (input.md §11, #25). The input path
     /// runs none, so the count does not change while input is routed (the box "no shell command per event").
     public var adbShellInvocationCount: Int {
         get async {
@@ -422,7 +422,7 @@ public actor DevelopmentGuestAgent {
         }
     }
 
-    /// Installs a development APK through Android's PackageInstaller for `apkrun dev launch <apk>` (#026).
+    /// Installs a development APK through Android's PackageInstaller for `apkrun dev launch <apk>` (#27).
     ///
     /// The Guest Agent owns the shared ADB client; this narrow method keeps raw ADB use inside RuntimeCore.
     public func installAPK(_ apk: URL, package: String) async throws(AdbFailure) {
@@ -482,7 +482,7 @@ public actor DevelopmentGuestAgent {
         }
     }
 
-    /// Finishes every task of a package without force-stopping its process (#026, guest-protocol.md §7.1 #15).
+    /// Finishes every task of a package without force-stopping its process (#27, guest-protocol.md §7.1 #15).
     ///
     /// The Guest Agent emits `TaskVanished` before acknowledging this operation. This bounded snapshot check keeps
     /// the host session open until those events have been applied, while leaving margin inside the protocol's 5 s
@@ -497,7 +497,7 @@ public actor DevelopmentGuestAgent {
         return await packageTasksDisappeared(package: package)
     }
 
-    /// Force-stops every task and process of a package for explicit terminate requests (#032).
+    /// Force-stops every task and process of a package for explicit terminate requests (#33).
     public func forceStopApplication(package: String) async throws(GuestAgentFailure) -> Bool {
         try requireAvailable()
         do {

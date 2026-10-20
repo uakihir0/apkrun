@@ -6,12 +6,12 @@ import RuntimeCore
 import RuntimeHost
 import XCTest
 
-/// T2 checks of the Android boot on the product path (android-image.md §6, §13; #012-#014).
+/// T2 checks of the Android boot on the product path (android-image.md §6, §13; #13-#15).
 ///
 /// They run in the `AndroidBoot` test-plan configuration of `IntegrationTests` and skip under
 /// the `LinuxGuest` configuration.
 final class AndroidBootTests: XCTestCase {
-    /// The budget for the first init line and the block devices (#012 step 6).
+    /// The budget for the first init line and the block devices (#13 step 6).
     private static let kernelBudget = Duration.seconds(120)
 
     override func setUpWithError() throws {
@@ -21,13 +21,13 @@ final class AndroidBootTests: XCTestCase {
         }
     }
 
-    /// #012 step 6: the kernel gets past early init and detects the configured virtio devices.
+    /// #13 step 6: the kernel gets past early init and detects the configured virtio devices.
     ///
     /// The boot runs without developer mode, so no serial shell is attached and the stop is a
     /// forced stop. The first-stage lines that come before `virtio_console` is loaded are not
     /// on hvc0 (IR-306), so the check does not look for them there. `Kernel command line:`,
     /// `Booting Linux on physical CPU`, and the other early lines are checked over the serial
-    /// shell in #013.
+    /// shell in #14.
     func testKernelBoot() async throws {
         let home = try AndroidBootFixture.makeHome()
         defer { removeTestHome(home) }
@@ -73,7 +73,7 @@ final class AndroidBootTests: XCTestCase {
         XCTAssertFalse(lines.contains { $0.contains("Kernel panic - not syncing") }, "the kernel does not panic")
     }
 
-    /// #012 step 6, with the observed outcome (IR-361).
+    /// #13 step 6, with the observed outcome (IR-361).
     ///
     /// The test is named for what it checks: a truncated ramdisk stalls the boot in the kernel. It does not
     /// check panic detection. A truncated ramdisk fails while the kernel unpacks it, before first-stage init has
@@ -149,7 +149,7 @@ final class AndroidBootTests: XCTestCase {
         collector.cancel()
     }
 
-    /// #013 step 1-6: init runs, and the serial shell shows what hvc0 cannot (`AndroidShellConsole`).
+    /// #14 step 1-6: init runs, and the serial shell shows what hvc0 cannot (`AndroidShellConsole`).
     ///
     /// The boot runs in developer mode so that hvc1 answers. The expected bootconfig is the planner's
     /// merged block of the same instance, so the check compares the kernel with what was sent.
@@ -195,7 +195,7 @@ final class AndroidBootTests: XCTestCase {
         }
     }
 
-    /// #095 step 3 and step 6: the in-guest KeyMint and Gatekeeper are running, `/data` is mounted, and
+    /// #96 step 3 and step 6: the in-guest KeyMint and Gatekeeper are running, `/data` is mounted, and
     /// LockSettings did not stall on Weaver (`logcat -s LockSettingsService`).
     func testHostServiceSubstitutes() async throws {
         let home = try AndroidBootFixture.makeHome()
@@ -233,7 +233,7 @@ final class AndroidBootTests: XCTestCase {
         }
     }
 
-    /// #014 step 1 and step 6: `sys.boot_completed` is 1 over the serial shell, and the boot wrote its
+    /// #15 step 1 and step 6: `sys.boot_completed` is 1 over the serial shell, and the boot wrote its
     /// record to `perf/boots.jsonl` with the markers in order from `VM_START`.
     func testBootCompleted() async throws {
         let home = try AndroidBootFixture.makeHome()
@@ -280,7 +280,7 @@ final class AndroidBootTests: XCTestCase {
         XCTAssertEqual(times, times.sorted(), "the markers are in boot order")
     }
 
-    /// #014 step 6: the console and VM states pass through the phases in order, and the boot ends ready.
+    /// #15 step 6: the console and VM states pass through the phases in order, and the boot ends ready.
     func testPhasesInOrder() async throws {
         let home = try AndroidBootFixture.makeHome()
         defer { removeTestHome(home) }
@@ -316,7 +316,7 @@ final class AndroidBootTests: XCTestCase {
         XCTAssertEqual(observed, expected, "the boot enters each phase once, in order")
     }
 
-    /// #014 step 4: the developer console socket relays the serial shell to a client.
+    /// #15 step 4: the developer console socket relays the serial shell to a client.
     ///
     /// The socket server is the only consumer of the hvc1 output, so the test reads the answer from the
     /// client's end of the socket.

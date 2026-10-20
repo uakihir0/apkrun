@@ -84,109 +84,109 @@ The tasks in working order ([../roadmap.md](../roadmap.md) §1.3). A task can st
 
 | Task | Title | Milestone | Depends on | Gate |
 |---|---|---|---|---|
-| #001 | Bootstrap Xcode workspace | M0 | None |  |
-| #002 | VMDefinition and VM validation | M0 | #001, #061 |  |
-| #003 | Boot minimal ARM64 Linux | M0 | #002 | G1 |
-| #004 | Serial console logging | M0 | #003 |  |
-| #005 | virtio-blk storage | M0 | #003 |  |
-| #006 | Guest networking | M0 | #003 |  |
-| #007 | virtio-vsock | M0 | #003 |  |
-| #061 | Diagnostics foundation | M0 | #001 |  |
-| #062 | CI and module dependency checks | M0 | #001 |  |
-| #063 | VirtioDeviceCore and test virtio device | M0 | #003 |  |
-| #008 | Acquire and inventory ARM64 Cuttlefish artifacts | M1 | #001 |  |
-| #064 | Reference boot capture | M1 | #008 |  |
-| #009 | AndroidImageManifest | M1 | #008 |  |
-| #010 | Extract Android kernel and ramdisk | M1 | #008, #009 |  |
-| #011 | GPT disks and partition mapping | M1 | #005, #009, #010 |  |
-| #012 | Boot the Android kernel | M1 | #010, #011 |  |
-| #013 | Reach Android init | M1 | #012 |  |
-| #095 | Cuttlefish host-service substitution | M1 | #013 |  |
-| #014 | Reach system_server and boot_completed | M1 | #013, #095 | G2 |
-| #015 | ADB debugging over vsock | M1 | #014, #007 |  |
-| #016 | Install HelloText APK | M1 | #015 |  |
-| #017 | Launch HelloText APK | M1 | #016 |  |
-| #065 | Runtime image bundle | M1 | #014 |  |
-| #018 | Analyze the RiftVM GPU prototype | M2 | #001 |  |
-| #019 | virtio-gpu device layer | M2 | #018, #003, #063 |  |
-| #020 | Build graphics dependencies | M2 | #018 |  |
-| #021 | Android detects virtio-gpu | M2 | #019, #014 |  |
-| #099 | Mesa-enabled VirGL guest image | M2 | #020, #021 |  |
-| #022 | Android VirGL | M2 | #021, #020, #099 |  |
-| #023 | Render SurfaceFlinger to Metal | M2 | #020, #022 | G3 |
-| #105 | VirGL submit errors during app runs | M2 | #023 |  |
-| #033 | Define GuestProtocol | M3 | #007 |  |
-| #072 | Guest Agent bootstrap | M3 | #033, #015 |  |
-| #024 | Pointer input | M3 | #023, #072 |  |
-| #025 | Keyboard input | M3 | #024 |  |
-| #101 | Input route rebinds after the guest agent is lost | M3 | #024 |  |
-| #102 | A pointer tap reliably focuses a text field | M3 | #024 |  |
-| #103 | Trace intermittent click loss during repeated presses | M3 | #023, #072 |  |
-| #026 | HelloText in a native Mac window | M3 | #023, #024, #025 | G4 |
-| #027 | RuntimeCore package operations | M3 | #026 |  |
-| #067 | Retina, density, and resize | M3 | #026 |  |
-| #028 | DisplayPool | M3 | #027, #067 |  |
-| #029 | App on a secondary Android display | M3 | #028 |  |
-| #030 | Two APKs in two native windows | M3 | #029 | G5 |
-| #098 | Parallel VM test runs | M3 | #014 |  |
-| #031 | Introduce apkrund | M4 | #030 | G6 (headless form) |
-| #032 | XPC runtime API | M4 | #031 |  |
-| #068 | Session client and IOSurface window over XPC | M4 | #032 | G6 (full form) |
-| #044 | Launcher as a wrapper (APKRunLauncher) | M7 | #032, #068 |  |
-| #045 | WrapperCore generator | M7 | #044 |  |
-| #046 | Generate Hello.app | M7 | #045 |  |
-| #047 | Launch Hello.app end to end | M7 | #046, #031 | G8 |
-| #034 | Full Guest Agent protocol and vsock transport | M4 | #033, #027 |  |
-| #066 | First-run provisioning | M4 | #032, #065, #068 |  |
-| #069 | Idle policy and host sleep/wake | M4 | #031 |  |
-| #070 | Performance harness | M4 | #031, #068 |  |
-| #053 | Clipboard, plain text | M4 | #034, #068 |  |
-| #071 | APKRun IME | M4 | #034, #068 |  |
-| #035 | APKRun AOSP product | M5 | #034 |  |
-| #036 | Store Agent | M5 | #035 |  |
-| #073 | Host inspection and import formats | M6 | #036 |  |
-| #037 | LocalUpdateProvider | M6 | #036 |  |
-| #038 | PackageInstaller updates | M6 | #037, #073 |  |
-| #039 | Update ownership | M6 | #038 |  |
-| #040 | Gentle updates | M6 | #039 | G7 |
-| #041 | Package and signature verification | M6 | #038, #073 |  |
-| #042 | Split APK installation | M6 | #041, #073 |  |
-| #043 | Update rollback | M6 | #041, #042 |  |
-| #050 | DirectProvider | M6 | #037, #041 |  |
-| #074 | Update scheduler | M6 | #037, #040, #050 |  |
-| #055 | Android icon to macOS icon pipeline | M7 | #045, #036 |  |
-| #056 | Finder, Dock, and Spotlight integration | M7 | #055 |  |
-| #048 | Wrapper independent of the APK file | M7 | #047, #037 |  |
-| #049 | Automatic update behind an unchanged wrapper | M7 | #043, #048 | G9 |
-| #075 | `apkrun wrap` CLI | M7 | #046, #048 |  |
-| #076 | Wrapper lifecycle and uninstall choices | M7 | #048 |  |
-| #077 | Home and store UI | M7 | #048 |  |
-| #078 | Add flow | M7 | #077, #073 |  |
-| #079 | Per-app settings | M7 | #077, #039, #074 |  |
-| #089 | Portable wrappers | M7 | #075 |  |
-| #051 | F-Droid provider | M8 | #050 |  |
-| #052 | GitHub provider | M8 | #050 |  |
-| #054 | Notifications | M9 | #034, #035, #047 |  |
-| #080 | Image and HTML clipboard | M9 | #053 |  |
-| #081 | Links | M9 | #034, #035, #047 |  |
-| #082 | Files | M9 | #034, #035 |  |
-| #085 | Locale, time zone, clock format, and time | M9 | #034, #035, #069 |  |
-| #086 | Menu bar | M9 | #032 |  |
-| #057 | APKRun runtime updater | M10 | #031, #049 |  |
-| #058 | Guest image versioning and migration | M10 | #035, #057 |  |
-| #087 | Runtime image distribution | M10 | #058, #065 |  |
-| #059 | `apkrun doctor` | M11 | #031, #034, #036 |  |
-| #060 | Diagnostics bundle | M11 | #004, #059 |  |
-| #083 | Audio output | M12 | #035 |  |
-| #084 | Microphone | M12 | #083 |  |
-| #088 | Developer ID signing, notarization, and distribution wrappers | M12 | #062, #046 |  |
-| #090 | Compatibility database | M12 | #059 |  |
-| #091 | Security hardening and fuzzing | M12 | #031, #034 |  |
-| #092 | Localization and accessibility | M12 | #077 |  |
-| #093 | Legal and licensing compliance | M12 | #020, #035 |  |
-| #094 | v1.0 release readiness | M12 | every other v1.0 task |  |
-| #096 | Vulkan track | Post-v1 | #023, #035 |  |
-| #097 | Google Play authority | Post-v1 | #039, #049 |  |
+| #2 | Bootstrap Xcode workspace | M0 | None |  |
+| #3 | VMDefinition and VM validation | M0 | #2, #62 |  |
+| #4 | Boot minimal ARM64 Linux | M0 | #3 | G1 |
+| #5 | Serial console logging | M0 | #4 |  |
+| #6 | virtio-blk storage | M0 | #4 |  |
+| #7 | Guest networking | M0 | #4 |  |
+| #8 | virtio-vsock | M0 | #4 |  |
+| #62 | Diagnostics foundation | M0 | #2 |  |
+| #63 | CI and module dependency checks | M0 | #2 |  |
+| #64 | VirtioDeviceCore and test virtio device | M0 | #4 |  |
+| #9 | Acquire and inventory ARM64 Cuttlefish artifacts | M1 | #2 |  |
+| #65 | Reference boot capture | M1 | #9 |  |
+| #10 | AndroidImageManifest | M1 | #9 |  |
+| #11 | Extract Android kernel and ramdisk | M1 | #9, #10 |  |
+| #12 | GPT disks and partition mapping | M1 | #6, #10, #11 |  |
+| #13 | Boot the Android kernel | M1 | #11, #12 |  |
+| #14 | Reach Android init | M1 | #13 |  |
+| #96 | Cuttlefish host-service substitution | M1 | #14 |  |
+| #15 | Reach system_server and boot_completed | M1 | #14, #96 | G2 |
+| #16 | ADB debugging over vsock | M1 | #15, #8 |  |
+| #17 | Install HelloText APK | M1 | #16 |  |
+| #18 | Launch HelloText APK | M1 | #17 |  |
+| #66 | Runtime image bundle | M1 | #15 |  |
+| #19 | Analyze the RiftVM GPU prototype | M2 | #2 |  |
+| #20 | virtio-gpu device layer | M2 | #19, #4, #64 |  |
+| #21 | Build graphics dependencies | M2 | #19 |  |
+| #22 | Android detects virtio-gpu | M2 | #20, #15 |  |
+| #99 | Mesa-enabled VirGL guest image | M2 | #21, #22 |  |
+| #23 | Android VirGL | M2 | #22, #21, #99 |  |
+| #24 | Render SurfaceFlinger to Metal | M2 | #21, #23 | G3 |
+| #105 | VirGL submit errors during app runs | M2 | #24 |  |
+| #34 | Define GuestProtocol | M3 | #8 |  |
+| #73 | Guest Agent bootstrap | M3 | #34, #16 |  |
+| #25 | Pointer input | M3 | #24, #73 |  |
+| #26 | Keyboard input | M3 | #25 |  |
+| #101 | Input route rebinds after the guest agent is lost | M3 | #25 |  |
+| #102 | A pointer tap reliably focuses a text field | M3 | #25 |  |
+| #103 | Trace intermittent click loss during repeated presses | M3 | #24, #73 |  |
+| #27 | HelloText in a native Mac window | M3 | #24, #25, #26 | G4 |
+| #28 | RuntimeCore package operations | M3 | #27 |  |
+| #68 | Retina, density, and resize | M3 | #27 |  |
+| #29 | DisplayPool | M3 | #28, #68 |  |
+| #30 | App on a secondary Android display | M3 | #29 |  |
+| #31 | Two APKs in two native windows | M3 | #30 | G5 |
+| #100 | Parallel VM test runs | M3 | #15 |  |
+| #32 | Introduce apkrund | M4 | #31 | G6 (headless form) |
+| #33 | XPC runtime API | M4 | #32 |  |
+| #69 | Session client and IOSurface window over XPC | M4 | #33 | G6 (full form) |
+| #45 | Launcher as a wrapper (APKRunLauncher) | M7 | #33, #69 |  |
+| #46 | WrapperCore generator | M7 | #45 |  |
+| #47 | Generate Hello.app | M7 | #46 |  |
+| #48 | Launch Hello.app end to end | M7 | #47, #32 | G8 |
+| #35 | Full Guest Agent protocol and vsock transport | M4 | #34, #28 |  |
+| #67 | First-run provisioning | M4 | #33, #66, #69 |  |
+| #70 | Idle policy and host sleep/wake | M4 | #32 |  |
+| #71 | Performance harness | M4 | #32, #69 |  |
+| #54 | Clipboard, plain text | M4 | #35, #69 |  |
+| #72 | APKRun IME | M4 | #35, #69 |  |
+| #36 | APKRun AOSP product | M5 | #35 |  |
+| #37 | Store Agent | M5 | #36 |  |
+| #74 | Host inspection and import formats | M6 | #37 |  |
+| #38 | LocalUpdateProvider | M6 | #37 |  |
+| #39 | PackageInstaller updates | M6 | #38, #74 |  |
+| #40 | Update ownership | M6 | #39 |  |
+| #41 | Gentle updates | M6 | #40 | G7 |
+| #42 | Package and signature verification | M6 | #39, #74 |  |
+| #43 | Split APK installation | M6 | #42, #74 |  |
+| #44 | Update rollback | M6 | #42, #43 |  |
+| #51 | DirectProvider | M6 | #38, #42 |  |
+| #75 | Update scheduler | M6 | #38, #41, #51 |  |
+| #56 | Android icon to macOS icon pipeline | M7 | #46, #37 |  |
+| #57 | Finder, Dock, and Spotlight integration | M7 | #56 |  |
+| #49 | Wrapper independent of the APK file | M7 | #48, #38 |  |
+| #50 | Automatic update behind an unchanged wrapper | M7 | #44, #49 | G9 |
+| #76 | `apkrun wrap` CLI | M7 | #47, #49 |  |
+| #77 | Wrapper lifecycle and uninstall choices | M7 | #49 |  |
+| #78 | Home and store UI | M7 | #49 |  |
+| #79 | Add flow | M7 | #78, #74 |  |
+| #80 | Per-app settings | M7 | #78, #40, #75 |  |
+| #90 | Portable wrappers | M7 | #76 |  |
+| #52 | F-Droid provider | M8 | #51 |  |
+| #53 | GitHub provider | M8 | #51 |  |
+| #55 | Notifications | M9 | #35, #36, #48 |  |
+| #81 | Image and HTML clipboard | M9 | #54 |  |
+| #82 | Links | M9 | #35, #36, #48 |  |
+| #83 | Files | M9 | #35, #36 |  |
+| #86 | Locale, time zone, clock format, and time | M9 | #35, #36, #70 |  |
+| #87 | Menu bar | M9 | #33 |  |
+| #58 | APKRun runtime updater | M10 | #32, #50 |  |
+| #59 | Guest image versioning and migration | M10 | #36, #58 |  |
+| #88 | Runtime image distribution | M10 | #59, #66 |  |
+| #60 | `apkrun doctor` | M11 | #32, #35, #37 |  |
+| #61 | Diagnostics bundle | M11 | #5, #60 |  |
+| #84 | Audio output | M12 | #36 |  |
+| #85 | Microphone | M12 | #84 |  |
+| #89 | Developer ID signing, notarization, and distribution wrappers | M12 | #63, #47 |  |
+| #91 | Compatibility database | M12 | #60 |  |
+| #92 | Security hardening and fuzzing | M12 | #32, #35 |  |
+| #93 | Localization and accessibility | M12 | #78 |  |
+| #94 | Legal and licensing compliance | M12 | #21, #36 |  |
+| #95 | v1.0 release readiness | M12 | every other v1.0 task |  |
+| #97 | Vulkan track | Post-v1 | #24, #36 |  |
+| #98 | Google Play authority | Post-v1 | #40, #50 |  |
 
 ---
 
@@ -195,3 +195,18 @@ The tasks in working order ([../roadmap.md](../roadmap.md) §1.3). A task can st
 - One task at a time per agent. Follow [../../../AGENTS.md](../../../AGENTS.md) §2.
 - Follow the steps in order. If a step is wrong or impossible, fix the design document and the entry in the same commit, and say why in the commit message.
 - Keep the scope. Work that is outside the entry becomes a new task: open a GitHub issue, then add its entry to the milestone file and its row to §3 in the same commit ([../../05-development/workflow.md](../../05-development/workflow.md) §2.4).
+
+---
+
+## 5. Old task numbers
+
+Before 2026-10-21, tasks had their own three-digit numbers, which differed from their GitHub issue numbers. Commit messages, branch names, and `IR-NNNN` records from before that date use the old numbers. To convert an old number to the task number used now:
+
+| Old number | Task number now | Example |
+|---|---|---|
+| `001`–`097` | old number + 1 | old `024` (Pointer input) is #25 |
+| `098` | #100 | Parallel VM test runs |
+| `099` | #99 | Mesa-enabled VirGL guest image |
+| `101`–`103` | unchanged | #101, #102, #103 |
+
+GitHub issue 1 and pull request 104 are not tasks. Tasks from #105 on were created with their final numbers.

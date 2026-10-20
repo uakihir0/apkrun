@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-28
-- Related: #008–#017, #035, #064, #065, #095, [../../02-design/android-image.md](../../02-design/android-image.md)
+- Related: #9–#18, #36, #65, #66, #96, [../../02-design/android-image.md](../../02-design/android-image.md)
 
 ## Context
 
@@ -32,10 +32,10 @@ Base the guest on **Cuttlefish arm64 (`vsoc_arm64_only`, phone config)**:
 
 ## Consequences
 
-- We must reproduce, without U-Boot and without the Cuttlefish host daemons, everything the guest expects. The ground truth comes from a reference boot on Linux (#064). Missing host services (keymint/gatekeeper over hvc) are handled in the custom image by selecting in-guest implementations (R-12).
+- We must reproduce, without U-Boot and without the Cuttlefish host daemons, everything the guest expects. The ground truth comes from a reference boot on Linux (#65). Missing host services (keymint/gatekeeper over hvc) are handled in the custom image by selecting in-guest implementations (R-12).
 - AOSP builds need an x86-64 Linux host with ≥ 64 GB RAM and 400 GB disk. macOS cannot build AOSP ([../../05-development/environment-setup.md](../../05-development/environment-setup.md) §5).
 - Cuttlefish input devices (vhost-user) cannot be reproduced. Input goes through guest injection ([0013](0013-input-via-guest-injection.md)).
 
 ## Verification
 
-G2 (Android reaches `boot_completed`) with the stock image (#012–#014), then again with the custom image (#035).
+G2 (Android reaches `boot_completed`) with the stock image (#13–#15), then again with the custom image (#36).

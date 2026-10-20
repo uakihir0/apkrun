@@ -4,8 +4,8 @@ import VirtualMachineCore
 
 /// Owns `Runtime/instance/`: provisioning, loading, and Reset Android (android-image.md §5).
 ///
-/// This first cut (#012) covers `load`, `provision`, `resetAndroid`, and the
-/// first-boot settings flag. Recovery points arrive with #058.
+/// This first cut (#13) covers `load`, `provision`, `resetAndroid`, and the
+/// first-boot settings flag. Recovery points arrive with #59.
 public actor InstanceStore {
     private let paths: APKRunPaths
     private let provisioner: InstanceDiskProvisioner

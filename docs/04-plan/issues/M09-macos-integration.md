@@ -1,15 +1,15 @@
 # M9 macOS integration
 
-M9 makes Android apps behave like Mac apps at their edges: notifications, clipboard images and HTML, links, files, locale and time, and a menu bar item. Every integration goes Guest Agent → `IntegrationPolicy` → host and can be turned off per app and globally (NFR-SEC-03, [security-model.md](../../01-architecture/security-model.md) §6). Notifications, links, and files need the custom image ([desktop-integration.md](../../02-design/desktop-integration.md) §2.4). #054 runs its R-19 check first. #054, #080, #081, #082, and #085 share the guest manifest, `.proto` files, and RuntimeAPI DTOs, so merge them in small pull requests. M9 closes no gate.
+M9 makes Android apps behave like Mac apps at their edges: notifications, clipboard images and HTML, links, files, locale and time, and a menu bar item. Every integration goes Guest Agent → `IntegrationPolicy` → host and can be turned off per app and globally (NFR-SEC-03, [security-model.md](../../01-architecture/security-model.md) §6). Notifications, links, and files need the custom image ([desktop-integration.md](../../02-design/desktop-integration.md) §2.4). #55 runs its R-19 check first. #55, #81, #82, #83, and #86 share the guest manifest, `.proto` files, and RuntimeAPI DTOs, so merge them in small pull requests. M9 closes no gate.
 
 ---
 
-## #054 Notifications
+## #55 Notifications
 
 | Field | Value |
 |---|---|
 | Milestone | M9 (v0.5) |
-| Depends on | #034, #035, #047 |
+| Depends on | #35, #36, #48 |
 | Design | [desktop-integration.md](../../02-design/desktop-integration.md) §3.2, §5; [wrapper.md](../../02-design/wrapper.md) §5.2, §5.8; [guest-protocol.md](../../02-design/guest-protocol.md) §8.4; [host-ui.md](../../02-design/host-ui.md) §7.4 |
 | Code | `Packages/IntegrationCore/Sources/IntegrationCore/Notifications/`, `Packages/RuntimeHost/` (`WorkspaceOpener`), `Apps/APKRunLauncher/Integration/` (`NotificationPoster`), `Guest/guestd/` (`notifications/`), `Packages/GuestProtocol/proto/`, `Tests/Fixtures/AndroidApps/hellonotification/` |
 
@@ -48,24 +48,24 @@ M9 makes Android apps behave like Mac apps at their edges: notifications, clipbo
 
 ---
 
-## #080 Image and HTML clipboard
+## #81 Image and HTML clipboard
 
 | Field | Value |
 |---|---|
 | Milestone | M9 (v0.5) |
-| Depends on | #053 |
+| Depends on | #54 |
 | Design | [desktop-integration.md](../../02-design/desktop-integration.md) §3.3, §4; [guest-protocol.md](../../02-design/guest-protocol.md) §5.3, §8.4; [runtime-api.md](../../03-reference/runtime-api.md) §4.9, §4.10 |
 | Code | `Packages/IntegrationCore/Sources/IntegrationCore/Clipboard/`, `Packages/RuntimeAPI/` (`ClipItem`), `Packages/GuestProtocol/proto/`, `Apps/APKRunLauncher/Integration/` (`PasteboardAdapter`), `Guest/guestd/` (`clipboard/`, `FileProvider`), `Tests/Fixtures/AndroidApps/helloclipboard/` |
 
 **Goal.** HTML and PNG images move both ways on the clipboard, with the focus and loop rules of plain text. A Mac screenshot pastes into an Android image view. HTML keeps its formatting in rich-text fields and falls back to plain text elsewhere.
 
-**Out of scope.** Files, URLs as files, and RTF (RTF falls back to plain text, [desktop-integration.md](../../02-design/desktop-integration.md) §4.4). Animated images keep only the first frame. Plain text and the ⌘V ack (#053).
+**Out of scope.** Files, URLs as files, and RTF (RTF falls back to plain text, [desktop-integration.md](../../02-design/desktop-integration.md) §4.4). Animated images keep only the first frame. Plain text and the ⌘V ack (#54).
 
 **Steps.**
 1. **Messages.** Add `html` and `image` to `ClipData` (`Packages/GuestProtocol/proto/`) and `ClipItem` (RuntimeAPI). The image is PNG `Data` of at most 16 MiB, so a clip fits the 32 MiB XPC limit ([runtime-api.md](../../03-reference/runtime-api.md) §4.10). Advertise `clipboard.image.v1`. Without it, image operations answer `UNSUPPORTED`. **Check:** T0 codec round trips pass.
 2. **Mac to Android.** `PasteboardAdapter` reads `public.utf8-plain-text`, `public.html`, then `public.png` or `public.tiff`. It converts TIFF to PNG with ImageIO, and derives plain text from HTML when none is present. An image over 16 MiB or 8192 px per side is dropped, and `ClipAck` carries `clipboardTooLarge(bytes:limit:)`. Text and HTML still go. apkrund sends the image as a host bulk transfer, then `SetClipboard` with `image.transfer_id`. The agent serves it through its `FileProvider` (`io.apkrun.guest.files`) as `image/png`. **Check:** a TIFF screenshot arrives as PNG.
 3. **Android to Mac.** `ClipboardBridge` checks bounds with `inJustDecodeBounds` before decoding. A PNG within the limits passes unchanged. Other formats are re-encoded to PNG. The agent sends a bulk transfer and then `ClipboardChanged` with `image.transfer_id`. apkrund stores it under `~/Library/Caches/io.apkrun.APKRun/transfers/`, reads it into `ClipItem`, and deletes the temp file. `PasteboardAdapter` writes `public.png`, the text and HTML types, and the `io.apkrun.clip-origin` marker. **Check:** a T1 test shows the temp file is gone after the event.
-4. **Loop prevention.** Apply the signals of [desktop-integration.md](../../02-design/desktop-integration.md) §4.4 to images and HTML: origin, seq, digest of the image bytes, and marker. Images are pushed only on ⌘V (R-21, settled by #053). **Check:** the T0 loop test with an image adds no extra `changeCount` change.
+4. **Loop prevention.** Apply the signals of [desktop-integration.md](../../02-design/desktop-integration.md) §4.4 to images and HTML: origin, seq, digest of the image bytes, and marker. Images are pushed only on ⌘V (R-21, settled by #54). **Check:** the T0 loop test with an image adds no extra `changeCount` change.
 
 **Tests.**
 - T0 (`Packages/IntegrationCore/Tests/IntegrationCoreTests/`): size and pixel limits, digests and loop prevention with a simulated pasteboard and agent, HTML without plain text, and the ⌘V fallback when the image is too large.
@@ -88,12 +88,12 @@ M9 makes Android apps behave like Mac apps at their edges: notifications, clipbo
 
 ---
 
-## #081 Links
+## #82 Links
 
 | Field | Value |
 |---|---|
 | Milestone | M9 (v0.5) |
-| Depends on | #034, #035, #047 |
+| Depends on | #35, #36, #48 |
 | Design | [desktop-integration.md](../../02-design/desktop-integration.md) §3.2, §7; [guest-protocol.md](../../02-design/guest-protocol.md) §7.1; [android-image.md](../../02-design/android-image.md) §11.2; [host-ui.md](../../02-design/host-ui.md) §7.4; [diagnostics.md](../../02-design/diagnostics.md) §6 |
 | Code | `Packages/IntegrationCore/Sources/IntegrationCore/Links/` (`LinkForwarder`), `Packages/RuntimeHost/` (`WorkspaceOpener`), `Packages/RuntimeAPI/` (`LinkPrompt`, `LinkChoice`), `Packages/GuestProtocol/proto/`, `Apps/APKRunLauncher/Integration/`, `Guest/guestd/` (`url/`), `Guest/product/`, `Tests/Fixtures/AndroidApps/hellolinks/` |
 
@@ -131,18 +131,18 @@ M9 makes Android apps behave like Mac apps at their edges: notifications, clipbo
 
 ---
 
-## #082 Files
+## #83 Files
 
 | Field | Value |
 |---|---|
 | Milestone | M9 (v0.5) |
-| Depends on | #034, #035 |
+| Depends on | #35, #36 |
 | Design | [desktop-integration.md](../../02-design/desktop-integration.md) §6, §11; [guest-protocol.md](../../02-design/guest-protocol.md) §7.5; [wrapper.md](../../02-design/wrapper.md) §4.3; [host-ui.md](../../02-design/host-ui.md) §9.5; [configuration.md](../../03-reference/configuration.md) §1.4 |
 | Code | `Packages/IntegrationCore/Sources/IntegrationCore/Files/` (`FileTransferService`, `SharedFolderService`), `Packages/RuntimeAPI/`, `Packages/GuestProtocol/proto/`, `Apps/APKRunLauncher/Integration/` (`DropTarget`, save panel), `Apps/APKRun/` (Settings → Files), `CLI/apkrun/` (`shared-folders`), `Guest/guestd/` (`files/`), `Tests/Fixtures/AndroidApps/hellofiles/` |
 
 **Goal.** Users drop files on an app's window, and the app receives them as a share. An Android app can save a file to the Mac through a Save panel. Apps with the setting on read files in the Shared folder and in folders the user added, through Android's file picker, read-only unless the user chose read-write. Android never sees the home folder, and every file that leaves Android is quarantined.
 
-**Out of scope.** A virtio-fs directory share. Drops of folders or promised files, positional drops, and a folder chooser for many saved items (post-v1; a drop arrives as a share, [desktop-integration.md](../../02-design/desktop-integration.md) §6.2). Fuzzing the host operations (#091): this task provides the malicious-agent build.
+**Out of scope.** A virtio-fs directory share. Drops of folders or promised files, positional drops, and a folder chooser for many saved items (post-v1; a drop arrives as a share, [desktop-integration.md](../../02-design/desktop-integration.md) §6.2). Fuzzing the host operations (#92): this task provides the malicious-agent build.
 
 **Steps.**
 1. **Drop.** `DropTarget` accepts file URLs only, and refuses more than 20 files, a file over 2 GiB, or more than 4 GiB in total. The window calls `importFiles([FileHandle], [ImportFileInfo{name, size, uti}], .shareToApp)`. apkrund checks `.files`, sends host bulk transfers, then `ImportFiles(SHARE_TO_PACKAGE, package, display_id, files)`. `FilesBridge` (`Guest/guestd/files/`) serves the files through its `FileProvider` and sends `ACTION_SEND` or `ACTION_SEND_MULTIPLE` with `FLAG_GRANT_READ_URI_PERMISSION`. With no share target, the files go to `MediaStore.Downloads` and the window says "Saved to Downloads". Cached files are deleted after 24 h or at uninstall. **Check:** T2 drops three files, one of 1.5 GiB, with the right hashes.
@@ -175,18 +175,18 @@ M9 makes Android apps behave like Mac apps at their edges: notifications, clipbo
 
 ---
 
-## #085 Locale, time zone, clock format, and time
+## #86 Locale, time zone, clock format, and time
 
 | Field | Value |
 |---|---|
 | Milestone | M9 (v0.5) |
-| Depends on | #034, #035, #069 |
+| Depends on | #35, #36, #70 |
 | Design | [desktop-integration.md](../../02-design/desktop-integration.md) §3.2, §9; [guest-protocol.md](../../02-design/guest-protocol.md) §7.1; [android-image.md](../../02-design/android-image.md) §11.2; [host-ui.md](../../02-design/host-ui.md) §9.6; [wrapper.md](../../02-design/wrapper.md) §9.1 |
 | Code | `Packages/IntegrationCore/Sources/IntegrationCore/Locale/` (`LocaleTimeSync`), `Packages/RuntimeCore/`, `Packages/GuestProtocol/proto/`, `Apps/APKRun/` (Settings → Language & Region), `Guest/guestd/` (`locale/`, `LocaleTimeService`) |
 
 **Goal.** Android uses the Mac's languages, region, time zone, and 12/24-hour setting, and follows changes while it runs. The guest clock stays within 1 s of the Mac, and within 2 s after the Mac wakes.
 
-**Out of scope.** `SyncTime` after resume and wake, and the ADB fallback (#069). Per-app languages and dark mode (post-v1). New tzdata, which comes with image updates (#087).
+**Out of scope.** `SyncTime` after resume and wake, and the ADB fallback (#70). Per-app languages and dark mode (post-v1). New tzdata, which comes with image updates (#88).
 
 **Steps.**
 1. **Host sources.** `LocaleTimeSync` reads `Locale.preferredLanguages`, adds the region of `Locale.current` to the first tag when it has none, and sends at most 8 BCP 47 tags with script subtags kept (`zh-Hans`, `sr-Latn`). The zone is `TimeZone.current.identifier`, read after `TimeZone.resetSystemTimeZone()`. The 12/24 value is `TWELVE` if `DateFormatter.dateFormat(fromTemplate: "j", options: 0, locale: .current)` contains `a`, else `TWENTY_FOUR`. Use `Locale.autoupdatingCurrent`. **Check:** T0 tag mapping passes, including a first tag without a region.
@@ -198,7 +198,7 @@ M9 makes Android apps behave like Mac apps at their edges: notifications, clipbo
 - T0 (`Packages/IntegrationCore/Tests/IntegrationCoreTests/`): tag mapping, 12/24 detection for several locales, the `Etc/GMT` sign and the non-whole-hour case, change-only pushes, and no push on the launch path.
 - T1: simulated power events for the `SyncTime` triggers with a fake channel (FR-VM-11).
 - T2 (`Tests/IntegrationTests/`, custom image): with HelloText running, change the language order, region, and 24-hour setting with `defaults write -g` plus a distributed notification from a test helper, and change the zone with `systemsetup -settimezone`. `GetSnapshot` follows within 2 s, and HelloText shows the new time format. Restore the Mac settings afterwards.
-- T3 (reference Mac, manual): sleep for 2 min with `pmset sleepnow` and a scheduled wake, then check the guest clock. Make the same changes in System Settings. Check C05-9 ([test-strategy.md](../test-strategy.md) §8.6): with macOS in Japanese, HelloSplit (#042) shows its Japanese string.
+- T3 (reference Mac, manual): sleep for 2 min with `pmset sleepnow` and a scheduled wake, then check the guest clock. Make the same changes in System Settings. Check C05-9 ([test-strategy.md](../test-strategy.md) §8.6): with macOS in Japanese, HelloSplit (#43) shows its Japanese string.
 
 **Done when.**
 - Changing the language order, region, zone, and 24-hour setting while HelloText runs updates Android within 2 s, and HelloText shows the new time format.
@@ -214,18 +214,18 @@ M9 makes Android apps behave like Mac apps at their edges: notifications, clipbo
 
 ---
 
-## #086 Menu bar
+## #87 Menu bar
 
 | Field | Value |
 |---|---|
 | Milestone | M9 (v0.5) |
-| Depends on | #032 |
+| Depends on | #33 |
 | Design | [host-ui.md](../../02-design/host-ui.md) §12; [runtime-daemon.md](../../02-design/runtime-daemon.md) §5.1, §7.2; [process-model-and-ipc.md](../../01-architecture/process-model-and-ipc.md) §2; [configuration.md](../../03-reference/configuration.md) §2.10 |
 | Code | `Apps/APKRunMenuBar/`, `Apps/APKRun/` (Settings → General toggle), `project.yml` (target and Login Items embed), `Tests/` (model tests), `Tests/IntegrationTests/`, `Tests/AcceptanceTests/` |
 
 **Goal.** A menu bar item shows whether Android runs, which apps run, and which updates are available. From it the user can bring an app forward, update apps, open APKRun, and stop Android. It keeps running when APKRun.app quits, and it never keeps Android running.
 
-**Out of scope.** The maintenance rows (APKRun version, Android system update, "Finish updating APKRun…", "◐ Updating Android…"), which #057 and #087 add. The microphone symbol (#084). Japanese strings (#092): all strings go into String Catalogs now.
+**Out of scope.** The maintenance rows (APKRun version, Android system update, "Finish updating APKRun…", "◐ Updating Android…"), which #58 and #88 add. The microphone symbol (#85). Japanese strings (#93): all strings go into String Catalogs now.
 
 **Steps.**
 1. **Target and connection.** Add the `APKRunMenuBar` target (`LSUIElement = true`, bundle ID `io.apkrun.APKRunMenuBar`), embedded in `APKRun.app/Contents/Library/LoginItems/` through `project.yml`. It depends only on RuntimeClient and DiagnosticsCore. It connects to `.control`, subscribes to the `runtime`, `sessions`, `updates`, and `health` topics, and reloads after each reconnect. While apkrund is unreachable, the runtime line says so and offers **Open APKRun…**. **Check:** `scripts/check-module-deps.sh` passes, and a T1 test shows Android still reaches its idle stop with the item connected.

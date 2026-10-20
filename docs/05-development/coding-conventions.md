@@ -20,9 +20,9 @@ This guide holds the rules for writing code in APKRun: Swift, the C and Objectiv
 | Swift | `swift-format` of the pinned Xcode toolchain | `swift-format lint --strict` | `.swift-format` (production), `.swift-format-tests` (tests) | `check-format.sh`, `lint` |
 | C, Objective-C (GraphicsBridge) | none | compiler warnings, errors in CI | `Package.swift` C settings; `GCC_TREAT_WARNINGS_AS_ERRORS` | `build` |
 | Kotlin | ktfmt 0.64, `--kotlinlang-style`, through `ktfmtCheck` and `ktfmtFormat` in `Guest/build.gradle.kts` | compiler warnings; errors in CI planned, not yet set | `Guest/gradle/libs.versions.toml` | `check-format.sh`, `lint` |
-| Rust | `cargo fmt` | `cargo clippy --all-targets -- -D warnings` | `Guest/vsockd/rustfmt.toml` (planned, #034) | `cargo fmt --check` in `lint`; clippy in `test-linux` (planned) |
+| Rust | `cargo fmt` | `cargo clippy --all-targets -- -D warnings` | `Guest/vsockd/rustfmt.toml` (planned, #35) | `cargo fmt --check` in `lint`; clippy in `test-linux` (planned) |
 | Python | `ruff format` | `ruff check` | `Images/tools/pyproject.toml` `[tool.ruff]`: `target-version = "py312"`, line length 100, rules `E`, `F`, `I`, `UP`, `ANN` | `test-images` |
-| Protobuf | none | `buf lint` (`STANDARD`, `enum_zero_value_suffix: _UNSPECIFIED`); `buf breaking` (planned, #033) | `Packages/GuestProtocol/buf.yaml` | `scripts/check-protos.sh` |
+| Protobuf | none | `buf lint` (`STANDARD`, `enum_zero_value_suffix: _UNSPECIFIED`); `buf breaking` (planned, #34) | `Packages/GuestProtocol/buf.yaml` | `scripts/check-protos.sh` |
 | JSON with a schema | none | JSON Schema validation | the `*.schema.json` beside each file | `test-linux` (planned) |
 
 Swift settings: indentation 4 spaces; line length 120. `.swift-format` turns on the defaults plus `NeverForceUnwrap`, `NeverUseForceTry`, `NeverUseImplicitlyUnwrappedOptionals`, `AllPublicDeclarationsHaveDocumentation`, `OrderedImports`, and `FileScopedDeclarationPrivacy`. `.swift-format-tests` is the same with the first four off, and the other rules that file turns off.
@@ -257,7 +257,7 @@ Swift (GraphicsCore) → GraphicsBridge C API (gb_*) → C / Objective-C impleme
 
 ## 8. Kotlin: the Guest Agent and the Store Agent
 
-- **Modules and packages.** `Guest/protocol`, `Guest/agentruntime`, `Guest/guestd`; `Guest/APKRunStore` is planned (#036). Code lives in `io.apkrun.guest.*` and `io.apkrun.store.*`. Generated protocol classes are in `io.apkrun.guest.protocol.v1`.
+- **Modules and packages.** `Guest/protocol`, `Guest/agentruntime`, `Guest/guestd`; `Guest/APKRunStore` is planned (#37). Code lives in `io.apkrun.guest.*` and `io.apkrun.store.*`. Generated protocol classes are in `io.apkrun.guest.protocol.v1`.
 - **Dependencies.** Kotlin stdlib, kotlinx-coroutines, and protobuf-javalite. Test-only dependencies (JUnit, Robolectric, Jazzer) go in `testImplementation`. Anything else needs an ADR ([build-system.md](build-system.md) §7.1).
 - **Style.** ktfmt (§2). No `!!` in production code. `lateinit` only for fields the framework sets.
 - **Threads** ([guest-components.md](../02-design/guest-components.md) §6.3): one coroutine per connection reads frames; display-affecting requests run on `Dispatchers.Default.limitedParallelism(1)`, one per display ID; framework callbacks arrive on the `HandlerThread` "apkrun-callbacks"; input injection runs on "apkrun-input" with `THREAD_PRIORITY_URGENT_DISPLAY`; the IME runs on the app's main thread, and `ImeBridge` posts to it with `Handler.post`.
@@ -324,7 +324,7 @@ The tiers, locations, budgets, and fixtures are in [test-strategy.md](../04-plan
 
 - A comment explains why the code does what it does. When a design document dictates the behavior, cite it: `// graphics.md §4.3: no config-write callback, so …`.
 - Comments and identifiers are in English.
-- Every temporary workaround carries a TODO with a tracking task and a reason (NFR-DEV-04). `scripts/check-todos.sh` rejects a `TODO` or `FIXME` without `(#NNN)` right after it. The task must exist in the task index ([issues/README.md](../04-plan/issues/README.md)); if none fits, file one (#098 and up) in the same pull request.
+- Every temporary workaround carries a TODO with a tracking task and a reason (NFR-DEV-04). `scripts/check-todos.sh` rejects a `TODO` or `FIXME` without `(#NNN)` right after it. The task must exist in the task index ([issues/README.md](../04-plan/issues/README.md)); if none fits, file one (#100 and up) in the same pull request.
 - `XXX`, `HACK`, and bare `NOTE:` are not used.
 
 | Marker | Meaning | Checked by |

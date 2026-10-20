@@ -10,7 +10,7 @@ struct AdbProcessResult: Equatable, Sendable {
     var standardError: String
 }
 
-/// Runs one `adb` process with a timeout (#015). Both output pipes are drained while the process runs,
+/// Runs one `adb` process with a timeout (#16). Both output pipes are drained while the process runs,
 /// so a large `logcat -d` cannot fill a pipe and block it. A process that runs past its timeout gets
 /// SIGTERM, and SIGKILL if it is still running after `terminationGrace`.
 enum AdbProcess {

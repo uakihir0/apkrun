@@ -3,7 +3,7 @@ import DiagnosticsCore
 import Foundation
 import RuntimeCore
 
-/// A developer console the socket serves: the guest's output and the host's input (#014).
+/// A developer console the socket serves: the guest's output and the host's input (#15).
 ///
 /// `RuntimeCore.DevConsoleEndpoint` is the production source. Tests use their own source, which
 /// keeps the socket code testable without a VM.
@@ -18,7 +18,7 @@ public protocol DevConsoleSource: Sendable {
 
 extension DevConsoleEndpoint: DevConsoleSource {}
 
-/// The Unix sockets that carry the developer consoles of a running `apkrun dev boot` (#014).
+/// The Unix sockets that carry the developer consoles of a running `apkrun dev boot` (#15).
 ///
 /// Each console has one socket, `<directory>/<name>.sock`, with mode 0600 in a 0700 directory.
 /// One client at a time is attached; a second client is refused. A socket exists while its VM

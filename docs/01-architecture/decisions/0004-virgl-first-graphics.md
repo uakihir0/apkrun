@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-28
-- Related: #018–#023, #026, #096 (Vulkan, post-v1), R-02, R-03, R-07
+- Related: #19–#24, #27, #97 (Vulkan, post-v1), R-02, R-03, R-07
 
 ## Context
 
@@ -16,7 +16,7 @@ Research: RiftVM demonstrates VirGL on macOS 27's custom virtio API with virglre
 
 ## Decision
 
-Ship **VirGL** as the v1 graphics path. Base our virtio-gpu device on RiftVM's MIT-licensed implementation, adapted to our module boundaries: `VirtioDeviceCore` + `GraphicsCore` + the `GraphicsBridge` C target. Vulkan (Venus or gfxstream) is Phase 21 work (#096, post-v1) and needs blob resources via `VZVirtioSharedMemoryRegion`.
+Ship **VirGL** as the v1 graphics path. Base our virtio-gpu device on RiftVM's MIT-licensed implementation, adapted to our module boundaries: `VirtioDeviceCore` + `GraphicsCore` + the `GraphicsBridge` C target. Vulkan (Venus or gfxstream) is Phase 21 work (#97, post-v1) and needs blob resources via `VZVirtioSharedMemoryRegion`.
 
 ## Alternatives considered
 
@@ -28,11 +28,11 @@ Ship **VirGL** as the v1 graphics path. Base our virtio-gpu device on RiftVM's M
 
 ## Consequences
 
-- Android sees GLES 3.0 (with ANGLE-imposed limits). Apps requiring GLES 3.1+/Vulkan fall into lower compatibility levels until the Vulkan track (#096) lands.
+- Android sees GLES 3.0 (with ANGLE-imposed limits). Apps requiring GLES 3.1+/Vulkan fall into lower compatibility levels until the Vulkan track (#97) lands.
 - There is one renderer thread and in-order fence processing. Performance is bounded by virglrenderer's serialization.
 - VM save/restore is not possible while VirGL is active (R-07).
 - We maintain pinned builds of virglrenderer/libepoxy/ANGLE plus patches ([../../05-development/build-system.md](../../05-development/build-system.md) §6). The ANGLE Metal build pulls about 11 GB of dependencies, so CI caches the artifacts.
 
 ## Verification
 
-G3 (SurfaceFlinger renders through virtio-gpu → Metal with no readback on the normal path, #023), G4 (#026), and frame-time numbers from the perf harness (#070).
+G3 (SurfaceFlinger renders through virtio-gpu → Metal with no readback on the normal path, #24), G4 (#27), and frame-time numbers from the perf harness (#71).

@@ -1,21 +1,21 @@
 # M10 Runtime maintenance
 
-M10 keeps APKRun and its Android system up to date without touching the user's apps. APKRun updates as one signed `APKRun.app` through Sparkle 2 ([ADR-0016](../../01-architecture/decisions/0016-sparkle-host-updates.md)). Before an install, apkrund ends the Android sessions, stops Android, and exits. Android system updates come from a signed image feed. They download in the background and apply when the Mac is idle. A failed migration returns to the previous image. The order is strict: #057, #058, #087. M10 closes no gate.
+M10 keeps APKRun and its Android system up to date without touching the user's apps. APKRun updates as one signed `APKRun.app` through Sparkle 2 ([ADR-0016](../../01-architecture/decisions/0016-sparkle-host-updates.md)). Before an install, apkrund ends the Android sessions, stops Android, and exits. Android system updates come from a signed image feed. They download in the background and apply when the Mac is idle. A failed migration returns to the previous image. The order is strict: #58, #59, #88. M10 closes no gate.
 
 ---
 
-## #057 APKRun runtime updater
+## #58 APKRun runtime updater
 
 | Field | Value |
 |---|---|
 | Milestone | M10 (v0.5) |
-| Depends on | #031, #049 |
+| Depends on | #32, #50 |
 | Design | [ADR-0016](../../01-architecture/decisions/0016-sparkle-host-updates.md); [runtime-maintenance.md](../../02-design/runtime-maintenance.md) §3, §8; [runtime-daemon.md](../../02-design/runtime-daemon.md) §2.2; [host-ui.md](../../02-design/host-ui.md) §9.1 |
 | Code | `Apps/APKRun/Maintenance/`, `Packages/RuntimeHost/Sources/RuntimeHost/Maintenance/`, `Packages/RuntimeAPI/`, `Packages/DiagnosticsCore/` (`SchemaMigrator`), `scripts/build/write-components.py`, `scripts/release/`, `Tests/IntegrationTests/MaintenanceTests/` |
 
 **Goal.** An APKRun update, found by Sparkle or by apkrund's probe, replaces `APKRun.app`. apkrund ends the Android apps, stops Android, and exits first. The new build starts, the apps reopen, and no data under `Packages/`, in the wrappers, or in the Android image changes.
 
-**Out of scope.** Android image updates (#058, #087). Automatic rollback of APKRun (post-v1; reinstall the previous release). Notarization and the DMG (#088): until then the release workflow is a dry run. The diagnostics bundle (#060), `apkrun doctor` (#059), and the wrapper refresh (#076).
+**Out of scope.** Android image updates (#59, #88). Automatic rollback of APKRun (post-v1; reinstall the previous release). Notarization and the DMG (#89): until then the release workflow is a dry run. The diagnostics bundle (#61), `apkrun doctor` (#60), and the wrapper refresh (#77).
 
 **Steps.**
 1. **Sparkle.** Add Sparkle 2 pinned to an exact version in `project.yml`, linked into APKRun.app only and embedded in `Contents/Frameworks/`. `scripts/release/sign-bundle.sh` signs nested code in the order of [build-system.md](../../05-development/build-system.md) §12.3. Confirm the keys and delegate behavior of [runtime-maintenance.md](../../02-design/runtime-maintenance.md) §3.2 with that version, and record the result in ADR-0016 and R-23. If Sparkle refuses plain HTTP on loopback, `appcast-server.py` serves HTTPS with a lab-only certificate, and `ReleaseUpdateTest` may add `NSAllowsLocalNetworking`. Release builds never get it. **Check:** R-23 is settled.
@@ -31,7 +31,7 @@ M10 keeps APKRun and its Android system up to date without touching the user's a
 - T0 (`Packages/RuntimeHost/Tests/RuntimeHostTests/`, `Packages/DiagnosticsCore/Tests/DiagnosticsCoreTests/`): `components.json`, appcast parsing, the marker table, schema goldens, DTO round trips, the settings mapping.
 - T1: `MaintenanceService` with a fake runtime (migration refusal, store-transaction wait, stop deadline, exit after reply). `BundleWatcher` on a temporary bundle copy. The probe against a local HTTP server.
 - T2 (`Tests/IntegrationTests/MaintenanceTests/`, CI job `maintenance`): N → N+1 with `ReleaseUpdateTest` 9000 and 9001, and variants (a) Install When Apps Are Closed, (b) the bundle replaced while HelloText is open, (c) APKRun.app killed after `prepareForHostUpdate` with `APKRUN_TEST_MARKER_TIMEOUT=30s`, (d) 9001 with a changed agent plist. `TestUserDriver`, compiled only into `ReleaseUpdateTest`, answers APKRun's install dialog from `APKRUN_TEST_INSTALL_CHOICE=closeApps|whenClosed`. The launch argument `--test-check-for-updates` starts a user-initiated check.
-- T3: the smoke row "APKRun update" ([test-strategy.md](../test-strategy.md) §9.2) and checklist C05-5, once OQ-01 and #088 allow a real appcast.
+- T3: the smoke row "APKRun update" ([test-strategy.md](../test-strategy.md) §9.2) and checklist C05-5, once OQ-01 and #89 allow a real appcast.
 
 **Done when.**
 - After N → N+1, apkrund reports 9001, and `Runtime/maintenance.json` is gone. Every file under `Packages/` (except `.trash/`), `Wrappers/registry.json`, and both wrapper bundles are unchanged. HelloText keeps its counter.
@@ -50,19 +50,19 @@ M10 keeps APKRun and its Android system up to date without touching the user's a
 
 ---
 
-## #058 Guest image versioning and migration
+## #59 Guest image versioning and migration
 
 | Field | Value |
 |---|---|
 | Milestone | M10 (v0.5) |
-| Depends on | #035, #057 |
+| Depends on | #36, #58 |
 | Design | [android-image.md](../../02-design/android-image.md) §12; [runtime-maintenance.md](../../02-design/runtime-maintenance.md) §4.3, §4.7, §4.8; [runtime-image-manifest.md](../../03-reference/runtime-image-manifest.md) §8.3; [state-machines.md](../../01-architecture/state-machines.md) §7 |
 | Code | `Packages/ImageCore/` (`ImageStore`, migration steps, `garbageCollect`), `Packages/RuntimeCore/` (`RuntimeSupervisor.migrateImage`), `Packages/RuntimeHost/Sources/RuntimeHost/Maintenance/` (`ImageUpdateCoordinator`), `Apps/APKRun/Features/Settings/`, `CLI/apkrun/`, `Tests/IntegrationTests/MaintenanceTests/` |
 
 **Goal.** An Android image B, given as a signed `.aar` file, is installed next to the current image A and applied as a migration. Android boots B with the existing userdata. If B fails, Android returns to A with its data unchanged. After a successful migration the user can go back to A.
 
 **Out of scope.**
-- The feed, downloads, the apply gate, and reminders (#087). Delta image updates (post-v1).
+- The feed, downloads, the apply gate, and reminders (#88). Delta image updates (post-v1).
 - Restoring the Reset Android recovery point. OQ-41 decides it. The working default is that v1 has no restore. `recoveryPoints` lists the point, and `deleteRecoveryPoint` deletes it.
 
 **Steps.**
@@ -91,24 +91,24 @@ M10 keeps APKRun and its Android system up to date without touching the user's a
 - Every failed migration posts the failure notification, and `maintenance.imageUpdate` warns for 7 days.
 
 **Pitfalls.**
-- Never delete or move the user's `.aar`. The archive deletion of [runtime-image-manifest.md](../../03-reference/runtime-image-manifest.md) §8.3 applies only to `Cache/images/` (#087).
+- Never delete or move the user's `.aar`. The archive deletion of [runtime-image-manifest.md](../../03-reference/runtime-image-manifest.md) §8.3 applies only to `Cache/images/` (#88).
 - `SuspendingClock` pauses during Mac sleep, so sleep does not use up the first-boot timeout.
 - Bootconfig sets only `ro.boot.*` properties. Bundle B carries `androidboot.apkrun.test.marker=B`, which the T2 test reads as `ro.boot.apkrun.test.marker` ([android-image.md](../../02-design/android-image.md) §12.4).
 
 ---
 
-## #087 Runtime image distribution
+## #88 Runtime image distribution
 
 | Field | Value |
 |---|---|
 | Milestone | M10 (v0.5) |
-| Depends on | #058, #065 |
+| Depends on | #59, #66 |
 | Design | [runtime-maintenance.md](../../02-design/runtime-maintenance.md) §4.1, §4.2, §4.4, §4.6; [runtime-image-manifest.md](../../03-reference/runtime-image-manifest.md) §8, §9; [host-ui.md](../../02-design/host-ui.md) §4 |
 | Code | `Packages/ImageCore/Sources/ImageCore/Updates/` (`ImageFeedClient`, `ImageDownloader`), `Packages/RuntimeHost/Sources/RuntimeHost/Maintenance/` (`ImageUpdateCoordinator`), `Apps/APKRun/Features/Settings/`, `Apps/APKRun/Features/Onboarding/`, `CLI/apkrun/`, `scripts/release/image-feed.py`, `scripts/dev/image-feed-server.py`, `.github/workflows/image-release.yml`, `.github/workflows/image-feed-resign.yml`, `Tests/Fixtures/runtime-updates/image-feed/` |
 
 **Goal.** Android system updates arrive by themselves. apkrund reads a signed image feed, downloads a compatible newer image in the background, installs it, and applies it when the Mac is idle or when the user asks. A new APKRun gets its first image from the same feed.
 
-**Out of scope.** Delta image updates (post-v1). The migration, extraction, rollback, and GC of #058. The updates host and the real upload (OQ-01): until OQ-01 is settled, publishing is a dry run. Building the release `-user` image ([test-strategy.md](../test-strategy.md) §9.3).
+**Out of scope.** Delta image updates (post-v1). The migration, extraction, rollback, and GC of #59. The updates host and the real upload (OQ-01): until OQ-01 is settled, publishing is a dry run. Building the release `-user` image ([test-strategy.md](../test-strategy.md) §9.3).
 
 **Steps.**
 1. **Feed tooling.** `scripts/release/image-feed.py add --channel <c> --archive <aar>` builds the entry from the archive (`aa archive -a lzfse`, [build-system.md](../../05-development/build-system.md) §10.2) and the manifest, per [runtime-image-manifest.md](../../03-reference/runtime-image-manifest.md) §8.1 and §9.4. It sets `sequence`, `generatedAt`, and `expiresAt` (30 days), and signs `feed.json.sig`. `resign` signs again with a new sequence. `image-release.yml` (manual) and `image-feed-resign.yml` (weekly) are dry runs until OQ-01. Fixtures use `test-image-ed25519`. **Check:** a feed written by the script passes the T1 client.

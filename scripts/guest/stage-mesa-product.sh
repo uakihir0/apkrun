@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Verify the pinned NDK Mesa output and stage its four libraries for the AOSP
-# product fragment under Guest/product/mesa (ADR-0018, #099).
+# product fragment under Guest/product/mesa (ADR-0018, #99).
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

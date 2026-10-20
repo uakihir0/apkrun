@@ -28,7 +28,7 @@ if sys.version_info < (3, 12):  # noqa: UP036
 RULES_PATH = Path(__file__).with_name("normalize.yaml")
 # The launcher capture holds these categories. A candidate with data where the reference has none
 # is a
-# difference, not a category to skip (#014 step 5).
+# difference, not a category to skip (#15 step 5).
 REFERENCE_HELD_CATEGORIES = frozenset({"bootconfig", "cmdline"})
 CATEGORIES = (
     "cmdline",

@@ -632,7 +632,7 @@ When validation runs:
 | `listWrappers` (home screen, [host-ui.md](host-ui.md) §5); results are cached for 60 s | quick |
 | `launch(packageID)` for that entry ([runtime-daemon.md](runtime-daemon.md) §7.2) | steps 1–3 |
 | `apkrun doctor` / `apkrun doctor --deep`; `apkrun wrapper verify --deep` | quick / deep |
-| G9 check (#049) | deep plus the file hash list |
+| G9 check (#50) | deep plus the file hash list |
 
 The launch path of the wrapper itself runs none of these checks ([overview.md](../01-architecture/overview.md) §6). The system's code-signing requirement on the endpoint is the check.
 

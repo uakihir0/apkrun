@@ -1,4 +1,4 @@
-"""Tests for the disks command (#011, android-image.md §4.2-§4.5)."""
+"""Tests for the disks command (#12, android-image.md §4.2-§4.5)."""
 
 from __future__ import annotations
 

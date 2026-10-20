@@ -1,4 +1,4 @@
-"""Build a development bundle whose super carries a replaced logical partition (#099).
+"""Build a development bundle whose super carries a replaced logical partition (#99).
 
 The variant is the stock bundle with one logical partition of its `super` replaced and, when a
 reseal output is given, the GPT partition `vbmeta_a` replaced by the refreshed vbmeta signed with
@@ -93,7 +93,7 @@ from apkrun_image.vendor_inject import (
 )
 
 SCHEMA_VERSION = 3
-TASK = "#099"
+TASK = "#99"
 SUPER_LABEL = "super"
 BOOT_FILES = ("bootconfig", "cmdline", "kernel", "ramdisk")
 MANIFEST_NAME = "manifest.json"
@@ -557,7 +557,7 @@ def _read_reseal_output(
     record_path = directory / vendor_reseal.OUTPUT_RECORD
     record, record_sha256 = _load_record_snapshot(record_path)
     if record.get("task") != TASK or record.get("schemaVersion") != vendor_reseal.SCHEMA_VERSION:
-        raise BundleVariantError(f"{record_path} is not a #099 vendor-reseal record")
+        raise BundleVariantError(f"{record_path} is not a #99 vendor-reseal record")
     if _section(record, "partition", record_path).get("name") != partition:
         raise BundleVariantError(f"{record_path} does not record the partition {partition}")
     inject_path = inject_directory / OUTPUT_RECORD
@@ -1353,7 +1353,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the bundle-variant command parser."""
     parser = argparse.ArgumentParser(
         prog="python -m apkrun_image bundle-variant",
-        description="Build a development bundle whose super carries a replaced partition (#099).",
+        description="Build a development bundle whose super carries a replaced partition (#99).",
     )
     parser.add_argument("--bundle", required=True, type=Path, help="the stock bundle to copy")
     parser.add_argument(

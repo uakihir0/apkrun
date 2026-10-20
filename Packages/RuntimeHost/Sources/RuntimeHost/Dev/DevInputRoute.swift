@@ -2,7 +2,7 @@ import Foundation
 import RuntimeAPI
 import RuntimeCore
 
-/// The development input route of one embedded app window (#024, #030, decision D10).
+/// The development input route of one embedded app window (#25, #31, decision D10).
 ///
 /// It converts wire batches to InputCore values and routes them through the shared ``InputRouter``. Focus can arrive
 /// before the Guest Agent input stream is ready, so the desired focus is retained and applied when the router binds.

@@ -153,9 +153,9 @@ Before committing a document change, run `scripts/check-docs.sh`. It checks that
 
 ## 5. History
 
-The documents were rewritten on 2026-10-21 to remove history and evidence. Two kinds of old references remain in code comments and commit messages:
+The documents were rewritten on 2026-10-21 to remove history and evidence. Two kinds of old references remain:
 
-- **Old task numbers.** Before 2026-10-21, tasks had their own three-digit numbers (`#024`), which differ from the GitHub issue numbers. [issues/README.md](04-plan/issues/README.md) §5 converts them.
-- **`IR-NNNN`.** The implementation review records. Read one with `git show dab71d6d:docs/04-plan/implementation-review.md`, and search for `## IR-NNNN`. New work never adds IR records. Decisions go into the design documents or an ADR.
+- **Old task numbers,** in commit messages and branch names from before 2026-10-21. Tasks then had their own three-digit numbers (for example `024`), which differ from the GitHub issue numbers. [issues/README.md](04-plan/issues/README.md) §5 converts them. Documents and code comments use the new numbers.
+- **`IR-NNNN`,** in some code comments and old commits: the implementation review records. Read one with `git show dab71d6d:docs/04-plan/implementation-review.md`, and search for `## IR-NNNN`. New work never adds IR records. Decisions go into the design documents or an ADR.
 
 The removed gate evidence (`docs/04-plan/evidence/`) and the traceability matrix are in the same commit.

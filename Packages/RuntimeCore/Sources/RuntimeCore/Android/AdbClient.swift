@@ -29,7 +29,7 @@ public struct AdbActivitySnapshot: Equatable, Sendable {
     }
 }
 
-/// The state that `/sys/class/drm/<connector>/status` reports (#021).
+/// The state that `/sys/class/drm/<connector>/status` reports (#22).
 public enum AdbDRMConnectorStatus: String, Equatable, Sendable {
     /// A display is attached to the connector.
     case connected
@@ -39,7 +39,7 @@ public enum AdbDRMConnectorStatus: String, Equatable, Sendable {
     case unknown
 }
 
-/// One DRM connector of `/sys/class/drm` (#021; graphics.md §4.1).
+/// One DRM connector of `/sys/class/drm` (#22; graphics.md §4.1).
 public struct AdbDRMConnector: Equatable, Sendable {
     /// The connector's directory name, such as `card0-Virtual-1`.
     public var name: String
@@ -53,7 +53,7 @@ public struct AdbDRMConnector: Equatable, Sendable {
     }
 }
 
-/// One device of `/sys/bus/virtio/devices`, with the driver bound to it (#021).
+/// One device of `/sys/bus/virtio/devices`, with the driver bound to it (#22).
 public struct AdbVirtioDevice: Equatable, Sendable {
     /// The device's directory name, such as `virtio0`.
     public var name: String
@@ -84,7 +84,7 @@ public struct AdbForward: Equatable, Sendable {
     }
 }
 
-/// The host's ADB client for the developer's Android (#015; cli.md §5; android-image.md §7.3).
+/// The host's ADB client for the developer's Android (#16; cli.md §5; android-image.md §7.3).
 ///
 /// APKRun does not ship adb. The client runs the developer's `platform-tools/adb`, found under
 /// `$ANDROID_HOME` and then on `PATH`, and it talks only to the development endpoint
@@ -93,7 +93,7 @@ public struct AdbForward: Equatable, Sendable {
 ///
 /// Every command line is built inside one of the helper methods below. `shellInvocationCount`
 /// counts `adb shell` runs, so tests can check that production paths stop using ADB shell commands
-/// (#034).
+/// (#35).
 public actor AdbClient {
     /// The development endpoint: adbd on vsock 5555, reached through the loopback forwarder.
     public static let developmentEndpoint = "127.0.0.1:6520"
@@ -170,11 +170,11 @@ public actor AdbClient {
         }
     }
 
-    /// Restarts adbd as root with `adb root`, connects again, and checks that the shell runs as uid 0 (#021).
+    /// Restarts adbd as root with `adb root`, connects again, and checks that the shell runs as uid 0 (#22).
     ///
     /// Only a development image allows it (`ro.debuggable=1`), and a user build refuses it, so the call throws
     /// `commandFailed` there. SELinux keeps the shell domain from reading the DRM connector status
-    /// (`/sys/class/drm/<connector>/status`), so the #021 capture runs as root. The restart drops the connection,
+    /// (`/sys/class/drm/<connector>/status`), so the #22 capture runs as root. The restart drops the connection,
     /// so the client connects again before it checks the uid.
     public func restartAsRoot(timeout: Duration = .seconds(60)) async throws(AdbFailure) {
         let result = try await AdbProcess.run(
@@ -208,7 +208,7 @@ public actor AdbClient {
     /// Runs one command through the device's shell (`adb shell <command>`).
     ///
     /// Each call counts once in `shellInvocationCount`, even when it fails. Use a named helper where
-    /// one exists: the helpers keep the command lines in one place (M01 #015 step 3).
+    /// one exists: the helpers keep the command lines in one place (M01 #16 step 3).
     public func shell(_ command: String, timeout: Duration? = nil) async throws(AdbFailure) -> AdbShellReply {
         try await runShell(label: "shell", command, timeout: timeout ?? commandTimeout)
     }
@@ -222,7 +222,7 @@ public actor AdbClient {
         return reply.output
     }
 
-    /// Reads the kernel log with `dmesg` (#021 capture). A user build may restrict the log to root, and then this
+    /// Reads the kernel log with `dmesg` (#22 capture). A user build may restrict the log to root, and then this
     /// throws `commandFailed`, so the caller falls back to the kernel console (hvc0).
     public func dmesg(timeout: Duration = .seconds(30)) async throws(AdbFailure) -> String {
         let reply = try await runShell(label: "dmesg", "dmesg", timeout: timeout)
@@ -232,7 +232,7 @@ public actor AdbClient {
         return reply.output
     }
 
-    /// Reads every DRM connector and its status from `/sys/class/drm` (#021; graphics.md §14). The device shell
+    /// Reads every DRM connector and its status from `/sys/class/drm` (#22; graphics.md §14). The device shell
     /// names the connectors, and a reply that is not one `<name> <status>` line per connector is unexpected, so a
     /// glob that matches nothing is never read as an empty list.
     public func drmConnectors() async throws(AdbFailure) -> [AdbDRMConnector] {
@@ -247,7 +247,7 @@ public actor AdbClient {
         return connectors
     }
 
-    /// Reads every device of `/sys/bus/virtio/devices` with its `device` attribute and its bound driver (#021).
+    /// Reads every device of `/sys/bus/virtio/devices` with its `device` attribute and its bound driver (#22).
     /// The driver is the link `driver`, so a device with no driver has an empty name.
     public func virtioDevices() async throws(AdbFailure) -> [AdbVirtioDevice] {
         let command =
@@ -651,7 +651,7 @@ public actor AdbClient {
 
     /// One connect attempt. A transport that already reports `device` is kept as it is: `adb disconnect` drops every
     /// `adb forward` of the transport, and the development Guest Agent reaches its control, input, and bulk sockets
-    /// through those forwards (#024). Otherwise the attempt first drops any transport that the adb server still holds
+    /// through those forwards (#25). Otherwise the attempt first drops any transport that the adb server still holds
     /// for the endpoint: after an earlier boot, `adb connect` answers "already connected" and the old transport
     /// stays `offline`, so only a fresh transport can reach the device. Each step gets the time left before
     /// `deadline`, and no step starts after it.

@@ -1149,7 +1149,7 @@ class InputInjectorTest {
 }
 
 /**
- * Key mode on the injector (input.md §5.2, §7.3; #025). The base time is the uptime that the
+ * Key mode on the injector (input.md §5.2, §7.3; #26). The base time is the uptime that the
  * harness starts at.
  */
 class InputInjectorKeyTest {

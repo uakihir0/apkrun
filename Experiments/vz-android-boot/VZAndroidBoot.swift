@@ -6,7 +6,7 @@
 // --log-dir. hvc1 (the Android serial shell) reads commands from the FIFO
 // <log-dir>/hvc1.in. A loopback TCP listener forwards to guest vsock 5555 so
 // `adb connect 127.0.0.1:<port>` works. The production path is
-// AndroidBootPlanner + VMController (#012-#015); nothing here is imported by a
+// AndroidBootPlanner + VMController (#13-#16); nothing here is imported by a
 // production target.
 
 import Darwin

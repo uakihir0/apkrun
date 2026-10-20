@@ -3,7 +3,7 @@ package io.apkrun.fixture.hellotext
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** The counter logic on the JVM, with an in-memory backend in place of SharedPreferences (#016 T0). */
+/** The counter logic on the JVM, with an in-memory backend in place of SharedPreferences (#17 T0). */
 class CounterStoreTest {
     private class MemoryStore : KeyValueStore {
         val values = mutableMapOf<String, Int>()

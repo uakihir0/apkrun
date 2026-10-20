@@ -4,7 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-/** The debug-only commands on the JVM, over the same CounterStore as the button (IR-920, #016 T0). */
+/** The debug-only commands on the JVM, over the same CounterStore as the button (IR-920, #17 T0). */
 class DebugCounterCommandsTest {
     private class MemoryStore : KeyValueStore {
         val values = mutableMapOf<String, Int>()

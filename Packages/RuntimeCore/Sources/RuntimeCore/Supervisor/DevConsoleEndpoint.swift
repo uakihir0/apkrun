@@ -1,7 +1,7 @@
 import Foundation
 import VirtualMachineCore
 
-/// A developer console of a running Android boot, for the dev console socket (#014).
+/// A developer console of a running Android boot, for the dev console socket (#15).
 ///
 /// `output` carries the guest's bytes in order, and `send` writes host input to the guest. The
 /// relay keeps reading the console even when no client is attached, so an absent client never

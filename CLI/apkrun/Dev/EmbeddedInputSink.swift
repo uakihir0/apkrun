@@ -5,7 +5,7 @@
     import RuntimeHost
     import WindowingCore
 
-    /// Sends the pointer events of the development window to the embedded runtime (#024, decision D10).
+    /// Sends the pointer events of the development window to the embedded runtime (#25, decision D10).
     ///
     /// The window delivers its events on the main thread. The sink queues each list, and one task sends the lists to the
     /// route in the order they were delivered, so a batch never overtakes an earlier one. The events are converted to the

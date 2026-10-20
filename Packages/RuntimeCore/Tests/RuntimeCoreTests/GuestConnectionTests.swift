@@ -5,7 +5,7 @@ import Testing
 @testable import RuntimeCore
 
 /// The handshake and the request rules of `GuestConnection`, run against an in-memory agent (guest-protocol.md
-/// §5, §6, §12; #072 T0).
+/// §5, §6, §12; #73 T0).
 
 /// Waits until `condition` holds, up to `seconds`. Used where the test must observe a state that another task reaches.
 private func eventually(within seconds: Double = 5, _ condition: () -> Bool) async throws {

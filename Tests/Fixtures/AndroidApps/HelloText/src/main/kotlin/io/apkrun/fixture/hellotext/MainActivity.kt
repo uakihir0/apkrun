@@ -21,7 +21,7 @@ import android.widget.TextView
  * The main Activity of HelloText. It shows a counter that persists across process restarts. Each
  * click logs `APKRUN-FIXTURE: click <n>`. A long press on the target text logs `APKRUN-FIXTURE:
  * contextmenu` and offers a reset. The field takes the typed text, and the Details button opens the
- * Details screen (#025). The screen logs `APKRUN-FIXTURE: screen <name>` when it resumes.
+ * Details screen (#26). The screen logs `APKRUN-FIXTURE: screen <name>` when it resumes.
  */
 class MainActivity : Activity() {
     private lateinit var counter: CounterStore

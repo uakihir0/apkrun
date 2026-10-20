@@ -50,7 +50,7 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
     /// The display generation that the last `GET_DISPLAY_INFO` answered.
     private var reportedGeneration: UInt64
     private var negotiatedEDID = false
-    /// Set by DRIVER_OK. A presenter attaches only before the guest starts (#023).
+    /// Set by DRIVER_OK. A presenter attaches only before the guest starts (#24).
     private var hasStarted = false
     private var isShuttingDown = false
     /// The `events_read` value the device wants the guest to see.
@@ -325,7 +325,7 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
 
     // MARK: - Host configuration
 
-    /// Attaches a presenter that shows `scanout` in a pool of `width` x `height` IOSurfaces (graphics.md §6.1 to §6.3, #023).
+    /// Attaches a presenter that shows `scanout` in a pool of `width` x `height` IOSurfaces (graphics.md §6.1 to §6.3, #24).
     ///
     /// Call it before the guest starts for scanout 0, or after a pool scanout is enabled and Android reports it. The
     /// presenter's frames carry the flushes of the scanout's resource. Close the device to release the targets.
@@ -518,7 +518,7 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
 
     /// The virtio-gpu features this device offers, named as the `requiredHostCapabilities` of a GPU profile
     /// in the bundle manifest (runtime-image-manifest.md §4.7): `edid` is `VIRTIO_GPU_F_EDID`, and `virgl` is
-    /// `VIRTIO_GPU_F_VIRGL`. The set follows the descriptor, so `virgl` appears only with the renderer (#022).
+    /// `VIRTIO_GPU_F_VIRGL`. The set follows the descriptor, so `virgl` appears only with the renderer (#23).
     public var hostCapabilities: Set<String> {
         var names: Set<String> = []
         if descriptor.optionalFeatures & VirtioGPUProtocol.Feature.virgl != 0 {
@@ -615,7 +615,7 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
             return Reply(bytes: errorReply(.invalidParameter, answering: header), work: nil)
         }
         if queueIndex == VirtioGPUProtocol.cursorQueueIndex {
-            // The cursor queue belongs to #023. Until then every command gets an error response.
+            // The cursor queue belongs to #24. Until then every command gets an error response.
             let isCursorCommand = header.command == .updateCursor || header.command == .moveCursor
             let code: VirtioGPUErrorCode = isCursorCommand ? .unspec : .invalidParameter
             reportGuestError("command on the cursor queue is not implemented", command: header.type)
@@ -844,7 +844,7 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
 
 #if APKRUN_TEST_READBACK
     // DEBUG-READBACK: test-only seams for the replay of a recorded session (graphics.md §14, M02-graphics.md
-    // #022 step 3). They exist only in builds with the TestReadback trait. Both run on the render thread that owns
+    // #23 step 3). They exist only in builds with the TestReadback trait. Both run on the render thread that owns
     // the renderer, and neither touches `counters`: the test-only readback is not a host readback of the normal
     // path (graphics.md §7).
     extension VirtioGPUDevice {

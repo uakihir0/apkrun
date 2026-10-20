@@ -5,7 +5,7 @@ import ImageCore
 import RuntimeCore
 import XCTest
 
-/// The development ADB path against a real Android guest (#015 T2; cli.md §5, android-image.md §7.3,
+/// The development ADB path against a real Android guest (#16 T2; cli.md §5, android-image.md §7.3,
 /// security-model.md §4). Runs only in the `AndroidADB` configuration of IntegrationTests.xctestplan,
 /// which needs the Android bundle of `scripts/build-test-android-bundle.sh` and adb under ANDROID_HOME.
 final class AndroidADBTests: XCTestCase {

@@ -1,4 +1,4 @@
-"""Tests for the offline Mesa injection into vendor_a (#099 step 2, IR-620 to IR-627).
+"""Tests for the offline Mesa injection into vendor_a (#99 step 2, IR-620 to IR-627).
 
 The partition tests build a synthetic vendor EROFS with the pinned erofs-utils and seal it with the
 vendored avbtool, so they need APKRUN_EROFS_UTILS like test_erofs.py. Nothing here starts a VM, and

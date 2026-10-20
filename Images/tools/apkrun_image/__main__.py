@@ -9,7 +9,7 @@ from collections.abc import Sequence
 
 COMMANDS = {
     "bundle": "Build and sign a runtime image bundle.",
-    "bundle-variant": "Build a development bundle whose super carries a replaced partition (#099).",
+    "bundle-variant": "Build a development bundle whose super carries a replaced partition (#99).",
     "disks": "Build the raw GPT disks of a device layout.",
     "erofs-tools": "Fetch and verify the pinned erofs-utils tools.",
     "extract": "Extract verified Android boot artifacts.",
@@ -19,7 +19,7 @@ COMMANDS = {
     "inspect": "Inspect an Android image file.",
     "keygen": "Create the Ed25519 key pair that signs runtime image bundles.",
     "manifest": "Generate or validate an Android image manifest.",
-    "vendor-reseal": "Reseal the injected vendor_a and refresh its descriptor in vbmeta_a (#099).",
+    "vendor-reseal": "Reseal the injected vendor_a and refresh its descriptor in vbmeta_a (#99).",
 }
 
 # Command names that are not valid module names map to their module.

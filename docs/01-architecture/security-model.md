@@ -48,13 +48,13 @@ This page defines the trust boundaries of APKRun, the host and guest controls th
 | Binary | Entitlements | Signing |
 |---|---|---|
 | APKRun.app | App Sandbox **off** (it needs `~/Applications`, LaunchServices registration, and arbitrary file import). Hardened Runtime on. | Developer ID (release); ad-hoc or development (dev) |
-| apkrund | `com.apple.security.virtualization`; `com.apple.security.device.audio-input` (microphone, #084). Hardened Runtime on. No `disable-library-validation`: VirGL and ANGLE dylibs are signed with the same team ID. | Same as APKRun.app |
+| apkrund | `com.apple.security.virtualization`; `com.apple.security.device.audio-input` (microphone, #85). Hardened Runtime on. No `disable-library-validation`: VirGL and ANGLE dylibs are signed with the same team ID. | Same as APKRun.app |
 | APKRunLauncher.app (generic launcher; its executable is the wrapper template) | None. Hardened Runtime on. arm64 only, system frameworks only. | Same as APKRun.app. Each local wrapper's copy is re-signed ad hoc. |
 | APKRunMenuBar.app | None. Hardened Runtime on. | Same as APKRun.app |
 | `apkrun` CLI, Release | None. It is a client only. | Same as APKRun.app |
 | `apkrun` CLI, Debug (`io.apkrun.cli.dev`, built with `APKRUN_EMBEDDED_RUNTIME`) | `com.apple.security.virtualization`, for the embedded runtime of `apkrun dev` | Development signing only; never shipped |
 | APKRunTestHost (`io.apkrun.testhost`, Debug only) | `com.apple.security.virtualization`, so T2 tests can start a VM | Development signing only; never shipped |
-| Distribution wrappers | None | Developer ID and notarized (#088) |
+| Distribution wrappers | None | Developer ID and notarized (#89) |
 
 Bridged networking (`com.apple.vm.networking`) is a restricted entitlement and is not used. Only NAT networking is used. The entitlement files are listed in [build-system.md](../05-development/build-system.md) §12.2. Adding an entitlement changes this table in the same pull request.
 
@@ -124,7 +124,7 @@ Clipboard, notification, and file contents never appear in logs or diagnostics b
 | Threat | Mitigation |
 |---|---|
 | A local process drives apkrund to install malware or read data | Broker and code-signing requirements. The broker exposes no capabilities. |
-| A malicious guest exploits the host virtio-gpu parser | Bounds checks; fuzzing of the command parser (#091); a separate renderer thread; limits on guest-controlled sizes: 8192 px, 256 MiB buffers, 256 contexts |
+| A malicious guest exploits the host virtio-gpu parser | Bounds checks; fuzzing of the command parser (#92); a separate renderer thread; limits on guest-controlled sizes: 8192 px, 256 MiB buffers, 256 contexts |
 | A malicious update replaces a trusted app | Signer continuity check, plus update ownership in Android |
 | Two updaters fight over one package | One `UpdateAuthority` per package, plus Android update ownership |
 | A forged or replayed APKRun update or Android image | Sparkle EdDSA and Developer ID check. Image feed signature with sequence and expiry, archive SHA-256, manifest signature, and safe extraction ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §10) |
@@ -135,7 +135,7 @@ Clipboard, notification, and file contents never appear in logs or diagnostics b
 
 ## 9. Review items
 
-Task #091 reviews every trust boundary before v1.0. Each item names its evidence (a test, a fuzz target, or a review note) and has a status: `open`, `closed`, or `follow-up #NNN`. v1.0 ships only when every item is `closed`, or has a follow-up task that is not High impact ([roadmap.md](../04-plan/roadmap.md) §3.6, item 5).
+Task #92 reviews every trust boundary before v1.0. Each item names its evidence (a test, a fuzz target, or a review note) and has a status: `open`, `closed`, or `follow-up #NNN`. v1.0 ships only when every item is `closed`, or has a follow-up task that is not High impact ([roadmap.md](../04-plan/roadmap.md) §3.6, item 5).
 
 | Item | Boundary | Status |
 |---|---|---|

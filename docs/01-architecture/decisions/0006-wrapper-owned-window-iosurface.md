@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-28
-- Related: #026, #068, #031, #032, #044, [../../02-design/display-and-windowing.md](../../02-design/display-and-windowing.md)
+- Related: #27, #69, #32, #33, #45, [../../02-design/display-and-windowing.md](../../02-design/display-and-windowing.md)
 
 ## Context
 
@@ -32,4 +32,4 @@ Research: IOSurfaces can be shared across processes via XPC (`IOSurfaceCreateXPC
 
 ## Verification
 
-G4/G5 plus a perf check: no readback, present cost < 2 ms p95 (#070).
+G4/G5 plus a perf check: no readback, present cost < 2 ms p95 (#71).

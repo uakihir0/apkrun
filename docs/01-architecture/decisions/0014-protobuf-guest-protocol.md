@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-28
-- Related: #033–#036, #072, [../../02-design/guest-protocol.md](../../02-design/guest-protocol.md), [../process-model-and-ipc.md](../process-model-and-ipc.md) §3
+- Related: #34–#37, #73, [../../02-design/guest-protocol.md](../../02-design/guest-protocol.md), [../process-model-and-ipc.md](../process-model-and-ipc.md) §3
 
 ## Context
 
@@ -33,4 +33,4 @@ The host and guest agents need a versioned, efficient, cross-language (Swift ↔
 
 ## Verification
 
-#033 codec tests (T0), #072 handshake over ADB forward (T2), #035/#034 over vsock through `apkrun_vsockd` on the custom image (T2).
+#34 codec tests (T0), #73 handshake over ADB forward (T2), #36/#35 over vsock through `apkrun_vsockd` on the custom image (T2).

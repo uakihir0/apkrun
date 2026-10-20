@@ -1,4 +1,4 @@
-// HelloSplit (split-install fixture, #027).
+// HelloSplit (split-install fixture, #28).
 plugins {
     alias(libs.plugins.android.application)
 }

@@ -3,7 +3,7 @@ import XCTest
 
 @testable import ImageCore
 
-/// Android bootconfig on the Linux test guest (android-image.md §6.3; #012 step 5).
+/// Android bootconfig on the Linux test guest (android-image.md §6.3; #13 step 5).
 ///
 /// The kernel reads one bootconfig block from the end of the initrd and shows it in
 /// `/proc/bootconfig`. The test merges a golden input with `BootconfigWriter`, appends the
@@ -57,7 +57,7 @@ final class LinuxGuestBootconfigTests: XCTestCase {
                 .map { $0.dropFirst("APKRUN-BOOTCONFIG-DMESG ".count) }
             throw XCTSkip(
                 "The pinned test kernel has no /proc/bootconfig (CONFIG_BOOT_CONFIG is not set: "
-                    + "\(kernelLines.joined(separator: "; "))). #013 checks /proc/bootconfig on Android."
+                    + "\(kernelLines.joined(separator: "; "))). #14 checks /proc/bootconfig on Android."
             )
         }
         guard let printed = Self.listing(in: console) else {

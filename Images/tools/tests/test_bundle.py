@@ -1,4 +1,4 @@
-"""Tests for `bundle` (#012, #065; android-image.md §10; runtime-image-manifest.md §3, §6, §7)."""
+"""Tests for `bundle` (#13, #66; android-image.md §10; runtime-image-manifest.md §3, §6, §7)."""
 
 from __future__ import annotations
 
@@ -256,7 +256,7 @@ DRM_VIRGL_GOLDEN = TESTS / "fixtures/gpu-profiles/drm-virgl-bootconfig.txt"
 
 
 def test_the_drm_virgl_bootconfig_follows_from_the_committed_layout(tmp_path: Path) -> None:
-    """#022 criterion 2: the drmVirgl bootconfig is reproducible from the committed layout."""
+    """#23 criterion 2: the drmVirgl bootconfig is reproducible from the committed layout."""
     output = tmp_path / "bundle"
     manifest = _build(tmp_path, output)
 

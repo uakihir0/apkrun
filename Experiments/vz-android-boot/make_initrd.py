@@ -1,9 +1,9 @@
 """Build the per-boot initrd (ramdisk + bootconfig trailer) for the VZ boot spike.
 
 Experiment only. The production path is `BootconfigWriter` and
-`AndroidBootPlanner` (#012). The layers follow android-image.md §6.1:
+`AndroidBootPlanner` (#13). The layers follow android-image.md §6.1:
 vendor (from vendor_boot), image (slot, AVB, and the Cuttlefish launcher's
-values from a #064 capture), platform (`boot_devices`), and instance.
+values from a #65 capture), platform (`boot_devices`), and instance.
 
 Usage:
     python3 -I make_initrd.py --repo <repo root> --capture <internal-bootconfig.txt> \

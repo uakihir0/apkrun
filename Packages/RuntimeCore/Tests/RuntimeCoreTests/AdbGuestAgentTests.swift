@@ -5,7 +5,7 @@ import Testing
 @testable import RuntimeCore
 
 /// The ADB helpers of the Guest Agent and the provisioner's decisions, run against a fake adb (guest-components.md
-/// §3.1, §3.2; #072 T0).
+/// §3.1, §3.2; #73 T0).
 
 /// A fake `adb` that records each call and answers the ones the Guest Agent uses. The state of the fake (the installed
 /// version, whether the agent runs, and whether the next install is refused) lives in files in its directory.
@@ -304,7 +304,7 @@ func aRestartThatFailsIsLoggedWithTheCodeOfItsOwnFailure() async throws {
 @Test(.timeLimit(.minutes(1)))
 func aFourthDeathWithinAMinuteIsRequiredAgentUnavailable() async throws {
     // Three deaths are restarted, and the fourth within the minute is refused. The refusal is the code that the
-    // host reports (guest-components.md §3.3, #072 acceptance).
+    // host reports (guest-components.md §3.3, #73 acceptance).
     let fake = try FakeGuestADB()
     let agent = DevelopmentGuestAgent(
         adb: AdbClient(executable: fake.executable),

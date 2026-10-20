@@ -5,7 +5,7 @@ import RuntimeCore
 import RuntimeHost
 import XCTest
 
-/// The environment and adb of the Android T2 suites (#015, #016, #017).
+/// The environment and adb of the Android T2 suites (#16, #17, #18).
 enum AndroidTestEnvironment {
     /// The process environment, with ANDROID_HOME from the `APKRUN_ANDROID_HOME` build setting when it is not set.
     /// xcodebuild does not pass the SDK path on, so the host's Info.plist carries it (IR-324).
@@ -30,7 +30,7 @@ enum AndroidTestEnvironment {
     }
 }
 
-/// One supervised boot of the test Android image in a private APKRUN_HOME (#015, #016, #017 T2).
+/// One supervised boot of the test Android image in a private APKRUN_HOME (#16, #17, #18 T2).
 final class AndroidBootSession: @unchecked Sendable {
     let supervisor: RuntimeSupervisor
     let capture: ConsoleCapture
@@ -55,7 +55,7 @@ final class AndroidBootSession: @unchecked Sendable {
         self.captureTask = captureTask
     }
 
-    /// Starts a boot whose supervisor installs and starts `guestAgentBundle` in developer mode (#072). Nil boots without the agent.
+    /// Starts a boot whose supervisor installs and starts `guestAgentBundle` in developer mode (#73). Nil boots without the agent.
     static func start(developerMode: Bool, guestAgentBundle: GuestAgentBundle? = nil) async throws -> AndroidBootSession
     {
         let bundle = try bundleDirectory()

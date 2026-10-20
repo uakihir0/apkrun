@@ -18,7 +18,7 @@ import io.apkrun.guest.runtime.HiddenApi
 /**
  * The operations of the agent on the device, over the services (guest-components.md §6.1). The
  * snapshot reports what the services know. The IME, notification, and clipboard fields keep their
- * defaults until #071, #053, and #054.
+ * defaults until #72, #54, and #55.
  */
 class DeviceOperations(
     private val displays: DisplayService,

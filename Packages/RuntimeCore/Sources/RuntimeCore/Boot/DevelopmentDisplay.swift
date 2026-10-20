@@ -66,7 +66,7 @@ public enum DevelopmentDisplayReconfigurationFailure: Error, Equatable, Sendable
     case modeRestorationFailed(hostModeRestored: Bool, guestModeRestored: Bool)
 }
 
-/// Presents scanout 0 of a development boot in the caller's process (graphics.md §6.2, #023).
+/// Presents scanout 0 of a development boot in the caller's process (graphics.md §6.2, #24).
 ///
 /// The boot attaches the display to its GPU device before the guest starts, so the first frame is not missed. The
 /// frames reach the window through `events`, and the window reports each displayed frame through `frameDisplayed`. It

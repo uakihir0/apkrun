@@ -4,7 +4,7 @@ import Testing
 
 @testable import RuntimeCore
 
-/// Command lines, parsing, and error mapping of `AdbClient`, run against a fake adb script (#015 T0).
+/// Command lines, parsing, and error mapping of `AdbClient`, run against a fake adb script (#16 T0).
 /// The script lives in a temporary directory, outside ~/Documents.
 @Test(.timeLimit(.minutes(1)))
 func adbClientConnectsAndChecksTheDeviceState() async throws {
@@ -27,7 +27,7 @@ func adbClientConnectsAndChecksTheDeviceState() async throws {
 
 @Test(.timeLimit(.minutes(1)))
 func adbClientKeepsAHealthyTransport() async throws {
-    // #024: `adb disconnect` drops the forwards of the transport, which carry the Guest Agent's control and input
+    // #25: `adb disconnect` drops the forwards of the transport, which carry the Guest Agent's control and input
     // sockets. A transport that already reports `device` must be kept, so connect asks for its state and nothing more.
     let fake = try FakeADB()
     let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
@@ -149,7 +149,7 @@ func adbClientTerminatesACommandThatRunsPastItsTimeout() async throws {
 func adbClientEndsEveryTimedOutCommandWhileOthersHoldTheirPipesOpen() async throws {
     // Each sleeping command keeps its two pipes open until it exits. Reading those pipes must not hold the
     // Swift concurrency pool, or the timers that end these commands could not run and each one would last
-    // its full 30 seconds (#015).
+    // its full 30 seconds (#16).
     let fake = try FakeADB()
     let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
     let started = ContinuousClock.now
@@ -456,7 +456,7 @@ func adbClientReadsTheKernelLogWithDmesg() async throws {
 
 @Test(.timeLimit(.minutes(1)))
 func adbClientReportsARestrictedKernelLogAsACommandFailure() async throws {
-    // A user build may restrict the kernel log to root. The caller then falls back to the console (#021).
+    // A user build may restrict the kernel log to root. The caller then falls back to the console (#22).
     let fake = try FakeADB()
     try fake.markDmesgDenied()
     let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())

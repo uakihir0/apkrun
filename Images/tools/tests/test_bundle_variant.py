@@ -1,4 +1,4 @@
-"""Tests for `bundle-variant` (#099, IR-680 to IR-689; runtime-image-manifest.md §5, §6).
+"""Tests for `bundle-variant` (#99, IR-680 to IR-689; runtime-image-manifest.md §5, §6).
 
 The stock bundle is built once for the module with `build_bundle`, from a copy of the fixture
 archive whose `super.img` is the synthetic super of test_lp_write.py. The fixture archive's own

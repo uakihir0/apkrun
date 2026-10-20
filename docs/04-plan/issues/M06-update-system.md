@@ -1,21 +1,21 @@
 # M6 Update system
 
-M6 keeps installed Android apps up to date. apkrund validates a provider's newer version on the host, stages it, and installs it through one `PackageInstaller` session when the app is not in use, keeping its data. A failed health check restores the previous APK set. The host also reads `.apks`, `.xapk`, and `.apkm` files and checks their signatures. M6 closes gate G7 ([roadmap.md](../roadmap.md) §2) and the update items of the v0.3 Definition of Done ([roadmap.md](../roadmap.md) §3.3). Tests run on the custom image (#035). "Both image kinds" tests also run on stock. Work in the order below. `Depends on` names the hard dependencies.
+M6 keeps installed Android apps up to date. apkrund validates a provider's newer version on the host, stages it, and installs it through one `PackageInstaller` session when the app is not in use, keeping its data. A failed health check restores the previous APK set. The host also reads `.apks`, `.xapk`, and `.apkm` files and checks their signatures. M6 closes gate G7 ([roadmap.md](../roadmap.md) §2) and the update items of the v0.3 Definition of Done ([roadmap.md](../roadmap.md) §3.3). Tests run on the custom image (#36). "Both image kinds" tests also run on stock. Work in the order below. `Depends on` names the hard dependencies.
 
 ---
 
-## #073 Host inspection and import formats
+## #74 Host inspection and import formats
 
 | Field | Value |
 |---|---|
 | Milestone | M6 (v0.3) |
-| Depends on | #036 |
+| Depends on | #37 |
 | Design | [package-store.md](../../02-design/package-store.md) §4.1–§4.7, §10.1; [cli.md](../../02-design/cli.md) §4.2 |
 | Code | `Packages/APKStoreCore/Sources/APKStoreCore/{Import,Signing}/`, `Packages/RuntimeHost/`, `CLI/apkrun/Commands/` |
 
 **Goal.** `apkrun inspect` and the import preview show name, icon, version, signer, permissions, and warnings with Android stopped. Signer digests match `apksigner`. Unsafe containers are refused with a reason (FR-PKG-02, FR-PKG-03, FR-PKG-06).
 
-**Out of scope.** Relations (#038), rules V1–V6 (#041), splits (#042), Store Agent icons (#055), the Add sheet (#078). OBB files are refused (OQ-13).
+**Out of scope.** Relations (#39), rules V1–V6 (#42), splits (#43), Store Agent icons (#56), the Add sheet (#79). OBB files are refused (OQ-13).
 
 **Steps.**
 1. **Containers.** Add ZIPFoundation with an `exact:` version ([ADR-0017](../../01-architecture/decisions/0017-zipfoundation-zip-reading.md)). `ContainerReader.detect(_:)` detects by content; `extract(into:)` streams into `incoming/<ticket>/` under the limits of [package-store.md](../../02-design/package-store.md) §4.2. Refuse the formats [package-store.md](../../02-design/package-store.md) §4.2 refuses. **Check:** T0 container tests.
@@ -24,7 +24,7 @@ M6 keeps installed Android apps up to date. apkrund validates a provider's newer
 4. **`ArtifactVerifier`.** `verify(set, guest:)` runs I1–I12 and the warnings of [package-store.md](../../02-design/package-store.md) §4.6. Failures are `StoreFailure` cases. **Check:** one T0 fixture per check and warning.
 5. **Preview and inspect.** Fill `ImportPreview` ([package-store.md](../../02-design/package-store.md) §10.1). `inspectFile` deletes its ticket. `apkrun inspect <file>… [--json]` runs with the runtime stopped. **Check:** goldens; no VM starts.
 6. **aapt2 sandbox.** Profile in `Contents/Resources/tools/` denies network and writes, allows reads of the ticket and the tool. 20 s timeout, 16 MiB output cap, `LANG=C`. **Check:** T1: no write outside the ticket.
-7. **`adoptPackage`.** Record `installer: external`, `updateAuthority: external`, no artifact, `source: adopted` ([package-store.md](../../02-design/package-store.md) §9.3). Merge after #037 step 1. **Check:** `apkrun adopt` gives authority `external`.
+7. **`adoptPackage`.** Record `installer: external`, `updateAuthority: external`, no artifact, `source: adopted` ([package-store.md](../../02-design/package-store.md) §9.3). Merge after #38 step 1. **Check:** `apkrun adopt` gives authority `external`.
 
 **Tests.**
 - T0 (`APKStoreCoreTests`): containers (zip bomb and ZIP64 generated at test time); split selection; apksig vectors (v2, v3, v3.1, lineage, multi-signer, RSA, ECDSA, DSA, v1-only at targetSdk 29 and 30, bad digest, bad signature, truncated); I1–I12.
@@ -44,22 +44,22 @@ M6 keeps installed Android apps up to date. apkrund validates a provider's newer
 
 ---
 
-## #037 LocalUpdateProvider
+## #38 LocalUpdateProvider
 
 | Field | Value |
 |---|---|
 | Milestone | M6 (v0.3) |
-| Depends on | #036 |
+| Depends on | #37 |
 | Design | [update-system.md](../../02-design/update-system.md) §4.1–§4.3, §10; [package-store.md](../../02-design/package-store.md) §2.3, §5.5 |
 | Code | `Packages/UpdateCore/` (new), `Packages/APKStoreCore/`, `Packages/RuntimeHost/`, `CLI/apkrun/Commands/Update.swift`, `Tests/Fixtures/update-repos/local/` |
 
 **Goal.** With HelloUpdate V1 installed and V2 in a local folder, `apkrun update --check-only` reports V2 available, with no network (FR-PKG-04, FR-UPD-01 to FR-UPD-03).
 
-**Out of scope.** Download and install (#038). Full authority rules (#039). Scheduled checks (#074). Other providers and the Add sheet (#050–#052, #078).
+**Out of scope.** Download and install (#39). Full authority rules (#40). Scheduled checks (#75). Other providers and the Add sheet (#51–#53, #79).
 
 **Steps.**
-1. **Authority in the record.** APKStoreCore: `UpdateAuthority`, `UpdateProviderRef`, `ProviderType`, `ProviderConfiguration`; `PackageRecord.updateAuthority` and `updateProvider` ([package-store.md](../../02-design/package-store.md) §2.3); `claimsUpdateOwnership`. A file import without a provider gets `manual`. **Check:** T0 round trip; a #036 record reads unchanged.
-2. **UpdateCore types.** `UpdateProvider`, `UpdateCandidate`, `RemoteArtifact`, `ProviderContext`, `ProviderCursor`, `UpdatePhase` ([state-machines.md](../../01-architecture/state-machines.md) §6), `UpdateFailure`. **Check:** #062 module check.
+1. **Authority in the record.** APKStoreCore: `UpdateAuthority`, `UpdateProviderRef`, `ProviderType`, `ProviderConfiguration`; `PackageRecord.updateAuthority` and `updateProvider` ([package-store.md](../../02-design/package-store.md) §2.3); `claimsUpdateOwnership`. A file import without a provider gets `manual`. **Check:** T0 round trip; a #37 record reads unchanged.
+2. **UpdateCore types.** `UpdateProvider`, `UpdateCandidate`, `RemoteArtifact`, `ProviderContext`, `ProviderCursor`, `UpdatePhase` ([state-machines.md](../../01-architecture/state-machines.md) §6), `UpdateFailure`. **Check:** #63 module check.
 3. **`LocalProvider`.** `ProviderRegistry` parses `local:<path>`. The CLI sends a bookmark (`ProviderSpec.bookmark`), never a path ([runtime-api.md](../../03-reference/runtime-api.md) §9.2). `check` reads `<root>/<packageId>/` and takes the highest numeric directory above the installed versionCode. A directory holds `app.apk`, or `base.apk` plus `split_*.apk`, or one `.apks`. No hashes. Hidden unless developer mode is on ([configuration.md](../../03-reference/configuration.md) §2.5). **Check:** T0 over temporary folders.
 4. **State and coordinator.** `UpdateStateStore` writes `Updates/state.json` and `Updates/history.jsonl` ([update-system.md](../../02-design/update-system.md) §10). `UpdateCoordinator` runs `checking` → `available` with the outcomes of [update-system.md](../../02-design/update-system.md) §4.2 and §5. `notifyOnly` stops at `available`, and `HostNotifier` posts the notification. Later tasks change only their own phases. **Check:** T1 transitions; restart in `available`.
 5. **Stage and discard.** `stage(ticket, StagedUpdateInfo)` and `discardStaged` with the recovery rows of [package-store.md](../../02-design/package-store.md) §5.5 and the `APKRUN_STORE_FAULT` hooks. `artifacts.staged` records the source ([package-store.md](../../02-design/package-store.md) §7.1). **Check:** T1 crash at every step.
@@ -84,24 +84,24 @@ M6 keeps installed Android apps up to date. apkrund validates a provider's newer
 
 ---
 
-## #038 PackageInstaller updates
+## #39 PackageInstaller updates
 
 | Field | Value |
 |---|---|
 | Milestone | M6 (v0.3) |
-| Depends on | #037, #073 |
+| Depends on | #38, #74 |
 | Design | [update-system.md](../../02-design/update-system.md) §5, §6, §8.1; [package-store.md](../../02-design/package-store.md) §5.2, §6.4, §7.2; [guest-protocol.md](../../02-design/guest-protocol.md) §11.3 |
 | Code | `Packages/APKStoreCore/`, `Packages/UpdateCore/`, `Packages/RuntimeHost/`, `Packages/RuntimeAPI/`, `CLI/apkrun/Commands/Update.swift`, `Tests/IntegrationTests/UpdateTests/` |
 
 **Goal.** With V1 installed and launched once, V2 from the local provider is downloaded, validated on the host, staged, and installed in one `PackageInstaller` session. V2 reads V1's data. A V2 signed by another key never reaches Android. A crash at any step leaves store and Android consistent (FR-UPD-15, NFR-REL-01).
 
-**Out of scope.** Gentle installs and `--now` (#040). Rules V4–V6 and rotation (#041); a rotated V2 is refused until then. Splits (#042). Rollback and ownership fields (#043, #039), masked until the channel has the capability.
+**Out of scope.** Gentle installs and `--now` (#41). Rules V4–V6 and rotation (#42); a rotated V2 is refused until then. Splits (#43). Rollback and ownership fields (#44, #40), masked until the channel has the capability.
 
 **Steps.**
 1. **`update` transaction.** `installStaged(id, enableRollback:)` runs [package-store.md](../../02-design/package-store.md) §5.2 and sends the `InstallRequest` of [guest-protocol.md](../../02-design/guest-protocol.md) §11.3. Stock: `adb install-multiple -r --no-streaming`, then `QueryPackage`. `hasOpenSession` before `BeginInstall` fails with `packageInUse(id)`. Promote with `renamex_np(RENAME_SWAP)`. Add `APKRUN_STORE_FAULT=update:<step>`. **Check:** T0 recovery rows per step; T1 crash injection.
 2. **Download.** `beginDownloadTicket(id)`; hash while streaming; retries and failures as [update-system.md](../../02-design/update-system.md) §5. **Check:** T1 with a manual clock.
 3. **Validation V0–V2.** `inspect(ticket)` runs I1–I12 as V0. `UpdateValidator` runs V1, V2, and signer equality ([update-system.md](../../02-design/update-system.md) §6). Failure: `completed(.skipped(.validationFailed(reason)))`. **Check:** T0 with V1, V2, V2-other-signer, HelloText.
-4. **Stage, install, H1.** `stage(ticket, StagedUpdateInfo)` from #037. If `hasActiveUse` is false, `installStaged(id, enableRollback: true)`, then `installing` and `healthChecking`. Only H1 of [update-system.md](../../02-design/update-system.md) §8.1 runs. First `UpdateRuntimeAccess` in RuntimeHost (`runtimeState`, `hasActiveUse`, `ensureReady(.update)`). Automatic runs need `ready`. A package with a session stays `staged`. **Check:** T1 transitions with fake store and runtime.
+4. **Stage, install, H1.** `stage(ticket, StagedUpdateInfo)` from #38. If `hasActiveUse` is false, `installStaged(id, enableRollback: true)`, then `installing` and `healthChecking`. Only H1 of [update-system.md](../../02-design/update-system.md) §8.1 runs. First `UpdateRuntimeAccess` in RuntimeHost (`runtimeState`, `hasActiveUse`, `ensureReady(.update)`). Automatic runs need `ready`. A package with a session stays `staged`. **Check:** T1 transitions with fake store and runtime.
 5. **Relations and CLI.** Classify imports ([package-store.md](../../02-design/package-store.md) §4.7). `update` enters UpdateCore at `validating`, trigger `manual`. `googlePlay` and `external` fail with `update.authorityDoesNotAllowUpdates`. `apkrun update <package> [--file <apk>…]`; `update` without `--check-only` continues `automatic` past `available`; `CheckForUpdatesRequest.checkOnly` stops at `available`. **Check:** T0 relation tests; goldens.
 
 **Tests.**
@@ -124,25 +124,25 @@ M6 keeps installed Android apps up to date. apkrund validates a provider's newer
 
 ---
 
-## #039 Update ownership
+## #40 Update ownership
 
 | Field | Value |
 |---|---|
 | Milestone | M6 (v0.3) |
-| Depends on | #038 |
+| Depends on | #39 |
 | Design | [update-system.md](../../02-design/update-system.md) §2.1–§2.4, §11.3; [package-store.md](../../02-design/package-store.md) §6.3; [guest-components.md](../../02-design/guest-components.md) §8.2; [guest-protocol.md](../../02-design/guest-protocol.md) §11.1 |
 | Code | `Guest/APKRunStore/`, `Packages/GuestProtocol/` (op 109), `Packages/APKStoreCore/`, `Packages/UpdateCore/`, `CLI/apkrun/Commands/Update.swift`, `Tests/Fixtures/AndroidApps/OtherInstaller/` |
 
 **Goal.** APKRun holds Android update ownership for each `apkrun` and `manual` package, so no other installer can update it without user approval. It never claims ownership of a `googlePlay` or `external` package (FR-UPD-01, FR-UPD-06).
 
-**Out of scope.** "Updated by" and the Updates choice (#079, #078). Google Play as an authority (#097). Gentle updates and rollback (#040, #043).
+**Out of scope.** "Updated by" and the Updates choice (#80, #79). Google Play as an authority (#98). Gentle updates and rollback (#41, #44).
 
 **Steps.**
 1. **Store Agent.** Op 109 and `store.ownership.v1` in Swift and Kotlin (additions only; `scripts/generate-protos.sh`). `OwnershipService` calls `PackageManager.relinquishUpdateOwnership`, answering `FAILED_PRECONDITION` when not the owner. `InstallService` sets `setRequestUpdateOwnership`. Report the enforcement flag in `Hello` ([guest-components.md](../../02-design/guest-components.md) §8.2). **Check:** the flag without the capability gives `INVALID_ARGUMENT`.
 2. **Ownership on install.** Request ownership on `firstInstall`, `reinstall`, and `update` as [package-store.md](../../02-design/package-store.md) §6.3 defines. Record `android.updateOwner`. `store.ownership` warns `store.updateOwnerMissing` when an `apkrun` or `manual` owner is not `io.apkrun.store`. **Check:** T1 per authority and capability.
 3. **Store authority change.** `setUpdateAuthority(id, authority, provider:)` under the operation lock. Leaving `apkrun` or `manual` for `googlePlay` or `external` calls `RelinquishUpdateOwnership` before the record write. Without a `ready` runtime, it is a post-boot task. **Check:** T1 call order and post-boot task.
 4. **Authority rules.** Implement [update-system.md](../../02-design/update-system.md) §2.1–§2.4 in UpdateCore. `setUpdatePolicy` writes `settings.json` `update.mode` before the record's `updateAuthority` and `updateProvider`, so a crash never leaves automatic updates on. **Check:** T0 mapping; a T1 counting fake gets no call for `manual`.
-5. **`setUpdateAuthority` and CLI.** `.control` `setUpdateAuthority(id, AuthorityChoice)` (`SetUpdateAuthorityRequest`; only #097 sets `googlePlay`). Moving to `external` discards staged sets. `apkrun update authority <package> apkrun|manual|external` ([cli.md](../../02-design/cli.md) §4.3). **Check:** T1: a move to `external` sends `RelinquishUpdateOwnership` before the record write.
+5. **`setUpdateAuthority` and CLI.** `.control` `setUpdateAuthority(id, AuthorityChoice)` (`SetUpdateAuthorityRequest`; only #98 sets `googlePlay`). Moving to `external` discards staged sets. `apkrun update authority <package> apkrun|manual|external` ([cli.md](../../02-design/cli.md) §4.3). **Check:** T1: a move to `external` sends `RelinquishUpdateOwnership` before the record write.
 6. **OtherInstaller fixture.** As [test-strategy.md](../test-strategy.md) §4.2 specifies. **Check:** logs a status on stock.
 7. **Owner-less check.** Custom image, developer mode: install V1 with `AdbClient.install(apk:)`, adopt, switch to `manual`, update to V2 with `--file`, and read `updateOwner`. **Check:** OQ-12 and R-18 record the result.
 
@@ -166,23 +166,23 @@ M6 keeps installed Android apps up to date. apkrund validates a provider's newer
 
 ---
 
-## #040 Gentle updates
+## #41 Gentle updates
 
 | Field | Value |
 |---|---|
 | Milestone | M6 (v0.3) |
-| Depends on | #039 |
+| Depends on | #40 |
 | Gate | G7 |
 | Design | [update-system.md](../../02-design/update-system.md) §7.1–§7.5; [package-store.md](../../02-design/package-store.md) §5.3, §7.2; [runtime-daemon.md](../../02-design/runtime-daemon.md) §7.1 |
 | Code | `Packages/UpdateCore/` (`GentleUpdateGate`), `Packages/RuntimeHost/`, `Packages/RuntimeCore/` (`SessionRegistry`), `Packages/GuestProtocol/` (op 110), `Guest/APKRunStore/` (`ConstraintsService`), `Tests/AcceptanceTests/G7GentleUpdate/` |
 
 **Goal.** An update is never installed while its app is in use. After the app quits it installs within 30 s, without user action. A click during the install has one defined result on both images (FR-UPD-07). G7 passes.
 
-**Out of scope.** Scheduled checks and `updates.startRuntimeToInstall` (#074); G7 starts with `apkrun update`. Health checks beyond H1 (#043). Home and app-page buttons (#078, #079).
+**Out of scope.** Scheduled checks and `updates.startRuntimeToInstall` (#75); G7 starts with `apkrun update`. Health checks beyond H1 (#44). Home and app-page buttons (#79, #80).
 
 **Steps.**
 1. **`CheckInstallConstraints`.** Op 110 and `store.constraints.v1`. `ConstraintsService` answers on the callback or with `TIMEOUT` after 10 s, and never waits for `true`. **Check:** T2 shows `satisfied = false` with a visible task.
-2. **`UpdateRuntimeAccess`.** Complete the #038 class with the members of [update-system.md](../../02-design/update-system.md) §7.5 except `healthCheckLaunch`. GU5 uses op 110 on custom and `ListTasks` on stock. **Check:** T1 with fake sessions and agents.
+2. **`UpdateRuntimeAccess`.** Complete the #39 class with the members of [update-system.md](../../02-design/update-system.md) §7.5 except `healthCheckLaunch`. GU5 uses op 110 on custom and `ListTasks` on stock. **Check:** T1 with fake sessions and agents.
 3. **`GentleUpdateGate`.** `isOpen(package)` evaluates GU1–GU7 ([update-system.md](../../02-design/update-system.md) §7.1) at the triggers of [update-system.md](../../02-design/update-system.md) §7.2. Log each false condition (`install`). Installs run under a `storeOperation` assertion, one at a time: user-initiated first, then longest waiting. Add `updates.waiting`. **Check:** T1 with a manual clock covers each condition, trigger, and the queue.
 4. **Races.** The `openSession` rules of [update-system.md](../../02-design/update-system.md) §7.2 and [runtime-daemon.md](../../02-design/runtime-daemon.md) §7.1. The first frame counts as H4. **Check:** T1 at each transaction step.
 5. **User-initiated and 7-day notice.** [update-system.md](../../02-design/update-system.md) §7.3 and §7.4. `apkrun update <package>` prints "will update when ‹App› quits" without `--now`; `--now` is Update Now without the question. APKRun never closes an app itself. **Check:** CLI goldens; T1 with a manual clock.
@@ -210,18 +210,18 @@ M6 keeps installed Android apps up to date. apkrund validates a provider's newer
 
 ---
 
-## #041 Package and signature verification
+## #42 Package and signature verification
 
 | Field | Value |
 |---|---|
 | Milestone | M6 (v0.3) |
-| Depends on | #038, #073 |
+| Depends on | #39, #74 |
 | Design | [update-system.md](../../02-design/update-system.md) §6, §9; [package-store.md](../../02-design/package-store.md) §3.1, §4.5 |
 | Code | `Packages/APKStoreCore/` (signer-set, `VersionCode`, set-digest comparisons), `Packages/UpdateCore/` (`UpdateValidator`, `ValidationReport`), `scripts/build-fixtures.sh`, `Tests/Fixtures/AndroidApps/HelloUpdate/` |
 
 **Goal.** Every update, from a provider or a file, passes V0–V6 before staging. Wrong package, wrong signer, downgrade, corrupted APK, changed file, and provider metadata that disagrees with the APK are refused with a readable reason. Rotation is accepted exactly where Android accepts it. No setting or build turns a rule off (FR-UPD-04, FR-UPD-05, FR-UPD-14, NFR-SEC-04).
 
-**Out of scope.** I1–I12 (#073; V0 calls them). The download hash check (#038). Splits (#042). Writes to `skippedVersions` (#043).
+**Out of scope.** I1–I12 (#74; V0 calls them). The download hash check (#39). Splits (#43). Writes to `skippedVersions` (#44).
 
 **Steps.**
 1. **Primitives.** Signer-set comparison with the lineage rules of [update-system.md](../../02-design/update-system.md) §6 (`INSTALLED_DATA` for updates, `ROLLBACK` for undone rotations). Multi-signer sets must be equal. Compare SHA-256 of the certificate DER. `VersionCode` and set-digest comparison. **Check:** T0 over hand-built signer sets and lineages.
@@ -247,22 +247,22 @@ M6 keeps installed Android apps up to date. apkrund validates a provider's newer
 **Pitfalls.**
 - Compare signers by SHA-256 of the certificate DER, never by subject or key alone.
 - V5 only refuses. A provider value never replaces an APK value.
-- Refuse every downgrade. Only the binary rollback of #043 installs an older version.
+- Refuse every downgrade. Only the binary rollback of #44 installs an older version.
 
 ---
 
-## #042 Split APK installation
+## #43 Split APK installation
 
 | Field | Value |
 |---|---|
 | Milestone | M6 (v0.3) |
-| Depends on | #041, #073 |
+| Depends on | #42, #74 |
 | Design | [package-store.md](../../02-design/package-store.md) §4.4, §6.2, §6.4, §7.2; [guest-protocol.md](../../02-design/guest-protocol.md) §11.3 |
 | Code | `Packages/APKStoreCore/` (split sets on both channels), `Guest/APKRunStore/` (`InstallService`), `Tests/Fixtures/AndroidApps/HelloSplit/`, `Tests/IntegrationTests/StoreTests/` |
 
 **Goal.** A split set installs, updates, and reinstalls in one `PackageInstaller` session on both channels. HelloSplit, imported from `.apks`, installs and launches. Its native library loads, and its Japanese string shows at guest locale `ja-JP` (FR-PKG-05).
 
-**Out of scope.** Split selection (#073). macOS locale sync (#085); T2 sets the guest locale directly. On-demand feature splits (Google Play). `MODE_INHERIT_EXISTING`: every install sends the full set.
+**Out of scope.** Split selection (#74). macOS locale sync (#86); T2 sets the guest locale directly. On-demand feature splits (Google Play). `MODE_INHERIT_EXISTING`: every install sends the full set.
 
 **Steps.**
 1. **HelloSplit.** Build from an App Bundle with the pinned bundletool ([build-system.md](../../05-development/build-system.md) §8.1), per [test-strategy.md](../test-strategy.md) §4.2. **Check:** `scripts/check-fixtures.sh` passes; the `.apks` holds base, `config.arm64_v8a`, `config.xhdpi`, `config.ja`, and the feature split.
@@ -272,10 +272,10 @@ M6 keeps installed Android apps up to date. apkrund validates a provider's newer
 5. **Density record.** Record the density bucket `SplitSelector` picked and whether the window looks right. Settle OQ-14. **Check:** the OQ-14 row has the result.
 
 **Tests.**
-- T0 (`APKStoreCoreTests`): split selection over HelloSplit's `.apks` (shared with #073); the `ArtifactSpec` list.
+- T0 (`APKStoreCoreTests`): split selection over HelloSplit's `.apks` (shared with #74); the `ArtifactSpec` list.
 - T1 (`APKStoreCoreSystemTests`): one `install-multiple` call; one session with several artifacts; update and reinstall.
 - T2 (`Tests/IntegrationTests/StoreTests/`, both images): installs and launches; logs `native ok`; at guest locale `ja-JP` (set through `AdbClient` in developer mode) logs the Japanese string; `QueryPackage` lists the splits.
-- T3: none here. The macOS-Japanese check is C05-9 in #085 ([test-strategy.md](../test-strategy.md) §8.6).
+- T3: none here. The macOS-Japanese check is C05-9 in #86 ([test-strategy.md](../test-strategy.md) §8.6).
 
 **Done when.**
 - HelloSplit installs and launches on both images.
@@ -289,25 +289,25 @@ M6 keeps installed Android apps up to date. apkrund validates a provider's newer
 
 ---
 
-## #043 Update rollback
+## #44 Update rollback
 
 | Field | Value |
 |---|---|
 | Milestone | M6 (v0.3) |
-| Depends on | #041, #042 |
+| Depends on | #42, #43 |
 | Design | [update-system.md](../../02-design/update-system.md) §8.1–§8.5, §9; [package-store.md](../../02-design/package-store.md) §5.5, §7.3; [guest-protocol.md](../../02-design/guest-protocol.md) §11.1 |
 | Code | `Packages/UpdateCore/` (`UpdateHealthChecker`), `Packages/RuntimeHost/` (`healthCheckLaunch`), `Packages/APKStoreCore/` (`rollback`), `Packages/GuestProtocol/` (op 108), `Guest/APKRunStore/` (`RollbackService`), `CLI/apkrun/Commands/`, `Tests/IntegrationTests/UpdateTests/` |
 
 **Goal.** After each update, APKRun checks that Android reports the new version, the app launches, its process stays alive, and it draws a frame. A broken update returns to the previous APK set without user action, and that version is skipped. App data is never reverted, and every rollback message says so (FR-UPD-10, FR-UPD-11).
 
-**Out of scope.** Skip and rollback controls in package settings (#079). Data rollback (OQ-16). Repair of a `broken` package (#076).
+**Out of scope.** Skip and rollback controls in package settings (#80). Data rollback (OQ-16). Repair of a `broken` package (#77).
 
 **Steps.**
 1. **Custom rollback.** Op 108 `RollbackPackage` and `store.rollback.v1`. `RollbackService` accepts only a rollback matching the package and both versionCodes, else `NOT_AVAILABLE`. `InstallService` calls `setEnableRollback(true, ROLLBACK_DATA_POLICY_RETAIN)`. `rollback` transaction: begin → `guestRollbackRequested` → `guestRolledBack` → `filesRestored` → `metadataWritten` → commit ([package-store.md](../../02-design/package-store.md) §5.5). **Check:** T0 recovery rows; T1 crash injection.
 2. **Other mechanisms.** The three mechanisms of [package-store.md](../../02-design/package-store.md) §7.3. The data-loss path runs only after a confirmed user action (`allowDataLoss: true`). **Check:** T1 per mechanism; a background call never uninstalls.
 3. **`UpdateHealthChecker`.** H1–H4, the budget, and the levels of [update-system.md](../../02-design/update-system.md) §8.1. `healthCheckLaunch` follows [update-system.md](../../02-design/update-system.md) §8.2. Record the level and each step. **Check:** T1 with a manual clock covers each level and each failing step.
 4. **Outcomes and notices.** [update-system.md](../../02-design/update-system.md) §8.3 decides the result; [update-system.md](../../02-design/update-system.md) §8.4 and §8.5 handle skipped versions. CLI: `apkrun rollback <package> [--allow-data-loss] [--yes]`, `apkrun update skip|unskip <package> <versionCode>`. Markers `UPDATE_HEALTH_END` and `UPDATE_ROLLBACK_END`; health check `updates.failed`. **Check:** T1 per [update-system.md](../../02-design/update-system.md) §8.3 row; goldens.
-5. **`user` image.** Custom `user` and `userdebug`: V2 over V1 with `enable_rollback`; `getAvailableRollbacks` lists it; `commitRollback` restores V1. Settle OQ-11; update R-18, which keeps its #058 part open. **Check:** OQ-11 and R-18 record the result.
+5. **`user` image.** Custom `user` and `userdebug`: V2 over V1 with `enable_rollback`; `getAvailableRollbacks` lists it; `commitRollback` restores V1. Settle OQ-11; update R-18, which keeps its #59 part open. **Check:** OQ-11 and R-18 record the result.
 
 **Tests.**
 - T0 (`APKStoreCoreTests`, `UpdateCoreTests`, `GuestProtocolTests`): `rollback` recovery rows with a scripted Android state; level choice; [update-system.md](../../02-design/update-system.md) §8.3 mapping; `enable_rollback` argument rules.
@@ -331,24 +331,24 @@ M6 keeps installed Android apps up to date. apkrund validates a provider's newer
 
 ---
 
-## #050 DirectProvider
+## #51 DirectProvider
 
 | Field | Value |
 |---|---|
 | Milestone | M6 (v0.3) |
-| Depends on | #037, #041 |
+| Depends on | #38, #42 |
 | Design | [update-system.md](../../02-design/update-system.md) §3.4, §4.4, §12; [direct-provider-manifest.md](../../03-reference/direct-provider-manifest.md) §5–§8 |
 | Code | `Packages/UpdateCore/` (`Providers/DirectProvider.swift`, `DirectManifest`), `docs/03-reference/schemas/direct-provider-manifest.schema.json`, `scripts/dev/update-server.py`, `Tests/Fixtures/update-repos/direct/`, `CLI/apkrun/` |
 
 **Goal.** A distributor publishes an APKRun manifest over HTTPS, and APKRun updates the package from it. The manifest lists package, versionCode, versionName, artifacts, and hashes. The APK's own values decide; the manifest can only refuse (FR-UPD-12).
 
-**Out of scope.** Signed manifests (OQ-19). F-Droid and GitHub providers (#051, #052). Provider picker (#079). Long fuzz runs (#091).
+**Out of scope.** Signed manifests (OQ-19). F-Droid and GitHub providers (#52, #53). Provider picker (#80). Long fuzz runs (#92).
 
 **Steps.**
 1. **Model and schema.** `Codable` `DirectManifest` and rules D1–D9 of [direct-provider-manifest.md](../../03-reference/direct-provider-manifest.md) §6. The published JSON Schema wins on structure. **Check:** T0 for every fixture in `direct/valid/` and `direct/invalid/`.
 2. **HTTP and download.** Shared `URLSession` and the HTTP rules of [direct-provider-manifest.md](../../03-reference/direct-provider-manifest.md) §5 and [update-system.md](../../02-design/update-system.md) §3.4. Refuse user info and non-HTTPS URLs. A failed check keeps the last cursor. `download` hashes while streaming and fails with `update.hashMismatch` after one retry. **Check:** T1 against `update-server.py`.
 3. **Local test service.** `scripts/dev/update-server.py` serves `Tests/Fixtures/update-repos/local/` and `direct/` as Direct manifests on `http://127.0.0.1:<port>`. `--delay <seconds>` holds every manifest response. Debug builds only ([update-system.md](../../02-design/update-system.md) §12). **Check:** a Release build refuses a loopback `http` URL in `setUpdatePolicy`.
-4. **Configuration and CLI.** `direct:<https-url>` in the #037 parser; `--update-provider direct --update-url <url>` maps to it. `setUpdatePolicy` checks the configuration before storing. **Check:** goldens for `update policy --provider direct:<url>`, `install <file> --provider direct:<url>`, and the alternate flags.
+4. **Configuration and CLI.** `direct:<https-url>` in the #38 parser; `--update-provider direct --update-url <url>` maps to it. `setUpdatePolicy` checks the configuration before storing. **Check:** goldens for `update policy --provider direct:<url>`, `install <file> --provider direct:<url>`, and the alternate flags.
 
 **Tests.**
 - T0 (`UpdateCoreTests`): schema cases of [direct-provider-manifest.md](../../03-reference/direct-provider-manifest.md) §12; model and schema agreement; URL resolution; candidate mapping.
@@ -370,18 +370,18 @@ M6 keeps installed Android apps up to date. apkrund validates a provider's newer
 
 ---
 
-## #074 Update scheduler
+## #75 Update scheduler
 
 | Field | Value |
 |---|---|
 | Milestone | M6 (v0.3) |
-| Depends on | #037, #040, #050 |
+| Depends on | #38, #41, #51 |
 | Design | [update-system.md](../../02-design/update-system.md) §2.2, §3; [runtime-daemon.md](../../02-design/runtime-daemon.md) §2.4, §7.1; [configuration.md](../../03-reference/configuration.md) §2.7 |
 | Code | `Packages/UpdateCore/` (`UpdateScheduler`, `noteLaunched`), `Packages/RuntimeHost/` (exit rule), `Packages/RuntimeCore/` (`SessionRegistry`), `Tests/PerformanceTests/`, `Tests/AcceptanceTests/G7GentleUpdate/` |
 
 **Goal.** apkrund checks every `apkrun` package on a schedule without making a launch wait. Checks use jitter, backoff, and network and power rules. A launch checks only after its first frame, and apkrund exits when nothing is due (FR-UPD-08, FR-UPD-09, NFR-PERF-07).
 
-**Out of scope.** The Updates pane and app-page mode (#079); the menu bar list (#086). The "Updated" notification text (#037).
+**Out of scope.** The Updates pane and app-page mode (#80); the menu bar list (#87). The "Updated" notification text (#38).
 
 **Steps.**
 1. **`UpdateScheduler`.** Timing, backoff, triggers, and resource limits as [update-system.md](../../02-design/update-system.md) §3.2–§3.4; per-mode behavior as [update-system.md](../../02-design/update-system.md) §2.2. Skip packages in `downloading`, `validating`, `installing`, `healthChecking`, `rollingBack`, and non-`apkrun` packages. A newer candidate replaces a `staged` set. **Check:** T1 with a manual clock.

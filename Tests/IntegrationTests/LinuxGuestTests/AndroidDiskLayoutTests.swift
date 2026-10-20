@@ -3,7 +3,7 @@ import XCTest
 
 @testable import VirtualMachineCore
 
-/// #011 step 4: the Linux test guest sees the Android disks of android-image.md §4.2 as
+/// #12 step 4: the Linux test guest sees the Android disks of android-image.md §4.2 as
 /// `disks.json` describes them, and the run records the VZ topology for `boot_devices`.
 final class LinuxGuestAndroidDiskLayoutTests: XCTestCase {
     func testAndroidDiskLayout() async throws {

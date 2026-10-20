@@ -3,7 +3,7 @@ package io.apkrun.guest.daemon
 import io.apkrun.guest.runtime.SystemServices
 
 /**
- * Reports which system service wrappers resolve on this image (guest-components.md §6.2, #072
+ * Reports which system service wrappers resolve on this image (guest-components.md §6.2, #73
  * acceptance). The host runs it with `app_process` in the same way as the daemon, so the check sees
  * the same hidden APIs. One line per wrapper: `service=<name> available=<true|false>
  * missing=<methods>`.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lock reading, manifest writing, and ELF checks for the guest Mesa build (ADR-0018, #099).
+"""Lock reading, manifest writing, and ELF checks for the guest Mesa build (ADR-0018, #99).
 
 Used by scripts/guest/build-mesa-android.sh and scripts/tests/test_guest_mesa_build.py.
 Standard library only. The ELF checks call the NDK's llvm-readelf and llvm-nm.

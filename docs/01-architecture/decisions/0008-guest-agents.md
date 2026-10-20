@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-28
-- Related: #033–#036, #072, [../../02-design/guest-components.md](../../02-design/guest-components.md)
+- Related: #34–#37, #73, [../../02-design/guest-components.md](../../02-design/guest-components.md)
 
 ## Context
 
@@ -34,4 +34,4 @@ Research: scrcpy (Apache-2.0) shows that an `app_process` program started via AD
 
 ## Verification
 
-#034 and #036 acceptance, then G7 (APK v1 → v2 automatic update through the Store Agent with update ownership, #037–#040).
+#35 and #37 acceptance, then G7 (APK v1 → v2 automatic update through the Store Agent with update ownership, #38–#41).

@@ -372,7 +372,7 @@ Schema and validation: [wrapper-json.md](wrapper-json.md). This section only map
 | `APKRUN_GRAPHICS_FAULT=rendererInit` | graphics host | makes renderer initialization fail | debug only | yes |
 | `APKRUN_RUNTIME_FAULT=rejectAgent:guest` | RuntimeCore | rejects the Guest Agent handshake | debug only | yes |
 | `APKRUN_LAUNCHER_TEST_NO_RUNTIME=1` | APKRunLauncher | runs the launcher without a runtime | debug only | yes |
-| `APKRUN_TEST_HEADLESS_LAUNCH=1` | apkrund | `launch` opens a daemon-owned session that discards its frames. Removed by #068 | debug only | yes |
+| `APKRUN_TEST_HEADLESS_LAUNCH=1` | apkrund | `launch` opens a daemon-owned session that discards its frames. Removed by #69 | debug only | yes |
 | `APKRUN_TEST_MARKER_TIMEOUT=<n>s` or `<n>m` | MaintenanceService | replaces the 10-minute maintenance marker timeout | Debug and `ReleaseUpdateTest`; shipped Release ignores it | yes |
 | `APKRUN_TEST_INSTALL_CHOICE=closeApps\|whenClosed` | `TestUserDriver` in APKRun.app | answers the install dialog in maintenance tests | `ReleaseUpdateTest` only | yes |
 | `APKRUN_TEST_IMAGE_FEED_URL=<url>` | `ImageFeedClient` | replaces the image feed base URL (may be `http://127.0.0.1`) | debug only | yes |

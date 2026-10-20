@@ -70,7 +70,7 @@ Background: [docs/00-product/vision.md](docs/00-product/vision.md), [docs/01-arc
 | Virtualization | Virtualization.framework with the macOS 27 custom virtio device API (ADR-0002) |
 | Graphics | Android GLES → Mesa VirGL → virtio-gpu → virglrenderer → ANGLE → Metal (ADR-0004) |
 
-Vulkan and Google Play are post-v1 tracks (#096, #097). Do not add code for them to v1 tasks.
+Vulkan and Google Play are post-v1 tracks (#97, #98). Do not add code for them to v1 tasks.
 
 ---
 

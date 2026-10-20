@@ -1,7 +1,7 @@
 package io.apkrun.fixture.hellotext
 
 /**
- * The debug-only commands of the screens (#025). Like [DebugCounterCommands], the class lives in `main` so that the
+ * The debug-only commands of the screens (#26). Like [DebugCounterCommands], the class lives in `main` so that the
  * release unit tests can run it. Only the debug receiver calls it.
  */
 class DebugFixtureCommands {

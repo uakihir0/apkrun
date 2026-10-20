@@ -1,6 +1,6 @@
 """Run the G2 pass conditions (roadmap.md §2) against the spike harness.
 
-Experiment only: the gate itself is `Tests/AcceptanceTests/G2/` (#014). This
+Experiment only: the gate itself is `Tests/AcceptanceTests/G2/` (#15). This
 resets the instance, then runs N cold boots in a row (VM stopped between
 boots). For each boot it checks:
 
@@ -9,7 +9,7 @@ boots). For each boot it checks:
 2. `getprop sys.boot_completed` over the serial shell returns 1;
 3. for the dwell time: `sys.system_server.start_count` stays 1, no
    Watchdog kill of system_server, and no init service exits three or more
-   times (the #095 crash-loop definition).
+   times (the #96 crash-loop definition).
 
 The first boot also applies the first-boot settings (Bluetooth off, Wi-Fi on
 VirtWifi) through standard Android commands on the serial shell.

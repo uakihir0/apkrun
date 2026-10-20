@@ -4,7 +4,7 @@ import ImageCore
 import RuntimeCore
 import XCTest
 
-/// One development Android boot in a private `APKRUN_HOME`, shared by the T2 Android tests (#012-#014).
+/// One development Android boot in a private `APKRUN_HOME`, shared by the T2 Android tests (#13-#15).
 ///
 /// The fixture uses the product path: `ImageStore`, `InstanceStore`, and `RuntimeSupervisor`.
 /// The bundle is the one `scripts/build-test-android-bundle.sh` writes under `APKRUN_TEST_LINUX_DIR`.

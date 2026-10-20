@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import WindowingCore
 
-/// A key of the US keyboard: its macOS virtual key code (`kVK_*`), and whether Shift is held to type it (#025, T2).
+/// A key of the US keyboard: its macOS virtual key code (`kVK_*`), and whether Shift is held to type it (#26, T2).
 struct MacKey: Equatable, Sendable {
     let code: UInt16
     let shift: Bool
@@ -56,7 +56,7 @@ enum InputKeyboardFailure: Error, Equatable {
     case shortcutNotTaken(UInt16)
 }
 
-/// Posts AppKit key events into the window's content view, as AppKit delivers them (#025, T2). Shift and Command are
+/// Posts AppKit key events into the window's content view, as AppKit delivers them (#26, T2). Shift and Command are
 /// pressed and released as their own `flagsChanged` events, as a physical keyboard sends them. A ⌘ shortcut goes to
 /// `performKeyEquivalent` first, and the other keys go to `keyDown` and `keyUp`.
 @MainActor

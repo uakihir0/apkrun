@@ -3,7 +3,7 @@ import ImageCore
 import RuntimeCore
 import XCTest
 
-/// T2 checks of the virtio-gpu device on the Android boot (#021; graphics.md §14, android-image.md §7).
+/// T2 checks of the virtio-gpu device on the Android boot (#22; graphics.md §14, android-image.md §7).
 ///
 /// They run in the `AndroidGraphics` configuration of IntegrationTests.xctestplan, with the `guestSwiftshader`
 /// profile. They need the Android bundle of `scripts/build-test-android-bundle.sh` and adb under ANDROID_HOME.
@@ -24,7 +24,7 @@ final class AndroidGraphicsTests: XCTestCase {
         }
     }
 
-    /// #021 acceptance: Android binds `virtio_gpu` to APKRun's device, `card0` has 16 `Virtual-N` connectors, and
+    /// #22 acceptance: Android binds `virtio_gpu` to APKRun's device, `card0` has 16 `Virtual-N` connectors, and
     /// only `Virtual-1` (scanout 0) is connected.
     func testVirtioGPUBinds() async throws {
         // The adb lookup skips the test when there is no SDK. It runs before the boot, so a skip never stops a VM.
@@ -60,7 +60,7 @@ final class AndroidGraphicsTests: XCTestCase {
         do {
             let adb = AdbClient(executable: adbExecutable)
             try await adb.connect(timeout: Self.adbBudget)
-            // SELinux keeps the shell from reading the DRM connector status, so the capture runs as root (#021).
+            // SELinux keeps the shell from reading the DRM connector status, so the capture runs as root (#22).
             try await adb.restartAsRoot()
             captured = .success(try await Self.capture(adb: adb, consoleText: console.text))
         } catch {
@@ -146,14 +146,14 @@ final class AndroidGraphicsTests: XCTestCase {
     }
 }
 
-/// The guest state that the #021 check reads, saved next to the bundle as its artifact.
+/// The guest state that the #22 check reads, saved next to the bundle as its artifact.
 private struct GraphicsCapture {
     let kernelLog: String
     let kernelLogSource: String
     let connectors: [AdbDRMConnector]
     let virtioDevices: [AdbVirtioDevice]
     let drmListing: String
-    /// `sys.boot_completed` when the capture was taken. Android need not be complete for the #021 check.
+    /// `sys.boot_completed` when the capture was taken. Android need not be complete for the #22 check.
     let bootCompleted: String
 
     /// Writes the capture into `directory` and attaches each file to the test report.

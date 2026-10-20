@@ -310,7 +310,7 @@ Checked on macOS 27.0.1 (26A434), build 16373615, Android kernel `6.12.74-androi
 
 ## 7. Cuttlefish host-service substitution
 
-Cuttlefish's guest expects host processes that APKRun does not run: the launcher, `secure_env`, `modem_simulator`, rootcanal, the GNSS proxy, the sensors simulator, `socket_vsock_proxy`, and others. This section states what APKRun provides instead. **Prefer in-guest implementations selected by configuration over host-side re-implementations.** Do not remove a guest service unless it breaks boot, stability, or resource use (#035).
+Cuttlefish's guest expects host processes that APKRun does not run: the launcher, `secure_env`, `modem_simulator`, rootcanal, the GNSS proxy, the sensors simulator, `socket_vsock_proxy`, and others. This section states what APKRun provides instead. **Prefer in-guest implementations selected by configuration over host-side re-implementations.** Do not remove a guest service unless it breaks boot, stability, or resource use (#36).
 
 ### 7.1 Console port plan
 
@@ -370,7 +370,7 @@ Verified option 2 NICs:
 
 ### 7.5 Audio
 
-Cuttlefish passes virtio-snd, and the guest uses the AIDL audio HAL with `ro.hardware.audio.primary=goldfish`. APKRun attaches `VZVirtioSoundDeviceConfiguration` ([vm.md](vm.md) §11). #083 verifies the module, `/proc/asound/cards`, a host-audible test tone, and the logged format. If the stock image lacks `virtio_snd`, the custom image adds it (OQ-38). Microphone input: [vm.md](vm.md) §11.
+Cuttlefish passes virtio-snd, and the guest uses the AIDL audio HAL with `ro.hardware.audio.primary=goldfish`. APKRun attaches `VZVirtioSoundDeviceConfiguration` ([vm.md](vm.md) §11). #84 verifies the module, `/proc/asound/cards`, a host-audible test tone, and the logged format. If the stock image lacks `virtio_snd`, the custom image adds it (OQ-38). Microphone input: [vm.md](vm.md) §11.
 
 ### 7.6 Other guest expectations
 
@@ -401,7 +401,7 @@ These facts hold on the test kernel and the stock image. Tests rely on them.
 - The Linux test kernel creates `/dev/hvc0`–`/dev/hvc7` only, so the 20-port marker check skips at `/dev/hvc8`. The Android kernel creates `/dev/hvc0`–`/dev/hvc19`. Marker checks do not run on the Android guest, because host input attaches only to service ports.
 - `testHostServiceSubstitutes` checks KeyMint and Gatekeeper registration, `/data`, and that logcat has no Weaver failure.
 - The stock `system` partition has `ping` but no `getent`, `nslookup`, `dig`, `host`, `wget`, or `curl`. Only `ping` prints a name-resolution result.
-- The serial shell runs as `uid=2000(shell)` in `u:r:shell:s0` and cannot reach `/dev/socket/dnsproxyd`, so its lookups fail at once. Root and app uids resolve. The SELinux fix belongs to #035 (§11.1, R-13).
+- The serial shell runs as `uid=2000(shell)` in `u:r:shell:s0` and cannot reach `/dev/socket/dnsproxyd`, so its lookups fail at once. Root and app uids resolve. The SELinux fix belongs to #36 (§11.1, R-13).
 - `AndroidNetworkTests` runs the name-resolution stage as root (`su 0 ping -c 1 -W 2 connectivitycheck.gstatic.com`) and judges each stage by its last polled value.
 
 ---
@@ -585,16 +585,16 @@ python3 -m apkrun_image bundle \
 
 ## 11. APKRun AOSP product
 
-The guest agents are designed in [guest-components.md](guest-components.md). This section covers the image build, which #035 implements.
+The guest agents are designed in [guest-components.md](guest-components.md). This section covers the image build, which #36 implements.
 
 ### 11.1 Product definition
 
 The source is `Guest/product/`, mapped into the AOSP tree as `device/apkrun/apkrun_arm64/`. It contains `AndroidProducts.mk` (lunch targets `apkrun_arm64-trunk_staging-userdebug` and `-user`), `apkrun_arm64.mk` (inherits `device/google/cuttlefish/vsoc_arm64_only/phone/aosp_cf.mk`; `PRODUCT_PACKAGES += apkrun_vsockd ApkRunGuest ApkRunStore`), `Android.bp` (agent APKs with the platform certificate, privileged, in `/system_ext/priv-app`), `prebuilt/` (git-ignored agent APKs copied by `scripts/build-guest.sh`), `init/apkrun.rc`, `sepolicy/`, `permissions/`, `overlay/`, `settings/`, and `manifest/pinned.xml` (the `repo manifest -r` snapshot for release builds).
 
-- The policy starts in `BOARD_SEPOLICY_DIRS`. If Treble `neverallow` checks reject `/system_ext` types, #035 moves those rules to `SYSTEM_EXT_PRIVATE_SEPOLICY_DIRS` and records the split here.
+- The policy starts in `BOARD_SEPOLICY_DIRS`. If Treble `neverallow` checks reject `/system_ext` types, #36 moves those rules to `SYSTEM_EXT_PRIVATE_SEPOLICY_DIRS` and records the split here.
 - `PRODUCT_IGNORE_ALL_ANDROIDMK := true`: all modules use `Android.bp`. The base product uses a 16 KiB page size, which the Rust and Kotlin components do not assume.
 - `ro.apkrun.product=1`, plus the default profile's GPU properties. `bundle --image-version` sets the image version, and ImageCore passes `androidboot.apkrun.image` at every boot.
-- `Guest/product/mesa/` (#099) holds the pinned EGL, GLES, and Gallium prebuilts, staged by `scripts/guest/stage-mesa-product.sh`. It supplies neither the product nor a SELinux policy.
+- `Guest/product/mesa/` (#99) holds the pinned EGL, GLES, and Gallium prebuilts, staged by `scripts/guest/stage-mesa-product.sh`. It supplies neither the product nor a SELinux policy.
 - The guest loads `/odm/etc/selinux/precompiled_sepolicy`, not the `/sepolicy` of the boot ramdisk. The product build must change that ODM policy or its split inputs. A sysfs label comes from `genfscon`, so a vendor `file_contexts` entry cannot change it.
 - The virtio-gpu PCI nodes under `/sys/devices/platform/40000000.pci/` carry the default `sysfs` label. On the `odm4` bundle the launcher (`priv_app`) and Settings (`system_app`) fail Mesa's DRM probe, while platform and untrusted apps pass. The untested candidate is a `genfscon` label `sysfs_gpu` on that path, plus a decision on `system_app` (R-13).
 
@@ -607,12 +607,12 @@ The source is `Guest/product/`, mapped into the AOSP tree as `device/apkrun/apkr
 | `Settings.Global.AUTO_TIME = 0`, `AUTO_TIME_ZONE = 0` | the host is the only time source ([desktop-integration.md](desktop-integration.md) §9) |
 | Adds an in-Android browser (AOSP `Browser2`) if the base has none | "Keep in Android" for links ([desktop-integration.md](desktop-integration.md) §7.1) |
 | Multi-display and freeform overlays | [display-and-windowing.md](display-and-windowing.md) |
-| Disables a HAL or service only with evidence from the §7 checks (#095) | "Do not aggressively remove services" (#035) |
+| Disables a HAL or service only with evidence from the §7 checks (#96) | "Do not aggressively remove services" (#36) |
 | Does **not** change the kernel, partition layout, or fstab | the stock image stays a valid development target |
 
 ### 11.3 Developer mode on custom images
 
-- `androidboot.apkrun.devmode=1` makes `init/apkrun.rc` start adbd on vsock 5555 (trigger `ro.boot.apkrun.devmode`). With `0`, the default, `apkrun.rc` stops adbd even in a userdebug build. #035 verifies that no other trigger restarts it.
+- `androidboot.apkrun.devmode=1` makes `init/apkrun.rc` start adbd on vsock 5555 (trigger `ro.boot.apkrun.devmode`). With `0`, the default, `apkrun.rc` stops adbd even in a userdebug build. #36 verifies that no other trigger restarts it.
 - `user` builds have `ro.adb.secure=1`. The Guest Agent authorizes the host's ADB key with `AdbManager.allowDebugging` (needs `MANAGE_DEBUGGING`), so no dialog appears on an unseen display.
 - A change of the devmode setting takes effect at the next runtime start, like the microphone setting.
 
@@ -630,7 +630,7 @@ Proposed for release: pass `orange` and unlocked, but keep dm-verity on through 
 - The host is x86-64 Linux with 64 GB of RAM and 400 GB of disk ([environment-setup.md](../05-development/environment-setup.md) §5). macOS cannot build AOSP.
 - `repo init` with the pinned manifest, `repo sync`, `lunch apkrun_arm64-trunk_staging-userdebug`, `m`, `m dist DIST_DIR=out/dist` with `BUILD_NUMBER=ar<counter>` (`scripts/aosp/build-product.sh`). The `*-img-*.zip` goes through §3–§10.
 - `provenance` records the pinned manifest, the builder image digest, and the `Guest/` git revision.
-- Acceptance (#035): the custom image reaches `boot_completed`, the agents start, and the reference diff has no unexplained differences beyond the documented product changes.
+- Acceptance (#36): the custom image reaches `boot_completed`, the agents start, and the reference diff has no unexplained differences beyond the documented product changes.
 
 ---
 
@@ -712,7 +712,7 @@ Each deviation has an ID with the prefix `CF-`. `Images/reference/<buildId>/expe
 | CF-18 | `log_buf_len=2M` is added | the default buffer wraps before the serial shell answers | §6.4, §6.6 |
 | CF-19 | The reference cmdline has `earlycon`, `ramoops.*`, and a second `panic=-1`; none is passed on VZ | crosvm's UART and ramoops do not exist on VZ | §6.4, §6.6 |
 
-#035 adds the product changes of §11.2 that differ at runtime, such as the developer-mode gate of adbd (§11.3).
+#36 adds the product changes of §11.2 that differ at runtime, such as the developer-mode gate of adbd (§11.3).
 
 ---
 
@@ -762,12 +762,12 @@ Subsystem `io.apkrun.image`, categories `store`, `install`, `verify`, `instance`
 - Release variant: signing and the AVB state (§11.4). OQ-36.
 - Hosting of the image feed and archives (§10.4). OQ-01.
 - Archive extraction writes zero runs before holes are punched (§10.4). R-25.
-- Licensing of redistributed images (§2.3). R-10, #093.
-- SELinux for the vsock bridge, the agents, and the virtio-gpu sysfs label (§11.1). R-13, #035.
-- AOSP build infrastructure and upstream changes (§11.5). R-14, #035.
-- `virtio_snd` in the stock kernel (§7.5). OQ-38, #083.
+- Licensing of redistributed images (§2.3). R-10, #94.
+- SELinux for the vsock bridge, the agents, and the virtio-gpu sysfs label (§11.1). R-13, #36.
+- AOSP build infrastructure and upstream changes (§11.5). R-14, #36.
+- `virtio_snd` in the stock kernel (§7.5). OQ-38, #84.
 - Network setup of the stock image on VZ (§7.4). OQ-37.
-- Intermittent Wi-Fi and name resolution (§7.4, §7.8). Pending: marker checks of 20 ports on the Android kernel, and the RIL's CPU and log cost. R-12, #095.
+- Intermittent Wi-Fi and name resolution (§7.4, §7.8). Pending: marker checks of 20 ports on the Android kernel, and the RIL's CPU and log cost. R-12, #96.
 - `androidboot.boot_devices` `40000000.pci` across macOS builds (§5.3). R-16.
 - `drm_virgl` graphics properties (§6.2) come from source only. No capture or VZ boot confirms them. No OQ or R row covers this yet.
 

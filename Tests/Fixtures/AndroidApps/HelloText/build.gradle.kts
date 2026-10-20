@@ -1,4 +1,4 @@
-// HelloText (fixture spec: docs/04-plan/issues/M01-android-bring-up.md #016).
+// HelloText (fixture spec: docs/04-plan/issues/M01-android-bring-up.md #17).
 plugins {
     alias(libs.plugins.android.application)
 }
@@ -7,7 +7,7 @@ android {
     namespace = "io.apkrun.fixture.hellotext"
     compileSdk = 37
 
-    // The unit tests run against the release variant, the one that ships (#016 step 1 names testReleaseUnitTest).
+    // The unit tests run against the release variant, the one that ships (#17 step 1 names testReleaseUnitTest).
     testBuildType = "release"
 
     defaultConfig {

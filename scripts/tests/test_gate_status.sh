@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks scripts/tools/gate-status.sh: each way a gate can end writes one status line and the real exit code (#023
+# Checks scripts/tools/gate-status.sh: each way a gate can end writes one status line and the real exit code (#24
 # review of run 3). Each case runs a shell that sources the helper, installs it on a report, and ends in one way.
 set -euo pipefail
 

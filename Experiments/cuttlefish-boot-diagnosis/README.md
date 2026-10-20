@@ -348,7 +348,7 @@ cleanup counts. The runner only accepts the pinned canonical baseline record.
 That record is pinned to commit
 `64da28a551b0b33e258c8f37057b9a8a6d90846d`.
 Missing or incomplete cleanup status for any bounded helper, including live
-snapshots, blocks publication. It does not update the three canonical #064
+snapshots, blocks publication. It does not update the three canonical #65
 profiles.
 
 Each generated workspace has a private ownership marker containing a

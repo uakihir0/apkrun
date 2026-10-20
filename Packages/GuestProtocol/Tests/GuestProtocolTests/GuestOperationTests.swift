@@ -3,7 +3,7 @@ import Testing
 
 @testable import GuestProtocol
 
-/// The paired GuestOperation of guest-protocol.md §4.1 and §13.1, checked against the schema (#072). Each typed
+/// The paired GuestOperation of guest-protocol.md §4.1 and §13.1, checked against the schema (#73). Each typed
 /// operation has the field number and the field name of its request and of its result in `envelope.proto`.
 private enum EnvelopeSchema {
     /// The text of `envelope.proto`, found from the location of this source file.

@@ -1,15 +1,15 @@
 # Post-v1 tracks
 
-After v1.0, two optional tracks decide how APKRun grows beyond the v1 scope ([roadmap.md](../roadmap.md) §5). #096 decides whether Android apps can get Vulkan, through Venus on virglrenderer with MoltenVK or through gfxstream. #097 decides whether APKRun can live next to a Google Play that the user brings, without competing with it for update ownership. Both tracks start with spikes, then an ADR, and implement only if the ADR decides to implement. Each track is done when its task meets its acceptance criteria. Neither track changes the GLES path or the update authorities `apkrun`, `manual`, and `external`, and neither delays a v1.x release. The tracks are independent of each other and of the core. Scope rules: Vulkan is not a v1 blocker, Play Integrity circumvention is never implemented, GMS is never bundled ([scope.md](../../00-product/scope.md) §1, §3), and a task touches one risk area only ([scope.md](../../00-product/scope.md) §5).
+After v1.0, two optional tracks decide how APKRun grows beyond the v1 scope ([roadmap.md](../roadmap.md) §5). #97 decides whether Android apps can get Vulkan, through Venus on virglrenderer with MoltenVK or through gfxstream. #98 decides whether APKRun can live next to a Google Play that the user brings, without competing with it for update ownership. Both tracks start with spikes, then an ADR, and implement only if the ADR decides to implement. Each track is done when its task meets its acceptance criteria. Neither track changes the GLES path or the update authorities `apkrun`, `manual`, and `external`, and neither delays a v1.x release. The tracks are independent of each other and of the core. Scope rules: Vulkan is not a v1 blocker, Play Integrity circumvention is never implemented, GMS is never bundled ([scope.md](../../00-product/scope.md) §1, §3), and a task touches one risk area only ([scope.md](../../00-product/scope.md) §5).
 
 ---
 
-## #096 Vulkan track
+## #97 Vulkan track
 
 | Field | Value |
 |---|---|
 | Milestone | Post-v1 |
-| Depends on | #023, #035 |
+| Depends on | #24, #36 |
 | Design | [graphics.md](../../02-design/graphics.md) §4.1, §5.4, §9, §10, §11; [ADR-0004](../../01-architecture/decisions/0004-virgl-first-graphics.md); [android-image.md](../../02-design/android-image.md) §6.2, §9 |
 | Code | `Experiments/vulkan/` (spikes), `docs/01-architecture/decisions/` (ADR). If implemented: `Packages/GraphicsCore/`, `Packages/VirtioDeviceCore/`, `ThirdParty/` (pinned MoltenVK or gfxstream), `Packages/ImageCore/` (`BootOptions.gpuProfile`), `Guest/product/`, `Tests/IntegrationTests/GraphicsTests/` |
 
@@ -27,7 +27,7 @@ After v1.0, two optional tracks decide how APKRun grows beyond the v1 scope ([ro
 4. **ADR.** Write the ADR with the next free number (the next free number). Its Context holds the spike numbers, its Decision is Venus on MoltenVK, gfxstream, or "not now", and its Consequences cover new dependencies, image changes, attack surface ([graphics.md](../../02-design/graphics.md) §11), memory (R-08), R-07, and the compatibility levels ([scope.md](../../00-product/scope.md) §4). Link it from [graphics.md](../../02-design/graphics.md) §10 and ADR-0004, and update R-01, R-03, and R-08 in [risks.md](../risks.md). **Check:** the ADR is Accepted. A "not now" decision ends the task, and steps 5–7 move to a new task.
 5. **Device and renderer (only if implemented).** Add the Vulkan GPU profile to the table of [graphics.md](../../02-design/graphics.md) §9. Only this profile offers `VIRTIO_GPU_F_RESOURCE_BLOB`, `VIRTIO_GPU_F_CONTEXT_INIT`, and the shared memory region. The `drmVirgl` features stay as in [graphics.md](../../02-design/graphics.md) §4.1. GraphicsCore adds blob resources in `ResourceTable` with the limits of [graphics.md](../../02-design/graphics.md) §5.4, `CONTEXT_INIT` context types, and per-context fence timelines by `ring_idx`. The chosen backend goes into `GraphicsBridge`, pinned in `ThirdParty/`. **Check:** T0 tests of the blob and fence state machines pass, and G3 passes unchanged on `drmVirgl`.
 6. **Image and profile selection (only if implemented).** Add the Venus-capable Mesa to `Guest/product/`, and the new profile's bootconfig keys to `AndroidBootPlanner`. `BootOptions.gpuProfile` selects the profile per boot. Until the ADR verification passes, select it only with `apkrun dev boot --gpu <profile>`. **Check:** the image boots with each profile, and on `drmVirgl` the `ro.cpuvulkan.version` and the GLES renderer string are unchanged.
-7. **Tests, fuzzing, acceptance (only if implemented).** Write the test plan for the track, with the tiers of [test-strategy.md](../test-strategy.md) §2. Add a Vulkan fixture to `Tests/Fixtures/AndroidApps/`. Add fuzz targets for the blob and context commands to #091. Measure the fixture's frame rate with the perf harness (#070). Update the compatibility levels in [scope.md](../../00-product/scope.md) §4 and the database (#090). **Check:** the acceptance criteria pass.
+7. **Tests, fuzzing, acceptance (only if implemented).** Write the test plan for the track, with the tiers of [test-strategy.md](../test-strategy.md) §2. Add a Vulkan fixture to `Tests/Fixtures/AndroidApps/`. Add fuzz targets for the blob and context commands to #92. Measure the fixture's frame rate with the perf harness (#71). Update the compatibility levels in [scope.md](../../00-product/scope.md) §4 and the database (#91). **Check:** the acceptance criteria pass.
 
 **Tests.**
 - T0 (`Packages/GraphicsCore/Tests/GraphicsCoreTests/`, `Packages/ImageCore/Tests/ImageCoreTests/`), only if implemented: the blob and fence-timeline state machines, the new limits, and the profile-to-feature and bootconfig mapping. The spikes have no CI tests.
@@ -48,12 +48,12 @@ After v1.0, two optional tracks decide how APKRun grows beyond the v1 scope ([ro
 
 ---
 
-## #097 Google Play authority
+## #98 Google Play authority
 
 | Field | Value |
 |---|---|
 | Milestone | Post-v1 |
-| Depends on | #039, #049 |
+| Depends on | #40, #50 |
 | Design | [update-system.md](../../02-design/update-system.md) §2.1, §2.3; [package-store.md](../../02-design/package-store.md) §6.3, §9.3; [guest-protocol.md](../../02-design/guest-protocol.md) §11.4; [ADR-0010](../../01-architecture/decisions/0010-update-authority-provider-split.md) |
 | Code | `Experiments/google-play/` (spikes), `docs/01-architecture/decisions/` (ADR). If implemented: `Packages/APKStoreCore/` (reconciliation, adoption), `Packages/UpdateCore/` (authority rules), `Packages/RuntimeAPI/`, `Apps/APKRun/Features/Home/`, `Apps/APKRun/Features/AppPage/`, `CLI/apkrun/Commands/`, `Tests/Fixtures/AndroidApps/` (stand-in installer) |
 
@@ -65,17 +65,17 @@ After v1.0, two optional tracks decide how APKRun grows beyond the v1 scope ([ro
 - Bridging Google sign-in or FCM push to the Mac. Any change to `apkrun`, `manual`, or `external` packages, or to images without Play.
 
 **Steps.**
-1. **Legal investigation.** List the lawful ways a user could have Google Play in the VM without APKRun distributing it, including not supporting it, with the source of each finding ([ADR-0001](../../01-architecture/decisions/0001-real-android-in-vm.md), [legal-and-licensing.md](../../05-development/legal-and-licensing.md)). The owner of the #093 checklist reviews the findings. **Check:** the findings are in the ADR draft. If no lawful way exists, go to step 3 with "not now".
+1. **Legal investigation.** List the lawful ways a user could have Google Play in the VM without APKRun distributing it, including not supporting it, with the source of each finding ([ADR-0001](../../01-architecture/decisions/0001-real-android-in-vm.md), [legal-and-licensing.md](../../05-development/legal-and-licensing.md)). The owner of the #94 checklist reviews the findings. **Check:** the findings are in the ADR draft. If no lawful way exists, go to step 3 with "not now".
 2. **Technical spike.** In `Experiments/google-play/`, use a stand-in installer on the custom image. It has the package name `com.android.vending`, installs a fixture package, and claims update ownership as Play would. The image has no Play, so the name is free. If step 1 found a lawful test environment with Play, repeat the checks there. Record `installer_of_record` and `update_owner` of the installed package, whether the stand-in can update a package that `io.apkrun.store` owns, what `RelinquishUpdateOwnership` (op 109) does when an APKRun package changes to `googlePlay`, and whether the stand-in then takes over updates. **Check:** the results are recorded in [update-system.md](../../02-design/update-system.md) §2.1 and [package-store.md](../../02-design/package-store.md) §6.3.
 3. **ADR.** Write the ADR with the next free number. Its Context holds the findings of steps 1 and 2. Its Decision is "support Play-managed packages" or "not now". Its Consequences name the isolation rules: only the authority value and the detection change, no GMS code or data in APKRun, and no new provider. Relate it to ADR-0001 and ADR-0010, and settle R-09 and R-10 in [risks.md](../risks.md). **Check:** the ADR is Accepted. A "not now" decision ends the task.
 4. **Detection and adoption (only if implemented).** Reconciliation marks an unmanaged package as managed by Google Play when its `installer_of_record` or `update_owner` is `com.android.vending`. Home → Other Android apps shows "Managed by Google Play" ([package-store.md](../../02-design/package-store.md) §9.1–§9.3). Adoption creates the record with `updateAuthority: googlePlay`, not `external`. Like `external`, such a package has no artifact and cannot be restored after Reset Android, and the adopt sheet says so. **Check:** T0 reconciliation and adoption tests pass with recorded `StorePackageInfo` values.
 5. **Authority rules and UI (only if implemented).** Changing an `apkrun` or `manual` package to `googlePlay` calls op 109 and keeps the record. UpdateCore never checks providers and never installs for a `googlePlay` package. A user-supplied file for a `googlePlay` package asks to switch to `manual` first, as for `external`. The app page shows a read-only "Managed by Google Play" state with no update choices, and `apkrun info <package>` shows the authority ([update-system.md](../../02-design/update-system.md) §2.3). **Check:** T0 rule and UI mapping tests pass, and a T1 test with a counting fake provider shows zero checks.
-6. **Tests and acceptance.** Write the test plan for the track, with the tiers of [test-strategy.md](../test-strategy.md) §2. Add the stand-in installer to `Tests/Fixtures/AndroidApps/` as a test-only fixture. Run the #039 ownership tests and G9. **Check:** the acceptance criteria pass.
+6. **Tests and acceptance.** Write the test plan for the track, with the tiers of [test-strategy.md](../test-strategy.md) §2. Add the stand-in installer to `Tests/Fixtures/AndroidApps/` as a test-only fixture. Run the #40 ownership tests and G9. **Check:** the acceptance criteria pass.
 
 **Tests.**
 - T0 (`Packages/APKStoreCore/Tests/APKStoreCoreTests/`, `Packages/UpdateCore/Tests/UpdateCoreTests/`, `Apps/APKRun/Tests/`, `CLI/apkrun/Tests/`), only if implemented: detection from `installer_of_record` and `update_owner`, adoption with `googlePlay`, the authority rules, the UI mapping, and CLI golden files.
 - T1 (`Packages/UpdateCore/Tests/UpdateCoreSystemTests/`), only if implemented: a counting fake provider shows zero checks for `googlePlay` packages.
-- T2 (`Tests/IntegrationTests/StoreTests/`, `Tests/IntegrationTests/UpdateTests/`, custom image): if implemented, a package that the stand-in installed is detected, nothing is installed for it after adoption, and a change to `googlePlay` relinquishes ownership (op 109). Always, the #039 ownership tests pass unchanged.
+- T2 (`Tests/IntegrationTests/StoreTests/`, `Tests/IntegrationTests/UpdateTests/`, custom image): if implemented, a package that the stand-in installed is detected, nothing is installed for it after adoption, and a change to `googlePlay` relinquishes ownership (op 109). Always, the #40 ownership tests pass unchanged.
 - T3: G9 unchanged on the reference Mac, and a manual check in a lawful Google Play environment if step 1 found one.
 
 **Done when.**
@@ -83,8 +83,8 @@ After v1.0, two optional tracks decide how APKRun grows beyond the v1 scope ([ro
 - An ADR with status Accepted decides "support" or "not now", and relates to ADR-0001 and ADR-0010.
 - If implemented: a package that Google Play or the stand-in installed shows "Managed by Google Play", and adopting it gives `updateAuthority: googlePlay`. APKRun never checks providers, installs updates, or claims ownership for it. A change to `googlePlay` calls `RelinquishUpdateOwnership`. The app page is read-only.
 - APKRun contains no GMS component, and nothing bypasses Play Integrity or signature checks (NFR-SEC-04).
-- The #039 ownership tests and G9 pass unchanged.
+- The #40 ownership tests and G9 pass unchanged.
 
 **Pitfalls.**
 - The stand-in installer is test-only, and it is never part of a release image.
-- Two automatic updaters must never manage the same package ([update-system.md](../../02-design/update-system.md) §2.1). If Google Play can update an APKRun-owned package, file a finding against #039 before any implementation.
+- Two automatic updaters must never manage the same package ([update-system.md](../../02-design/update-system.md) §2.1). If Google Play can update an APKRun-owned package, file a finding against #40 before any implementation.

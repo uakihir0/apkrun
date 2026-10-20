@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-28
-- Related: #024, #025, #071, #072, R-05, [../../02-design/input.md](../../02-design/input.md)
+- Related: #25, #26, #72, #73, R-05, [../../02-design/input.md](../../02-design/input.md)
 
 ## Context
 
@@ -26,8 +26,8 @@ See the options above. A guest `uinput` virtual device (RiftVM's approach) was c
 - Input depends on the Guest Agent being up. Before M5 it runs via ADB (`app_process`), so dev builds need ADB.
 - Latency: XPC + vsock + agent add a few milliseconds. The budget is NSEvent received → injected into the guest, p95 ≤ 16 ms (NFR-PERF-03).
 - Injected events carry `SOURCE_TOUCHSCREEN`/`SOURCE_MOUSE`/`SOURCE_KEYBOARD` as chosen per mapping (mouse as touch by default, hover and right-click as mouse; [../../02-design/input.md](../../02-design/input.md) §4).
-- The milestone plan schedules protocol task #033 and Guest Agent bootstrap #072 before input task #024 ([../../04-plan/issues/M03-input-and-basic-runtime.md](../../04-plan/issues/M03-input-and-basic-runtime.md)).
+- The milestone plan schedules protocol task #34 and Guest Agent bootstrap #73 before input task #25 ([../../04-plan/issues/M03-input-and-basic-runtime.md](../../04-plan/issues/M03-input-and-basic-runtime.md)).
 
 ## Verification
 
-G4 input part (tap, scroll, type, #024–#026) and G5 (independent input to two displays, #030).
+G4 input part (tap, scroll, type, #25–#27) and G5 (independent input to two displays, #31).

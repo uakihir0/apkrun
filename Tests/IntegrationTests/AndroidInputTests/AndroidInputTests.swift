@@ -10,7 +10,7 @@ private struct AndroidImageVariantReceipt: Decodable {
     let variantManifestSHA256: String
 }
 
-/// The pointer checks of #024 on a real Android guest (T2), through the path of `apkrun dev launch`.
+/// The pointer checks of #25 on a real Android guest (T2), through the path of `apkrun dev launch`.
 ///
 /// Each test boots the test image with the embedded runtime (`DevBoot` and `DevInputRoute`), shows the development
 /// window, and posts the pointer events into the window's content view. The existing tests synthesize `NSEvent`s
@@ -31,7 +31,7 @@ private struct AndroidImageVariantReceipt: Decodable {
 /// broadcasts exist only there), and APKRUN_FIXTURE_COMPOSE_APK (HelloCompose). A missing input skips its test and names
 /// the variable.
 ///
-/// The keyboard cases (#025) post AppKit key events into the window's view, as the pointer cases post pointer events. The
+/// The keyboard cases (#26) post AppKit key events into the window's view, as the pointer cases post pointer events. The
 /// field's text is read from the fixture's `text` line after a `TEXT` broadcast, and the screens and the editor action
 /// from their log lines, so each case checks the state it needs and not only that a command ran.
 ///
@@ -87,7 +87,7 @@ final class AndroidInputTests: XCTestCase {
         XCTAssertTrue(identity["variant_manifest_sha256"] is NSNull)
     }
 
-    /// 100 of 100 clicks on HelloText's button are logged as `APKRUN-FIXTURE: click <n>` (#024 acceptance). Each click is
+    /// 100 of 100 clicks on HelloText's button are logged as `APKRUN-FIXTURE: click <n>` (#25 acceptance). Each click is
     /// a left-button press and release at the button's centre, with no `adb shell input` process during the sequence.
     func testOneHundredClicksOnTheButtonAreLogged() async throws {
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")
@@ -284,7 +284,7 @@ final class AndroidInputTests: XCTestCase {
     /// Diagnostic only: exercises the product 50 ms press/gap cadence through direct view dispatch.
     ///
     /// This activates the APKRun window but bypasses WindowServer and AppKit window dispatch. It can compare cadence
-    /// behavior without Accessibility permission, but cannot satisfy #024 box 3 or #103's WindowServer requirement.
+    /// behavior without Accessibility permission, but cannot satisfy #25 box 3 or #103's WindowServer requirement.
     func testThreeConsecutiveHundredClickBatchesThroughDirectView() async throws {
         guard ProcessInfo.processInfo.environment["APKRUN_INPUT_CADENCE_T2"] == "1" else {
             throw XCTSkip("Run only with the AndroidInputCadence test-plan configuration.")
@@ -438,7 +438,7 @@ final class AndroidInputTests: XCTestCase {
     /// Diagnostic only: traces the second 100-click batch after an untraced warm-up through direct view dispatch.
     ///
     /// Per-event ACKs and the debug fixture listener perturb timing. The test activates the APKRun window, bypasses
-    /// WindowServer/AppKit dispatch, and cannot satisfy #024 box 3 or #103's WindowServer requirement.
+    /// WindowServer/AppKit dispatch, and cannot satisfy #25 box 3 or #103's WindowServer requirement.
     func testOneHundredClickDiagnosticTraceJoinsHostGuestAndFixtureThroughDirectView() async throws {
         guard ProcessInfo.processInfo.environment["APKRUN_INPUT_TRACE_CADENCE_T2"] == "1" else {
             throw XCTSkip("Run only with the AndroidInputCadence test-plan configuration.")
@@ -548,7 +548,7 @@ final class AndroidInputTests: XCTestCase {
                 ],
                 limitations: [
                     "The debug touch listener and per-event ACK cadence can change timing; compare with the separate product-cadence test.",
-                    "Direct-view delivery bypasses WindowServer and AppKit dispatch; this trace cannot satisfy #024 box 3 or #103's WindowServer requirement.",
+                    "Direct-view delivery bypasses WindowServer and AppKit dispatch; this trace cannot satisfy #25 box 3 or #103's WindowServer requirement.",
                     "Host and guest clock values have different epochs and are never subtracted.",
                     "Fixture pressed transitions and counter timings are unjoined observations: they use elapsed realtime and have no gesture key, so they are not correlated with MotionEvent uptime or host events.",
                     "The route is M3 DevBoot/DevInputRoute and does not exercise the future wrapper-to-apkrund XPC path.",
@@ -644,7 +644,7 @@ final class AndroidInputTests: XCTestCase {
         }
     }
 
-    /// Dragging scrolls HelloCompose's list, and trackpad and wheel scrolling move it the way macOS reports them (#024).
+    /// Dragging scrolls HelloCompose's list, and trackpad and wheel scrolling move it the way macOS reports them (#25).
     /// The content moves up for a negative delta, and then the first visible row index grows.
     func testDragAndScrollMoveTheHelloComposeList() async throws {
         let apk = try Self.fixture("APKRUN_FIXTURE_COMPOSE_APK")
@@ -670,7 +670,7 @@ final class AndroidInputTests: XCTestCase {
     }
 
     /// A right-click on HelloText's context target opens its context menu, which logs `APKRUN-FIXTURE: contextmenu`
-    /// (#024 acceptance). The right button is `SOURCE_MOUSE` with the secondary button (input.md §4.1).
+    /// (#25 acceptance). The right button is `SOURCE_MOUSE` with the secondary button (input.md §4.1).
     func testARightClickOpensTheContextMenu() async throws {
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")
         try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
@@ -684,7 +684,7 @@ final class AndroidInputTests: XCTestCase {
         }
     }
 
-    /// Typing `Hello, APKRun 123!` into HelloText's field gives exactly that text (#025 acceptance, T2). The field is
+    /// Typing `Hello, APKRun 123!` into HelloText's field gives exactly that text (#26 acceptance, T2). The field is
     /// focused with Tab, because a pointer tap does not focus it reliably (IR-1270). The debug `TEXT` broadcast makes the
     /// fixture log the field's text, and that log line is what the case checks. The sequence samples for shell input too.
     func testTypingGivesExactTextInTheField() async throws {
@@ -700,7 +700,7 @@ final class AndroidInputTests: XCTestCase {
     }
 
     /// Backspace removes the character before the cursor, the left arrow moves the cursor, and Enter is the editor action
-    /// of the field, which logs `APKRUN-FIXTURE: editor action 6` (IME_ACTION_DONE, #025).
+    /// of the field, which logs `APKRUN-FIXTURE: editor action 6` (IME_ACTION_DONE, #26).
     func testBackspaceEnterAndArrowsEditTheField() async throws {
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")
         try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in

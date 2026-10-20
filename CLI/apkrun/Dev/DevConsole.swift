@@ -102,7 +102,7 @@
         }
     }
 
-    /// Relays this terminal to the Android serial shell socket of a running `apkrun dev boot` (#014).
+    /// Relays this terminal to the Android serial shell socket of a running `apkrun dev boot` (#15).
     ///
     /// The socket is the owner's; this command only attaches. Ctrl-] detaches.
     private func attachAndroidShell() async throws {

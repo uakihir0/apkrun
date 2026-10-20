@@ -50,7 +50,7 @@ These terms have exactly these meanings in the documents and the code. A design 
 | **Update type A / B / C / D** | A: Android application. B: APKRun runtime. C: Android guest image. D: wrapper metadata. Never mixed. |
 | **Update authority** | Who owns automatic updates of a package: `apkrun`, `googlePlay`, `external`, or `manual`. Exactly one per package. |
 | **Update mode** | Per-package preference `update.mode`: `automatic` or `notifyOnly`. It applies while the authority is `apkrun`. "Manual" in the UI and the CLI is the authority `manual`, not a mode. |
-| **Update provider** | Where candidates come from: `local`, `direct`, `fdroid`, or `github`. Independent of the authority. Google Play is an authority (`googlePlay`, post-v1 #097), not a provider. APKRun never downloads from it. |
+| **Update provider** | Where candidates come from: `local`, `direct`, `fdroid`, or `github`. Independent of the authority. Google Play is an authority (`googlePlay`, post-v1 #98), not a provider. APKRun never downloads from it. |
 | **Update candidate** | A newer version announced by a provider and not yet verified. |
 | **Package artifact** | A single APK, or a split set (base plus splits), on disk. |
 | **Staged artifact** | A downloaded and verified artifact that waits for a safe moment to install. |
@@ -68,7 +68,7 @@ These terms have exactly these meanings in the documents and the code. A design 
 | **VirGL** | The guest Mesa driver that serializes OpenGL ES into virtio-gpu 3D commands. |
 | **virglrenderer** | The host library that executes VirGL command streams. |
 | **ANGLE** | An implementation of EGL and GLES on Metal. It is virglrenderer's GL backend on macOS. |
-| **Venus / gfxstream** | Future Vulkan paths (post-v1 #096). |
+| **Venus / gfxstream** | Future Vulkan paths (post-v1 #97). |
 | **Readback** | Copying GPU contents to CPU memory. Forbidden on the normal frame path. |
 | **Zero-copy scanout** | Presenting guest scanout content without any copy. A stretch goal. v1 allows at most one GPU-side blit per frame. |
 
@@ -78,7 +78,7 @@ These terms have exactly these meanings in the documents and the code. A design 
 |---|---|
 | **Cuttlefish** | AOSP's virtual device, normally run with crosvm. APKRun reuses its images and configuration and boots them with Virtualization.framework. |
 | **Reference boot** | A boot of the same Cuttlefish build under the official `launch_cvd` or crosvm on Linux. It is the ground truth for the VZ boot. |
-| **Reference boot capture** | The `/proc/cmdline`, `/proc/bootconfig`, `getprop` output, device list, and partition map of a reference boot. The VZ boot must reproduce it (#064). |
+| **Reference boot capture** | The `/proc/cmdline`, `/proc/bootconfig`, `getprop` output, device list, and partition map of a reference boot. The VZ boot must reproduce it (#65). |
 | **bootconfig** | The Android 12+ mechanism that carries `androidboot.*` parameters in a trailer appended to the initrd. |
 | **Dynamic partitions / super** | Logical partitions (system, vendor, product, and others) inside `super.img`. |
 | **Split APK** | An app delivered as `base.apk` plus configuration splits (ABI, density, language). |

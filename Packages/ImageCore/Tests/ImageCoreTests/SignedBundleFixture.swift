@@ -5,7 +5,7 @@ import Testing
 
 @testable import ImageCore
 
-/// The repository root, from this file's path (#065).
+/// The repository root, from this file's path (#66).
 let imageRepositoryRoot: URL = {
     var url = URL(fileURLWithPath: #filePath)
     for _ in 0..<5 {

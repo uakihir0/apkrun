@@ -2,7 +2,7 @@ import Testing
 
 @testable import InputCore
 
-// Key mode (input.md §5.2, §6; #025): the key codes, the meta state, the repeat count, the shortcuts, and the rule that
+// Key mode (input.md §5.2, §6; #26): the key codes, the meta state, the repeat count, the shortcuts, and the rule that
 // every release matches its press.
 
 private let time = InputTimestamp(hostNanos: 1_000)

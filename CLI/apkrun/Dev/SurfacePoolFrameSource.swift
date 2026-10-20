@@ -5,7 +5,7 @@
     import WindowingCore
 
     /// Adapts the developer display's frames to the window's `FrameSource` (graphics.md §6.2, display-and-windowing.md
-    /// §5.3, #023). It lives in the embedded CLI, because neither WindowingCore nor the CLI may import GraphicsCore.
+    /// §5.3, #24). It lives in the embedded CLI, because neither WindowingCore nor the CLI may import GraphicsCore.
     /// The window reports each displayed frame back through the display.
     final class SurfacePoolFrameSource: FrameSource, @unchecked Sendable {
         // UNCHECKED-SENDABLE: the surfaces are created once by the presenter and only read here. The stream is

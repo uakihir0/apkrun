@@ -6,9 +6,9 @@
     import RuntimeHost
 
     /// `apkrun dev launch <apk|package> [apk|package]`: boots Android, starts the Guest Agent, and launches one app on
-    /// the selected display or two apps in primary and secondary windows (#030). With the development window (the
+    /// the selected display or two apps in primary and secondary windows (#31). With the development window (the
     /// default, decision D13) the boot goes on until the app windows close or Ctrl-C. With `--no-window` Android stops
-    /// once the one-package launch is done, as #072 did.
+    /// once the one-package launch is done, as #73 did.
     struct DevLaunchCommand: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "launch",

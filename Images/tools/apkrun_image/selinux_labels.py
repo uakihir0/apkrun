@@ -1,4 +1,4 @@
-"""SELinux labels for files that a rebuild adds, from the image's own file contexts (#099).
+"""SELinux labels for files that a rebuild adds, from the image's own file contexts (#99).
 
 libselinux loads the platform file contexts of system_a, then the vendor's file contexts, as one
 list. For one path, the matching rule with the longest literal stem wins, and a tie goes to the

@@ -30,7 +30,7 @@ from pathlib import Path, PurePosixPath
 
 CODE_SUFFIXES = {
     ".swift", ".h", ".c", ".m", ".mm", ".cpp", ".cc", ".kt", ".kts", ".rs", ".py", ".sh",
-    ".yml", ".yaml", ".json", ".proto", ".te", ".mk", ".bp", ".rc", ".txt",
+    ".yml", ".yaml", ".json", ".proto", ".te", ".mk", ".bp", ".rc", ".txt", ".csv", ".list",
 }
 SKIPPED_PREFIXES = ("ThirdParty/", "Images/reference/", "Images/tools/vendor/", "docs/")
 TASK_INDEX = "docs/04-plan/issues/README.md"

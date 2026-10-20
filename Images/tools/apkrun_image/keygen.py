@@ -1,4 +1,4 @@
-"""Create the Ed25519 key pair that signs runtime image bundles (#065).
+"""Create the Ed25519 key pair that signs runtime image bundles (#66).
 
 `python3 -m apkrun_image keygen --out ~/.config/apkrun/dev-image-key` writes the
 PKCS#8 PEM private key to `--out` (mode 0600) and the base64 public key to

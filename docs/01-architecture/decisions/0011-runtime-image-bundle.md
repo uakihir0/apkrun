@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-28
-- Related: #008–#010, #065, #057–#058, #087, [../../02-design/android-image.md](../../02-design/android-image.md)
+- Related: #9–#11, #66, #58–#59, #88, [../../02-design/android-image.md](../../02-design/android-image.md)
 
 ## Context
 
@@ -24,8 +24,8 @@ For M1 development the same pipeline runs locally on the developer's Mac against
 ## Consequences
 
 - There is one well-defined artifact format with its own versioning ([../../03-reference/runtime-image-manifest.md](../../03-reference/runtime-image-manifest.md)).
-- Image distribution (#087) needs hosting, signatures, and resumable downloads.
+- Image distribution (#88) needs hosting, signatures, and resumable downloads.
 
 ## Verification
 
-#065 acceptance: the bundle from the stock image boots to `sys.boot_completed=1` under VZ.
+#66 acceptance: the bundle from the stock image boots to `sys.boot_completed=1` under VZ.

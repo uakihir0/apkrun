@@ -1,10 +1,10 @@
 import Foundation
 import XCTest
 
-/// The Android network check of #095 step 5 (FR-VM-04): an address, a vmnet default route, DNS, and a validated
+/// The Android network check of #96 step 5 (FR-VM-04): an address, a vmnet default route, DNS, and a validated
 /// Wi-Fi network.
 ///
-/// It is #095's open check, not a condition of gate G2 (#014; IR-374), so it runs in its own `AndroidNetwork`
+/// It is #96's open check, not a condition of gate G2 (#15; IR-374), so it runs in its own `AndroidNetwork`
 /// test-plan configuration of `IntegrationTests`. CI and the gate do not select that configuration; run it by hand
 /// with `-only-test-configuration AndroidNetwork`.
 final class AndroidNetworkTests: XCTestCase {
@@ -15,7 +15,7 @@ final class AndroidNetworkTests: XCTestCase {
         }
     }
 
-    /// #095 step 5: the guest has an address, a default route, DNS, and a validated network (FR-VM-04).
+    /// #96 step 5: the guest has an address, a default route, DNS, and a validated network (FR-VM-04).
     ///
     /// The checks run inside Android over the serial shell. `connectivitycheck` is the name NetworkMonitor
     /// probes, and `VALIDATED` in `dumpsys connectivity` means its `generate_204` probe passed.

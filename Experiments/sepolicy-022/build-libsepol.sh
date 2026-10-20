@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the test-only policy editor of #022 from the pinned libsepol 3.11 release tarball.
+# Build the test-only policy editor of #23 from the pinned libsepol 3.11 release tarball.
 #
 # The tarball is the GitHub release asset libsepol-3.11.tar.gz of SELinuxProject/selinux, tag 3.11.
 # Its sha256 is pinned in ThirdParty/ThirdParty.lock.json (component libsepol). The script refuses

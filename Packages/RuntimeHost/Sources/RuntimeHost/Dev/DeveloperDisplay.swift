@@ -67,7 +67,7 @@ public struct DeveloperDisplayStatistics: Equatable, Sendable {
     public var cpuPixelCopies: UInt64
 }
 
-/// The development window's connection to one embedded scanout (runtime-api.md §15, #023, #029).
+/// The development window's connection to one embedded scanout (runtime-api.md §15, #24, #30).
 ///
 /// The CLI reads a boot presenter or a leased pool through this type, because it may not import RuntimeCore or
 /// GraphicsCore. The window reports displayed frames back through `frameDisplayed`.

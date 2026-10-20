@@ -1,26 +1,26 @@
 # M4 Daemon and guest protocol
 
-The runtime moves out of the CLI into apkrund, a per-user LaunchAgent that launchd starts on demand. apkrund alone owns the VM and the package state. APKRun.app, APKRunLauncher, and the CLI are XPC clients, so quitting APKRun.app leaves Android and running apps alive. Apps show in their own launcher windows, fed by IOSurfaces over XPC. The Guest Agent speaks the full guest protocol, and on the custom image it uses vsock instead of ADB. The stock image (`aosp_cf_arm64_only_phone-userdebug`, build 16373615) is the test image of this milestone. The milestone closes G6, staged over #031, #032, and #068 ([roadmap.md](../roadmap.md) §2).
+The runtime moves out of the CLI into apkrund, a per-user LaunchAgent that launchd starts on demand. apkrund alone owns the VM and the package state. APKRun.app, APKRunLauncher, and the CLI are XPC clients, so quitting APKRun.app leaves Android and running apps alive. Apps show in their own launcher windows, fed by IOSurfaces over XPC. The Guest Agent speaks the full guest protocol, and on the custom image it uses vsock instead of ADB. The stock image (`aosp_cf_arm64_only_phone-userdebug`, build 16373615) is the test image of this milestone. The milestone closes G6, staged over #32, #33, and #69 ([roadmap.md](../roadmap.md) §2).
 
 ---
-## #031 Introduce apkrund
+## #32 Introduce apkrund
 
 | Field | Value |
 |---|---|
 | Milestone | M4 (v0.2) |
-| Depends on | #030 |
-| Gate | G6 (headless form; passes in #068) |
+| Depends on | #31 |
+| Gate | G6 (headless form; passes in #69) |
 | Design | [runtime-daemon.md](../../02-design/runtime-daemon.md) §2–§4, §10 |
 | Code | `Daemon/apkrund/`; `scripts/build/write-launch-agent.sh`; `scripts/dev/install-dev-app.sh`; `Packages/RuntimeHost/`; `Packages/RuntimeCore/` |
 
-**Goal.** apkrund runs as a per-user LaunchAgent that launchd starts on demand (only `onDemand` ships), and it alone owns the VM and package state, so quitting APKRun.app keeps running apps alive. This task builds G6's headless form (conditions 1, 2, and 4 of [roadmap.md](../roadmap.md) §2); G6 passes only in #068.
+**Goal.** apkrund runs as a per-user LaunchAgent that launchd starts on demand (only `onDemand` ships), and it alone owns the VM and package state, so quitting APKRun.app keeps running apps alive. This task builds G6's headless form (conditions 1, 2, and 4 of [roadmap.md](../roadmap.md) §2); G6 passes only in #69.
 
-**Out of scope.** The XPC API beyond `runtime status|start|stop` (#032). Windows (#068). Idle and sleep (#069). Onboarding (#066).
+**Out of scope.** The XPC API beyond `runtime status|start|stop` (#33). Windows (#69). Idle and sleep (#70). Onboarding (#67).
 
 **Steps.**
 1. **Target and plist.** `Daemon/apkrund/main.swift` builds `RuntimeHost` and runs `RunLoop.main`. `write-launch-agent.sh` writes the Release and Debug plists (`io.apkrun.apkrund`, `io.apkrun.apkrund.dev`) with the keys of [runtime-daemon.md](../../02-design/runtime-daemon.md) §2.1. **Check:** a build test asserts those keys and the Mach service name.
 2. **Startup, lock, exit.** `RuntimeHost.start()` runs the steps of [runtime-daemon.md](../../02-design/runtime-daemon.md) §2.2. The listener resumes by step 11 and logs `DAEMON_READY` within 300 ms. `flock` on `Runtime/instance.lock` makes a second apkrund exit 0 ([runtime-daemon.md](../../02-design/runtime-daemon.md) §2.3). `SIGTERM` runs `stop(.hostShutdown)` ([runtime-daemon.md](../../02-design/runtime-daemon.md) §2.4). **Check:** T0 exit rules; T1 startup order and lock.
-3. **VM and agents.** Move the VM lifecycle into `RuntimeSupervisor` ([runtime-daemon.md](../../02-design/runtime-daemon.md) §3.2–§3.6) and build agent supervision on #072's `GuestAgentSupervisor` ([runtime-daemon.md](../../02-design/runtime-daemon.md) §4). Resume the broker `io.apkrun.apkrund.xpc` with `runtimeStatus`, `startRuntime`, and `stopRuntime`. `apkrun dev` exits 75 while apkrund holds the lock ([cli.md](../../02-design/cli.md) §5). **Check:** T2 `DaemonLifecycleTests`: cold boot to `ready` with the three markers, and each stop path.
+3. **VM and agents.** Move the VM lifecycle into `RuntimeSupervisor` ([runtime-daemon.md](../../02-design/runtime-daemon.md) §3.2–§3.6) and build agent supervision on #73's `GuestAgentSupervisor` ([runtime-daemon.md](../../02-design/runtime-daemon.md) §4). Resume the broker `io.apkrun.apkrund.xpc` with `runtimeStatus`, `startRuntime`, and `stopRuntime`. `apkrun dev` exits 75 while apkrund holds the lock ([cli.md](../../02-design/cli.md) §5). **Check:** T2 `DaemonLifecycleTests`: cold boot to `ready` with the three markers, and each stop path.
 4. **Registration.** Launch calls `SMAppService.agent(plistName:).register()` when the service is absent or the plist SHA-256 differs from `registeredAgentPlistSHA256`. A pending `.requiresApproval` stays. `install-dev-app.sh` registers `io.apkrun.apkrund.dev` ([runtime-daemon.md](../../02-design/runtime-daemon.md) §2.6). **Check:** `launchctl print` shows the service; a second run does not re-register.
 5. **Recovery and headless G6.** T2 `DaemonRecoveryTests`: `kill -9` while `ready` restarts within 15 s, with a cold boot. T2 `BootLoopGuardTests` (test bundle P): three kernel panics block a fourth automatic boot. Add `Tests/AcceptanceTests/G6WarmRuntime` and `scripts/run-gate.sh G6`: HelloText on display 0; "interactive" means an injected tap gets a `click <n>` line within 5 minutes. **Check:** the T2 tests pass, then `scripts/run-gate.sh G6` passes.
 
@@ -43,23 +43,23 @@ The runtime moves out of the CLI into apkrund, a per-user LaunchAgent that launc
 - Read `cleanExit` only under the lock; a reused PID proves nothing.
 
 ---
-## #032 XPC runtime API
+## #33 XPC runtime API
 
 | Field | Value |
 |---|---|
 | Milestone | M4 (v0.2) |
-| Depends on | #031 |
+| Depends on | #32 |
 | Design | [runtime-daemon.md](../../02-design/runtime-daemon.md) §7, §8; [runtime-api.md](../../03-reference/runtime-api.md) |
 | Code | `Packages/RuntimeAPI/`; `Packages/RuntimeHost/`; `Packages/RuntimeClient/`; `CLI/apkrun/` |
 
 **Goal.** APKRun.app, APKRunLauncher, and the CLI use one versioned XPC API to reach apkrund, and the CLI owns no VM: `apkrun launch io.apkrun.fixture.hellotext` starts HelloText through XPC. This task adds G6 condition 3 (a warm launch writes no boot markers).
 
-**Out of scope.** The launcher window (#068). `WrapperIdentity` (#044; use `WrapperAuthorizer` until then). `setup`, `runtime reset --erase` (#066). `inspect`, `adopt` (#073). `update` (#037). `doctor` (#059).
+**Out of scope.** The launcher window (#69). `WrapperIdentity` (#45; use `WrapperAuthorizer` until then). `setup`, `runtime reset --erase` (#67). `inspect`, `adopt` (#74). `update` (#38). `doctor` (#60).
 
 **Steps.**
 1. **DTOs.** In `Packages/RuntimeAPI`, `Codable` and `NSSecureCoding`-safe DTOs and `@objc` protocols for `runtimeStatus`, `install`, `launch`, `terminate`, `uninstall`, `list`, `packageInfo`, `subscribe`, `unsubscribe`, `cancel`, `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime`, `runtimeInfo`, `listSessions`, `listOperations`, and the session channel. Add optional `WireError.listItems`. **Check:** T0 round trip per DTO; a removed field without a version bump fails.
 2. **Broker and rules.** `XPCBrokerListener` (`io.apkrun.apkrund.xpc`), `ControlEndpoint` (one use, 5 s expiry), `WrapperEndpoint(bundleID)`, and `XPCRuntimeExporter`. Authorize by endpoint kind and apply the request rules of [runtime-daemon.md](../../02-design/runtime-daemon.md) §8.2. `ReplyGuard` replies once. `WrapperAuthorizer` is a Debug fixture: test bundle to one package. **Check:** T1 over `NSXPCListener.anonymous()`: version mismatch, authorization, and the 65th request rejected.
-3. **Operations, events, sessions.** `OperationHandle`; a repeated start with the same ID and payload joins. An install or uninstall of a package with an open window fails with `store.packageInUse`. `EventHub` serves the topics of [runtime-daemon.md](../../02-design/runtime-daemon.md) §8.4. Implement `launch`, `terminate` (`StopApplication(FORCE_STOP)`), and `SessionRegistry` ([runtime-daemon.md](../../02-design/runtime-daemon.md) §7). Until #068, `launch` runs without frames when `APKRUN_TEST_HEADLESS_LAUNCH=1` (Debug only). **Check:** T1 with a fake runtime: queued sessions, orphans, takeover, cancel.
+3. **Operations, events, sessions.** `OperationHandle`; a repeated start with the same ID and payload joins. An install or uninstall of a package with an open window fails with `store.packageInUse`. `EventHub` serves the topics of [runtime-daemon.md](../../02-design/runtime-daemon.md) §8.4. Implement `launch`, `terminate` (`StopApplication(FORCE_STOP)`), and `SessionRegistry` ([runtime-daemon.md](../../02-design/runtime-daemon.md) §7). Until #69, `launch` runs without frames when `APKRUN_TEST_HEADLESS_LAUNCH=1` (Debug only). **Check:** T1 with a fake runtime: queued sessions, orphans, takeover, cancel.
 4. **RuntimeClient.** `XPCRuntimeService` reconnects with backoff ([process-model-and-ipc.md](../../01-architecture/process-model-and-ipc.md) §2.5) and replays subscriptions. **Check:** T1: after the listener is invalidated, the client reconnects and replays.
 5. **CLI switch.** Every non-`dev` command uses `XPCRuntimeService`. Add `status`, `runtime`, `launch`, `stop`, `config`, `operations`. `runtime status --json` reports `owner` (`apkrund` or `apkrun-dev`). `stop` sends `FORCE_STOP`; closing a window sends `FINISH_TASKS`. **Check:** T0 golden output and exit codes.
 
@@ -80,25 +80,25 @@ The runtime moves out of the CLI into apkrund, a per-user LaunchAgent that launc
 - Reply exactly once. A dropped reply becomes `RuntimeFailure.internal`.
 
 ---
-## #068 Session client and IOSurface window over XPC
+## #69 Session client and IOSurface window over XPC
 
 | Field | Value |
 |---|---|
 | Milestone | M4 (v0.2) |
-| Depends on | #032 |
+| Depends on | #33 |
 | Gate | G6 (full form; this task completes it) |
 | Design | [display-and-windowing.md](../../02-design/display-and-windowing.md) §5; [graphics.md](../../02-design/graphics.md) §6.2, §6.3 |
 | Code | `Packages/RuntimeAPI/`; `Packages/RuntimeClient/`; `Packages/GraphicsCore/` (`SurfacePool`); `Packages/WindowingCore/` (`IOSurfaceLayerView`); `Apps/APKRunLauncher/` (`XPCFrameSource`); `scripts/check-launcher.sh`; `Tests/IntegrationTests/WindowingTests/` |
 
 **Goal.** apkrund renders and APKRunLauncher owns the window, showing the session's IOSurfaces with no copy and no host readback; apkrund never creates windows. `apkrun launch` opens HelloText in its own launcher window, which completes G6.
 
-**Out of scope.** Wrapper generation and the `.wrapper` endpoint (#044 to #049). Launch screens and the warm spare display (#070). Wide color and HDR (post-v1).
+**Out of scope.** Wrapper generation and the `.wrapper` endpoint (#45 to #50). Launch screens and the warm spare display (#71). Wide color and HDR (post-v1).
 
 **Steps.**
 1. **Messages.** Add `SessionDescriptor` with `SurfaceSet{generation, 3 × IOSurface, pixelSize, densityDpi}`, `frameReady`, `surfacesReplaced`, and the wrapper messages `frameDisplayed` and `visibilityChanged` ([display-and-windowing.md](../../02-design/display-and-windowing.md) §5.1). `XPCFrameSource` delivers `frameReady` on the main queue and coalesces while busy. **Check:** T0 round trips; T1 coalescing.
 2. **Buffer states.** `SurfacePool` implements `free`, `rendering`, `offered(seq)`, and `displayed(seq)` with rules 1 to 6 ([display-and-windowing.md](../../02-design/display-and-windowing.md) §5.2). After 1 s without `frameDisplayed`, the session counts as hidden. `ScanoutController.requestPresent` runs on `visibilityChanged(true)`. **Check:** T0 `BufferStateMachineTests` with a scripted wrapper: no offered buffer is rendered into.
 3. **Window and launcher.** `IOSurfaceLayerView` sets `CALayer.contents` to the IOSurface with actions disabled, and sends `frameDisplayed` from the transaction completion block ([display-and-windowing.md](../../02-design/display-and-windowing.md) §5.3, §5.4). `Apps/APKRunLauncher` (`io.apkrun.APKRunLauncher`) takes `--package <id>`; `launch` opens it for packages without a Mac app. **Check:** T0 `PresentationAlgorithmTests`; T1 `IOSurfaceLayerViewSystemTests`; `scripts/check-launcher.sh` passes in CI.
-4. **Remove the hook and accept.** Delete `APKRUN_TEST_HEADLESS_LAUNCH` and its entries in [configuration.md](../../03-reference/configuration.md) §5.1 and [test-strategy.md](../test-strategy.md) §3.3. Run `WrapperPresentationTests` with HelloGL, then the full G6 check. **Check:** the #032 acceptance check passes with the window, and the Done-when items hold.
+4. **Remove the hook and accept.** Delete `APKRUN_TEST_HEADLESS_LAUNCH` and its entries in [configuration.md](../../03-reference/configuration.md) §5.1 and [test-strategy.md](../test-strategy.md) §3.3. Run `WrapperPresentationTests` with HelloGL, then the full G6 check. **Check:** the #33 acceptance check passes with the window, and the Done-when items hold.
 
 **Tests.**
 - T0: `Packages/GraphicsCore/Tests/`, `Packages/WindowingCore/Tests/`; T1: `Packages/WindowingCore/Tests/WindowingCoreSystemTests/`.
@@ -117,23 +117,23 @@ The runtime moves out of the CLI into apkrund, a per-user LaunchAgent that launc
 
 ---
 
-## #034 Full Guest Agent protocol and vsock transport
+## #35 Full Guest Agent protocol and vsock transport
 
 | Field | Value |
 |---|---|
 | Milestone | M4 (v0.2) |
-| Depends on | #033, #027 |
+| Depends on | #34, #28 |
 | Design | [guest-protocol.md](../../02-design/guest-protocol.md) §7.1, §13.3; [guest-components.md](../../02-design/guest-components.md) §6, §10 |
 | Code | `Packages/GuestProtocol/`; `Packages/RuntimeCore/` (`VsockGuestTransport`, `AndroidControlChannel`, `AdbClient`); `Guest/guestd/` (`HealthService`); `Guest/vsockd/`; `Tests/IntegrationTests/GuestAgentTests/` |
 
 **Goal.** The Guest Agent implements every control operation the runtime needs. RuntimeCore uses GuestProtocol, not `adb shell`, on all production control paths. HelloText launches with no `adb shell` call, and ADB stays available for debugging.
 
-**Out of scope.** `AuthorizeAdbKey` (72; #035, until then `UNSUPPORTED`). Operation 71 stays reserved. Image bridge and custom-image vsock (#035). Store operations (#036). Clipboard, `SyncTime`, `CollectDiagnostics`, M9 (#053, #069, #070).
+**Out of scope.** `AuthorizeAdbKey` (72; #36, until then `UNSUPPORTED`). Operation 71 stays reserved. Image bridge and custom-image vsock (#36). Store operations (#37). Clipboard, `SyncTime`, `CollectDiagnostics`, M9 (#54, #70, #71).
 
 **Steps.**
 1. **Operations and events.** Implement 16 `MoveTaskToDisplay`, 17 `ListTasks`, 21 `GetHealth`, and 70 `Shutdown` (20 s) on the host and in `Guest/guestd/`, and the events up to number 22 ([guest-protocol.md](../../02-design/guest-protocol.md) §7.1, §8.1). Each checks its capability. Operations 13, 15, 19, and 20 exist already. **Check:** T0 `GuestConnectionTests` with a fake agent (pipelining, out-of-order replies, timeouts, cancel, keepalive loss, resync); T1 Kotlin server tests.
 2. **Health and reconnect.** `HealthService` reports `AppProcessEvent` and memory. The host pings every 5 s and treats three missed pings as dead, then reconnects and resyncs ([runtime-daemon.md](../../02-design/runtime-daemon.md) §4.2). **Check:** T2 `AgentReconnectTests`: after an agent kill, the open session continues.
-3. **vsock transport.** `VsockGuestTransport` in RuntimeCore. Build `apkrun_vsockd` with `cargo ndk -t arm64-v8a build --release`, push it to `/data/local/tmp`, and run it as root. If the stock policy blocks vsock for `su`, record the denial and defer the validation to #035. `apkrun dev boot --guest-transport vsock|adb` selects the transport. **Check:** `VsockTransportTests` pass, or the denial and deferral are in the pull request.
+3. **vsock transport.** `VsockGuestTransport` in RuntimeCore. Build `apkrun_vsockd` with `cargo ndk -t arm64-v8a build --release`, push it to `/data/local/tmp`, and run it as root. If the stock policy blocks vsock for `su`, record the denial and defer the validation to #36. `apkrun dev boot --guest-transport vsock|adb` selects the transport. **Check:** `VsockTransportTests` pass, or the denial and deferral are in the pull request.
 4. **Control path switch.** Every production control path uses `AndroidControlChannel`. `AdbClient` keeps stock installs, debugging, and fallbacks, and counts `adb shell` calls. Remove control paths from the raw-ADB allowlist ([test-strategy.md](../test-strategy.md) §3.3). **Check:** the raw-ADB lint passes.
 5. **Acceptance.** Run `GuestProtocolLaunchTests`: the `adb shell` counter does not change between `ready` and the first frame. **Check:** the Done-when items.
 
@@ -156,23 +156,23 @@ The runtime moves out of the CLI into apkrund, a per-user LaunchAgent that launc
 - Never resend a request after its connection dropped; the guest may have run it ([runtime-daemon.md](../../02-design/runtime-daemon.md) §4.3).
 
 ---
-## #066 First-run provisioning
+## #67 First-run provisioning
 
 | Field | Value |
 |---|---|
 | Milestone | M4 (v0.2) |
-| Depends on | #032, #065, #068 |
+| Depends on | #33, #66, #69 |
 | Design | [runtime-daemon.md](../../02-design/runtime-daemon.md) §9; [host-ui.md](../../02-design/host-ui.md) §4; [package-store.md](../../02-design/package-store.md) §9 |
 | Code | `Packages/RuntimeHost/` (`HostRequirementsCheck`, `setup`, `ProvisioningState`, Reset Android); `Packages/APKStoreCore/`; `Apps/APKRun/` (`RuntimeStatusModel`, `Features/Onboarding/`); `CLI/apkrun/Commands/Setup.swift`; `Tests/IntegrationTests/DaemonTests/` |
 
 **Goal.** A new user approves the background service in APKRun.app and gets a `ready` runtime without a terminal; setup survives a quit in the middle. **Reset Android** gives a fresh Android with every managed app reinstalled.
 
-**Out of scope.** Recovery-point listing and restore (#058; OQ-41, working default: not restorable in v1). The **Add App…** preview (#078). Image updates (#058, #087). Doctor (#059).
+**Out of scope.** Recovery-point listing and restore (#59; OQ-41, working default: not restorable in v1). The **Add App…** preview (#79). Image updates (#59, #88). Doctor (#60).
 
 **Steps.**
 1. **Host requirements.** `HostRequirementsCheck` returns every failed row of [runtime-daemon.md](../../02-design/runtime-daemon.md) §9.1 at once, each with its remediation. **Check:** T0 with a fake host, one case per row.
 2. **`setup`.** Run `setup` as a long operation with `ProvisioningState` (`checkingHost`, `installingImage(fraction:)`, `creatingInstance`, `firstBoot(BootPhase, fraction:)`, `installingAgents`, `verifying`, `complete`, `failed(step:error:)`). Each step is idempotent and recorded in `state.json`; a restart resumes at the first incomplete step. `creatingInstance` uses 4 vCPUs and 4 GiB, capped at 50 % of memory (NFR-RES-01), with a sparse `userdata` (NFR-RES-02). Before `complete`, Android operations return `RuntimeFailure.notProvisioned`. **Check:** T0 transitions and resume points; T1 `ProvisioningSystemTests`: killed and resumed at each step.
-3. **Onboarding and CLI.** The sheet of [host-ui.md](../../02-design/host-ui.md) §4 polls the approval every 2 s. Failures offer **Try Again** and **Report…**; after 2 failed first boots, **Start Over** (`setup` with `recreateInstance = true`). The drop zone and **Add App…** call `importPackage` and `installImported` (#027). Add `apkrun setup [--image <path>] [--yes]`. **Check:** T1 `OnboardingUITests` resumes at the right step after relaunch; T0 golden output.
+3. **Onboarding and CLI.** The sheet of [host-ui.md](../../02-design/host-ui.md) §4 polls the approval every 2 s. Failures offer **Try Again** and **Report…**; after 2 failed first boots, **Start Over** (`setup` with `recreateInstance = true`). The drop zone and **Add App…** call `importPackage` and `installImported` (#28). Add `apkrun setup [--image <path>] [--yes]`. **Check:** T1 `OnboardingUITests` resumes at the right step after relaunch; T0 golden output.
 4. **Reset Android.** `apkrun runtime reset --erase [--no-backup] [--yes]` requires typing `Reset`. It runs `stop(.reset, force: true)`, creates a recovery point (`InstanceStore.createRecoveryPoint`, kept 7 days), deletes `userdata.img`, provisions again, and writes a new `userdataGeneration`. After `ready`, managed packages are reinstalled from `current/` ([package-store.md](../../02-design/package-store.md) §9.2). **Check:** T2 `ResetAndroidTests`: HelloText and HelloUpdate V1 return with settings kept, and each shows its first frame.
 5. **Acceptance.** Run the Done-when items on a fresh macOS account. **Check:** all pass.
 
@@ -193,18 +193,18 @@ The runtime moves out of the CLI into apkrund, a per-user LaunchAgent that launc
 - Registration and Login Items approval are per macOS account. A fresh `APKRUN_HOME` is not a fresh account.
 
 ---
-## #069 Idle policy and host sleep/wake
+## #70 Idle policy and host sleep/wake
 
 | Field | Value |
 |---|---|
 | Milestone | M4 (v0.2) |
-| Depends on | #031 |
+| Depends on | #32 |
 | Design | [runtime-daemon.md](../../02-design/runtime-daemon.md) §5, §6; [desktop-integration.md](../../02-design/desktop-integration.md) §9 |
 | Code | `Packages/RuntimeCore/` (`IdleController`, `RuntimeActivityAssertion`); `Packages/RuntimeHost/` (`PowerObserver`, preboot, memory pressure); `Guest/guestd/` (`SyncTime`); `CLI/apkrun/Commands/Dev/Power.swift`; `Tests/IntegrationTests/DaemonTests/` |
 
 **Goal.** After no app has been open for a while, the runtime suspends and then stops, and apkrund uses almost no CPU while suspended; the next launch resumes quickly. Host sleep and wake pause and resume the VM, and the guest clock is correct afterwards.
 
-**Out of scope.** Locale, time zone, and clock format (#085). The timer settings UI (#079). A memory balloon before a pause (OQ-32; default: none in v1). VM save and restore (R-07, accepted).
+**Out of scope.** Locale, time zone, and clock format (#86). The timer settings UI (#80). A memory balloon before a pause (OQ-32; default: none in v1). VM save and restore (R-07, accepted).
 
 **Steps.**
 1. **IdleController.** `IdleController` (RuntimeCore actor) tracks the activity sources of [runtime-daemon.md](../../02-design/runtime-daemon.md) §5.1, each held through `RuntimeActivityAssertion`. `runtime.idleSuspendMinutes` (default 10) and `runtime.idleStopMinutes` (default 60) use `SuspendingClock`; `0` means never. **Check:** T0 `IdleControllerTests` with a manual clock: each source holds the runtime, both timers fire, and sleep is not counted.
@@ -215,7 +215,7 @@ The runtime moves out of the CLI into apkrund, a per-user LaunchAgent that launc
 **Tests.**
 - T0: `Packages/RuntimeCore/Tests/RuntimeCoreTests/` (`IdleControllerTests`).
 - T2 (`Tests/IntegrationTests/DaemonTests/`, AndroidStock): `IdleSuspendTests`, `SleepWakeTests`.
-- T3: nightly `pmset sleepnow`; the `idle-cpu` scenario of #070; checklists C02-4 and C10-9 of [test-strategy.md](../test-strategy.md) §8.
+- T3: nightly `pmset sleepnow`; the `idle-cpu` scenario of #71; checklists C02-4 and C10-9 of [test-strategy.md](../test-strategy.md) §8.
 
 **Done when.**
 - With `idleSuspendMinutes = 1` and no sessions, the runtime is `suspended` after 1 minute, with apkrund under 1 % CPU (FR-VM-10, NFR-PERF-06).
@@ -230,18 +230,18 @@ The runtime moves out of the CLI into apkrund, a per-user LaunchAgent that launc
 - Never skip the time sync after a resume: Android's wall clock stops while paused.
 
 ---
-## #070 Performance harness
+## #71 Performance harness
 
 | Field | Value |
 |---|---|
 | Milestone | M4 (v0.2) |
-| Depends on | #031, #068 |
+| Depends on | #32, #69 |
 | Design | [diagnostics.md](../../02-design/diagnostics.md) §4.3, §9; [guest-protocol.md](../../02-design/guest-protocol.md) §7.1 (operation 73) |
 | Code | `Packages/RuntimeHost/` (`PerfRecordWriter`, `perfStatistics`, `MetricsSampler`); `Packages/RuntimeAPI/`; `Apps/APKRunLauncher/`; `Packages/GuestProtocol/`; `Packages/RuntimeCore/`; `Guest/guestd/` (`DiagnosticsService`); `Tests/PerformanceTests/`; `Tests/IntegrationTests/DiagnosticsTests/` |
 
 **Goal.** `swift run apkrun-perf <scenario>` measures every NFR-PERF target repeatably on the reference Mac (M1, 16 GB, by default; OQ-02). It splits each launch and boot into marker segments, and the nightly job fails on regressions.
 
-**Out of scope.** Other `CollectDiagnostics` items, doctor, and the bundle (#059, #060). Fixes for a missed target.
+**Out of scope.** Other `CollectDiagnostics` items, doctor, and the bundle (#60, #61). Fixes for a missed target.
 
 **Steps.**
 1. **Records.** `PerfRecordWriter` in apkrund writes `perf/launches.jsonl` and `perf/boots.jsonl`, keeping the newest 2,000 and 200 records ([diagnostics.md](../../02-design/diagnostics.md) §4.3). Add `OpenSessionRequest.launchTiming`; the launcher writes `FIRST_FRAME_DISPLAYED`. **Check:** T0 record format, `launchState`, and rotation.
@@ -259,38 +259,38 @@ The runtime moves out of the CLI into apkrund, a per-user LaunchAgent that launc
 **Done when.**
 - `apkrun-perf` runs every scenario and writes `results.json` and `summary.md` (FR-OPS-05). Two `warm-launch` runs agree within 10 % at p50, and segments add to the total within 5 ms.
 - NFR-PERF-01 to NFR-PERF-06 are measured on the reference Mac, with warm launch p50 and p95 (NFR-PERF-01).
-- `update-check-launch` is `skipped`, with its reason, until #037 and #074 exist (NFR-PERF-07).
+- `update-check-launch` is `skipped`, with its reason, until #38 and #75 exist (NFR-PERF-07).
 - `memory` reports VM memory, `system_server`, SurfaceFlinger, zygote, each APK, host graphics, and apkrund RSS (NFR-RES-04).
 - `DUMPSYS_MEMINFO` returns within the caps; an unknown item is `unsupported` without failing the request (FR-OPS-05).
 - In developer mode, View → Show Frame Statistics shows fps, dropped frames, and readback counters, once per second; otherwise hidden.
 
 ---
 
-## #053 Clipboard, plain text
+## #54 Clipboard, plain text
 
 | Field | Value |
 |---|---|
 | Milestone | M4 (v0.2) |
-| Depends on | #034, #068 |
+| Depends on | #35, #69 |
 | Design | [desktop-integration.md](../../02-design/desktop-integration.md) §2, §4; [guest-protocol.md](../../02-design/guest-protocol.md) §8.4; [input.md](../../02-design/input.md) §6 |
 | Code | `Packages/IntegrationCore/` (`IntegrationPolicy`, `IntegrationChannel`, `ClipboardCoordinator`); `Packages/RuntimeAPI/`; `Apps/APKRunLauncher/` (`PasteboardAdapter`); `Guest/guestd/` (`ClipboardBridge`); `CLI/apkrun/Commands/Integrations.swift`; `Tests/IntegrationTests/DesktopIntegrationTests/` |
 
 **Goal.** Plain text copied on the Mac pastes into the focused Android app, and plain text copied in Android lands on the Mac pasteboard. There is no feedback loop, and each app has its own switch.
 
-**Out of scope.** Images, files, and rich text (#080, #082). Notifications, URLs, and shared folders (#054, #081, #082). The per-app settings UI (#079).
+**Out of scope.** Images, files, and rich text (#81, #83). Notifications, URLs, and shared folders (#55, #82, #83). The per-app settings UI (#80).
 
 **Steps.**
 1. **IntegrationCore skeleton.** `IntegrationPolicy` evaluates the per-app `integrations.clipboard` switch and the global switch ([desktop-integration.md](../../02-design/desktop-integration.md) §2). Every integration passes guest agent, then policy, then host. **Check:** T0 `IntegrationPolicyTests` for both switches.
 2. **Coordinator and adapter.** `ClipboardCoordinator` in apkrund handles `pushClipboard`, `clipboardFromGuest`, and `clipboardWritten`. `PasteboardAdapter` reads the Mac clipboard at ⌘V and when the window becomes key, but skips reads that would prompt. If a read prompts on macOS 27, push on paste only (R-21). Sensitive clips get `org.nspasteboard.ConcealedType`; `org.nspasteboard.TransientType` applies only to a paste. Android-to-Mac writes add `io.apkrun.clip-origin`. Text over 1 MiB is truncated at a character boundary, with the message "Only the first 1 MB was copied." **Check:** T0 `ClipboardLoopTests`: the three loop signals stop echoes both ways.
-3. **Guest bridge.** `ClipboardBridge` in `Guest/guestd/` implements operation 40 `SetClipboard(ClipData)` (answers `ClipAck{seq}`) and sends `ClipboardChanged` for changes it did not make. Verify that the shell-mode agent can read and listen in the background on stock; if not, move the listener into the IME process (#071). **Check:** T1 `ClipboardBridgeTests`: echo suppression against a scripted host.
+3. **Guest bridge.** `ClipboardBridge` in `Guest/guestd/` implements operation 40 `SetClipboard(ClipData)` (answers `ClipAck{seq}`) and sends `ClipboardChanged` for changes it did not make. Verify that the shell-mode agent can read and listen in the background on stock; if not, move the listener into the IME process (#72). **Check:** T1 `ClipboardBridgeTests`: echo suppression against a scripted host.
 4. **⌘V with acknowledgment.** In editor mode, ⌘V pushes the Mac clipboard and waits for `ClipAck`, then pastes. After 500 ms without an ack, it commits plain text ([input.md](../../02-design/input.md) §6). **Check:** T2: ⌘V in HelloText pastes the Mac text.
 5. **Acceptance.** Run `ClipboardTests` and checklist C02-3. **Check:** the Done-when items.
 
 **Tests.**
 - T0: `Packages/IntegrationCore/Tests/IntegrationCoreTests/`.
 - T1: `Guest/guestd` JVM tests; `Packages/IntegrationCore/Tests/IntegrationCoreSystemTests/`.
-- T2 (`Tests/IntegrationTests/DesktopIntegrationTests/`, AndroidStock; again in AndroidCustom after #035; fixture: [test-strategy.md](../test-strategy.md) §4.2): HelloClipboard both ways with "héllo 😀"; nothing crosses with the setting off; a 5-minute loop check; the 1 MiB limit.
-- T3: ⌘V p95 at most 150 ms for 64 KiB (#070); checklist C02-3.
+- T2 (`Tests/IntegrationTests/DesktopIntegrationTests/`, AndroidStock; again in AndroidCustom after #36; fixture: [test-strategy.md](../test-strategy.md) §4.2): HelloClipboard both ways with "héllo 😀"; nothing crosses with the setting off; a 5-minute loop check; the 1 MiB limit.
+- T3: ⌘V p95 at most 150 ms for 64 KiB (#71); checklist C02-3.
 
 **Done when.**
 - Text copied in TextEdit pastes into HelloClipboard, and the reverse, including "héllo 😀" (FR-INT-01).
@@ -305,12 +305,12 @@ The runtime moves out of the CLI into apkrund, a per-user LaunchAgent that launc
 
 ---
 
-## #071 APKRun IME
+## #72 APKRun IME
 
 | Field | Value |
 |---|---|
 | Milestone | M4 (v0.2) |
-| Depends on | #034, #068 |
+| Depends on | #35, #69 |
 | Design | [input.md](../../02-design/input.md) §5, §6; [guest-components.md](../../02-design/guest-components.md) §7 |
 | Code | `Guest/guestd/` (`io.apkrun.guest/.ime.ApkRunInputMethodService`, `res/xml/method.xml`); `Packages/InputCore/` (`TextInputModel`, editor commands, secure-input counter); `Packages/WindowingCore/` (`NSTextInputClient`); `Packages/GuestProtocol/` (`ImeState`); `Tests/Fixtures/AndroidApps/` (HelloCompose); `Tests/IntegrationTests/InputTests/` |
 

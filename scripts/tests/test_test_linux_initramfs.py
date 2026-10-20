@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""T0 tests for the virgl inputs and the manifest of the Linux test initramfs (#022)."""
+"""T0 tests for the virgl inputs and the manifest of the Linux test initramfs (#23)."""
 
 from __future__ import annotations
 

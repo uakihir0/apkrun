@@ -300,7 +300,7 @@ Adopted patches (APKRun's initial set):
 
 Patches carry the license of the component they change ([legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.2). None of the carried patches records whether it was sent upstream, which that section requires. The RiftVM MIT notice covers RiftVM-authored source only.
 
-Build flags. #020 passes the lock's `buildFlags` unchanged. They differ from RiftVM's reference flags in `mac_deployment_target`, `-Dglx=no`, `-Dplatforms=egl`, and `-Dvenus=false` (guest Vulkan is outside v1, §10). ANGLE and libepoxy reach Meson through generated pkg-config files. The full comparison is in [riftvm-analysis.md](riftvm-analysis.md) §4.
+Build flags. #21 passes the lock's `buildFlags` unchanged. They differ from RiftVM's reference flags in `mac_deployment_target`, `-Dglx=no`, `-Dplatforms=egl`, and `-Dvenus=false` (guest Vulkan is outside v1, §10). ANGLE and libepoxy reach Meson through generated pkg-config files. The full comparison is in [riftvm-analysis.md](riftvm-analysis.md) §4.
 
 ### 5.2 GraphicsBridge
 
@@ -463,7 +463,7 @@ Guest scanout resources are 32-bit (`B8G8R8X8`, `B8G8R8A8`, or `R8G8B8A8`). Pool
 
 The development window (`apkrun dev boot --gpu virgl --window`) shows display 0 in an `NSWindow`. It uses WindowingCore's IOSurface layer in-process, the same code the wrapper uses later.
 
-The development window (#023) is **fixed-size**: display 0 keeps the image's default mode, and the window scales the layer with aspect fit. Runtime mode changes and pool reallocation belong to #067 (§6.1, §6.4).
+The development window (#24) is **fixed-size**: display 0 keeps the image's default mode, and the window scales the layer with aspect fit. Runtime mode changes and pool reallocation belong to #68 (§6.1, §6.4).
 
 ---
 
@@ -566,7 +566,7 @@ The guest is untrusted from the host's point of view ([security-model.md](../01-
 - Every guest value is validated after it is copied (§3.2), with checked arithmetic. There are no struct casts over guest memory.
 - The limits of §5.4 bound memory use.
 - virglrenderer's command decoder is the largest attack surface. It is pinned, its patches are listed in the lock, and upstream security fixes are tracked ([build-system.md](../05-development/build-system.md) §6).
-- Fuzzing (#091): a libFuzzer target over `VirtioGPUProtocol` decoding and `ResourceTable` (T1, in CI), and a virgl command-stream fuzzer that runs the renderer in a separate test process.
+- Fuzzing (#92): a libFuzzer target over `VirtioGPUProtocol` decoding and `ResourceTable` (T1, in CI), and a virgl command-stream fuzzer that runs the renderer in a separate test process.
 - A renderer crash takes down apkrund (§8). Moving the renderer to a separate process is post-v1 research. It would need guest memory sharing across processes, which VZ does not offer.
 
 ---
@@ -606,7 +606,7 @@ Subsystem `io.apkrun.graphics`, with categories `device` (negotiation, commands,
 - **T0, `GraphicsCore`** (`Packages/GraphicsCore/Tests/GraphicsCoreTests/`): `VirtioGPUProtocol` decode and encode for every command, including truncated and oversized input, with golden vectors from Linux traces (`Tests/Fixtures/graphics/virtio-gpu-vectors.json`); `ResourceTable` limits, overflow, backing, and reset; display events (§4.3); EDID golden files; the latest-frame scheduler and `SurfacePool` state machine.
 - **T1, GraphicsBridge** (`Packages/GraphicsCore/Tests/GraphicsCoreSystemTests/GraphicsRendererSystemTests.swift`): renderer create and destroy, capsets, and contexts on a Metal device. **T1, present** (`ScanoutPresentRendererTests`): a flush of the real VirGL renderer presents the guest pixels in order, pixel-exact, with no readback.
 - **T1, replay** (`VirGLRoundTripSystemTests.swift`): the synthetic fixture `Tests/Fixtures/graphics/synthetic-virgl-session.json` replays through the device, and its scanout hash must match exactly through the test-only readback. The optional `kmscube` recording replays every operation with no renderer failure and no rejected submit. It makes no pixel claim. Both need Metal.
-- **T1, fuzzing:** protocol decoding and `ResourceTable`, time-boxed in CI (#091).
+- **T1, fuzzing:** protocol decoding and `ResourceTable`, time-boxed in CI (#92).
 - **T2, Linux test guest** (`Tests/IntegrationTests/LinuxGuestTests/`): `EntropyDeviceTests` (`virtio_rng.0` listed in `/sys/class/misc/hw_random/rng_available`; 64 KiB from `/dev/hwrng` matches the seeded sequence; a second read works after reset; a live mapping and a stale context are rejected after reset and stop); `GPUDeviceTests` (probe, EDID, hotplug); `VirglTests` (`kmscube` headless with `rendererFailures = 0` after shutdown, then in a window).
 - **T2, Android** (`Tests/IntegrationTests/AndroidGraphicsTests/`): `virtio_gpu` binding, VirGL SurfaceFlinger, and `boot_completed` with `drmVirgl` and with `guestSwiftshader`.
 - **RuntimeCore:** `AndroidGraphicsDevicesTests` (T0) and `AndroidGraphicsDevicesRendererTests` (T1, `Packages/RuntimeCore/Tests/RuntimeCoreTests/`): `drmVirgl` attaches one device with `edid` and `virgl`; an unlisted profile starts no renderer.

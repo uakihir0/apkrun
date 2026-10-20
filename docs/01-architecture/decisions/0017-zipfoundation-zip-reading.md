@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-28
-- Related: #036, #073, #051, #091, #093, [../../02-design/package-store.md](../../02-design/package-store.md) §4.2, [../../02-design/update-system.md](../../02-design/update-system.md) §4.5, [../modules.md](../modules.md) §3
+- Related: #37, #74, #52, #92, #94, [../../02-design/package-store.md](../../02-design/package-store.md) §4.2, [../../02-design/update-system.md](../../02-design/update-system.md) §4.5, [../modules.md](../modules.md) §3
 
 ## Context
 
@@ -17,7 +17,7 @@ The APK signature verifier is a different case. APK Signature Scheme v2 and late
 
 ## Decision
 
-- Use ZIPFoundation (MIT) to read ZIP archives in APKStoreCore and UpdateCore. It is pinned with an `exact:` version in `Package.swift`, recorded in `Package.resolved`, and listed in the third-party notices (#093).
+- Use ZIPFoundation (MIT) to read ZIP archives in APKStoreCore and UpdateCore. It is pinned with an `exact:` version in `Package.swift`, recorded in `Package.resolved`, and listed in the third-party notices (#94).
 - Only the reading API is used, through one small wrapper per module (`ContainerReader` in APKStoreCore, `FDroidIndexVerifier` in UpdateCore). The wrapper enforces the extraction limits of [package-store.md](../../02-design/package-store.md) §4.2 itself, entry by entry and while streaming. It never calls the library's extract-to-directory functions, so names, symlinks, and paths are always checked by APKRun code.
 - The APK signature verifier keeps its own reader of the ZIP structures it needs.
 - The diagnostics bundle `ZipWriter` in DiagnosticsCore is a small writer on Compression.framework. DiagnosticsCore stays a leaf without third-party code.
@@ -34,9 +34,9 @@ The APK signature verifier is a different case. APK Signature Scheme v2 and late
 ## Consequences
 
 - One more pinned dependency to review in the release checks and the notices.
-- #091 fuzzes the container reader through the wrapper (`ContainerReader`) and the `entry.jar` path, which covers the library code as used.
+- #92 fuzzes the container reader through the wrapper (`ContainerReader`) and the `entry.jar` path, which covers the library code as used.
 - A future change of the library is a new ADR, as for the other third-party components.
 
 ## Verification
 
-#036 and #073 T0 tests of container detection and the extraction limits (zip bomb, path traversal, symlink entries, ZIP64 archive). #051 T0 tests of `entry.jar` verification. The #091 fuzz targets run with no open crash.
+#37 and #74 T0 tests of container detection and the extraction limits (zip bomb, path traversal, symlink entries, ZIP64 archive). #52 T0 tests of `entry.jar` verification. The #92 fuzz targets run with no open crash.

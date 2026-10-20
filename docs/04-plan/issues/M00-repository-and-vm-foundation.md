@@ -1,10 +1,10 @@
 # M0 Repository and VM foundation
 
-M0 proves that Virtualization.framework works for APKRun before Android is involved. It delivers the repository and build baseline, DiagnosticsCore, and a Linux test guest that exercises the serial console, virtio-blk, NAT networking, virtio-vsock, and a host-implemented virtio device. It closes gate G1 ([roadmap.md](../roadmap.md) §2). It delivers no v0.1 feature directly; #012–#014 (G2) and #019 (virtio-gpu) build on it.
+M0 proves that Virtualization.framework works for APKRun before Android is involved. It delivers the repository and build baseline, DiagnosticsCore, and a Linux test guest that exercises the serial console, virtio-blk, NAT networking, virtio-vsock, and a host-implemented virtio device. It closes gate G1 ([roadmap.md](../roadmap.md) §2). It delivers no v0.1 feature directly; #13–#15 (G2) and #20 (virtio-gpu) build on it.
 
 ---
 
-## #001 Bootstrap Xcode workspace
+## #2 Bootstrap Xcode workspace
 
 | Field | Value |
 |---|---|
@@ -19,12 +19,12 @@ M0 proves that Virtualization.framework works for APKRun before Android is invol
 
 ---
 
-## #061 Diagnostics foundation
+## #62 Diagnostics foundation
 
 | Field | Value |
 |---|---|
 | Milestone | M0 (v0.1) |
-| Depends on | #001 |
+| Depends on | #2 |
 | Design | [diagnostics.md](../../02-design/diagnostics.md) §2–§4; [error-catalog.md](../../03-reference/error-catalog.md) §5, §16; [cli.md](../../02-design/cli.md) §3.2 |
 | Code | `Packages/DiagnosticsCore/` (`ErrorCatalog/errors.json`, `Sources/`), `scripts/errorgen.swift`, `scripts/check-logging.sh`, `scripts/check-compile-fail.sh`, `scripts/build/stamp-commit.sh`, `CLI/apkrun/Commands/Logs.swift` |
 
@@ -34,12 +34,12 @@ M0 proves that Virtualization.framework works for APKRun before Android is invol
 
 ---
 
-## #062 CI and module dependency checks
+## #63 CI and module dependency checks
 
 | Field | Value |
 |---|---|
 | Milestone | M0 (v0.1) |
-| Depends on | #001 |
+| Depends on | #2 |
 | Design | [build-system.md](../../05-development/build-system.md) §3, §4; [modules.md](../../01-architecture/modules.md) §3 |
 | Code | `.github/workflows/ci.yml`, `.github/workflows/ci-policy.yml`, `scripts/ci/run-checks.sh`, `scripts/check-module-deps.sh`, `scripts/check-lock.sh`, `scripts/check-todos.sh`, `scripts/check-format.sh`, `ThirdParty/ThirdParty.lock.json`, `.swift-format`, `scripts/tests/` |
 
@@ -49,12 +49,12 @@ M0 proves that Virtualization.framework works for APKRun before Android is invol
 
 ---
 
-## #002 VMDefinition and VM validation
+## #3 VMDefinition and VM validation
 
 | Field | Value |
 |---|---|
 | Milestone | M0 (v0.1) |
-| Depends on | #001, #061 |
+| Depends on | #2, #62 |
 | Design | [vm.md](../../02-design/vm.md) §2–§4; [state-machines.md](../../01-architecture/state-machines.md) §1; [error-catalog.md](../../03-reference/error-catalog.md) §5.2 |
 | Code | `Packages/VirtualMachineCore/Sources/VirtualMachineCore/` (`Definition/`, `Validation/`, `Framework/`, `State/`), `Packages/VirtioDeviceCore/Sources/VirtioDeviceCore/` (descriptor and protocol only) |
 
@@ -64,12 +64,12 @@ M0 proves that Virtualization.framework works for APKRun before Android is invol
 
 ---
 
-## #003 Boot minimal ARM64 Linux
+## #4 Boot minimal ARM64 Linux
 
 | Field | Value |
 |---|---|
 | Milestone | M0 (v0.1) |
-| Depends on | #002 |
+| Depends on | #3 |
 | Gate | G1 |
 | Design | [vm.md](../../02-design/vm.md) §4, §9, §12; [state-machines.md](../../01-architecture/state-machines.md) §1; [decisions/0015-direct-kernel-boot.md](../../01-architecture/decisions/0015-direct-kernel-boot.md) |
 | Code | `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Controller/`, `Packages/RuntimeHost/Sources/RuntimeHost/Dev/`, `CLI/apkrun/Dev/DevLinux.swift`, `scripts/fetch-test-linux.sh`, `scripts/build-test-initramfs.sh`, `scripts/run-gate.sh`, `Tests/Fixtures/linux/`, `Tests/IntegrationTests/LinuxGuestTests/`, `Tests/AcceptanceTests/G1LinuxBoot/` |
@@ -80,12 +80,12 @@ M0 proves that Virtualization.framework works for APKRun before Android is invol
 
 ---
 
-## #004 Serial console logging
+## #5 Serial console logging
 
 | Field | Value |
 |---|---|
 | Milestone | M0 (v0.1) |
-| Depends on | #003 |
+| Depends on | #4 |
 | Design | [vm.md](../../02-design/vm.md) §6; [diagnostics.md](../../02-design/diagnostics.md) §3.3; [filesystem-layout.md](../../01-architecture/filesystem-layout.md) §2 |
 | Code | `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Console/`, `CLI/apkrun/Dev/DevConsole.swift`, `Tests/IntegrationTests/LinuxGuestTests/ConsoleTests.swift` |
 
@@ -95,12 +95,12 @@ M0 proves that Virtualization.framework works for APKRun before Android is invol
 
 ---
 
-## #005 virtio-blk storage
+## #6 virtio-blk storage
 
 | Field | Value |
 |---|---|
 | Milestone | M0 (v0.1) |
-| Depends on | #003 |
+| Depends on | #4 |
 | Design | [vm.md](../../02-design/vm.md) §2–§5 |
 | Code | `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Validation/`, `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Framework/VZConfigurationBuilder.swift`, `Tests/Fixtures/linux/make-test-disks.sh`, `Tests/IntegrationTests/LinuxGuestTests/BlockTests.swift` |
 
@@ -110,12 +110,12 @@ M0 proves that Virtualization.framework works for APKRun before Android is invol
 
 ---
 
-## #006 Guest networking
+## #7 Guest networking
 
 | Field | Value |
 |---|---|
 | Milestone | M0 (v0.1) |
-| Depends on | #003 |
+| Depends on | #4 |
 | Design | [vm.md](../../02-design/vm.md) §4, §7, §9.2 |
 | Code | `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Framework/VZConfigurationBuilder.swift`, `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Controller/VMController.swift`, `Tests/Fixtures/linux/` (`init`, `udhcpc.script`, `network-errors.sh`), `Tests/IntegrationTests/LinuxGuestTests/NetworkTests.swift`, `Tests/AcceptanceTests/Network/` |
 
@@ -125,12 +125,12 @@ M0 proves that Virtualization.framework works for APKRun before Android is invol
 
 ---
 
-## #007 virtio-vsock
+## #8 virtio-vsock
 
 | Field | Value |
 |---|---|
 | Milestone | M0 (v0.1) |
-| Depends on | #003 |
+| Depends on | #4 |
 | Design | [vm.md](../../02-design/vm.md) §4, §8; [process-model-and-ipc.md](../../01-architecture/process-model-and-ipc.md) §3.1; [error-catalog.md](../../03-reference/error-catalog.md) §5.1 |
 | Code | `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Vsock/VsockConnection.swift`, `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Controller/VMController.swift`, `Tests/IntegrationTests/LinuxGuestTests/VsockTests.swift` |
 
@@ -140,15 +140,15 @@ M0 proves that Virtualization.framework works for APKRun before Android is invol
 
 ---
 
-## #063 VirtioDeviceCore and test virtio device
+## #64 VirtioDeviceCore and test virtio device
 
 | Field | Value |
 |---|---|
 | Milestone | M0 (v0.1) |
-| Depends on | #003 |
+| Depends on | #4 |
 | Design | [graphics.md](../../02-design/graphics.md) §3, §8; [vm.md](../../02-design/vm.md) §3, §4, §9.5 |
 | Code | `Packages/VirtioDeviceCore/Sources/VirtioDeviceCore/` (`API/`, `VZAdapter/`, `TestDevices/EntropyTestDevice.swift`), `Packages/VirtioDeviceCore/Tests/VirtioDeviceCoreTests/`, `Tests/IntegrationTests/LinuxGuestTests/EntropyDeviceTests.swift` |
 
 **Goal.** A host-implemented virtio-rng device, built on the macOS 27 custom virtio device API, replaces the built-in entropy device. The Linux test guest reads 64 KiB of the device's seeded sequence from `/dev/hwrng`, and it reads again after a driver reset.
 
-**Result.** `VirtioDeviceCore` provides the descriptor, queue, element, and guest-memory API and a VZ adapter. VZ objects are touched only on the device queue. Each element completes exactly once. A context from an old generation cannot reach the restarted device. `supportsSaveRestore` stays off (R-07). R-01 stays open until #019 and #028 settle it. Tests: T0 in `Packages/VirtioDeviceCore/Tests/VirtioDeviceCoreTests/`, T2 in `EntropyDeviceTests.swift`.
+**Result.** `VirtioDeviceCore` provides the descriptor, queue, element, and guest-memory API and a VZ adapter. VZ objects are touched only on the device queue. Each element completes exactly once. A context from an old generation cannot reach the restarted device. `supportsSaveRestore` stays off (R-07). R-01 stays open until #20 and #29 settle it. Tests: T0 in `Packages/VirtioDeviceCore/Tests/VirtioDeviceCoreTests/`, T2 in `EntropyDeviceTests.swift`.

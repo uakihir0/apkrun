@@ -1,5 +1,5 @@
 {
-  "provenance": "Field layouts follow Linux include/uapi/linux/virtio_gpu.h (virtio 1.2 section 5.7). These vectors were written from those layouts by an independent script, not captured from the driver. Replace them with bytes captured from the Linux test guest once the T2 guest runs (graphics.md section 12, #019 step 1).",
+  "provenance": "Field layouts follow Linux include/uapi/linux/virtio_gpu.h (virtio 1.2 section 5.7). These vectors were written from those layouts by an independent script, not captured from the driver. Replace them with bytes captured from the Linux test guest once the T2 guest runs (graphics.md section 12, #20 step 1).",
   "vectors": [
     {
       "name": "get-display-info",

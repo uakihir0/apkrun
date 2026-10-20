@@ -93,7 +93,7 @@ if [ "$instance_num" -gt 59016 ]; then
   exit 2
 fi
 if [ "$instance_num" -ne 1 ]; then
-  printf 'The pinned #064 comparison requires Cuttlefish instance 1.\n' >&2
+  printf 'The pinned #65 comparison requires Cuttlefish instance 1.\n' >&2
   exit 2
 fi
 adb_port=$((6520 + instance_num - 1))

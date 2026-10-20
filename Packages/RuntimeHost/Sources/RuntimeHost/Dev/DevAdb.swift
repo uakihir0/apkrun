@@ -1,7 +1,7 @@
 import Foundation
 import RuntimeCore
 
-/// `apkrun dev adb [<args>…]`: the developer's adb against the development Android (cli.md §5; #015).
+/// `apkrun dev adb [<args>…]`: the developer's adb against the development Android (cli.md §5; #16).
 ///
 /// APKRun does not ship adb. The command first connects the endpoint, so that adb knows the
 /// device, and then runs `adb -s 127.0.0.1:6520 <arguments>` with the terminal attached. A connect

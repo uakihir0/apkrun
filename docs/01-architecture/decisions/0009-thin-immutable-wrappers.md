@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-28
-- Related: #044–#049, #055–#056, #075–#076, #089, [../../02-design/wrapper.md](../../02-design/wrapper.md)
+- Related: #45–#50, #56–#57, #76–#77, #90, [../../02-design/wrapper.md](../../02-design/wrapper.md)
 
 ## Context
 
@@ -29,4 +29,4 @@ A **portable wrapper** additionally embeds a bootstrap APK set for first import 
 
 ## Verification
 
-G9 (the wrapper stays unchanged while the APK is updated automatically, #049), using the wrapper integrity test: the SHA-256 of every file in the wrapper is unchanged after the app update.
+G9 (the wrapper stays unchanged while the APK is updated automatically, #50), using the wrapper integrity test: the SHA-256 of every file in the wrapper is unchanged after the app update.

@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-28
-- Related: #031, #032, #066, [../process-model-and-ipc.md](../process-model-and-ipc.md)
+- Related: #32, #33, #67, [../process-model-and-ipc.md](../process-model-and-ipc.md)
 
 ## Context
 
@@ -28,4 +28,4 @@ apkrund is a **per-user LaunchAgent** embedded in APKRun.app. It is registered w
 
 ## Verification
 
-G6 (runtime remains warm under apkrund), checked in stages: #031 (the VM in apkrund, quitting APKRun.app, crash restart), #032 (warm launch, and a client with another signing identity is rejected), and #068 (the full check with an app window). The #031 and #032 acceptance criteria also apply.
+G6 (runtime remains warm under apkrund), checked in stages: #32 (the VM in apkrund, quitting APKRun.app, crash restart), #33 (warm launch, and a client with another signing identity is rejected), and #69 (the full check with an app window). The #32 and #33 acceptance criteria also apply.

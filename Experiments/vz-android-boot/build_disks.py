@@ -1,6 +1,6 @@
 """Build the three raw GPT disks of android-image.md §4.2 for the VZ boot spike.
 
-Experiment only. The production writer is `apkrun_image disks` (#011). This
+Experiment only. The production writer is `apkrun_image disks` (#12). This
 script reads the pinned artifacts straight from the verified download zip,
 checks each member against the manifest SHA-256, and writes `os.img`,
 `persistent.img`, and `userdata.img` with holes for unwritten ranges.

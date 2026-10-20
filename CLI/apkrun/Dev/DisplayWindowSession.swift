@@ -9,7 +9,7 @@
         case status(String)
     }
 
-    /// The window of `apkrun dev boot --window`: the display, the stop requests, and the event loop (#023).
+    /// The window of `apkrun dev boot --window`: the display, the stop requests, and the event loop (#24).
     ///
     /// AppKit runs on the main thread, so `APKRunCommand.main` enters the loop there before its first suspension, and the
     /// command runs on a detached task. The window's close button stops the boot, and the end of the boot ends the loop.
@@ -63,7 +63,7 @@
         let appCloseRequests = AsyncStream.makeStream(of: Void.self)
         private let windowUpdates: AsyncStream<DisplayWindowUpdate>
         private let windowUpdateContinuation: AsyncStream<DisplayWindowUpdate>.Continuation
-        /// The development input route of the boot. The boot binds it to display 0 (#024).
+        /// The development input route of the boot. The boot binds it to display 0 (#25).
         let inputRoute: DevInputRoute
         /// The window's pointer events, sent to `inputRoute`.
         let inputSink: EmbeddedInputSink

@@ -9,8 +9,8 @@ This guide lists the machines and tools needed to build and test APKRun, and how
 | Machine | Needed for | Minimum | Section |
 |---|---|---|---|
 | Developer Mac | host code, Guest Gradle and Rust builds, image tooling, T0–T2 tests | Apple silicon (M1 or later), macOS 27, 16 GB RAM, 150 GiB free | §2 |
-| Developer Mac, M3 or later | the Cuttlefish reference host as a nested-virtualization VM (#064) | M3 or later, 24 GB RAM recommended | §3.3 |
-| Linux x86_64 AOSP builder | the APKRun AOSP product (#035); CI runner `apkrun-aosp` | ≥ 64 GB RAM, ≥ 400 GB disk | §5 |
+| Developer Mac, M3 or later | the Cuttlefish reference host as a nested-virtualization VM (#65) | M3 or later, 24 GB RAM recommended | §3.3 |
+| Linux x86_64 AOSP builder | the APKRun AOSP product (#36); CI runner `apkrun-aosp` | ≥ 64 GB RAM, ≥ 400 GB disk | §5 |
 | Image build machine | `user` release images, signed with the offline AOSP release keys; never a CI runner | as the AOSP builder | §5.6 |
 | GitHub-hosted `xcode-27` | static checks, builds, and Swift T0 tests for pull requests and `main` pushes | Apple silicon, 3 cores, 7 GB RAM, 14 GB SSD; one fresh VM per job | §6.1 |
 | `apkrun-ci` | self-hosted runner for trusted default-branch jobs | bare-metal Apple silicon, macOS 27 | §6 |
@@ -69,7 +69,7 @@ pytest Images/tools/tests
 
 | Tool | Pin | Notes |
 |---|---|---|
-| JDK | Temurin 17: `export JAVA_HOME="$(/usr/libexec/java_home -v 17)"` | Kotlin targets JVM 17 ([guest-components.md](../02-design/guest-components.md) §2). `scripts/bootstrap` does not install it yet (planned, #015) |
+| JDK | Temurin 17: `export JAVA_HOME="$(/usr/libexec/java_home -v 17)"` | Kotlin targets JVM 17 ([guest-components.md](../02-design/guest-components.md) §2). `scripts/bootstrap` does not install it yet (planned, #16) |
 | Gradle | 9.6.1, the wrapper in `gradle/wrapper/` (`distributionSha256Sum`), run as `./gradlew -p Guest`. Never install Gradle globally | `Tests/Fixtures/AndroidApps/` has its own wrapper of the same version |
 | AGP, Kotlin, coroutines, protobuf, ktfmt | `Guest/gradle/libs.versions.toml`: AGP 9.4.1, coroutines 1.11.0, protobuf 4.31.1, ktfmt 0.64 | [coding-conventions.md](coding-conventions.md) §2 |
 | Android platform, build tools, platform tools | `platforms;android-37.0`, `build-tools;37.0.0` (`apksigner`, the reference of `scripts/dev/verify-corpus.sh`), `platform-tools` (`adb`) | compileSdk and targetSdk 37 |
@@ -83,7 +83,7 @@ export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
 export PATH="$ANDROID_HOME/platform-tools:$PATH"
 ```
 
-`Guest/local.properties` and `Tests/Fixtures/AndroidApps/local.properties` (git-ignored) hold `sdk.dir=$ANDROID_HOME`. `scripts/bootstrap` writes them once the check is added (planned, #015).
+`Guest/local.properties` and `Tests/Fixtures/AndroidApps/local.properties` (git-ignored) hold `sdk.dir=$ANDROID_HOME`. `scripts/bootstrap` writes them once the check is added (planned, #16).
 
 ### 2.6 Rust and cargo-ndk (planned)
 
@@ -98,7 +98,7 @@ cargo install cargo-ndk --version 3.5.4 --locked
 cd Guest/vsockd && cargo ndk -t arm64-v8a build --release
 ```
 
-The product build uses the Rust prebuilt of the pinned AOSP tree (`prebuilts/rust/`; [build-system.md](build-system.md) §9). The host Rust pin must not be newer than that prebuilt, so code that builds with cargo also builds with Soong. #034 records the prebuilt version and sets the pin to match.
+The product build uses the Rust prebuilt of the pinned AOSP tree (`prebuilts/rust/`; [build-system.md](build-system.md) §9). The host Rust pin must not be newer than that prebuilt, so code that builds with cargo also builds with Soong. #35 records the prebuilt version and sets the pin to match.
 
 ### 2.7 Code generation tools
 
@@ -123,7 +123,7 @@ The product build uses the Rust prebuilt of the pinned AOSP tree (`prebuilts/rus
 | `APKRUN_ANDROID_HOME` | SDK root outside `~/Documents` holding `platform-tools` (§4) | T2 Android suites |
 | `APKRUN_TEST_DEVELOPMENT_TEAM` | Apple Development team ID of the lab test host | signed T2 and G1 tests |
 | `APKRUN_TEST_CODE_SIGN_IDENTITY` | SHA-1 fingerprint of that team's Apple Development certificate | signed T2 and G1 tests |
-| `APKRUN_AOSP_BUILDER` | `user@host` of the Linux builder (planned, #035) | `scripts/aosp/remote-build.sh` (§5.5) |
+| `APKRUN_AOSP_BUILDER` | `user@host` of the Linux builder (planned, #36) | `scripts/aosp/remote-build.sh` (§5.5) |
 | `APKRUN_CI` | `1` on CI runners only; turns "skip with a message" into a failure | all tests and scripts |
 
 Put the exports in `~/.zprofile`. Nothing in this table is committed.
@@ -138,11 +138,11 @@ Put the exports in `~/.zprofile`. Nothing in this table is committed.
 | Gradle | `gradle/wrapper/gradle-wrapper.properties` |
 | AGP, Kotlin, Android libraries | `Guest/gradle/libs.versions.toml` |
 | Android SDK, build tools, NDK | §2.5 and `scripts/bootstrap` |
-| Rust | `Guest/vsockd/rust-toolchain.toml`, `Guest/vsockd/Cargo.lock` (planned, #034) |
+| Rust | `Guest/vsockd/rust-toolchain.toml`, `Guest/vsockd/Cargo.lock` (planned, #35) |
 | Python packages | `Images/tools/pyproject.toml` |
 | Third-party native code, test Linux kernel and rootfs, vendored mkbootimg and avbtool | `ThirdParty/ThirdParty.lock.json` ([build-system.md](build-system.md) §6) |
 | Cuttlefish build | `Images/manifests/<buildId>/android-image.json` |
-| AOSP source | `Guest/product/manifest/pinned.xml` (planned, #035) |
+| AOSP source | `Guest/product/manifest/pinned.xml` (planned, #36) |
 
 ---
 
@@ -256,7 +256,7 @@ xcodebuild test -scheme IntegrationTests \
 
 ## 5. Linux x86_64 AOSP builder (planned)
 
-The APKRun AOSP product and every release image are built on a Linux x86_64 machine, because macOS cannot build AOSP. Set the builder up before #035 starts ([roadmap.md](../04-plan/roadmap.md) §1.3; R-14).
+The APKRun AOSP product and every release image are built on a Linux x86_64 machine, because macOS cannot build AOSP. Set the builder up before #36 starts ([roadmap.md](../04-plan/roadmap.md) §1.3; R-14).
 
 ### 5.1 Hardware
 
@@ -272,7 +272,7 @@ A cloud VM is fine for development builds. Release builds need the AOSP release 
 ### 5.2 OS and container
 
 - The host can be any 64-bit Linux that runs Docker or Podman. The build runs in a container.
-- `scripts/aosp/builder.Dockerfile` (planned, #035) is based on `ubuntu:22.04`. It includes the AOSP packages (`git-core gnupg flex bison build-essential zip curl zlib1g-dev libc6-dev-i386 x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3`), the `repo` launcher, JDK 17, and the Android SDK packages of §2.5.
+- `scripts/aosp/builder.Dockerfile` (planned, #36) is based on `ubuntu:22.04`. It includes the AOSP packages (`git-core gnupg flex bison build-essential zip curl zlib1g-dev libc6-dev-i386 x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3`), the `repo` launcher, JDK 17, and the Android SDK packages of §2.5.
 - Build the image once per Dockerfile change, and reference it by digest in the bundle `provenance` ([android-image.md](../02-design/android-image.md) §11.5).
 
 ```bash
@@ -314,17 +314,17 @@ The zip goes through the same pipeline as the stock image, starting with invento
 
 ```bash
 export APKRUN_AOSP_BUILDER=builder@aosp-builder.example
-git push origin task/035-apkrun-aosp-product      # the builder fetches this commit
+git push origin task/36-apkrun-aosp-product      # the builder fetches this commit
 scripts/aosp/remote-build.sh --revision "$(git rev-parse HEAD)" --variant userdebug
 ```
 
-`scripts/aosp/remote-build.sh` (planned, #035): checks that the revision exists on `origin` (the builder never receives uncommitted work); runs `build-product.sh` inside the container; copies `out/dist/apkrun_arm64-img-<n>.zip` and `build-info.json` to `Images/work/ar<n>/download/`; and prints the next commands (`scripts/inventory-cuttlefish.py`, `apkrun_image bundle`). The log stays on the builder under `~/aosp/logs/<BUILD_NUMBER>.log`.
+`scripts/aosp/remote-build.sh` (planned, #36): checks that the revision exists on `origin` (the builder never receives uncommitted work); runs `build-product.sh` inside the container; copies `out/dist/apkrun_arm64-img-<n>.zip` and `build-info.json` to `Images/work/ar<n>/download/`; and prints the next commands (`scripts/inventory-cuttlefish.py`, `apkrun_image bundle`). The log stays on the builder under `~/aosp/logs/<BUILD_NUMBER>.log`.
 
 ### 5.6 Keys on the builder
 
 - `userdebug` builds use the AOSP test keys of the tree. They are for development and CI only.
 - `user` builds use the APKRun platform and release keys. The keys are offline and live only on the image build machine ([security-model.md](../01-architecture/security-model.md) §7). They are permanent: changing them breaks updates of the platform-signed agents.
-- The release signing flow is fixed by #035 (OQ-36; [android-image.md](../02-design/android-image.md) §11.4).
+- The release signing flow is fixed by #36 (OQ-36; [android-image.md](../02-design/android-image.md) §11.4).
 
 ### 5.7 Build numbers and provenance
 
@@ -389,7 +389,7 @@ The harness checks `AXIsProcessTrusted()` at start and fails with a message that
 
 ## 7. Verification checklist
 
-`scripts/bootstrap` installs what it can (pinned tools, the Python venv, Homebrew packages) and then checks the environment. `scripts/bootstrap --check` only checks. Checks for tools that a later task adds print `skip` until it lands (JDK and Android SDK: #015; Rust and cargo-ndk: #034; Android Build API key: #008). A machine is ready when every applicable check reports `ok` and none reports `FAIL`. Warnings are informational.
+`scripts/bootstrap` installs what it can (pinned tools, the Python venv, Homebrew packages) and then checks the environment. `scripts/bootstrap --check` only checks. Checks for tools that a later task adds print `skip` until it lands (JDK and Android SDK: #16; Rust and cargo-ndk: #35; Android Build API key: #9). A machine is ready when every applicable check reports `ok` and none reports `FAIL`. Warnings are informational.
 
 | Check | Command it runs | Expected |
 |---|---|---|
@@ -399,9 +399,9 @@ The harness checks `AXIsProcessTrusted()` at start and fails with a message that
 | Swift | `swift --version` | 6.2 or later |
 | Homebrew packages | `brew bundle check --file scripts/Brewfile` | satisfied |
 | Python venv | `Images/tools/.venv/bin/python -m apkrun_image --help` | exit 0 |
-| JDK | `java -version` | 17 (planned, #015) |
-| Android SDK | `sdkmanager --list_installed` | platform 37, build-tools 37.0.0, NDK 28.2.13676358, platform-tools (planned, #015) |
-| Rust, cargo-ndk | `rustup target list --installed` in `Guest/vsockd`; `cargo ndk --version` | `aarch64-linux-android`; 3.5.4 (planned, #034) |
+| JDK | `java -version` | 17 (planned, #16) |
+| Android SDK | `sdkmanager --list_installed` | platform 37, build-tools 37.0.0, NDK 28.2.13676358, platform-tools (planned, #16) |
+| Rust, cargo-ndk | `rustup target list --installed` in `Guest/vsockd`; `cargo ndk --version` | `aarch64-linux-android`; 3.5.4 (planned, #35) |
 | protoc, buf, XcodeGen | `build/tools/*/bin/* --version` | versions of `scripts/tool-versions.env` |
 | protoc-gen-swift | `build/tools/protoc-gen-swift/bin/protoc-gen-swift --version` | the swift-protobuf version in `Package.resolved` |
 | API key | `APKRUN_ANDROID_BUILD_API_KEY` set | set (warning only) |
@@ -432,7 +432,7 @@ scripts/check-module-deps.sh
 | `apkrun dev adb` fails with `runtime.adbExecutableMissing` | no `adb` in `$ANDROID_HOME/platform-tools` or `PATH` | §2.5 |
 | Developer boot logs `vm.loopbackPortInUse` (port 6520) and runs without ADB | another program listens on port 6520 | quit it (`lsof -nP -iTCP:6520 -sTCP:LISTEN`), then boot again |
 | `apkrun dev adb` reports `device '127.0.0.1:6520' not found` | the developer boot is not running | start `apkrun dev boot`; `apkrun dev adb` connects the endpoint itself |
-| Gradle: "SDK location not found" | `local.properties` missing | `scripts/bootstrap` (planned, #015) |
+| Gradle: "SDK location not found" | `local.properties` missing | `scripts/bootstrap` (planned, #16) |
 | `cargo ndk`: "Could not find any NDK" | `ANDROID_NDK_HOME` unset or another version | §2.5 |
 | Soong rejects Rust that builds with cargo | host Rust pin newer than `prebuilts/rust` | §2.6 |
 | Development agent does not start after a rebuild | the registered path points into deleted DerivedData | `scripts/dev/install-dev-app.sh` ([build-system.md](build-system.md) §13) |

@@ -169,7 +169,7 @@ private func scroll(
 }
 
 /// A move without a button during a press is not a drag: a drag is `leftDragged`. The move sends nothing, so the tap that
-/// the press started still ends where it began. A stray pointer during a click must not turn it into a drag (#024).
+/// the press started still ends where it began. A stray pointer during a click must not turn it into a drag (#25).
 @Test func aMoveWithoutAButtonDuringATouchGestureSendsNothing() {
     var translator = EventTranslator(mapper: contentMapper)
     #expect(translator.translate(sample(.leftDown)) == [touch(.down, 200, 168)])

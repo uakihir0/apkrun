@@ -4,7 +4,7 @@ import Testing
 
 @testable import WindowingCore
 
-// The adapter of input.md §5.2 (#025): NSEvent key events become KeySamples, and the side of each modifier comes from the
+// The adapter of input.md §5.2 (#26): NSEvent key events become KeySamples, and the side of each modifier comes from the
 // device-dependent bits of NSEvent.modifierFlags.
 
 /// The generic and device bits of the modifier flags that the tests build.

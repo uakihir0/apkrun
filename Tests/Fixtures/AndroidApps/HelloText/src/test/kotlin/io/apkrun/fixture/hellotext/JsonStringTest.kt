@@ -3,7 +3,7 @@ package io.apkrun.fixture.hellotext
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** The JSON literal of the `text` event (#025). */
+/** The JSON literal of the `text` event (#26). */
 class JsonStringTest {
     @Test
     fun aPlainTextIsQuoted() {

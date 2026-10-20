@@ -4,7 +4,7 @@ import Testing
 
 @testable import WindowingCore
 
-// The mapper that the pointer view builds from its content rectangle (input.md §3, #024), without a window.
+// The mapper that the pointer view builds from its content rectangle (input.md §3, #25), without a window.
 
 @Test func aSteadyStateMapperMapsTheWholeContentToThePixels() {
     let mapper = DisplayGeometry.coordinateMapper(

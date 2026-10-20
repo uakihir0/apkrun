@@ -95,7 +95,7 @@ public struct RuntimeIdleSettings: Sendable, Equatable {
         /// Start only when an operation requires Android.
         case onDemand
 
-        /// Preboot after login. The preboot trigger is implemented in #069 step 2.
+        /// Preboot after login. The preboot trigger is implemented in #70 step 2.
         case atLogin
     }
 

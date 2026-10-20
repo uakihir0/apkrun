@@ -44,11 +44,11 @@ The following are outside the v1 scope. **Do not add support for any of them unl
 | ARM translation (houdini, ndk_translation) | Out of scope; licensing is complicated |
 | Windows and Linux hosts | macOS-only product |
 | Apps that depend on Google Play Integrity | No GMS. Integrity bypass is **never** implemented. |
-| Google Play certification and bundled GMS | Only an optional, isolated post-v1 track (#097) |
+| Google Play certification and bundled GMS | Only an optional, isolated post-v1 track (#98) |
 | Banking apps and similar strong tamper detection | Root and emulator detection, Integrity dependence |
 | Strong DRM (for example Widevine L1) | Hardware DRM cannot be provided |
 | Competitive anti-cheat | Emulator detection |
-| Vulkan-only games | VirGL has no Vulkan. Evaluated in the post-v1 track #096. |
+| Vulkan-only games | VirGL has no Vulkan. Evaluated in the post-v1 track #97. |
 | Hardware-specific APIs (NFC, UWB, fingerprint, most sensors, telephony) | Not present in a virtual machine |
 | Android Automotive, TV, and Wear-only apps | Phone form factor only |
 | Camera | Not in the v1.0 candidate list; v1.x or later |
@@ -69,7 +69,7 @@ Internally there are four levels, for a future per-app compatibility database. U
 | `compatibilityMode` | Works only in the `primaryDisplayCompatibility` window mode. | **Works with limitations** |
 | `unsupported` | Does not start, or has unsupported requirements (Integrity, x86-only, and others). | **Unsupported** |
 
-The compatibility database is a v1.0 candidate (#090).
+The compatibility database is a v1.0 candidate (#91).
 
 ---
 

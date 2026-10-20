@@ -1,4 +1,4 @@
-/// The US key map from macOS virtual key codes to Android key codes (input.md §5.2, #025).
+/// The US key map from macOS virtual key codes to Android key codes (input.md §5.2, #26).
 ///
 /// The rows are the rows of `Packages/InputCore/Resources/keymap-mac-android.csv`. A T0 test reads the CSV and checks that
 /// this table has the same rows, and that every Android name and value is in the API 37 list. The table is a literal so

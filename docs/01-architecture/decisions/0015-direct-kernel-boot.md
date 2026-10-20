@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-28
-- Related: #009–#015, #064, #065, R-11, R-12, [../../02-design/android-image.md](../../02-design/android-image.md)
+- Related: #10–#16, #65, #66, R-11, R-12, [../../02-design/android-image.md](../../02-design/android-image.md)
 
 ## Context
 
@@ -42,9 +42,9 @@ Use **`VZLinuxBootLoader`** with artifacts pre-assembled by the runtime image pi
 ## Consequences
 
 - We own "bootloader semantics": no in-guest OTA, no slot switching, and no recovery boot (recovery-as-boot is not supported).
-- The VZ PCI host path for `boot_devices` must be discovered empirically (#011: boot any Linux and read `/sys/bus/pci/devices` and `/sys/devices/platform`), because Apple doesn't document it. `androidboot.boot_part_uuid` is an alternative if the path isn't stable.
-- AVB: userdebug images are unlocked (orange). For production images we either keep AVB in "unlocked" mode with dm-verity still on, or compute vbmeta digests at build time and pass them via bootconfig. This is settled in #035.
+- The VZ PCI host path for `boot_devices` must be discovered empirically (#12: boot any Linux and read `/sys/bus/pci/devices` and `/sys/devices/platform`), because Apple doesn't document it. `androidboot.boot_part_uuid` is an alternative if the path isn't stable.
+- AVB: userdebug images are unlocked (orange). For production images we either keep AVB in "unlocked" mode with dm-verity still on, or compute vbmeta digests at build time and pass them via bootconfig. This is settled in #36.
 
 ## Verification
 
-#012–#014 reach `sys.boot_completed=1` (G2). #064's reference capture is diffed against the VZ boot (`/proc/cmdline`, `/proc/bootconfig`, `getprop`) with no unexplained differences.
+#13–#15 reach `sys.boot_completed=1` (G2). #65's reference capture is diffed against the VZ boot (`/proc/cmdline`, `/proc/bootconfig`, `getprop`) with no unexplained differences.

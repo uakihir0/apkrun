@@ -1,4 +1,4 @@
-"""Tests of the vendor reseal (#099, steps 2 and 3).
+"""Tests of the vendor reseal (#99, steps 2 and 3).
 
 The partitions here are small synthetic images that the vendored avbtool seals, so the tests need
 neither the erofs tools nor a VM. The stock vendor_a and vbmeta_a of the bundle are not in

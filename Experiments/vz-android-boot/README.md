@@ -2,13 +2,13 @@
 
 This experiment boots the pinned stock Cuttlefish image (build 16373615) directly on
 Virtualization.framework, without Cuttlefish host tools and without nested virtualization.
-It answers one question before the #011–#015 production work: does the stock image reach
+It answers one question before the #12–#16 production work: does the stock image reach
 `sys.boot_completed=1` under VZ direct kernel boot (G2 condition 1), and which host-service
 substitutes does it need?
 
 Nothing here is imported by a production target (AGENTS.md §11). The production path is
-`apkrun_image disks` (#011), `AndroidBootPlanner` and `VMController` (#012), and the
-RuntimeCore substitutes (#095). Results are recorded in
+`apkrun_image disks` (#12), `AndroidBootPlanner` and `VMController` (#13), and the
+RuntimeCore substitutes (#96). Results are recorded in
 [android-image.md](../../docs/02-design/android-image.md) §17.
 
 ## Files
@@ -16,7 +16,7 @@ RuntimeCore substitutes (#095). Results are recorded in
 | File | Purpose |
 |---|---|
 | `build_disks.py` | Writes `os.img`, `persistent.img`, and `userdata.img` (raw GPT, android-image.md §4.2) from the verified download zip. Unwritten ranges stay holes. |
-| `make_initrd.py` | Merges the bootconfig layers (vendor, image from a #064 launcher capture, platform, instance) with the repository's `bootconfig.py` and `avb.py`, and appends the trailer to `ramdisk.img`. |
+| `make_initrd.py` | Merges the bootconfig layers (vendor, image from a #65 launcher capture, platform, instance) with the repository's `bootconfig.py` and `avb.py`, and appends the trailer to `ramdisk.img`. |
 | `VZAndroidBoot.swift` | The VZ harness: 10 single-port consoles plus one multiport console device for hvc10–hvc19, vsock with a loopback ADB forwarder (127.0.0.1:6520 → vsock 5555), NAT NICs, optional VZ virtio-gpu, and the "no sensors" responder on hvc18. |
 | `build.sh` | Builds and ad-hoc signs the harness with `com.apple.security.virtualization`. |
 | `run.sh` | Clones the writable disks (APFS `clonefile`) into a fresh run directory and boots. |
@@ -53,7 +53,7 @@ G2 pass conditions: it resets the instance, then runs five cold boots and checks
 
 ### The stall was the nested reference host
 
-| Event | #064 nested reference (E1, guest uptime) | VZ direct boot (guest uptime) |
+| Event | #65 nested reference (E1, guest uptime) | VZ direct boot (guest uptime) |
 |---|---|---|
 | Second-stage init | 8.4 s | 0.3 s |
 | `zygote` start | 233 s | 1.3 s |
@@ -105,4 +105,4 @@ Services that exited during a dwell were one-shot or lazy services (`apexd`, `ar
 two-disk layout (`--disk-set disks2`), two cold boots passed the same checks (7.6 s and 5.1 s).
 
 This is not the G2 gate: G2 runs `Tests/AcceptanceTests/G2/` against the product code from a clean
-`main` (#014).
+`main` (#15).

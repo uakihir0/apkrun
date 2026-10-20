@@ -1,7 +1,7 @@
 import Foundation
 import RuntimeAPI
 
-/// Dispatches package-session requests to the window that owns that package in an embedded multi-window run (#030).
+/// Dispatches package-session requests to the window that owns that package in an embedded multi-window run (#31).
 ///
 /// Each child service owns one session and display lease; this actor keeps the RuntimeAPI surface singular while the
 /// Guest Agent, DisplayPool, SessionRegistry, and input stream are shared by the boot.

@@ -1874,8 +1874,8 @@
         "ja": "Android ディスプレイの詳細は、まだランタイムサービスから取得できません。"
       },
       "remediation": {
-        "en": "Run `apkrun runtime status` for available runtime details. Display reporting is tracked in #028.",
-        "ja": "取得可能なランタイム情報は `apkrun runtime status` で確認できます。ディスプレイ情報の対応は #028 で管理されています。"
+        "en": "Run `apkrun runtime status` for available runtime details. Display reporting is tracked in #29.",
+        "ja": "取得可能なランタイム情報は `apkrun runtime status` で確認できます。ディスプレイ情報の対応は #29 で管理されています。"
       },
       "action": "none",
       "cliExit": 69,
@@ -2548,7 +2548,7 @@
         "case": "connectTimedOut",
         "when": "no handshake completes before the connect deadline, and no refusal that would repeat was received",
         "raisedBy": "GuestAgentSupervisor",
-        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §13.2 (#072)"
+        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §13.2 (#73)"
       }
     },
     {

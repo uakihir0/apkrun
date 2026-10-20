@@ -99,7 +99,7 @@ public enum RuntimeEvent: Sendable {
     case logcat(Data)
     /// The first-boot settings ran (android-image.md §7.6).
     case firstBootSettingsApplied
-    /// A developer console is attached for this boot: `hvc0`, and `hvc1` in developer mode (#014).
+    /// A developer console is attached for this boot: `hvc0`, and `hvc1` in developer mode (#15).
     case devConsole(DevConsoleEndpoint)
 }
 
@@ -114,13 +114,13 @@ private struct BootDraft: Sendable {
     var cpuCount: Int
 }
 
-/// Owns the Android VM: boot, readiness, and stop (runtime-daemon.md §3; first cut for #012-#014).
+/// Owns the Android VM: boot, readiness, and stop (runtime-daemon.md §3; first cut for #13-#15).
 ///
 /// `ensureReady` runs steps 0-2, 4, and 5 of runtime-daemon.md §3.2 with the
 /// boot timeouts and the stall limit. In M1, `ready` is entered at
-/// `.bootCompleted`, because the agents (#072) and the post-boot setup do not
-/// exist yet. Developer mode adds the ADB bridge (#015): the loopback forwarder, and the ADB
-/// boot signals. The GraphicsCore device of the GPU profile is appended to each boot's definition (#021).
+/// `.bootCompleted`, because the agents (#73) and the post-boot setup do not
+/// exist yet. Developer mode adds the ADB bridge (#16): the loopback forwarder, and the ADB
+/// boot signals. The GraphicsCore device of the GPU profile is appended to each boot's definition (#22).
 public actor RuntimeSupervisor {
     /// The current state.
     public private(set) var state: RuntimeState = .stopped
@@ -160,7 +160,7 @@ public actor RuntimeSupervisor {
     private var adbPollTask: Task<Void, Never>?
     /// The bundled development Guest Agent, when developer mode is given one (guest-components.md §3).
     private let guestAgentBundle: GuestAgentBundle?
-    /// The development display of scanout 0, or `nil` (`apkrun dev boot --window`, #023).
+    /// The development display of scanout 0, or `nil` (`apkrun dev boot --window`, #24).
     private let developmentDisplay: DevelopmentDisplay?
     /// The development Guest Agent of the boot in flight, from the start of the ADB bridge until the boot ends.
     public private(set) var developmentGuestAgent: DevelopmentGuestAgent?
@@ -350,7 +350,7 @@ public actor RuntimeSupervisor {
         // The whole-boot limit counts from the start of the boot (runtime-daemon.md §3.2), VM start included.
         let bootStarted = ContinuousClock.now
         // The GPU device is decided before anything is written. For drmVirgl that starts the renderer, so a renderer
-        // failure ends the boot here, before the VM is created (#021, #022, graphics.md §8).
+        // failure ends the boot here, before the VM is created (#22, #23, graphics.md §8).
         let gpuDevices = try AndroidGraphicsDevices.devices(
             for: options.gpuProfile,
             requiredHostCapabilities: image.manifest.gpuProfiles[options.gpuProfile.rawValue]?.requiredHostCapabilities
@@ -832,7 +832,7 @@ public actor RuntimeSupervisor {
         }
     }
 
-    /// Reads `sys.boot_completed` over the serial shell (the M1 debug channel, #014).
+    /// Reads `sys.boot_completed` over the serial shell (the M1 debug channel, #15).
     private func confirmBootCompleted(
         _ shell: AndroidSerialShell,
         before requiredAgentDeadline: ContinuousClock.Instant?

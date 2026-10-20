@@ -1,15 +1,15 @@
 # M8 Real update sources
 
-M8 adds two public update sources that need no Google Play: F-Droid repositories (`.fdroid`) and GitHub Releases (`.github`). Both use the M6 provider protocol and validation pipeline unchanged. Provider metadata can only cause a refusal. The package name, versionCode, and signer of the downloaded APK decide every update ([update-system.md](../../02-design/update-system.md) §6). #051 and #052 can be built in parallel. They close no gate.
+M8 adds two public update sources that need no Google Play: F-Droid repositories (`.fdroid`) and GitHub Releases (`.github`). Both use the M6 provider protocol and validation pipeline unchanged. Provider metadata can only cause a refusal. The package name, versionCode, and signer of the downloaded APK decide every update ([update-system.md](../../02-design/update-system.md) §6). #52 and #53 can be built in parallel. They close no gate.
 
 ---
 
-## #051 F-Droid provider
+## #52 F-Droid provider
 
 | Field | Value |
 |---|---|
 | Milestone | M8 (v0.5) |
-| Depends on | #050 |
+| Depends on | #51 |
 | Design | [update-system.md](../../02-design/update-system.md) §4.5, §4.7, §5, §6; [host-ui.md](../../02-design/host-ui.md) §7.5 |
 | Code | `Packages/UpdateCore/Sources/UpdateCore/Providers/FDroid*.swift`, `Packages/UpdateCore/Tests/UpdateCoreTests/`, `Tests/Fixtures/update-repos/fdroid/`, `scripts/dev/update-server.py` |
 
@@ -20,7 +20,7 @@ M8 adds two public update sources that need no Google Play: F-Droid repositories
 **Steps.**
 1. **Verify the format.** Check the field names, diff format, and pinned fingerprint in [update-system.md](../../02-design/update-system.md) §4.5 against a real index and `entry.jar`. Correct [update-system.md](../../02-design/update-system.md) §4.5 where they differ. **Check:** the field names match the real format.
 2. **`FDroidIndexVerifier`.** Verify `entry.jar` in the order of [update-system.md](../../02-design/update-system.md) §4.5 "Index verification", with ZIPFoundation (ADR-0017). Any failure is `UpdateFailure.providerSignatureInvalid`. It sets `updates.providers` to error and blocks the repository until a check verifies. HTTPS only; Debug builds also allow `http://127.0.0.1`. **Check:** T0 verifier cases pass.
-3. **`FDroidIndexReader`.** Download the index or the diff that `entry.json` names, check its SHA-256, and merge. Cache under `Providers/cache/fdroid/` and fetch at most once per check interval. Stream-decode within 64 MiB, keeping managed and requested packages only. Take a byte buffer, so #091 can fuzz it. A hash mismatch is `providerMetadataInvalid(detail:)`. **Check:** T0 cached index plus diff equals the full index; the T1 memory test passes.
+3. **`FDroidIndexReader`.** Download the index or the diff that `entry.json` names, check its SHA-256, and merge. Cache under `Providers/cache/fdroid/` and fetch at most once per check interval. Stream-decode within 64 MiB, keeping managed and requested packages only. Take a byte buffer, so #92 can fuzz it. A hash mismatch is `providerMetadataInvalid(detail:)`. **Check:** T0 cached index plus diff equals the full index; the T1 memory test passes.
 4. **`FDroidProvider` check and download.** Select the candidate, artifact, and cursor as [update-system.md](../../02-design/update-system.md) §4.5 `check` says. `download` streams into `Packages/<id>/incoming/<ticket>/` under [update-system.md](../../02-design/update-system.md) §5. V4 always applies, and V5 compares the declared values with the APK. When only other signers exist, record `noCompatibleArtifact(.signerDiffers)` and show the signer text of [update-system.md](../../02-design/update-system.md) §4.5. **Check:** T0 selection and `.signerDiffers` tests pass.
 5. **Configuration and suggestion.** The spec is `fdroid[:<url>#<fingerprint>]`. A bare `fdroid` means the main repository with its pinned fingerprint. `setUpdatePolicy` makes one test request. The Add-sheet suggestion follows [update-system.md](../../02-design/update-system.md) §4.7. Logs use `io.apkrun.update`/`provider` with the host only. **Check:** `apkrun update policy io.apkrun.fixture.helloupdate --mode automatic --provider fdroid:http://127.0.0.1:<port>/repo#<test fingerprint>` succeeds, and a wrong fingerprint fails with `providerSignatureInvalid`.
 6. **Test repository.** CI runs `fdroid update` on HelloUpdate V1 and V2 and signs the index with `Tests/Fixtures/signing/test-fdroid-repo.*`. The output goes to `Tests/Fixtures/update-repos/fdroid/`, which `scripts/dev/update-server.py` serves in Debug builds. **Check:** the CI output passes the T0 verifier with the test fingerprint.
@@ -45,12 +45,12 @@ M8 adds two public update sources that need no Google Play: F-Droid repositories
 
 ---
 
-## #052 GitHub provider
+## #53 GitHub provider
 
 | Field | Value |
 |---|---|
 | Milestone | M8 (v0.5) |
-| Depends on | #050 |
+| Depends on | #51 |
 | Design | [update-system.md](../../02-design/update-system.md) §4.6, §4.7, §5, §6; [host-ui.md](../../02-design/host-ui.md) §7.5 |
 | Code | `Packages/UpdateCore/Sources/UpdateCore/Providers/GitHubProvider.swift`, `Packages/UpdateCore/Tests/UpdateCoreTests/`, `Tests/Fixtures/update-repos/github/`, `scripts/dev/update-server.py` |
 

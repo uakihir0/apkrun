@@ -8,7 +8,7 @@
     ///
     /// The pump runs on the main actor, next to the AppKit event loop. It makes the window when the display is attached,
     /// forwards each ready frame to the window, and updates the title once a second. With `--stats` it also logs each
-    /// line to standard error. The window's pointer events go to `inputSink` (#024).
+    /// line to standard error. The window's pointer events go to `inputSink` (#25).
     @MainActor
     final class DisplayPump {
         private let display: DeveloperDisplay

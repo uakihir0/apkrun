@@ -1,4 +1,4 @@
-"""Tests for the file-context rule that labels the files a rebuild adds (#099, IR-623).
+"""Tests for the file-context rule that labels the files a rebuild adds (#99, IR-623).
 
 The excerpts in fixtures/selinux are verbatim lines of the stock contexts of build 16373615. The
 labels in the stock partition were read with `xattr` from the exported tree, so these tests check

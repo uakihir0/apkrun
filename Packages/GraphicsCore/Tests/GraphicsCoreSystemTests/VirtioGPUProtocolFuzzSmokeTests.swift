@@ -7,7 +7,7 @@ import Testing
 ///
 /// Mutated golden vectors must either decode, or fail with a typed
 /// `VirtioGPUProtocolError`. An accepted input must re-encode to bytes that decode
-/// to the same value. The libFuzzer target belongs to #091.
+/// to the same value. The libFuzzer target belongs to #92.
 private struct SplitMix64 {
     private var state: UInt64
 

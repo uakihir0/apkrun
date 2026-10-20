@@ -1,4 +1,4 @@
-"""Inject the guest Mesa libraries into the vendor partition of an Android image (#099, step 2
+"""Inject the guest Mesa libraries into the vendor partition of an Android image (#99, step 2
 offline).
 
 The inputs are an AndroidImageManifest, its source archive, and the verified output of
@@ -709,7 +709,7 @@ def inject_vendor(
 
         record = {
             "schemaVersion": 1,
-            "task": "#099",
+            "task": "#99",
             "buildId": build_id,
             "partition": {"name": PARTITION, "size": partition_size, "filesystem": "erofs"},
             "stock": {
@@ -797,7 +797,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the inject-vendor command parser."""
     parser = argparse.ArgumentParser(
         prog="python -m apkrun_image inject-vendor",
-        description="Rebuild vendor_a with the verified guest Mesa libraries (#099, offline).",
+        description="Rebuild vendor_a with the verified guest Mesa libraries (#99, offline).",
     )
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--source", type=Path, help="source archive or directory")

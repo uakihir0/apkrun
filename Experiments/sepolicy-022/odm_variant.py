@@ -1,11 +1,11 @@
-"""Build a signed ODM overlay control for the exact #099 2026.10.2 image (test only).
+"""Build a signed ODM overlay control for the exact #99 2026.10.2 image (test only).
 
 The source bundle is the installed 2026.10.2-cf16373615-arm64 Mesa variant. The output uses a
 new imageVersion and changes only the `odm_a` logical partition, its signed top-level `vbmeta_a`,
 bootconfig's vbmeta digest, and the corresponding bundle hashes/signature:
 
 - in `full-control`, the precompiled policy applies all 18 candidate rules together: the
-  SurfaceFlinger rule of #022, candidate uevent and DRM-device rules for `untrusted_app` (IR-991),
+  SurfaceFlinger rule of #23, candidate uevent and DRM-device rules for `untrusted_app` (IR-991),
   and candidate sysfs rules explored for privileged and system app DRM probes (IR-1278); no
   individual rule is isolated. `surfaceflinger-egl` applies only SurfaceFlinger's `sysfs` open/read
   pair, without isolating those two permissions from each other;
@@ -33,7 +33,7 @@ The default `full-control` profile applies all 18 candidate rules. The
 rules, to test the narrow EGL-initialization hypothesis. `prepare` is
 profile-neutral; select the same profile for `build` and `check`.
 
-No VM is started by this script. The ramdisk and the kernel are the #099 ones, unchanged.
+No VM is started by this script. The ramdisk and the kernel are the #99 ones, unchanged.
 """
 
 from __future__ import annotations
@@ -91,7 +91,7 @@ CHUNK = 64 * 1024 * 1024
 BLOCK = 4096
 PART_PRECOMPILED_STOCK_SHA = "6a1f95dad28bdf50"  # prefix of the file the guest loaded at boot
 # The rules added to the stock precompiled policy: (source type, target type, class, permission).
-# SurfaceFlinger: the rule of #022 (IR-942). platform_app: the uevent read that aborted platform_app
+# SurfaceFlinger: the rule of #23 (IR-942). platform_app: the uevent read that aborted platform_app
 # RenderThreads (IR-954; requested for this variant). untrusted_app: the domain of HelloText, which
 # targets SDK 37 with the test key (seapp_contexts: `minTargetSdkVersion=37 domain=untrusted_app`,
 # IR-991). The DRM-device rules copy what SurfaceFlinger's EGL uses on the same node; in the
@@ -719,7 +719,7 @@ def build_odm_bundle(
 
     record = {
         "schemaVersion": 1,
-        "task": "#099",
+        "task": "#99",
         "purpose": "test-only ODM SELinux policy overlay control",
         "source": {
             "bundle": str(SRC),
@@ -920,7 +920,7 @@ def check(args: argparse.Namespace) -> None:
     manifest_bytes, manifest = bv._verify_stock(out, public_key)
     source_manifest_bytes, source_manifest = verify_source_bundle(public_key)
     receipt = json.loads(OUTPUT_RECEIPT.read_text(encoding="utf-8"))
-    need(receipt["task"] == "#099" and
+    need(receipt["task"] == "#99" and
          receipt["purpose"] == "test-only ODM SELinux policy overlay control",
          "the control receipt has another purpose")
     need(receipt["source"]["manifestSHA256"] == hashlib.sha256(source_manifest_bytes).hexdigest(),

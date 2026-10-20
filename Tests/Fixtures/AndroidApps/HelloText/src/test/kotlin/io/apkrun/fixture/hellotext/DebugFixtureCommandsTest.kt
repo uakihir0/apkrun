@@ -4,7 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-/** The debug commands of the screens on the JVM (#025). */
+/** The debug commands of the screens on the JVM (#26). */
 class DebugFixtureCommandsTest {
     @Test
     fun textReportsTheFieldAsAJsonStringOnRequest() {

@@ -9,7 +9,7 @@ import Testing
 }
 
 @Test func theGPUProfilesOfTheDevCommandAreSelectableByName() {
-    // `virgl` is selectable from #022 on. Any other name is an invalid argument.
+    // `virgl` is selectable from #23 on. Any other name is an invalid argument.
     #expect(DevGPUProfile(rawValue: "none") == DevGPUProfile.none)
     #expect(DevGPUProfile(rawValue: "swiftshader") == DevGPUProfile.swiftshader)
     #expect(DevGPUProfile(rawValue: "virgl") == DevGPUProfile.virgl)

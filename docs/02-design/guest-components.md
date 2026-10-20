@@ -12,7 +12,7 @@ The guest components run inside the Android guest. This document covers the Gues
 | Guest Agent app | `io.apkrun.guest` | development: hosts the IME only. Custom image: persistent priv-app that hosts **all** Guest Agent services, including the daemon code | IME, notification listener, URL handler, documents provider, and the daemon services on the custom image |
 | APKRun IME | `io.apkrun.guest/.ime.ApkRunInputMethodService` | both | text input from the macOS input method ([input.md](input.md) §5.6) |
 | Store Agent | `io.apkrun.store` | custom image only: persistent priv-app | installs, updates, uninstalls, metadata, icons ([guest-protocol.md](guest-protocol.md) §11) |
-| vsock bridge | `apkrun_vsockd` (Rust) | custom image only (also pushed as root for the #034 validation) | vsock ports 6100–6111 → the agents' abstract sockets |
+| vsock bridge | `apkrun_vsockd` (Rust) | custom image only (also pushed as root for the #35 validation) | vsock ports 6100–6111 → the agents' abstract sockets |
 
 The same daemon code runs in both modes. The difference is how it gets a process and which privileges it has. `AgentMode` in `Hello` tells the host which mode it talks to ([guest-protocol.md](guest-protocol.md) §5.1).
 
@@ -50,7 +50,7 @@ The host app bundle carries the development-mode APK at `APKRun.app/Contents/Res
 2. the `APKRUN_GUEST_DIR` environment variable,
 3. `Resources/guest` of the app bundle that holds the executable (`DevGuestAgentLocation`).
 
-Custom images carry both agents in `/system_ext/priv-app/`. The agents on a custom image are updated only with the image (#058). v1 does not update platform-signed agents through the Store Agent.
+Custom images carry both agents in `/system_ext/priv-app/`. The agents on a custom image are updated only with the image (#59). v1 does not update platform-signed agents through the Store Agent.
 
 ---
 
@@ -127,7 +127,7 @@ The application is `io.apkrun.guest`, with `android:persistent="true"`, `directB
 - `persistent="true"` (allowed for system apps) makes ActivityManager start the app at `systemReady` and restart it if it dies. `directBootAware` lets it start before the user is unlocked. With the keyguard disabled, unlock follows at once.
 - `GuestAgentApplication.onCreate` starts the same daemon code as §3.2, with a real `Context`, in `AgentMode.PRIVILEGED_APP`. It binds the same abstract socket names, which `apkrun_vsockd` reaches.
 - `HealthCheckActivity` fills its window with a fixed four-quadrant color pattern. It logs `APKRUN-HEALTH: drawn` after the first `onDraw` and finishes itself after 2 s. The host launches it on a fresh display to check the whole path: display, launch, composition, and frame delivery ([runtime-daemon.md](runtime-daemon.md) §9.2, [android-image.md](android-image.md) §12.3). It is exported because the shell uid must be able to start it. It is enabled in both modes.
-- The development-only components are the same classes. In development mode the listener, URL handler, and documents provider stay disabled (`android:enabled="false"`). The agent enables them only in `PRIVILEGED_APP` mode. The features from M9 (#054, #081, #082) need the custom image.
+- The development-only components are the same classes. In development mode the listener, URL handler, and documents provider stay disabled (`android:enabled="false"`). The agent enables them only in `PRIVILEGED_APP` mode. The features from M9 (#55, #82, #83) need the custom image.
 
 ### 4.2 SELinux
 
@@ -371,14 +371,14 @@ The exact names of the attribute and the permission set are confirmed against th
 
 | Item | Plan |
 |---|---|
-| Clipboard read, write, and listen as shell in development mode (§5) | #053 checks it. If a restriction applies, the IME process does it |
-| A notification click from the background starts the app's activity on the requested display (§5) | #054 checks it on the custom image |
-| `SET_TIME_ZONE` for the shell-launched agent (§5) | #085 checks it |
-| Update ownership: granted for an owner-less package, and enforcement active on the image (§5, §8.2) | OQ-12. #039 checks both and reports enforcement in `Hello`. Working default: APKRun keeps ownership on the host only, and health reports `store.ownership` as a warning |
-| `checkInstallConstraints`: the exact caller rule, and how a foreground service counts with `GENTLE_UPDATE` (§5, §8.2) | OQ-17. #040 checks it. Working default: trust `GENTLE_UPDATE` with `setAppNotForegroundRequired()`. If a foreground service is not reported as busy, custom images add the `ListTasks` rule and a process-importance query ([update-system.md](update-system.md) §7.1) |
-| Rollback with `TEST_MANAGE_ROLLBACKS` on `user` and `userdebug` builds (§5) | OQ-11. #043 checks it. Working default: the confirmed data-loss path ([package-store.md](package-store.md) §7.3) |
+| Clipboard read, write, and listen as shell in development mode (§5) | #54 checks it. If a restriction applies, the IME process does it |
+| A notification click from the background starts the app's activity on the requested display (§5) | #55 checks it on the custom image |
+| `SET_TIME_ZONE` for the shell-launched agent (§5) | #86 checks it |
+| Update ownership: granted for an owner-less package, and enforcement active on the image (§5, §8.2) | OQ-12. #40 checks both and reports enforcement in `Hello`. Working default: APKRun keeps ownership on the host only, and health reports `store.ownership` as a warning |
+| `checkInstallConstraints`: the exact caller rule, and how a foreground service counts with `GENTLE_UPDATE` (§5, §8.2) | OQ-17. #41 checks it. Working default: trust `GENTLE_UPDATE` with `setAppNotForegroundRequired()`. If a foreground service is not reported as busy, custom images add the `ListTasks` rule and a process-importance query ([update-system.md](update-system.md) §7.1) |
+| Rollback with `TEST_MANAGE_ROLLBACKS` on `user` and `userdebug` builds (§5) | OQ-11. #44 checks it. Working default: the confirmed data-loss path ([package-store.md](package-store.md) §7.3) |
 | Hidden and privileged APIs change between Android releases (§3.4, §5, §6.2) | R-18. A missing method fails only its capability (§6.2). The per-API fallbacks are in R-18 |
-| vsock on the stock image with `apkrun_vsockd` run as root (§10) | #034 tries it. If the stock image's policy does not allow it, the validation moves to #035. See [guest-protocol.md](guest-protocol.md) §17 |
+| vsock on the stock image with `apkrun_vsockd` run as root (§10) | #35 tries it. If the stock image's policy does not allow it, the validation moves to #36. See [guest-protocol.md](guest-protocol.md) §17 |
 | Final SELinux rules, and the exact names of the vsock attribute and permission set (§4.2, §10.2) | R-13. The permissive-mode denials become rules, and the names are confirmed against the image's `system/sepolicy`. Fallback: move the function to a system service in the product, or use the platform-signed priv-app path |
 | Release image variant: signing and the AVB state (§4.2) | OQ-36. The answer affects SELinux on `user` builds (R-13) and OQ-11 ([android-image.md](android-image.md) §11.4) |
 | Steady memory use of the persistent Store Agent, against NFR-RES-04 (§8.1) | OQ-34. Fallback: the Guest Agent starts the Store Agent on demand (`EnsureStoreAgent`) |

@@ -1,4 +1,4 @@
-"""Tests for replacing one linear logical partition of a liblp super image (#099, IR-680).
+"""Tests for replacing one linear logical partition of a liblp super image (#99, IR-680).
 
 The synthetic super follows the stock layout (IR-681): a primary and a backup geometry block, three
 metadata slots with a backup copy of each, a 256-byte header of version 10.2, and empty A/B-style

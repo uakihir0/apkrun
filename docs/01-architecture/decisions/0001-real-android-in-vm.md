@@ -28,4 +28,4 @@ Run a real, unmodified AOSP-based Android system inside a virtual machine. Integ
 
 ## Verification
 
-G2 (Android reaches `boot_completed`, #014) and G4 (Hello APK renders and accepts input in a native Mac window, #026).
+G2 (Android reaches `boot_completed`, #15) and G4 (Hello APK renders and accepts input in a native Mac window, #27).

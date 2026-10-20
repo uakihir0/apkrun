@@ -179,7 +179,7 @@ object SystemServices {
                 ),
         )
 
-    /** `InputManager`: event injection. It resolves now and is used from #024 on (input.v1). */
+    /** `InputManager`: event injection. It resolves now and is used from #25 on (input.v1). */
     val input =
         SystemServiceWrapper(
             serviceName = "input",

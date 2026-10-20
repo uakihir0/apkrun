@@ -1,7 +1,7 @@
 import GraphicsCore
 import ImageCore
 
-/// The virtio-gpu device that an Android boot profile needs (graphics.md §9, #021, #022).
+/// The virtio-gpu device that an Android boot profile needs (graphics.md §9, #22, #23).
 ///
 /// ImageCore cannot depend on GraphicsCore, so the planner leaves `customDevices` empty and
 /// RuntimeCore appends the device for the requested profile (android-image.md §9.2). The profile's

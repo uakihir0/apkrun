@@ -1,7 +1,7 @@
 import AppKit
 import InputCore
 
-/// Converts AppKit key events into `KeySample`s (input.md §5.2, #025, decision D1).
+/// Converts AppKit key events into `KeySample`s (input.md §5.2, #26, decision D1).
 ///
 /// This is the only place that reads the key events of `NSEvent`. A modifier key's side comes from the device-dependent
 /// bits of `NSEvent.modifierFlags`. When a side is unknown and no side bit is set, the generic flag stands for the key.

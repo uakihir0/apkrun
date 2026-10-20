@@ -28,7 +28,7 @@ public struct DisplayMode: Equatable, Sendable, CustomStringConvertible {
     /// The density used to derive the physical size in the EDID.
     public var dotsPerInch: Int
 
-    /// The fixed mode of scanout 0 until the image's default mode is used (#028).
+    /// The fixed mode of scanout 0 until the image's default mode is used (#29).
     public static let testDefault = DisplayMode(
         widthPixels: 1024,
         heightPixels: 768,

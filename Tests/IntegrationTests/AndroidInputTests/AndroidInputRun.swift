@@ -91,7 +91,7 @@ private final class InputTouchEventRecorder: @unchecked Sendable {
     }
 }
 
-/// One development boot with the window and input, as `apkrun dev launch` runs it (#024, decision D13).
+/// One development boot with the window and input, as `apkrun dev launch` runs it (#25, decision D13).
 ///
 /// The boot is `DevBoot` with a developer display and a development input route. The window's adapters (the CLI's
 /// `DisplayPump`, `SurfacePoolFrameSource`, and `EmbeddedInputSink`) live in the CLI target, which the test host cannot
@@ -445,7 +445,7 @@ final class AndroidInputRun {
         }
     }
 
-    /// The keyboard of the window: the same view, which takes the key events as AppKit delivers them (#025).
+    /// The keyboard of the window: the same view, which takes the key events as AppKit delivers them (#26).
     func keyboard() throws -> InputKeyboard {
         let (window, view) = try windowAndView()
         return InputKeyboard(window: window, view: view)
@@ -641,7 +641,7 @@ final class AndroidInputRun {
         }
     }
 
-    /// Starts the launcher activity of `package` by its component name, as AndroidPackageTests does (#017), and waits until
+    /// Starts the launcher activity of `package` by its component name, as AndroidPackageTests does (#18), and waits until
     /// its process runs. monkey starts nothing on this image (IR-1286). A launch that starts no process throws with the
     /// resumed activity and the fatal lines of the guest log, so the first failure names the cause.
     private func launch(_ package: String) async throws {
@@ -924,7 +924,7 @@ struct InputPointer {
     }
 }
 
-/// The window's frames, from the developer display (the CLI's `SurfacePoolFrameSource`, #023).
+/// The window's frames, from the developer display (the CLI's `SurfacePoolFrameSource`, #24).
 private final class DisplayFrames: FrameSource, @unchecked Sendable {
     // UNCHECKED-SENDABLE: surface sets and frame ingestion are used by the main actor, and display acknowledgements
     // are generation-scoped.
@@ -1106,7 +1106,7 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
     }
 
     /// The wire form of `event`. A long press is not sent (decision D6), and the key events are converted as the CLI's
-    /// `EmbeddedInputSink` converts them (#025).
+    /// `EmbeddedInputSink` converts them (#26).
     static func wire(_ event: InputCore.InputEvent) -> RuntimeAPI.WireInputEvent? {
         switch event {
         case .key(let key):

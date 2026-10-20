@@ -583,7 +583,7 @@ def read_ranges(stream: BinaryIO, ranges: Sequence[tuple[int, int]]) -> list[byt
 
 @dataclass(frozen=True)
 class RangeReplacement:
-    """Replace `size` expanded bytes at `offset` with new data (#099, IR-680).
+    """Replace `size` expanded bytes at `offset` with new data (#99, IR-680).
 
     The new bytes are the `source_size` bytes of `source` that start at `source_offset`, followed by
     zeros up to `size`. `source` may be None only when `source_size` is zero.
@@ -704,7 +704,7 @@ def _write_replacement(out: BinaryIO, replacement: RangeReplacement, block_size:
 def rewrite_ranges(
     stream: BinaryIO, out: BinaryIO, replacements: Sequence[RangeReplacement]
 ) -> int:
-    """Write a sparse copy of `stream` with each replacement range replaced (#099, IR-680).
+    """Write a sparse copy of `stream` with each replacement range replaced (#99, IR-680).
 
     Chunks that the replacements do not touch are written again from their parsed records, so an
     empty `replacements` gives back the input bytes. A chunk cut by a replacement keeps its type on

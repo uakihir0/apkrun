@@ -439,9 +439,9 @@ fi
 check_metal_toolchain
 setup_homebrew_tools
 setup_python_tools
-report skip "JDK and Android SDK" "added by #015"
-report skip "Rust and cargo-ndk" "added by #034"
-report skip "Android Build API key" "added by #008"
+report skip "JDK and Android SDK" "added by #16"
+report skip "Rust and cargo-ndk" "added by #35"
+report skip "Android Build API key" "added by #9"
 
 if (( failures > 0 )); then
     exit 1

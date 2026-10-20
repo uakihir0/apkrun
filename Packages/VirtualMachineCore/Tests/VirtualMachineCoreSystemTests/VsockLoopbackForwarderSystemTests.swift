@@ -5,7 +5,7 @@ import Testing
 
 @testable import VirtualMachineCore
 
-/// Host-only checks of `VsockLoopbackForwarder` over real loopback sockets (#015 T1). The guest end
+/// Host-only checks of `VsockLoopbackForwarder` over real loopback sockets (#16 T1). The guest end
 /// is a socketpair, so no VM is needed.
 @Test(.timeLimit(.minutes(1)))
 func loopbackForwarderCarriesBytesInBothDirections() async throws {
@@ -162,7 +162,7 @@ func loopbackForwarderListensOnlyOnTheLoopbackAddress() async throws {
     defer { forwarder.stop() }
     let port = try #require(forwarder.port)
 
-    // The acceptance check of #015: lsof reports the listener on 127.0.0.1 only.
+    // The acceptance check of #16: lsof reports the listener on 127.0.0.1 only.
     let addresses = try listeningAddresses(port: port)
     #expect(addresses == ["127.0.0.1:\(port)"])
 }

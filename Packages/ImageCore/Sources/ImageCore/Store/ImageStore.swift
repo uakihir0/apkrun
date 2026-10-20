@@ -3,7 +3,7 @@ import Darwin
 import DiagnosticsCore
 import Foundation
 
-/// Where an image comes from (android-image.md §9.1). The archive case arrives with #058.
+/// Where an image comes from (android-image.md §9.1). The archive case arrives with #59.
 public enum ImageSource: Sendable, Equatable {
     /// A bundle directory with the files of runtime-image-manifest.md §3.1 (a development install).
     case directory(URL)

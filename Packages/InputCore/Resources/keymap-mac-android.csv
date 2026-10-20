@@ -1,4 +1,4 @@
-# The US map from macOS virtual key codes (kVK_*) to Android KeyEvent key codes (input.md §5.2, #025).
+# The US map from macOS virtual key codes (kVK_*) to Android KeyEvent key codes (input.md §5.2, #26).
 # Source of the kVK_* values: HIToolbox Events.h of the macOS SDK 27.0 in Xcode 27.0.
 # Source of the KEYCODE_* values: android.view.KeyEvent of the API 37 android.jar; the same values are in android-api37-keycodes.txt.
 # Keys that are not forwarded in key mode: Command (both sides), Function, F13 to F20, ISO section, the keypad clear, Eisu and Kana, Help, the volume and mute keys, and the context menu key (input.md §5.2).

@@ -181,7 +181,7 @@ An adopted package ([package-store.md](../02-design/package-store.md) §9.3). It
 | `signingCertificates` | array of `SHA256Digest` | yes | 1–16 items, unique, sorted ascending | the current signer set, as Android reports it after the install |
 | `signingLineage` | array of `SHA256Digest` | yes | 0–16 items, unique, oldest → newest. Empty without key rotation | the signing lineage. When not empty, its last item is in `signingCertificates` |
 | `installer` | enum | yes | `apkrun`, `external` | who installed the package into Android. `external` only for adopted packages ([package-store.md](../02-design/package-store.md) §9.3) |
-| `updateAuthority` | enum | yes | `apkrun`, `googlePlay`, `external`, `manual` | who updates the package (ADR-0010, [update-system.md](../02-design/update-system.md) §2.1). `googlePlay` is post-v1 (#097): v1 writers never write it, and v1 readers accept it |
+| `updateAuthority` | enum | yes | `apkrun`, `googlePlay`, `external`, `manual` | who updates the package (ADR-0010, [update-system.md](../02-design/update-system.md) §2.1). `googlePlay` is post-v1 (#98): v1 writers never write it, and v1 readers accept it |
 | `updateProvider` | object | no | §2.4 | the attached update provider. Omitted when there is none |
 | `state` | `PackageState` | yes | a persisted state (§2.3.1) | the package state ([state-machines.md](../01-architecture/state-machines.md) §5) |
 | `artifacts` | object | yes | §2.3.2 | summaries of the artifact slots |
@@ -945,7 +945,7 @@ This schema is the writer's contract. It rejects unknown keys. Readers are more 
 
 These rules are defined in [configuration.md](configuration.md). They are summarized here.
 
-- **Effective value** ([configuration.md](configuration.md) §3.2): the global switch `integrations.enabled.<name> = false`, then the value in this file, then the compatibility database recommendation (#090), then the default of §3.1. Recommendations are never written to this file.
+- **Effective value** ([configuration.md](configuration.md) §3.2): the global switch `integrations.enabled.<name> = false`, then the value in this file, then the compatibility database recommendation (#91), then the default of §3.1. Recommendations are never written to this file.
 - **First record** ([configuration.md](configuration.md) §3.3, §4): at install and import, at a bootstrap import, and at the approval of a wrapper whose package has no settings. The sources are the command's flags, then `wrapper.json` ([wrapper-json.md](wrapper-json.md)), then `integrations.defaults.*`. A value equal to the default of §3.1 is not written. Authority and provider go to the record (§2.4), not to this file.
 - **Unmanaged packages** have no file. They use the defaults, with `integrations.notifications` off ([configuration.md](configuration.md) §3.2).
 

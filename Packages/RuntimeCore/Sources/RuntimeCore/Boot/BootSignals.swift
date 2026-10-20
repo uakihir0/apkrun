@@ -4,7 +4,7 @@ import Foundation
 /// The console strings that move the boot forward or end it (runtime-daemon.md §3.3).
 ///
 /// The phase strings were observed on the VZ direct boot of the stock image (android-image.md §7.7,
-/// IR-306). #064's checked-in crosvm captures are incomplete and do not reach boot completion; they
+/// IR-306). #65's checked-in crosvm captures are incomplete and do not reach boot completion; they
 /// remain useful for launcher-output comparison, but are not complete console golden logs.
 /// Patterns are data: every pattern lives in this table.
 enum BootSignals {

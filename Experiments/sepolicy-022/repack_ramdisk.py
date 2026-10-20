@@ -1,4 +1,4 @@
-"""Replace the `sepolicy` entry of an LZ4 legacy boot ramdisk, and keep every other byte (#022 experiment).
+"""Replace the `sepolicy` entry of an LZ4 legacy boot ramdisk, and keep every other byte (#23 experiment).
 
 The stock ramdisk is an LZ4 legacy frame (magic 02 21 4c 18) around one or more concatenated newc
 cpio archives. Only the entry named `sepolicy` changes. Its header takes the new size, and its data

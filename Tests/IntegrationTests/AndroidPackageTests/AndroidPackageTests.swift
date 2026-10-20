@@ -5,10 +5,10 @@ import RuntimeCore
 import RuntimeHost
 import XCTest
 
-/// HelloText package operations through RuntimeAPI on a booted guest (#016/#017 T2).
+/// HelloText package operations through RuntimeAPI on a booted guest (#17/#18 T2).
 ///
 /// The tests run in the `AndroidPackage` configuration of IntegrationTests.xctestplan and need the HelloText APK
-/// plus the Guest Agent bundle staged outside the checkout. The headless #017 activity and force-stop observations
+/// plus the Guest Agent bundle staged outside the checkout. The headless #18 activity and force-stop observations
 /// still use ADB because this harness has no display-backed RuntimeAPI session.
 final class AndroidPackageTests: XCTestCase {
     private static let packageName = "io.apkrun.fixture.hellotext"
@@ -81,7 +81,7 @@ final class AndroidPackageTests: XCTestCase {
         }
     }
 
-    /// The #017 headless launch checks remain transport-level: package installation uses RuntimeAPI, while ADB
+    /// The #18 headless launch checks remain transport-level: package installation uses RuntimeAPI, while ADB
     /// observes the activity because RuntimeAPI.launch requires a window-backed session.
     func testLaunchHelloText() async throws {
         let apk = try Self.fixtureAPK()
@@ -105,7 +105,7 @@ final class AndroidPackageTests: XCTestCase {
         }
     }
 
-    /// Uses RuntimeAPI for install, package termination, and uninstall around the #017 headless launch check.
+    /// Uses RuntimeAPI for install, package termination, and uninstall around the #18 headless launch check.
     func testInstallLaunchStopUninstall() async throws {
         let apk = try Self.fixtureAPK()
         let guestAgentBundle = try Self.guestAgentBundle()

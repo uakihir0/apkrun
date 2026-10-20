@@ -1,4 +1,4 @@
-"""Tests for manifest.sig and key generation (runtime-image-manifest.md §6.1; #065)."""
+"""Tests for manifest.sig and key generation (runtime-image-manifest.md §6.1; #66)."""
 
 from __future__ import annotations
 

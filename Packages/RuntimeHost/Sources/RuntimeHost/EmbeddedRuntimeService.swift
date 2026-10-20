@@ -3,7 +3,7 @@ import Foundation
 import RuntimeAPI
 import RuntimeCore
 
-/// The in-process session service used by `apkrun dev launch` before the XPC client is introduced (#026).
+/// The in-process session service used by `apkrun dev launch` before the XPC client is introduced (#27).
 ///
 /// It composes the RuntimeCore registry with the embedded development boot. The API remains narrow: display 0, one
 /// package session, and the stop policy that finishes the package's tasks.

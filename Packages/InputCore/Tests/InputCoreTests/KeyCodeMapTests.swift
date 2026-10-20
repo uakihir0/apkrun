@@ -3,7 +3,7 @@ import Testing
 
 @testable import InputCore
 
-// The key map of input.md §5.2 (#025). The table is a literal, so these tests keep it equal to the CSV, and check every
+// The key map of input.md §5.2 (#26). The table is a literal, so these tests keep it equal to the CSV, and check every
 // Android name and value against the API 37 list of `android.view.KeyEvent`.
 
 /// The directory of the module's resources: `Packages/InputCore/Resources`, found from this file's path.

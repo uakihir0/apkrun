@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checks for the guest Mesa build (ADR-0018, #099).
+"""Checks for the guest Mesa build (ADR-0018, #99).
 
 Without arguments, these are T0 checks that need no NDK and no VM: the lock pins, the parsers of the
 llvm-readelf and llvm-nm output, and the verifier, which runs against fake ELF tools. With

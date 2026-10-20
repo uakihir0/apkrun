@@ -1,4 +1,4 @@
-"""Build the raw GPT disks of a layout from an AndroidImageManifest (#011).
+"""Build the raw GPT disks of a layout from an AndroidImageManifest (#12).
 
 android-image.md §4.2-§4.5. Each disk is created at its full logical size
 with `truncate`, so ranges that are never written stay holes. Partition

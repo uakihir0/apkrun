@@ -82,7 +82,7 @@ The source pins in RiftVM's `scripts/virgl-runtime-pins.sh` match the initial AP
 | ANGLE | `2d91f554ab55bd1bef6998ab4094f60ae3e7feb5`; archive SHA-256 `c24c4e7bc464a63069b67a9f663717b6e0f4a5ff4b6404215a7dc98ea83c6ba7` | recipe `b010ac372569747a4b265e75eaa72868c6849f62`; recipe archive SHA-256 `076df85af0f3bcd5d1232be7285bdb0bc305f28df155bc5ac6d19e83e27e3195` |
 | ANGLE build helper | depot_tools `f70835271105ca56d2cd5382a0118152bc2bdeea` | ANGLE DEPS synchronized to the pinned ANGLE revision |
 
-The APKRun patches map to the RiftVM inputs as follows. "Adopted" is APKRun's #020 working set.
+The APKRun patches map to the RiftVM inputs as follows. "Adopted" is APKRun's #21 working set.
 
 | APKRun patch | RiftVM counterpart | Relation | Disposition |
 |---|---|---|---|
@@ -98,7 +98,7 @@ The recipe archives contain more patches (`venus-*`, `bgra-*`, `angle-egl-includ
 
 RiftVM's reference arguments come from `scripts/build-virgl-runtime-from-source.sh`. ANGLE is built Metal-only (`angle_enable_metal=true`; GL, Vulkan, SwiftShader, WGPU, and Null off), release, with `use_system_xcode=true`, and it produces `libEGL` and `libGLESv2`. libepoxy uses `-Degl=yes -Dx11=false -Dtests=false`. virglrenderer uses `-Ddrm-renderers=[] -Dvenus=true -Dtests=false -Dvideo=false -Dtracing=none`, with ANGLE and libepoxy found through `PKG_CONFIG_PATH`.
 
-APKRun's #020 flags come from the lock's `buildFlags`. ANGLE adds `mac_deployment_target="27.0"`. libepoxy adds `-Dglx=no`. virglrenderer uses `-Dplatforms=egl -Ddrm-renderers=[] -Dvenus=false -Dtests=false -Dvideo=false -Dtracing=none`, and receives ANGLE and libepoxy through generated pkg-config files. Its Meson process sees only the locked PyYAML 6.0.3 as Python. `-Dvenus=true` in RiftVM is not guest Vulkan support. The prototype advertises only VIRGL and EDID.
+APKRun's #21 flags come from the lock's `buildFlags`. ANGLE adds `mac_deployment_target="27.0"`. libepoxy adds `-Dglx=no`. virglrenderer uses `-Dplatforms=egl -Ddrm-renderers=[] -Dvenus=false -Dtests=false -Dvideo=false -Dtracing=none`, and receives ANGLE and libepoxy through generated pkg-config files. Its Meson process sees only the locked PyYAML 6.0.3 as Python. `-Dvenus=true` in RiftVM is not guest Vulkan support. The prototype advertises only VIRGL and EDID.
 
 Licenses of the renderer inputs, as the APKRun lock records them:
 

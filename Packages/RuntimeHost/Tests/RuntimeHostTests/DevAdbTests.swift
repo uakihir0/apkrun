@@ -5,7 +5,7 @@ import Testing
 @testable import RuntimeHost
 
 /// `apkrun dev adb` runs the developer's adb against 127.0.0.1:6520 and passes the exit status
-/// through (cli.md §5; #015 T0). A fake adb in a temporary directory records its arguments.
+/// through (cli.md §5; #16 T0). A fake adb in a temporary directory records its arguments.
 @Test(.timeLimit(.minutes(1)))
 func devAdbConnectsThenPassesTheExitStatusThrough() async throws {
     let fake = try FakeSDK(transportAbsent: true)
@@ -22,7 +22,7 @@ func devAdbConnectsThenPassesTheExitStatusThrough() async throws {
 }
 
 /// A running boot holds the Guest Agent's forwards on the endpoint's transport. `apkrun dev adb` must not drop that
-/// transport, so it must not disconnect or connect when the endpoint already reports `device` (#024).
+/// transport, so it must not disconnect or connect when the endpoint already reports `device` (#25).
 @Test(.timeLimit(.minutes(1)))
 func devAdbLeavesAHealthyTransportAlone() async throws {
     let fake = try FakeSDK()

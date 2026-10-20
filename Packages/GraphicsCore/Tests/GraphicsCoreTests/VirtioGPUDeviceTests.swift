@@ -99,7 +99,7 @@ private final class TraceBox: @unchecked Sendable {
 }
 
 @Test func hostCapabilitiesNameTheFeaturesTheDeviceOffers() {
-    // No renderer yet (#021), so the device offers EDID only. `virgl` is named only when the descriptor offers it.
+    // No renderer yet (#22), so the device offers EDID only. `virgl` is named only when the descriptor offers it.
     #expect(VirtioGPUDevice().hostCapabilities == ["edid"])
 }
 

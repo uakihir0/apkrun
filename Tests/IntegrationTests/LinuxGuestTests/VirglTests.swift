@@ -11,7 +11,7 @@ final class VirglTests: XCTestCase {
     func testKmscubeHasNonzeroResource4BackingWithoutRendererFailures() async throws {
         try installStagedVirGLRuntime()
         // The recorder is always attached for the bounded guest-backing sample. It writes renderer operations only when
-        // the environment names a file, in the replay format for graphics.md §14 (M02-graphics.md #022 step 3). The
+        // the environment names a file, in the replay format for graphics.md §14 (M02-graphics.md #23 step 3). The
         // file must be under /tmp, so it stays out of the checkout and out of protected folders.
         // The path is standardized first, so a `..` segment cannot leave /tmp.
         let recordingURL = ProcessInfo.processInfo.environment["APKRUN_TEST_VIRGL_RECORDING"].map {

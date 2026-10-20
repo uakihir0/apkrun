@@ -133,7 +133,7 @@ public struct DisplayConfiguration: Sendable, Equatable {
 public enum AndroidWindowMode: Sendable, Equatable {
     /// Allocate one of scanouts 1...15.
     case secondaryDisplay
-    /// Use primary display 0. This mode is reserved for #029 integration.
+    /// Use primary display 0. This mode is reserved for #30 integration.
     case primaryDisplayCompatibility
 }
 
@@ -512,7 +512,7 @@ public actor DisplayPool {
         throw .attachFailed(scanout: 1)
     }
 
-    /// Reconfigures an allocated display with the #067 mode-confirmation sequence.
+    /// Reconfigures an allocated display with the #68 mode-confirmation sequence.
     public func reconfigure(
         _ lease: DisplayLease,
         geometry: DisplayGeometry

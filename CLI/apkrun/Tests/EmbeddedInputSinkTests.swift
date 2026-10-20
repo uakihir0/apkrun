@@ -6,7 +6,7 @@
 
     @testable import apkrun
 
-    // The conversion of the development window's events to the wire types (runtime-api.md §7.2, #024). RuntimeHost
+    // The conversion of the development window's events to the wire types (runtime-api.md §7.2, #25). RuntimeHost
     // converts the wire types back, and DevInputRouteTests use the same pairs, so the two tables are checked together.
 
     private let coreTime = InputCore.InputTimestamp(hostNanos: 77)

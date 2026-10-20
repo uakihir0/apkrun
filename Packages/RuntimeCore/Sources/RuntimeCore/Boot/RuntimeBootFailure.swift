@@ -7,7 +7,7 @@ import VirtualMachineCore
 
 /// Why an Android boot failed (error domain `runtime`; error-catalog.md §7.2).
 ///
-/// The first cut of the supervisor's failures (#012-#014). RuntimeHost's
+/// The first cut of the supervisor's failures (#13-#15). RuntimeHost's
 /// `RuntimeFailure` holds the host-process cases of the same domain; the two
 /// merge when the full `RuntimeSupervisor` arrives (IR-312).
 public enum RuntimeBootFailure: APKRunError, Equatable {
@@ -26,7 +26,7 @@ public enum RuntimeBootFailure: APKRunError, Equatable {
     /// No phase progress within the stall limit.
     case bootStalled(phase: BootPhase)
     /// The bundle does not list the boot profile, or the device does not offer a virtio-gpu feature that the bundle
-    /// requires for it (graphics.md §9, #021, #022).
+    /// requires for it (graphics.md §9, #22, #23).
     case gpuProfileUnavailable(profile: String)
     /// The host renderer of the boot profile failed to start, before the VM was created (graphics.md §8, §13.1).
     case graphics(GraphicsFailure)

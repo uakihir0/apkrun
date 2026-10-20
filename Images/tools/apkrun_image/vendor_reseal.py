@@ -1,4 +1,4 @@
-"""Reseal the injected vendor partition and refresh its descriptor in the stock vbmeta (#099).
+"""Reseal the injected vendor partition and refresh its descriptor in the stock vbmeta (#99).
 
 The inputs are the `vendor_a.img` that `inject-vendor` writes, the stock `vendor_a` and the stock
 top-level `vbmeta_a` (both read from the stock bundle). The tool writes two images and a record of
@@ -49,7 +49,7 @@ from apkrun_image.vendor_inject import (
     PARTITION as LOGICAL_PARTITION,
 )
 
-TASK = "#099"
+TASK = "#99"
 SCHEMA_VERSION = 2
 PARTITION = VERITY_PARTITION
 ALGORITHM = "NONE"

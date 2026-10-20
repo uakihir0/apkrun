@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the parts of the G3 evidence that the exit status of xcodebuild cannot show (#023 review).
+"""Check the parts of the G3 evidence that the exit status of xcodebuild cannot show (#24 review).
 
     python3 -I scripts/tools/check-g3-evidence.py ARTIFACTS XCRESULT REPOSITORY
 
@@ -27,13 +27,13 @@ FIXED_SIZE_STATEMENTS = (
     (
         "docs/02-design/graphics.md",
         "### 6.5 Development window",
-        "The development window (#023) is **fixed-size**: display 0 keeps the image's default mode, and the window "
+        "The development window (#24) is **fixed-size**: display 0 keeps the image's default mode, and the window "
         "scales the layer with aspect fit.",
     ),
     (
         "docs/02-design/display-and-windowing.md",
         "### 5.3 Wrapper presentation algorithm",
-        "**Development window (#023), fixed-size:** display 0 keeps the image's default mode, and the window scales the "
+        "**Development window (#24), fixed-size:** display 0 keeps the image's default mode, and the window scales the "
         "layer with aspect fit when it is resized ([graphics.md](graphics.md) §6).",
     ),
 )

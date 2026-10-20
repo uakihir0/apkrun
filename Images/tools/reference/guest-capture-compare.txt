@@ -1,4 +1,4 @@
-# Guest commands for the VZ capture that the G2 gate compares (#014): the cheap outputs of guest-capture.txt.
+# Guest commands for the VZ capture that the G2 gate compares (#15): the cheap outputs of guest-capture.txt.
 # dmesg and logcat are left out: over the serial shell they take minutes, and the reference holds no booted
 # data for their categories (IR-305, IR-367). Run the full list with `capture-vz --commands guest-capture.txt`.
 cmdline.txt	cat /proc/cmdline

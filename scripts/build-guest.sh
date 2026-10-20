@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the development Guest Agent APK (build-system.md §7.1, guest-components.md §2, #072).
+# Builds the development Guest Agent APK (build-system.md §7.1, guest-components.md §2, #73).
 #
 #   scripts/build-guest.sh                       build Guest/build/out/apkrun-guest.apk and its version record
 #   scripts/build-guest.sh --version-code N --out DIR

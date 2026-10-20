@@ -1,7 +1,7 @@
 import Foundation
 import RuntimeCore
 
-/// The Android serial shell (hvc1, developer mode) for the T2 Android tests (#013).
+/// The Android serial shell (hvc1, developer mode) for the T2 Android tests (#14).
 ///
 /// It wraps the product's `AndroidSerialShell`, the channel `RuntimeSupervisor` uses to confirm
 /// `sys.boot_completed`, so the checks run on the product path. Root commands run as `su 0`, as

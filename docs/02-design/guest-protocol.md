@@ -32,10 +32,10 @@ Packages/GuestProtocol/
 ```
 
 - proto3, `package apkrun.guest.v1`, `option java_package = "io.apkrun.guest.protocol.v1"`, `option java_multiple_files = true`, `option swift_prefix = "GP"`.
-- **Host:** `swift-protobuf`, pinned in `Package.resolved`. The generated Swift is checked in, so `swift build` needs no `protoc`. `scripts/generate-protos.sh` regenerates it with the pinned `protoc` and `protoc-gen-swift`. CI (#062) fails if regeneration changes the tree.
+- **Host:** `swift-protobuf`, pinned in `Package.resolved`. The generated Swift is checked in, so `swift build` needs no `protoc`. `scripts/generate-protos.sh` regenerates it with the pinned `protoc` and `protoc-gen-swift`. CI (#63) fails if regeneration changes the tree.
 - **Guest:** the Gradle builds of `Guest/guestd` and `Guest/APKRunStore` use the `com.google.protobuf` plugin with the lite runtime (`protobuf-javalite`, pinned) and read the same `proto/` directory. The AOSP product imports the built APKs ([android-image.md](android-image.md) §11.1), so Soong never compiles the protos.
 - **Golden frames:** `testdata/frames/valid-*.txtpb` are the sources. `scripts/generate-protos.sh` writes `valid-*.bin` and `invalid-*.bin`.
-- CI runs `buf lint` (DEFAULT rules, with `ENUM_ZERO_VALUE_SUFFIX = _UNSPECIFIED`) and `buf breaking` against the last release tag (#062).
+- CI runs `buf lint` (DEFAULT rules, with `ENUM_ZERO_VALUE_SUFFIX = _UNSPECIFIED`) and `buf breaking` against the last release tag (#63).
 
 ---
 
@@ -653,7 +653,7 @@ public actor GuestConnection {
 | Build and image | Guest Agent | Store Agent |
 |---|---|---|
 | M3–M4, stock image | `ADBForwardGuestTransport` | `ADBStoreAgentChannel` |
-| M4, stock userdebug image with the bridge pushed and run as root (#034 validation only) | `VsockGuestTransport` | `ADBStoreAgentChannel` |
+| M4, stock userdebug image with the bridge pushed and run as root (#35 validation only) | `VsockGuestTransport` | `ADBStoreAgentChannel` |
 | M5+, custom image | `VsockGuestTransport` | `VsockGuestTransport` (store endpoints) |
 | M5+, custom image, developer mode | vsock by default. `apkrun dev … --guest-transport adb` forces ADB for debugging | same |
 
@@ -674,7 +674,7 @@ public actor GuestConnection {
 - The agents authenticate peers with `SO_PEERCRED` ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3.1). The session token binds only the streams opened by the same host session.
 - The host validates package names, URLs, paths, and content URIs from the guest before use. Package names follow the Android package-name grammar. `OpenUrlOnHost` accepts only `http`, `https`, and `mailto`. Shared-folder paths resolve inside their root ([desktop-integration.md](desktop-integration.md) §6.4, §7.2).
 - Logs contain operation names, IDs, sizes, and error codes. Clipboard content, notification text, and typed text are never logged at any level. Input events and file names appear only at debug level in development builds ([diagnostics.md](diagnostics.md) §3.4).
-- Both decoders are fuzz targets (#091). The Swift frame decoder runs under a libFuzzer harness on the host. The Kotlin frame decoder and the injector's batch validator run under Jazzer.
+- Both decoders are fuzz targets (#92). The Swift frame decoder runs under a libFuzzer harness on the host. The Kotlin frame decoder and the injector's batch validator run under Jazzer.
 
 ---
 
@@ -689,7 +689,7 @@ public actor GuestConnection {
 | T0 | Agent dispatcher: per-display serialization, `UNSUPPORTED` for operations the build lacks and capabilities the host did not enable, timeouts. A missing framework method fails only its request | `Guest/guestd/src/test/` (`DispatcherTest.kt`) |
 | T0 | Store Agent argument rules: `enable_rollback` with `INSTALL_NEW`, fields without their capability, and `allow_downgrade = true` answer `INVALID_ARGUMENT` | `Guest/APKRunStore/` |
 | T1 | Kotlin agent server against a scripted host, with JVM fakes of the Android services | `Guest/guestd/src/test/`, `Guest/agentruntime/src/test/` |
-| T1 | Fuzzing of both decoders: short runs in CI, long runs nightly | fuzz harnesses (#091) |
+| T1 | Fuzzing of both decoders: short runs in CI, long runs nightly | fuzz harnesses (#92) |
 | T2 | ADB-forward and vsock transports on real images; reconnect after agent kill; the `adb shell` counter | `Tests/IntegrationTests/GuestAgentTests/` |
 | T2 | Store Agent: install, update, hash and signer mismatch, uninstall; rollback, ownership, and `CheckInstallConstraints` (§11.1) | `Tests/IntegrationTests/AndroidPackageTests/`; host side in `Packages/RuntimeHost/Tests/RuntimeHostTests/ADBStoreAgentChannelTests.swift` |
 
@@ -699,6 +699,6 @@ public actor GuestConnection {
 
 | Item | Plan |
 |---|---|
-| vsock on the stock userdebug image needs the `su` domain to be allowed to use vsock (§13.3) | #034 tries it with `apkrun_vsockd` run as root. If the policy does not allow it, the vsock validation moves to #035. See [risks.md](../04-plan/risks.md) R-13 |
-| SELinux policy for the bridge and the agents' sockets on the custom image (§14) | R-13. #035 checks the handshake over vsock with no ADB, and that an `untrusted_app` cannot connect to `@apkrun-guestd-control` |
+| vsock on the stock userdebug image needs the `su` domain to be allowed to use vsock (§13.3) | #35 tries it with `apkrun_vsockd` run as root. If the policy does not allow it, the vsock validation moves to #36. See [risks.md](../04-plan/risks.md) R-13 |
+| SELinux policy for the bridge and the agents' sockets on the custom image (§14) | R-13. #36 checks the handshake over vsock with no ADB, and that an `untrusted_app` cannot connect to `@apkrun-guestd-control` |
 | `GENTLE_UPDATE` with an app that runs a foreground service (§11.1) | OQ-17. Working default: trust `GENTLE_UPDATE` with `app_not_foreground_required`. If the app is not reported as busy, custom images add the `ListTasks` rule and a process-importance query ([update-system.md](update-system.md) §7.1) |

@@ -5,7 +5,7 @@ import android.os.Bundle
 import android.util.Log
 
 /**
- * The Details screen of HelloText (#025). It has no input of its own. Back returns to the main screen, and the main
+ * The Details screen of HelloText (#26). It has no input of its own. Back returns to the main screen, and the main
  * screen logs `screen main` when it resumes.
  */
 class DetailsActivity : Activity() {

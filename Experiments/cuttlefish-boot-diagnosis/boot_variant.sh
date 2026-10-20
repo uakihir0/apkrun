@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Bounded host-side launch variant of the pinned `default` Cuttlefish profile.
 #
-# Status: EXPERIMENT (#064, #014). Not a supported capture path; it does not
+# Status: EXPERIMENT (#65, #15). Not a supported capture path; it does not
 # publish profiles. Its receipts are in Images/reference/16373615/incomplete/.
 #
-# This is an experiment for #064 and #014. It runs inside the Linux reference
+# This is an experiment for #65 and #15. It runs inside the Linux reference
 # guest (limactl shell apkrun-cuttlefish) with CVD_HOST_DIR and
 # ANDROID_PRODUCT_OUT set as in Images/tools/reference/capture.sh. The launch
 # flags are the `default` profile flags of android-image.md §8.2 (--cpus 4

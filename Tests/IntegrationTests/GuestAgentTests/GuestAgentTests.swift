@@ -4,7 +4,7 @@ import GuestProtocol
 import RuntimeCore
 import XCTest
 
-/// The development Guest Agent on a real Android guest (#072 T2; guest-components.md §3, §12; guest-protocol.md
+/// The development Guest Agent on a real Android guest (#73 T2; guest-components.md §3, §12; guest-protocol.md
 /// §15). The suite runs in the `AndroidGuestAgent` configuration of IntegrationTests.xctestplan. It needs the Android
 /// bundle of `scripts/build-test-android-bundle.sh` and the Guest Agent bundle of `scripts/build-guest.sh`.
 final class GuestAgentTests: XCTestCase {
@@ -40,7 +40,7 @@ final class GuestAgentTests: XCTestCase {
         }
     }
 
-    /// Every SystemServices wrapper resolves on the stock image (guest-components.md §6.2, #072 acceptance). The check
+    /// Every SystemServices wrapper resolves on the stock image (guest-components.md §6.2, #73 acceptance). The check
     /// runs the daemon's own classes through app_process.
     func testEveryServiceWrapperResolvesOnTheStockImage() async throws {
         let bundle = try Self.bundle()
@@ -59,7 +59,7 @@ final class GuestAgentTests: XCTestCase {
     }
 
     /// `apkrun dev launch` starts HelloText on display 0 through `LaunchApplication`, and the agent reports its task
-    /// (#072 acceptance, guest-protocol.md §7.1 #14).
+    /// (#73 acceptance, guest-protocol.md §7.1 #14).
     func testLaunchPutsHelloTextOnDisplayZero() async throws {
         let apk = try Self.fixtureAPK()
         let bundle = try Self.bundle()
@@ -81,7 +81,7 @@ final class GuestAgentTests: XCTestCase {
         }
     }
 
-    /// A killed agent is restarted by the host, and the supervisor reconnects and resynchronises (#072 acceptance,
+    /// A killed agent is restarted by the host, and the supervisor reconnects and resynchronises (#73 acceptance,
     /// guest-components.md §3.3). The new session has a new token.
     func testKilledAgentIsRestartedAndTheSupervisorResynchronises() async throws {
         let bundle = try Self.bundle()
@@ -107,7 +107,7 @@ final class GuestAgentTests: XCTestCase {
         }
     }
 
-    /// A fourth death within a minute is not restarted, and the host reports `requiredAgentUnavailable` (#072
+    /// A fourth death within a minute is not restarted, and the host reports `requiredAgentUnavailable` (#73
     /// acceptance, guest-components.md §3.3).
     func testAFourthDeathWithinAMinuteIsRequiredAgentUnavailable() async throws {
         let bundle = try Self.bundle()
@@ -137,7 +137,7 @@ final class GuestAgentTests: XCTestCase {
         }
     }
 
-    /// An installed agent with another version is replaced by the bundled one (#072 acceptance, guest-components.md
+    /// An installed agent with another version is replaced by the bundled one (#73 acceptance, guest-components.md
     /// §3.1). The second version is built by `scripts/build-guest.sh --version-code`.
     func testAnotherInstalledVersionIsReplacedByTheBundle() async throws {
         let bundle = try Self.bundle()

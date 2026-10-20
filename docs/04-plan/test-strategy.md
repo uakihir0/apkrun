@@ -21,7 +21,7 @@ This document defines the test tiers, the test infrastructure, the fixture apps,
 | P11 | No sleeps for synchronization. Tests wait for markers (`APKRUN-TEST:` lines, boot and perf markers, `APKRUN-FIXTURE` events) with a timeout. | |
 | P12 | Experiments are not tests. CI does not run `Experiments/`, and no test imports it. | NFR-DEV-05 |
 | P13 | Security rules are tested negatively. Every policy has a test that tries the forbidden action and expects a refusal (§7.2). | |
-| P14 | Tests use the product paths: `RuntimeService`, RuntimeCore, or the CLI. Not raw `adb shell` or `pm`, except the allowlist of §3.3. | #027 |
+| P14 | Tests use the product paths: `RuntimeService`, RuntimeCore, or the CLI. Not raw `adb shell` or `pm`, except the allowlist of §3.3. | #28 |
 | P15 | Test hooks exist only in Debug builds (and in `ReleaseUpdateTest` where listed). A release check proves they are absent (§3.3). | [../02-design/diagnostics.md](../02-design/diagnostics.md) §12 |
 | P16 | Scope discipline applies to tests. A task's tests do not depend on features of later tasks. | |
 
@@ -38,7 +38,7 @@ This document defines the test tiers, the test infrastructure, the fixture apps,
 | T2 | VM integration | a real VM: the Linux test guest or an Android image | `Tests/IntegrationTests/` | `xcodebuild test -scheme IntegrationTests` on `apkrun-lab` | push to `main`; nightly; PRs on a disposable runner (§2.4) | per suite, ≤ 15–120 min | no; the PR that closes a task passes the suites the task lists |
 | T3 | Acceptance | T2 plus the reference Mac, the network, credentials, long runs, or a person | `Tests/AcceptanceTests/`, `Tests/PerformanceTests/`, `Tests/Compatibility/`, §8 | `nightly.yml` jobs, gate scripts, people | nightly, gate closing, release candidates | nightly ≤ 8 h | no; gate checks close gates, release checks gate releases |
 
-The CI jobs that run each tier are in [../05-development/build-system.md](../05-development/build-system.md) §15. A pull request merges only when every required CI check passes. `ci.yml` runs static checks, builds, and T0 tests on fresh GitHub-hosted VMs, and it does not run T1. T1 suites that need real host resources pass on a developer or reference Mac before merge, and the pull request links the result. Three checks run in the `lint` job of [build-system.md](../05-development/build-system.md) §3: the raw-ADB lint (§3.3), the compatibility database schema check (#090), and the release checks of §3.3 (in the `build` job for Release).
+The CI jobs that run each tier are in [../05-development/build-system.md](../05-development/build-system.md) §15. A pull request merges only when every required CI check passes. `ci.yml` runs static checks, builds, and T0 tests on fresh GitHub-hosted VMs, and it does not run T1. T1 suites that need real host resources pass on a developer or reference Mac before merge, and the pull request links the result. Three checks run in the `lint` job of [build-system.md](../05-development/build-system.md) §3: the raw-ADB lint (§3.3), the compatibility database schema check (#91), and the release checks of §3.3 (in the `build` job for Release).
 
 ### 2.2 T0: unit and model tests
 
@@ -78,7 +78,7 @@ The CI jobs that run each tier are in [../05-development/build-system.md](../05-
 |---|---|---|---|
 | LinuxGuest | Linux test guest: devices, disks, bootconfig, `net`, `rng`, `gpu`, `virgl` | `linux-guest` | ≤ 15 min |
 | AndroidStock | stock Cuttlefish image: boot, ADB, install and launch, graphics, input, windows, development-mode agent | `android-stock` | ≤ 60 min |
-| AndroidCustom | custom `userdebug` image (#035): Store Agent, updates, rollback, wrappers, desktop integration, diagnostics, SELinux, image migration | `android-custom` | ≤ 90 min |
+| AndroidCustom | custom `userdebug` image (#36): Store Agent, updates, rollback, wrappers, desktop integration, diagnostics, SELinux, image migration | `android-custom` | ≤ 90 min |
 | Maintenance | APKRun N → N+1 and its variants (`ReleaseUpdateTest`), feed-driven image update | `maintenance` | ≤ 120 min |
 
 - **Triggers.** The jobs are in `integration.yml` ([../05-development/build-system.md](../05-development/build-system.md) §15.1). `linux-guest` runs only on manual dispatch from `main` until an `apkrun-lab` runner exists. Pull-request T2 runs are off until a disposable runner exists. Until then, the reviewed commit runs on the reference Mac, and the result is linked before the task-closing pull request merges. A label never authorizes unreviewed code on a persistent self-hosted runner. The nightly `t2-all` job runs all four suites on `main`.
@@ -97,7 +97,7 @@ The CI jobs that run each tier are in [../05-development/build-system.md](../05-
 | Performance (§7.1) | `Tests/PerformanceTests/` (`apkrun-perf`) | nightly (`perf`) | none; the regression rule of §7.1 applies |
 | Compatibility (§7.4) | `Tests/Compatibility/` | corpus nightly; full list before each release | none |
 | Network checks (§3.4) | `Tests/AcceptanceTests/Network` | nightly | one retry, classified as in §2.7 |
-| Long fuzzing (`fuzz-long`), soak, notarization (`notarize`) | §7.2, §7.3, #088 | nightly | none |
+| Long fuzzing (`fuzz-long`), soak, notarization (`notarize`) | §7.2, §7.3, #89 | nightly | none |
 | Manual checklists (§8) | the release issue | every release candidate | not applicable |
 
 - **Gate checks.** A gate may run a lower-tier VM test as a building block, but its check lives in `AcceptanceTests`. G3 follows this rule: `scripts/run-gate.sh G3` first runs the `LinuxGuest` IntegrationTests configuration, then the gate check in `Tests/AcceptanceTests/G3GraphicsTests/` with the `G3` AcceptanceTests configuration.
@@ -175,28 +175,28 @@ T2 and T3 never run inside a VM (P3). Hosted macOS VMs may run T0 tests that nee
 
 ### 3.3 Test hooks, test builds, and the raw-ADB allowlist
 
-All hooks are compiled into Debug builds only, unless the Builds column says otherwise. No hook, in any build, turns off a package validation rule ([../../AGENTS.md](../../AGENTS.md) §4, invariant 10). Tests that need Android's own refusal install through `AdbClient` (#038). Variables: [../03-reference/configuration.md](../03-reference/configuration.md) §5.1.
+All hooks are compiled into Debug builds only, unless the Builds column says otherwise. No hook, in any build, turns off a package validation rule ([../../AGENTS.md](../../AGENTS.md) §4, invariant 10). Tests that need Android's own refusal install through `AdbClient` (#39). Variables: [../03-reference/configuration.md](../03-reference/configuration.md) §5.1.
 
 | Hook | Effect | Builds | Used by |
 |---|---|---|---|
-| `APKRUN_STORE_FAULT=<kind>:<step>` | injects a store fault at a host step | Debug | [../02-design/package-store.md](../02-design/package-store.md) §16 T1, #038 |
+| `APKRUN_STORE_FAULT=<kind>:<step>` | injects a store fault at a host step | Debug | [../02-design/package-store.md](../02-design/package-store.md) §16 T1, #39 |
 | `APKRUN_GRAPHICS_FAULT=rendererInit` | renderer initialization fails | Debug | [../02-design/diagnostics.md](../02-design/diagnostics.md) §12 T2-4 (c) |
 | `APKRUN_RUNTIME_FAULT=rejectAgent:guest` | apkrund rejects the Guest Agent handshake | Debug | [../02-design/diagnostics.md](../02-design/diagnostics.md) §12 T2-4 (d) |
-| `APKRUN_LAUNCHER_TEST_NO_RUNTIME=1` | the launcher runs without a runtime (screen R) | Debug | #044 |
-| `APKRUN_TEST_HEADLESS_LAUNCH=1` | `launch` opens a session owned by apkrund that discards its frames. #068 removes it. | Debug | #032, the G6 stages |
+| `APKRUN_LAUNCHER_TEST_NO_RUNTIME=1` | the launcher runs without a runtime (screen R) | Debug | #45 |
+| `APKRUN_TEST_HEADLESS_LAUNCH=1` | `launch` opens a session owned by apkrund that discards its frames. #69 removes it. | Debug | #33, the G6 stages |
 | `APKRUN_TEST_MARKER_TIMEOUT=<n>s` | shortens the maintenance marker timeout | Debug, `ReleaseUpdateTest` | [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §14 variant (c) |
 | `APKRUN_HOME` | relocates the data root. CLI commands other than `apkrun dev` ignore it ([../02-design/cli.md](../02-design/cli.md) §3.6), so their tests run in a separate macOS test user account ([../02-design/diagnostics.md](../02-design/diagnostics.md) §12 T2-1). | Debug (`apkrun dev`, debug apkrund, test hosts) | isolation (§3.9) |
-| `apkrun dev power sleep\|wake` | injects host sleep and wake messages | Debug | #069 |
-| `APKRUN_TEST_READBACK` compile flag | the test-only readback mode: reads the scanout resource for the #022 replay test, and samples pool buffers for the #023 tearing test. Excluded from the readback counter. | test builds only | #022, #023 |
-| `APKRUN_TEST_IMAGE_FEED_URL=<url>` | points `ImageFeedClient` at a local feed server, which may be `http://127.0.0.1`. The Direct and F-Droid loopback URLs of Debug builds point at the local update server ([../02-design/update-system.md](../02-design/update-system.md) §12). | Debug | #087 |
-| `APKRUN_TEST_IDLE_SECONDS=<n>` | replaces the `HIDIdleTime` value of the apply gate | Debug | #087 |
-| `APKRUN_TEST_POWER=ac\|battery:<percent>` | replaces the power source of the apply gate | Debug | #087 |
+| `apkrun dev power sleep\|wake` | injects host sleep and wake messages | Debug | #70 |
+| `APKRUN_TEST_READBACK` compile flag | the test-only readback mode: reads the scanout resource for the #23 replay test, and samples pool buffers for the #24 tearing test. Excluded from the readback counter. | test builds only | #23, #24 |
+| `APKRUN_TEST_IMAGE_FEED_URL=<url>` | points `ImageFeedClient` at a local feed server, which may be `http://127.0.0.1`. The Direct and F-Droid loopback URLs of Debug builds point at the local update server ([../02-design/update-system.md](../02-design/update-system.md) §12). | Debug | #88 |
+| `APKRUN_TEST_IDLE_SECONDS=<n>` | replaces the `HIDIdleTime` value of the apply gate | Debug | #88 |
+| `APKRUN_TEST_POWER=ac\|battery:<percent>` | replaces the power source of the apply gate | Debug | #88 |
 | `ReleaseUpdateTest` configuration | Release code; builds 9000 and 9001 (9001 adds `Resources/test-build-marker`); local appcast; test Sparkle key | `ReleaseUpdateTest` only | [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §14 |
 | Sparkle test user driver | accepts every prompt. `APKRUN_TEST_INSTALL_CHOICE=closeApps\|whenClosed` answers the install dialog; the launch argument `--test-check-for-updates` starts a user-initiated check | `ReleaseUpdateTest` only | [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §14 |
-| settings as switches | `runtime.idleSuspendMinutes = 1`, `runtime.idleStopMinutes = 2` | all (ordinary settings) | #069, #070 |
-| hand-built wrapper with `runtime.minimumVersion = 99.0` | `scripts/dev/make-wrapper.sh --minimum-version 99.0`. The value is normally the launcher's build constant ([../03-reference/configuration.md](../03-reference/configuration.md) §4). | Debug (the script) | wrapper screen V, #044 |
+| settings as switches | `runtime.idleSuspendMinutes = 1`, `runtime.idleStopMinutes = 2` | all (ordinary settings) | #70, #71 |
+| hand-built wrapper with `runtime.minimumVersion = 99.0` | `scripts/dev/make-wrapper.sh --minimum-version 99.0`. The value is normally the launcher's build constant ([../03-reference/configuration.md](../03-reference/configuration.md) §4). | Debug (the script) | wrapper screen V, #45 |
 | `androidboot.apkrun.test.*` | `marker=<value>`, `fail_health=1`, `fail_boot=1` | test image bundles only ([../02-design/android-image.md](../02-design/android-image.md) §6.2) | §3.5 |
-| `androidboot.apkrun.devmode=1` | adbd on vsock 5555 on the custom image | custom image, user-controlled | §3.5, #035 |
+| `androidboot.apkrun.devmode=1` | adbd on vsock 5555 on the custom image | custom image, user-controlled | §3.5, #36 |
 
 Release checks (`scripts/release/check-release-build.sh`, run by the `build` job on every Release build and again in the release jobs, [../05-development/build-system.md](../05-development/build-system.md) §3.1):
 
@@ -204,7 +204,7 @@ Release checks (`scripts/release/check-release-build.sh`, run by the `build` job
 - A release image manifest contains no `androidboot.apkrun.test.*` key ([../02-design/android-image.md](../02-design/android-image.md) §6.2).
 - `ImageTrustStore` in a Release build contains only release key IDs ([../02-design/android-image.md](../02-design/android-image.md) §10.1).
 
-Raw-ADB allowlist. The raw-ADB lint of #027 rejects `adb shell` and `pm ` strings outside `ADBStoreAgentChannel` and `AdbClient`. These paths are exempt because they use ADB directly: `scripts/dev/` (#024), `Tests/Compatibility/` (the `monkey` run, [../02-design/diagnostics.md](../02-design/diagnostics.md) §10.4), and `Images/tools/reference/` (the reference capture). T2 tests that need a shell command go through `AdbClient`.
+Raw-ADB allowlist. The raw-ADB lint of #28 rejects `adb shell` and `pm ` strings outside `ADBStoreAgentChannel` and `AdbClient`. These paths are exempt because they use ADB directly: `scripts/dev/` (#25), `Tests/Compatibility/` (the `monkey` run, [../02-design/diagnostics.md](../02-design/diagnostics.md) §10.4), and `Images/tools/reference/` (the reference capture). T2 tests that need a shell command go through `AdbClient`.
 
 ### 3.4 Linux test guest
 
@@ -222,13 +222,13 @@ Defined in [../02-design/vm.md](../02-design/vm.md) §12.
 
 | Image | Source | Used by |
 |---|---|---|
-| Stock Cuttlefish `aosp_cf_arm64_only_phone-userdebug`, build 16373615, Android 17 (API 37) | Android CI, fetched by the #008 tool, pinned in the image manifest | AndroidStock suite, tasks of M1–M4, development mode |
-| Custom `apkrun_arm64-trunk_staging-userdebug` | AOSP builder ([../02-design/android-image.md](../02-design/android-image.md) §11.5) | AndroidCustom suite (#035), test bundles |
+| Stock Cuttlefish `aosp_cf_arm64_only_phone-userdebug`, build 16373615, Android 17 (API 37) | Android CI, fetched by the #9 tool, pinned in the image manifest | AndroidStock suite, tasks of M1–M4, development mode |
+| Custom `apkrun_arm64-trunk_staging-userdebug` | AOSP builder ([../02-design/android-image.md](../02-design/android-image.md) §11.5) | AndroidCustom suite (#36), test bundles |
 | Custom `-user` | image build machine, release signing | image release candidates, release smoke matrix, performance |
 | Current and previous stable images | the published image feed | release smoke matrix (§9.2) |
 | Reference captures (`default`, `target`, `swiftshader`) | `Images/tools/reference/capture.sh` → `Images/reference/<buildId>/` | the G2 reference diff ([../02-design/android-image.md](../02-design/android-image.md) §8.4), `BootPhaseDetector` golden tests |
 
-Test bundles are built from the custom `userdebug` image, because the handlers of the `androidboot.apkrun.test.*` keys, the Guest Agent health report that `fail_health` changes, and the script of bundle S are in the custom product (#035). Bundle P is the exception: it only changes the kernel command line, so it may be built from the stock image. Test bundles are never published. An Android T2 suite skips when `Images/work/16373615/` holds no test bundle. Under `APKRUN_CI=1` it fails instead of skipping.
+Test bundles are built from the custom `userdebug` image, because the handlers of the `androidboot.apkrun.test.*` keys, the Guest Agent health report that `fail_health` changes, and the script of bundle S are in the custom product (#36). Bundle P is the exception: it only changes the kernel command line, so it may be built from the stock image. Test bundles are never published. An Android T2 suite skips when `Images/work/16373615/` holds no test bundle. Under `APKRUN_CI=1` it fails instead of skipping.
 
 | Bundle | Difference from its base | Used by |
 |---|---|---|
@@ -246,10 +246,10 @@ Signing: each `apkrun-lab` machine creates its own development key with `python3
 Setup: [../05-development/environment-setup.md](../05-development/environment-setup.md) §6.2–§6.3. Every lab Mac (`apkrun-lab`, the seed Mac, the information Mac):
 
 - runs on AC power with Low Power Mode off, runs `caffeinate -d` during a run, and runs no other VM ([../02-design/diagnostics.md](../02-design/diagnostics.md) §9.2);
-- runs the runner in the GUI session of the `apkrun-ci` user with automatic login, and has a second local test account (portable wrappers #089, host-only doctor, fresh-account checks);
-- has the permissions that macOS asks for once: Accessibility for the harness (`input-latency`), Screen Recording for window captures, notifications for the fixture wrappers, and Microphone for apkrund (#084, [../02-design/desktop-integration.md](../02-design/desktop-integration.md) §8.2). A test that finds a permission missing fails with `runnerMissingPermission`. It never clicks a prompt;
-- allows incoming connections for the signed `APKRunTestHost` in the macOS Application Firewall, so the #006 guest can reach the host-local HTTP probe;
-- has a virtual loopback audio device as default output and input for the audio and microphone T3 jobs (#083, #084). Without it, these jobs skip, and checklist §8.7 covers them by hand;
+- runs the runner in the GUI session of the `apkrun-ci` user with automatic login, and has a second local test account (portable wrappers #90, host-only doctor, fresh-account checks);
+- has the permissions that macOS asks for once: Accessibility for the harness (`input-latency`), Screen Recording for window captures, notifications for the fixture wrappers, and Microphone for apkrund (#85, [../02-design/desktop-integration.md](../02-design/desktop-integration.md) §8.2). A test that finds a permission missing fails with `runnerMissingPermission`. It never clicks a prompt;
+- allows incoming connections for the signed `APKRunTestHost` in the macOS Application Firewall, so the #7 guest can reach the host-local HTTP probe;
+- has a virtual loopback audio device as default output and input for the audio and microphone T3 jobs (#84, #85). Without it, these jobs skip, and checklist §8.7 covers them by hand;
 - runs one VM at a time (§3.10), and serializes suites per machine;
 - keeps a runner cache (§4.1) with pinned SHA-256 values. No test downloads a large artifact during a run.
 
@@ -268,7 +268,7 @@ Retention: pull request runs 14 days, nightly runs 30 days, gate evidence and re
 ### 3.8 Performance baselines
 
 - The harness is `swift run apkrun-perf <scenario> [--runs] [--warmup] [--output] [--baseline]` ([../02-design/diagnostics.md](../02-design/diagnostics.md) §9).
-- Baselines: `Tests/PerformanceTests/baselines/<model identifier>.json`. Only a reviewed pull request that says why may change one. The first report of every scenario becomes the initial baseline (#070).
+- Baselines: `Tests/PerformanceTests/baselines/<model identifier>.json`. Only a reviewed pull request that says why may change one. The first report of every scenario becomes the initial baseline (#71).
 - Runs use a Release build, the release candidate's `-user` image when one exists, and fixtures wrapped with `apkrun wrap --output`.
 
 ### 3.9 Isolation
@@ -276,13 +276,13 @@ Retention: pull request runs 14 days, nightly runs 30 days, gate evidence and re
 - T2 uses Debug builds with their `.dev` identities, so a test never touches an installed release ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §2.6).
 - Each T2 suite starts from an empty data root. The harness unregisters the Debug agent and deletes the `APKRun-Dev` root, or gives test hosts and `apkrun dev` a fresh `APKRUN_HOME`.
 - Each Android suite uses a temporary `APKRUN_HOME` on the same volume as the test bundle.
-- Wrappers go into a per-suite folder (`apkrun wrap --output`). Tests of `~/Applications` behavior (#056, #078) remove their wrappers in teardown.
-- Update sources are local, on `127.0.0.1`: `scripts/dev/update-server.py`, the local appcast, the local image feed, the GitHub mock, and the served F-Droid test repository. T2 has no Internet access. The #006 network test fetches from a server on the host. Its Internet half is a T3 check ([../02-design/vm.md](../02-design/vm.md) §7).
+- Wrappers go into a per-suite folder (`apkrun wrap --output`). Tests of `~/Applications` behavior (#57, #79) remove their wrappers in teardown.
+- Update sources are local, on `127.0.0.1`: `scripts/dev/update-server.py`, the local appcast, the local image feed, the GitHub mock, and the served F-Droid test repository. T2 has no Internet access. The #7 network test fetches from a server on the host. Its Internet half is a T3 check ([../02-design/vm.md](../02-design/vm.md) §7).
 - A failed teardown marks the machine dirty. The next suite starts with Reset Android ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §9.5) and a new data root.
 
 ### 3.10 Parallel VM runs
 
-Until #098 is done, one VM runs at a time, and gate runs take the lock `lockf -k /tmp/apkrun-vm.lock`. Two VM runs on one Mac otherwise share the developer ADB port `127.0.0.1:6520`, the artifact directory `/tmp/apkrun-test-linux` (`APKRUN_TEST_LINUX_DIR`), and the default home. After #098, these rules hold:
+Until #100 is done, one VM runs at a time, and gate runs take the lock `lockf -k /tmp/apkrun-vm.lock`. Two VM runs on one Mac otherwise share the developer ADB port `127.0.0.1:6520`, the artifact directory `/tmp/apkrun-test-linux` (`APKRUN_TEST_LINUX_DIR`), and the default home. After #100, these rules hold:
 
 - Each VM test run has its own APKRun home, `/tmp/apkrun-vm-<UUID>`, created by `VMRunResources`. The instance, logs, image store, and console sockets live under it. The G2 reference capture sits beside it (`/tmp/apkrun-vm-<UUID>-capture`), because it is gate evidence. Teardown removes the home.
 - The ADB host port of a run comes from `APKRUN_TEST_ADB_PORT` (set through `TEST_RUNNER_APKRUN_TEST_ADB_PORT`). When unset, it is `0`, and the kernel picks a free loopback port, which the supervisor reports as `developmentADBHostPort`. The product default stays `6520` (`BootOptions.adbHostPort`).
@@ -301,7 +301,7 @@ Until #098 is done, one VM runs at a time, and gate runs take the lock `lockf -k
 
 - **Fixture apps** are one Gradle project in `Tests/Fixtures/AndroidApps/`, built by `scripts/build-fixtures.sh` into `Tests/Fixtures/AndroidApps/out/` ([../05-development/build-system.md](../05-development/build-system.md) §8). Each app has a CamelCase project name and the package in §4.2 (`io.apkrun.fixture.<name>`, [../01-architecture/modules.md](../01-architecture/modules.md) §5). Variants of one app share its package. Debug-only hooks (receivers, traces) live in the `src/debug` source set and are absent from release builds.
 - **Committed copies.** T0 tests read committed prebuilt APKs from `Tests/Fixtures/apks/`, so `swift test` needs no Gradle (NFR-DEV-02). `scripts/build-fixtures.sh` refreshes them. A CI check fails when a copy is older than its sources.
-- **Size.** A committed fixture file is at most 10 MiB. Larger inputs are generated at test time from a seed (for example the 1.5 GiB file of #082) or kept in the runner cache with a pinned SHA-256.
+- **Size.** A committed fixture file is at most 10 MiB. Larger inputs are generated at test time from a seed (for example the 1.5 GiB file of #83) or kept in the runner cache with a pinned SHA-256.
 - **Event log.** Fixture apps log to logcat with the tag `APKRUN-FIXTURE` and the message `<event> <detail>`, for example `I/APKRUN-FIXTURE: click 3`. Tests read them through `AdbClient` with a `FixtureLog` helper that starts the stream before the action. Fixtures never log secrets, except where a test plants a fixture secret on purpose (§7.2).
 - **Determinism.** Fixtures have no network access, except HelloLinks, which only asks the host to open links. No ads, no analytics, no random behavior unless a seed is passed.
 - **Signing.** Fixture apps are signed with test keys (§4.4). Nothing built with a test key ships.
@@ -312,26 +312,26 @@ This table is the only specification of the fixture apps. Each row gives the pac
 
 | App | Package | What it does | Events | Used by |
 |---|---|---|---|---|
-| HelloText | `io.apkrun.fixture.hellotext` | Counter button with a persistent counter, text field, password field, context menu, Details screen (for Back), time label, adaptive vector icon. See the details below. | `start counter=<n>`, `click <n>`, `text <JSON string>`, `screen <name>`, `contextmenu`, `config locale=<tag> tz=<id> 24h=<bool>` | G4–G9 building blocks, #016, #017, #024–#026, #071, #085, #103, migration, perf |
-| HelloCompose | `io.apkrun.fixture.hellocompose` | Compose `LazyColumn`, `TextField`, and a password field. | `scroll first=<index>`, `text <JSON string>` | #024, #029, #030 (G5), #071; installed with `adb install` as the unmanaged package of #077 |
-| HelloGL | `io.apkrun.fixture.hellogl` | A GLES 3.0 animation. An intent extra selects the alternating-color mode, and another sets the run length. | `renderer <GL_RENDERER>`, `fps <average>` every 10 s | #022, #023 (G3), #029, #068, `hellogl-fps` (§7.1) |
-| HelloWebView | `io.apkrun.fixture.hellowebview` | A WebView showing a bundled local page. No network. | `loaded` | #029, compatibility |
-| HelloNotification | `io.apkrun.fixture.hellonotification` | Posts, on buttons and on a timer, the notification set of [../02-design/desktop-integration.md](../02-design/desktop-integration.md) §5.5: plain, two-action, an update of the first, `LOW`, ongoing, and a grouped series. Its launch activity logs which intent opened it. | `posted <id>`, `intent <action>` | #054, secret test (§7.2) |
-| HelloClipboard | `io.apkrun.fixture.helloclipboard` | A text field, a Copy button that sets a known string, an image view and a rich-text field (#080), and a view of the current primary clip ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §4.5). | `clip <text>` (logs its clipboard text on purpose) | #053, #080, secret test (§7.2) |
-| HelloLinks | `io.apkrun.fixture.hellolinks` | Opens an `https` link, a `mailto` link, a Custom Tab, a `javascript:` URL, an `intent:` URL, and a link in the background (from a timer after its window loses focus) ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §7.3). | `open <scheme>` | #081 |
-| HelloFiles | `io.apkrun.fixture.hellofiles` | Accepts shares (text, images, any file), opens the system picker (open, open tree, create), shows names, sizes, and SHA-256, and shares a generated file ("Save to Mac") ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.5). | `file <name> <size> <sha256>` | #082 |
-| HelloFilesPeer | `io.apkrun.fixture.hellofilespeer` | A second package with the HelloFiles picker and no shared-folder access. It cannot open a URI that was granted to HelloFiles. | as HelloFiles | #082 |
-| HelloAudio | `io.apkrun.fixture.helloaudio` | Buttons play a 1 kHz tone, a sweep, and a click track (one click per second). Records 5 s and shows the level ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §8.3). | `play <name>` when playback starts, `recorded <frames> <peak>` after a recording | #083, #084, checklist C10-5 (§8.7) |
-| HelloUpdate | `io.apkrun.fixture.helloupdate` | Versions and variants in §4.3. | `version <code>`, `data <value>`, `fgs started` (V1 with the `fgs` extra) | #066 (adds V1), #037–#043 (other variants), #050–#052, #049 (G9), G7 |
-| HelloSplit | `io.apkrun.fixture.hellosplit` | Base, `config.arm64_v8a`, `config.xhdpi`, `config.ja`, and an install-time feature split. A native library and a Japanese string. See the details below. | `native ok`, `string <locale>` | #027 (creates it), #042, #073, #078 |
+| HelloText | `io.apkrun.fixture.hellotext` | Counter button with a persistent counter, text field, password field, context menu, Details screen (for Back), time label, adaptive vector icon. See the details below. | `start counter=<n>`, `click <n>`, `text <JSON string>`, `screen <name>`, `contextmenu`, `config locale=<tag> tz=<id> 24h=<bool>` | G4–G9 building blocks, #17, #18, #25–#27, #72, #86, #103, migration, perf |
+| HelloCompose | `io.apkrun.fixture.hellocompose` | Compose `LazyColumn`, `TextField`, and a password field. | `scroll first=<index>`, `text <JSON string>` | #25, #30, #31 (G5), #72; installed with `adb install` as the unmanaged package of #78 |
+| HelloGL | `io.apkrun.fixture.hellogl` | A GLES 3.0 animation. An intent extra selects the alternating-color mode, and another sets the run length. | `renderer <GL_RENDERER>`, `fps <average>` every 10 s | #23, #24 (G3), #30, #69, `hellogl-fps` (§7.1) |
+| HelloWebView | `io.apkrun.fixture.hellowebview` | A WebView showing a bundled local page. No network. | `loaded` | #30, compatibility |
+| HelloNotification | `io.apkrun.fixture.hellonotification` | Posts, on buttons and on a timer, the notification set of [../02-design/desktop-integration.md](../02-design/desktop-integration.md) §5.5: plain, two-action, an update of the first, `LOW`, ongoing, and a grouped series. Its launch activity logs which intent opened it. | `posted <id>`, `intent <action>` | #55, secret test (§7.2) |
+| HelloClipboard | `io.apkrun.fixture.helloclipboard` | A text field, a Copy button that sets a known string, an image view and a rich-text field (#81), and a view of the current primary clip ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §4.5). | `clip <text>` (logs its clipboard text on purpose) | #54, #81, secret test (§7.2) |
+| HelloLinks | `io.apkrun.fixture.hellolinks` | Opens an `https` link, a `mailto` link, a Custom Tab, a `javascript:` URL, an `intent:` URL, and a link in the background (from a timer after its window loses focus) ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §7.3). | `open <scheme>` | #82 |
+| HelloFiles | `io.apkrun.fixture.hellofiles` | Accepts shares (text, images, any file), opens the system picker (open, open tree, create), shows names, sizes, and SHA-256, and shares a generated file ("Save to Mac") ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.5). | `file <name> <size> <sha256>` | #83 |
+| HelloFilesPeer | `io.apkrun.fixture.hellofilespeer` | A second package with the HelloFiles picker and no shared-folder access. It cannot open a URI that was granted to HelloFiles. | as HelloFiles | #83 |
+| HelloAudio | `io.apkrun.fixture.helloaudio` | Buttons play a 1 kHz tone, a sweep, and a click track (one click per second). Records 5 s and shows the level ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §8.3). | `play <name>` when playback starts, `recorded <frames> <peak>` after a recording | #84, #85, checklist C10-5 (§8.7) |
+| HelloUpdate | `io.apkrun.fixture.helloupdate` | Versions and variants in §4.3. | `version <code>`, `data <value>`, `fgs started` (V1 with the `fgs` extra) | #67 (adds V1), #38–#44 (other variants), #51–#53, #50 (G9), G7 |
+| HelloSplit | `io.apkrun.fixture.hellosplit` | Base, `config.arm64_v8a`, `config.xhdpi`, `config.ja`, and an install-time feature split. A native library and a Japanese string. See the details below. | `native ok`, `string <locale>` | #28 (creates it), #43, #74, #79 |
 | HelloNative | `io.apkrun.fixture.hellonative` | An arm64-v8a variant and an armeabi-v7a-only variant. | `native ok` | ABI check ([../02-design/package-store.md](../02-design/package-store.md) §4.6) |
 | HelloLegacySig | `io.apkrun.fixture.hellolegacysig` | v1 signature only, `targetSdk` 29. | none | signature floor tests |
-| OtherInstaller | `io.apkrun.fixture.otherinstaller` | Declares `REQUEST_INSTALL_PACKAGES` and tries to update another fixture. See the details below. | `session <status>` | #039 |
-| IconLegacy | `io.apkrun.fixture.iconlegacy` | A legacy PNG launcher icon with transparency. | none | #055 |
-| OddName | `io.apkrun.fixture.odd_name` | A label with `/`, `:`, and an emoji ZWJ sequence. | none | #045 name sanitizing and the `_` → `-` mapping ([../02-design/wrapper.md](../02-design/wrapper.md) §4), #078 |
-| HelloProbe | `io.apkrun.fixture.helloprobe` | An ordinary `untrusted_app` that tries to connect to the agents' abstract sockets and to open `AF_VSOCK`. | `probe <target> <result>` | #035 SELinux negative test ([../02-design/guest-components.md](../02-design/guest-components.md) §12) |
+| OtherInstaller | `io.apkrun.fixture.otherinstaller` | Declares `REQUEST_INSTALL_PACKAGES` and tries to update another fixture. See the details below. | `session <status>` | #40 |
+| IconLegacy | `io.apkrun.fixture.iconlegacy` | A legacy PNG launcher icon with transparency. | none | #56 |
+| OddName | `io.apkrun.fixture.odd_name` | A label with `/`, `:`, and an emoji ZWJ sequence. | none | #46 name sanitizing and the `_` → `-` mapping ([../02-design/wrapper.md](../02-design/wrapper.md) §4), #79 |
+| HelloProbe | `io.apkrun.fixture.helloprobe` | An ordinary `untrusted_app` that tries to connect to the agents' abstract sockets and to open `AF_VSOCK`. | `probe <target> <result>` | #36 SELinux negative test ([../02-design/guest-components.md](../02-design/guest-components.md) §12) |
 
-Post-v1 tracks add a Vulkan fixture (#096) and a stand-in installer (#097) to `Tests/Fixtures/AndroidApps/`, signed like the others.
+Post-v1 tracks add a Vulkan fixture (#97) and a stand-in installer (#98) to `Tests/Fixtures/AndroidApps/`, signed like the others.
 
 Details that the table does not hold:
 
@@ -339,28 +339,28 @@ Details that the table does not hold:
   - Debug source set only: `DebugCounterReceiver` handles the broadcasts `io.apkrun.fixture.hellotext.debug.INCREMENT` (increments and logs `debug increment <n>`), `io.apkrun.fixture.hellotext.debug.READ` (logs `debug read <n>`), and `io.apkrun.fixture.hellotext.debug.DETAILS` (opens the Details screen). It uses the same store as the Button. Release builds have no receiver.
   - Debug trace (#103): `TouchTrace` records DOWN, MOVE, UP, and CANCEL dispatch, pressed-state changes, and click callbacks with their timing. The `DebugTouchTraceActions` start and stop-and-drain broadcasts control it, and a drain logs `touch-trace <record>` lines. The trace is off unless a test starts it. The release source set has a plain button and no trace.
 - **HelloSplit.** Built as an App Bundle and converted to `.apks` with the pinned bundletool ([../05-development/build-system.md](../05-development/build-system.md) §8.1). The native library lives in `config.arm64_v8a` and logs `native ok` when loaded. The activity logs `string <locale>` from a string that `config.ja` translates.
-- **HelloAudio.** The `play click` event marks the start of the click track for the latency measure (#083).
+- **HelloAudio.** The `play click` event marks the start of the click track for the latency measure (#84).
 - **OtherInstaller.** Carries HelloUpdate V2 in its assets. On first launch it opens a `PackageInstaller` session for `io.apkrun.fixture.helloupdate` with `USER_ACTION_NOT_REQUIRED`, commits it, and logs `session <status>`.
 
 Combinations used by name in the design documents:
 
 - "Two fixture windows" in the clipboard loop test ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §4.5): HelloClipboard and HelloText.
-- "The APKRun-managed fixture" of #039: HelloUpdate.
+- "The APKRun-managed fixture" of #40: HelloUpdate.
 - "A fixture app in `untrusted_app`" ([../02-design/guest-components.md](../02-design/guest-components.md) §12): HelloProbe.
 
 ### 4.3 Derived packages
 
 | Variant | Build | Purpose |
 |---|---|---|
-| HelloUpdate V1 | versionCode 1, key A | writes `HELLO` to `files/data.txt` on first launch. With the intent extra `fgs`, it starts a `mediaPlayback` foreground service and logs `fgs started` (#040) |
+| HelloUpdate V1 | versionCode 1, key A | writes `HELLO` to `files/data.txt` on first launch. With the intent extra `fgs`, it starts a `mediaPlayback` foreground service and logs `fgs started` (#41) |
 | HelloUpdate V2 | versionCode 2, key A | reads `files/data.txt` and logs `data HELLO`; writes `files/v2.txt` |
-| HelloUpdate V2-other-signer | versionCode 2, key B | `signerMismatch` on the host, `CONFLICT` in Android (#038) |
-| HelloUpdate V3-broken | versionCode 3, key A | crashes 2 s after launch (#043) |
-| HelloUpdate V4 | versionCode 4, key A | the normal update after a skipped version (#043) |
-| HelloUpdate rotation variants | V2 signed with lineage A → B, with and without `INSTALLED_DATA`; rotation back with and without `ROLLBACK` | T0 validation matrix (#041) |
-| Corrupted HelloUpdate V2 | one flipped byte in `classes.dex` | `invalidSignature` (#041) |
+| HelloUpdate V2-other-signer | versionCode 2, key B | `signerMismatch` on the host, `CONFLICT` in Android (#39) |
+| HelloUpdate V3-broken | versionCode 3, key A | crashes 2 s after launch (#44) |
+| HelloUpdate V4 | versionCode 4, key A | the normal update after a skipped version (#44) |
+| HelloUpdate rotation variants | V2 signed with lineage A → B, with and without `INSTALLED_DATA`; rotation back with and without `ROLLBACK` | T0 validation matrix (#42) |
+| Corrupted HelloUpdate V2 | one flipped byte in `classes.dex` | `invalidSignature` (#42) |
 | Container fixtures | from HelloSplit and HelloText: split files, `.apks` (bundletool), `.xapk` with and without OBB, `.apkm` plain and non-ZIP, `.aab`, a zip bomb, a `../` entry, a symlink entry, 600 entries, and a ZIP64 container generated at test time | [../02-design/package-store.md](../02-design/package-store.md) §16 T0 |
-| Generated `.apks` | 3 ABIs, 6 densities, 10 languages, one feature split, `requiredSplitTypes` | split selection (#042, #073) |
+| Generated `.apks` | 3 ABIs, 6 densities, 10 languages, one feature split, `requiredSplitTypes` | split selection (#43, #74) |
 
 "HelloUpdate V4" is the fixture. "Rule V4" is the validation rule of [../02-design/update-system.md](../02-design/update-system.md) §6. Tests and documents always write the prefix.
 
@@ -372,41 +372,41 @@ All test keys are in `Tests/Fixtures/signing/`, named `test-*` ([../01-architect
 |---|---|
 | `test-fixture-a.jks` | default signer of all fixture apps |
 | `test-fixture-b.jks` | the "other signer" and the rotation target |
-| `test-fdroid-repo.jks` | signs the F-Droid test repository index (#051) |
+| `test-fdroid-repo.jks` | signs the F-Droid test repository index (#52) |
 | `test-sparkle-ed25519` and `.pub` | signs the local appcast for `ReleaseUpdateTest` ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.2) |
 | `test-image-ed25519` and `.pub` | T0 and T1 signature vectors for image manifests and feeds, with an injected trust store |
 | `test-guest-dev.jks` | development signing of the Guest Agent and Store Agent APKs on the stock image ([../02-design/guest-components.md](../02-design/guest-components.md) §2) |
 
-Developer ID, notarization credentials, the release Sparkle key, and the release image key are CI secrets ([../05-development/workflow.md](../05-development/workflow.md) §9.2). Only the `signing` and `release` environments can read them. The Developer ID and the notarization credentials are read by the release job, the `maintenance` T2 job (which signs the `ReleaseUpdateTest` bundles, #057), and the nightly notarization check (#088). The release Sparkle key and the release image key are only in `release`.
+Developer ID, notarization credentials, the release Sparkle key, and the release image key are CI secrets ([../05-development/workflow.md](../05-development/workflow.md) §9.2). Only the `signing` and `release` environments can read them. The Developer ID and the notarization credentials are read by the release job, the `maintenance` T2 job (which signs the `ReleaseUpdateTest` bundles, #58), and the nightly notarization check (#89). The release Sparkle key and the release image key are only in `release`.
 
 ### 4.5 Update repositories and servers
 
 | Fixture | Location | Served by | Used by |
 |---|---|---|---|
-| Local provider repository | `Tests/Fixtures/update-repos/local/io.apkrun.fixture.helloupdate/{1,2}/` (#037) | read directly | #037, #038, G7 |
-| Temporary repositories | copies of the local repository with V3-broken and V4 added | the test | #043 |
-| Direct manifests | the local fixtures served as Direct manifests ([../05-development/build-system.md](../05-development/build-system.md) §8.1), plus `Tests/Fixtures/update-repos/direct/`: valid, versionCode mismatch, wrong `sha256`, missing `sha256`, HTTP URL, relative URL, oversized, wrong package | `scripts/dev/update-server.py` on `127.0.0.1` (Debug only), with `--delay <seconds>` | #050, `update-check-launch` (5 s delay), #074 (30 s delay) |
-| F-Droid test repository | `Tests/Fixtures/update-repos/fdroid/`: two HelloUpdate versions; `fdroid update` in CI signs the index with `test-fdroid-repo.jks`; a tampered `entry.jar` is a negative case | a local static server | #051 |
-| GitHub recorded responses and mock | `Tests/Fixtures/update-repos/github/recorded/`: releases for V1 and V2 (V2 tagged `v0.1`), a release with two matching assets and no ABI hint, a draft, a pre-release, an asset with `digest` and one without, and a rate-limit response with its headers | T0 reads them; the T1/T2 mock serves them (a GitHub mode of `update-server.py`) | #052 (misleading tag `v0.1`, `ambiguousAsset`) |
-| GitHub fixture repository | `apkrun-fixtures/helloupdate-releases` | github.com | #052 T3 nightly |
-| Local appcast | `Tests/Fixtures/runtime-updates/appcast/` | a local server | #057 (`ReleaseUpdateTest` 9000 → 9001) |
-| Local image feed | `Tests/Fixtures/runtime-updates/image-feed/`: valid, tampered, replayed sequence, expired | a local server with `Range` support | #087 step 8a |
+| Local provider repository | `Tests/Fixtures/update-repos/local/io.apkrun.fixture.helloupdate/{1,2}/` (#38) | read directly | #38, #39, G7 |
+| Temporary repositories | copies of the local repository with V3-broken and V4 added | the test | #44 |
+| Direct manifests | the local fixtures served as Direct manifests ([../05-development/build-system.md](../05-development/build-system.md) §8.1), plus `Tests/Fixtures/update-repos/direct/`: valid, versionCode mismatch, wrong `sha256`, missing `sha256`, HTTP URL, relative URL, oversized, wrong package | `scripts/dev/update-server.py` on `127.0.0.1` (Debug only), with `--delay <seconds>` | #51, `update-check-launch` (5 s delay), #75 (30 s delay) |
+| F-Droid test repository | `Tests/Fixtures/update-repos/fdroid/`: two HelloUpdate versions; `fdroid update` in CI signs the index with `test-fdroid-repo.jks`; a tampered `entry.jar` is a negative case | a local static server | #52 |
+| GitHub recorded responses and mock | `Tests/Fixtures/update-repos/github/recorded/`: releases for V1 and V2 (V2 tagged `v0.1`), a release with two matching assets and no ABI hint, a draft, a pre-release, an asset with `digest` and one without, and a rate-limit response with its headers | T0 reads them; the T1/T2 mock serves them (a GitHub mode of `update-server.py`) | #53 (misleading tag `v0.1`, `ambiguousAsset`) |
+| GitHub fixture repository | `apkrun-fixtures/helloupdate-releases` | github.com | #53 T3 nightly |
+| Local appcast | `Tests/Fixtures/runtime-updates/appcast/` | a local server | #58 (`ReleaseUpdateTest` 9000 → 9001) |
+| Local image feed | `Tests/Fixtures/runtime-updates/image-feed/`: valid, tampered, replayed sequence, expired | a local server with `Range` support | #88 step 8a |
 
 ### 4.6 Schema and golden files
 
 | Golden set | Location | Test |
 |---|---|---|
 | Schema migrations | `Tests/Fixtures/schemas/<file>/v<n>.json` → `v<n>.expected.json` | T0, every file and version ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §5, release rule R5) |
-| Guest protocol frames | `Packages/GuestProtocol/testdata/frames/*.bin` | T0 in Swift and Kotlin (#033) |
+| Guest protocol frames | `Packages/GuestProtocol/testdata/frames/*.bin` | T0 in Swift and Kotlin (#34) |
 | Bootconfig vectors | `Images/tools/tests/fixtures/bootconfig/*.txt` → `*.bin` | T0 in Python and Swift; T2 in the Linux guest ([../02-design/android-image.md](../02-design/android-image.md) §6.3) |
-| Boot console captures | `Images/reference/<buildId>/` (#064) | T0 `BootPhaseDetector` ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.3) |
-| virtio-gpu byte vectors | from Linux driver traces, in GraphicsCore test resources | T0 (#019) |
+| Boot console captures | `Images/reference/<buildId>/` (#65) | T0 `BootPhaseDetector` ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.3) |
+| virtio-gpu byte vectors | from Linux driver traces, in GraphicsCore test resources | T0 (#20) |
 | EDIDs | golden EDIDs and committed `edid-decode` output, in GraphicsCore test resources | T0 |
 | `kmscube` command stream | `Tests/Fixtures/graphics/`. Synthetic until a Linux run records it: `synthetic-virgl-session.json` | T1 replay ([../02-design/graphics.md](../02-design/graphics.md) §14) |
 | CLI output | `CLI/apkrun/Tests/Golden/` | T0 human and JSON output per command ([../02-design/cli.md](../02-design/cli.md) §6.3) |
 | `aapt2` output | APKStoreCore test resources, per pinned `aapt2` version | T1 |
 | Icon masters | WrapperCore test resources | T1 perceptual compare ([../02-design/wrapper.md](../02-design/wrapper.md) §16) |
-| Direct manifest schema | `docs/03-reference/schemas/direct-provider-manifest.schema.json` | T0 against the model's fixtures (#050) |
+| Direct manifest schema | `docs/03-reference/schemas/direct-provider-manifest.schema.json` | T0 against the model's fixtures (#51) |
 | Compatibility database | `Tests/Compatibility/database/compatibility.json` against `compatibility.schema.json` | static check ([../02-design/diagnostics.md](../02-design/diagnostics.md) §10) |
 | Compile-fail sources | `Tests/Fixtures/compile-fail/` | T1 ([../02-design/diagnostics.md](../02-design/diagnostics.md) §12) |
 
@@ -451,8 +451,8 @@ The gates, their pass conditions, and their closing tasks are in [roadmap.md](ro
 | G2 boot_completed | `G2AndroidBoot` | stock image |
 | G3 SurfaceFlinger → virtio-gpu → Metal | `G3Graphics` | stock image, HelloGL |
 | G4 Hello APK in a native window | `G4NativeWindow` | stock image, HelloText |
-| G5 Two APKs in two windows | `G5TwoWindows` | stock image, HelloText and HelloCompose (#030) |
-| G6 Warm under apkrund | `G6WarmRuntime` | stock image (custom image after #035), HelloText |
+| G5 Two APKs in two windows | `G5TwoWindows` | stock image, HelloText and HelloCompose (#31) |
+| G6 Warm under apkrund | `G6WarmRuntime` | stock image (custom image after #36), HelloText |
 | G7 v1 → v2 automatically | `G7GentleUpdate` | custom image, HelloUpdate V1 and V2, local provider |
 | G8 APK wrapped as .app | `G8Wrapper` | custom image, HelloText |
 | G9 Wrapper unchanged during updates | `G9WrapperIntegrity` | custom image, HelloUpdate V1 and V2 |
@@ -462,9 +462,9 @@ Rules:
 - `scripts/run-gate.sh G<n>` runs the check on the reference Mac from a clean build of `main`. The T2 building blocks in `Tests/IntegrationTests/` pass first (§2.5).
 - Keep the evidence permanently with the closing task: the script report, the xcresult, the artifacts of §3.7, and a screen recording for G3–G9.
 - A gate check is never retried and never quarantined (§2.7).
-- After a gate passes, its check runs nightly. From #035 on, the G2–G6 regressions run on the custom image. G2 also runs on the stock image while the stock image is used for development.
+- After a gate passes, its check runs nightly. From #36 on, the G2–G6 regressions run on the custom image. G2 also runs on the stock image while the stock image is used for development.
 - A red gate regression opens an issue, blocks release candidates, and stops new tasks that depend on the gate ([roadmap.md](roadmap.md) §2).
-- The checks that [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §14 adds to G6 (the warm-launch KPI, a real `pmset sleepnow`, onboarding on a fresh user account) join the nightly G6 run once #066, #069, and #070 are done. Until then they are on the v0.2 checklist (§8.3).
+- The checks that [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §14 adds to G6 (the warm-launch KPI, a real `pmset sleepnow`, onboarding on a fresh user account) join the nightly G6 run once #67, #70, and #71 are done. Until then they are on the v0.2 checklist (§8.3).
 
 ---
 
@@ -491,13 +491,13 @@ Other measured targets:
 | Target | Source | Where measured |
 |---|---|---|
 | ⌘V p95 ≤ 150 ms for 64 KiB | [../02-design/desktop-integration.md](../02-design/desktop-integration.md) §4 | harness, nightly |
-| file read through the provider ≥ 200 MB/s (provisional) | [../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6 | T2 #082, nightly |
-| notification banner p50 ≤ 1 s (wrapper running), ≤ 3 s (background start) | [../02-design/desktop-integration.md](../02-design/desktop-integration.md) §5 | T2 #054 |
-| `readyToDisplayed` p95 < 1 refresh + 4 ms; present < 2 ms p95 | [../02-design/display-and-windowing.md](../02-design/display-and-windowing.md) §5.5 | T2 #068, nightly |
+| file read through the provider ≥ 200 MB/s (provisional) | [../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6 | T2 #83, nightly |
+| notification banner p50 ≤ 1 s (wrapper running), ≤ 3 s (background start) | [../02-design/desktop-integration.md](../02-design/desktop-integration.md) §5 | T2 #55 |
+| `readyToDisplayed` p95 < 1 refresh + 4 ms; present < 2 ms p95 | [../02-design/display-and-windowing.md](../02-design/display-and-windowing.md) §5.5 | T2 #69, nightly |
 | `inspect` < 1 s per 50 MiB APK | [../02-design/package-store.md](../02-design/package-store.md) §4 | reference Mac, nightly |
 | quick doctor ≤ 3 s; bundle ≤ 100 MiB and ≤ 60 s | [../02-design/diagnostics.md](../02-design/diagnostics.md) §7–§8 | reference Mac, nightly |
-| apkrund restart ≤ 15 s after `kill -9` | #031 | T2 |
-| `VM_RESUMED → RUNTIME_READY` p50 ≤ 500 ms over 20 runs | #069 | T2 |
+| apkrund restart ≤ 15 s after `kill -9` | #32 | T2 |
+| `VM_RESUMED → RUNTIME_READY` p50 ≤ 500 ms over 20 runs | #70 | T2 |
 
 Rules:
 
@@ -509,7 +509,7 @@ Rules:
 
 | Requirement | Tests |
 |---|---|
-| NFR-SEC-01 APK code is untrusted | HelloProbe SELinux test (#035); malicious-agent fuzzing (#082, #091); virtio-gpu fuzzing |
+| NFR-SEC-01 APK code is untrusted | HelloProbe SELinux test (#36); malicious-agent fuzzing (#83, #92); virtio-gpu fuzzing |
 | NFR-SEC-02 no automatic exposure of the home folder, `~/.ssh`, `~/Library`, `~/Documents` | T0: `VMDefinition` has no directory-sharing device; `SharedFolderService` refuses paths outside a share. T2: without opt-in, HelloFiles' picker shows no Mac folder. |
 | NFR-SEC-03 integrations go through the policy and can be turned off | T0 `IntegrationPolicy` table; T2 each integration with its setting off ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §4.5, §5.5, §6.5, §7.3) |
 | NFR-SEC-04 no signature bypass | T0 validation rules; T2 other signer refused by the host, and by Android through `AdbClient`; no hook in any build disables a rule (§3.3) |
@@ -519,7 +519,7 @@ Rules:
 
 Secret test ([../02-design/diagnostics.md](../02-design/diagnostics.md) §12 T2-6): fixture secrets `APKRUN-FIXTURE-SECRET-<n>` are planted in a provider token (test Keychain), a URL query, a `.private` log argument, the console (bundle S), app logcat (HelloClipboard), the clipboard and a notification (HelloClipboard or HelloNotification), a shared-folder file name, a wrapper path, the Mac user name (the test account's name), and `persist.apkrun.test.secret`. The unzipped bundle is searched in raw, URL-encoded, base64, and UTF-16 forms, with and without `--include-logcat`. It must contain none of them.
 
-Fuzz targets (#091):
+Fuzz targets (#92):
 
 | Target | Code | Source |
 |---|---|---|
@@ -536,7 +536,7 @@ Fuzz targets (#091):
 | GitHub release decoder (4 MiB) | UpdateCore (`GitHubProvider`) | [../02-design/update-system.md](../02-design/update-system.md) §12 |
 | host operations from a malicious agent build | IntegrationCore, RuntimeCore (T2) | [../02-design/desktop-integration.md](../02-design/desktop-integration.md) §15 |
 
-- Engines: libFuzzer for Swift and C targets (with the swift.org toolchain that #091 pins) and Jazzer for Kotlin targets ([../05-development/build-system.md](../05-development/build-system.md) §15). GraphicsBridge T1 tests and all Swift and C fuzz targets also run with Address Sanitizer and Undefined Behavior Sanitizer.
+- Engines: libFuzzer for Swift and C targets (with the swift.org toolchain that #92 pins) and Jazzer for Kotlin targets ([../05-development/build-system.md](../05-development/build-system.md) §15). GraphicsBridge T1 tests and all Swift and C fuzz targets also run with Address Sanitizer and Undefined Behavior Sanitizer.
 - Runs: 60 s per target in `fuzz-short` (T1) on every pull request; 1 h per target in nightly `fuzz-long` (T3).
 - A crash opens an issue, and its reproducer goes into `Tests/Fixtures/fuzz/<target>/` as a permanent T1 regression input. A release needs no open fuzz crash ([roadmap.md](roadmap.md) §3.6).
 
@@ -546,9 +546,9 @@ Fuzz targets (#091):
 |---|---|
 | NFR-REL-01 recoverable after a crash during an update | T0 recovery table; T1 `APKRUN_STORE_FAULT` at every host step; T2 kill during `CommitInstall`; wrapper `pending` and `refreshing` recovery; maintenance variant (c) |
 | NFR-REL-02 launchd restarts apkrund and clients reconnect | T2 `kill -9` recovery; G6 |
-| NFR-REL-03 a dead agent is detected and reconnected | T2 agent kill with session continuity (#034, #072) |
+| NFR-REL-03 a dead agent is detected and reconnected | T2 agent kill with session continuity (#35, #73) |
 | NFR-REL-04 no silent version mismatch | T0 handshake matrix; T1 XPC version mismatch; release smoke matrix with the previous stable image |
-| NFR-REL-05 serial logs survive a VM crash | T2 forced stop during output (#004) |
+| NFR-REL-05 serial logs survive a VM crash | T2 forced stop during output (#5) |
 
 Soak run: nightly, 60 minutes on one lab Mac with the custom image. It cycles launches and closes of HelloText, HelloGL, and HelloCompose, with suspend and resume every 10 minutes. It passes with no crash of apkrund, the launcher, or an agent, and with apkrund RSS growth below 10 % after the first 10 minutes.
 
@@ -568,10 +568,10 @@ Soak run: nightly, 60 minutes on one lab Mac with the custom image. It cycles la
 
 | Requirement | Tests |
 |---|---|
-| NFR-L10N-01 English and Japanese | T0: every error code and human CLI message of the golden tests has `ja` text (#092, [../02-design/diagnostics.md](../02-design/diagnostics.md) §12); T2: pseudo-language run of APKRun.app ([../02-design/host-ui.md](../02-design/host-ui.md) §15); manual Japanese UI review (§8.7) |
+| NFR-L10N-01 English and Japanese | T0: every error code and human CLI message of the golden tests has `ja` text (#93, [../02-design/diagnostics.md](../02-design/diagnostics.md) §12); T2: pseudo-language run of APKRun.app ([../02-design/host-ui.md](../02-design/host-ui.md) §15); manual Japanese UI review (§8.7) |
 | NFR-L10N-02 VoiceOver | T2 accessibility audit ([../02-design/host-ui.md](../02-design/host-ui.md) §15); manual VoiceOver walkthrough (§8.7) |
 
-Android-side language behavior uses the fixtures: HelloSplit's Japanese resource (#042), Japanese IME input (#071), and locale sync (#085).
+Android-side language behavior uses the fixtures: HelloSplit's Japanese resource (#43), Japanese IME input (#72), and locale sync (#86).
 
 ### 7.6 Upgrades
 
@@ -593,7 +593,7 @@ Android-side language behavior uses the fixtures: HelloSplit's Japanese resource
 
 - Check IDs are `C<version>-<n>`, where `<version>` is the release without the dot (`C04-2` is check 2 of v0.4). They are not milestone numbers.
 - Manual checks run on the reference Mac with the release candidate build and, from v0.3 on, the custom image.
-- Record each result in the release issue: the milestone review issue for v0.1–v0.5, and #094 for v1.0. A record holds pass or fail, the macOS build, the APKRun build, the image version, notes, and a screenshot where useful.
+- Record each result in the release issue: the milestone review issue for v0.1–v0.5, and #95 for v1.0. A record holds pass or fail, the macOS build, the APKRun build, the image version, notes, and a screenshot where useful.
 - A failed check blocks the release. Only a non-security check with a filed follow-up issue that the release notes name may be waived. Security and privacy checks cannot be waived.
 - Every later release repeats the checks of earlier releases whose feature still exists. v1.0 runs all of them.
 - A check that becomes automatable moves to T2 or T3 and leaves the list.
@@ -602,73 +602,73 @@ Android-side language behavior uses the fixtures: HelloSplit's Japanese resource
 
 | ID | Check | Task |
 |---|---|---|
-| C01-1 | HelloText text is sharp on a Retina display, and on a non-Retina external display if one is available | #067 |
-| C01-2 | Trackpad and wheel scrolling follow the macOS natural-scrolling setting | #024 |
-| C01-3 | Right-click opens HelloText's context menu at the pointer | #024 |
-| C01-4 | With the US and the JIS keyboard layouts, `Hello, APKRun 123!` arrives exactly | #025 |
-| C01-5 | `apkrun dev launch` from a new Terminal window shows HelloText without emulator chrome | #017, #026 |
-| C01-6 | The G3 screen recording shows no visible tearing or stutter in HelloGL | #023 |
+| C01-1 | HelloText text is sharp on a Retina display, and on a non-Retina external display if one is available | #68 |
+| C01-2 | Trackpad and wheel scrolling follow the macOS natural-scrolling setting | #25 |
+| C01-3 | Right-click opens HelloText's context menu at the pointer | #25 |
+| C01-4 | With the US and the JIS keyboard layouts, `Hello, APKRun 123!` arrives exactly | #26 |
+| C01-5 | `apkrun dev launch` from a new Terminal window shows HelloText without emulator chrome | #18, #27 |
+| C01-6 | The G3 screen recording shows no visible tearing or stutter in HelloGL | #24 |
 
 ### 8.3 v0.2
 
 | ID | Check | Task |
 |---|---|---|
-| C02-1 | Clicking back and forth between the HelloText and HelloCompose windows moves keyboard focus correctly | #030 |
-| C02-2 | The Japanese IME candidate window appears next to the Android cursor in both fixtures | #071 |
-| C02-3 | Copy and paste between TextEdit and HelloClipboard work both ways; the pasteboard prompt behavior of R-21 is recorded | #053 |
-| C02-4 | Real sleep (`pmset sleepnow`) with HelloText open, wake after 2 minutes: HelloText responds and the guest clock is right | #069 |
-| C02-5 | Logout with a running session: the stop log says `graceful` | #031 |
-| C02-6 | The G6 extras of [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §14 until they are automated (§5) | #031 |
+| C02-1 | Clicking back and forth between the HelloText and HelloCompose windows moves keyboard focus correctly | #31 |
+| C02-2 | The Japanese IME candidate window appears next to the Android cursor in both fixtures | #72 |
+| C02-3 | Copy and paste between TextEdit and HelloClipboard work both ways; the pasteboard prompt behavior of R-21 is recorded | #54 |
+| C02-4 | Real sleep (`pmset sleepnow`) with HelloText open, wake after 2 minutes: HelloText responds and the guest clock is right | #70 |
+| C02-5 | Logout with a running session: the stop log says `graceful` | #32 |
+| C02-6 | The G6 extras of [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §14 until they are automated (§5) | #32 |
 
 ### 8.4 v0.3
 
 | ID | Check | Task |
 |---|---|---|
-| C03-1 | The rollback notification and UI say that app data is not rolled back | #043 |
-| C03-2 | The update notifications (including the 7-day notification) read correctly | #040 |
+| C03-1 | The rollback notification and UI say that app data is not rolled back | #44 |
+| C03-2 | The update notifications (including the 7-day notification) read correctly | #41 |
 
 ### 8.5 v0.4 (first public demo)
 
 | ID | Check | Task |
 |---|---|---|
-| C04-1 | HelloText and IconLegacy icons have no gray system plate in Finder, the Dock, Spotlight, and the Apps view | #055 |
-| C04-2 | Keep `HelloText.app` in the Dock, log out and in, launch it from the Dock | #056 |
-| C04-3 | Launch `HelloText.app` from Spotlight by its label | #056 |
-| C04-4 | Whether the Apps view lists the Desktop copy is recorded (OQ-22) | #056 |
-| C04-5 | The Dock pin survives a wrapper refresh (R-20) | #076 |
-| C04-6 | Launcher screens R, S, V, L, D show the right text and layout | #044 |
-| C04-7 | The approval prompt for a copied wrapper is clear, and Return does not allow | #044, #089 |
-| C04-8 | The uninstall choices sheet matches [../02-design/host-ui.md](../02-design/host-ui.md) §8 | #076 |
-| C04-9 | The demo of [roadmap.md](roadmap.md) §3.4 runs on a clean Mac with the #035 image bundle picked in onboarding, and no Terminal | #049 |
+| C04-1 | HelloText and IconLegacy icons have no gray system plate in Finder, the Dock, Spotlight, and the Apps view | #56 |
+| C04-2 | Keep `HelloText.app` in the Dock, log out and in, launch it from the Dock | #57 |
+| C04-3 | Launch `HelloText.app` from Spotlight by its label | #57 |
+| C04-4 | Whether the Apps view lists the Desktop copy is recorded (OQ-22) | #57 |
+| C04-5 | The Dock pin survives a wrapper refresh (R-20) | #77 |
+| C04-6 | Launcher screens R, S, V, L, D show the right text and layout | #45 |
+| C04-7 | The approval prompt for a copied wrapper is clear, and Return does not allow | #45, #90 |
+| C04-8 | The uninstall choices sheet matches [../02-design/host-ui.md](../02-design/host-ui.md) §8 | #77 |
+| C04-9 | The demo of [roadmap.md](roadmap.md) §3.4 runs on a clean Mac with the #36 image bundle picked in onboarding, and no Terminal | #50 |
 
 ### 8.6 v0.5
 
 | ID | Check | Task |
 |---|---|---|
-| C05-1 | The notification permission prompt names the wrapper; notifications look right; R-19 behavior recorded | #054 |
-| C05-2 | Sharing a folder inside `~/Documents`: the privacy prompt and its attribution are recorded (R-22) | #082 |
-| C05-3 | Save to Mac: the Save panel flow works, and the file carries a quarantine attribute | #082 |
-| C05-4 | Image and HTML copied in HelloClipboard paste correctly into Preview and TextEdit, and back | #080 |
-| C05-5 | The Sparkle update UI and launcher screen U during a `ReleaseUpdateTest` update | #057 |
-| C05-6 | The Android system update UI: ask-mode reminder, install, restart text | #087 |
-| C05-7 | Troubleshooting pane and Report a Problem from a wrapper produce a bundle ([../02-design/diagnostics.md](../02-design/diagnostics.md) §12 T3-2) | #059, #060 |
-| C05-8 | The F-Droid signer-mismatch text in Settings is clear | #051 |
-| C05-9 | With macOS set to Japanese, HelloSplit shows its Japanese string (needs the locale sync of #085) | #042, #085 |
+| C05-1 | The notification permission prompt names the wrapper; notifications look right; R-19 behavior recorded | #55 |
+| C05-2 | Sharing a folder inside `~/Documents`: the privacy prompt and its attribution are recorded (R-22) | #83 |
+| C05-3 | Save to Mac: the Save panel flow works, and the file carries a quarantine attribute | #83 |
+| C05-4 | Image and HTML copied in HelloClipboard paste correctly into Preview and TextEdit, and back | #81 |
+| C05-5 | The Sparkle update UI and launcher screen U during a `ReleaseUpdateTest` update | #58 |
+| C05-6 | The Android system update UI: ask-mode reminder, install, restart text | #88 |
+| C05-7 | Troubleshooting pane and Report a Problem from a wrapper produce a bundle ([../02-design/diagnostics.md](../02-design/diagnostics.md) §12 T3-2) | #60, #61 |
+| C05-8 | The F-Droid signer-mismatch text in Settings is clear | #52 |
+| C05-9 | With macOS set to Japanese, HelloSplit shows its Japanese string (needs the locale sync of #86) | #43, #86 |
 
 ### 8.7 v1.0
 
 | ID | Check | Task |
 |---|---|---|
-| C10-1 | VoiceOver walkthrough of onboarding, home, add flow, per-app settings, Settings, and uninstall | #092 |
-| C10-2 | Japanese UI: complete, no truncation; pseudo-language screenshots reviewed | #092 |
-| C10-3 | Onboarding on a fresh macOS user account | #066 |
-| C10-4 | Microphone permission prompt timing recorded (OQ-29) | #084 |
-| C10-5 | HelloAudio's tone, sweep, and click track are heard on the Mac, in sync | #083 |
-| C10-6 | A distribution wrapper downloaded with Safari on a clean account opens after Gatekeeper approval; `spctl --assess` accepts it | #088 |
-| C10-7 | APKRun.app passes `spctl --assess --type execute` and `stapler validate` | #088, #094 |
-| C10-8 | License notices are visible in APKRun.app and in the image | #093 |
-| C10-9 | Lid-close sleep with a running app, then wake | #069 |
-| C10-10 | The v0.4 demo, repeated on the v1.0 candidate, with the image installed from the stable feed during onboarding | #094 |
+| C10-1 | VoiceOver walkthrough of onboarding, home, add flow, per-app settings, Settings, and uninstall | #93 |
+| C10-2 | Japanese UI: complete, no truncation; pseudo-language screenshots reviewed | #93 |
+| C10-3 | Onboarding on a fresh macOS user account | #67 |
+| C10-4 | Microphone permission prompt timing recorded (OQ-29) | #85 |
+| C10-5 | HelloAudio's tone, sweep, and click track are heard on the Mac, in sync | #84 |
+| C10-6 | A distribution wrapper downloaded with Safari on a clean account opens after Gatekeeper approval; `spctl --assess` accepts it | #89 |
+| C10-7 | APKRun.app passes `spctl --assess --type execute` and `stapler validate` | #89, #95 |
+| C10-8 | License notices are visible in APKRun.app and in the image | #94 |
+| C10-9 | Lid-close sleep with a running app, then wake | #70 |
+| C10-10 | The v0.4 demo, repeated on the v1.0 candidate, with the image installed from the stable feed during onboarding | #95 |
 
 ---
 
@@ -676,10 +676,10 @@ Android-side language behavior uses the fixtures: HelloSplit's Japanese resource
 
 ### 9.1 APKRun release candidate
 
-1. Build the candidate from a tagged commit on `main`: Release configuration, Developer ID signed, and, from #088 on, notarized and stapled. The build number is higher than every published one (release rule R1).
+1. Build the candidate from a tagged commit on `main`: Release configuration, Developer ID signed, and, from #89 on, notarized and stapled. The build number is higher than every published one (release rule R1).
 2. On the candidate commit: T0, T1, and the release checks of §3.3 pass.
-3. On the reference Mac with the candidate: every T2 suite, every closed gate check, the performance scenarios (no NFR miss, or an ADR with the measured numbers, [roadmap.md](roadmap.md) §3.6), the full compatibility list, the network checks, and, from #088 on, nightly notarization pass. No fuzz crash is open.
-4. Publish the candidate on the beta channel first. Before #088 nothing is published ([../05-development/workflow.md](../05-development/workflow.md) §9.7), and this step runs against the local test appcast of the `maintenance` job instead. On the reference Mac, an install of the current stable release, switched to beta (`maintenance.channel`), updates to the candidate through the real appcast. The data checks of the N → N+1 test ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §14) are repeated.
+3. On the reference Mac with the candidate: every T2 suite, every closed gate check, the performance scenarios (no NFR miss, or an ADR with the measured numbers, [roadmap.md](roadmap.md) §3.6), the full compatibility list, the network checks, and, from #89 on, nightly notarization pass. No fuzz crash is open.
+4. Publish the candidate on the beta channel first. Before #89 nothing is published ([../05-development/workflow.md](../05-development/workflow.md) §9.7), and this step runs against the local test appcast of the `maintenance` job instead. On the reference Mac, an install of the current stable release, switched to beta (`maintenance.channel`), updates to the candidate through the real appcast. The data checks of the N → N+1 test ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §14) are repeated.
 5. The release smoke matrix (§9.2) passes.
 6. The manual checklist of the version (§8) is complete.
 7. Promotion from beta to stable follows [../05-development/workflow.md](../05-development/workflow.md).

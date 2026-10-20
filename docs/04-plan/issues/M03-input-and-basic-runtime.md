@@ -1,30 +1,30 @@
 # M3 Input and basic runtime
 
-M3 makes HelloText run in a normal Mac window that responds to the mouse and the keyboard, which closes gate G4 ([roadmap.md](../roadmap.md) §2). Then two apps run at once, each on its own Android display in its own window, and input reaches only the focused window's app, which closes gate G5. The Guest Agent injects input inside Android ([ADR-0013](../../01-architecture/decisions/0013-input-via-guest-injection.md)). M3 runs in embedded development mode ([runtime-daemon.md](../../02-design/runtime-daemon.md) §10); apkrund arrives in M4 (#031).
+M3 makes HelloText run in a normal Mac window that responds to the mouse and the keyboard, which closes gate G4 ([roadmap.md](../roadmap.md) §2). Then two apps run at once, each on its own Android display in its own window, and input reaches only the focused window's app, which closes gate G5. The Guest Agent injects input inside Android ([ADR-0013](../../01-architecture/decisions/0013-input-via-guest-injection.md)). M3 runs in embedded development mode ([runtime-daemon.md](../../02-design/runtime-daemon.md) §10); apkrund arrives in M4 (#32).
 
 ---
 
-## #033 Define GuestProtocol
+## #34 Define GuestProtocol
 
 | Field | Value |
 |---|---|
 | Milestone | M3 (v0.1) |
-| Depends on | #007 |
+| Depends on | #8 |
 | Design | [guest-protocol.md](../../02-design/guest-protocol.md) §2, §4, §5 |
 | Code | `Packages/GuestProtocol/`, `Guest/protocol/` |
 
 **Goal.** One versioned Protocol Buffers schema defines every message between the host and the guest components. It compiles for the host and the guest, and a version mismatch fails with a typed error.
 
-**Result.** The `.proto` files are in `Packages/GuestProtocol/proto/apkrun/guest/v1/`. The Swift sources are generated and checked in. `FrameCodec`, `ProtocolVersion`, and `Capabilities` exist in Swift and in Kotlin (`Guest/protocol/`). An incompatible major version fails with `incompatibleVersion`. The field numbers are frozen, and the evolution rules are in [guest-protocol.md](../../02-design/guest-protocol.md) §5.2. Tests are T0 in `GuestProtocolTests` and `Guest/protocol/src/test/`. Known limit: fuzzing of both decoders is #091.
+**Result.** The `.proto` files are in `Packages/GuestProtocol/proto/apkrun/guest/v1/`. The Swift sources are generated and checked in. `FrameCodec`, `ProtocolVersion`, and `Capabilities` exist in Swift and in Kotlin (`Guest/protocol/`). An incompatible major version fails with `incompatibleVersion`. The field numbers are frozen, and the evolution rules are in [guest-protocol.md](../../02-design/guest-protocol.md) §5.2. Tests are T0 in `GuestProtocolTests` and `Guest/protocol/src/test/`. Known limit: fuzzing of both decoders is #92.
 
 ---
 
-## #072 Guest Agent bootstrap
+## #73 Guest Agent bootstrap
 
 | Field | Value |
 |---|---|
 | Milestone | M3 (v0.1) |
-| Depends on | #033, #015 |
+| Depends on | #34, #16 |
 | Design | [guest-components.md](../../02-design/guest-components.md) §3, §6.4; [guest-protocol.md](../../02-design/guest-protocol.md) §5, §6 |
 | Code | `Packages/RuntimeCore/Sources/RuntimeCore/Guest/`, `Guest/guestd/`, `Guest/agentruntime/`, `scripts/build-guest.sh`, `Tests/IntegrationTests/GuestAgentTests/` |
 
@@ -34,12 +34,12 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 
 ---
 
-## #024 Pointer input
+## #25 Pointer input
 
 | Field | Value |
 |---|---|
 | Milestone | M3 (v0.1) |
-| Depends on | #023, #072 |
+| Depends on | #24, #73 |
 | Design | [input.md](../../02-design/input.md) §3, §4, §7.1, §8 |
 | Code | `Packages/InputCore/Sources/InputCore/`, `Packages/RuntimeCore/Sources/RuntimeCore/Input/InputRouter.swift`, `CLI/apkrun/Dev/EmbeddedInputSink.swift`, `Guest/guestd/src/main/kotlin/io/apkrun/guest/daemon/InputInjector.kt`, `scripts/dev/validate-input-coordinates.sh`, `Tests/IntegrationTests/AndroidInputTests/` |
 
@@ -54,18 +54,18 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 
 ---
 
-## #025 Keyboard input
+## #26 Keyboard input
 
 | Field | Value |
 |---|---|
 | Milestone | M3 (v0.1) |
-| Depends on | #024 |
+| Depends on | #25 |
 | Design | [input.md](../../02-design/input.md) §5.1, §5.2, §6, §10 |
 | Code | `Packages/InputCore/Sources/InputCore/KeyCodeMap.swift`, `Packages/InputCore/Resources/keymap-mac-android.csv`, `Packages/WindowingCore/Sources/WindowingCore/KeyEventAdapter.swift`, `Guest/guestd/src/main/kotlin/io/apkrun/guest/daemon/InputInjector.kt`, `docs/06-user/keyboard-and-text-input.md`, `Tests/IntegrationTests/AndroidInputTests/` |
 
 **Goal.** The user types into an Android text field from the Mac window. Special keys and the common shortcuts work in key mode.
 
-**Result.** `KeyCodeMap` reads the US key map from the CSV. The translator covers key down and up, modifiers, repeat, Backspace, Enter, arrows, and Escape. Esc and ⌘[ send `BACK`. ⌘C, ⌘X, ⌘V, ⌘A, and ⌘Z send the Ctrl combinations. The IME is not started (#071). Tests are T0 in `InputCoreTests`, T1 in the guest JVM tests, and T2 in `AndroidInputTests`. Known limits: a tap does not reliably focus a field (#102), so the T2 cases move focus with Tab. The JIS layout check is manual check C01-4 in [test-strategy.md](../test-strategy.md) §8.
+**Result.** `KeyCodeMap` reads the US key map from the CSV. The translator covers key down and up, modifiers, repeat, Backspace, Enter, arrows, and Escape. Esc and ⌘[ send `BACK`. ⌘C, ⌘X, ⌘V, ⌘A, and ⌘Z send the Ctrl combinations. The IME is not started (#72). Tests are T0 in `InputCoreTests`, T1 in the guest JVM tests, and T2 in `AndroidInputTests`. Known limits: a tap does not reliably focus a field (#102), so the T2 cases move focus with Tab. The JIS layout check is manual check C01-4 in [test-strategy.md](../test-strategy.md) §8.
 
 ---
 
@@ -74,11 +74,11 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 | Field | Value |
 |---|---|
 | Milestone | M3 (v0.1) |
-| Depends on | #024 |
+| Depends on | #25 |
 | Design | [input.md](../../02-design/input.md) §3, §7.1; [guest-components.md](../../02-design/guest-components.md) §3.3 |
 | Code | `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevInputBinding.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Guest/DevelopmentGuestAgent.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Guest/GuestAgentSupervisor.swift`, `Packages/RuntimeCore/Tests/RuntimeCoreTests/GuestAgentSupervisorTests.swift` |
 
-**Goal.** After the guest agent restarts, pointer input works again in the same window without ending the boot. Today the bound channel stays after the loss, so input stays dead until the boot ends. This is a follow-up of #024.
+**Goal.** After the guest agent restarts, pointer input works again in the same window without ending the boot. Today the bound channel stays after the loss, so input stays dead until the boot ends. This is a follow-up of #25.
 
 **Out of scope.**
 - The restart policy itself. The change only adds the rebind.
@@ -107,17 +107,17 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 | Field | Value |
 |---|---|
 | Milestone | M3 (v0.1) |
-| Depends on | #024 |
+| Depends on | #25 |
 | Design | [input.md](../../02-design/input.md) §4.1, §7.3 |
 | Code | `Packages/InputCore/Sources/InputCore/EventTranslator.swift`, `Guest/guestd/src/main/kotlin/io/apkrun/guest/daemon/InputInjector.kt`, `Packages/WindowingCore/Sources/WindowingCore/IOSurfaceLayerView.swift`, `Tests/IntegrationTests/AndroidInputTests/` |
 
-**Goal.** A click from the Mac window on a text field focuses the field, and the next key goes to it, every time. Today a tap does not reliably focus it, while the same tap through ADB does. This is a follow-up of #024 and #025.
+**Goal.** A click from the Mac window on a text field focuses the field, and the next key goes to it, every time. Today a tap does not reliably focus it, while the same tap through ADB does. This is a follow-up of #25 and #26.
 
 **Steps.**
 1. **Compare the sequences.** Compare the Mac press sequence with an ADB tap at the same point: press timing, pointer ID, move during the press, and release. **Check:** the difference that fails is named in the pull request.
 2. **Reproduce.** Write a T0 or T1 test that replays the failing sequence. **Check:** the test fails before the fix.
 3. **Fix in the translator or the injector.** Change `EventTranslator` or `InputInjector`. Do not change the fixture. **Check:** the test passes.
-4. **Device run.** Click the field 50 times through the Mac window. **Check:** all 50 focus it, and the adb and drop counters of #024 stay at zero.
+4. **Device run.** Click the field 50 times through the Mac window. **Check:** all 50 focus it, and the adb and drop counters of #25 stay at zero.
 
 **Tests.**
 - T0: the reproduction in `Packages/InputCore/Tests/InputCoreTests/`.
@@ -139,11 +139,11 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 | Field | Value |
 |---|---|
 | Milestone | M3 (v0.1) |
-| Depends on | #023, #072 |
+| Depends on | #24, #73 |
 | Design | [input.md](../../02-design/input.md) §4, §8, §11 |
 | Code | `Guest/guestd/`, `Tests/Fixtures/AndroidApps/HelloText/` (debug trace and touch trace), `Tests/IntegrationTests/AndroidInputTests/` |
 
-**Goal.** A press from the Mac window is either delivered as a click, or its loss is explained at the stage where it occurs. Some presses do not produce a click, and the cause is not established. This is the follow-up that resolves the click criterion of #024.
+**Goal.** A press from the Mac window is either delivered as a click, or its loss is explained at the stage where it occurs. Some presses do not produce a click, and the cause is not established. This is the follow-up that resolves the click criterion of #25.
 
 **Steps.**
 1. **Reproduce in product mode.** Run three consecutive 100-click batches in one guest session on the ordinary input path, without the debug trace. Record the image identity, the fixture APK hash, the persisted counter deltas, the host counters, and the guest rejection totals with their sequence coverage. **Check:** each batch result can be verified from the fixture's persisted counter.
@@ -160,9 +160,9 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 **Done when.**
 - The cause, and the framework source revision of the tested image, are recorded in the pull request. Or a bytecode inspection and its limit are recorded.
 - If a safe product correction exists, it has a T0 or T1 regression test, and three consecutive product-mode T2 batches of 100 clicks pass. Each persisted delta is 100, the host drop and coalescing counters are zero, and every normal ACK reports zero guest rejections.
-- If the correction changes event timing, #070's `input-latency` scenario shows p95 ≤ 16 ms ([input.md](../../02-design/input.md) §8).
-- If no safe correction is supported, the evidence and its limits are recorded, with no speculative change. #024's click criterion then stays open.
-- #024's click criterion is met only after the three batches pass.
+- If the correction changes event timing, #71's `input-latency` scenario shows p95 ≤ 16 ms ([input.md](../../02-design/input.md) §8).
+- If no safe correction is supported, the evidence and its limits are recorded, with no speculative change. #25's click criterion then stays open.
+- #25's click criterion is met only after the three batches pass.
 
 **Pitfalls.**
 - An ACK means the guest queued the event. It does not mean Android dispatched it or that the app clicked.
@@ -171,12 +171,12 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 
 ---
 
-## #026 HelloText in a native Mac window
+## #27 HelloText in a native Mac window
 
 | Field | Value |
 |---|---|
 | Milestone | M3 (v0.1) |
-| Depends on | #023, #024, #025 |
+| Depends on | #24, #25, #26 |
 | Gate | G4 |
 | Design | [display-and-windowing.md](../../02-design/display-and-windowing.md) §5.3, §7.3, §7.6; [runtime-daemon.md](../../02-design/runtime-daemon.md) §7, §10; [cli.md](../../02-design/cli.md) §5 |
 | Code | `Packages/WindowingCore/Sources/WindowingCore/SessionWindowController.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Input/SessionRegistry.swift`, `Packages/RuntimeHost/Sources/RuntimeHost/EmbeddedRuntimeService.swift`, `CLI/apkrun/Dev/SurfacePoolFrameSource.swift`, `Tests/IntegrationTests/NativeWindowTests/` |
@@ -184,12 +184,12 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 **Goal.** `apkrun dev launch` with HelloText opens a normal Mac window that shows HelloText and accepts mouse and keyboard input. The window has no emulator chrome.
 
 **Out of scope.**
-- `DisplayPool` and secondary displays (#028, #029).
-- Resize, density, and fullscreen (#067). The window is fixed-size until then.
-- The XPC frame path and the wrapper (#068, #031, M7).
+- `DisplayPool` and secondary displays (#29, #30).
+- Resize, density, and fullscreen (#68). The window is fixed-size until then.
+- The XPC frame path and the wrapper (#69, #32, M7).
 
 **Steps.**
-1. **Window.** Write `SessionWindowController`: a normal `NSWindow` with a title and the standard buttons, and no toolbar, device frame, or control buttons. Show the placeholder of [display-and-windowing.md](../../02-design/display-and-windowing.md) §7.3. Replace the #023 development window. **Check:** a T1 screenshot of `IOSurfaceLayerView` with a synthetic `FrameSource`.
+1. **Window.** Write `SessionWindowController`: a normal `NSWindow` with a title and the standard buttons, and no toolbar, device frame, or control buttons. Show the placeholder of [display-and-windowing.md](../../02-design/display-and-windowing.md) §7.3. Replace the #24 development window. **Check:** a T1 screenshot of `IOSurfaceLayerView` with a synthetic `FrameSource`.
 2. **Frame source.** Bind `SurfacePoolFrameSource` to the session's `SurfaceSet` ([display-and-windowing.md](../../02-design/display-and-windowing.md) §5.3). **Check:** T2 sees the placeholder, then HelloText.
 3. **Sessions.** `SessionRegistry` opens and closes display 0 sessions, calls `ScanoutController` for scanout 0, and follows the session states of [state-machines.md](../../01-architecture/state-machines.md) §3. **Check:** T0 covers the states that apply to display 0.
 4. **Launch command.** `apkrun dev launch <apk|package>` boots Android if needed, installs the APK through `AdbClient`, launches it on display 0 through the Guest Agent, and opens the window. **Check:** T2 clicks the button and types into the field.
@@ -211,29 +211,29 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 
 **Pitfalls.**
 - Android's status bar and navigation bar stay on display 0. They are not emulator chrome. Do not trim Android before the baseline works ([AGENTS.md](../../../AGENTS.md) §4).
-- Window close sends `FINISH_TASKS`. `FORCE_STOP` is for an explicit terminate, which comes with #032.
+- Window close sends `FINISH_TASKS`. `FORCE_STOP` is for an explicit terminate, which comes with #33.
 
 ---
 
-## #027 RuntimeCore package operations
+## #28 RuntimeCore package operations
 
 | Field | Value |
 |---|---|
 | Milestone | M3 (v0.1) |
-| Depends on | #026 |
+| Depends on | #27 |
 | Design | [package-store.md](../../02-design/package-store.md) §2.3, §5, §11.1; [runtime-api.md](../../03-reference/runtime-api.md) §8.1 |
 | Code | `Packages/APKStoreCore/`, `Packages/RuntimeHost/Sources/RuntimeHost/ADBStoreAgentChannel.swift`, `Packages/RuntimeHost/Sources/RuntimeHost/DevelopmentStoreRuntimeAccess.swift`, `CLI/apkrun/`, `scripts/check-raw-adb.sh`, `Tests/IntegrationTests/PackageStoreTests/` |
 
 **Goal.** Install, launch, terminate, uninstall, list, and inspect use the runtime API, not raw shell commands. ADB stays behind one channel.
 
-**Out of scope.** The Store Agent (#036), host signature and update rules (M6), the CLI `launch` and `stop` (#032), and wrapper deletion (#076).
+**Out of scope.** The Store Agent (#37), host signature and update rules (M6), the CLI `launch` and `stop` (#33), and wrapper deletion (#77).
 
 **Steps.**
 1. **Types.** `PackageID`, `VersionCode`, `SHA256Digest`, `ArtifactFile`, `ArtifactSet`, `PackageRecord` (`updateAuthority` is `manual`), `PackageState`, and the APK set digest, in `APKStoreCore`. **Check:** T0 covers `PackageID`, `VersionCode`, and the set digest.
 2. **PackageStore.** `open()`, the journal and recovery table ([package-store.md](../../02-design/package-store.md) §5.1, §5.5), and the kinds `firstInstall`, `reinstall`, `uninstall`, and `forget`. `APKRUN_STORE_FAULT=<kind>:<step>` stops a debug build after that step. **Check:** T0 covers the journal and recovery table. T1 crashes at every step of `firstInstall` and `uninstall`.
 3. **Inspector and channel.** `APKInspector` v0 reads metadata with `aapt2` and hashes every file; the signature check is `notPerformed`. `ADBStoreAgentChannel` installs with `adb install-multiple -r --no-streaming`, uninstalls with `pm uninstall` (`-k` keeps data), downgrades with `-r -d` on debuggable images, and queries through the Guest Agent. **Check:** T1 with a fake channel, and `APKInspector` on HelloText and HelloSplit.
 4. **Runtime operations and CLI.** Add `importPackage`, `installImported`, `listPackages`, `packageInfo`, and `uninstallPackage` ([runtime-api.md](../../03-reference/runtime-api.md) §8.1), and embedded `launch` and `terminate`. Without a session, `terminate` force-stops with `StopApplication`. Add the CLI `install`, `uninstall`, `list`, and `info`. **Check:** after `apkrun-dev install Tests/Fixtures/apks/HelloText.apk`, `apkrun-dev list` shows its versionCode.
-5. **Lint and migration.** `scripts/check-raw-adb.sh` rejects `adb shell` and `pm` package commands outside `ADBStoreAgentChannel`, `AdbClient`, and the allowlist (`scripts/dev/`, `Images/tools/reference/`). Move the #016 and #017 tests to the runtime API. **Check:** the lint passes on `main` and fails on a planted raw call.
+5. **Lint and migration.** `scripts/check-raw-adb.sh` rejects `adb shell` and `pm` package commands outside `ADBStoreAgentChannel`, `AdbClient`, and the allowlist (`scripts/dev/`, `Images/tools/reference/`). Move the #17 and #18 tests to the runtime API. **Check:** the lint passes on `main` and fails on a planted raw call.
 6. **HelloSplit.** The fixture is specified in [test-strategy.md](../test-strategy.md) §4.2. **Check:** the split set installs as one package.
 
 **Tests.**
@@ -254,18 +254,18 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 
 ---
 
-## #067 Retina, density, and resize
+## #68 Retina, density, and resize
 
 | Field | Value |
 |---|---|
 | Milestone | M3 (v0.1) |
-| Depends on | #026 |
+| Depends on | #27 |
 | Design | [display-and-windowing.md](../../02-design/display-and-windowing.md) §6, §7.1, §7.2, §7.4, §7.7; [graphics.md](../../02-design/graphics.md) §6.4 |
 | Code | `Packages/RuntimeCore/Sources/RuntimeCore/Display/DisplayGeometryResolver.swift`, `Packages/GraphicsCore/Sources/GraphicsCore/Display/EDIDGenerator.swift`, `Packages/WindowingCore/Sources/WindowingCore/SessionWindowController.swift`, `Guest/guestd/src/main/kotlin/io/apkrun/guest/daemon/DisplayService.kt`, `Tests/IntegrationTests/NativeWindowTests/` |
 
-**Goal.** The Android display follows the size and backing scale of the Mac window. Text is sharp at zoom 1, resizing re-lays out the app, and moving the window to another screen changes the density. This task builds `DisplayGeometryResolver`, which #028 uses.
+**Goal.** The Android display follows the size and backing scale of the Mac window. Text is sharp at zoom 1, resizing re-lays out the app, and moving the window to another screen changes the density. This task builds `DisplayGeometryResolver`, which #29 uses.
 
-**Out of scope.** Pool displays (#028), the XPC frame path (#068), and the IME (#071).
+**Out of scope.** Pool displays (#29), the XPC frame path (#69), and the IME (#72).
 
 **Steps.**
 1. **Resolver.** Write `DisplayGeometryResolver` with the formula and limits of [display-and-windowing.md](../../02-design/display-and-windowing.md) §6.1 and §6.2. **Check:** T0 table tests for Retina, non-Retina, the 4095 cap, the zoom clamp, and the minimum size.
@@ -293,18 +293,18 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 
 ---
 
-## #028 DisplayPool
+## #29 DisplayPool
 
 | Field | Value |
 |---|---|
 | Milestone | M3 (v0.2) |
-| Depends on | #027, #067 |
+| Depends on | #28, #68 |
 | Design | [display-and-windowing.md](../../02-design/display-and-windowing.md) §3, §4; [graphics.md](../../02-design/graphics.md) §4.3 |
 | Code | `Packages/RuntimeCore/Sources/RuntimeCore/Display/DisplayPool.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Input/SessionRegistry.swift`, `Packages/GraphicsCore/Sources/GraphicsCore/Display/ScanoutController.swift`, `Guest/guestd/src/main/kotlin/io/apkrun/guest/daemon/DisplayService.kt`, `CLI/apkrun/Dev/` (`dev displays`), `Tests/IntegrationTests/DisplayPoolTests/` |
 
 **Goal.** `DisplayPool` allocates, releases, and reuses the Android displays on scanouts 1–15 in one place. Displays are reused without stale scanouts or conflicting IDs.
 
-**Out of scope.** Apps on pool displays (#029) and two sessions (#030).
+**Out of scope.** Apps on pool displays (#30) and two sessions (#31).
 
 **Steps.**
 1. **Pool with fakes.** Write the `DisplayPool` actor (`acquire`, `reconfigure`, `release`, `snapshot`, `events`) with the slot states, serialized acquire and release, and fault retry of [display-and-windowing.md](../../02-design/display-and-windowing.md) §3.2–§3.5. Each lease carries a `SessionID`. Test against `FakeScanoutController` and `FakeDisplayControlChannel`. **Check:** T0 state machine tests and the invariant 2 property test.
@@ -330,27 +330,27 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 
 ---
 
-## #029 App on a secondary Android display
+## #30 App on a secondary Android display
 
 | Field | Value |
 |---|---|
 | Milestone | M3 (v0.2) |
-| Depends on | #028 |
+| Depends on | #29 |
 | Design | [display-and-windowing.md](../../02-design/display-and-windowing.md) §3.6, §4, §8; [guest-protocol.md](../../02-design/guest-protocol.md) §7.1; [guest-components.md](../../02-design/guest-components.md) §6.4 |
 | Code | `Guest/guestd/src/main/kotlin/io/apkrun/guest/daemon/LaunchService.kt`, `Packages/RuntimeCore/Sources/RuntimeCore/Display/DisplayPool.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Input/SessionRegistry.swift`, `CLI/apkrun/Dev/` (`dev launch --display`), `Tests/Fixtures/AndroidApps/HelloWebView/`, `Tests/IntegrationTests/DisplayPoolTests/` |
 
 **Goal.** HelloText renders correctly on a non-primary Android display, in its own Mac window, and accepts input.
 
 **Out of scope.**
-- Two sessions at the same time (#030).
-- The per-app compatibility setting in the UI (#079).
-- The compatibility runs of real apps (#090).
+- Two sessions at the same time (#31).
+- The per-app compatibility setting in the UI (#80).
+- The compatibility runs of real apps (#91).
 
 **Steps.**
 1. **Launch on a display.** `LaunchService` launches `LaunchApplication(package, displayID)` with the launch options of [display-and-windowing.md](../../02-design/display-and-windowing.md) §4. **Check:** T1 JVM test of the launch options.
 2. **Development command.** `apkrun dev launch --display secondary <apk>` acquires a pool display and opens the window on its scanout. **Check:** T2 shows HelloText on a pool display.
 3. **Compatibility mode.** `apkrun dev launch --display 0 <apk>` leases display 0 in `primaryDisplayCompatibility` mode ([display-and-windowing.md](../../02-design/display-and-windowing.md) §3.6, §8). **Check:** T2 launches HelloText this way, and a second request for display 0 fails with `primaryDisplayBusy`.
-4. **Fixture runs.** Run HelloText, HelloCompose, HelloGL, and HelloWebView on a secondary display. For each app, record whether rendering, input, IME, and dialogs work. Repeat the OQ-31 pointer check there. Fixture specs are in [test-strategy.md](../test-strategy.md) §4.2. **Check:** the table of results is in the pull request, and it is the seed list for #090.
+4. **Fixture runs.** Run HelloText, HelloCompose, HelloGL, and HelloWebView on a secondary display. For each app, record whether rendering, input, IME, and dialogs work. Repeat the OQ-31 pointer check there. Fixture specs are in [test-strategy.md](../test-strategy.md) §4.2. **Check:** the table of results is in the pull request, and it is the seed list for #91.
 5. **Acceptance run.** **Check:** `DisplayPoolTests` passes on the reference Mac.
 
 **Tests.**
@@ -363,7 +363,7 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 - HelloText launches with a selected display ID, and its scanout is mapped to a Mac window.
 - HelloText renders correctly on a non-primary display and accepts input.
 - The `primaryDisplayCompatibility` mode works, and a second request gets `primaryDisplayBusy`.
-- The results of the four fixtures are recorded for the #090 seed list.
+- The results of the four fixtures are recorded for the #91 seed list.
 - OQ-31 has an answer for pool displays.
 
 **Pitfalls.**
@@ -372,12 +372,12 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 
 ---
 
-## #030 Two APKs in two native windows
+## #31 Two APKs in two native windows
 
 | Field | Value |
 |---|---|
 | Milestone | M3 (v0.2) |
-| Depends on | #029 |
+| Depends on | #30 |
 | Gate | G5 |
 | Design | [display-and-windowing.md](../../02-design/display-and-windowing.md) §7.5, §7.6; [input.md](../../02-design/input.md) §7.2, §7.3; [runtime-daemon.md](../../02-design/runtime-daemon.md) §7; [graphics.md](../../02-design/graphics.md) §7 |
 | Code | `Packages/RuntimeCore/Sources/RuntimeCore/Input/InputRouter.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Input/SessionRegistry.swift`, `Packages/WindowingCore/Sources/WindowingCore/SessionWindowController.swift`, `Guest/guestd/src/main/kotlin/io/apkrun/guest/daemon/TaskService.kt`, `CLI/apkrun/Dev/`, `Tests/IntegrationTests/DisplayPoolTests/`, `Tests/AcceptanceTests/` (G5) |
@@ -385,9 +385,9 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 **Goal.** Two Android apps run at the same time in two independent Mac windows, each on its own Android display. Input goes only to the app of the focused window.
 
 **Out of scope.**
-- The IME on secondary displays (#071).
-- Windows owned by the wrapper over XPC (#068, #031).
-- The full latency run (#070).
+- The IME on secondary displays (#72).
+- Windows owned by the wrapper over XPC (#69, #32).
+- The full latency run (#71).
 
 **Steps.**
 1. **Two sessions.** `apkrun dev launch <apk1> <apk2>` opens two sessions on two pool displays, in two windows. HelloCompose is the second test APK ([test-strategy.md](../test-strategy.md) §4.2). **Check:** T2 shows both apps.
@@ -412,16 +412,16 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 
 **Pitfalls.**
 - A drag in progress when focus moves must end with `.cancelAll`. Otherwise the first app keeps a finger down.
-- In M3, key mode is used on every display. The IME comes with #071.
+- In M3, key mode is used on every display. The IME comes with #72.
 
 ---
 
-## #098 Parallel VM test runs
+## #100 Parallel VM test runs
 
 | Field | Value |
 |---|---|
 | Milestone | M3 (v0.1) |
-| Depends on | #014 |
+| Depends on | #15 |
 | Design | [test-strategy.md](../test-strategy.md) §3.9, §3.10 |
 | Code | `Tests/IntegrationTests/RunResources/`, `Packages/RuntimeCore/Sources/RuntimeCore/Supervisor/RuntimeSupervisor.swift`, `Tests/IntegrationTests/AndroidSupport/AndroidBootSession.swift`, `Tests/IntegrationTests/AndroidBootTests/AndroidBootFixture.swift`, `Tests/IntegrationTests/AndroidADBTests/`, `Tests/AcceptanceTests/G2AndroidBoot/` |
 

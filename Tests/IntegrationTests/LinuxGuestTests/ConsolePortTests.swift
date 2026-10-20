@@ -3,7 +3,7 @@ import XCTest
 @testable import VirtualMachineCore
 
 final class LinuxGuestConsolePortTests: XCTestCase {
-    /// #095 step 1: the marker sent to attachment port `i` arrives on `/dev/hvc<i>`, so the guest numbers
+    /// #96 step 1: the marker sent to attachment port `i` arrives on `/dev/hvc<i>`, so the guest numbers
     /// the ports as the host attaches them (vm.md §6.2). The pinned test kernel exposes eight of them.
     func testConsolePortMarkersMatchTheirNumbers() async throws {
         let result = try await LinuxGuestHarness.run(
@@ -26,7 +26,7 @@ final class LinuxGuestConsolePortTests: XCTestCase {
         }
     }
 
-    /// #095 step 1 for all 20 ports. The pinned test kernel creates `/dev/hvc0` through `/dev/hvc7` only,
+    /// #96 step 1 for all 20 ports. The pinned test kernel creates `/dev/hvc0` through `/dev/hvc7` only,
     /// so the check skips when it reaches a missing node. The Android kernel creates `hvc0` through `hvc19`
     /// on the same VZ configuration, and the VZ capture shows their holders (IR-372).
     func testTwentyConsolePorts() async throws {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the guest Mesa for Android ARM64 (EGL, GLES 2.0 and 1.1, gallium virgl) with the NDK r28c (ADR-0018, #099).
+# Builds the guest Mesa for Android ARM64 (EGL, GLES 2.0 and 1.1, gallium virgl) with the NDK r28c (ADR-0018, #99).
 #
 #   scripts/guest/build-mesa-android.sh                  build into ThirdParty/out/mesa-android
 #   scripts/guest/build-mesa-android.sh --out DIR        build into DIR; the work area is DIR-work

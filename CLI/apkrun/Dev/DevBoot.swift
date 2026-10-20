@@ -63,7 +63,7 @@
             guard (8...256).contains(userdataGib) else {
                 throw CLIFailure.invalidArgument(argument: "--userdata-gib", reason: "range")
             }
-            // The window shows the scanout of the drmVirgl device, and the other profiles have no presenter (#023).
+            // The window shows the scanout of the drmVirgl device, and the other profiles have no presenter (#24).
             guard !window || profile == .virgl else {
                 throw CLIFailure.invalidArgument(argument: "--window", reason: "profile")
             }

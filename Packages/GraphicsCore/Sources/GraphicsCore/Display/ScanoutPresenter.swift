@@ -36,7 +36,7 @@ final class ScanoutFrameSequence: @unchecked Sendable {
     }
 }
 
-/// Presents one scanout into a pool of IOSurfaces (graphics.md §6.1 to §6.3, #023).
+/// Presents one scanout into a pool of IOSurfaces (graphics.md §6.1 to §6.3, #24).
 ///
 /// A flush of the resource bound to the scanout becomes one blit into a free buffer. Only one blit is in flight at a
 /// time, and the newest flush that waits replaces the older one (latest frame wins). A serial waiter waits on the

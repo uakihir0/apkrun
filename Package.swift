@@ -70,7 +70,7 @@ let package = Package(
         ),
         .trait(
             name: "TestReadback",
-            description: "Compile the test-only readback mode of the VirGL replay test (graphics.md §7, #022)."
+            description: "Compile the test-only readback mode of the VirGL replay test (graphics.md §7, #23)."
         ),
     ],
     dependencies: [

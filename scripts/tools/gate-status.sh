@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The final status of a gate report, written once whichever way the gate ends (#023 review of run 3).
+# The final status of a gate report, written once whichever way the gate ends (#24 review of run 3).
 #
 # scripts/run-gate.sh sources this file and calls gate_report_install REPORT after it has written the report's first
 # block, which holds `status: running`. The EXIT trap then replaces that line with one final status and appends

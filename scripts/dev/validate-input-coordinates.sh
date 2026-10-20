@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validates the coordinate mapping of input.md §3 on display 0, with ADB input (#024).
+# Validates the coordinate mapping of input.md §3 on display 0, with ADB input (#25).
 #
 #   scripts/dev/validate-input-coordinates.sh [--serial SERIAL] [--display-size WxH] [--content x,y,w,h] [--taps N]
 #   scripts/dev/validate-input-coordinates.sh --self-test
@@ -35,7 +35,7 @@
 # Output: one line per tap, then `hits: H of N taps`. Exit status 0 when every tap hits, 1 on a miss or a device
 # failure, 64 on a usage error, 78 when adb is missing (environment-setup.md §2.5).
 #
-# Reference vectors for --self-test. The T0 test of #024 step 2 (CoordinateMapper) uses the same vectors, and the
+# Reference vectors for --self-test. The T0 test of #25 step 2 (CoordinateMapper) uses the same vectors, and the
 # two must agree. Each row is: content (x, y, w, h), display (W, H), window point (p.x, p.y), expected pixel.
 #   content (0, 0, 512, 384), display 1024 x 768:
 #       (0, 384) -> (0, 0)         (512, 0) -> (1023, 767)      (256, 192) -> (512, 384)
@@ -125,7 +125,7 @@ if [[ ! "$taps" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 # The mapping of input.md §3 as awk functions. Every awk program in this script includes them, so the formula is
-# written once. Keep it equal to CoordinateMapper (InputCore, #024 step 2), including the clamp to the last pixel.
+# written once. Keep it equal to CoordinateMapper (InputCore, #25 step 2), including the clamp to the last pixel.
 mapping_awk='
 function raw_x(px, cx, cw, pw) { return (px - cx) * pw / cw }
 function raw_y(py, cy, ch, ph) { return (cy + ch - py) * ph / ch }

@@ -8,11 +8,11 @@ import RuntimeCore
 ///
 /// `none` stays the default of `apkrun dev boot` until the drmVirgl boot is verified on the VM (IR-584).
 public enum DevGPUProfile: String, CaseIterable, Sendable {
-    /// `none`: the development `headless` profile, where VZ's 2D device is the DRM device (#012).
+    /// `none`: the development `headless` profile, where VZ's 2D device is the DRM device (#13).
     case none
-    /// `swiftshader`: the `guestSwiftshader` profile, which needs no host renderer (#021).
+    /// `swiftshader`: the `guestSwiftshader` profile, which needs no host renderer (#22).
     case swiftshader
-    /// `virgl`: the `drmVirgl` profile, which renders through the VirGL renderer on the host (#022).
+    /// `virgl`: the `drmVirgl` profile, which renders through the VirGL renderer on the host (#23).
     case virgl
 
     /// The bundle's GPU profile that the boot uses.
@@ -25,7 +25,7 @@ public enum DevGPUProfile: String, CaseIterable, Sendable {
     }
 }
 
-/// Inputs for `apkrun dev boot` (cli.md §5; #012-#014, #021).
+/// Inputs for `apkrun dev boot` (cli.md §5; #13-#15, #22).
 public struct DevBootOptions: Sendable {
     /// The GPU profile of the boot. `none` is the default.
     public var gpu: DevGPUProfile
@@ -42,19 +42,19 @@ public struct DevBootOptions: Sendable {
     /// The directory of the Guest Agent bundle (`apkrun-guest.apk` and `apkrun-guest.json`), which the boot installs
     /// and starts (guest-components.md §3). Nil boots without the agent.
     public var guestAgentDirectory: URL?
-    /// A package to launch on display 0 once Android is ready (`apkrun dev launch`, #072). Nil launches nothing.
+    /// A package to launch on display 0 once Android is ready (`apkrun dev launch`, #73). Nil launches nothing.
     public var launchPackage: String?
-    /// An optional APK to install before launching `launchPackage` (#026).
+    /// An optional APK to install before launching `launchPackage` (#27).
     public var launchAPKURL: URL?
-    /// App windows launched together by `apkrun dev launch <apk1> <apk2>` (#030).
+    /// App windows launched together by `apkrun dev launch <apk1> <apk2>` (#31).
     public var appLaunches: [DevBootAppLaunch]
-    /// The window's connection to display 0 (`apkrun dev boot --window`, #023). Nil shows nothing. It needs `drmVirgl`.
+    /// The window's connection to display 0 (`apkrun dev boot --window`, #24). Nil shows nothing. It needs `drmVirgl`.
     public var developerDisplay: DeveloperDisplay?
     /// The window that receives app frames. A secondary lease attaches after Android is ready.
     public var windowDisplay: DeveloperDisplay?
     /// The display policy selected by `apkrun dev launch`.
     public var windowDisplayMode: AndroidWindowMode
-    /// The development input route of the window (#024). Nil binds no input. It is bound once the Guest Agent is ready,
+    /// The development input route of the window (#25). Nil binds no input. It is bound once the Guest Agent is ready,
     /// and it is unbound before Android stops.
     public var inputRoute: DevInputRoute?
 
@@ -92,7 +92,7 @@ public struct DevBootOptions: Sendable {
     }
 }
 
-/// One app/window pair in an embedded multi-window launch (#030).
+/// One app/window pair in an embedded multi-window launch (#31).
 public struct DevBootAppLaunch: Sendable {
     /// The Android package to install, launch, and stop for this window.
     public let packageID: String
@@ -404,7 +404,7 @@ public struct DevBoot: Sendable {
     ///
     /// The instance lock is held for the whole run. The current image is checked quickly before
     /// the boot (android-image.md §9.3). An instance made from another image version is refused,
-    /// because migration arrives with #058; `--reset` provisions a new instance instead. Developer
+    /// because migration arrives with #59; `--reset` provisions a new instance instead. Developer
     /// mode is always on: the Android serial shell answers on hvc1, and logcat is captured to
     /// `<logs>/guest/logcat-<timestamp>.log` (android-image.md §7.1).
     public func run(
@@ -712,7 +712,7 @@ public struct DevBoot: Sendable {
                 stopCause = requestedStop
             }
         }
-        // The window's input reaches its leased Android display through the Guest Agent (#024, #029).
+        // The window's input reaches its leased Android display through the Guest Agent (#25, #30).
         var inputBinding: Task<Void, Never>?
         do {
             if let requestedStop = await stopSignal.current() {
@@ -1099,7 +1099,7 @@ public struct DevBoot: Sendable {
     }
 
     /// Stops the input binding, and unbinds the route. The unbinding sends `cancelAll` while the agent still runs, so
-    /// the guest releases every gesture and button that is open (input.md §7.3, #024).
+    /// the guest releases every gesture and button that is open (input.md §7.3, #25).
     private func endInput(_ binding: Task<Void, Never>?, route: DevInputRoute?) async {
         await endInput(binding, routes: [route].compactMap { $0 })
     }

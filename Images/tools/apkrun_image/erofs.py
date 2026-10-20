@@ -1,4 +1,4 @@
-"""EROFS support for the Android image tools: pinned erofs-utils, tree export, and rebuilds (#099).
+"""EROFS support for the Android image tools: pinned erofs-utils, tree export, and rebuilds (#99).
 
 The binaries are the erofs-utils bottle of `ThirdParty/ThirdParty.lock.json` (component `erofs-
 utils`). Each binary's SHA-256 is checked before it runs. A tree is exported with `fsck.erofs

@@ -40,7 +40,7 @@ final class GuestGPUSession {
     private var scanoutBindings: [Int: UInt32] = [:]
     /// The source rectangle that each scanout's `SET_SCANOUT` named. A present copies it (graphics.md §6.2 step 2).
     private var scanoutRects: [Int: VirtioGPURect] = [:]
-    /// The presenter of each scanout that presents (#023). The device swaps these during display reconfiguration.
+    /// The presenter of each scanout that presents (#24). The device swaps these during display reconfiguration.
     private var presenters: [Int: ScanoutPresenter] = [:]
 
     /// - Parameters:
@@ -68,7 +68,7 @@ final class GuestGPUSession {
         }
     }
 
-    /// Attaches the presenter of its scanout. The device calls it before the guest starts (#023).
+    /// Attaches the presenter of its scanout. The device calls it before the guest starts (#24).
     func attachPresenter(_ presenter: ScanoutPresenter) {
         presenters[Int(presenter.scanout.rawValue)] = presenter
     }
@@ -240,7 +240,7 @@ final class GuestGPUSession {
         guard scanout < UInt32(VirtioGPUProtocol.scanoutCount) else {
             return failed(.invalidScanoutID)
         }
-        // A held frame names the resource that this SET_SCANOUT replaces, so it is discarded (#023).
+        // A held frame names the resource that this SET_SCANOUT replaces, so it is discarded (#24).
         presenters[Int(scanout)]?.guestReset()
         if resource == 0 {
             scanoutBindings.removeValue(forKey: Int(scanout))

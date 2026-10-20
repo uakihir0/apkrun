@@ -113,7 +113,7 @@ private fun pressureOf(buttonState: Int): Float = if (buttonState != 0) 1f else 
  * - A mouse gesture opens with ACTION_DOWN at its first button press, and each press and release is
  *   an ACTION_BUTTON_PRESS or ACTION_BUTTON_RELEASE. The gesture closes with ACTION_UP when no
  *   button is down.
- * - Scroll stands alone. A key is a KeyEvent on the virtual keyboard (#025). A DOWN while the key
+ * - Scroll stands alone. A key is a KeyEvent on the virtual keyboard (#26). A DOWN while the key
  *   is down is a repeat when its repeat count is above zero. Otherwise the open press is released
  *   and the DOWN starts a new press. An UP without an open press is dropped. A long press is
  *   dropped and counted, because it is not injected in this build (decision D6).

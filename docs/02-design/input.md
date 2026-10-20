@@ -169,7 +169,7 @@ line deltas (wheel mice):
 
 The wrapper learns the mode from `imeStateChanged(EditorState)`, relayed by apkrund on the session channel ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.3). `EditorState` carries `focused`, `inputType`, `imeOptions`, the selection, the composing range, and the cursor rectangle in display pixels.
 
-Without the APKRun IME (#071), all input uses key mode, and characters come from Android's US virtual key character map (§10).
+Without the APKRun IME (#72), all input uses key mode, and characters come from Android's US virtual key character map (§10).
 
 ### 5.2 Physical key mapping
 
@@ -235,7 +235,7 @@ When `EditorState.inputType` is a password variation (`TYPE_TEXT_VARIATION_PASSW
 
 ### 5.6 The APKRun IME (guest side)
 
-- The IME is built by #071. `io.apkrun.guest/.ime.ApkRunInputMethodService` is an `InputMethodService` with no visible keyboard: `onEvaluateInputViewShown()` returns false, and `onCreateInputView()` returns an empty view. The Mac keyboard and macOS input method are the only text input.
+- The IME is built by #72. `io.apkrun.guest/.ime.ApkRunInputMethodService` is an `InputMethodService` with no visible keyboard: `onEvaluateInputViewShown()` returns false, and `onCreateInputView()` returns an empty view. The Mac keyboard and macOS input method are the only text input.
 - The Guest Agent enables the IME and selects it as default at start (`Settings.Secure.ENABLED_INPUT_METHODS`, `DEFAULT_INPUT_METHOD`). This needs `WRITE_SECURE_SETTINGS`: the shell has it in development, and the privileged app in the custom image.
 - `onStartInput`, `onFinishInput`, `onUpdateSelection`, and `onUpdateCursorAnchorInfo` produce `EditorState` events for the host.
 - Host commands run on the IME's main thread against `getCurrentInputConnection()`. A command that arrives with no bound editor is dropped and counted.
@@ -315,7 +315,7 @@ The agent tracks per display the open touch gesture (`downTime`, last position),
 ## 9. Security
 
 - Guest-bound input is generated only from `NSEvent`s in the wrapper's key window, or from APKRun's test harness in development builds.
-- The agent validates each batch: the display exists, coordinates are finite and within ±2 × display size, key codes are in the `KEYCODE_*` range, and text is valid UTF-8 up to 4 KiB per command. Violations are dropped and counted. The injector's decoder is a fuzz target (#091).
+- The agent validates each batch: the display exists, coordinates are finite and within ±2 × display size, key codes are in the `KEYCODE_*` range, and text is valid UTF-8 up to 4 KiB per command. Violations are dropped and counted. The injector's decoder is a fuzz target (#92).
 - Injection needs `INJECT_EVENTS`. The shell has it in development, and the priv-app is platform-signed in the custom image.
 - No logging of key codes, text, or pointer positions at `info` or above. Debug logging of input requires a development build.
 
@@ -325,16 +325,16 @@ The agent tracks per display the open touch gesture (`downTime`, last position),
 
 | Behavior | Status |
 |---|---|
-| Composition without the APKRun IME (#071) | Not supported. Only ASCII from the US key character map can be typed, and dead keys produce wrong characters |
+| Composition without the APKRun IME (#72) | Not supported. Only ASCII from the US key character map can be typed, and dead keys produce wrong characters |
 | Reconversion (select committed text and convert again) | Not supported. `attributedSubstring` returns nil |
 | Clause highlighting inside composition | Android shows one underline for the whole composing text. The macOS candidate window still shows clauses |
 | Android IMEs (Gboard and others), soft keyboard, handwriting | Not used. The macOS input method is the only text input |
-| Dictation, emoji & symbols viewer (⌃⌘Space) | Work through `insertText` and marked text (#071) |
+| Dictation, emoji & symbols viewer (⌃⌘Space) | Work through `insertText` and marked text (#72) |
 | Non-US layouts in key mode | Positional key codes (US character map). Editor mode is correct |
 | Multi-touch, pinch, rotate | Post-v1 (FR-IN-09) |
 | Stylus pressure and tilt, game controllers | Post-v1 |
 | Android pointer icons (I-beam, hand) | Post-v1 ([display-and-windowing.md](display-and-windowing.md) §7.7) |
-| File drag and drop into apps | A drop arrives as a share to the app, or a save to Downloads, not as an Android `DragEvent` at the drop position ([desktop-integration.md](desktop-integration.md) §6.2). #082 |
+| File drag and drop into apps | A drop arrives as a share to the app, or a save to Downloads, not as an Android `DragEvent` at the drop position ([desktop-integration.md](desktop-integration.md) §6.2). #83 |
 
 ---
 
@@ -355,9 +355,9 @@ The agent tracks per display the open touch gesture (`downTime`, last position),
 - **T0**, `Packages/InputCore/Tests/InputCoreTests/`: `CoordinateMapper` (steady state, letterbox, clamping, generation change); `EventTranslator` (every row of §4.1, scroll conversion and signs, hover rate limit, letterbox press drop, clamped drag at all four edges); `KeyCodeMap` (unique rows, every `KEYCODE_*` exists); `KeyTranslator` (meta state, repeat).
 - **T0**, `Packages/WindowingCore/Tests/WindowingCoreTests/` (`PointerMappingTests`, `PointerEventAdapterTests`, `KeyEventAdapterTests`): adapters from window events to `InputEvent`s.
 - **T0**, `Packages/RuntimeCore/Tests/RuntimeCoreTests/`: `InputRouterTests` (ownership, state gating, rate limits, coalescing: `DOWN`, `UP`, and keys are never merged); `GuestInputEncodingTests` and `GuestInputConnectionTests`.
-- **T0 (#071)**: `TextInputModel`, editor command mapping (§5.4), and the balance of secure input.
+- **T0 (#72)**: `TextInputModel`, editor command mapping (§5.4), and the balance of secure input.
 - **T1**, `Guest/guestd/src/test/kotlin/io/apkrun/guest/daemon/`: `InputInjectorTest` (`MotionEvent` and `KeyEvent` construction, injection) and `InputValidatorTest` (batch validation, §9).
-- **T1 (#091)**: fuzzing of the agent's `InputBatch` decoder.
+- **T1 (#92)**: fuzzing of the agent's `InputBatch` decoder.
 - **T2**, `Tests/IntegrationTests/AndroidInputTests/AndroidInputTests.swift`: HelloText clicks (100 of 100 registered, counted by `APKRUN-FIXTURE: click <n>` lines), the right-click context menu, typing and key navigation, HelloCompose scroll signs, and the letterbox and clamping cases on display 0. The same file holds `AndroidInputTraceJoinTests`, which joins trace records without a device. Two-window routing and IME composition are not yet in the suite.
 - **T3**, nightly on the reference Mac: the `input-latency` scenario ([diagnostics.md](diagnostics.md) §9.3). It sends 1,000 synthetic clicks and 1,000 key presses at 20 Hz and requires p95 ≤ 16 ms (§8) ([test-strategy.md](../04-plan/test-strategy.md) §7.1).
 
@@ -365,10 +365,10 @@ The agent tracks per display the open touch gesture (`downTime`, last position),
 
 ## 14. Open items
 
-- Does Android draw its own pointer for injected `SOURCE_MOUSE` events on pool displays (OQ-31, §4.2)? #029 checks it.
-- Injection with a display ID uses the hidden `setDisplayId`, reached by reflection (R-18, §8). It is checked on the stock image (#072, #034), and again on each new Android base ([guest-components.md](guest-components.md) §13).
+- Does Android draw its own pointer for injected `SOURCE_MOUSE` events on pool displays (OQ-31, §4.2)? #30 checks it.
+- Injection with a display ID uses the hidden `setDisplayId`, reached by reflection (R-18, §8). It is checked on the stock image (#73, #35), and again on each new Android base ([guest-components.md](guest-components.md) §13).
 - Physical trackpad and wheel scroll direction. The synthetic tests check the signs. Physical input is manual check C01-2 ([test-strategy.md](../04-plan/test-strategy.md) §8).
-- Input and IME on secondary displays (R-05, §7.2). Fallbacks: `primaryDisplayCompatibility` for affected apps, and the `FALLBACK_DISPLAY` IME policy. #030 and #071 check it.
-- Dictation and the emoji viewer through `insertText` and marked text (§10). #071 checks them.
-- The counters are not in diagnostics snapshots yet, and the `agent.input.disconnected` warning is not implemented (§11, #024). `input.ime.unmappedCommand` needs the IME (#071).
-- NSEvent → injected latency, p95 ≤ 16 ms (§8, NFR-PERF-03). #070 measures it on the reference Mac, which OQ-02 selects. Working default: the lowest-tier lab Mac (M1, 16 GB).
+- Input and IME on secondary displays (R-05, §7.2). Fallbacks: `primaryDisplayCompatibility` for affected apps, and the `FALLBACK_DISPLAY` IME policy. #31 and #72 check it.
+- Dictation and the emoji viewer through `insertText` and marked text (§10). #72 checks them.
+- The counters are not in diagnostics snapshots yet, and the `agent.input.disconnected` warning is not implemented (§11, #25). `input.ime.unmappedCommand` needs the IME (#72).
+- NSEvent → injected latency, p95 ≤ 16 ms (§8, NFR-PERF-03). #71 measures it on the reference Mac, which OQ-02 selects. Working default: the lowest-tier lab Mac (M1, 16 GB).

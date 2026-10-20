@@ -1,12 +1,12 @@
 import AppKit
 import Dispatch
 
-/// Owns the native window for one app session (display-and-windowing.md §7, #026).
+/// Owns the native window for one app session (display-and-windowing.md §7, #27).
 ///
 /// The window is created at the scanout's size, so the surface shows at its native density, and it is never resized
 /// by the guest. Before the first frame, it shows a lightweight app placeholder. The window consumes the frames of its
 /// source on the main actor, applies the layer's frame gate, and reports each displayed frame back to the source. Its
-/// pointer events go to the input sink (#024). The mapper follows the generation of the frames it shows.
+/// pointer events go to the input sink (#25). The mapper follows the generation of the frames it shows.
 @MainActor
 public final class SessionWindowController: NSObject, NSWindowDelegate {
     /// Runs when the user closes the window. The owner stops the runtime, which is the close action of the window.
@@ -32,7 +32,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     private var isShown = false
 
     /// Creates the window for `source`, titled `title`, at the points of the source's pixel size divided by `backingScale`.
-    /// The pointer events of the window go to `inputSink` (#024). Without a sink the window shows the frames only.
+    /// The pointer events of the window go to `inputSink` (#25). Without a sink the window shows the frames only.
     public init(
         source: any FrameSource,
         title: String,

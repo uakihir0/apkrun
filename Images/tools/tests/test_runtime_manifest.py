@@ -1,4 +1,4 @@
-"""Tests for the manifest schema and rules S1–S14 (runtime-image-manifest.md §5, §7; #065)."""
+"""Tests for the manifest schema and rules S1–S14 (runtime-image-manifest.md §5, §7; #66)."""
 
 from __future__ import annotations
 

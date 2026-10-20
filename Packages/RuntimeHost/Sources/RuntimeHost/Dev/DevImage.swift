@@ -4,7 +4,7 @@ import ImageCore
 import RuntimeCore
 
 /// `apkrun dev image install <bundle>`: installs a development bundle as the current image
-/// (cli.md §5; android-image.md §10.3; #065).
+/// (cli.md §5; android-image.md §10.3; #66).
 public struct DevImage: Sendable {
     /// Creates the development image installer.
     public init() {}

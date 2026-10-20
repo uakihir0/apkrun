@@ -238,7 +238,7 @@ A second run gives byte-identical output. The writer uses UTF-8, sorted keys, 2-
 
 ## 5. `android-image.json`: complete example
 
-The generated manifest for the pinned build `16373615`. It matches the committed `Images/manifests/16373615/android-image.json` and the committed inventory. The blank partition sizes stay placeholders until #011 reads their values from the reference capture (#064).
+The generated manifest for the pinned build `16373615`. It matches the committed `Images/manifests/16373615/android-image.json` and the committed inventory. The blank partition sizes stay placeholders until #12 reads their values from the reference capture (#65).
 
 ```json
 {
@@ -493,7 +493,7 @@ The boot header stores only a year and a month. The day-precise level (`2026-09-
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
-| `kernel` | artifact id | yes | kind `bootImage`, `bootKind` `boot`, header v4 | the kernel source (#010) |
+| `kernel` | artifact id | yes | kind `bootImage`, `bootKind` `boot`, header v4 | the kernel source (#11) |
 | `genericRamdisk` | artifact id | yes | kind `bootImage`, `bootKind` `init_boot`, header v4 | the generic ramdisk (Android 13 and later keep it in `init_boot`) |
 | `vendorBoot` | artifact id | yes | kind `vendorBootImage`, header v4 | vendor ramdisks, vendor cmdline, vendor bootconfig |
 | `vbmeta` | array of artifact id | yes | 1 to 16 unique ids, each kind `vbmeta`. Item 0 has partition `vbmeta` and is the top-level image. Every other `kind: vbmeta` artifact must appear here, and its partition must be a chain partition of item 0 | input of `androidboot.vbmeta.*` ([android-image.md](../02-design/android-image.md) §6.2) |
@@ -683,10 +683,10 @@ Every anchored string pattern in the schema ends with an end-of-input assertion,
 
 | Consumer | Uses | Output |
 |---|---|---|
-| `extract` (#010) | `roles.kernel`, `roles.genericRamdisk`, `roles.vendorBoot` | `Images/work/<buildId>/boot/`: `kernel` (decompressed, `ARM\x64` at 0x38), `ramdisk.img` (vendor fragments in table order without `RECOVERY`, then `init_boot`), `vendor-bootconfig.txt`, `cmdline.txt`, `dtb`, `extraction.json` |
-| `disks` (#011) | `artifacts[].partition`, `roles.super` (unsparsed into `os.img`), `blankPartitions`, `roles.userdataTemplate` (fallback A only), and the layout | `os.img`, `userdata.img`, `disks.json` |
-| bootconfig baseline (#012, #013) | top-level vbmeta chain descriptors in order; raw vbmeta artifacts checked against `roles.vbmeta`; footer-backed images resolved from their manifest artifacts | `androidboot.vbmeta.{digest,hash_alg,size,avb_version,invalidate_on_error}` |
-| `bundle` (#065) | `source`, `android` | the runtime manifest `provenance` ([runtime-image-manifest.md](runtime-image-manifest.md) §4). The ImageVersion base is `cf` + `buildId` for `ci.android.com`, or `buildId` itself for `apkrun-builder` |
+| `extract` (#11) | `roles.kernel`, `roles.genericRamdisk`, `roles.vendorBoot` | `Images/work/<buildId>/boot/`: `kernel` (decompressed, `ARM\x64` at 0x38), `ramdisk.img` (vendor fragments in table order without `RECOVERY`, then `init_boot`), `vendor-bootconfig.txt`, `cmdline.txt`, `dtb`, `extraction.json` |
+| `disks` (#12) | `artifacts[].partition`, `roles.super` (unsparsed into `os.img`), `blankPartitions`, `roles.userdataTemplate` (fallback A only), and the layout | `os.img`, `userdata.img`, `disks.json` |
+| bootconfig baseline (#13, #14) | top-level vbmeta chain descriptors in order; raw vbmeta artifacts checked against `roles.vbmeta`; footer-backed images resolved from their manifest artifacts | `androidboot.vbmeta.{digest,hash_alg,size,avb_version,invalidate_on_error}` |
+| `bundle` (#66) | `source`, `android` | the runtime manifest `provenance` ([runtime-image-manifest.md](runtime-image-manifest.md) §4). The ImageVersion base is `cf` + `buildId` for `ci.android.com`, or `buildId` itself for `apkrun-builder` |
 | ImageCore `AndroidImageManifest` (Swift `Codable`) | `source`, `android` inside `provenance` | diagnostics and `apkrun image list`. ImageCore never reads `android-image.json` from the source tree at run time |
 
 The layout file names partitions, and this manifest maps partitions to files. That keeps the rule of §1.

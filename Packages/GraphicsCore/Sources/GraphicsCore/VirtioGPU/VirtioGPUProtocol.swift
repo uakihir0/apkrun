@@ -42,7 +42,7 @@ enum VirtioGPUProtocol {
 
     /// Feature bits offered or negotiated by the device.
     enum Feature {
-        /// `VIRTIO_GPU_F_VIRGL`, offered only with the renderer (#022).
+        /// `VIRTIO_GPU_F_VIRGL`, offered only with the renderer (#23).
         static let virgl: UInt64 = 1 << 0
         /// `VIRTIO_GPU_F_EDID`.
         static let edid: UInt64 = 1 << 1

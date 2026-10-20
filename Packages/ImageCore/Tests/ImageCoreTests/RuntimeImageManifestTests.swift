@@ -3,7 +3,7 @@ import Testing
 
 @testable import ImageCore
 
-/// `Images/tools/tests/fixtures/runtime-manifests/`, which Python checks as well (#065).
+/// `Images/tools/tests/fixtures/runtime-manifests/`, which Python checks as well (#66).
 private let manifestFixtures: URL = {
     var url = URL(fileURLWithPath: #filePath)
     for _ in 0..<5 {

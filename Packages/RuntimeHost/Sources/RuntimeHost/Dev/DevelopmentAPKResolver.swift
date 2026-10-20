@@ -9,7 +9,7 @@ public struct DevelopmentAPKResolution: Equatable, Sendable {
     public let wasSandboxed: Bool
 }
 
-/// Resolves the package name of an APK for `apkrun dev launch` (#026).
+/// Resolves the package name of an APK for `apkrun dev launch` (#27).
 ///
 /// Android's PackageManager remains authoritative after installation. This host-side `aapt2` call only chooses which
 /// package the development command asks the Guest Agent to launch.

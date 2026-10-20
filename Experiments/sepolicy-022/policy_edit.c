@@ -1,7 +1,7 @@
 /*
  * policy_edit: add or query one allow rule in a compiled (binary) SELinux policy.
  *
- * Test-only tool for the #022 experiment (see the implementation review IR-940 to IR-959).
+ * Test-only tool for the #23 experiment (see the implementation review IR-940 to IR-959).
  * It is linked against the pinned libsepol 3.11 (ThirdParty/ThirdParty.lock.json, libsepol).
  * It never sets a permissive mode, and it does not check neverallow rules, because the
  * compiled policy does not carry them.

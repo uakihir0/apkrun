@@ -1,4 +1,4 @@
-"""Tests of the refreshed-vbmeta path of bundle-variant (#099, step 4).
+"""Tests of the refreshed-vbmeta path of bundle-variant (#99, step 4).
 
 The chain digest is checked against an independent computation on small vbmeta images that the
 vendored avbtool makes, and the reseal record is checked on small fabricated files. The whole
@@ -304,7 +304,7 @@ def _reseal_fixture(tmp_path: Path, **changes: object) -> tuple[Path, Path, Path
         "the test vendor",
     )
     record = {
-        "task": "#099",
+        "task": "#99",
         "schemaVersion": vendor_reseal.SCHEMA_VERSION,
         "partition": {"name": "vendor_a", "verityName": "vendor", "size": injected.stat().st_size},
         "injected": {"sha256": _sha(injected.read_bytes()), "size": injected.stat().st_size},
@@ -508,7 +508,7 @@ def test_the_builder_helper_rejects_nonzero_vbmeta_partition_padding(tmp_path: P
         ),
         ({"vendor.descriptor": {"rootDigest": "other"}}, "does not describe its vendor_a"),
         ({"partition.name": "system_a"}, "does not record the partition vendor_a"),
-        ({"task": "#098"}, "is not a #099 vendor-reseal record"),
+        ({"task": "#100"}, "is not a #99 vendor-reseal record"),
     ],
 )
 def test_a_reseal_record_that_does_not_match_its_inject_is_refused(

@@ -66,7 +66,7 @@ struct gb_virgl_api {
         struct virgl_box *, uint64_t, struct iovec *, int);
     int (*create_fence)(int, uint32_t);
     void (*poll)(void);
-    /* Optional in older builds. The present path needs it (#023). */
+    /* Optional in older builds. The present path needs it (#24). */
     int (*borrow_texture_for_scanout)(int, struct virgl_renderer_resource_info_ext *);
 };
 
@@ -138,7 +138,7 @@ struct gb_renderer {
     struct gb_present_egl_api present_egl;
     /* Set when every present entry point loaded. Only the render thread reads it. */
     bool present_ready;
-    /* The framebuffer that reads the scanout texture in the root context. Created on first use (#023). */
+    /* The framebuffer that reads the scanout texture in the root context. Created on first use (#24). */
     GLuint present_source_framebuffer;
     struct virgl_renderer_callbacks virgl_callbacks;
     EGLDisplay display;
@@ -865,7 +865,7 @@ const char *gb_status_description(int status) {
 }
 
 /*
- * Presentation (#023). The present functions use the root context, because the framebuffers they
+ * Presentation (#24). The present functions use the root context, because the framebuffers they
  * create belong to it. A framebuffer is not shared between GL contexts, and the guest's contexts
  * share only the root's textures (IR-463). Each function saves the EGL context of the caller,
  * switches to the root, and restores the previous context before it returns.

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Reads PackageManager's metadata for one installed package
-/// (guest-protocol.md §7.1 operation 19; pulled forward by #027).
+/// (guest-protocol.md §7.1 operation 19; pulled forward by #28).
 public struct GuestQueryPackage: GuestOperation {
     /// The package information returned by the Guest Agent.
     public typealias Result = GPPackageInfo
@@ -38,7 +38,7 @@ public struct GuestQueryPackage: GuestOperation {
 }
 
 /// Lists installed packages from PackageManager
-/// (guest-protocol.md §7.1 operation 20; pulled forward by #027).
+/// (guest-protocol.md §7.1 operation 20; pulled forward by #28).
 public struct GuestListPackages: GuestOperation {
     /// The package list returned by the Guest Agent.
     public typealias Result = GPPackageList

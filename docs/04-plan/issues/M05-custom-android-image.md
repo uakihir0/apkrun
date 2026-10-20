@@ -4,18 +4,18 @@ APKRun gets its own Android image: the APKRun AOSP product, built on a Linux bui
 
 ---
 
-## #035 APKRun AOSP product
+## #36 APKRun AOSP product
 
 | Field | Value |
 |---|---|
 | Milestone | M5 (v0.3) |
-| Depends on | #034 |
+| Depends on | #35 |
 | Design | [android-image.md](../../02-design/android-image.md) §8.4, §11, §13; [guest-components.md](../../02-design/guest-components.md) §4, §5, §10 |
 | Code | `Guest/product/`; `Guest/vsockd/`; `Guest/guestd/`; `scripts/aosp/`; `Images/manifests/ar<n>/`; `Tests/Fixtures/AndroidApps/` (HelloProbe); `Tests/IntegrationTests/AndroidBootTests/`, `GuestAgentTests/`, `SecurityTests/` |
 
 **Goal.** The APKRun AOSP product builds reproducibly on the Linux builder. Its image boots under the APKRun VM with the Guest Agent as a platform-signed priv-app, reached over vsock with ADB off.
 
-**Out of scope.** The Store Agent (#036). M9 components (#054, #081, #082). Image updates (#058, #087). Removing services without #095 evidence; kernel, partition, or fstab changes (R-14).
+**Out of scope.** The Store Agent (#37). M9 components (#55, #82, #83). Image updates (#59, #88). Removing services without #96 evidence; kernel, partition, or fstab changes (R-14).
 
 **Steps.**
 1. **Builder.** `scripts/aosp/builder.Dockerfile`, `build-product.sh --revision <commit> --variant userdebug|user`, and `remote-build.sh` ([android-image.md](../../02-design/android-image.md) §11.1, §11.5). **Check:** a userdebug build without APKRun modules yields `apkrun_arm64-img-ar<n>.zip`.
@@ -24,7 +24,7 @@ APKRun gets its own Android image: the APKRun AOSP product, built on a Linux bui
 4. **SELinux.** Domains: [guest-components.md](../../02-design/guest-components.md) §4.2, §10.2. The three new domains are `permissive` in `userdebug` only; `scripts/check-sepolicy.sh` rejects `permissive` in `user` builds. Fix the virtio-gpu `sysfs` label in the product policy, and never grant `sysfs` to app domains ([android-image.md](../../02-design/android-image.md) §11.1). **Check:** T2 `SelinuxDenialTests`: no `avc: denied` for the three domains when enforcing.
 5. **Developer mode.** adbd listens on vsock 5555 only with `ro.boot.apkrun.devmode=1`. Override the base product's always-on adbd, and record the override in [android-image.md](../../02-design/android-image.md) §11.3. **Check:** T2 `DeveloperModeAdbTests`: `devmode=1` works on `127.0.0.1:6520`; `devmode=0` runs no adbd and refuses uid `shell`.
 6. **Bundle and release.** `scripts/inventory-cuttlefish.py`, then `python3 -m apkrun_image bundle` (`kind: apkrun`); commit `Images/manifests/ar<n>/`. vsock is the custom-image transport. Rebuild test bundles A, B, B′, F, P, and S ([test-strategy.md](../test-strategy.md) §3.5). Add CF rows to [android-image.md](../../02-design/android-image.md) §13. The `user` variant uses the OQ-36 default ([android-image.md](../../02-design/android-image.md) §11.4). **Check:** T2 `VsockAgentTests`.
-7. **Acceptance.** Compare with `Images/reference/16373615/target` ([android-image.md](../../02-design/android-image.md) §8.4). Run AndroidCustom, HelloProbe, G2–G6, and the graphics checks without the #099 profile. **Check:** the Done-when items.
+7. **Acceptance.** Compare with `Images/reference/16373615/target` ([android-image.md](../../02-design/android-image.md) §8.4). Run AndroidCustom, HelloProbe, G2–G6, and the graphics checks without the #99 profile. **Check:** the Done-when items.
 
 **Tests.**
 - T0 (`Guest/vsockd`, `cargo test`): port table, connection limits.
@@ -43,22 +43,22 @@ APKRun gets its own Android image: the APKRun AOSP product, built on a Linux bui
 
 ---
 
-## #036 Store Agent
+## #37 Store Agent
 
 | Field | Value |
 |---|---|
 | Milestone | M5 (v0.3) |
-| Depends on | #035 |
+| Depends on | #36 |
 | Design | [package-store.md](../../02-design/package-store.md) §6.1–§6.4, §9; [guest-protocol.md](../../02-design/guest-protocol.md) §11 |
 | Code | `Guest/APKRunStore/`; `Guest/agentruntime/`; `Guest/product/`; `Packages/APKStoreCore/` (`StoreAgentSupervisor`, reconciliation); `Tests/IntegrationTests/StoreTests/` |
 
 **Goal.** The host installs, updates, and uninstalls apps, and reads their metadata, through the Store Agent over vsock, without `adb install`. `io.apkrun.store` is the installer of record on the custom image.
 
-**Out of scope.** `RenderIcon` (#055). Update ownership, constraints, rollback, and the update transaction (#038 to #040, #043). Host import and preview (#027, #073).
+**Out of scope.** `RenderIcon` (#56). Update ownership, constraints, rollback, and the update transaction (#39 to #41, #44). Host import and preview (#28, #74).
 
 **Steps.**
 1. **Store Agent app.** `StoreAgentApplication` in `Guest/agentruntime/` serves `@apkrun-store-control` and `@apkrun-store-artifacts`, with `InstallService`, `ArchiveInspector`, `UninstallService`, `MetadataService`, and `PackageMonitor`. Implement operations 100–106 and events 100–102 ([guest-protocol.md](../../02-design/guest-protocol.md) §11). Answer `INVALID_ARGUMENT` for `allow_downgrade = true` and for `enable_rollback` outside `UPDATE` ([guest-protocol.md](../../02-design/guest-protocol.md) §11.3). Hash while writing, and check `expected_package`, `expected_version_code`, and `expected_signer_sha256` before `CommitInstall`. **Check:** T0 argument rules; T1 JVM tests for every operation.
-2. **Product integration.** Add the Store Agent permissions to `privapp-permissions-apkrun.xml` ([guest-components.md](../../02-design/guest-components.md) §8.1), with `TEST_MANAGE_ROLLBACKS` allowlisted from this task. Complete `apkrun_store_app.te` from the #035 denials. **Check:** the store domain enforces; `apkrun_vsockd` reaches both sockets.
+2. **Product integration.** Add the Store Agent permissions to `privapp-permissions-apkrun.xml` ([guest-components.md](../../02-design/guest-components.md) §8.1), with `TEST_MANAGE_ROLLBACKS` allowlisted from this task. Complete `apkrun_store_app.te` from the #36 denials. **Check:** the store domain enforces; `apkrun_vsockd` reaches both sockets.
 3. **Host channel.** `StoreAgentSupervisor` implements `StoreAgentChannel` over vsock ports 6110 and 6111 with `.install`, `.metadata`, and `.inspect` only ([package-store.md](../../02-design/package-store.md) §6.1). It streams artifacts and handles `InstallFinished` with the timeouts of [package-store.md](../../02-design/package-store.md) §6.2, §6.4. Cancel works up to `CommitInstall`. The custom image uses it; stock uses `ADBStoreAgentChannel`. **Check:** T2 `StoreAgentInstallTests`: install, update, uninstall, and metadata. Mismatch tests call `StoreAgentChannel` with a wrong `sha256` and a wrong `expected_signer_sha256`.
 4. **Reconciliation.** Refresh metadata after each install. Reconciliation v1 ([package-store.md](../../02-design/package-store.md) §9.1–§9.2) runs `ListManagedPackages(ALL_USER_INSTALLED)` after each handshake and `GetPackageMetadata` on `PackageChanged`. A package removed inside Android moves to `broken(.removedInAndroid)`. **Check:** T2: the store matches Android's list after `PackageChanged`.
 5. **Acceptance.** With ADB disabled, run `apkrun install HelloText.apk --yes`. **Check:** the Done-when items.

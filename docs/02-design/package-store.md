@@ -180,7 +180,7 @@ The digest proves that two host sets hold the same bytes under the same names. I
 | Guest free space | at install | Android decides. `STATUS_FAILURE_STORAGE` becomes `StoreFailure.guestStorageFull`. Remediation: Settings → Runtime (`runtime.userdataGiB`) ([error-catalog.md](../03-reference/error-catalog.md) §10) |
 | Store size | Settings → Storage | current + previous + staged + failed + icons. "Remove previous version" frees `previous/` and disables rollback until the next update |
 
-Import uses `clonefile(2)` when the source is on the same APFS volume. Otherwise it streams the copy and hashes it. After `beginImport` returns, nothing refers to the source file. The user may delete the original APK (#048).
+Import uses `clonefile(2)` when the source is on the same APFS volume. Otherwise it streams the copy and hashes it. After `beginImport` returns, nothing refers to the source file. The user may delete the original APK (#49).
 
 ---
 
@@ -193,7 +193,7 @@ Import uses `clonefile(2)` when the source is on the same APFS volume. Otherwise
 | Files dropped on APKRun.app, the Add sheet, or the Dock icon | `RuntimeService.importPackage` with file handles | The GUI passes open file descriptors over XPC ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.1). apkrund needs no TCC consent for `~/Downloads` or `~/Desktop` |
 | `apkrun install <file…>` | same, with file handles opened by the CLI | Several `.apk` files form one split set |
 | Provider download | `PackageStore.beginDownloadTicket(id)` gives a ticket. The provider writes into `incoming/<ticket>/`. UpdateCore calls `PackageStore.inspect(ticket)` | [update-system.md](update-system.md) §5 |
-| Portable wrapper bootstrap | `importBootstrap` with a file handle for `Contents/Resources/bootstrap/` | First import on a new Mac only (#089, [wrapper.md](wrapper.md)) |
+| Portable wrapper bootstrap | `importBootstrap` with a file handle for `Contents/Resources/bootstrap/` | First import on a new Mac only (#90, [wrapper.md](wrapper.md)) |
 | Adoption | `adoptPackage(id)` | no artifact (§9.3) |
 
 A set holds at most 256 APKs (§4.2). The daemon's XPC endpoint and `apkrun install` allow 20 file handles per request. That transport limit does not change the store's limit.
@@ -231,8 +231,8 @@ Detection uses content, never the extension alone. ZIP reading uses ZIPFoundatio
 | signer set, lineage, scheme | `APKSignatureVerifier` (§4.5) | native Swift |
 | size, SHA-256 | streaming hash | during the copy |
 
-- aapt2 runs as a subprocess: 20 s timeout per call, 16 MiB output cap, `LANG=C`. A tolerant parser reads its output. Golden tests cover the pinned version. Updating aapt2 requires re-running them (#073).
-- aapt2 parses untrusted input. It runs under a `sandbox-exec` profile that denies process creation, network, and writes, and allows reads only of the ticket directory, the tool, and the system files it needs (#091). Without `sandbox-exec`, aapt2 runs unsandboxed and a warning is logged.
+- aapt2 runs as a subprocess: 20 s timeout per call, 16 MiB output cap, `LANG=C`. A tolerant parser reads its output. Golden tests cover the pinned version. Updating aapt2 requires re-running them (#74).
+- aapt2 parses untrusted input. It runs under a `sandbox-exec` profile that denies process creation, network, and writes, and allows reads only of the ticket directory, the tool, and the system files it needs (#92). Without `sandbox-exec`, aapt2 runs unsandboxed and a warning is logged.
 - `apkrun dev launch <apk>` (development only) uses the same 2 GiB per-file limit. It checks the source size before staging and enforces the limit while it streams the private copy.
 - The inspector never executes anything from an APK.
 
@@ -319,7 +319,7 @@ public struct ImportPreview: Codable, Sendable {
     public var permissions: [String]
     public var warnings: [ImportWarning]
     public var relation: ImportRelation
-    public var compatibility: CompatibilityInfo?   // compatibility database entry (#090, diagnostics.md §10.3); nil = none
+    public var compatibility: CompatibilityInfo?   // compatibility database entry (#91, diagnostics.md §10.3); nil = none
 }
 
 public enum ImportRelation: Codable, Sendable {
@@ -468,7 +468,7 @@ public protocol StoreRuntimeAccess: Sendable {
 | `ADBStoreAgentChannel` | stock image, and custom images with `--guest-transport adb` for debugging | `adb install-multiple`, `pm uninstall`, Guest Agent `QueryPackage` and `ListPackages` ([guest-protocol.md](guest-protocol.md) §13.2) | `.updateOwnership`, `.icons`, `.rollback`, `.inspect`. It has `.downgradeReinstall` when `ro.debuggable=1` |
 | `StoreAgentSupervisor` | custom image | vsock 6110 and 6111, Store Agent protocol ([guest-protocol.md](guest-protocol.md) §11) | none, once the agent announces every capability. The store uses only what `Hello` announces ([guest-protocol.md](guest-protocol.md) §3). `.downgradeReinstall` is never offered (`allow_downgrade` is always false in v1) |
 
-- `.updateOwnership`, `.rollback`, and `.icons` arrive with #039, #043, and #055.
+- `.updateOwnership`, `.rollback`, and `.icons` arrive with #40, #44, and #56.
 - RuntimeHost provides `DevelopmentStoreRuntimeAccess` for the embedded runtime.
 - A CI lint rejects raw `adb shell` and `pm` package operations outside `ADBStoreAgentChannel`, RuntimeCore's `AdbClient` helpers, and the allowlist of [test-strategy.md](../04-plan/test-strategy.md) §3.3.
 - Missing capabilities are not errors. The store records what it could not do (for example `android.updateOwner = nil` and a health note on a stock image) and continues.
@@ -636,7 +636,7 @@ Reinstalls that reconciliation triggers queue in the one-at-a-time Android queue
 - A live `listPackages(.all)` refreshes `android-inventory.json`. While Android is stopped, the operation returns the saved inventory with the managed records. That result is last-known state until a live query replaces it.
 - A managed record still `installed` but absent from the full inventory is reported as `broken(.removedInAndroid)`. This is a read-only projection. `source` and `observedAt` show whether the evidence is live or a snapshot.
 - **Adopt** (Home → Other Android apps → "Manage with APKRun", or creating a wrapper for such a package) creates a record with `installer: external`, `updateAuthority: external`, no artifact, and `source: adopted`. APKRun never updates the package. After Reset Android, its record becomes `broken(.removedInAndroid)` with the Remove action, because APKRun has no copy. The adopt sheet says so.
-- Post-v1 Google Play support (#097) uses the same record shape, with `updateAuthority: googlePlay`.
+- Post-v1 Google Play support (#98) uses the same record shape, with `updateAuthority: googlePlay`.
 
 ---
 
@@ -818,7 +818,7 @@ Messages never include file paths from the user's disk at `info` level or above.
 
 ## 14. Security notes
 
-- APKs, containers, and their metadata are untrusted input (NFR-SEC-01). The parsers that see them are the ZIP reader, aapt2 (in a sandboxed subprocess), and the signature verifier. All three are fuzz targets (#091).
+- APKs, containers, and their metadata are untrusted input (NFR-SEC-01). The parsers that see them are the ZIP reader, aapt2 (in a sandboxed subprocess), and the signature verifier. All three are fuzz targets (#92).
 - The host never executes, loads, or `dlopen`s anything from an APK.
 - Package IDs from APKs and from the guest are validated against the grammar (§2.1) before they reach a path, a bundle ID, or a log line.
 - Artifacts reach the guest only on the Store Agent artifact stream or through `adb install-multiple`. They are never placed in the shared folder.

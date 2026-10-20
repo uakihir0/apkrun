@@ -1,6 +1,6 @@
-/// Translates key samples into the key events of the guest in key mode (input.md §5.1, §5.2, §6; #025).
+/// Translates key samples into the key events of the guest in key mode (input.md §5.1, §5.2, §6; #26).
 ///
-/// Key mode is the only path before the IME (#071). The translator keeps the keys that are down, so that every release is
+/// Key mode is the only path before the IME (#72). The translator keeps the keys that are down, so that every release is
 /// sent with the Android key code of its press, even when the mapping of the release would differ (for example, when
 /// Command is released before the C of ⌘C). A key that is not forwarded has no entry on the guest, and its release is
 /// dropped too. The meta state of each event comes from the modifiers of its sample.

@@ -4,9 +4,9 @@
 # Tests/Fixtures/signing/test-fixture-a.jks.
 #
 #   scripts/build-fixtures.sh                     build out/HelloText.apk and check its signer
-#   scripts/build-fixtures.sh --app HelloGL       build out/HelloGL.apk instead (the G3 gate, #023)
-#   scripts/build-fixtures.sh --app HelloCompose  build out/HelloCompose.apk instead (the list of #024, G5 of #030)
-#   scripts/build-fixtures.sh --app HelloWebView  build out/HelloWebView.apk instead (#029)
+#   scripts/build-fixtures.sh --app HelloGL       build out/HelloGL.apk instead (the G3 gate, #24)
+#   scripts/build-fixtures.sh --app HelloCompose  build out/HelloCompose.apk instead (the list of #25, G5 of #31)
+#   scripts/build-fixtures.sh --app HelloWebView  build out/HelloWebView.apk instead (#30)
 #   scripts/build-fixtures.sh --app HelloSplit   build the xhdpi/ja/arm64 split set as out/HelloSplit.apks
 #   scripts/build-fixtures.sh --check-reproducible
 #                                                 build twice from clean, and compare the badging, the dex

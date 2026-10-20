@@ -113,7 +113,7 @@ The controller is an actor. Its state is the explicit `VMState` enum ([state-mac
 | `consolePorts` is non-empty and `[0]` is `.systemConsole` | `.missingSystemConsole` |
 | MAC address is a valid locally administered unicast address | `.invalidMACAddress` |
 | `machineIdentifier`, when present, decodes with `VZGenericMachineIdentifier(dataRepresentation:)` | `.machineIdentifierInvalid` |
-| Each custom device has a nonempty name and at least one queue. VZ adapter checks are part of #063 | `.customDeviceInvalid(name, reason)` |
+| Each custom device has a nonempty name and at least one queue. VZ adapter checks are part of #64 | `.customDeviceInvalid(name, reason)` |
 | `sound.input == true` only with `NSMicrophoneUsageDescription` in the host bundle | `.microphoneUsageDescriptionMissing` |
 | `VZVirtualMachineConfiguration.validate()`, after the local rules pass | `.frameworkRejected(underlying)` |
 
@@ -162,7 +162,7 @@ Cuttlefish HALs open fixed nodes such as `/dev/hvc3` ([android-image.md](android
 Apple does not document the order in which VZ assigns PCI functions to serial ports. Therefore:
 
 1. The test Linux guest attaches `[.systemConsole, .service("test-1"), .service("test-2")]`. The host writes `APKRUN-PORT-<i>\n` to ports 1 and 2 only, never to the system console outside `apkrun dev console` (§6.3). The guest `/init` reads `/dev/hvc1` and `/dev/hvc2` and prints the marker it saw. A T2 test asserts the mapping.
-2. The T2 suite checks all 20 ports with markers, using a guest-side probe in the test initramfs. Android relies on the mapping only after this check (#095).
+2. The T2 suite checks all 20 ports with markers, using a guest-side probe in the test initramfs. Android relies on the mapping only after this check (#96).
 3. If VZ numbering is not the array order, `ConsolePortPlan` (RuntimeCore) reorders the array to match the Cuttlefish map. The map is data, not scattered constants.
 
 The product must not depend on array order across macOS releases. Step 2 runs on each new macOS build (R-16).
@@ -218,7 +218,7 @@ Buffering rules:
 - Reads: the stream reads in ordered 64 KiB chunks and caps unread buffered input at 1 MiB. At the cap it probes for peer EOF with a one-byte read. More data than the cap closes the connection, and reads throw `bufferedInputLimitExceeded` after the buffered bytes drain. Data and EOF keep their order. The low-water mark is one byte, so small reads are delivered promptly. `read(upTo:)` checks cancellation first. `write(_:)` writes the data. `closed` completes after peer EOF or local close.
 - Errors: `NSPOSIXErrorDomain` `ECONNREFUSED` maps to `.vsockPortNotListening(port)`. Other VZ errors, including `ECONNRESET`, map to `VMFailure.vsockConnectFailed(port, underlying)`. With no listener, VZ may do nothing, so a caller may time out (`.vsockConnectTimedOut`). Connect with vsock disabled reports `.vsockDeviceNotConfigured`. If VZ does not expose the device, it reports `.vsockDeviceUnavailable`.
 - The LinuxGuest readiness probe retries refused, timed-out, and startup `ECONNRESET` attempts with backoff for at most five seconds.
-- **`VsockLoopbackForwarder`** (generic; ADB uses it, #015) listens on `127.0.0.1:<hostPort>` only, with a POSIX IPv4 socket. Each TCP connection opens `connect(vsockPort:)` and copies both directions. If the guest connection fails, the TCP connection closes at once. RuntimeCore configures `guest 5555 ↔ 127.0.0.1:<port>` in developer mode only, where `<port>` is `BootOptions.adbHostPort` (6520 in the product; `0` asks for a free port). It never binds a non-loopback address (NFR-SEC-06). Do not use Network.framework: on macOS 27 it cannot bind loopback only.
+- **`VsockLoopbackForwarder`** (generic; ADB uses it, #16) listens on `127.0.0.1:<hostPort>` only, with a POSIX IPv4 socket. Each TCP connection opens `connect(vsockPort:)` and copies both directions. If the guest connection fails, the TCP connection closes at once. RuntimeCore configures `guest 5555 ↔ 127.0.0.1:<port>` in developer mode only, where `<port>` is `BootOptions.adbHostPort` (6520 in the product; `0` asks for a free port). It never binds a non-loopback address (NFR-SEC-06). Do not use Network.framework: on macOS 27 it cannot bind loopback only.
 - Before binding, the forwarder connects to the port once. A listener on any address of that port is reported as `vm.loopbackPortInUse`. `SO_REUSEADDR` is set only after that probe, so a TIME_WAIT connection does not block a restart.
 
 ## 9. Lifecycle
@@ -365,8 +365,8 @@ Codes, messages, and remediations are in [error-catalog.md](../03-reference/erro
 
 ## 16. Open items
 
-- Whether the microphone prompt appears at VM start or at first capture (OQ-29, §11). #084 decides.
-- Whether the stock arm64 kernel carries `virtio_snd` (OQ-38, §11). If not, the custom image adds it ([android-image.md](android-image.md) §7.5). #083 decides.
-- RuntimeCore does not send the Guest Agent `Shutdown` RPC yet (§9.3), so only developer mode stops Android gracefully. #034 and #035 hold it.
-- Pause and resume across host sleep is not verified on hardware (§9.4). #069 holds it.
+- Whether the microphone prompt appears at VM start or at first capture (OQ-29, §11). #85 decides.
+- Whether the stock arm64 kernel carries `virtio_snd` (OQ-38, §11). If not, the custom image adds it ([android-image.md](android-image.md) §7.5). #84 decides.
+- RuntimeCore does not send the Guest Agent `Shutdown` RPC yet (§9.3), so only developer mode stops Android gracefully. #35 and #36 hold it.
+- Pause and resume across host sleep is not verified on hardware (§9.4). #70 holds it.
 - Whether VZ reports a start failure through the start completion, `didStopWithError`, or both (§9.1, §9.2). The controller accepts either path and never makes a second transition. Not verified across macOS builds (R-16).

@@ -376,7 +376,7 @@ resume (suspended, ensureReady or an activity assertion)
   4. state: suspended → ready
 ```
 
-- Target: `VM_RESUMED` → `ready` p50 ≤ 500 ms, so a launch from `suspended` stays within NFR-PERF-01 plus 0.5 s. #070 measures it.
+- Target: `VM_RESUMED` → `ready` p50 ≤ 500 ms, so a launch from `suspended` stays within NFR-PERF-01 plus 0.5 s. #71 measures it.
 - A VZ pause error gives `failed(.vm(.pauseFailed))`, and a resume error gives `failed(.vm(.resumeFailed))` (§3.6).
 - The memory balloon is not inflated before a pause in v1 (OQ-32).
 
@@ -517,12 +517,12 @@ The request and reply types are in [runtime-api.md](../03-reference/runtime-api.
 
 | Operation | Behavior | Task |
 |---|---|---|
-| `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime` | The wire names of `ensureReady`, `stop`, `restart`, and `reset` (§3.1). `startRuntime` uses `.cli` for the CLI and `.user` for APKRun.app and the menu bar. `resetRuntime` clears `failed` and the boot-loop guard, and deletes nothing ([runtime-api.md](../03-reference/runtime-api.md) §5.2) | #031 (`startRuntime`, `stopRuntime`), #032 (the others) |
-| `runtimeInfo` | `apkrun info` without a package: versions, state, resource use, and display pool size ([cli.md](cli.md) §4.1) | #032, #028 |
-| `listSessions` | Open sessions (§7) with package, display, phase, and point size. Used by `apkrun status`, the menu bar, and **Use Current Size** | #032 |
-| `restartApp` | Session channel request for Android → Restart ‹App› ([wrapper.md](wrapper.md) §5.6): `StopApplication`, then `LaunchApplication` on the same display. The session stays open | #044 |
-| `listOperations` | Running operations and the last 50 finished ones (§8.3). Used by `apkrun operations list` | #032 |
-| `unsubscribe`, `closeStream` | Counterparts of `subscribe` and of the stream operations (§8.4) | #032 |
+| `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime` | The wire names of `ensureReady`, `stop`, `restart`, and `reset` (§3.1). `startRuntime` uses `.cli` for the CLI and `.user` for APKRun.app and the menu bar. `resetRuntime` clears `failed` and the boot-loop guard, and deletes nothing ([runtime-api.md](../03-reference/runtime-api.md) §5.2) | #32 (`startRuntime`, `stopRuntime`), #33 (the others) |
+| `runtimeInfo` | `apkrun info` without a package: versions, state, resource use, and display pool size ([cli.md](cli.md) §4.1) | #33, #29 |
+| `listSessions` | Open sessions (§7) with package, display, phase, and point size. Used by `apkrun status`, the menu bar, and **Use Current Size** | #33 |
+| `restartApp` | Session channel request for Android → Restart ‹App› ([wrapper.md](wrapper.md) §5.6): `StopApplication`, then `LaunchApplication` on the same display. The session stays open | #45 |
+| `listOperations` | Running operations and the last 50 finished ones (§8.3). Used by `apkrun operations list` | #33 |
+| `unsubscribe`, `closeStream` | Counterparts of `subscribe` and of the stream operations (§8.4) | #33 |
 
 ---
 
@@ -726,4 +726,4 @@ Error domain `runtime`. Codes, user messages, and remediations are in [error-cat
 | Memory balloon before a pause (§5.3, [OQ-32](../04-plan/open-questions.md)) | No balloon in v1. A balloon is also a fallback of R-08 |
 | Pause and resume churn during dark wakes (§6, [OQ-33](../04-plan/open-questions.md)) | Resume on every wake. Fallback: resume lazily on the first request or on `visibilityChanged(true)` |
 | Restoring the Reset Android recovery point (§9.5, [OQ-41](../04-plan/open-questions.md)) | No restore in v1. The point can be listed and deleted |
-| No VM save and restore while VirGL is active ([R-07](../04-plan/risks.md)) | Accepted. The runtime stays warm with pause and resume (§5). Revisit if a later virglrenderer, or the Venus track (#096), can rebuild the renderer state |
+| No VM save and restore while VirGL is active ([R-07](../04-plan/risks.md)) | Accepted. The runtime stays warm with pause and resume (§5). Revisit if a later virglrenderer, or the Venus track (#97), can rebuild the renderer state |

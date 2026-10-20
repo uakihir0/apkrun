@@ -14,7 +14,7 @@ public struct AdbPackageListing: Equatable, Sendable {
     }
 }
 
-/// The metadata that `dumpsys package` reports for one installed package (#016 step 4).
+/// The metadata that `dumpsys package` reports for one installed package (#17 step 4).
 public struct AdbPackageMetadata: Equatable, Sendable {
     /// The installed `versionCode`.
     public var versionCode: Int
@@ -172,7 +172,7 @@ enum AdbOutputParser {
         return candidates.min { $0.rank < $1.rank }?.component
     }
 
-    /// The connectors of `drmConnectors` (#021): one `<name> <status>` line each. Any other line makes the whole
+    /// The connectors of `drmConnectors` (#22): one `<name> <status>` line each. Any other line makes the whole
     /// reply unexpected, so a glob that matched nothing (`card*-* `) is never read as a connector.
     static func drmConnectors(_ output: String) -> [AdbDRMConnector]? {
         var connectors: [AdbDRMConnector] = []
@@ -188,7 +188,7 @@ enum AdbOutputParser {
         return connectors
     }
 
-    /// The devices of `virtioDevices` (#021): `<name> device=<0xHEX or empty> driver=<name or empty>` per line.
+    /// The devices of `virtioDevices` (#22): `<name> device=<0xHEX or empty> driver=<name or empty>` per line.
     static func virtioDevices(_ output: String) -> [AdbVirtioDevice]? {
         var devices: [AdbVirtioDevice] = []
         for line in lines(output) {

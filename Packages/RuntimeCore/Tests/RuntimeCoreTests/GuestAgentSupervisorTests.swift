@@ -5,7 +5,7 @@ import Testing
 @testable import RuntimeCore
 
 /// The supervisor's resync, keepalive, and recovery, run against in-memory agents (guest-protocol.md §6,
-/// guest-components.md §3.3; #072 T0).
+/// guest-components.md §3.3; #73 T0).
 
 private func eventually(within seconds: Double = 8, _ condition: () async -> Bool) async throws {
     let deadline = ContinuousClock.now + .seconds(seconds)

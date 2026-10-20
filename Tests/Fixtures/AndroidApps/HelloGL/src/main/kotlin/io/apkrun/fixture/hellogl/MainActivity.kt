@@ -14,7 +14,7 @@ import javax.microedition.khronos.opengles.GL10
  * 10 seconds.
  *
  * With the intent extra [EXTRA_ALTERNATE] set to true, the screen alternates between two colours on every frame. The
- * tearing check of #023 samples the frames for that mode.
+ * tearing check of #24 samples the frames for that mode.
  */
 class MainActivity : Activity() {
     private lateinit var glView: GLSurfaceView

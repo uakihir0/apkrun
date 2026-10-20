@@ -1,4 +1,4 @@
-"""Validate a runtime image manifest (runtime-image-manifest.md §5, §7.2; #065).
+"""Validate a runtime image manifest (runtime-image-manifest.md §5, §7.2; #66).
 
 `validate` runs the JSON Schema of §5 first. Only when that passes does it run
 the semantic rules S1–S14. Each violation names its rule: `schema` or `S1`…`S14`,

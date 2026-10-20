@@ -4,7 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-/** The scroll rule of the list on the JVM (test-strategy §4.2, #024 T2 checks HelloCompose's scroll). */
+/** The scroll rule of the list on the JVM (test-strategy §4.2, #25 T2 checks HelloCompose's scroll). */
 class ScrollReporterTest {
     @Test
     fun theInitialIndexIsNotReported() {

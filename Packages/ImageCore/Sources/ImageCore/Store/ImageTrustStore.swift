@@ -31,7 +31,7 @@ public struct ImageTrustStore: Equatable, Sendable {
     }
 
     /// The release image keys compiled into the app. None exist until the release key
-    /// ceremony (#093), so a Release build trusts no bundle and refuses every one with
+    /// ceremony (#94), so a Release build trusts no bundle and refuses every one with
     /// `untrustedKey`. That is the fail-closed default for M1.
     public static let release = ImageTrustStore(keys: [])
 

@@ -300,5 +300,5 @@
       "requiredHostCapabilities": []
     }
   },
-  "gpuProfilesComment": "graphics.md §9. guestSwiftshader and headless carry the launcher capture's guest_swiftshader keys (IR-305); headless adds VZ's 2D virtio-gpu at boot and exists only in development bundles (IR-307). The drmVirgl keys are the source-derived set (graphics-props-from-source.txt, not committed) without its display_framebuffer_format, which that file takes from the capture (IR-401), plus the composer key from the capture. No capture or VZ run confirms the drmVirgl values; #022 does (IR-400)."
+  "gpuProfilesComment": "graphics.md §9. guestSwiftshader and headless carry the launcher capture's guest_swiftshader keys (IR-305); headless adds VZ's 2D virtio-gpu at boot and exists only in development bundles (IR-307). The drmVirgl keys are the source-derived set (graphics-props-from-source.txt, not committed) without its display_framebuffer_format, which that file takes from the capture (IR-401), plus the composer key from the capture. No capture or VZ run confirms the drmVirgl values; #23 does (IR-400)."
 }

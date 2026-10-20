@@ -3,11 +3,11 @@
 - Status: Accepted
 - Date: 2026-10-10
 - Approval: the project owner approved this route in the session of 2026-10-10, instead of the AOSP Soong build.
-- Related: #099 (Mesa-enabled VirGL guest image), #022, #021, ADR-0003, ADR-0004, R-02; the receipt of build 16373615 on `task/099-mesa-virgl-guest-image`
+- Related: #99 (Mesa-enabled VirGL guest image), #23, #22, ADR-0003, ADR-0004, R-02; the receipt of build 16373615 on `task/99-mesa-virgl-guest-image`
 
 ## Context
 
-The VirGL path of ADR-0004 needs a guest Mesa: the EGL and GLES libraries that Android loads with `ro.hardware.egl=mesa`, and the gallium `virgl` driver under them. The current guest image has no such userspace. Build 16373615 has `libEGL_emulation.so` and `libGLESv2_emulation.so` in `vendor_a`, ANGLE in `system_a`, and no Mesa EGL, GLES, gallium, or gbm library (the receipt `Images/reference/16373615/mesa-payload-receipt.txt`, sections 3 and 6, on `task/099-mesa-virgl-guest-image`).
+The VirGL path of ADR-0004 needs a guest Mesa: the EGL and GLES libraries that Android loads with `ro.hardware.egl=mesa`, and the gallium `virgl` driver under them. The current guest image has no such userspace. Build 16373615 has `libEGL_emulation.so` and `libGLESv2_emulation.so` in `vendor_a`, ANGLE in `system_a`, and no Mesa EGL, GLES, gallium, or gbm library (the receipt `Images/reference/16373615/mesa-payload-receipt.txt`, sections 3 and 6, on `task/99-mesa-virgl-guest-image`).
 
 The pinned AOSP `external/mesa3d` tree has no module for EGL, GLES, or the virgl driver. Its 90 `Android.bp` files define the platform stubs, two Vulkan ICDs, and the gallium-free helpers only. The AOSP build of that tree needs a Linux x86-64 builder with 400 GB of disk, and this Mac has neither.
 
@@ -64,7 +64,7 @@ The project owner approved the NDK route in this session. Mesa is built on this 
 
 ## Consequences
 
-- The guest gets Mesa's EGL and GLES 2.0 and 1.1 entry points and the `virgl` driver, so `eglInitialize` can run on the VirGL display. Acceptance of #099 needs the VM check, which is not part of this ADR.
+- The guest gets Mesa's EGL and GLES 2.0 and 1.1 entry points and the `virgl` driver, so `eglInitialize` can run on the VirGL display. Acceptance of #99 needs the VM check, which is not part of this ADR.
 - The guest must provide the libraries that the shipped Mesa imports. These are `libcutils.so`, `libhardware.so`, `liblog.so`, `libnativewindow.so`, `libsync.so`, `libdrm.so`, `libz.so`, `libm.so`, `libdl.so`, and `libc.so`, and 37 Mesa-used symbols of the stub libraries and libdrm (the symbol list is in `scripts/guest/mesa_android.py`). `libz.so` is not in the receipt's inventory, so it is an open check.
 - Mesa is a third-party component with runtime impact, so it is in the lock with `ships: image`, its licence texts, and this ADR. Security updates come from the upstream check ([build-system.md](../../05-development/build-system.md) §6.7), and a Mesa bump is a new pin with a new receipt.
 - The app list is not met for HPND and for the Bison-generated code. The image release is blocked until the maintainer decides.
@@ -74,4 +74,4 @@ The project owner approved the NDK route in this session. Mesa is built on this 
 ## Verification
 
 - Host build on this Mac with NDK r28c and the pins above. The four libraries are AArch64 ELF64 with 16 KB load alignment. Their `DT_NEEDED` entries and exports are checked by `scripts/tests/test_guest_mesa_build.py`.
-- `eglInitialize` on the VirGL display, the GLES renderer string, and the symbol contract all need the guest. They are recorded as open in #099 and are not claimed by this ADR.
+- `eglInitialize` on the VirGL display, the GLES renderer string, and the symbol contract all need the guest. They are recorded as open in #99 and are not claimed by this ADR.

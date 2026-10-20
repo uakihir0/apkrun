@@ -3,7 +3,7 @@ import Testing
 
 @testable import RuntimeCore
 
-/// The readers of the adb replies (#016 T0). The replies are recorded from a real Android 17 guest on 2026-10-09:
+/// The readers of the adb replies (#17 T0). The replies are recorded from a real Android 17 guest on 2026-10-09:
 /// `adb install -r`, `adb uninstall`, `pm list packages --show-versioncode`, and `dumpsys package`.
 @Test
 func installReplyOfASuccessfulInstallIsSuccess() {

@@ -1,4 +1,4 @@
-// Install-time feature split for HelloSplit (#027).
+// Install-time feature split for HelloSplit (#28).
 plugins {
     alias(libs.plugins.android.dynamic.feature)
 }

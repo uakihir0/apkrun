@@ -3,8 +3,8 @@ import IOSurface
 import InputCore
 import QuartzCore
 
-/// Shows one IOSurface as the contents of a plain layer (display-and-windowing.md §5.3, #023), and captures the pointer and key
-/// events of the window (input.md §3, §4, §5, #024, #025).
+/// Shows one IOSurface as the contents of a plain layer (display-and-windowing.md §5.3, #24), and captures the pointer and key
+/// events of the window (input.md §3, §4, §5, #25, #26).
 ///
 /// The view never draws with the CPU. Setting the contents is zero-copy: Core Animation reads the surface, and the
 /// consumer's `displayed` callback runs once Core Animation has committed the new contents.

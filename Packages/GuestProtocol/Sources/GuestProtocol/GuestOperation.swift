@@ -216,7 +216,7 @@ public struct GuestLaunchApplication: GuestOperation {
 }
 
 /// `StopApplication` with `FINISH_TASKS`: removes each task of a package without force-stopping its process
-/// (guest-protocol.md §7.1 #15; #026).
+/// (guest-protocol.md §7.1 #15; #27).
 public struct GuestStopApplication: GuestOperation {
     /// The decoded result of the operation.
     public typealias Result = GPEmpty
@@ -252,7 +252,7 @@ public struct GuestStopApplication: GuestOperation {
     }
 }
 
-/// `StopApplication` with `FORCE_STOP`: stops every task and process for a package (#032).
+/// `StopApplication` with `FORCE_STOP`: stops every task and process for a package (#33).
 public struct GuestForceStopApplication: GuestOperation {
     /// The decoded result of the operation.
     public typealias Result = GPEmpty

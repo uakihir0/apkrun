@@ -71,7 +71,7 @@ public enum RuntimeFailure: APKRunError, Equatable {
     /// `apkrun dev boot` cannot create the developer console socket.
     case devConsoleSocketUnavailable
 
-    /// The development window's input is not bound to the Guest Agent's input channel (#024). `cause` is the agent
+    /// The development window's input is not bound to the Guest Agent's input channel (#25). `cause` is the agent
     /// failure, or nil when the boot has no running Guest Agent to bind to. A warning: the boot goes on.
     case inputNotBound(cause: GuestAgentFailure?)
 

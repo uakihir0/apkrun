@@ -182,7 +182,7 @@ final class G2AndroidBootTests: XCTestCase {
         return (process.terminationStatus, output)
     }
 
-    /// Services that exited three or more times (the #095 crash-loop definition).
+    /// Services that exited three or more times (the #96 crash-loop definition).
     static func crashLoops(in console: String) -> [String] {
         serviceExits(in: console).filter { $0.value >= 3 && !expectedExits.contains($0.key) }.keys.sorted()
     }

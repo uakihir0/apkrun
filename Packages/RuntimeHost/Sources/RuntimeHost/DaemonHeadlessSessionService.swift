@@ -10,7 +10,7 @@ import RuntimeCore
 ///
 /// This service owns no window. It drains each lease's frame stream and acknowledges frames as discarded, then marks
 /// the session running as soon as Android confirms the launch operation.
-public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageUninstallSessionEnding {
+public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutationSessionHandling {
     private let guestAgent: any DaemonHeadlessGuestAgent
     private let displayPool: DisplayPool
     private let registry: SessionRegistry
@@ -252,6 +252,11 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageUninsta
         _ = await registry.stopCompleted(sessionID: current.id)
         forgetSession(packageID: packageID, sessionID: current.id)
         return RuntimeTerminateResult(packageID: request.packageID, hadSession: true)
+    }
+
+    /// Reports whether this package still owns a live app session.
+    func hasActiveSession(packageID: RuntimePackageID) async -> Bool {
+        await registry.session(packageID: packageID.rawValue) != nil
     }
 
     /// Closes an active session with the package-removal reason before the store uninstalls Android's package.

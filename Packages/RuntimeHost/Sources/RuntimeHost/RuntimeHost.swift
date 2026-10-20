@@ -884,6 +884,9 @@ public actor RuntimeHost {
         operationID: WireOperationID?
     ) async throws(RuntimeWireError) -> RuntimePackageSummary {
         let service = packageQueryServiceInstance()
+        if let headlessSessionService {
+            await service.setSessionService(headlessSessionService)
+        }
         try await service.open()
         try await waitForPackageLaunches(packageID.rawValue)
         do {
@@ -899,19 +902,25 @@ public actor RuntimeHost {
         }
 
         try await attachPackageQueriesIfRuntimeIsReady(to: service)
-        if let operationID {
-            guard !Task.isCancelled else {
-                throw Self.cancelledOperationError
-            }
-            // PackageStore currently makes the guest install a single transaction call. From this
-            // point it reconciles ambiguous guest results and must run to a terminal journal state.
-            setPackageMutationNotCancellable(
-                operationID,
-                stage: "installing",
-                message: "Installing the Android package…"
-            )
+        if let headlessSessionService {
+            await service.setSessionService(headlessSessionService)
         }
-        let installResult = try await service.installImportedWithChange(request)
+        let storeMutationBoundary: PackageMutationBoundary = { [weak self] () async throws(RuntimeWireError) in
+            guard let self else { throw Self.cancelledOperationError }
+            do {
+                try await self.enterPackageStoreMutation(
+                    operationID: operationID,
+                    stage: "installing",
+                    message: "Installing the Android package…"
+                )
+            } catch {
+                throw Self.operationWireError(for: error)
+            }
+        }
+        let installResult = try await service.installImportedWithChange(
+            request,
+            beforeStoreMutation: storeMutationBoundary
+        )
         if installResult.cleanupDeferred {
             logger?.warning(
                 "Package install committed; package-store cleanup is deferred",
@@ -959,15 +968,26 @@ public actor RuntimeHost {
             }
         }
 
-        // A guest uninstall has no safe cancellation point after its Store Agent transaction begins.
-        setPackageMutationNotCancellable(
-            operationID,
-            stage: request.options.forget ? "updatingStore" : "uninstalling",
-            message: request.options.forget
-                ? "Updating APKRun's package store…"
-                : "Uninstalling the Android package…"
+        // Keep cancellation available while the app session closes. The boundary callback runs
+        // immediately before PackageStore starts the guest uninstall or host-only forget.
+        let storeMutationBoundary: PackageMutationBoundary = { [weak self] () async throws(RuntimeWireError) in
+            guard let self else { throw Self.cancelledOperationError }
+            do {
+                try await self.enterPackageStoreMutation(
+                    operationID: operationID,
+                    stage: request.options.forget ? "updatingStore" : "uninstalling",
+                    message: request.options.forget
+                        ? "Updating APKRun's package store…"
+                        : "Uninstalling the Android package…"
+                )
+            } catch {
+                throw Self.operationWireError(for: error)
+            }
+        }
+        let result = try await service.uninstallPackageWithChange(
+            request,
+            beforeStoreMutation: storeMutationBoundary
         )
-        let result = try await service.uninstallPackageWithChange(request)
         if result.cleanupDeferred {
             logger?.warning(
                 "Package uninstall committed; package-store cleanup is deferred",
@@ -1083,6 +1103,21 @@ public actor RuntimeHost {
             .progress(operationID, operation.snapshot.progress ?? OperationProgress()),
             operationID: operationID
         )
+    }
+
+    private func enterPackageStoreMutation(
+        operationID: WireOperationID?,
+        stage: String,
+        message: String
+    ) throws(RuntimeWireError) {
+        guard !Task.isCancelled else {
+            throw Self.cancelledOperationError
+        }
+        if let operationID {
+            // PackageStore reconciles ambiguous guest results and journals the transaction to a
+            // terminal state once its Store Agent operation begins.
+            setPackageMutationNotCancellable(operationID, stage: stage, message: message)
+        }
     }
 
     private func finishOperation(_ operationID: WireOperationID, result: OperationResult) {

@@ -7,7 +7,7 @@ import RuntimeCore
 ///
 /// It composes the RuntimeCore registry with the embedded development boot. The API remains narrow: display 0, one
 /// package session, and the stop policy that finishes the package's tasks.
-public actor EmbeddedRuntimeService: RuntimeSessionService, PackageUninstallSessionEnding {
+public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessionHandling {
     private let registry: SessionRegistry
     private var sessionID: SessionID?
     private var packageID: String?
@@ -323,6 +323,11 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageUninstallSess
             }
             throw Self.wireError(for: failure)
         }
+    }
+
+    /// Reports whether this package still owns a live app session.
+    func hasActiveSession(packageID: RuntimePackageID) async -> Bool {
+        await registry.session(packageID: packageID.rawValue) != nil
     }
 
     /// Closes this package's active window with the package-removal reason before uninstall.

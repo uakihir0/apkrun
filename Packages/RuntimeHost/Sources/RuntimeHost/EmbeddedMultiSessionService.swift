@@ -5,7 +5,7 @@ import RuntimeAPI
 ///
 /// Each child service owns one session and display lease; this actor keeps the RuntimeAPI surface singular while the
 /// Guest Agent, DisplayPool, SessionRegistry, and input stream are shared by the boot.
-public actor EmbeddedMultiSessionService: RuntimeSessionService, PackageUninstallSessionEnding {
+public actor EmbeddedMultiSessionService: RuntimeSessionService, PackageMutationSessionHandling {
     private var sessions: [String: EmbeddedRuntimeService]
 
     /// Creates a dispatcher for the packages opened by one `apkrun dev launch` command.
@@ -39,6 +39,12 @@ public actor EmbeddedMultiSessionService: RuntimeSessionService, PackageUninstal
             throw Self.sessionUnavailable(request.packageID.rawValue)
         }
         return try await session.terminate(request)
+    }
+
+    /// Reports whether this package still owns a live app session.
+    func hasActiveSession(packageID: RuntimePackageID) async -> Bool {
+        guard let session = sessions[packageID.rawValue] else { return false }
+        return await session.hasActiveSession(packageID: packageID)
     }
 
     /// Closes only the window that owns the package being uninstalled.

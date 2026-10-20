@@ -220,6 +220,68 @@ func embeddedPackageServiceRoutesLaunchAndTerminateThroughRuntimeSessionService(
 }
 
 @Test(.timeLimit(.minutes(1)))
+func embeddedPackageServiceRejectsInstallWhileThePackageHasAnActiveSession() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-package-session-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": root.path])
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let runtimePackageID = try #require(RuntimePackageID(rawValue: packageID.rawValue))
+    let launchError = PackageMutationErrorProbe()
+    let sessionService = PackageMutationTestSessionService(
+        activePackageID: runtimePackageID,
+        launchError: launchError
+    )
+    let service = EmbeddedPackageService(
+        paths: paths,
+        inspector: { _ in
+            APKFacts(
+                packageID: packageID,
+                versionCode: 12,
+                versionName: "1.2",
+                splitName: nil,
+                displayName: "Hello Text",
+                minSDK: 23,
+                targetSDK: 35,
+                nativeABIs: []
+            )
+        },
+        sessionService: sessionService
+    )
+    await sessionService.setPackageService(service)
+    try await service.open()
+
+    let source = root.appendingPathComponent("hello.apk")
+    try Data("apk-test-bytes".utf8).write(to: source)
+    let handle = try FileHandle(forReadingFrom: source)
+    defer { try? handle.close() }
+    let preview = try await service.importPackage(
+        RuntimeImportPackageRequest(
+            files: [RuntimeImportSourceFile(fileIndex: 0, name: "hello.apk")],
+            origin: .cli
+        ),
+        files: [handle]
+    )
+    let boundaryProbe = PackageMutationBoundaryProbe()
+
+    do {
+        _ = try await service.installImportedWithChange(
+            RuntimeInstallImportedRequest(ticket: preview.ticket),
+            beforeStoreMutation: { await boundaryProbe.markEntered() }
+        )
+        Issue.record("An install must not replace a package with an active app session.")
+    } catch let wireError as RuntimeWireError {
+        #expect(wireError.code == "store.packageInUse")
+    }
+
+    #expect(!(await boundaryProbe.wasEntered()))
+    #expect(await launchError.code == "store.operationInProgress")
+    #expect(try await service.launch(RuntimeLaunchRequest(packageID: runtimePackageID)).state == .running)
+}
+
+@Test(.timeLimit(.minutes(1)))
 func embeddedPackageServiceImportsIndexedFileHandlesWithoutStartingAndroid() async throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("apkrun-package-service-\(UUID().uuidString)", isDirectory: true)
@@ -472,6 +534,70 @@ private actor FakePackageRuntimeSessionService: RuntimeSessionService {
     func terminate(_ request: RuntimeTerminateRequest) async throws(RuntimeWireError) -> RuntimeTerminateResult {
         terminatedPackageIDs.append(request.packageID)
         return RuntimeTerminateResult(packageID: request.packageID, hadSession: true)
+    }
+}
+
+private actor PackageMutationTestSessionService: RuntimeSessionService, PackageMutationSessionHandling {
+    private let activePackageID: RuntimePackageID?
+    private let launchError: PackageMutationErrorProbe?
+    private var packageService: EmbeddedPackageService?
+
+    init(
+        activePackageID: RuntimePackageID? = nil,
+        launchError: PackageMutationErrorProbe? = nil
+    ) {
+        self.activePackageID = activePackageID
+        self.launchError = launchError
+    }
+
+    func setPackageService(_ packageService: EmbeddedPackageService) {
+        self.packageService = packageService
+    }
+
+    func launch(_ request: RuntimeLaunchRequest) async throws(RuntimeWireError) -> RuntimeLaunchResult {
+        RuntimeLaunchResult(sessionID: UUID(), packageID: request.packageID, state: .running)
+    }
+
+    func terminate(_ request: RuntimeTerminateRequest) async throws(RuntimeWireError) -> RuntimeTerminateResult {
+        RuntimeTerminateResult(packageID: request.packageID, hadSession: true)
+    }
+
+    func hasActiveSession(packageID: RuntimePackageID) async -> Bool {
+        if let packageService {
+            do {
+                _ = try await packageService.launch(RuntimeLaunchRequest(packageID: packageID))
+                await launchError?.record("unexpectedLaunch")
+            } catch let wireError as RuntimeWireError {
+                await launchError?.record(wireError.code)
+            } catch {
+                await launchError?.record("unexpectedError")
+            }
+        }
+        return activePackageID == packageID
+    }
+
+    func endSessionForPackageUninstall(_ request: RuntimeTerminateRequest) async throws(RuntimeWireError) {
+        _ = request
+    }
+}
+
+private actor PackageMutationErrorProbe {
+    private(set) var code: String?
+
+    func record(_ code: String) {
+        self.code = code
+    }
+}
+
+private actor PackageMutationBoundaryProbe {
+    private var entered = false
+
+    func markEntered() {
+        entered = true
+    }
+
+    func wasEntered() -> Bool {
+        entered
     }
 }
 

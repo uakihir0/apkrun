@@ -5,6 +5,8 @@ import Foundation
 import RuntimeAPI
 import RuntimeCore
 
+typealias PackageMutationBoundary = @Sendable () async throws(RuntimeWireError) -> Void
+
 struct RuntimePackageInstallResult: Sendable {
     let summary: RuntimePackageSummary
     let change: PackageChange
@@ -48,6 +50,9 @@ public actor EmbeddedPackageService: RuntimeService {
     private var openTask: Task<Void, Error>?
     private var runtimeAttached = false
     private var importPreviews: [UUID: RuntimeImportPreview] = [:]
+    private var packageMutationsInProgress = Set<String>()
+    private var packageStoreMutationsInProgress = Set<String>()
+    private var packageLaunchesInProgress: [String: Int] = [:]
 
     /// Creates an embedded package service rooted at APKRun's persistent package directory.
     public init(
@@ -134,7 +139,10 @@ public actor EmbeddedPackageService: RuntimeService {
 
     /// Launches an installed package in the embedded runtime through the Guest Agent.
     public func launch(_ request: RuntimeLaunchRequest) async throws(RuntimeWireError) -> RuntimeLaunchResult {
-        try await sessionService.launch(request)
+        let packageID = request.packageID.rawValue
+        try beginPackageLaunch(packageID)
+        defer { finishPackageLaunch(packageID) }
+        return try await sessionService.launch(request)
     }
 
     /// Stops the package's task, force-stopping through Android when no session exists.
@@ -193,7 +201,8 @@ public actor EmbeddedPackageService: RuntimeService {
 
     /// Installs an import and reports the store change that occurred.
     func installImportedWithChange(
-        _ request: RuntimeInstallImportedRequest
+        _ request: RuntimeInstallImportedRequest,
+        beforeStoreMutation: PackageMutationBoundary? = nil
     ) async throws(RuntimeWireError) -> RuntimePackageInstallResult {
         do {
             try await ensureOpen()
@@ -206,24 +215,51 @@ public actor EmbeddedPackageService: RuntimeService {
             guard let ticket = UUID(uuidString: request.ticket.rawValue) else {
                 throw EmbeddedPackageServiceFailure.invalidTicket
             }
+            let packageID = try await store.packageIDForImportTicket(ticket)
+            guard let runtimePackageID = RuntimePackageID(rawValue: packageID.rawValue) else {
+                throw EmbeddedPackageServiceFailure.invalidTicket
+            }
+            try beginPackageMutation(runtimePackageID.rawValue)
+            defer { finishPackageMutation(runtimePackageID.rawValue) }
+            try await waitForPackageLaunches(runtimePackageID.rawValue)
+            guard let sessionHandling = sessionService as? any PackageMutationSessionHandling else {
+                throw Self.packageSessionStateUnavailableError
+            }
+            guard !(await sessionHandling.hasActiveSession(packageID: runtimePackageID)) else {
+                throw Self.packageInUseError
+            }
 
             let outcome: PackageInstallOutcome
             if let preview = importPreviews[ticket] {
                 if case .otherSigner = preview.relation {
                     throw EmbeddedPackageServiceFailure.signerMismatch
                 }
+            }
 
+            if let preview = importPreviews[ticket] {
                 if case .uninstalledWithData = preview.relation {
-                    outcome = try await store.installImportedWithOutcome(ticket: ticket)
+                    outcome = try await store.installImportedWithOutcome(
+                        ticket: ticket,
+                        beforeGuestInstall: beforeStoreMutation
+                    )
                 } else if case .newPackage = preview.relation {
-                    outcome = try await store.installImportedWithOutcome(ticket: ticket)
+                    outcome = try await store.installImportedWithOutcome(
+                        ticket: ticket,
+                        beforeGuestInstall: beforeStoreMutation
+                    )
                 } else {
-                    outcome = try await store.reinstallWithOutcome(ticket: ticket)
+                    outcome = try await store.reinstallWithOutcome(
+                        ticket: ticket,
+                        beforeGuestInstall: beforeStoreMutation
+                    )
                 }
             } else {
                 // The ticket may have been restored from disk after a restart. PackageStore
                 // safely permits first installs and retained-data reinstalls in this case.
-                outcome = try await store.installImportedWithOutcome(ticket: ticket)
+                outcome = try await store.installImportedWithOutcome(
+                    ticket: ticket,
+                    beforeGuestInstall: beforeStoreMutation
+                )
             }
             importPreviews[ticket] = nil
             try? await refreshAndroidInventory()
@@ -248,7 +284,8 @@ public actor EmbeddedPackageService: RuntimeService {
 
     /// Uninstalls through Android or forgets the host record, preserving the event distinction.
     func uninstallPackageWithChange(
-        _ request: RuntimeUninstallPackageRequest
+        _ request: RuntimeUninstallPackageRequest,
+        beforeStoreMutation: PackageMutationBoundary? = nil
     ) async throws(RuntimeWireError) -> RuntimePackageUninstallResult {
         guard !request.options.forget || !request.options.keepData else {
             throw .runtime(
@@ -263,17 +300,31 @@ public actor EmbeddedPackageService: RuntimeService {
                 throw EmbeddedPackageServiceFailure.invalidPackageID
             }
             if request.options.forget {
-                try await store.forget(packageID: packageID)
+                try beginPackageMutation(request.packageID.rawValue, blocksLaunches: false)
+                defer { finishPackageMutation(request.packageID.rawValue) }
+                try await store.forget(
+                    packageID: packageID,
+                    beforeForget: beforeStoreMutation
+                )
                 return RuntimePackageUninstallResult(change: nil, cleanupDeferred: false)
             } else {
-                if let sessionEnding = sessionService as? any PackageUninstallSessionEnding {
-                    try await sessionEnding.endSessionForPackageUninstall(
-                        RuntimeTerminateRequest(packageID: request.packageID)
-                    )
+                try beginPackageMutation(request.packageID.rawValue)
+                defer { finishPackageMutation(request.packageID.rawValue) }
+                try await waitForPackageLaunches(request.packageID.rawValue)
+                guard let sessionHandling = sessionService as? any PackageMutationSessionHandling else {
+                    throw Self.packageSessionStateUnavailableError
                 }
                 let outcome = try await store.uninstallWithOutcome(
                     packageID: packageID,
-                    keepData: request.options.keepData
+                    keepData: request.options.keepData,
+                    beforeUninstall: {
+                        try await sessionHandling.endSessionForPackageUninstall(
+                            RuntimeTerminateRequest(packageID: request.packageID)
+                        )
+                    },
+                    beforeGuestUninstall: {
+                        try await beforeStoreMutation?()
+                    }
                 )
                 try? await refreshAndroidInventory()
                 return RuntimePackageUninstallResult(
@@ -285,6 +336,75 @@ public actor EmbeddedPackageService: RuntimeService {
             throw Self.wireError(for: error)
         }
     }
+
+    private static let packageInUseError = RuntimeWireError.store(
+        "packageInUse",
+        message: "The app still has an open APKRun window.",
+        remediation: "Close the app window, then retry the install."
+    )
+
+    private static let packageSessionStateUnavailableError = RuntimeWireError.runtime(
+        "serviceUnavailable",
+        message: "APKRun couldn't check whether the app has an open window.",
+        remediation: "Restart the APKRun background service, then retry."
+    )
+
+    private func beginPackageMutation(
+        _ packageID: String,
+        blocksLaunches: Bool = true
+    ) throws(RuntimeWireError) {
+        guard packageStoreMutationsInProgress.insert(packageID).inserted else {
+            throw Self.packageOperationInProgressError
+        }
+        if blocksLaunches {
+            packageMutationsInProgress.insert(packageID)
+        }
+    }
+
+    private func finishPackageMutation(_ packageID: String) {
+        packageStoreMutationsInProgress.remove(packageID)
+        packageMutationsInProgress.remove(packageID)
+    }
+
+    private func beginPackageLaunch(_ packageID: String) throws(RuntimeWireError) {
+        guard !packageMutationsInProgress.contains(packageID) else {
+            throw Self.packageOperationInProgressError
+        }
+        packageLaunchesInProgress[packageID, default: 0] += 1
+    }
+
+    private func finishPackageLaunch(_ packageID: String) {
+        guard let count = packageLaunchesInProgress[packageID] else { return }
+        if count <= 1 {
+            packageLaunchesInProgress[packageID] = nil
+        } else {
+            packageLaunchesInProgress[packageID] = count - 1
+        }
+    }
+
+    private func waitForPackageLaunches(_ packageID: String) async throws(RuntimeWireError) {
+        while packageLaunchesInProgress[packageID, default: 0] > 0 {
+            guard !Task.isCancelled else {
+                throw Self.cancelledOperationError
+            }
+            do {
+                try await Task.sleep(for: .milliseconds(25))
+            } catch {
+                throw Self.cancelledOperationError
+            }
+        }
+    }
+
+    private static let packageOperationInProgressError = RuntimeWireError.store(
+        "operationInProgress",
+        message: "APKRun is already changing this app's package state.",
+        remediation: "Wait for the package operation to finish, then try again."
+    )
+
+    private static let cancelledOperationError = RuntimeWireError.runtime(
+        "cancelled",
+        message: "The package operation was cancelled."
+    )
 
     /// Lists managed records, optionally merging Android's current PackageManager inventory.
     public func listPackages(

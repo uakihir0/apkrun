@@ -82,6 +82,9 @@ printf '%s\n' "let invocation = \"${adb_shell}\"" \
 printf '%s\n' "let invocation = \"${pm_install}\"" \
     >"$fixture/Packages/RuntimeHost/Sources/RuntimeHost/ADBStoreAgentChannel.swift"
 printf '%s\n' "adb${space}shell input tap 10 10" >"$fixture/scripts/dev/device-check.sh"
-run_check "allows documented implementation and development paths" pass
+run_check "rejects raw shell in the stock package channel" fail "ADBStoreAgentChannel.swift:1:"
+
+rm "$fixture/Packages/RuntimeHost/Sources/RuntimeHost/ADBStoreAgentChannel.swift"
+run_check "allows the ADB command owner and development tools" pass
 
 printf '%s\n' 'scripts/tests/test_check_raw_adb.sh: passed'

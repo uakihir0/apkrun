@@ -28,8 +28,9 @@ private struct AndroidImageVariantReceipt: Decodable {
 /// with APKRUN_INPUT_T2=1, which the AndroidInput configurations of IntegrationTests.xctestplan set. The
 /// `AndroidInputEdges` configuration also sets APKRUN_INPUT_EDGE_T2=1. The suite needs
 /// APKRUN_GUEST_DIR (the Guest Agent bundle), APKRUN_FIXTURE_APK (HelloText, a debug build: its `TEXT` and `DETAILS`
-/// broadcasts exist only there), and APKRUN_FIXTURE_COMPOSE_APK (HelloCompose). A missing input skips its test and names
-/// the variable.
+/// broadcasts exist only there), and APKRUN_FIXTURE_COMPOSE_APK (HelloCompose). The `AndroidInput` configuration also
+/// enables the #101 Guest Agent restart test with APKRUN_INPUT_REBIND_T2=1. A missing input skips its test and names the
+/// variable.
 ///
 /// The keyboard cases (#26) post AppKit key events into the window's view, as the pointer cases post pointer events. The
 /// field's text is read from the fixture's `text` line after a `TEXT` broadcast, and the screens and the editor action
@@ -85,6 +86,58 @@ final class AndroidInputTests: XCTestCase {
         XCTAssertTrue(identity["receipt_sha256"] is NSNull)
         XCTAssertTrue(identity["variant_disk_sha256"] is NSNull)
         XCTAssertTrue(identity["variant_manifest_sha256"] is NSNull)
+    }
+
+    /// A forced Guest Agent restart rebinds the same window's input route without rebooting Android (#101).
+    func testWindowInputRebindsAfterGuestAgentRestartWithoutRebooting() async throws {
+        guard ProcessInfo.processInfo.environment["APKRUN_INPUT_REBIND_T2"] == "1" else {
+            throw XCTSkip("Run only with APKRUN_INPUT_REBIND_T2=1 in the AndroidInput test-plan configuration.")
+        }
+        let apk = try Self.fixture("APKRUN_FIXTURE_APK")
+        try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
+            let target = try await run.centre(of: Self.buttonID)
+            guard let initialCount = try await Self.persistedClickCount(run) else {
+                throw AndroidInputRunFailure.timedOut("the fixture's initial persisted click counter")
+            }
+            XCTAssertEqual(initialCount, 0)
+
+            let bootIDBefore = try await Self.androidBootID(run)
+            let agentPIDBefore = try await Self.guestAgentPID(run)
+            let rebindCountBefore = run.inputRouteRebindCount()
+            let countersBefore = try await run.inputCounters()
+            let killed = try await run.adb.shell("kill -9 \(agentPIDBefore)")
+            guard killed.status == 0 else {
+                throw AndroidInputRunFailure.timedOut("SIGKILL of Guest Agent PID \(agentPIDBefore)")
+            }
+
+            try await run.waitForInputRouteRebind(after: rebindCountBefore)
+            let agentPIDAfter = try await Self.guestAgentPID(run)
+            let bootIDAfter = try await Self.androidBootID(run)
+            XCTAssertNotEqual(agentPIDAfter, agentPIDBefore, "the Guest Agent must have restarted")
+            XCTAssertEqual(bootIDAfter, bootIDBefore, "Android must stay in the same boot")
+
+            try await run.activateWindowForInput()
+            try await run.drainInput()
+            let countersBeforeClick = try await run.inputCounters()
+            let touchPhasesBeforeClick = try await run.inputWireTouchPhaseCounts()
+            try await run.pointer().click(at: target)
+            try await run.drainInput()
+            let countersAfter = try await run.inputCounters()
+            let touchPhaseDelta = try await run.inputWireTouchPhaseCounts().delta(since: touchPhasesBeforeClick)
+            let clickLines = try await run.fixtureLog(
+                until: { lines in lines.contains { $0.contains(Self.clickPrefix) } },
+                timeout: .seconds(10)
+            )
+            XCTAssertEqual(AndroidInputRun.numbers(in: clickLines, after: Self.clickPrefix), [1])
+
+            XCTAssertEqual(touchPhaseDelta, InputWireTouchPhaseCounts(down: 1, up: 1))
+            XCTAssertEqual(countersAfter.eventsSent - countersBeforeClick.eventsSent, 2, "\(countersAfter)")
+            XCTAssertEqual(
+                countersAfter.droppedNotFocused - countersBeforeClick.droppedNotFocused, 0, "\(countersAfter)")
+            XCTAssertEqual(countersAfter.droppedChannel - countersBefore.droppedChannel, 0, "\(countersAfter)")
+            XCTAssertEqual(
+                countersAfter.droppedNotRunning - countersBefore.droppedNotRunning, 0, "\(countersAfter)")
+        }
     }
 
     /// 100 of 100 clicks on HelloText's button are logged as `APKRUN-FIXTURE: click <n>` (#25 acceptance). Each click is
@@ -825,6 +878,25 @@ final class AndroidInputTests: XCTestCase {
             }
         }
         return nil
+    }
+
+    private static func guestAgentPID(_ run: AndroidInputRun) async throws -> Int {
+        let reply = try await run.adb.shell("pidof apkrun_guestd")
+        guard reply.status == 0,
+            let pid = reply.output.split(whereSeparator: \.isWhitespace).compactMap({ Int($0) }).first
+        else {
+            throw AndroidInputRunFailure.timedOut("the running Guest Agent process ID")
+        }
+        return pid
+    }
+
+    private static func androidBootID(_ run: AndroidInputRun) async throws -> String {
+        let reply = try await run.adb.shell("cat /proc/sys/kernel/random/boot_id")
+        let bootID = reply.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard reply.status == 0, !bootID.isEmpty else {
+            throw AndroidInputRunFailure.timedOut("the Android kernel boot ID")
+        }
+        return bootID
     }
 
     /// Reads the fixture's persisted counter without clearing the diagnostic touch records from logcat.

@@ -157,6 +157,11 @@
             "enabled": true
           },
           {
+            "key": "APKRUN_INPUT_REBIND_T2",
+            "value": "1",
+            "enabled": true
+          },
+          {
             "key": "APKRUN_VIRGL_RUNTIME_PATH",
             "value": "/tmp/apkrun-test-linux/virgl-runtime",
             "enabled": true

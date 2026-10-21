@@ -533,19 +533,21 @@ public actor InputRouter {
     }
 
     /// Ends a session. Its open gestures, buttons, and keys are cancelled on the guest, after the batches that were
-    /// routed before when it still owns focus. A previous focus-loss event has already cancelled the session, and an
-    /// unfocused session could not have sent input.
-    public func sessionEnded(_ session: SessionID) async {
+    /// routed before when it still owns focus. Set `cancelGuestState` to false only when the Guest Agent input stream
+    /// has disconnected; the guest cancels its input state when that stream closes. A previous focus-loss event has
+    /// already cancelled the session, and an unfocused session could not have sent input.
+    public func sessionEnded(_ session: SessionID, cancelGuestState: Bool = true) async {
         guard let ended = sessions.removeValue(forKey: session) else {
             return
         }
         if displayOwners[ended.displayID] == session {
             displayOwners.removeValue(forKey: ended.displayID)
         }
-        let needsCancellation = focusedSession == session
-        if needsCancellation {
+        let ownsFocus = focusedSession == session
+        if ownsFocus {
             focusedSession = nil
         }
+        let needsCancellation = cancelGuestState && ownsFocus
         await takeTurn()
         defer { releaseTurn() }
         if needsCancellation {

@@ -188,7 +188,7 @@ public actor GuestAgentSupervisor {
     /// When the recent protocol violations happened.
     private var violations: [ContinuousClock.Instant] = []
     /// Secondary connections belong to the control session whose token they present.
-    private var secondaries: [GuestConnection] = []
+    private var secondaries: [GuestEndpoint: GuestConnection] = [:]
 
     /// Creates a supervisor. The timings are the design values unless a test sets shorter ones.
     public init(
@@ -316,12 +316,21 @@ public actor GuestAgentSupervisor {
 
     /// Registers a connection that presents the current control session token. The supervisor closes it when that
     /// session ends or this supervisor stops.
-    func attachSecondary(_ secondary: GuestConnection, presenting token: Data) -> Bool {
+    func attachSecondary(_ secondary: GuestConnection, presenting token: Data) async -> Bool {
         guard state == .ready, connection != nil, session?.sessionToken == token else {
             return false
         }
-        secondaries.append(secondary)
+        let previous = secondaries.updateValue(secondary, forKey: secondary.endpoint)
+        await previous?.close()
         return true
+    }
+
+    /// Returns the current session token only after its snapshot and reconciliation handlers have completed.
+    public func readySessionToken() -> Data? {
+        guard state == .ready else {
+            return nil
+        }
+        return session?.sessionToken
     }
 
     /// Reads the connection state and negotiated version together as one status snapshot.
@@ -785,7 +794,7 @@ public actor GuestAgentSupervisor {
 
     /// Closes and removes the secondary connections of the ended control session.
     private func releaseSecondaries() async -> Int {
-        let released = secondaries
+        let released = Array(secondaries.values)
         secondaries.removeAll()
         for secondary in released {
             await secondary.close()

@@ -415,6 +415,8 @@ func queuedSendsWaitForSnapshotReconciliationAndEventsStayOrdered() async throws
     await gate.waitUntilPaused()
     #expect(await supervisor.state == .reconnecting)
     #expect(await gate.snapshots.map { $0.displays.keys.sorted() } == [[0], [3]])
+    #expect(await supervisor.session?.sessionToken != nil)
+    #expect(await supervisor.readySessionToken() == nil)
 
     let queuedSend = Task {
         try await supervisor.send(GuestPing(nonce: 123), timeout: .seconds(1))
@@ -436,6 +438,7 @@ func queuedSendsWaitForSnapshotReconciliationAndEventsStayOrdered() async throws
         let hasReplayedEvent = await supervisor.snapshot.displays[9] != nil
         return state == .ready && hasReplayedEvent
     }
+    #expect(await supervisor.readySessionToken() == supervisor.session?.sessionToken)
     #expect(transport.agents[1].requests.filter(isPing).count == 1)
     await supervisor.stop()
 }
@@ -829,6 +832,35 @@ func aLostControlSessionReleasesItsInputConnectionAndTheRouteRebinds() async thr
     }
     await supervisor.stop()
     #expect(await rebound.isUsable == false)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aReplacementSecondaryClosesThePreviousConnectionForItsEndpoint() async throws {
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello()
+        agent.answer = { request in
+            isGetSnapshot(request) ? .getSnapshot(snapshot(displays: [0])) : pongResult(for: request)
+        }
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: transport,
+        keepaliveInterval: .seconds(60),
+        restartAgent: { _ in false }
+    )
+    try await supervisor.start(connectTimeout: .seconds(2))
+    let token = try #require(await supervisor.readySessionToken())
+
+    let first = GuestConnection(endpoint: .guestInput, transport: transport, presentedToken: token)
+    _ = try await first.open()
+    #expect(await supervisor.attachSecondary(first, presenting: token))
+    let replacement = GuestConnection(endpoint: .guestInput, transport: transport, presentedToken: token)
+    _ = try await replacement.open()
+    #expect(await supervisor.attachSecondary(replacement, presenting: token))
+    #expect(await first.isUsable == false)
+    #expect(await replacement.isUsable)
+
+    await supervisor.stop()
+    #expect(await replacement.isUsable == false)
 }
 
 @Test func theFourthDeathWithinAMinuteIsNotRestarted() {

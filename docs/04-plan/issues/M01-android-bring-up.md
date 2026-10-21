@@ -140,6 +140,22 @@ M1 brings the stock Cuttlefish arm64 userdebug build 16373615 (Android 17, API 3
 
 ---
 
+## #107 Update Android boot tests for runtime state snapshots
+
+| Field | Value |
+|---|---|
+| Milestone | M1 (v0.1) |
+| Depends on | #15 |
+| Design | [state-machines.md](../../01-architecture/state-machines.md) §1; [runtime-daemon.md](../../02-design/runtime-daemon.md) §3.2–§3.3 |
+| Code | `Tests/IntegrationTests/AndroidBootTests/AndroidBootTests.swift` |
+
+**Goal.** Keep the Android boot integration test target buildable after `RuntimeSupervisor` events began carrying `RuntimeStateSnapshot` values.
+
+
+**Result.** `AndroidBootTests.testPhasesInOrder` appends `RuntimeStateSnapshot.state` to the `RuntimeState` collector. The IntegrationTests target builds and the test passes against the Android VM in both test-plan repetitions. T2: `AndroidBootTests.testPhasesInOrder`.
+
+---
+
 ## #16 ADB debugging over vsock
 
 | Field | Value |

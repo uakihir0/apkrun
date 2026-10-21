@@ -103,6 +103,7 @@ The tasks in working order ([../roadmap.md](../roadmap.md) §1.3). A task can st
 | #14 | Reach Android init | M1 | #13 |  |
 | #96 | Cuttlefish host-service substitution | M1 | #14 |  |
 | #15 | Reach system_server and boot_completed | M1 | #14, #96 | G2 |
+| #107 | Update Android boot tests for runtime state snapshots | M1 | #15 |  |
 | #16 | ADB debugging over vsock | M1 | #15, #8 |  |
 | #17 | Install HelloText APK | M1 | #16 |  |
 | #18 | Launch HelloText APK | M1 | #17 |  |
@@ -122,7 +123,7 @@ The tasks in working order ([../roadmap.md](../roadmap.md) §1.3). A task can st
 | #101 | Input route rebinds after the guest agent is lost | M3 | #25 |  |
 | #102 | A pointer tap reliably focuses a text field | M3 | #25 |  |
 | #103 | Trace intermittent click loss during repeated presses | M3 | #24, #73 |  |
-| #27 | HelloText in a native Mac window | M3 | #24, #25, #26 | G4 |
+| #27 | HelloText in a native Mac window | M3 | #24, #25, #26, #107 | G4 |
 | #28 | RuntimeCore package operations | M3 | #27 |  |
 | #68 | Retina, density, and resize | M3 | #27 |  |
 | #29 | DisplayPool | M3 | #28, #68 |  |

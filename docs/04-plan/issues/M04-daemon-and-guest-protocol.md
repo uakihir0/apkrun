@@ -331,7 +331,7 @@ The runtime moves out of the CLI into apkrund, a per-user LaunchAgent that launc
 - T3: checklist C02-2 of [test-strategy.md](../test-strategy.md) §8.3. Dictation is checked too; a failure becomes a follow-up and does not block.
 
 **Done when.**
-- "にほんご" converts to "日本語" in HelloText's field and in a HelloCompose `TextField` (FR-IN-07).
+- "にほんご" converts to "日本語" in HelloText's field and in a HelloCompose `TextField` (FR-IN-07). The test reads both fields from a `uiautomator dump`, because HelloCompose logs only the text length.
 - The candidate window sits next to the Android cursor, and emoji from the character viewer are inserted (FR-IN-07).
 - ⌘V pastes Mac text, and ⌘C, ⌘X, ⌘A, and ⌘Z do the Android equivalents (FR-IN-08).
 - In a password field, secure input is on and the input source is Roman, and secure input is off after focus leaves (FR-IN-07).

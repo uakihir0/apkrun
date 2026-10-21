@@ -310,6 +310,50 @@ final class AndroidInputRun {
         _ = await inputSink.drain()
     }
 
+    /// The number of display-0 input bindings reported during this boot.
+    func inputBindingCountOnDisplayZero() -> Int {
+        bootLog.count(of: "input is bound to display [0]")
+    }
+
+    /// Whether the development boot task has returned.
+    var bootHasEnded: Bool {
+        bootLog.hasEnded
+    }
+
+    /// Waits for the restarted Guest Agent to receive a new display-0 input binding without ending this boot.
+    func waitForInputRebind(
+        after bindingCount: Int,
+        guestAgentPID: Int,
+        timeout: Duration = .seconds(60)
+    ) async throws -> (guestAgentPID: Int, bindingCount: Int) {
+        let deadline = ContinuousClock.now + timeout
+        var latestPID: Int?
+        var latestBindingCount = inputBindingCountOnDisplayZero()
+        while ContinuousClock.now < deadline {
+            guard !bootLog.hasEnded else {
+                throw AndroidInputRunFailure.bootEnded(
+                    "while waiting for the input route to rebind after Guest Agent PID \(guestAgentPID); "
+                        + "bindings: \(latestBindingCount), boot: \(bootLog.recent)"
+                )
+            }
+            latestBindingCount = inputBindingCountOnDisplayZero()
+            latestPID = try await adb.processID(named: "apkrun_guestd", timeout: .seconds(5))
+            if latestBindingCount > bindingCount, let latestPID, latestPID != guestAgentPID {
+                return (latestPID, latestBindingCount)
+            }
+            let remaining = deadline - .now
+            guard remaining > .zero else {
+                break
+            }
+            try await Task.sleep(for: min(.milliseconds(250), remaining))
+        }
+        throw AndroidInputRunFailure.timedOut(
+            "display-0 input rebind after Guest Agent PID \(guestAgentPID); "
+                + "bindings \(bindingCount) → \(latestBindingCount), "
+                + "latest Guest Agent PID \(latestPID.map(String.init) ?? "none"), boot: \(bootLog.recent)"
+        )
+    }
+
     /// Waits for the first app frame in DevBoot's real window launch path.
     func waitForDisplayedFrameAfterLaunch(timeout: Duration = .seconds(30)) async throws {
         if closeStopsPackage != nil {
@@ -1462,5 +1506,9 @@ private final class BootLog: @unchecked Sendable {
 
     var recent: String {
         lock.withLock { lines.suffix(3).joined(separator: "; ") }
+    }
+
+    func count(of line: String) -> Int {
+        lock.withLock { lines.filter { $0 == line }.count }
     }
 }

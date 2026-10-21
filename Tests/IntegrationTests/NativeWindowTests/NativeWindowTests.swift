@@ -90,6 +90,64 @@ final class NativeWindowTests: XCTestCase {
         }
     }
 
+    /// The development input route rebinds after an agent restart without replacing the boot or native window (#101, T2).
+    func testInputRouteRebindsAfterGuestAgentRestartInNativeWindow() async throws {
+        let apk = try fixture("APKRUN_FIXTURE_APK")
+        try await AndroidInputRun.with(
+            apk: apk,
+            package: Self.helloText,
+            inputBindingTimeout: .seconds(180),
+            stopPackageOnWindowClose: true
+        ) { run in
+            let window = try XCTUnwrap(
+                NSApplication.shared.windows.first { $0.title == Self.windowTitle },
+                "SessionWindowController did not create the display-0 window")
+            try await run.waitForAppFrameAtPlaceholder()
+            await run.allowAppFrameToReplacePlaceholder()
+            try await run.waitForDisplayedFrameAfterLaunch()
+            try await Self.waitForVisibleHelloText(in: window)
+            try await run.waitForText("INCREMENT")
+            try await run.activateWindowForInput()
+
+            let runningAgentPID = try await run.adb.processID(named: "apkrun_guestd")
+            let agentPIDBefore = try XCTUnwrap(
+                runningAgentPID,
+                "the development Guest Agent must be running before the restart")
+            let bindingCountBefore = run.inputBindingCountOnDisplayZero()
+            XCTAssertGreaterThan(
+                bindingCountBefore, 0,
+                "DevBoot must report the initial display-0 input binding before the restart.")
+            let originalWindowNumber = window.windowNumber
+
+            try await run.adb.terminateProcess(named: "apkrun_guestd")
+            let rebind = try await run.waitForInputRebind(
+                after: bindingCountBefore,
+                guestAgentPID: agentPIDBefore
+            )
+            XCTAssertNotEqual(rebind.guestAgentPID, agentPIDBefore)
+            XCTAssertGreaterThan(rebind.bindingCount, bindingCountBefore)
+            XCTAssertFalse(run.bootHasEnded, "the development boot must remain active after the agent restarts.")
+            XCTAssertTrue(window.isVisible, "the original native window must remain visible after the agent restarts.")
+            XCTAssertTrue(
+                NSApplication.shared.windows.contains { $0 === window },
+                "the same native window must remain open instead of being replaced.")
+            XCTAssertEqual(window.windowNumber, originalWindowNumber)
+
+            _ = try await run.adb.shell("logcat -c")
+            let button = try await run.centre(of: Self.buttonID)
+            try await run.pointer().click(at: button)
+            try await run.drainInput()
+            let clickLines = try await run.fixtureLog { lines in
+                lines.contains { $0.contains(Self.clickPrefix) }
+            }
+            XCTAssertTrue(
+                clickLines.contains { $0.contains(Self.clickPrefix) },
+                "HelloText did not receive a native-window click after the input route rebound.")
+            XCTAssertFalse(run.bootHasEnded, "the development boot must remain active after the rebound click.")
+            try await run.closeWindowAndWaitForTaskVanished(package: Self.helloText)
+        }
+    }
+
     /// Verifies that the real native window shows its launch placeholder before DevBoot reveals the app frame.
     private static func waitForVisiblePlaceholder(
         in window: NSWindow,

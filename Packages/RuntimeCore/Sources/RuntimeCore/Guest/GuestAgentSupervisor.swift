@@ -187,6 +187,8 @@ public actor GuestAgentSupervisor {
     private var sendWaiters: [UUID: SendWaiter] = [:]
     /// When the recent protocol violations happened.
     private var violations: [ContinuousClock.Instant] = []
+    /// Secondary connections belong to the control session whose token they present.
+    private var secondaries: [GuestConnection] = []
 
     /// Creates a supervisor. The timings are the design values unless a test sets shorter ones.
     public init(
@@ -307,8 +309,19 @@ public actor GuestAgentSupervisor {
         hasConnected = false
         updateState(.stopped)
         resumeSendWaiters()
+        _ = await releaseSecondaries()
         await closing?.close()
         androidRestartContinuation.finish()
+    }
+
+    /// Registers a connection that presents the current control session token. The supervisor closes it when that
+    /// session ends or this supervisor stops.
+    func attachSecondary(_ secondary: GuestConnection, presenting token: Data) -> Bool {
+        guard state == .ready, connection != nil, session?.sessionToken == token else {
+            return false
+        }
+        secondaries.append(secondary)
+        return true
     }
 
     /// Reads the connection state and negotiated version together as one status snapshot.
@@ -699,6 +712,10 @@ public actor GuestAgentSupervisor {
         consumer?.cancel()
         consumer = nil
         updateState(.reconnecting)
+        let released = await releaseSecondaries()
+        if released > 0 {
+            logger.notice("The control session ended; \(released, .public) secondary connection(s) are released")
+        }
         await dead.close()
         guard generation == started, !Task.isCancelled, maintenance != nil else {
             return
@@ -764,6 +781,16 @@ public actor GuestAgentSupervisor {
                 delay = min(delay * 2, backoffMaximum)
             }
         }
+    }
+
+    /// Closes and removes the secondary connections of the ended control session.
+    private func releaseSecondaries() async -> Int {
+        let released = secondaries
+        secondaries.removeAll()
+        for secondary in released {
+            await secondary.close()
+        }
+        return released.count
     }
 
     /// Counts a protocol violation (guest-protocol.md §12.2), and reports whether the count within

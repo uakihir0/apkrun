@@ -259,7 +259,8 @@ public actor DevelopmentGuestAgent {
 
     /// The input channel of the control session (input.md §8, decision D11). The input connection opens on the first
     /// call, presents the control session's token, and is reused while it is usable. It is opened again when it is not
-    /// usable, or when the control session has another token, because a new control session refuses the old one.
+    /// usable, or when the control session has another token, because a new control session refuses the old one. The
+    /// supervisor closes the secondary connection when its control session ends.
     public func inputChannel() async throws(GuestAgentFailure) -> GuestInputChannel {
         try requireAvailable()
         guard await supervisor.statusSnapshot().state == .ready else {
@@ -293,6 +294,10 @@ public actor DevelopmentGuestAgent {
         if let kept = await reusableInputConnection(token: token) {
             await connection.close()
             return GuestInputChannel(connection: kept)
+        }
+        guard await supervisor.attachSecondary(connection, presenting: token) else {
+            await connection.close()
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
         }
         await inputConnection?.close()
         inputConnection = connection

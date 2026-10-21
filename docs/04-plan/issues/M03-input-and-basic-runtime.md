@@ -199,7 +199,7 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 **Tests.**
 - T1: the screenshot test in `Packages/WindowingCore/Tests/WindowingCoreSystemTests/`.
 - T2: `NativeWindowTests`: the window, a click, typing, and a Guest Agent snapshot that no longer lists HelloText's task before DevBoot exits cleanly after window close.
-- T3: G4 check `G4NativeWindow` ([test-strategy.md](../test-strategy.md) §5): 100 of 100 clicks, `Hello, APKRun 123!`, Esc goes to `screen main`, and the adb shell counter does not change. The test starts its screen recording after the active native window is ready and verifies that every posted host input event occurs while recording. Manually record C01-1 through C01-5 in [test-strategy.md](../test-strategy.md) §8.2; C01-5 launches from a new Terminal window.
+- T3: G4 check `G4NativeWindow` ([test-strategy.md](../test-strategy.md) §5): 100 of 100 clicks, `Hello, APKRun 123!`, Esc goes to `screen main`, and the adb shell counter does not change. The test records only the active native window with ScreenCaptureKit. It timestamps every posted host event and requires frames from the recording stream to bracket the event range; the completed movie must contain a readable video track. Manually record C01-1 through C01-5 in [test-strategy.md](../test-strategy.md) §8.2; C01-5 launches from a new Terminal window.
 
 **Done when.**
 - Launching the test opens a normal Mac window with HelloText. Mouse and keyboard input work.

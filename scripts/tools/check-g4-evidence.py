@@ -50,29 +50,44 @@ def summary_check(path: Path) -> tuple[bool, list[str]]:
         ("the native-window screenshot is listed", summary.get("window_capture") == EXPECTED_SCREENSHOT),
         ("the synchronized screen recording is listed", summary.get("screen_recording") == EXPECTED_RECORDING),
         (
-            "screencapture finished successfully",
-            type(summary.get("screen_recording_exit_code")) is int
-            and summary.get("screen_recording_exit_code") == 0,
+            "ScreenCaptureKit finished writing the movie without an error",
+            summary.get("screen_recording_finished_successfully") is True
+            and summary.get("screen_recording_failure") is None,
         ),
         (
-            "the recording was ready before host input",
-            summary.get("screen_recording_ready_before_first_host_event") is True,
+            "the movie contains a readable video track and positive duration",
+            type(summary.get("screen_recording_video_track_count")) is int
+            and summary.get("screen_recording_video_track_count") > 0
+            and type(summary.get("screen_recording_duration_ms")) is int
+            and summary.get("screen_recording_duration_ms") > 0,
         ),
         (
-            "every host input event was posted while screencapture was running",
+            "the stream delivered at least one captured video frame",
+            type(summary.get("screen_recording_frame_count")) is int
+            and summary.get("screen_recording_frame_count") > 0,
+        ),
+        (
+            "every host input event was recorded after the recording output started",
             type(summary.get("host_input_event_count")) is int
             and summary.get("host_input_event_count") > 0
             and type(summary.get("recorded_host_input_event_count")) is int
             and summary.get("recorded_host_input_event_count") == summary.get("host_input_event_count"),
         ),
         (
-            "the first and last host events fall within the recording process lifetime",
-            type(summary.get("first_host_input_offset_ms")) is int
-            and summary.get("first_host_input_offset_ms") >= 0
+            "the recording output started before the first host input event",
+            summary.get("screen_recording_started_before_first_host_event") is True,
+        ),
+        (
+            "captured movie frames bracket the first and last host input events",
+            type(summary.get("screen_recording_first_frame_offset_ms")) is int
+            and summary.get("screen_recording_first_frame_offset_ms") >= 0
+            and type(summary.get("first_host_input_offset_ms")) is int
+            and summary.get("first_host_input_offset_ms") >= summary.get("screen_recording_first_frame_offset_ms")
             and type(summary.get("last_host_input_offset_ms")) is int
             and summary.get("last_host_input_offset_ms") >= summary.get("first_host_input_offset_ms")
-            and type(summary.get("screen_recording_process_duration_ms")) is int
-            and summary.get("screen_recording_process_duration_ms") >= summary.get("last_host_input_offset_ms"),
+            and type(summary.get("screen_recording_last_frame_offset_ms")) is int
+            and summary.get("screen_recording_last_frame_offset_ms") >= summary.get("last_host_input_offset_ms")
+            and summary.get("screen_recording_frames_bracket_host_input") is True,
         ),
         (
             "the recorded movie has a positive byte count",

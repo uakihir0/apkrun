@@ -1,7 +1,9 @@
+import AVFoundation
 import AppKit
 import CoreGraphics
 import Darwin
 import Foundation
+import ScreenCaptureKit
 import Vision
 import XCTest
 
@@ -64,7 +66,7 @@ final class G4NativeWindowTests: XCTestCase {
                 timeout: .seconds(30)
             )
             windowCapture = "screenshots/hellotext.png"
-            try await session.startScreenRecording()
+            try await session.startScreenRecording(window: window)
             try await session.clickButtonOneHundredTimes(window: window, displaySize: displaySize)
             clicks = try await session.waitForClicks(Array(1...100), timeout: .seconds(30))
 
@@ -78,6 +80,7 @@ final class G4NativeWindowTests: XCTestCase {
             try session.type(Self.expectedText)
             try session.requestFieldText()
             typedText = try await session.waitForFieldText(timeout: .seconds(20))
+            try await session.waitForScreenRecordingFrameAfterLastHostInput(timeout: 20)
             let stopped = await session.stopLaunch()
             shellCountAfterEvents = stopped.adbCount
             launchExitCode = stopped.exitCode
@@ -183,28 +186,33 @@ final class G4NativeWindowTests: XCTestCase {
             result.append("the synchronized screen recording did not finish")
             return result
         }
-        if recording.exitCode != 0 {
-            result.append("screencapture exited with \(recording.exitCode.map(String.init) ?? "no status")")
-        }
         if recording.movieBytes <= 0 {
             result.append("the screen recording is missing or empty")
         }
-        if !recording.readyBeforeFirstHostEvent {
-            result.append("screen recording was not ready before the first host input event")
+        if !recording.finishedSuccessfully {
+            result.append("ScreenCaptureKit did not finish writing the recording")
+        }
+        if let failure = recording.failure {
+            result.append("screen recording failed: \(failure)")
+        }
+        if recording.videoTrackCount == 0 || recording.durationMilliseconds <= 0 {
+            result.append("the completed movie has no readable video track or positive duration")
+        }
+        if recording.frameCount == 0 {
+            result.append("ScreenCaptureKit did not deliver a recorded video frame")
         }
         if recording.hostInputEventCount == 0
             || recording.recordedHostInputEventCount != recording.hostInputEventCount
         {
             result.append(
-                "screen recording covered \(recording.recordedHostInputEventCount) of "
+                "ScreenCaptureKit recorded \(recording.recordedHostInputEventCount) of "
                     + "\(recording.hostInputEventCount) host input events")
         }
-        if recording.firstHostEventOffsetMilliseconds == nil
-            || recording.lastHostEventOffsetMilliseconds == nil
-            || recording.processDurationMilliseconds == nil
-            || recording.lastHostEventOffsetMilliseconds! > recording.processDurationMilliseconds!
-        {
-            result.append("host input event timestamps do not fit inside the recording process lifetime")
+        if !recording.startedBeforeFirstHostEvent {
+            result.append("the recording output did not start before the first host input event")
+        }
+        if !recording.framesBracketHostInput {
+            result.append("captured video frames do not bracket every host input event")
         }
         return result
     }
@@ -235,11 +243,24 @@ final class G4NativeWindowTests: XCTestCase {
             "apkrun_exit_code: \(launchExitCode.map(String.init) ?? "unavailable")",
             "apkrun_termination_reason: \(launchTerminationReason ?? "unavailable")",
             "screen_recording: \(recording?.path ?? "missing")",
-            "screen_recording_exit_code: \(recording?.exitCode.map(String.init) ?? "unavailable")",
             "screen_recording_bytes: \(recording?.movieBytes ?? 0)",
-            "screen_recording_ready_before_first_host_event: \(recording?.readyBeforeFirstHostEvent ?? false)",
+            "screen_recording_finished_successfully: \(recording?.finishedSuccessfully ?? false)",
+            "screen_recording_video_tracks: \(recording?.videoTrackCount ?? 0)",
+            "screen_recording_duration_ms: \(recording?.durationMilliseconds ?? 0)",
+            "screen_recording_frame_count: \(recording?.frameCount ?? 0)",
             "screen_recording_covered_host_input_events: "
                 + "\(recording?.recordedHostInputEventCount ?? 0)/\(recording?.hostInputEventCount ?? 0)",
+            "screen_recording_started_before_first_host_event: "
+                + "\(recording?.startedBeforeFirstHostEvent ?? false)",
+            "screen_recording_first_frame_offset_ms: "
+                + "\(recording?.firstFrameOffsetMilliseconds.map(String.init) ?? "unavailable")",
+            "screen_recording_first_host_input_offset_ms: "
+                + "\(recording?.firstHostEventOffsetMilliseconds.map(String.init) ?? "unavailable")",
+            "screen_recording_last_host_input_offset_ms: "
+                + "\(recording?.lastHostEventOffsetMilliseconds.map(String.init) ?? "unavailable")",
+            "screen_recording_last_frame_offset_ms: "
+                + "\(recording?.lastFrameOffsetMilliseconds.map(String.init) ?? "unavailable")",
+            "screen_recording_frames_bracket_host_input: \(recording?.framesBracketHostInput ?? false)",
             "result: \(failures.isEmpty ? "passed" : "failed")",
         ] + failures.map { "failure: \($0)" })
         .joined(separator: "\n") + "\n"
@@ -248,30 +269,199 @@ final class G4NativeWindowTests: XCTestCase {
 
 private struct G4RecordingEvidence {
     let path: String
-    let exitCode: Int32?
     let movieBytes: Int
-    let readyBeforeFirstHostEvent: Bool
+    let finishedSuccessfully: Bool
+    let failure: String?
+    let videoTrackCount: Int
+    let durationMilliseconds: Int
+    let frameCount: Int
     let hostInputEventCount: Int
     let recordedHostInputEventCount: Int
+    let startedBeforeFirstHostEvent: Bool
+    let firstFrameOffsetMilliseconds: Int?
     let firstHostEventOffsetMilliseconds: Int?
     let lastHostEventOffsetMilliseconds: Int?
-    let processDurationMilliseconds: Int?
+    let lastFrameOffsetMilliseconds: Int?
+    let framesBracketHostInput: Bool
 }
 
-private final class G4ProcessTerminationEvidence: @unchecked Sendable {
-    private let lock = NSLock()
-    private var terminationUptime: TimeInterval?
-
-    func recordTermination() {
-        lock.lock()
-        defer { lock.unlock() }
-        terminationUptime = ProcessInfo.processInfo.systemUptime
+private final class G4ScreenCaptureEvidence: NSObject, SCRecordingOutputDelegate, SCStreamDelegate, SCStreamOutput,
+    @unchecked Sendable
+{
+    private enum WaitCondition: Sendable {
+        case recordingStarted
+        case frameAfterLastHostInput
+        case recordingFinished
     }
 
-    var terminatedAt: TimeInterval? {
+    struct Snapshot {
+        let failure: String?
+        let recordingStartedMachTime: UInt64?
+        let finishedSuccessfully: Bool
+        let frameCount: Int
+        let firstFrameMachTime: UInt64?
+        let lastFrameMachTime: UInt64?
+        let recordedHostInputEventCount: Int
+        let firstHostInputMachTime: UInt64?
+        let lastHostInputMachTime: UInt64?
+    }
+
+    private let lock = NSLock()
+    private let changed = DispatchSemaphore(value: 0)
+    private var failure: String?
+    private var recordingStartedMachTime: UInt64?
+    private var finishedSuccessfully = false
+    private var frameCount = 0
+    private var firstFrameMachTime: UInt64?
+    private var lastFrameMachTime: UInt64?
+    private var recordedHostInputEventCount = 0
+    private var firstHostInputMachTime: UInt64?
+    private var lastHostInputMachTime: UInt64?
+
+    func recordingOutputDidStartRecording(_ recordingOutput: SCRecordingOutput) {
+        lock.lock()
+        if recordingStartedMachTime == nil {
+            recordingStartedMachTime = mach_absolute_time()
+        }
+        lock.unlock()
+        changed.signal()
+    }
+
+    func recordingOutput(_ recordingOutput: SCRecordingOutput, didFailWithError error: Error) {
+        recordFailure(String(describing: error))
+    }
+
+    func recordingOutputDidFinishRecording(_ recordingOutput: SCRecordingOutput) {
+        lock.lock()
+        finishedSuccessfully = failure == nil
+        lock.unlock()
+        changed.signal()
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        recordFailure("the capture stream stopped with an error: \(error)")
+    }
+
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        guard type == .screen,
+            let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
+            CVPixelBufferGetWidth(imageBuffer) > 0,
+            CVPixelBufferGetHeight(imageBuffer) > 0,
+            let attachmentArray = CMSampleBufferGetSampleAttachmentsArray(
+                sampleBuffer,
+                createIfNecessary: false
+            ) as? [[SCStreamFrameInfo: Any]],
+            let attachment = attachmentArray.first,
+            let statusValue = attachment[.status] as? Int,
+            let status = SCFrameStatus(rawValue: statusValue),
+            status == .started || status == .complete,
+            let displayTime = attachment[.displayTime] as? NSNumber
+        else {
+            return
+        }
+        recordFrame(at: displayTime.uint64Value)
+    }
+
+    func recordHostInput(at machTime: UInt64) throws {
         lock.lock()
         defer { lock.unlock() }
-        return terminationUptime
+        guard failure == nil, recordingStartedMachTime != nil else {
+            throw G4Failure.screenRecordingFailed(failure ?? "input arrived before recording started")
+        }
+        recordedHostInputEventCount += 1
+        if firstHostInputMachTime == nil {
+            firstHostInputMachTime = machTime
+        }
+        lastHostInputMachTime = machTime
+        changed.signal()
+    }
+
+    func waitForRecordingStart(timeout: TimeInterval) async throws {
+        try await waitFor(.recordingStarted, timeout: timeout)
+    }
+
+    func waitForFrameAfterLastHostInput(timeout: TimeInterval) async throws {
+        try await waitFor(.frameAfterLastHostInput, timeout: timeout)
+    }
+
+    func waitForRecordingFinish(timeout: TimeInterval) async throws {
+        try await waitFor(.recordingFinished, timeout: timeout)
+    }
+
+    func recordFailure(_ message: String) {
+        lock.lock()
+        if failure == nil {
+            failure = message
+        }
+        lock.unlock()
+        changed.signal()
+    }
+
+    func snapshot() -> Snapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        return Snapshot(
+            failure: failure,
+            recordingStartedMachTime: recordingStartedMachTime,
+            finishedSuccessfully: finishedSuccessfully,
+            frameCount: frameCount,
+            firstFrameMachTime: firstFrameMachTime,
+            lastFrameMachTime: lastFrameMachTime,
+            recordedHostInputEventCount: recordedHostInputEventCount,
+            firstHostInputMachTime: firstHostInputMachTime,
+            lastHostInputMachTime: lastHostInputMachTime
+        )
+    }
+
+    private func recordFrame(at machTime: UInt64) {
+        lock.lock()
+        frameCount += 1
+        if firstFrameMachTime == nil || machTime < firstFrameMachTime! {
+            firstFrameMachTime = machTime
+        }
+        if lastFrameMachTime == nil || machTime > lastFrameMachTime! {
+            lastFrameMachTime = machTime
+        }
+        lock.unlock()
+        changed.signal()
+    }
+
+    private func waitFor(_ condition: WaitCondition, timeout: TimeInterval) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try self.waitSynchronously(for: condition, timeout: timeout)
+        }.value
+    }
+
+    private func waitSynchronously(for condition: WaitCondition, timeout: TimeInterval) throws {
+        let deadline = DispatchTime.now() + timeout
+        while true {
+            let state = snapshot()
+            if let failure = state.failure {
+                throw G4Failure.screenRecordingFailed(failure)
+            }
+            switch condition {
+            case .recordingStarted where state.recordingStartedMachTime != nil:
+                return
+            case .frameAfterLastHostInput:
+                if let lastFrame = state.lastFrameMachTime,
+                    let lastInput = state.lastHostInputMachTime,
+                    lastFrame > lastInput
+                {
+                    return
+                }
+            case .recordingFinished where state.finishedSuccessfully:
+                return
+            default:
+                break
+            }
+            guard changed.wait(timeout: deadline) == .success else {
+                let finalState = snapshot()
+                if let failure = finalState.failure {
+                    throw G4Failure.screenRecordingFailed(failure)
+                }
+                throw G4Failure.screenRecordingFailed("timed out waiting for \(condition)")
+            }
+        }
     }
 }
 
@@ -344,7 +534,7 @@ private enum G4Failure: Error, CustomStringConvertible {
         case .screenRecordingFailed(let detail):
             "could not record the G4 native-window interactions: \(detail)"
         case .screenRecordingStoppedDuringInput:
-            "screencapture stopped while G4 was posting host input events"
+            "ScreenCaptureKit stopped while G4 was posting host input events"
         case .viewNotFound(let identifier):
             "HelloText did not expose \(identifier) in the UI hierarchy."
         case .malformedOutput(let detail):
@@ -358,24 +548,20 @@ private final class G4Session {
     private static let adbCountPrefix = "ADB shell invocations so far: "
     private static let windowTitle = "HelloText"
     private static let screenRecordingDurationSeconds = 120
-    private static let screenRecordingStopTimeout: Duration = .seconds(15)
-    private static let screenRecordingTerminateTimeout: Duration = .seconds(5)
-    private static let screenRecordingKillTimeout: Duration = .seconds(5)
+    private static let screenRecordingStartTimeout: TimeInterval = 30
+    private static let screenRecordingFinishTimeout: TimeInterval = 15
     private let inputs: G4Inputs
     let home: URL
     private var launch: Process?
     private var launchOutputFile: FileHandle?
     private let launchOutputURL: URL
     private var adbLogNumber = 0
-    private var screenRecorder: Process?
-    private var screenRecorderTerminationEvidence: G4ProcessTerminationEvidence?
-    private var screenRecorderLog: FileHandle?
+    private var screenStream: SCStream?
+    private var screenRecordingOutput: SCRecordingOutput?
+    private var screenCaptureEvidence: G4ScreenCaptureEvidence?
+    private var screenRecordingLimitTask: Task<Void, Never>?
     private let screenRecordingURL: URL
-    private var screenRecordingStartedAt: TimeInterval?
-    private var screenRecordingReadyAt: TimeInterval?
-    private var screenRecordingProcessExitedAt: TimeInterval?
-    private var firstHostInputAt: TimeInterval?
-    private var lastHostInputAt: TimeInterval?
+    private var screenRecordingStartMachTime: UInt64?
     private var hostInputEventCount = 0
     private var recordedHostInputEventCount = 0
 
@@ -538,106 +724,163 @@ private final class G4Session {
             .appendingPathComponent(name)
     }
 
-    func startScreenRecording() async throws {
-        let logURL = inputs.artifacts.appendingPathComponent("screen-recording.log")
-        guard FileManager.default.createFile(atPath: logURL.path, contents: nil) else {
-            throw G4Failure.screenRecordingFailed("could not create screen-recording.log")
+    func startScreenRecording(window targetWindow: G4Window) async throws {
+        let shareableContent = try await SCShareableContent.current
+        guard let window = shareableContent.windows.first(where: { $0.windowID == CGWindowID(targetWindow.number) })
+        else {
+            throw G4Failure.screenRecordingFailed("the HelloText native window is not available to ScreenCaptureKit")
         }
-        let log = try FileHandle(forWritingTo: logURL)
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        process.arguments = ["-v", "-V", "\(Self.screenRecordingDurationSeconds)", screenRecordingURL.path]
-        process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
-        process.standardOutput = log
-        process.standardError = log
-        let terminationEvidence = G4ProcessTerminationEvidence()
-        process.terminationHandler = { _ in terminationEvidence.recordTermination() }
-        screenRecorderTerminationEvidence = terminationEvidence
-        screenRecorder = process
-        screenRecorderLog = log
-        try process.run()
-        screenRecordingStartedAt = ProcessInfo.processInfo.systemUptime
+        if FileManager.default.fileExists(atPath: screenRecordingURL.path) {
+            try FileManager.default.removeItem(at: screenRecordingURL)
+        }
 
-        // Give screencapture time to attach to the current desktop before the test posts its first host event.
-        try await Task.sleep(for: .seconds(1))
-        guard process.isRunning else {
-            throw G4Failure.screenRecordingFailed("screencapture exited before the native-window interactions")
+        let configuration = SCStreamConfiguration()
+        configuration.width = max(2, Int(window.frame.width.rounded(.up)))
+        configuration.height = max(2, Int(window.frame.height.rounded(.up)))
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        configuration.queueDepth = 3
+        configuration.capturesAudio = false
+        configuration.ignoreShadowsSingleWindow = true
+
+        let recordingConfiguration = SCRecordingOutputConfiguration()
+        recordingConfiguration.outputURL = screenRecordingURL
+        recordingConfiguration.outputFileType = .mov
+        recordingConfiguration.videoCodecType = .h264
+
+        let evidence = G4ScreenCaptureEvidence()
+        let output = SCRecordingOutput(configuration: recordingConfiguration, delegate: evidence)
+        let stream = SCStream(
+            filter: SCContentFilter(desktopIndependentWindow: window),
+            configuration: configuration,
+            delegate: evidence
+        )
+        let outputQueue = DispatchQueue(label: "io.apkrun.acceptance.g4-screen-capture", qos: .userInitiated)
+        do {
+            try stream.addStreamOutput(evidence, type: .screen, sampleHandlerQueue: outputQueue)
+            try stream.addRecordingOutput(output)
+            screenCaptureEvidence = evidence
+            screenRecordingOutput = output
+            screenStream = stream
+            screenRecordingStartMachTime = mach_absolute_time()
+            try await stream.startCapture()
+            try await evidence.waitForRecordingStart(timeout: Self.screenRecordingStartTimeout)
+            screenRecordingLimitTask = Task { [weak self] in
+                do {
+                    try await Task.sleep(for: .seconds(Self.screenRecordingDurationSeconds))
+                } catch {
+                    return
+                }
+                await self?.stopRecordingAtDurationLimit()
+            }
+        } catch {
+            evidence.recordFailure(String(describing: error))
+            throw G4Failure.screenRecordingFailed(String(describing: error))
         }
-        screenRecordingReadyAt = ProcessInfo.processInfo.systemUptime
+    }
+
+    func waitForScreenRecordingFrameAfterLastHostInput(timeout: TimeInterval) async throws {
+        guard let screenCaptureEvidence else {
+            throw G4Failure.screenRecordingFailed("screen capture was not started")
+        }
+        try await screenCaptureEvidence.waitForFrameAfterLastHostInput(timeout: timeout)
     }
 
     func finishScreenRecording() async -> G4RecordingEvidence {
-        let recorder = screenRecorder
-        if let recorder, recorder.isRunning {
-            // SIGINT asks screencapture to finalize the movie immediately; -V remains the hard cap if the
-            // test process is interrupted before it can request a graceful stop.
-            kill(recorder.processIdentifier, SIGINT)
-            let deadline = ContinuousClock.now + Self.screenRecordingStopTimeout
-            while recorder.isRunning, ContinuousClock.now < deadline {
-                try? await Task.sleep(for: .milliseconds(100))
-            }
-            if recorder.isRunning {
-                kill(recorder.processIdentifier, SIGTERM)
-                let terminationDeadline = ContinuousClock.now + Self.screenRecordingTerminateTimeout
-                while recorder.isRunning, ContinuousClock.now < terminationDeadline {
-                    try? await Task.sleep(for: .milliseconds(100))
-                }
-                if recorder.isRunning {
-                    kill(recorder.processIdentifier, SIGKILL)
-                    let killDeadline = ContinuousClock.now + Self.screenRecordingKillTimeout
-                    while recorder.isRunning, ContinuousClock.now < killDeadline {
-                        try? await Task.sleep(for: .milliseconds(100))
-                    }
-                }
+        screenRecordingLimitTask?.cancel()
+        screenRecordingLimitTask = nil
+        let evidence = screenCaptureEvidence
+        if let screenStream {
+            do {
+                try await screenStream.stopCapture()
+            } catch {
+                evidence?.recordFailure("could not stop the capture stream: \(error)")
             }
         }
-        if let terminationEvidence = screenRecorderTerminationEvidence {
-            let deadline = ContinuousClock.now + .seconds(5)
-            while terminationEvidence.terminatedAt == nil, ContinuousClock.now < deadline {
-                try? await Task.sleep(for: .milliseconds(10))
+        if let evidence {
+            do {
+                try await evidence.waitForRecordingFinish(timeout: Self.screenRecordingFinishTimeout)
+            } catch {
+                evidence.recordFailure(String(describing: error))
             }
-            screenRecordingProcessExitedAt = terminationEvidence.terminatedAt
         }
-        let recorderExited = recorder.map { !$0.isRunning } ?? true
-        if recorderExited {
-            try? screenRecorderLog?.close()
-            screenRecorderLog = nil
+
+        var failure = evidence?.snapshot().failure
+        var videoTrackCount = 0
+        var durationMilliseconds = 0
+        if evidence?.snapshot().finishedSuccessfully == true {
+            do {
+                let movie = AVURLAsset(url: screenRecordingURL)
+                videoTrackCount = try await movie.load(.tracks).filter { $0.mediaType == .video }.count
+                let duration = try await movie.load(.duration)
+                let seconds = CMTimeGetSeconds(duration)
+                if seconds.isFinite, seconds > 0 {
+                    durationMilliseconds = Int(seconds * 1_000)
+                }
+            } catch {
+                failure = "the completed movie could not be read: \(error)"
+            }
         }
 
         let attributes = try? FileManager.default.attributesOfItem(atPath: screenRecordingURL.path)
         let movieBytes = (attributes?[.size] as? NSNumber)?.intValue ?? 0
-        let readyBeforeFirstHostEvent: Bool
-        if let readyAt = screenRecordingReadyAt, let firstEventAt = firstHostInputAt {
-            readyBeforeFirstHostEvent = readyAt <= firstEventAt
-        } else {
-            readyBeforeFirstHostEvent = false
-        }
-        func milliseconds(from start: TimeInterval?, to end: TimeInterval?) -> Int? {
-            guard let start, let end else {
+        let state = evidence?.snapshot()
+        let origin = screenRecordingStartMachTime
+        let firstFrame = state?.firstFrameMachTime
+        let lastFrame = state?.lastFrameMachTime
+        func milliseconds(from tick: UInt64?) -> Int? {
+            guard let tick, let origin, tick >= origin else {
                 return nil
             }
-            return Int((end - start) * 1_000)
+            var timebase = mach_timebase_info_data_t()
+            guard mach_timebase_info(&timebase) == KERN_SUCCESS, timebase.denom > 0 else {
+                return nil
+            }
+            let nanoseconds = Double(tick - origin) * Double(timebase.numer) / Double(timebase.denom)
+            return Int(nanoseconds / 1_000_000)
+        }
+        let firstInput = state?.firstHostInputMachTime
+        let lastInput = state?.lastHostInputMachTime
+        let startedBeforeFirstHostEvent =
+            state?.recordingStartedMachTime.map { startTime in
+                guard let firstInput else {
+                    return false
+                }
+                return startTime <= firstInput
+            } ?? false
+        let framesBracketHostInput: Bool
+        if let firstFrame, let firstInput, let lastInput, let lastFrame {
+            framesBracketHostInput = firstFrame <= firstInput && lastInput <= lastFrame
+        } else {
+            framesBracketHostInput = false
         }
         return G4RecordingEvidence(
             path: "screen-recording.mov",
-            exitCode: recorderExited && recorder?.terminationReason == .exit ? recorder?.terminationStatus : nil,
             movieBytes: movieBytes,
-            readyBeforeFirstHostEvent: readyBeforeFirstHostEvent,
+            finishedSuccessfully: state?.finishedSuccessfully == true && failure == nil,
+            failure: failure,
+            videoTrackCount: videoTrackCount,
+            durationMilliseconds: durationMilliseconds,
+            frameCount: state?.frameCount ?? 0,
             hostInputEventCount: hostInputEventCount,
-            recordedHostInputEventCount: recordedHostInputEventCount,
-            firstHostEventOffsetMilliseconds: milliseconds(
-                from: screenRecordingStartedAt,
-                to: firstHostInputAt
-            ),
-            lastHostEventOffsetMilliseconds: milliseconds(
-                from: screenRecordingStartedAt,
-                to: lastHostInputAt
-            ),
-            processDurationMilliseconds: milliseconds(
-                from: screenRecordingStartedAt,
-                to: screenRecordingProcessExitedAt
-            )
+            recordedHostInputEventCount: state?.recordedHostInputEventCount ?? 0,
+            startedBeforeFirstHostEvent: startedBeforeFirstHostEvent,
+            firstFrameOffsetMilliseconds: milliseconds(from: firstFrame),
+            firstHostEventOffsetMilliseconds: milliseconds(from: firstInput),
+            lastHostEventOffsetMilliseconds: milliseconds(from: lastInput),
+            lastFrameOffsetMilliseconds: milliseconds(from: lastFrame),
+            framesBracketHostInput: framesBracketHostInput
         )
+    }
+
+    private func stopRecordingAtDurationLimit() async {
+        screenCaptureEvidence?.recordFailure(
+            "recording exceeded the \(Self.screenRecordingDurationSeconds)-second limit"
+        )
+        do {
+            try await screenStream?.stopCapture()
+        } catch {
+            screenCaptureEvidence?.recordFailure("could not stop the capture stream at its duration limit: \(error)")
+        }
     }
 
     func waitForScreen(_ screen: String, timeout: Duration) async throws {
@@ -819,14 +1062,20 @@ private final class G4Session {
             "apkrun_exit_code": launchExitCode.map { $0 as Any } ?? NSNull(),
             "apkrun_termination_reason": launchTerminationReason.map { $0 as Any } ?? NSNull(),
             "screen_recording": recording?.path as Any? ?? NSNull(),
-            "screen_recording_exit_code": recording?.exitCode.map { $0 as Any } ?? NSNull(),
             "screen_recording_bytes": recording?.movieBytes ?? 0,
-            "screen_recording_ready_before_first_host_event": recording?.readyBeforeFirstHostEvent ?? false,
+            "screen_recording_finished_successfully": recording?.finishedSuccessfully ?? false,
+            "screen_recording_failure": recording?.failure.map { $0 as Any } ?? NSNull(),
+            "screen_recording_video_track_count": recording?.videoTrackCount ?? 0,
+            "screen_recording_duration_ms": recording?.durationMilliseconds ?? 0,
+            "screen_recording_frame_count": recording?.frameCount ?? 0,
             "host_input_event_count": recording?.hostInputEventCount ?? 0,
             "recorded_host_input_event_count": recording?.recordedHostInputEventCount ?? 0,
+            "screen_recording_started_before_first_host_event": recording?.startedBeforeFirstHostEvent ?? false,
+            "screen_recording_first_frame_offset_ms": recording?.firstFrameOffsetMilliseconds as Any? ?? NSNull(),
             "first_host_input_offset_ms": recording?.firstHostEventOffsetMilliseconds as Any? ?? NSNull(),
             "last_host_input_offset_ms": recording?.lastHostEventOffsetMilliseconds as Any? ?? NSNull(),
-            "screen_recording_process_duration_ms": recording?.processDurationMilliseconds as Any? ?? NSNull(),
+            "screen_recording_last_frame_offset_ms": recording?.lastFrameOffsetMilliseconds as Any? ?? NSNull(),
+            "screen_recording_frames_bracket_host_input": recording?.framesBracketHostInput ?? false,
             "failures": failures,
         ]
         let data = try JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted, .sortedKeys])
@@ -951,15 +1200,15 @@ private final class G4Session {
 
     private func noteHostInputEventRecorded() throws {
         hostInputEventCount += 1
-        guard let screenRecorder, screenRecorder.isRunning, screenRecordingReadyAt != nil else {
+        guard let screenCaptureEvidence else {
             throw G4Failure.screenRecordingStoppedDuringInput
         }
-        let now = ProcessInfo.processInfo.systemUptime
-        if firstHostInputAt == nil {
-            firstHostInputAt = now
+        do {
+            try screenCaptureEvidence.recordHostInput(at: mach_absolute_time())
+            recordedHostInputEventCount += 1
+        } catch {
+            throw G4Failure.screenRecordingStoppedDuringInput
         }
-        lastHostInputAt = now
-        recordedHostInputEventCount += 1
     }
 
     private func launchOutput() -> String {

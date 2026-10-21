@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Checks that scripts/run-gate.sh removes the dwell overrides before the first test run and records the
-# dwell in the G2 report (roadmap.md §2, gate G2). Static: the gate itself needs main, a clean tree, and the
-# lab's signing identity, so the check reads the script.
+# Checks that scripts/run-gate.sh removes the dwell overrides before the first test, records the G2 dwell, and
+# holds the VM lock for the full gate. Static: a gate needs main, a clean tree, and the lab's signing identity.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,3 +22,17 @@ if ! grep -qF "printf 'dwell_seconds: %s\\n' \"\$gate_dwell_seconds\"" "$gate_sc
     exit 1
 fi
 printf 'PASS run-gate dwell: overrides removed before the run, dwell recorded in the G2 report\n'
+
+lock_condition_line="$(grep -nF 'if [[ "${APKRUN_INTERNAL_RUN_GATE_LOCK_HELD:-}" != "$gate" ]]; then' "$gate_script" | head -1 | cut -d: -f1 || true)"
+lock_exec_line="$(grep -nF 'exec lockf -k /tmp/apkrun-vm.lock env APKRUN_INTERNAL_RUN_GATE_LOCK_HELD="$gate" "$0" "$gate"' "$gate_script" | head -1 | cut -d: -f1 || true)"
+producer_line="$(grep -n '^scripts/generate-project.sh$' "$gate_script" | head -1 | cut -d: -f1 || true)"
+if [[ -z "$lock_condition_line" || -z "$lock_exec_line" || -z "$producer_line" \
+    || "$lock_condition_line" -ge "$producer_line" || "$lock_exec_line" -ge "$producer_line" ]]; then
+    printf 'FAIL run-gate lock: every gate must acquire the VM lock before changing artifacts\n' >&2
+    exit 1
+fi
+if grep -qF 'lockf -k /tmp/apkrun-vm.lock xcodebuild test' "$gate_script"; then
+    printf 'FAIL run-gate lock: G3 must use the gate-wide lock without acquiring it recursively\n' >&2
+    exit 1
+fi
+printf 'PASS run-gate lock: G1, G2, and G3 hold the VM lock through artifact production and testing\n'

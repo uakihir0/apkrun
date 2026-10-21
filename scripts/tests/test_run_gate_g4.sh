@@ -61,7 +61,7 @@ fi
 printf 'PASS G4 builds and verifies staged inputs before its serialized acceptance run\n'
 
 capture_window="$(grep -n 'try await session.captureVisibleHelloTextWindow' "$acceptance_test" | cut -d: -f1)"
-start_recording="$(grep -n 'try await session.startScreenRecording()' "$acceptance_test" | cut -d: -f1)"
+start_recording="$(grep -n 'try await session.startScreenRecording(window: window)' "$acceptance_test" | cut -d: -f1)"
 first_interaction="$(grep -n 'try await session.clickButtonOneHundredTimes' "$acceptance_test" | cut -d: -f1)"
 if (( capture_window >= start_recording || start_recording >= first_interaction )); then
     fail "the test must verify and capture visible HelloText before recording and host input"
@@ -72,18 +72,30 @@ then
     fail "the HelloText screenshot must pass a visible-content OCR check"
 fi
 if ! grep -Fq 'screenRecordingDurationSeconds = 120' "$acceptance_test" \
-    || ! grep -Fq 'screenRecordingStopTimeout: Duration = .seconds(15)' "$acceptance_test" \
-    || ! grep -Fq 'screenRecordingTerminateTimeout: Duration = .seconds(5)' "$acceptance_test" \
-    || ! grep -Fq 'screenRecordingKillTimeout: Duration = .seconds(5)' "$acceptance_test" \
-    || ! grep -Fq 'process.arguments = ["-v", "-V", "\(Self.screenRecordingDurationSeconds)", screenRecordingURL.path]' \
-        "$acceptance_test" \
-    || ! grep -Fq 'kill(recorder.processIdentifier, SIGINT)' "$acceptance_test" \
-    || ! grep -Fq 'try await Task.sleep(for: .seconds(1))' "$acceptance_test"
+    || ! grep -Fq 'screenRecordingStartTimeout: TimeInterval = 30' "$acceptance_test" \
+    || ! grep -Fq 'screenRecordingFinishTimeout: TimeInterval = 15' "$acceptance_test" \
+    || ! grep -Fq 'SCRecordingOutput(configuration: recordingConfiguration, delegate: evidence)' "$acceptance_test" \
+    || ! grep -Fq 'try await stream.startCapture()' "$acceptance_test" \
+    || ! grep -Fq 'try await evidence.waitForRecordingStart' "$acceptance_test" \
+    || ! grep -Fq 'try await screenStream.stopCapture()' "$acceptance_test" \
+    || ! grep -Fq 'try await evidence.waitForRecordingFinish' "$acceptance_test" \
+    || grep -Fq 'try await Task.sleep(for: .seconds(1))' "$acceptance_test"
 then
-    fail "the test must cap recording at 120 seconds, stop it promptly, and wait for it to attach"
+    fail "the test must cap ScreenCaptureKit, await recording-start and finish markers, and avoid a fixed startup delay"
 fi
 if [[ "$(grep -Fc 'try noteHostInputEventRecorded()' "$acceptance_test")" -ne 3 ]]; then
-    fail "mouse and keyboard event paths must check that screencapture is running after each event"
+    fail "mouse and keyboard event paths must timestamp every posted host event"
+fi
+if ! grep -Fq 'attachment[.displayTime]' "$acceptance_test" \
+    || ! grep -Fq 'mach_absolute_time()' "$acceptance_test" \
+    || ! grep -Fq 'waitForScreenRecordingFrameAfterLastHostInput' "$acceptance_test"
+then
+    fail "the test must compare captured-frame timestamps with host-input timestamps"
+fi
+last_input_frame="$(grep -n 'waitForScreenRecordingFrameAfterLastHostInput' "$acceptance_test" | head -1 | cut -d: -f1)"
+stop_launch="$(grep -n 'let stopped = await session.stopLaunch()' "$acceptance_test" | head -1 | cut -d: -f1)"
+if (( last_input_frame >= stop_launch )); then
+    fail "the test must observe a captured frame after the last input before closing HelloText"
 fi
 g4_branch_start="$(grep -n '^    g4_status=0$' "$gate" | cut -d: -f1)"
 g4_branch_end="$(grep -n '^    exit "\$gate_status"$' "$gate" | tail -1 | cut -d: -f1)"

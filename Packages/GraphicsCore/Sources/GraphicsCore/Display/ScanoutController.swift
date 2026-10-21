@@ -12,7 +12,7 @@ public struct ScanoutPoolHandle: @unchecked Sendable {
     public let surfaces: [IOSurface]
     /// Completed guest frames for this presenter generation.
     public let frames: AsyncStream<ScanoutFrame>
-    /// The highest frame sequence assigned to a blit, including frames that have not been offered yet.
+    /// The highest sequence assigned to an accepted flush, including requests still held by the scheduler.
     public var latestIssuedFrameSequence: UInt64 {
         latestIssuedFrameSequenceProvider()
     }

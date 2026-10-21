@@ -28,7 +28,7 @@ final class ScanoutFrameSequence: @unchecked Sendable {
     private let lock = NSLock()
     private var nextValue: UInt64 = 1
 
-    /// The highest frame sequence assigned to a blit, even when its fence has not signaled yet.
+    /// The highest sequence assigned to an accepted flush, including a request that is still pending.
     var latestIssued: UInt64 {
         lock.withLock { nextValue &- 1 }
     }
@@ -43,11 +43,12 @@ final class ScanoutFrameSequence: @unchecked Sendable {
 
 /// Presents one scanout into a pool of IOSurfaces (graphics.md §6.1 to §6.3, #24).
 ///
-/// A flush of the resource bound to the scanout becomes one blit into a free buffer. Only one blit is in flight at a
-/// time, and the newest flush that waits replaces the older one (latest frame wins). A serial waiter waits on the
-/// fence of each blit. When the fence signals, the buffer is offered and `frameReady` is emitted. The consumer reports
-/// `frameDisplayed`, which makes the older buffers reusable. The blit only copies on the GPU, so a frame never passes
-/// through host memory.
+/// A flush of the resource bound to the scanout receives its sequence when accepted, before it enters the scheduler.
+/// It becomes a blit into a free buffer when one is available. Only one blit is in flight at a time, and the newest
+/// flush that waits replaces the older one (latest frame wins). A serial waiter waits on the fence of each blit.
+/// When the fence signals, the buffer is offered and `frameReady` is emitted. The consumer reports `frameDisplayed`,
+/// which makes the older buffers reusable. The blit only copies on the GPU, so a frame never passes through host
+/// memory.
 public final class ScanoutPresenter: @unchecked Sendable {
     /// The stall timeout of the completion waiter (graphics.md §6.2 step 4).
     static let stallTimeoutNanoseconds: UInt64 = 100_000_000
@@ -152,7 +153,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
         pool.generation
     }
 
-    /// The highest frame sequence assigned to a blit in this scanout, even if it is not ready to display yet.
+    /// The highest sequence assigned to an accepted flush, even if it has not started blitting yet.
     var latestIssuedFrameSequence: UInt64 {
         sequenceSource.latestIssued
     }
@@ -170,7 +171,11 @@ public final class ScanoutPresenter: @unchecked Sendable {
     func flush(resource: UInt32, source: VirtioGPURect) -> VirGLRenderWork? {
         lock.withLock {
             guard !isClosed, !isReconfiguring else { return nil }
-            let request = PresentRequest(resource: resource, source: source)
+            let request = PresentRequest(
+                resource: resource,
+                source: source,
+                sequence: sequenceSource.take()
+            )
             guard let runnable = scheduler.submit(request) else {
                 return nil
             }
@@ -262,7 +267,6 @@ public final class ScanoutPresenter: @unchecked Sendable {
         guard let index = pool.acquire() else {
             return nil
         }
-        let sequence = sequenceSource.take()
         scheduler.beginBlit()
         let target = targets[index]
         return { [self] engine in
@@ -272,7 +276,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
                     sourceRect: request.source,
                     into: target
                 )
-                self.blitSubmitted(fence, index: index, sequence: sequence)
+                self.blitSubmitted(fence, index: index, sequence: request.sequence)
                 return nil
             } catch {
                 self.blitFailed(index: index)
@@ -365,6 +369,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
 struct PresentRequest: Equatable, Sendable {
     let resource: UInt32
     let source: VirtioGPURect
+    let sequence: UInt64
 }
 
 /// Carries the IOSurfaces into the render-thread closure, which only reads their identity.

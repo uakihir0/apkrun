@@ -342,6 +342,50 @@ func embeddedRuntimeServiceReconcilesTerminalGuestSnapshotThroughMultiWindowCall
 }
 
 @Test(.timeLimit(.minutes(1)))
+func terminalReconciliationAfterReconnectDoesNotSendOnTheClosedInputChannel() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent()
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let stopSignal = DevBootStopSignal()
+    let route = DevInputRoute()
+    let channel = ReconciliationInputChannel()
+    let (reconciled, continuation) = AsyncStream.makeStream(of: AppSessionSnapshot.self)
+    let service = EmbeddedRuntimeService(
+        developerDisplay: display,
+        stopSignal: stopSignal,
+        inputRoute: route,
+        onTerminalSessionReconciled: { snapshot in continuation.yield(snapshot) }
+    )
+    defer {
+        display.finish()
+        continuation.finish()
+    }
+
+    _ = try await service.requestSession(packageID: "io.apkrun.fixture.hellotext")
+    _ = try await service.displayReady()
+    _ = try await service.beginLaunch()
+    _ = try await service.launched(taskID: 23)
+    _ = try await service.firstFramePresented()
+    await service.attachGuestAgent(guest)
+
+    await route.bind(router: InputRouter(channel: channel))
+    await route.focusChanged(true, generation: 1)
+    await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(RuntimeAPI.InputTimestamp(hostNanos: 1))]))
+    #expect(await channel.batches.count == 1)
+    await channel.disconnect()
+
+    await guest.resynchronize(with: guestSnapshot(displays: [0]))
+    for await snapshot in reconciled {
+        if snapshot.state == .ended(.appExited) {
+            break
+        }
+    }
+
+    #expect(await route.counters().droppedChannel == 0)
+    #expect(await channel.batches.count == 1)
+    #expect(!(await route.canBind()))
+}
+
+@Test(.timeLimit(.minutes(1)))
 func embeddedRuntimeServiceSignalsSingleWindowWhenSnapshotShowsAppExited() async throws {
     let guest = FakeEmbeddedSessionGuestAgent()
     let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
@@ -877,6 +921,33 @@ private actor FakeEmbeddedSessionGuestAgent: EmbeddedSessionGuestAgent {
 
     func resynchronize(with snapshot: GuestSnapshotState) async {
         await resynchronizationHandler?(snapshot)
+    }
+}
+
+private actor ReconciliationInputChannel: InputChannel {
+    nonisolated let acks: AsyncStream<GPInputAck>
+    private(set) var batches: [GPInputBatch] = []
+    private var disconnected = false
+
+    init() {
+        let stream = AsyncStream.makeStream(of: GPInputAck.self)
+        stream.continuation.finish()
+        acks = stream.stream
+    }
+
+    func send(_ batch: GPInputBatch) async throws {
+        batches.append(batch)
+        if disconnected {
+            throw GuestProtocolFailure.disconnected
+        }
+    }
+
+    var pendingBytes: Int {
+        0
+    }
+
+    func disconnect() {
+        disconnected = true
     }
 }
 

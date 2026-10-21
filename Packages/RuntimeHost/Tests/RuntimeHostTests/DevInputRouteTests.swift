@@ -426,7 +426,7 @@ func aTerminalRouteCannotRebindAfterGuestReconciliation() async {
     let route = DevInputRoute()
     await route.bind(router: InputRouter(channel: oldChannel))
     await route.focusChanged(true, generation: 1)
-    let cleanupTask = await route.detachForGuestReconciliation()
+    let cleanupTask = await route.detachForGuestReconciliation(cancelGuestState: false)
 
     #expect(!(await route.canBind()))
     #expect(await route.bind(router: InputRouter(channel: newChannel), session: .app(UUID())) == nil)
@@ -435,6 +435,22 @@ func aTerminalRouteCannotRebindAfterGuestReconciliation() async {
 
     #expect(await oldChannel.batches.count == 1)
     #expect(await newChannel.batches.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func guestReconciliationDetachesWithoutSendingCancellationOnTheOldChannel() async {
+    let channel = CollectingInputChannel()
+    let route = DevInputRoute()
+    await route.bind(router: InputRouter(channel: channel))
+    await route.focusChanged(true, generation: 1)
+    await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
+
+    let cleanupTask = await route.detachForGuestReconciliation(cancelGuestState: false)
+    await cleanupTask?.value
+
+    #expect(await channel.batches.count == 1)
+    #expect(await route.counters().droppedChannel == 0)
+    #expect(!(await route.canBind()))
 }
 
 @Test(.timeLimit(.minutes(1)))

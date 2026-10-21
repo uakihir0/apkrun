@@ -161,8 +161,9 @@ struct DevInputBinding: Sendable {
             }
             try? await Task.sleep(for: pollingInterval)
         }
+        let cancelGuestState = await channel?.isUsable() ?? false
         for route in routes {
-            await route.unbind()
+            await route.unbind(cancelGuestState: cancelGuestState)
         }
     }
 }

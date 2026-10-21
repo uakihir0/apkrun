@@ -258,6 +258,23 @@ private struct G4RecordingEvidence {
     let processDurationMilliseconds: Int?
 }
 
+private final class G4ProcessTerminationEvidence: @unchecked Sendable {
+    private let lock = NSLock()
+    private var terminationUptime: TimeInterval?
+
+    func recordTermination() {
+        lock.lock()
+        defer { lock.unlock() }
+        terminationUptime = ProcessInfo.processInfo.systemUptime
+    }
+
+    var terminatedAt: TimeInterval? {
+        lock.lock()
+        defer { lock.unlock() }
+        return terminationUptime
+    }
+}
+
 private struct G4Inputs {
     let cli: URL
     let bundle: URL
@@ -347,11 +364,12 @@ private final class G4Session {
     private let launchOutputURL: URL
     private var adbLogNumber = 0
     private var screenRecorder: Process?
+    private var screenRecorderTerminationEvidence: G4ProcessTerminationEvidence?
     private var screenRecorderLog: FileHandle?
     private let screenRecordingURL: URL
     private var screenRecordingStartedAt: TimeInterval?
     private var screenRecordingReadyAt: TimeInterval?
-    private var screenRecordingFinishedAt: TimeInterval?
+    private var screenRecordingProcessExitedAt: TimeInterval?
     private var firstHostInputAt: TimeInterval?
     private var lastHostInputAt: TimeInterval?
     private var hostInputEventCount = 0
@@ -528,10 +546,13 @@ private final class G4Session {
         process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
         process.standardOutput = log
         process.standardError = log
+        let terminationEvidence = G4ProcessTerminationEvidence()
+        process.terminationHandler = { _ in terminationEvidence.recordTermination() }
+        screenRecorderTerminationEvidence = terminationEvidence
         screenRecorder = process
         screenRecorderLog = log
-        screenRecordingStartedAt = ProcessInfo.processInfo.systemUptime
         try process.run()
+        screenRecordingStartedAt = ProcessInfo.processInfo.systemUptime
 
         // Give screencapture time to attach to the current desktop before the test posts its first host event.
         try await Task.sleep(for: .seconds(1))
@@ -562,7 +583,13 @@ private final class G4Session {
                 }
             }
         }
-        screenRecordingFinishedAt = ProcessInfo.processInfo.systemUptime
+        if let terminationEvidence = screenRecorderTerminationEvidence {
+            let deadline = ContinuousClock.now + .seconds(5)
+            while terminationEvidence.terminatedAt == nil, ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            screenRecordingProcessExitedAt = terminationEvidence.terminatedAt
+        }
         try? screenRecorderLog?.close()
         screenRecorderLog = nil
 
@@ -597,7 +624,7 @@ private final class G4Session {
             ),
             processDurationMilliseconds: milliseconds(
                 from: screenRecordingStartedAt,
-                to: screenRecordingFinishedAt
+                to: screenRecordingProcessExitedAt
             )
         )
     }

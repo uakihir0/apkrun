@@ -479,6 +479,7 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     let harness = try VirGLHarness(logger: APKLogger(category: GraphicsLogCategory.device, sink: sink))
     harness.engineRef.engine.fail("resourceAttachBacking")
     harness.engineRef.engine.fail("submit")
+    harness.guest.failMapping(address: 0x2000)
 
     let control = harness.send([
         gpuRequest(.resourceCreate3D, body: .resourceCreate3D(resource3D(id: 5))),
@@ -494,7 +495,7 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
             .resourceAttachBacking,
             body: .resourceAttachBacking(
                 resourceID: 5,
-                entries: [VirtioGPUMemoryEntry(address: .max, length: 1)]
+                entries: [VirtioGPUMemoryEntry(address: 0x2000, length: 64)]
             )
         ),
         gpuRequest(.ctxCreate, body: .ctxCreate(contextInit: 0, debugName: []), contextID: 1),
@@ -517,6 +518,7 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
             $0.contains("command was rejected")
                 && $0.contains("control_ordinal=4 command=262 context_id=0 resource_id=5")
                 && $0.contains("response_error=4613")
+                && $0.contains("rejection_reason=guest_memory_mapping")
         })
     #expect(
         messages.contains {

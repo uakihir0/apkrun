@@ -80,25 +80,7 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 
 **Goal.** After the guest agent restarts, pointer input works again in the same window without ending the boot. Today the bound channel stays after the loss, so input stays dead until the boot ends. This is a follow-up of #25.
 
-**Out of scope.**
-- The restart policy itself. The change only adds the rebind.
-
-**Steps.**
-1. **Release on loss.** When `DevelopmentGuestAgent` reports the agent lost, `DevInputBinding` releases the bound channel. **Check:** a T1 test shows no send on the dead channel.
-2. **Count drops.** Events sent on the dead channel count as `input.dropped.channel` ([input.md](../../02-design/input.md) §11). **Check:** the T1 test reads the counter.
-3. **Rebind.** When `GuestAgentSupervisor` reports the new agent ready, bind display 0 again. **Check:** `GuestAgentSupervisorTests` covers the loss and the rebind.
-
-**Tests.**
-- T0 and T1: `GuestAgentSupervisorTests` (loss, rebind, dropped events), and the existing supervisor tests still pass.
-- T2: kill the agent during a development boot with a window, then click. The click reaches HelloText. Needs a Mac with a VM.
-- T3: none.
-
-**Done when.**
-- A T1 test in `GuestAgentSupervisorTests` covers the loss and the rebind. Events on the dead channel count as `input.dropped.channel`.
-- On a device, after a forced kill of the agent, a click in the window reaches the app again, and the boot is not restarted.
-
-**Pitfalls.**
-- Changing what counts as a death changes the restart policy. Keep the death rule as it is.
+**Result.** `DevInputBinding` releases the old input channel when its Guest Agent session ends and rebinds display 0 when a new session is ready. `GuestAgentSupervisorTests` covers loss, rebind, and `input.dropped.channel`; `AndroidInputTests.testWindowInputRebindsAfterGuestAgentRestartWithoutRebooting` verifies on a VM that a click reaches HelloText after `apkrun_guestd` restarts without changing Android's boot ID.
 
 ---
 

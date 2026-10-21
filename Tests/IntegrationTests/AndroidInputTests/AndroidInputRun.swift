@@ -365,6 +365,7 @@ final class AndroidInputRun {
         window.close()
 
         let deadline = ContinuousClock.now + timeout
+        var successfulStopObserved = false
         while ContinuousClock.now < deadline {
             if let failure = bootLog.failureEvent ?? bootLog.closePolicyFailure(package: package) {
                 throw AndroidInputRunFailure.bootEnded("after closing \(package): \(failure)")
@@ -376,7 +377,8 @@ final class AndroidInputRun {
                 currentTaskIDs.isEmpty,
                 !bootLog.hasEnded
             {
-                return
+                successfulStopObserved = true
+                break
             }
             if bootLog.hasEnded {
                 throw AndroidInputRunFailure.bootEnded(
@@ -385,10 +387,28 @@ final class AndroidInputRun {
             }
             try await Task.sleep(for: .milliseconds(10))
         }
-        throw AndroidInputRunFailure.timedOut(
-            "successful StopApplication and TaskVanished before DevBoot shutdown; original task IDs "
-                + "\(baselineTaskIDs.sorted()), remaining task IDs "
-                + "\(await taskSnapshotProbe.taskIDs(package: package).sorted()), boot: \(bootLog.recent)")
+        guard successfulStopObserved else {
+            throw AndroidInputRunFailure.timedOut(
+                "successful StopApplication and TaskVanished before DevBoot shutdown; original task IDs "
+                    + "\(baselineTaskIDs.sorted()), remaining task IDs "
+                    + "\(await taskSnapshotProbe.taskIDs(package: package).sorted()), boot: \(bootLog.recent)")
+        }
+
+        let shutdownDeadline = ContinuousClock.now + timeout
+        while !bootLog.hasEnded, ContinuousClock.now < shutdownDeadline {
+            if let failure = bootLog.failureEvent ?? bootLog.closePolicyFailure(package: package) {
+                throw AndroidInputRunFailure.bootEnded("after successful app close request: \(failure)")
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard bootLog.hasEnded else {
+            throw AndroidInputRunFailure.timedOut(
+                "DevBoot to exit after a successful StopApplication and TaskVanished; boot: \(bootLog.recent)")
+        }
+        if let failure = bootLog.failureEvent {
+            throw AndroidInputRunFailure.bootEnded("after the app close request: \(failure)")
+        }
+        await boot?.value
     }
 
     /// The route counters after all previously received view events have been routed.

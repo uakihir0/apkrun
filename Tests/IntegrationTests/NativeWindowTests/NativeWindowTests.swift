@@ -47,6 +47,9 @@ final class NativeWindowTests: XCTestCase {
             XCTAssertTrue(window.styleMask.contains(.titled))
             XCTAssertTrue(window.styleMask.contains(.closable))
             XCTAssertTrue(window.styleMask.contains(.miniaturizable))
+            XCTAssertFalse(
+                window.styleMask.contains(.resizable),
+                "The #27 display-0 window stays fixed-size until #68 implements live resize.")
             XCTAssertNil(window.toolbar, "The app window must not show emulator toolbar chrome.")
             try await run.waitForAppFrameAtPlaceholder()
             XCTAssertEqual(

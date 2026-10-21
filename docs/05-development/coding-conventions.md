@@ -20,7 +20,7 @@ This guide holds the rules for writing code in APKRun: Swift, the C and Objectiv
 | Swift | `swift-format` of the pinned Xcode toolchain | `swift-format lint --strict` | `.swift-format` (production), `.swift-format-tests` (tests) | `check-format.sh`, `lint` |
 | C, Objective-C (GraphicsBridge) | none | compiler warnings, errors in CI | `Package.swift` C settings; `GCC_TREAT_WARNINGS_AS_ERRORS` | `build` |
 | Kotlin | ktfmt 0.64, `--kotlinlang-style`, through `ktfmtCheck` and `ktfmtFormat` in `Guest/build.gradle.kts` | compiler warnings; errors in CI planned, not yet set | `Guest/gradle/libs.versions.toml` | `check-format.sh`, `lint` |
-| Rust | `cargo fmt` | `cargo clippy --all-targets -- -D warnings` | `Guest/vsockd/rustfmt.toml` (planned, #35) | `cargo fmt --check` in `lint`; clippy in `test-linux` (planned) |
+| Rust | `cargo fmt` | `cargo clippy --all-targets -- -D warnings` | `Guest/vsockd/rustfmt.toml` | `cargo fmt --check` in `lint`; clippy in `test-vsockd` |
 | Python | `ruff format` | `ruff check` | `Images/tools/pyproject.toml` `[tool.ruff]`: `target-version = "py312"`, line length 100, rules `E`, `F`, `I`, `UP`, `ANN` | `test-images` |
 | Protobuf | none | `buf lint` (`STANDARD`, `enum_zero_value_suffix: _UNSPECIFIED`); `buf breaking` (planned, #34) | `Packages/GuestProtocol/buf.yaml` | `scripts/check-protos.sh` |
 | JSON with a schema | none | JSON Schema validation | the `*.schema.json` beside each file | `test-linux` (planned) |
@@ -268,7 +268,7 @@ Swift (GraphicsCore) → GraphicsBridge C API (gb_*) → C / Objective-C impleme
 
 ---
 
-## 9. Rust: apkrun_vsockd (planned)
+## 9. Rust: apkrun_vsockd
 
 - **Crate.** `Guest/vsockd`, edition 2021. Dependencies are `std`, `libc`, `log`, and `android_logger` only ([build-system.md](build-system.md) §7.2).
 - **Behavior limits** ([guest-components.md](../02-design/guest-components.md) §10): a static port table with no configuration file, one thread per direction, at most 8 connections per port, a 64 KiB copy buffer, and a peer check for `VMADDR_CID_HOST`. The bridge never parses or logs payload bytes. Changing any limit is a design change.

@@ -45,7 +45,7 @@ The CI jobs that run each tier are in [../05-development/build-system.md](../05-
 - **Definition.** Code runs in the test process. Allowed: fakes (§3.2), injected clocks, golden files, and a per-test temporary directory for plain reads and writes.
 - **Not allowed.** Network (including loopback), subprocesses, XPC, Metal, `codesign`, the Keychain, real user defaults, sleeping, wall-clock time, and file system features beyond plain files (APFS clones, holes, modes, extended attributes). Those are T1.
 - **Location.** Swift: `Packages/<Module>/Tests/<Module>Tests/`, `CLI/apkrun/Tests/`, and `Apps/<App>/Tests/`. Kotlin: `src/test/` of pure modules without Android APIs (`Guest/protocol`). Rust: `cargo test` in `Guest/vsockd`. Python: `Images/tools/tests/`.
-- **Runner.** Swift (`test-swift`), Kotlin (`test-guest`), and Python (`test-images`) T0 may run on fresh GitHub-hosted macOS VMs. Rust (`test-linux`) runs on `ubuntu-latest`. `swift test` passes on a clean checkout without Gradle, AOSP, or network (NFR-DEV-02). T0 tests that read APKs use the committed copies of §4.1.
+- **Runner.** Swift (`test-swift`), Kotlin (`test-guest`), and Python (`test-images`) T0 may run on fresh GitHub-hosted macOS VMs. Rust (`test-vsockd`) runs on `ubuntu-latest`. `swift test` passes on a clean checkout without Gradle, AOSP, or network (NFR-DEV-02). T0 tests that read APKs use the committed copies of §4.1.
 - **Budget.** The whole T0 set finishes in 10 minutes. One test takes at most 1 s.
 - **Flakiness.** None tolerated. No retry (§2.7).
 
@@ -63,7 +63,7 @@ The CI jobs that run each tier are in [../05-development/build-system.md](../05-
   - Linux: the `vsock_loopback` test of `apkrun_vsockd`;
   - short fuzz runs (§7.2).
 - **Location.** Swift: `Packages/<Module>/Tests/<Module>SystemTests/`, and UI tests in `Apps/<App>/UITests/` ([../05-development/build-system.md](../05-development/build-system.md) §2.1). Kotlin: `src/test/` of `Guest/agentruntime`, `Guest/guestd`, and `Guest/APKRunStore`. Fuzz: `Packages/<Module>/Tests/<Module>Fuzz/`, corpora in `Tests/Fixtures/fuzz/<target>/`.
-- **Runner.** The bare-metal `apkrun-ci` Mac with a GUI session (§3.1), or the developer's Apple silicon Mac before merge. `vsock_loopback` runs in `test-linux`. A T1 test whose resource is missing (Metal device, GUI session, APFS scratch volume) skips with a message that names the resource. On its required runner, a skip for a missing resource fails the job.
+- **Runner.** Host-specific T1 tests run on a runner with the required resource. Mac tests use the bare-metal `apkrun-ci` with a GUI session (§3.1), or the developer's Apple silicon Mac before merge. Linux-only `vsock_loopback` tests run on Linux; `test-vsockd` attempts the test when the Ubuntu runner provides the kernel module and reports a notice when it does not. A Linux host with the module is required to claim this T1 check passed when CI skips it. A T1 test whose resource is missing (Metal device, GUI session, APFS scratch volume) skips with a message that names the resource. On its required runner, a skip for a missing resource fails the job.
 - **Budget.** 20 minutes for the PR set. Fuzz targets run 60 s each in `fuzz-short`.
 - **Flakiness.** No retry (§2.7).
 
@@ -141,7 +141,7 @@ Runner labels and setup: [../05-development/environment-setup.md](../05-developm
 
 | Machine | Runs |
 |---|---|
-| `ubuntu-latest` | `test-linux`: `cargo test`, the T1 `vsock_loopback` test; the F-Droid test repository build (`fdroid update`) |
+| `ubuntu-latest` | `test-vsockd`: Rust tests and lints, plus T1 `vsock_loopback` when the kernel module is available; `test-linux` (planned): remaining Linux checks and F-Droid test repository build (`fdroid update`) |
 | `xcode-27` (fresh GitHub-hosted macOS 27 VM) | `ci.yml`: static checks, builds, T0 Swift tests |
 | `apkrun-ci` (self-hosted Apple Silicon, macOS 27, user `apkrun-ci` with automatic login, GUI session, APFS scratch volume) | trusted default-branch and manual T1 Swift, Kotlin, and Python checks, XCUITest, `fuzz-short`; nightly `fuzz-long` |
 | `apkrun-lab`, the reference Mac (OQ-02: M1, 16 GB, bare metal, §3.6) | trusted `main` and nightly runs, gate checks, NFR numbers and baselines, release smoke matrix, notarization, manual checklists |
@@ -204,7 +204,7 @@ Release checks (`scripts/release/check-release-build.sh`, run by the `build` job
 - A release image manifest contains no `androidboot.apkrun.test.*` key ([../02-design/android-image.md](../02-design/android-image.md) §6.2).
 - `ImageTrustStore` in a Release build contains only release key IDs ([../02-design/android-image.md](../02-design/android-image.md) §10.1).
 
-Raw-ADB allowlist. The raw-ADB lint of #28 rejects `adb shell` and `pm ` strings outside `ADBStoreAgentChannel` and `AdbClient`. These paths are exempt because they use ADB directly: `scripts/dev/` (#25), `Tests/Compatibility/` (the `monkey` run, [../02-design/diagnostics.md](../02-design/diagnostics.md) §10.4), and `Images/tools/reference/` (the reference capture). T2 tests that need a shell command go through `AdbClient`.
+Raw-ADB allowlist. The raw-ADB lint of #28 rejects `adb shell` and `pm ` strings outside `AdbClient`, the command owner. Control paths use `AndroidControlChannel` ([../02-design/guest-protocol.md](../02-design/guest-protocol.md) §13.1); the remaining ADB uses are provisioning, PackageInstaller, developer diagnostics, and documented fallbacks. `scripts/dev/` (#25), `Tests/Compatibility/` (the `monkey` run, [../02-design/diagnostics.md](../02-design/diagnostics.md) §10.4), and `Images/tools/reference/` (the reference capture) remain exempt. T2 tests that need a shell command go through `AdbClient`.
 
 ### 3.4 Linux test guest
 

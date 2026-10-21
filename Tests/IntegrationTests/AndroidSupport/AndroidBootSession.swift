@@ -61,49 +61,51 @@ final class AndroidBootSession: @unchecked Sendable {
         let bundle = try bundleDirectory()
         // The run's own home and developer ADB port (test-strategy §3.10).
         let run = try VMRunResources.new(environment: ProcessInfo.processInfo.environment)
-        let home = run.home
-        let paths = run.paths
-        // The signed bundle goes through the install path of `apkrun dev image install`, as the G2 check does.
-        let images = ImageStore(paths: paths, trust: .standard(), diagnostics: .live(paths: paths))
-        let image = try await images.install(from: .directory(bundle))
-        let store = InstanceStore(paths: paths, diagnostics: .live(paths: paths))
-        _ = try await store.resetAndroid(image: image, sizing: .default)
-        let diagnostics = DiagnosticsContext.live(paths: paths)
-        let supervisor = RuntimeSupervisor(
-            image: image,
-            instanceStore: store,
-            options: BootOptions(
-                gpuProfile: .headless,
-                developerMode: developerMode,
-                captureLogcat: false,
-                adbHostPort: run.adbHostPort
-            ),
-            diagnostics: diagnostics,
-            environment: AndroidTestEnvironment.current(),
-            guestAgentBundle: guestAgentBundle
-        )
-        let capture = ConsoleCapture()
-        let events = supervisor.events
-        let captureTask = Task {
-            for await event in events {
-                if case .console(let bytes) = event {
-                    capture.append(bytes)
-                }
-            }
-        }
-        return AndroidBootSession(
-            supervisor: supervisor,
-            capture: capture,
-            paths: paths,
-            runtimeContext: DevelopmentRuntimeContext(
+        return try await VMRunResources.withCleanupOnFailure(run) {
+            let home = run.home
+            let paths = run.paths
+            // The signed bundle goes through the install path of `apkrun dev image install`, as the G2 check does.
+            let images = ImageStore(paths: paths, trust: .standard(), diagnostics: .live(paths: paths))
+            let image = try await images.install(from: .directory(bundle))
+            let store = InstanceStore(paths: paths, diagnostics: .live(paths: paths))
+            _ = try await store.resetAndroid(image: image, sizing: .default)
+            let diagnostics = DiagnosticsContext.live(paths: paths)
+            let supervisor = RuntimeSupervisor(
                 image: image,
                 instanceStore: store,
+                options: BootOptions(
+                    gpuProfile: .headless,
+                    developerMode: developerMode,
+                    captureLogcat: false,
+                    adbHostPort: run.adbHostPort
+                ),
+                diagnostics: diagnostics,
+                environment: AndroidTestEnvironment.current(),
+                guestAgentBundle: guestAgentBundle
+            )
+            let capture = ConsoleCapture()
+            let events = supervisor.events
+            let captureTask = Task {
+                for await event in events {
+                    if case .console(let bytes) = event {
+                        capture.append(bytes)
+                    }
+                }
+            }
+            return AndroidBootSession(
                 supervisor: supervisor,
-                diagnostics: diagnostics
-            ),
-            home: home,
-            captureTask: captureTask
-        )
+                capture: capture,
+                paths: paths,
+                runtimeContext: DevelopmentRuntimeContext(
+                    image: image,
+                    instanceStore: store,
+                    supervisor: supervisor,
+                    diagnostics: diagnostics
+                ),
+                home: home,
+                captureTask: captureTask
+            )
+        }
     }
 
     /// Runs `body` on a fresh boot, and stops Android and removes the instance afterwards, also when `body` throws.

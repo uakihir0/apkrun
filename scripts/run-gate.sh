@@ -12,6 +12,12 @@ if [[ "$gate" != G1 && "$gate" != G2 && "$gate" != G3 ]]; then
     exit 64
 fi
 
+if [[ "${APKRUN_INTERNAL_RUN_GATE_LOCK_HELD:-}" != "$gate:$$" ]]; then
+    # The locked wrapper writes its own PID into the marker before exec, so an inherited marker cannot skip locking.
+    exec lockf -k /tmp/apkrun-vm.lock /bin/bash -c \
+        'APKRUN_INTERNAL_RUN_GATE_LOCK_HELD="$1:$$" exec "$2" "$1"' _ "$gate" "$0"
+fi
+
 if [[ -z "${APKRUN_TEST_DEVELOPMENT_TEAM:-}" || -z "${APKRUN_TEST_CODE_SIGN_IDENTITY:-}" ]]; then
     printf 'run-gate: set APKRUN_TEST_DEVELOPMENT_TEAM and APKRUN_TEST_CODE_SIGN_IDENTITY for the lab Apple Development certificate\n' >&2
     exit 78
@@ -201,8 +207,8 @@ xcodebuild test \
     "APKRUN_CI=1" \
     "${signing_arguments[@]}"
 if [[ "$gate" == G3 ]]; then
-    # The G3 check runs one boot in the G3 configuration (graphics.md §14). It is serialised with the other VM runs
-    # by lockf (test-strategy §3.6). The artifacts stay outside ~/Documents until the run ends, and the gate copies them.
+    # The gate-wide lock also covers G3's artifact producers and VM test (test-strategy §3.10).
+    # The artifacts stay outside ~/Documents until the run ends, and the gate copies them.
     artifacts="$APKRUN_TEST_LINUX_DIR/g3-artifacts"
     rm -rf "$artifacts"
     recording="$gate_dir/screen-recording.mov"
@@ -212,7 +218,7 @@ if [[ "$gate" == G3 ]]; then
     screencapture -v -V 1800 "$recording" &
     recording_pid=$!
     g3_status=0
-    lockf -k /tmp/apkrun-vm.lock xcodebuild test \
+    xcodebuild test \
         -project APKRun.xcodeproj \
         -scheme AcceptanceTests \
         -testPlan AcceptanceTests \

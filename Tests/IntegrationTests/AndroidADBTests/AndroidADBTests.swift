@@ -63,22 +63,25 @@ final class AndroidADBTests: XCTestCase {
         }
     }
 
-    /// Without developer mode, no ADB forwarder starts, nothing listens on the product ADB port, and Android still
-    /// boots.
-    ///
-    /// The product port is checked as well as the forwarder, because a developer's `apkrun dev boot` uses it. A
-    /// developer boot that runs at the same time fails this check. That is the one shared-port check left
-    /// (test-strategy §3.10).
+    /// Without developer mode, this VM starts no ADB forwarder, and Android still boots. Existing listeners on the
+    /// product port must remain untouched so this check can run alongside a developer boot (test-strategy §3.10).
     func testDeveloperModeOffListensOnNoPort() async throws {
+        let productPort = BootOptions.defaultADBHostPort
+        let existingListeners = try Self.listeningAddresses(port: productPort)
         try await AndroidBootSession.withBoot(developerMode: false) { session in
             let readyState = await session.supervisor.state
             XCTAssertEqual(readyState, .ready)
 
             let boundPort = await session.supervisor.developmentADBHostPort
             XCTAssertNil(boundPort, "developer mode off starts no ADB forwarder")
-            let productPort = BootOptions.defaultADBHostPort
-            XCTAssertTrue(try Self.listeningAddresses(port: productPort).isEmpty)
-            XCTAssertFalse(Self.isAccepting(address: "127.0.0.1", port: productPort))
+            XCTAssertEqual(
+                try Self.listeningAddresses(port: productPort),
+                existingListeners,
+                "developer mode off must not change listeners on the product ADB port"
+            )
+            if existingListeners.isEmpty {
+                XCTAssertFalse(Self.isAccepting(address: "127.0.0.1", port: productPort))
+            }
 
             await session.supervisor.stop()
         }

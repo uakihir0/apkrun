@@ -4,10 +4,39 @@ import Testing
 
 /// T0 checks of the per-run resources of the VM tests (test-strategy §3.10). They create only directories
 /// under `/tmp`, and they start no VM.
+private enum RunSetupTestError: Error {
+    case expectedFailure
+}
 
 @Test func adbPortIsKernelChosenWhenTheVariableIsUnsetOrEmpty() throws {
     #expect(try VMRunResources.adbHostPort(environment: [:]) == 0)
-    #expect(try VMRunResources.adbHostPort(environment: ["APKRUN_TEST_ADB_PORT": ""]) == 0)
+    #expect(try VMRunResources.adbHostPort(environment: [VMRunResources.adbPortVariable: ""]) == 0)
+    #expect(try VMRunResources.adbHostPort(environment: [VMRunResources.testRunnerADBPortVariable: ""]) == 0)
+}
+
+@Test func adbPortReadsTheXcodeTestRunnerVariable() throws {
+    #expect(try VMRunResources.adbHostPort(environment: [VMRunResources.testRunnerADBPortVariable: "49321"]) == 49321)
+    #expect(
+        throws: VMRunResourcesFailure.invalidADBPort("nope")
+    ) {
+        try VMRunResources.adbHostPort(environment: [VMRunResources.testRunnerADBPortVariable: "nope"])
+    }
+}
+
+@Test func adbPortVariableTakesPrecedenceOverTheXcodeTestRunnerVariable() throws {
+    let environment = [
+        VMRunResources.adbPortVariable: "49321",
+        VMRunResources.testRunnerADBPortVariable: "49322",
+    ]
+    #expect(try VMRunResources.adbHostPort(environment: environment) == 49321)
+}
+
+@Test func adbPortUsesTheXcodeTestRunnerVariableWhenTheRegularVariableIsEmpty() throws {
+    let environment = [
+        VMRunResources.adbPortVariable: "",
+        VMRunResources.testRunnerADBPortVariable: "49321",
+    ]
+    #expect(try VMRunResources.adbHostPort(environment: environment) == 49321)
 }
 
 @Test func adbPortAcceptsEveryPortNumber() throws {
@@ -109,6 +138,19 @@ import Testing
         let attributes = try FileManager.default.attributesOfItem(atPath: run.home.path)
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o700)
     }
+}
+
+@Test func aFailedRunSetupRemovesItsHome() async throws {
+    let run = try VMRunResources.new(environment: [:])
+    #expect(FileManager.default.fileExists(atPath: run.home.path))
+
+    await #expect(throws: RunSetupTestError.expectedFailure) {
+        try await VMRunResources.withCleanupOnFailure(run) {
+            throw RunSetupTestError.expectedFailure
+        }
+    }
+
+    #expect(!FileManager.default.fileExists(atPath: run.home.path))
 }
 
 // MARK: - Removing a home

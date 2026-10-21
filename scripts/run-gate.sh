@@ -12,8 +12,10 @@ if [[ "$gate" != G1 && "$gate" != G2 && "$gate" != G3 ]]; then
     exit 64
 fi
 
-if [[ "${APKRUN_INTERNAL_RUN_GATE_LOCK_HELD:-}" != "$gate" ]]; then
-    exec lockf -k /tmp/apkrun-vm.lock env APKRUN_INTERNAL_RUN_GATE_LOCK_HELD="$gate" "$0" "$gate"
+if [[ "${APKRUN_INTERNAL_RUN_GATE_LOCK_HELD:-}" != "$gate:$$" ]]; then
+    # The locked wrapper writes its own PID into the marker before exec, so an inherited marker cannot skip locking.
+    exec lockf -k /tmp/apkrun-vm.lock /bin/bash -c \
+        'APKRUN_INTERNAL_RUN_GATE_LOCK_HELD="$1:$$" exec "$2" "$1"' _ "$gate" "$0"
 fi
 
 if [[ -z "${APKRUN_TEST_DEVELOPMENT_TEAM:-}" || -z "${APKRUN_TEST_CODE_SIGN_IDENTITY:-}" ]]; then

@@ -230,7 +230,7 @@ Main / GuestAgentApplication
 `SystemServices` (in `Guest/agentruntime`) wraps the hidden framework interfaces. It gets each service with `ServiceManager.getService(name)` and `I*.Stub.asInterface`, through reflection, as scrcpy does. Each wrapper:
 
 - resolves its methods once at start and records which signatures exist. Android changes hidden signatures between releases, so each wrapper has variants selected by `Build.VERSION.SDK_INT` and by what is present at run time;
-- fails the owning capability, not the agent, when a method is missing. The capability is then left out of `Hello`, and `GetHealth` reports the missing method name;
+- fails the owning capability, not the agent, when a method is missing. The capability is then left out of `Hello`. When `health.v1` remains available, `GetHealth` reports missing method names; when a missing health method disables `health.v1`, startup diagnostics report the unavailable method because `GetHealth` cannot be called;
 - is covered by an instrumented test on each supported image (§12).
 
 Hidden API restrictions do not apply to `app_process` or to platform-signed system apps, so the same wrappers work in both modes. On the custom image, public or system APIs are used where they exist (`Context.getSystemService`). The reflection wrappers are used only where they do not.

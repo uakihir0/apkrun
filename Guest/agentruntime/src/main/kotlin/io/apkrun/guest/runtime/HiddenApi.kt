@@ -1,5 +1,8 @@
 package io.apkrun.guest.runtime
 
+import android.os.IBinder
+import android.os.Parcel
+import android.os.Parcelable
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
@@ -88,6 +91,109 @@ object HiddenApi {
             }
         return proxy(interfaceClass) { method, _ ->
             if (method.name == "asBinder") binder else null
+        }
+    }
+
+    /**
+     * Builds a Binder-backed implementation of a hidden callback interface. This is used for
+     * `IActivityController`, whose callbacks cross from system_server and therefore cannot be
+     * implemented as an in-process Java proxy alone.
+     */
+    fun binderCallback(
+        interfaceClass: Class<*>,
+        onCall: (Method, Array<Any?>) -> Any?,
+    ): Any {
+        val stubClass =
+            checkNotNull(classOrNull("${interfaceClass.name}\$Stub")) {
+                "the ${interfaceClass.name} Stub is missing"
+            }
+        val descriptor =
+            stubClass.getDeclaredField("DESCRIPTOR").apply { isAccessible = true }.get(null)
+                as String
+        val calls =
+            interfaceClass.methods
+                .mapNotNull { method ->
+                    val code =
+                        try {
+                            stubClass
+                                .getDeclaredField("TRANSACTION_${method.name}")
+                                .apply { isAccessible = true }
+                                .getInt(null)
+                        } catch (_: ReflectiveOperationException) {
+                            null
+                        }
+                    code?.let { it to method }
+                }
+                .toMap()
+        val binder =
+            object : android.os.Binder() {
+                override fun onTransact(
+                    code: Int,
+                    data: Parcel,
+                    reply: Parcel?,
+                    flags: Int,
+                ): Boolean {
+                    if (code == IBinder.INTERFACE_TRANSACTION) {
+                        reply?.writeString(descriptor)
+                        return true
+                    }
+                    val method = calls[code] ?: return super.onTransact(code, data, reply, flags)
+                    data.enforceInterface(descriptor)
+                    val arguments =
+                        method.parameterTypes
+                            .map { type -> readCallbackArgument(data, type) }
+                            .toTypedArray()
+                    val result = onCall(method, arguments)
+                    reply?.writeNoException()
+                    writeCallbackResult(reply, method.returnType, result)
+                    return true
+                }
+            }
+        return Proxy.newProxyInstance(interfaceClass.classLoader, arrayOf(interfaceClass)) {
+            proxy,
+            method,
+            arguments ->
+            when (method.name) {
+                "asBinder" -> binder
+                "toString" -> "apkrun-callback(${interfaceClass.simpleName})"
+                "hashCode" -> System.identityHashCode(proxy)
+                "equals" -> proxy === arguments?.firstOrNull()
+                else -> onCall(method, arguments ?: emptyArray())
+            }
+        }
+    }
+
+    private fun readCallbackArgument(parcel: Parcel, type: Class<*>): Any? =
+        when (type) {
+            String::class.java -> parcel.readString()
+            Int::class.javaPrimitiveType -> parcel.readInt()
+            Long::class.javaPrimitiveType -> parcel.readLong()
+            Boolean::class.javaPrimitiveType -> parcel.readInt() != 0
+            else ->
+                if (Parcelable::class.java.isAssignableFrom(type)) {
+                    val creator = type.getField("CREATOR").get(null) as Parcelable.Creator<*>
+                    parcel.readTypedObject(creator)
+                } else {
+                    throw IllegalArgumentException(
+                        "the callback parameter ${type.name} is not supported"
+                    )
+                }
+        }
+
+    private fun writeCallbackResult(reply: Parcel?, type: Class<*>, value: Any?) {
+        when (type) {
+            Void.TYPE -> Unit
+            Boolean::class.javaPrimitiveType -> reply?.writeInt(if (value == true) 1 else 0)
+            Int::class.javaPrimitiveType -> reply?.writeInt((value as? Number)?.toInt() ?: 0)
+            Long::class.javaPrimitiveType -> reply?.writeLong((value as? Number)?.toLong() ?: 0L)
+            else ->
+                if (Parcelable::class.java.isAssignableFrom(type)) {
+                    reply?.writeTypedObject(value as? Parcelable, 0)
+                } else {
+                    throw IllegalArgumentException(
+                        "the callback result ${type.name} is not supported"
+                    )
+                }
         }
     }
 

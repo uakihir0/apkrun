@@ -20,6 +20,10 @@ class SessionManager(now: () -> Long, private val publishToken: (ByteArray?) -> 
     /** The control connection that holds the open session, or null. */
     private var control: Closeable? = null
 
+    /** Open control and secondary connections, reported by Health.open_sessions. */
+    @Synchronized
+    fun openConnectionCount(): Int = (if (control == null) 0 else 1) + secondaries.size
+
     /**
      * Admits the control connection [connection], or returns the reason to refuse it. A handshake
      * that is in progress refuses another one. An active session refuses a new connection, and a

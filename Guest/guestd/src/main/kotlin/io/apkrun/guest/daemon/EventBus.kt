@@ -1,6 +1,7 @@
 package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.FrameWriter
+import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.v1.Event
 
 /**
@@ -12,12 +13,17 @@ import io.apkrun.guest.protocol.v1.Event
 class EventBus {
     private var writer: FrameWriter? = null
     private var sequence = 0L
+    private var enabledCapabilities: Set<GuestCapability> = GuestCapability.entries.toSet()
 
     /** Makes [target] the connection of the events, and restarts the sequence. */
     @Synchronized
-    fun attach(target: FrameWriter) {
+    fun attach(
+        target: FrameWriter,
+        enabled: Set<GuestCapability> = GuestCapability.entries.toSet(),
+    ) {
         writer = target
         sequence = 0L
+        enabledCapabilities = enabled
     }
 
     /** Stops the events of [target] when it is still the attached connection. */
@@ -25,6 +31,7 @@ class EventBus {
     fun detach(target: FrameWriter) {
         if (writer === target) {
             writer = null
+            enabledCapabilities = emptySet()
         }
     }
 
@@ -33,7 +40,8 @@ class EventBus {
      * published.
      */
     @Synchronized
-    fun publish(build: (Event.Builder) -> Unit) {
+    fun publish(capability: GuestCapability, build: (Event.Builder) -> Unit) {
+        if (capability !in enabledCapabilities) return
         val target = writer ?: return
         sequence += 1
         val event = Event.newBuilder().setSeq(sequence)

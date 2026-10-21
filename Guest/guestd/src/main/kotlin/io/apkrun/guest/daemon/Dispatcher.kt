@@ -65,7 +65,7 @@ class Dispatcher(
             // caller, which still
             // has to send the response.
             return coroutineScope {
-                val work = async { withTimeoutOrNull(timeout) { run(request) } }
+                val work = async { withTimeoutOrNull(timeout) { run(id, request) } }
                 active[id] = work
                 work.await()
                     ?: failure(
@@ -82,7 +82,7 @@ class Dispatcher(
             }
             throw error
         } catch (error: GuestFailure) {
-            return Response.newBuilder().setError(error.toGuestError()).build()
+            return response(error.toGuestError())
         } catch (error: ServiceMethodMissing) {
             return failure(
                 GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
@@ -127,7 +127,7 @@ class Dispatcher(
         job.cancel()
     }
 
-    private suspend fun run(request: Request): Response =
+    private suspend fun run(id: Long, request: Request): Response =
         when (request.opCase) {
             Request.OpCase.PING ->
                 Response.newBuilder()
@@ -138,7 +138,7 @@ class Dispatcher(
                     )
                     .build()
             Request.OpCase.GET_HEALTH ->
-                Response.newBuilder().setGetHealth(operations.health()).build()
+                Response.newBuilder().setGetHealth(operations.getHealth()).build()
             Request.OpCase.GET_SNAPSHOT ->
                 Response.newBuilder().setGetSnapshot(operations.snapshot()).build()
             Request.OpCase.SET_DISPLAY_POLICY -> {
@@ -163,6 +163,13 @@ class Dispatcher(
                 operations.stopApplication(request.stopApplication)
                 Response.newBuilder().setStopApplication(Empty.getDefaultInstance()).build()
             }
+            Request.OpCase.MOVE_TASK_TO_DISPLAY -> {
+                val move = request.moveTaskToDisplay
+                withDisplayLock(move.displayId) { operations.moveTaskToDisplay(move) }
+                Response.newBuilder().setMoveTaskToDisplay(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.LIST_TASKS ->
+                Response.newBuilder().setListTasks(operations.listTasks(request.listTasks)).build()
             Request.OpCase.QUERY_PACKAGE ->
                 Response.newBuilder()
                     .setQueryPackage(operations.queryPackage(request.queryPackage))
@@ -242,6 +249,10 @@ class Dispatcher(
                 operations.setSharedFolderAccess(request.setSharedFolderAccess)
                 Response.newBuilder().setSetSharedFolderAccess(Empty.getDefaultInstance()).build()
             }
+            Request.OpCase.SHUTDOWN -> {
+                operations.shutdown(id, request.shutdown)
+                Response.newBuilder().setShutdown(Empty.getDefaultInstance()).build()
+            }
             else ->
                 failure(
                     GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
@@ -278,11 +289,12 @@ class Dispatcher(
             when (request.opCase) {
                 Request.OpCase.PING,
                 Request.OpCase.GET_SNAPSHOT,
-                Request.OpCase.GET_HEALTH -> GuestCapability.CORE
                 Request.OpCase.SET_DISPLAY_POLICY,
                 Request.OpCase.CLEAR_DISPLAY -> GuestCapability.DISPLAY
                 Request.OpCase.LAUNCH_APPLICATION,
-                Request.OpCase.STOP_APPLICATION -> GuestCapability.LAUNCH
+                Request.OpCase.STOP_APPLICATION,
+                Request.OpCase.MOVE_TASK_TO_DISPLAY,
+                Request.OpCase.LIST_TASKS -> GuestCapability.LAUNCH
                 Request.OpCase.FOCUS_DISPLAY -> GuestCapability.INPUT
                 Request.OpCase.QUERY_PACKAGE,
                 Request.OpCase.LIST_PACKAGES -> GuestCapability.PACKAGES
@@ -308,11 +320,13 @@ class Dispatcher(
                 Request.OpCase.IMPORT_FILES,
                 Request.OpCase.RESOLVE_EXPORT -> GuestCapability.FILES
                 Request.OpCase.SET_SHARED_FOLDER_ACCESS -> GuestCapability.FILES_SHARED
+                Request.OpCase.GET_HEALTH -> GuestCapability.HEALTH
+                Request.OpCase.SHUTDOWN -> GuestCapability.SYSTEM
                 else -> null
             }
 
         /** A response with only an error, and no result. */
-        fun failure(
+        private fun failureResponse(
             code: GuestErrorCode,
             message: String,
             detail: Map<String, String> = emptyMap(),
@@ -321,4 +335,14 @@ class Dispatcher(
                 .setError(GuestFailure(code, message, detail).toGuestError())
                 .build()
     }
+
+    /** A response with only an error; the health snapshot keeps the latest failure. */
+    private fun failure(
+        code: GuestErrorCode,
+        message: String,
+        detail: Map<String, String> = emptyMap(),
+    ): Response = failureResponse(code, message, detail).also { operations.recordFailure(it.error) }
+
+    private fun response(error: io.apkrun.guest.protocol.v1.GuestError): Response =
+        Response.newBuilder().setError(error).build().also { operations.recordFailure(error) }
 }

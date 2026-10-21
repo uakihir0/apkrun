@@ -8,12 +8,15 @@ import io.apkrun.guest.protocol.v1.CollectDiagnostics
 import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
 import io.apkrun.guest.protocol.v1.DismissNotification
 import io.apkrun.guest.protocol.v1.ExportStart
+import io.apkrun.guest.protocol.v1.GuestError
 import io.apkrun.guest.protocol.v1.Health
 import io.apkrun.guest.protocol.v1.ImportFiles
 import io.apkrun.guest.protocol.v1.ImportResult
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
 import io.apkrun.guest.protocol.v1.ListPackages
+import io.apkrun.guest.protocol.v1.ListTasks
+import io.apkrun.guest.protocol.v1.MoveTaskToDisplay
 import io.apkrun.guest.protocol.v1.PackageInfo
 import io.apkrun.guest.protocol.v1.PackageList
 import io.apkrun.guest.protocol.v1.QueryPackage
@@ -27,9 +30,11 @@ import io.apkrun.guest.protocol.v1.SetNotificationForwarding
 import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
 import io.apkrun.guest.protocol.v1.SetTimeZone
 import io.apkrun.guest.protocol.v1.SetUrlRedirect
+import io.apkrun.guest.protocol.v1.Shutdown
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
 import io.apkrun.guest.protocol.v1.SyncTime
+import io.apkrun.guest.protocol.v1.TaskList
 
 /**
  * The operations of the development agent that the [Dispatcher] calls (guest-protocol.md §7.1). The
@@ -54,6 +59,12 @@ interface AgentOperations {
 
     /** Stops every task belonging to the package (launch.v1). */
     suspend fun stopApplication(request: StopApplication)
+
+    /** Moves one root task to a display (launch.v1). */
+    fun moveTaskToDisplay(request: MoveTaskToDisplay)
+
+    /** Returns tasks on the requested display, or all tasks when no display is supplied. */
+    fun listTasks(request: ListTasks): TaskList
 
     /** Moves the focus to the top task of a display (input.v1). */
     fun focusDisplay(displayId: Int)
@@ -108,4 +119,19 @@ interface AgentOperations {
 
     /** Replaces the shared-folder roots and per-package access map (files.shared.v1, §6.4). */
     fun setSharedFolderAccess(request: SetSharedFolderAccess)
+
+    /** Returns the health snapshot (health.v1). */
+    fun getHealth(): Health
+
+    /** Prepares an Android shutdown that runs only after response [requestId] is written. */
+    fun shutdown(requestId: Long, request: Shutdown)
+
+    /** Called after the connection has flushed response [requestId]. */
+    fun responseSent(requestId: Long) {}
+
+    /** Called when the response for [requestId] could not be written. */
+    fun responseFailed(requestId: Long) {}
+
+    /** Records the most recent operation failure for the health snapshot. */
+    fun recordFailure(error: GuestError) {}
 }

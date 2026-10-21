@@ -76,7 +76,7 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 | Milestone | M3 (v0.1) |
 | Depends on | #25 |
 | Design | [input.md](../../02-design/input.md) §3, §7.1; [guest-components.md](../../02-design/guest-components.md) §3.3 |
-| Code | `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevInputBinding.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Guest/DevelopmentGuestAgent.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Guest/GuestAgentSupervisor.swift`, `Packages/RuntimeHost/Tests/RuntimeHostTests/DevInputBindingTests.swift`, `Packages/RuntimeCore/Tests/RuntimeCoreTests/GuestAgentSupervisorTests.swift`, `Tests/IntegrationTests/AndroidInputTests/AndroidInputRun.swift`, `Tests/IntegrationTests/NativeWindowTests/NativeWindowTests.swift` |
+| Code | `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevInputBinding.swift`, `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevInputRoute.swift`, `Packages/RuntimeHost/Sources/RuntimeHost/EmbeddedRuntimeService.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Guest/DevelopmentGuestAgent.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Guest/GuestAgentSupervisor.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Input/InputRouter.swift`, `Packages/RuntimeHost/Tests/RuntimeHostTests/DevInputBindingTests.swift`, `Packages/RuntimeCore/Tests/RuntimeCoreTests/GuestAgentSupervisorTests.swift`, `Tests/IntegrationTests/AndroidInputTests/AndroidInputRun.swift`, `Tests/IntegrationTests/NativeWindowTests/NativeWindowTests.swift` |
 
 **Goal.** After the guest agent restarts, pointer input works again in the same window without ending the boot. Today the bound channel stays after the loss, so input stays dead until the boot ends. This is a follow-up of #25.
 
@@ -84,17 +84,22 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 - The restart policy itself. The change only adds the rebind.
 
 **Steps.**
-1. **Release on loss.** When `DevelopmentGuestAgent` reports the agent lost, `DevInputBinding` releases the bound channel. **Check:** a T1 test shows no send on the dead channel.
+1. **Release on loss.** When `DevelopmentGuestAgent` reports the agent lost, `DevInputBinding` releases the bound channel and immediately closes the shared route gate, even if a channel usability check is suspended. A candidate binding cannot reopen the gate if a loss was observed while it was pending. **Check:** T1 tests show no send on the dead channel or through the old route after loss is reported, and a stale activation generation cannot open the gate.
 2. **Count drops.** Events sent on the dead channel count as `input.dropped.channel` ([input.md](../../02-design/input.md) §11). **Check:** the T1 test reads the counter.
 3. **Rebind.** When `GuestAgentSupervisor` reports the new agent ready, bind display 0 again. **Check:** `GuestAgentSupervisorTests` covers the loss and the rebind.
 
 **Tests.**
-- T0 and T1: `GuestAgentSupervisorTests` covers supervisor loss and reconnection; `DevInputBindingTests` covers route release, channel-drop accounting, and rebinding to the new session. The existing supervisor tests still pass.
+- T0 and T1: `GuestAgentSupervisorTests` covers supervisor loss and reconnection plus ready-session token availability; `DevInputBindingTests` covers route release without sending cancellation over a disconnected stream, immediate gate closure on reported loss while usability is suspended, rejection of stale activation generations, channel-drop accounting, rejecting stale sessions during open and usability checks, applying focus changes while prepared, keeping all routes closed until session and focus checks pass, closing the gate before shutdown channel inspection, and rebinding to the new session. The existing supervisor tests still pass.
 - T2: `NativeWindowTests.testInputRouteRebindsAfterGuestAgentRestartInNativeWindow` kills `apkrun_guestd` during the HelloText development boot, waits for a higher display-0 input-binding log count and a different agent PID, verifies the boot and same native window remain active, then checks the fixture click log. Needs a Mac with a VM.
 - T3: none.
 
 **Done when.**
 - A T1 test covers the loss and the rebind. Events already sent to the dead channel count as `input.dropped.channel`, and later events do not use that channel.
+- A route remains unbound if the control session changes while its input channel is opening, and teardown does not send cancellation over the disconnected stream.
+- The shared route gate closes as soon as a non-ready state is observed, so an input sent while the old channel check is suspended does not reach the stale channel.
+- A binding candidate cannot reopen the route gate after a non-ready state invalidates its activation generation.
+- Routes stay unavailable to input while focus is being applied, focus loss is reconciled before activation, and an existing channel is released when its session token changes during a usability check.
+- Shutdown closes the shared route gate before checking whether cancellation can be sent over the input channel.
 - The T2 NativeWindow test observes a new input-binding log entry and Guest Agent PID after the forced kill, confirms the boot and original native window remain active, and verifies a post-rebind click in the window reaches HelloText.
 
 **Pitfalls.**

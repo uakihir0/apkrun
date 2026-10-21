@@ -246,7 +246,7 @@ stop(reason, force)
 
 - With `reason == .hostShutdown` the whole sequence has a 40 s deadline (§2.4), which can cap the Guest Agent request and post-request wait. The VM is force-stopped at that deadline.
 - Without a Guest Agent, the Guest Protocol request is skipped; developer mode may still use its ADB and serial
-  fallbacks, while production waits the post-request interval and then force-stops the VM.
+  fallbacks. Production has no fallback channel, so it force-stops the VM immediately.
 - Every stop logs the path it took (`graceful` or `forced`) and its duration with an operation ID. `apkrun doctor` warns when the last 3 stops were forced.
 - While a package install is active, RuntimeHost rejects user stop, restart, and reset with `runtime.invalidTransition`. Daemon shutdown drains the install before it stops Android. This reservation lasts until the tracked install reaches a terminal result.
 

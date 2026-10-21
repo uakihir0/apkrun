@@ -132,7 +132,8 @@
                     title: windowTitle,
                     backingScale: display.backingScale,
                     inputSink: inputSink,
-                    allowsResize: display.supportsWindowResize,
+                    // #27 keeps display-0 launch windows fixed-size until #68 implements live resize.
+                    allowsResize: false,
                     holdsPlaceholderUntilAppRunning: holdsPlaceholderUntilAppRunning,
                     onFocusChanged: { [onFocusChanged] focused in onFocusChanged(focused) },
                     onGeometryChanged: { [weak self] pointSize, backingScale, zoom, completion in

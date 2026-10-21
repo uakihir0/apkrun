@@ -7,7 +7,33 @@ import Testing
 
 @Test func adbPortIsKernelChosenWhenTheVariableIsUnsetOrEmpty() throws {
     #expect(try VMRunResources.adbHostPort(environment: [:]) == 0)
-    #expect(try VMRunResources.adbHostPort(environment: ["APKRUN_TEST_ADB_PORT": ""]) == 0)
+    #expect(try VMRunResources.adbHostPort(environment: [VMRunResources.adbPortVariable: ""]) == 0)
+    #expect(try VMRunResources.adbHostPort(environment: [VMRunResources.testRunnerADBPortVariable: ""]) == 0)
+}
+
+@Test func adbPortReadsTheXcodeTestRunnerVariable() throws {
+    #expect(try VMRunResources.adbHostPort(environment: [VMRunResources.testRunnerADBPortVariable: "49321"]) == 49321)
+    #expect(
+        throws: VMRunResourcesFailure.invalidADBPort("nope")
+    ) {
+        try VMRunResources.adbHostPort(environment: [VMRunResources.testRunnerADBPortVariable: "nope"])
+    }
+}
+
+@Test func adbPortVariableTakesPrecedenceOverTheXcodeTestRunnerVariable() throws {
+    let environment = [
+        VMRunResources.adbPortVariable: "49321",
+        VMRunResources.testRunnerADBPortVariable: "49322",
+    ]
+    #expect(try VMRunResources.adbHostPort(environment: environment) == 49321)
+}
+
+@Test func adbPortUsesTheXcodeTestRunnerVariableWhenTheRegularVariableIsEmpty() throws {
+    let environment = [
+        VMRunResources.adbPortVariable: "",
+        VMRunResources.testRunnerADBPortVariable: "49321",
+    ]
+    #expect(try VMRunResources.adbHostPort(environment: environment) == 49321)
 }
 
 @Test func adbPortAcceptsEveryPortNumber() throws {

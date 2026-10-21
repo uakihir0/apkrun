@@ -14,6 +14,8 @@ import Foundation
 public struct VMRunResources: Equatable, Sendable {
     /// The environment variable that sets the developer ADB port of a run.
     public static let adbPortVariable = "APKRUN_TEST_ADB_PORT"
+    /// The name xcodebuild gives the test process for `adbPortVariable`.
+    public static let testRunnerADBPortVariable = "TEST_RUNNER_" + adbPortVariable
     /// The longest socket path `sockaddr_un` holds, without its terminating NUL (`DevConsoleSocketServer`).
     public static let maximumSocketPathBytes = 103
     private static let homePrefix = "/tmp/apkrun-vm-"
@@ -45,7 +47,10 @@ public struct VMRunResources: Equatable, Sendable {
     /// The developer ADB port that `environment` asks for. Unset or empty means `0`. Anything else must be a
     /// decimal port number from 0 to 65535. A malformed value is an error, never a silent default.
     public static func adbHostPort(environment: [String: String]) throws(VMRunResourcesFailure) -> UInt16 {
-        guard let value = environment[adbPortVariable], !value.isEmpty else {
+        let value =
+            environment[adbPortVariable].flatMap { $0.isEmpty ? nil : $0 }
+            ?? environment[testRunnerADBPortVariable]
+        guard let value, !value.isEmpty else {
             return 0
         }
         guard value.allSatisfy({ $0.isASCII && $0.isNumber }), let port = UInt16(value) else {

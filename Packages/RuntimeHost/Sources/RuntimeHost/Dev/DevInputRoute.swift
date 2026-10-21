@@ -114,8 +114,11 @@ public actor DevInputRoute {
         localCounters.add(await router.counters)
     }
 
-    /// Detaches local input state immediately and finishes guest cancellation asynchronously after reconnect.
-    public func detachForGuestReconciliation() -> Task<Void, Never>? {
+    /// Detaches local input state immediately and ends the router session asynchronously.
+    ///
+    /// When the supervisor closes the input stream before it reconciles a snapshot, the guest has already cancelled
+    /// its input state. The caller passes `false` to avoid trying to cancel through that disconnected stream.
+    public func detachForGuestReconciliation(cancelGuestState: Bool) -> Task<Void, Never>? {
         isTerminal = true
         isFocused = false
         guard let router, let session else {
@@ -124,7 +127,7 @@ public actor DevInputRoute {
         self.router = nil
         self.session = nil
         return Task { [weak self] in
-            await router.sessionEnded(session)
+            await router.sessionEnded(session, cancelGuestState: cancelGuestState)
             let counters = await router.counters
             await self?.addRouterCounters(counters)
         }

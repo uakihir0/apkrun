@@ -586,7 +586,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         if result.session.state.isEnded {
             pendingLaunchFrameCount = nil
             frameReconciliationSessionID = nil
-            let inputCleanupTask = await inputRoute?.detachForGuestReconciliation()
+            let inputCleanupTask = await inputRoute?.detachForGuestReconciliation(cancelGuestState: false)
             scheduleTerminalSessionReconciliation(result.session, inputCleanupTask: inputCleanupTask)
         }
 

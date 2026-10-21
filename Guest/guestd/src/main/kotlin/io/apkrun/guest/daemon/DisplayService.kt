@@ -1,5 +1,6 @@
 package io.apkrun.guest.daemon
 
+import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.v1.DeviceProductInfo
 import io.apkrun.guest.protocol.v1.DisplayInfo
 import io.apkrun.guest.protocol.v1.DisplayMode
@@ -105,13 +106,15 @@ class DisplayService(
         for ((id, info) in current) {
             val before = known[id]
             if (before == null) {
-                events.publish { it.setDisplayAdded(info) }
+                events.publish(GuestCapability.DISPLAY) { it.setDisplayAdded(info) }
             } else if (before != info) {
-                events.publish { it.setDisplayChanged(info) }
+                events.publish(GuestCapability.DISPLAY) { it.setDisplayChanged(info) }
             }
         }
         for (id in known.keys - current.keys) {
-            events.publish { it.setDisplayRemoved(DisplayRemoved.newBuilder().setDisplayId(id)) }
+            events.publish(GuestCapability.DISPLAY) {
+                it.setDisplayRemoved(DisplayRemoved.newBuilder().setDisplayId(id))
+            }
             removalListeners.forEach { it(id) }
         }
         known.clear()

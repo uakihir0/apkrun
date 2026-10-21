@@ -77,7 +77,7 @@ class Connection(
             if (!daemon.sessions.openControl(socket, negotiated.token)) {
                 return
             }
-            daemon.events.attach(writer)
+            daemon.events.attach(writer, negotiated.enabled)
             try {
                 controlLoop(negotiated.enabled)
             } finally {
@@ -126,7 +126,12 @@ class Connection(
                 "the first frame from the host is not HelloAck"
             )
         }
-        val accepted = AgentHandshake.evaluate(ack.helloAck, ProtocolVersion.HOST, IMPLEMENTED)
+        val accepted =
+            AgentHandshake.evaluate(
+                ack.helloAck,
+                ProtocolVersion.HOST,
+                daemon.supportedCapabilities(),
+            )
         val enabled =
             GuestCapability.entries.filter { it.wireName in accepted.enabledCapabilities }.toSet()
         return Negotiated(enabled, accepted.sessionToken)
@@ -152,7 +157,9 @@ class Connection(
                         try {
                             val response = daemon.dispatcher.dispatch(id, request, enabled)
                             writer.send(replyTo = id) { it.setResponse(response) }
+                            daemon.responseSent(id)
                         } catch (error: IOException) {
+                            daemon.responseFailed(id)
                             // The host closed the connection while the request ran, so nothing
                             // reads the answer.
                             // The agent keeps running (guest-protocol.md §4.1).
@@ -245,7 +252,7 @@ class Connection(
                     .setBuildFingerprint(Build.FINGERPRINT)
                     .setBuildType(Build.TYPE)
             )
-            .addAllCapabilities(IMPLEMENTED.map { it.wireName })
+            .addAllCapabilities(daemon.supportedCapabilities().map { it.wireName })
             .setChannel(channel)
             .setMode(AgentMode.AGENT_MODE_DEVELOPMENT_SHELL)
             .build()
@@ -260,6 +267,8 @@ class Connection(
                 GuestCapability.INPUT,
                 GuestCapability.INPUT_ACK_TRACE,
                 GuestCapability.PACKAGES,
+                GuestCapability.HEALTH,
+                GuestCapability.SYSTEM,
             )
     }
 }

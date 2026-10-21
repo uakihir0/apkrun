@@ -177,7 +177,7 @@ These rules apply to components APKRun distributes or uses as build or test tool
 | Kotlin stdlib, `org.jetbrains:annotations`, kotlinx-coroutines | app, image | Apache-2.0 | the Guest Agent APK (`Resources/guest/`) and the image |
 | protobuf-javalite | app, image | BSD-3-Clause | same |
 | RiftVM | reference | MIT | analysis input only (§3.1) |
-| `libc`, `log`, `android_logger` and their dependencies (planned, #35) | image | MIT OR Apache-2.0 | `apkrun_vsockd`; the product uses AOSP `external/rust/crates`, which carry their own metadata |
+| `libc`, `log`, `android_logger` and their dependencies | image | MIT OR Apache-2.0 | `apkrun_vsockd`; the product uses AOSP `external/rust/crates`, which carry their own metadata |
 | AOSP, including the prebuilt kernel | image | many; kernel GPL-2.0-only | not lock entries (§4.3); notices and source offer in §7 |
 | `avbtool.py`, AOSP AVB test key | tooling, committed | MIT | vendored, test only (§3.3) |
 | `mkbootimg.py`, `unpack_bootimg.py` | tooling, committed | Apache-2.0 | vendored (§3.3) |

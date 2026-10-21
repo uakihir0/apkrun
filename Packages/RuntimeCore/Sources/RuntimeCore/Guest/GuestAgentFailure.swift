@@ -90,3 +90,33 @@ extension GuestProtocolFailure {
         }
     }
 }
+
+extension GuestAgentFailure {
+    /// Whether RuntimeSupervisor may safely use an ADB/serial fallback after a failed Guest Protocol shutdown.
+    ///
+    /// A timeout or disconnect can happen after Android accepted the request, so it must not be sent again through a
+    /// different channel. Explicit capability/agent failures and a remote error response are safe to fall back from.
+    var shutdownAttempt: GuestPowerOffAttempt {
+        switch self {
+        case .operationFailed(let reason):
+            if reason == "disconnected" || reason == "timeout.Shutdown"
+                || reason == "frameTooLarge" || reason == "malformedFrame"
+            {
+                return .uncertain
+            }
+            if reason.hasPrefix("capabilityMissing.")
+                || reason.hasPrefix("agentUnavailable.")
+                || reason == "incompatibleVersion"
+                || reason == "handshakeTimedOut"
+                || reason.hasPrefix("handshakeFailed.")
+                || reason.hasPrefix("remote.Shutdown.")
+            {
+                return .rejected
+            }
+            return .uncertain
+        case .bundleMissing, .installFailed, .startFailed, .connectTimedOut, .stopped, .handshakeFailed,
+            .requiredAgentUnavailable, .adb:
+            return .rejected
+        }
+    }
+}

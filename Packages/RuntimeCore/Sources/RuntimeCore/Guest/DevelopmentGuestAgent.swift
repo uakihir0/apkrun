@@ -82,10 +82,12 @@ public actor DevelopmentGuestAgent {
     private let displayEventContinuation: AsyncStream<GuestDisplayEvent>.Continuation
     private var taskEventRelay: Task<Void, Never>?
 
-    /// Creates the coordinator for `bundle`, reached through `adb`.
+    /// Creates the coordinator for `bundle`; ADB installs and starts the agent, while the selected transport connects
+    /// to its protocol endpoints.
     public init(
         adb: AdbClient,
         bundle: GuestAgentBundle,
+        transport guestTransport: (any GuestTransport)? = nil,
         hostVersion: String = "dev",
         logSink: (any LogSink)? = nil,
         clock: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
@@ -96,11 +98,11 @@ public actor DevelopmentGuestAgent {
         self.logSink = logSink
         logger = APKLogger(category: RuntimeLogCategory.agents, sink: logSink)
         provisioner = GuestAgentProvisioner(adb: adb, bundle: bundle)
-        let transport = ADBForwardGuestTransport(adb: adb, logSink: logSink)
-        self.transport = transport
+        let selectedTransport = guestTransport ?? ADBForwardGuestTransport(adb: adb, logSink: logSink)
+        self.transport = selectedTransport
         let relay = RestartRelay()
         supervisor = GuestAgentSupervisor(
-            transport: transport,
+            transport: selectedTransport,
             hostVersion: hostVersion,
             logSink: logSink,
             restartAgent: { loss in await relay.restart(loss) }
@@ -387,6 +389,53 @@ public actor DevelopmentGuestAgent {
         }
     }
 
+    /// Moves one Android task to another display (guest-protocol.md §7.1 #16).
+    public func moveTask(
+        taskID: Int32,
+        toDisplay displayID: Int32,
+        toBack: Bool = false
+    ) async throws(GuestAgentFailure) {
+        try requireAvailable()
+        do {
+            _ = try await supervisor.send(
+                GuestMoveTaskToDisplay(taskID: taskID, displayID: displayID, toBack: toBack)
+            )
+        } catch {
+            throw .operation(error)
+        }
+    }
+
+    /// Lists Android tasks on one display, or across every display when `displayID` is nil.
+    public func listTasks(displayID: Int32? = nil) async throws(GuestAgentFailure) -> [GPTaskInfo] {
+        try requireAvailable()
+        do {
+            let result = try await supervisor.send(GuestListTasks(displayID: displayID))
+            return result.tasks
+        } catch {
+            throw .operation(error)
+        }
+    }
+
+    /// Reads the guest's health through Guest Agent operation 21.
+    public func getHealth() async throws(GuestAgentFailure) -> GPHealth {
+        try requireAvailable()
+        do {
+            return try await supervisor.send(GuestGetHealth())
+        } catch {
+            throw .operation(error)
+        }
+    }
+
+    /// Asks Android to shut down through Guest Agent operation 70.
+    public func shutdown(reason: String) async throws(GuestAgentFailure) {
+        try requireAvailable()
+        do {
+            _ = try await supervisor.send(GuestShutdown(reason: reason))
+        } catch {
+            throw .operation(error)
+        }
+    }
+
     /// Waits for display 0 to adopt a scanout mode, then applies the matching density and local IME policy.
     public func applyDisplayPolicy(for mode: ResolvedDisplayMode) async -> Bool {
         let width = mode.pixelSize.width
@@ -607,6 +656,8 @@ public actor DevelopmentGuestAgent {
         )
     }
 }
+
+extension DevelopmentGuestAgent: AndroidControlChannel {}
 
 extension DevelopmentGuestAgent: DisplayControlChannel {
     /// Returns the current Android display inventory from the Guest Agent supervisor.

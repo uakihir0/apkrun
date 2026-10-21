@@ -48,9 +48,13 @@ private enum EnvelopeSchema {
         ("launch_application", GuestLaunchApplication.number),
         ("stop_application", GuestStopApplication.number),
         ("stop_application", GuestForceStopApplication.number),
+        ("move_task_to_display", GuestMoveTaskToDisplay.number),
+        ("list_tasks", GuestListTasks.number),
         ("focus_display", GuestFocusDisplay.number),
         ("query_package", GuestQueryPackage.number),
         ("list_packages", GuestListPackages.number),
+        ("get_health", GuestGetHealth.number),
+        ("shutdown", GuestShutdown.number),
     ]
     for pair in pairs {
         #expect(requests[pair.name] == pair.number, "Request.\(pair.name) is not \(pair.number)")
@@ -122,4 +126,64 @@ private enum EnvelopeSchema {
     } else {
         Issue.record("GuestListPackages does not build a list request")
     }
+
+    let moveOperation = GuestMoveTaskToDisplay(taskID: 8, displayID: 4, toBack: true)
+    let moveRequest: GPRequest.OneOf_Op? = moveOperation.request()
+    #expect(moveOperation.timeout == .seconds(5))
+    #expect(moveOperation.capability == .launch)
+    #expect(moveOperation.operationName == "MoveTaskToDisplay")
+    if case .moveTaskToDisplay(let move)? = moveRequest {
+        #expect(move.taskID == 8)
+        #expect(move.displayID == 4)
+        #expect(move.toBack)
+    } else {
+        Issue.record("GuestMoveTaskToDisplay does not build the move request")
+    }
+    #expect(GuestMoveTaskToDisplay.decode(.moveTaskToDisplay(GPEmpty())) != nil)
+    #expect(GuestMoveTaskToDisplay.decode(.getHealth(GPHealth())) == nil)
+
+    let allTasksOperation = GuestListTasks()
+    let allTasksRequest: GPRequest.OneOf_Op? = allTasksOperation.request()
+    #expect(allTasksOperation.timeout == .seconds(5))
+    #expect(allTasksOperation.capability == .launch)
+    #expect(allTasksOperation.operationName == "ListTasks")
+    if case .listTasks(let list)? = allTasksRequest {
+        #expect(!list.hasDisplayID)
+    } else {
+        Issue.record("GuestListTasks does not build the all-displays request")
+    }
+    let displayTasksRequest: GPRequest.OneOf_Op? = GuestListTasks(displayID: 4).request()
+    if case .listTasks(let list)? = displayTasksRequest {
+        #expect(list.hasDisplayID)
+        #expect(list.displayID == 4)
+    } else {
+        Issue.record("GuestListTasks does not build the display-filtered request")
+    }
+    #expect(GuestListTasks.decode(.listTasks(GPTaskList())) != nil)
+    #expect(GuestListTasks.decode(.getHealth(GPHealth())) == nil)
+
+    let healthOperation = GuestGetHealth()
+    let healthRequest: GPRequest.OneOf_Op? = healthOperation.request()
+    #expect(healthOperation.timeout == .seconds(5))
+    #expect(healthOperation.capability == .health)
+    #expect(healthOperation.operationName == "GetHealth")
+    if case .getHealth? = healthRequest {
+        #expect(GuestGetHealth.decode(.getHealth(GPHealth())) != nil)
+    } else {
+        Issue.record("GuestGetHealth does not build the health request")
+    }
+    #expect(GuestGetHealth.decode(.shutdown(GPEmpty())) == nil)
+
+    let shutdownOperation = GuestShutdown(reason: "test complete")
+    let shutdownRequest: GPRequest.OneOf_Op? = shutdownOperation.request()
+    #expect(shutdownOperation.timeout == .seconds(20))
+    #expect(shutdownOperation.capability == .system)
+    #expect(shutdownOperation.operationName == "Shutdown")
+    if case .shutdown(let shutdown)? = shutdownRequest {
+        #expect(shutdown.reason == "test complete")
+    } else {
+        Issue.record("GuestShutdown does not build the shutdown request")
+    }
+    #expect(GuestShutdown.decode(.shutdown(GPEmpty())) != nil)
+    #expect(GuestShutdown.decode(.getHealth(GPHealth())) == nil)
 }

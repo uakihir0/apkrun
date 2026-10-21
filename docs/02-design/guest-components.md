@@ -320,6 +320,7 @@ The content rules of the host apply ([guest-protocol.md](guest-protocol.md) §14
 - For each port: `socket(AF_VSOCK, SOCK_STREAM)`, bind `VMADDR_CID_ANY:<port>`, and listen. On accept, check that the peer CID is `VMADDR_CID_HOST` (2). Then connect to the abstract socket and splice both directions until either side closes. `SO_KEEPALIVE` stays off. Liveness is the protocol's job.
 - Limits: at most 8 concurrent connections per port. Excess connections are closed at once. If the upstream connect fails (the agent is not running), the vsock connection is closed at once, and the host's backoff handles it ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3.1).
 - The bridge does not parse, log, or buffer payloads beyond a 64 KiB copy buffer per direction.
+- The agents accept the bridge by its uid (`PeerCheck`, the `SO_PEERCRED` rule of [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3.1). On the custom image they accept `system` (1000, the bridge) and `root` (0), and `shell` (2000, the ADB forward) only with developer mode on. On the stock image in development mode they accept `shell` and `root`, because adbd is the only peer there; that is the rule built so far. #36 adds the custom-image rule.
 
 ### 10.2 Implementation
 

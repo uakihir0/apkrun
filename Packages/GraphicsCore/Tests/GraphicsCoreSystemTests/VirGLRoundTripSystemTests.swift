@@ -445,7 +445,17 @@ extension VirGLRendererSuite {
             #expect(throws: GraphicsFailure.self) {
                 try renderer.submit(context: 2, commands: [])
             }
-            #expect(renderer.submitRejections == [VirGLSubmitRejection(virglResult: Int32.min, messages: [])])
+            #expect(
+                renderer.submitRejections
+                    == [
+                        VirGLSubmitRejection(
+                            contextID: 2,
+                            ordinal: 1,
+                            virglResult: Int32.min,
+                            messages: []
+                        )
+                    ]
+            )
         }
     #endif
 }

@@ -598,7 +598,7 @@ Guest-caused errors are virtio-gpu error responses, not `GraphicsFailure` values
 
 ### 13.2 Logging
 
-Subsystem `io.apkrun.graphics`, with categories `device` (negotiation, commands, guest errors), `renderer` (virglrenderer and ANGLE log callback, context lifecycle), `present` (pools, frames, stalls), and `stats` (a summary every 60 s while any scanout presents). Per-command logging is at debug level only and is off in release builds.
+Subsystem `io.apkrun.graphics`, with categories `device` (negotiation, commands, guest errors), `renderer` (virglrenderer and ANGLE log callback, context lifecycle), `present` (pools, frames, stalls), and `stats` (a summary every 60 s while any scanout presents). A failed renderer submit includes its guest `context_id` in the device-category error so it can be correlated with the renderer callback and command trace. Per-command logging is at debug level only and is off in release builds.
 
 ---
 

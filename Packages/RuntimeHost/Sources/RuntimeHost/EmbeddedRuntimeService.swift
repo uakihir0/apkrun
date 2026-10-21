@@ -81,7 +81,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         else {
             return
         }
-        await inputRoute?.unbind()
+        await inputRoute?.retire()
         guard !current.taskIDs.isEmpty else {
             _ = try? await registry.transition(sessionID, to: .ended(.runtimeStopped))
             return

@@ -302,12 +302,20 @@ func embeddedRuntimeServiceRestoresSessionWhenGuestCannotStopTasks() async throw
 @Test(.timeLimit(.minutes(1)))
 func embeddedRuntimeServiceClosesAnUnlaunchedWindowWithoutStoppingItsPackage() async throws {
     let guest = FakeEmbeddedSessionGuestAgent()
-    let service = EmbeddedRuntimeService()
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let route = DevInputRoute()
+    let service = EmbeddedRuntimeService(
+        developerDisplay: display,
+        stopSignal: DevBootStopSignal(),
+        inputRoute: route
+    )
+    defer { display.finish() }
     await service.attachGuestAgent(guest)
     _ = try await service.requestSession(packageID: "io.apkrun.fixture.hellotext")
 
     try await service.closeForWindow()
 
+    #expect(!(await route.canBind()))
     #expect(await service.currentSession()?.state == .ended(.runtimeStopped))
     #expect(await guest.stoppedPackages.isEmpty)
 }

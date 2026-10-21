@@ -91,6 +91,13 @@ public actor DevInputRoute {
         !isTerminal
     }
 
+    /// Retires a route when its owning window closes, preventing later Guest Agent recovery from reusing it.
+    func retire() async {
+        isTerminal = true
+        isFocused = false
+        await unbind()
+    }
+
     /// The selected Android display, for the development binding status message.
     func targetDisplayIDForDiagnostics() -> Int32 {
         targetDisplayID

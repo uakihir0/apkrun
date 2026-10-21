@@ -410,6 +410,63 @@ func releasesTheDeadInputRouteAndRebindsWhenTheGuestSessionReturns() async throw
 }
 
 @Test(.timeLimit(.minutes(1)))
+func closedWindowRouteIsNotRegisteredAfterGuestAgentRebind() async throws {
+    let oldInput = BindingInputChannel()
+    let newInput = BindingInputChannel()
+    let oldChannel = DevInputBindingChannel(
+        input: oldInput,
+        isUsable: { await oldInput.usable() }
+    )
+    let newChannel = DevInputBindingChannel(
+        input: newInput,
+        isUsable: { await newInput.usable() }
+    )
+    let agent = BindingAgentState(token: Data([1]), channels: [oldChannel])
+    let closedRoute = DevInputRoute()
+    await closedRoute.setDisplayID(3)
+    let liveRoute = DevInputRoute()
+    await liveRoute.setDisplayID(7)
+    await liveRoute.focusChanged(true, generation: 1)
+    let reports = BindingReportState()
+    let binding = DevInputBinding(
+        routes: [closedRoute, liveRoute],
+        stateUpdates: { await agent.stateUpdates() },
+        sessionToken: { await agent.sessionToken() },
+        openInputChannel: { () async throws(GuestAgentFailure) -> DevInputBindingChannel in
+            try await agent.openInputChannel()
+        },
+        focusDisplay: { _ in },
+        adbShellInvocationCount: { 0 },
+        logSink: nil
+    )
+    let task = Task { await binding.run { reports.record($0) } }
+    defer { task.cancel() }
+
+    try await waitForBindingCondition {
+        await oldInput.batches.count == 2 && reports.boundCount == 1
+    }
+    #expect(await oldInput.batches.map(\.displayID) == [3, 7])
+    await closedRoute.retire()
+    #expect(!(await closedRoute.canBind()))
+    await agent.loseSession()
+    await agent.restoreSession(token: Data([2]), channel: newChannel)
+
+    try await waitForBindingCondition {
+        await newInput.batches.count == 1 && reports.boundCount == 2
+    }
+    #expect(await newInput.batches.map(\.displayID) == [7])
+    await closedRoute.send(bindingTouchBatch(at: 2))
+    await liveRoute.send(bindingTouchBatch(at: 3))
+    try await waitForBindingCondition {
+        await newInput.batches.count == 2
+    }
+    #expect(await newInput.batches.map(\.displayID) == [7, 7])
+    #expect(await closedRoute.counters().droppedNotRunning == 1)
+    task.cancel()
+    await task.value
+}
+
+@Test(.timeLimit(.minutes(1)))
 func refusesToBindAnInputChannelWhenTheControlSessionChangesDuringUsabilityCheck() async throws {
     let staleInput = BindingInputChannel()
     let currentInput = BindingInputChannel()

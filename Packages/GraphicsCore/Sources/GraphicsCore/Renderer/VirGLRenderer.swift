@@ -405,6 +405,8 @@ final class GraphicsRendererCallbackContext: @unchecked Sendable {
         let message = "VirGL renderer callback level=\(severity) \(activeCommandDiagnostic.logFields)"
         if Int(level) == GB_LOG_ERROR {
             logger.error("\(message, .public)")
+        } else if Int(level) == GB_LOG_WARNING {
+            logger.warning("\(message, .public)")
         } else {
             logger.info("\(message, .public)")
         }

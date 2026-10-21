@@ -45,7 +45,14 @@ struct VirGLCommandDiagnostic: Sendable {
     let resourceID: UInt32?
 
     var logFields: String {
-        let resourceField = resourceID.map { " resource_id=\($0)" } ?? ""
+        let resourceField: String
+        if let resourceID {
+            resourceField = " resource_id=\(resourceID)"
+        } else if command == VirtioGPUCommand.submit3D.rawValue {
+            resourceField = " resource_id=unattributed"
+        } else {
+            resourceField = ""
+        }
         return "control_ordinal=\(ordinal) command=\(command) context_id=\(contextID)\(resourceField)"
     }
 }

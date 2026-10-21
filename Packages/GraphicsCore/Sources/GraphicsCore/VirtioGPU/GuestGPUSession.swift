@@ -8,6 +8,7 @@ typealias VirGLRenderWork = @Sendable (any VirGLEngine) -> GraphicsFailure?
 struct GPUCommandReply: Sendable {
     var response: VirtioGPUResponseBody
     var renderWork: VirGLRenderWork?
+    var rejectionReason: String?
 }
 
 /// The guest's 2D and 3D state, kept on the device queue (graphics.md §4.2 to §4.4, §5.4).
@@ -147,12 +148,12 @@ final class GuestGPUSession {
 
     // MARK: - Helpers
 
-    private func failed(_ code: VirtioGPUErrorCode) -> GPUCommandReply {
-        GPUCommandReply(response: .error(code), renderWork: nil)
+    private func failed(_ code: VirtioGPUErrorCode, rejectionReason: String? = nil) -> GPUCommandReply {
+        GPUCommandReply(response: .error(code), renderWork: nil, rejectionReason: rejectionReason)
     }
 
     private func succeeded(renderWork: VirGLRenderWork? = nil) -> GPUCommandReply {
-        GPUCommandReply(response: .okNoData, renderWork: renderWork)
+        GPUCommandReply(response: .okNoData, renderWork: renderWork, rejectionReason: nil)
     }
 
     /// Wraps a renderer call that may throw. Its failure is returned to the render thread's logger.
@@ -412,10 +413,11 @@ final class GuestGPUSession {
                 }
             }
         } catch {
-            return failed(error.errorCode)
+            let rejectionReason = mappingFailed ? "guest_memory_mapping" : error.diagnosticReason
+            return failed(error.errorCode, rejectionReason: rejectionReason)
         }
         guard !mappingFailed, views.count == entries.count else {
-            return failed(.invalidParameter)
+            return failed(.invalidParameter, rejectionReason: "guest_memory_mapping")
         }
         backings[resource] = GuestBacking(entries: entries, views: views)
         guard path == .virgl else { return succeeded() }
@@ -454,7 +456,8 @@ final class GuestGPUSession {
                 maxVersion: capset.version,
                 maxSize: UInt32(capset.bytes.count)
             ),
-            renderWork: nil
+            renderWork: nil,
+            rejectionReason: nil
         )
     }
 
@@ -466,7 +469,7 @@ final class GuestGPUSession {
         guard let capset = capsets.first(where: { $0.id == id }), version <= capset.version else {
             return failed(.invalidParameter)
         }
-        return GPUCommandReply(response: .okCapset(data: capset.bytes), renderWork: nil)
+        return GPUCommandReply(response: .okCapset(data: capset.bytes), renderWork: nil, rejectionReason: nil)
     }
 
     // MARK: - Contexts

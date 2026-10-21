@@ -119,6 +119,9 @@ private let rgba: UInt32 = 67
             _ in true
         }
     }
+    #expect(
+        ResourceTableFailure.invalidParameter(field: "entry.length").diagnosticReason
+            == "resource_table.entry.length")
     #expect(throws: ResourceTableFailure.invalidParameter(field: "entry.address")) {
         try table.attachBacking(id: 7, entries: [VirtioGPUMemoryEntry(address: UInt64.max - 1, length: 4)]) {
             _ in true
@@ -127,17 +130,21 @@ private let rgba: UInt32 = 67
     #expect(throws: ResourceTableFailure.invalidParameter(field: "entry.address")) {
         try table.attachBacking(id: 7, entries: [needed]) { _ in false }
     }
-    #expect(throws: ResourceTableFailure.invalidParameter(field: "entry.length")) {
+    #expect(throws: ResourceTableFailure.invalidParameter(field: "backing.too_small")) {
         try table.attachBacking(id: 7, entries: [VirtioGPUMemoryEntry(address: 0x8000_0000, length: 512)]) {
             _ in true
         }
     }
+    #expect(
+        ResourceTableFailure.invalidParameter(field: "backing.too_small").diagnosticReason
+            == "resource_table.backing.too_small")
     #expect(table.resource(id: 7)?.backing.isEmpty == true)
 
     try table.attachBacking(id: 7, entries: [needed]) { _ in true }
     #expect(throws: ResourceTableFailure.invalidParameter(field: "backing")) {
         try table.attachBacking(id: 7, entries: [needed]) { _ in true }
     }
+    #expect(ResourceTableFailure.invalidParameter(field: "backing").diagnosticReason == "resource_table.backing")
 }
 
 @Test func backingEntryCountIsLimitedTo16384() throws {

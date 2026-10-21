@@ -248,6 +248,7 @@ final class FakeVirGLEngine: VirGLEngine, @unchecked Sendable {
 final class SeededGuestBackend: VirtioDeviceContextBackend, @unchecked Sendable {
     private let lock = NSLock()
     private var seeds: [UInt64: [UInt8]] = [:]
+    private var unmappedAddresses: Set<UInt64> = []
     private var views: [UInt64: FakeGuestMemory] = [:]
     private var queues: [FakeVirtioQueue]
 
@@ -263,6 +264,11 @@ final class SeededGuestBackend: VirtioDeviceContextBackend, @unchecked Sendable 
     /// Sets the bytes that the range starting at `address` holds when the device maps it.
     func seed(address: UInt64, bytes: [UInt8]) {
         lock.withLock { seeds[address] = bytes }
+    }
+
+    /// Makes mapping the range at `address` fail as if it were outside guest memory.
+    func failMapping(address: UInt64) {
+        lock.withLock { unmappedAddresses.insert(address) }
     }
 
     /// The view of the range at `address`, as the device mapped it.
@@ -285,12 +291,15 @@ final class SeededGuestBackend: VirtioDeviceContextBackend, @unchecked Sendable 
         generation: UInt64
     ) throws(VirtioFailure) -> GuestMemory {
         _ = try range.validatedEndAddress()
-        let fake = lock.withLock { () -> FakeGuestMemory in
-            let bytes = seeds[range.address] ?? [UInt8](repeating: 0, count: Int(range.length))
-            let fake = FakeGuestMemory(range: range, bytes: bytes)
-            views[range.address] = fake
-            return fake
+        let (isUnmapped, bytes) = lock.withLock {
+            (
+                unmappedAddresses.contains(range.address),
+                seeds[range.address] ?? [UInt8](repeating: 0, count: Int(range.length))
+            )
         }
+        guard !isUnmapped else { throw .guestMemoryRangeInvalid }
+        let fake = FakeGuestMemory(range: range, bytes: bytes)
+        lock.withLock { views[range.address] = fake }
         return fake.memory
     }
 

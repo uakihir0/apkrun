@@ -728,7 +728,8 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
                 "command was rejected",
                 command: header.type,
                 diagnostic: diagnostic,
-                responseErrorCode: code.rawValue
+                responseErrorCode: code.rawValue,
+                rejectionReason: answer.rejectionReason
             )
             return Reply(
                 bytes: errorReply(code, answering: header),
@@ -974,15 +975,17 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
         _ reason: String,
         command: UInt32?,
         diagnostic: VirGLCommandDiagnostic? = nil,
-        responseErrorCode: UInt32? = nil
+        responseErrorCode: UInt32? = nil,
+        rejectionReason: String? = nil
     ) {
         let decision = lock.withLock { errorLimiter.admit(at: clock()) }
         guard case .log(let suppressedCount) = decision else { return }
         let commandField = diagnostic == nil ? " command=\(command ?? 0)" : ""
         let diagnosticFields = diagnostic.map { " \($0.logFields)" } ?? ""
         let responseErrorField = responseErrorCode.map { " response_error=\($0)" } ?? ""
+        let rejectionReasonField = rejectionReason.map { " rejection_reason=\($0)" } ?? ""
         logger.warning(
-            "virtio-gpu rejected a guest request reason=\(reason, .public)\(commandField, .public)\(diagnosticFields, .public)\(responseErrorField, .public) suppressed=\(suppressedCount, .public)"
+            "virtio-gpu rejected a guest request reason=\(reason, .public)\(commandField, .public)\(diagnosticFields, .public)\(responseErrorField, .public)\(rejectionReasonField, .public) suppressed=\(suppressedCount, .public)"
         )
     }
 }

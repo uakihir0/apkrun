@@ -169,6 +169,9 @@ class AndroidPackageCatalog(private val packageManager: PackageManager) : Packag
 
 /** Implements the Guest Agent's `QueryPackage` and `ListPackages` operations. */
 class PackageService(private val catalog: PackageCatalog) {
+    /** Current version code for a package broadcast, or null if the package is already gone. */
+    fun versionCode(packageName: String): Long? = catalog.find(packageName)?.versionCode
+
     fun query(request: QueryPackage): GuestPackageInfo {
         val packageName = request.getPackage()
         if (!PackageName.isValid(packageName)) {

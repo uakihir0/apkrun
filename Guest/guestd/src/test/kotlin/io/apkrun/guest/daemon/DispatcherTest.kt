@@ -1,14 +1,18 @@
 package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.GuestCapability
+import io.apkrun.guest.protocol.v1.AuthorizeAdbKey
 import io.apkrun.guest.protocol.v1.ClearDisplay
 import io.apkrun.guest.protocol.v1.ClearPolicy
 import io.apkrun.guest.protocol.v1.GuestErrorCode
+import io.apkrun.guest.protocol.v1.Health
 import io.apkrun.guest.protocol.v1.ImePolicy
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchOutcome
 import io.apkrun.guest.protocol.v1.LaunchResult
 import io.apkrun.guest.protocol.v1.ListPackages
+import io.apkrun.guest.protocol.v1.ListTasks
+import io.apkrun.guest.protocol.v1.MoveTaskToDisplay
 import io.apkrun.guest.protocol.v1.PackageFilter
 import io.apkrun.guest.protocol.v1.PackageInfo
 import io.apkrun.guest.protocol.v1.PackageList
@@ -22,6 +26,8 @@ import io.apkrun.guest.protocol.v1.Shutdown
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
 import io.apkrun.guest.protocol.v1.StopMode
+import io.apkrun.guest.protocol.v1.TaskInfo
+import io.apkrun.guest.protocol.v1.TaskList
 import io.apkrun.guest.runtime.ServiceMethodMissing
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -46,6 +52,11 @@ private class FakeOperations : AgentOperations {
     var clearedDisplay: ClearDisplay? = null
     var queriedPackage: QueryPackage? = null
     var listedPackages: ListPackages? = null
+    var movedTask: MoveTaskToDisplay? = null
+    var listedTasks: ListTasks? = null
+    var shutdownRequest: Shutdown? = null
+    var healthSnapshot = Health.newBuilder().setAgentUptimeMs(99).build()
+    var lastFailure: io.apkrun.guest.protocol.v1.GuestError? = null
     /**
      * Released by the first operation that starts. Tests that need an op to be in flight wait on
      * it.
@@ -81,6 +92,19 @@ private class FakeOperations : AgentOperations {
         stoppedRequest = request
     }
 
+    override fun moveTaskToDisplay(request: MoveTaskToDisplay) {
+        enter()
+        movedTask = request
+    }
+
+    override fun listTasks(request: ListTasks): TaskList {
+        enter()
+        listedTasks = request
+        return TaskList.newBuilder()
+            .addTasks(TaskInfo.newBuilder().setTaskId(9).setDisplayId(2))
+            .build()
+    }
+
     override suspend fun clearDisplay(request: ClearDisplay) {
         enter()
         clearedDisplay = request
@@ -101,6 +125,20 @@ private class FakeOperations : AgentOperations {
             .addPackages(PackageSummary.newBuilder().setPackage("io.apkrun.fixture.hellotext"))
             .build()
     }
+
+    override fun getHealth(): Health {
+        enter()
+        return healthSnapshot
+    }
+
+    override fun shutdown(requestId: Long, request: Shutdown) {
+        enter()
+        shutdownRequest = request
+    }
+
+    override fun recordFailure(error: io.apkrun.guest.protocol.v1.GuestError) {
+        lastFailure = error
+    }
 }
 
 class DispatcherTest {
@@ -110,6 +148,8 @@ class DispatcherTest {
             GuestCapability.DISPLAY,
             GuestCapability.LAUNCH,
             GuestCapability.INPUT,
+            GuestCapability.HEALTH,
+            GuestCapability.SYSTEM,
         )
 
     private fun policy(displayId: Int): Request =
@@ -158,10 +198,14 @@ class DispatcherTest {
     }
 
     @Test
-    fun anOperationThisBuildDoesNotHaveIsUnsupported() = runBlocking {
-        val request = Request.newBuilder().setShutdown(Shutdown.getDefaultInstance()).build()
-        val response = dispatcher(FakeOperations()).dispatch(1, request, everything)
+    fun authorizeAdbKeyIsUnsupportedEvenWhenSystemCapabilityIsEnabled() = runBlocking {
+        val operations = FakeOperations()
+        val request =
+            Request.newBuilder().setAuthorizeAdbKey(AuthorizeAdbKey.getDefaultInstance()).build()
+        val response = dispatcher(operations).dispatch(1, request, setOf(GuestCapability.SYSTEM))
         assertEquals(GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED, response.getError().getCode())
+        assertEquals(0, operations.running.get())
+        assertEquals(null, operations.shutdownRequest)
     }
 
     @Test
@@ -238,6 +282,102 @@ class DispatcherTest {
     }
 
     @Test
+    fun moveTaskToDisplayUsesLaunchCapability() = runBlocking {
+        val operations = FakeOperations()
+        val move =
+            MoveTaskToDisplay.newBuilder().setTaskId(7).setDisplayId(3).setToBack(true).build()
+
+        val response =
+            dispatcher(operations)
+                .dispatch(
+                    1,
+                    Request.newBuilder().setMoveTaskToDisplay(move).build(),
+                    setOf(GuestCapability.LAUNCH),
+                )
+
+        assertTrue(response.hasMoveTaskToDisplay())
+        assertEquals(move, operations.movedTask)
+    }
+
+    @Test
+    fun listTasksPreservesOptionalDisplayFilterAndReturnsTasks() = runBlocking {
+        val operations = FakeOperations()
+        val list = ListTasks.newBuilder().setDisplayId(2).build()
+
+        val response =
+            dispatcher(operations)
+                .dispatch(
+                    1,
+                    Request.newBuilder().setListTasks(list).build(),
+                    setOf(GuestCapability.LAUNCH),
+                )
+
+        assertTrue(response.hasListTasks())
+        assertEquals(2, operations.listedTasks?.displayId)
+        assertEquals(9, response.listTasks.tasksList.single().taskId)
+    }
+
+    @Test
+    fun healthAndShutdownUseTheirOwnCapabilities() = runBlocking {
+        val operations = FakeOperations()
+        val healthResponse =
+            dispatcher(operations)
+                .dispatch(
+                    1,
+                    Request.newBuilder()
+                        .setGetHealth(io.apkrun.guest.protocol.v1.GetHealth.getDefaultInstance())
+                        .build(),
+                    setOf(GuestCapability.HEALTH),
+                )
+        val shutdown = Shutdown.newBuilder().setReason("host shutdown").build()
+        val shutdownResponse =
+            dispatcher(operations)
+                .dispatch(
+                    2,
+                    Request.newBuilder().setShutdown(shutdown).build(),
+                    setOf(GuestCapability.SYSTEM),
+                )
+
+        assertEquals(99L, healthResponse.getGetHealth().agentUptimeMs)
+        assertTrue(shutdownResponse.hasShutdown())
+        assertEquals(shutdown, operations.shutdownRequest)
+    }
+
+    @Test
+    fun disabledSystemCapabilityRejectsShutdown() = runBlocking {
+        val operations = FakeOperations()
+        val response =
+            dispatcher(operations)
+                .dispatch(
+                    1,
+                    Request.newBuilder()
+                        .setShutdown(Shutdown.newBuilder().setReason("host shutdown"))
+                        .build(),
+                    emptySet(),
+                )
+
+        assertEquals(GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED, response.error.code)
+        assertTrue(operations.shutdownRequest == null)
+    }
+
+    @Test
+    fun disabledHealthCapabilityRejectsGetHealth() = runBlocking {
+        val operations = FakeOperations()
+        val response =
+            dispatcher(operations)
+                .dispatch(
+                    1,
+                    Request.newBuilder()
+                        .setGetHealth(io.apkrun.guest.protocol.v1.GetHealth.getDefaultInstance())
+                        .build(),
+                    emptySet(),
+                )
+
+        assertEquals(GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED, response.error.code)
+        assertEquals(0, operations.running.get())
+    }
+
+    @Test
     fun aRequestPastItsTimeoutAnswersTimeout() = runBlocking {
         val operations = FakeOperations().apply { delayMillis = 2_000 }
         val response = dispatcher(operations).dispatch(1, launch(0, timeoutMs = 50), everything)
@@ -289,6 +429,7 @@ class DispatcherTest {
             }
         val response = dispatcher(operations).dispatch(1, launch(0), everything)
         assertEquals(GuestErrorCode.GUEST_ERROR_CODE_NOT_FOUND, response.getError().getCode())
+        assertEquals(response.error, operations.lastFailure)
     }
 
     @Test

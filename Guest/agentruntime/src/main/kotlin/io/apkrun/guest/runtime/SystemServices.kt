@@ -34,6 +34,10 @@ class SystemServiceWrapper(
     val available: Boolean
         get() = resolution.service != null && resolution.missing.isEmpty()
 
+    /** Whether [name] resolved on the registered service, independently of other methods. */
+    fun supports(name: String): Boolean =
+        resolution.service != null && resolution.methods.containsKey(name)
+
     /** The interface object, or null when the service is not registered. */
     val service: Any?
         get() = resolution.service
@@ -165,7 +169,9 @@ object SystemServices {
                 ),
         )
 
-    /** `ActivityManager`: stops a package and its background processes (guest-components.md §6.2). */
+    /**
+     * `ActivityManager`: stops a package and its background processes (guest-components.md §6.2).
+     */
     val activity =
         SystemServiceWrapper(
             serviceName = "activity",
@@ -175,6 +181,60 @@ object SystemServices {
                     MethodRequirement(
                         "forceStopPackage",
                         listOf(listOf("java.lang.String", "int")),
+                    )
+                ),
+        )
+
+    /** `ActivityManager`: app crash and ANR observations (health.v1). */
+    val activityController =
+        SystemServiceWrapper(
+            serviceName = "activity",
+            interfaceName = "android.app.IActivityManager",
+            requirements =
+                listOf(
+                    MethodRequirement(
+                        "setActivityController",
+                        listOf(listOf("android.app.IActivityController", "boolean")),
+                    )
+                ),
+        )
+
+    /**
+     * Android releases that moved the activity-controller hook to ActivityTaskManager
+     * (`health.v1`). Keep the older ActivityManager wrapper above for images that still expose it.
+     */
+    val activityTaskController =
+        SystemServiceWrapper(
+            serviceName = "activity_task",
+            interfaceName = "android.app.IActivityTaskManager",
+            requirements =
+                listOf(
+                    MethodRequirement(
+                        "setActivityController",
+                        listOf(listOf("android.app.IActivityController", "boolean")),
+                    )
+                ),
+        )
+
+    /** The one activity-controller wrapper that matches this image, for service diagnostics. */
+    private val activityControllerForImage: SystemServiceWrapper
+        get() =
+            if (activityController.supports("setActivityController")) {
+                activityController
+            } else {
+                activityTaskController
+            }
+
+    /** `PowerManager`: shuts Android down after a host request (system.v1). */
+    val power =
+        SystemServiceWrapper(
+            serviceName = "power",
+            interfaceName = "android.os.IPowerManager",
+            requirements =
+                listOf(
+                    MethodRequirement(
+                        "shutdown",
+                        listOf(listOf("boolean", "java.lang.String", "boolean")),
                     )
                 ),
         )
@@ -209,5 +269,15 @@ object SystemServices {
 
     /** Every wrapper, in the order that the service check reports them. */
     val all: List<SystemServiceWrapper>
-        get() = listOf(display, window, activityTask, activity, input, lockSettings)
+        get() =
+            listOf(
+                display,
+                window,
+                activityTask,
+                activity,
+                activityControllerForImage,
+                power,
+                input,
+                lockSettings,
+            )
 }

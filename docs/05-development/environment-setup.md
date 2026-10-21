@@ -85,17 +85,19 @@ export PATH="$ANDROID_HOME/platform-tools:$PATH"
 
 `Guest/local.properties` and `Tests/Fixtures/AndroidApps/local.properties` (git-ignored) hold `sdk.dir=$ANDROID_HOME`. `scripts/bootstrap` writes them once the check is added (planned, #16).
 
-### 2.6 Rust and cargo-ndk (planned)
+### 2.6 Rust and cargo-ndk
 
 | Tool | Pin | Where |
 |---|---|---|
 | Rust | 1.88.0, with `rustfmt`, `clippy`, target `aarch64-linux-android` | `Guest/vsockd/rust-toolchain.toml` |
-| cargo-ndk | 3.5.4 | `CARGO_NDK_VERSION` in `scripts/tool-versions.env` (planned) |
+| cargo-ndk | 3.5.4 | `CARGO_NDK_VERSION` in `scripts/tool-versions.env` |
 
 ```bash
-rustup show                     # inside Guest/vsockd: installs the pinned toolchain and target
-cargo install cargo-ndk --version 3.5.4 --locked
-cd Guest/vsockd && cargo ndk -t arm64-v8a build --release
+source scripts/tool-versions.env
+cargo install --locked --version "$CARGO_NDK_VERSION" cargo-ndk
+cd Guest/vsockd
+rustup show                     # installs the pinned toolchain and Android target
+cargo ndk -t arm64-v8a build --release
 ```
 
 The product build uses the Rust prebuilt of the pinned AOSP tree (`prebuilts/rust/`; [build-system.md](build-system.md) §9). The host Rust pin must not be newer than that prebuilt, so code that builds with cargo also builds with Soong. #35 records the prebuilt version and sets the pin to match.
@@ -134,11 +136,11 @@ Put the exports in `~/.zprofile`. Nothing in this table is committed.
 |---|---|
 | Xcode | `.xcode-version` |
 | Swift packages | `Package.swift` (exact) and `Package.resolved`; Sparkle (planned) in `project.yml` |
-| protoc, buf, XcodeGen, and hashes; cargo-ndk (planned) | `scripts/tool-versions.env` |
+| protoc, buf, XcodeGen, and hashes; cargo-ndk | `scripts/tool-versions.env` |
 | Gradle | `gradle/wrapper/gradle-wrapper.properties` |
 | AGP, Kotlin, Android libraries | `Guest/gradle/libs.versions.toml` |
 | Android SDK, build tools, NDK | §2.5 and `scripts/bootstrap` |
-| Rust | `Guest/vsockd/rust-toolchain.toml`, `Guest/vsockd/Cargo.lock` (planned, #35) |
+| Rust | `Guest/vsockd/rust-toolchain.toml`, `Guest/vsockd/Cargo.lock` |
 | Python packages | `Images/tools/pyproject.toml` |
 | Third-party native code, test Linux kernel and rootfs, vendored mkbootimg and avbtool | `ThirdParty/ThirdParty.lock.json` ([build-system.md](build-system.md) §6) |
 | Cuttlefish build | `Images/manifests/<buildId>/android-image.json` |
@@ -345,9 +347,9 @@ scripts/aosp/remote-build.sh --revision "$(git rev-parse HEAD)" --variant userde
 | `apkrun-seed` | the seed lab Mac | full T2 set and closed gate checks on each macOS build (`macos-seed.yml`) |
 | `apkrun-aosp` | the AOSP builder of §5 (not the image build machine) | nightly `userdebug` product builds |
 
-GitHub-hosted `ubuntu-latest` runners take the Linux-only jobs (`cargo test` with `vsock_loopback`, `ruff`, JSON Schema checks, the F-Droid test repository, the upstream security check, weekly feed re-signing). `user` release images are built on the image build machine (§5.6), never on a runner. A lab Mac has one runner slot, so it runs one job, and one VM, at a time.
+GitHub-hosted `ubuntu-latest` runners take the Linux-only jobs (`cargo test`, the `vsock_loopback` T1 test when the runner kernel supports it, `ruff`, JSON Schema checks, the F-Droid test repository, the upstream security check, weekly feed re-signing). The `test-vsockd` job compiles the feature test on every run; if the loopback kernel module is unavailable it emits a notice, and T1 must be run locally on Linux with that module before claiming it passed. `user` release images are built on the image build machine (§5.6), never on a runner. A lab Mac has one runner slot, so it runs one job, and one VM, at a time.
 
-`ci.yml` uses the unprivileged `pull_request` event. Each job runs on a fresh GitHub-hosted macOS 27 VM, checks out the exact PR head SHA with persisted credentials disabled, has `contents: read` only, and references no secrets and no self-hosted runners. Never switch these jobs to `pull_request_target`.
+`ci.yml` uses the unprivileged `pull_request` event. Each job runs on a fresh GitHub-hosted macOS 27 or Ubuntu VM, checks out the exact PR head SHA with persisted credentials disabled, has `contents: read` only, and references no secrets and no self-hosted runners. Never switch these jobs to `pull_request_target`.
 
 `ci-policy.yml` is the only workflow with `pull_request_target`, for pull requests to `main`. It checks out only `refs/heads/main`, reads PR metadata, changed paths, and reviews through the read-only API, and never executes pull request code. A change to a protected path passes only after a non-author human approves the current head and that reviewer applies `ci-policy-approved`. Protected paths: workflows; Xcode build-phase scripts; the Gradle wrapper; build scripts and `buildSrc` or `build-logic`; code generation and test scripts; dependency and tool pins; formatter configurations; every `Package.swift` and `project.yml`; every `Tests/` and `UITests/` tree; and the module graph. The policy compares the event's head and base with the current PR, reads the revision again after fetching, and fails closed on any change. A new commit, reopen, label event, or PR edit resets the check; removing the label revokes it. Branch protection separately requires an active PR approval and the `workflow-policy` job. Public repositories must allow the `pull_request_target` event in Actions policy first.
 
@@ -389,7 +391,7 @@ The harness checks `AXIsProcessTrusted()` at start and fails with a message that
 
 ## 7. Verification checklist
 
-`scripts/bootstrap` installs what it can (pinned tools, the Python venv, Homebrew packages) and then checks the environment. `scripts/bootstrap --check` only checks. Checks for tools that a later task adds print `skip` until it lands (JDK and Android SDK: #16; Rust and cargo-ndk: #35; Android Build API key: #9). A machine is ready when every applicable check reports `ok` and none reports `FAIL`. Warnings are informational.
+`scripts/bootstrap` installs what it can (pinned tools, the Python venv, Homebrew packages) and then checks the environment. `scripts/bootstrap --check` only checks. Checks for tools that a later task adds print `skip` until it lands (JDK and Android SDK: #16; Android Build API key: #9). A machine is ready when every applicable check reports `ok` and none reports `FAIL`. Warnings are informational.
 
 | Check | Command it runs | Expected |
 |---|---|---|
@@ -401,7 +403,7 @@ The harness checks `AXIsProcessTrusted()` at start and fails with a message that
 | Python venv | `Images/tools/.venv/bin/python -m apkrun_image --help` | exit 0 |
 | JDK | `java -version` | 17 (planned, #16) |
 | Android SDK | `sdkmanager --list_installed` | platform 37, build-tools 37.0.0, NDK 28.2.13676358, platform-tools (planned, #16) |
-| Rust, cargo-ndk | `rustup target list --installed` in `Guest/vsockd`; `cargo ndk --version` | `aarch64-linux-android`; 3.5.4 (planned, #35) |
+| Rust, cargo-ndk | `rustup target list --installed` in `Guest/vsockd`; `cargo ndk --version` | `aarch64-linux-android`; 3.5.4 |
 | protoc, buf, XcodeGen | `build/tools/*/bin/* --version` | versions of `scripts/tool-versions.env` |
 | protoc-gen-swift | `build/tools/protoc-gen-swift/bin/protoc-gen-swift --version` | the swift-protobuf version in `Package.resolved` |
 | API key | `APKRUN_ANDROID_BUILD_API_KEY` set | set (warning only) |

@@ -104,13 +104,13 @@ public actor DevInputRoute {
 
     /// Unbinds the route. The session ends on the router, so that the guest cancels its open gestures and keys. The
     /// counts of the router are kept after it ends, so that the route's total covers every router it has had.
-    public func unbind() async {
+    public func unbind(cancelGuestState: Bool = true) async {
         guard let router, let session else {
             return
         }
         self.router = nil
         self.session = nil
-        await router.sessionEnded(session)
+        await router.sessionEnded(session, cancelGuestState: cancelGuestState)
         localCounters.add(await router.counters)
     }
 

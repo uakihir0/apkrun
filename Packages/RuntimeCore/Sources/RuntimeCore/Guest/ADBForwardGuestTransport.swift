@@ -33,10 +33,12 @@ public actor ADBForwardGuestTransport: GuestTransport {
     }
 }
 
-/// The development transport has no socket for the endpoint.
+/// A Guest Agent endpoint is not available through the selected transport.
 enum GuestTransportFailure: Error, Equatable {
     /// The endpoint is served by the vsock transport (#35) or the Store Agent, not by the development agent.
     case notServedByDevelopmentTransport
+    /// The endpoint is available only through the development ADB forward, not through vsock.
+    case notServedByVsockTransport
 }
 
 /// A stream that owns its forward. Closing it removes the forward too.

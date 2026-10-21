@@ -118,10 +118,12 @@ public actor DevelopmentGuestAgent {
     private let exportOfferedContinuation: AsyncStream<GPExportFileOffered>.Continuation
     private var taskEventRelay: Task<Void, Never>?
 
-    /// Creates the coordinator for `bundle`, reached through `adb`.
+    /// Creates the coordinator for `bundle`; ADB installs and starts the agent, while the selected transport connects
+    /// to its protocol endpoints.
     public init(
         adb: AdbClient,
         bundle: GuestAgentBundle,
+        transport guestTransport: (any GuestTransport)? = nil,
         hostVersion: String = "dev",
         logSink: (any LogSink)? = nil,
         clock: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
@@ -132,11 +134,11 @@ public actor DevelopmentGuestAgent {
         self.logSink = logSink
         logger = APKLogger(category: RuntimeLogCategory.agents, sink: logSink)
         provisioner = GuestAgentProvisioner(adb: adb, bundle: bundle)
-        let transport = ADBForwardGuestTransport(adb: adb, logSink: logSink)
-        self.transport = transport
+        let selectedTransport = guestTransport ?? ADBForwardGuestTransport(adb: adb, logSink: logSink)
+        self.transport = selectedTransport
         let relay = RestartRelay()
         supervisor = GuestAgentSupervisor(
-            transport: transport,
+            transport: selectedTransport,
             hostVersion: hostVersion,
             logSink: logSink,
             restartAgent: { loss in await relay.restart(loss) }
@@ -876,6 +878,8 @@ public actor DevelopmentGuestAgent {
         )
     }
 }
+
+extension DevelopmentGuestAgent: AndroidControlChannel {}
 
 extension DevelopmentGuestAgent: DisplayControlChannel {
     /// Returns the current Android display inventory from the Guest Agent supervisor.

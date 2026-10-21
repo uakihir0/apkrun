@@ -1,3 +1,13 @@
+/// The outcome of trying Guest Protocol `Shutdown` before platform-specific fallbacks.
+enum GuestPowerOffAttempt: Equatable, Sendable {
+    /// The Guest Agent acknowledged `Shutdown`.
+    case accepted
+    /// The Guest Agent explicitly rejected or could not send `Shutdown`.
+    case rejected
+    /// The connection failed after the request may have reached Android.
+    case uncertain
+}
+
 /// How Android stops (vm.md §9.3). With a power-off request, Android gets `deadline` after the request to power
 /// itself off, and only a VM that is still running then is stopped by force. Without one, the VM is stopped at once.
 struct AndroidStopSequence: Sendable {
@@ -29,8 +39,10 @@ struct AndroidStopSequence: Sendable {
         forceStop: @Sendable () async -> Void
     ) async -> Bool {
         if let requestPowerOff {
-            let limit = ContinuousClock.now + deadline
             if await requestPowerOff() {
+                // Android gets the full grace period after the shutdown request has returned. In particular, an
+                // uncertain protocol reply must not consume the post-request deadline while the request is pending.
+                let limit = ContinuousClock.now + deadline
                 while ContinuousClock.now < limit {
                     if await isStopped() {
                         break
@@ -51,14 +63,21 @@ struct AndroidStopSequence: Sendable {
         await Task.detached { _ = try? await Task.sleep(for: duration) }.value
     }
 
-    /// Sends the power-off request over the first channel that takes it: ADB, then the serial shell. Each closure is
-    /// nil when its channel does not exist, and each reports whether its request succeeded. Returns whether a channel
-    /// was tried. A request that failed may still have reached Android (its reply can be lost), so a tried request
-    /// gets the full deadline, and only a request that no channel could try skips the wait.
+    /// Sends the power-off request through Guest Protocol first, then developer-only ADB and serial fallbacks.
+    /// A Guest Protocol request with an uncertain outcome gets the full deadline and is never resent over another
+    /// channel, because Android may already be shutting down.
     static func sendPowerOff(
+        guestAttempt: GuestPowerOffAttempt?,
         overADB adb: (@Sendable () async -> Bool)?,
         overShell shell: (@Sendable () async -> Bool)?
     ) async -> Bool {
+        switch guestAttempt {
+        case .accepted, .uncertain:
+            return true
+        case .rejected, nil:
+            break
+        }
+
         var tried = false
         if let adb {
             tried = true

@@ -92,7 +92,7 @@ enum AppSessionState: Sendable, Equatable {
 | requested, waitingForRuntime | acquiringDisplay | RuntimeState == ready |
 | acquiringDisplay | launching | `DisplayPool.acquire` returned a display |
 | acquiringDisplay | ended(.error) | Pool exhausted (`RuntimeFailure.displayPoolExhausted`) |
-| launching | running | First frame on the display after `LaunchApplication` |
+| launching | running | First committed frame after `LaunchApplication`; embedded development waits for the Guest Agent to report the task visible before capturing the frame watermark |
 | launching | ended(.error) | Launch timeout (15 s) or Guest Agent error |
 | launching | ended(.appExited) | The task returned by `LaunchApplication` exited before its first frame, and no other package task remains |
 | running | backgrounded | Wrapper reported occlusion or minimize |

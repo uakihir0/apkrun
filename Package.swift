@@ -355,7 +355,7 @@ let package = Package(
         ),
         .testTarget(
             name: "RuntimeHostTests",
-            dependencies: ["RuntimeHost", "DiagnosticsCore"],
+            dependencies: ["RuntimeHost", "GraphicsCore", "DiagnosticsCore"],
             path: "Packages/RuntimeHost/Tests/RuntimeHostTests"
         ),
         .testTarget(

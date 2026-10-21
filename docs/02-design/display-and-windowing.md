@@ -156,7 +156,7 @@ An uncertain resize keeps its session and lease counted against the session limi
 ### 3.5 Reuse without stale content
 
 - Each lease gets a fresh `SurfacePool`. The wrapper never sees surfaces from an earlier session.
-- The pool attaches only after `DisplayAdded`. `AppSessionState` moves `launching → running` on the first frame after `LaunchApplication` ([state-machines.md](../01-architecture/state-machines.md) §3). Until then the wrapper shows the placeholder (§7.3).
+- The pool attaches only after `DisplayAdded`. In embedded development mode, `AppSessionState` moves `launching → running` only after the Guest Agent reports the launched task visible and a later frame commits to the native window. Until then the window shows the placeholder (§7.3).
 - SurfaceFlinger allocates a re-enabled display's framebuffer after `DisplayAdded`, so no guest content survives.
 - T0 tests model the pool with fake channels and scanouts, and assert invariant 2 across random acquire, release, and fault sequences.
 
@@ -165,6 +165,8 @@ An uncertain resize keeps its session and lease counted against the session limi
 Scanout 0 is always enabled, and `DisplayPool` never leases it in `secondaryDisplay` mode. In `primaryDisplayCompatibility` mode it reserves display 0 for one session at a time (§8). A runtime change of the primary mode uses the resize and rollback sequence of §7.1.
 
 In the embedded development path, the primary presenter is attached before boot. `dev launch --display 0` resolves the geometry before boot. `DisplayPool` verifies Android's mode, applies the compatibility density, and grants an exclusive lease over the existing presenter. Releasing restores the previous density and leaves scanout 0 enabled. A secondary-display lease owns a fresh pool, and its window relays that pool's frames and acknowledgements.
+
+For an embedded app launch, the Guest Agent's visible-task report establishes the frame watermark. The session reaches `running` only after a later frame sequence commits to the native window. GraphicsCore assigns each sequence when its `RESOURCE_FLUSH` is accepted, so a pre-launch flush already accepted by the host, including one still waiting for a buffer, cannot satisfy the transition. This is a host-observable readiness signal, not proof that the frame came from the launched task: the Guest Agent and virtio-GPU use independent paths, so a guest flush still queued when the watermark is sampled can arrive later. T2 and G4 verify HelloText content separately.
 
 ---
 
@@ -358,7 +360,7 @@ The chosen fallback is recorded in R-04.
 | `ended(.error(...))` | Error panel: message, remediation, "Try Again", "Open APKRun" ([error-catalog.md](../03-reference/error-catalog.md)) |
 | `ended(.appCrashed)` | "‹App› stopped unexpectedly" and "Reopen" |
 
-On the embedded path, `launching → running` follows the window's Core Animation transaction completion (`frameDisplayed`). The GPU `framesPresented` counter counts completed blits, which does not prove the window committed the frame.
+On the embedded path, the Guest Agent first reports that the launched task is visible. The runtime then waits for a frame sequence above the visible-task watermark and moves `launching → running` only when that frame's Core Animation transaction completes (`frameDisplayed`). The GPU `framesPresented` counter counts completed blits, which does not prove the window committed the frame. The watermark orders host-accepted flushes; it cannot attribute a flush still queued in the guest to a task.
 
 `apkrun dev launch` updates its placeholder as Android boots, the APK installs, and the app starts. The window title is the package's Android label. On failure, the window stays open with the catalog message, remediation, and a **Close** button, and the CLI prints the full error. Rerunning the command retries. The development command offers neither **Try Again** nor **Open APKRun**. A failure before the Android display attaches shows the same message in a failure-only window.
 

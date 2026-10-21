@@ -802,8 +802,8 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
     /// Waits for a visible task and a later committed frame sequence.
     ///
     /// Guest task visibility identifies the launched app on this Android display. The frame watermark is captured
-    /// only after that signal, so a boot/home frame already delivered to the window cannot satisfy launch readiness
-    /// merely because its native commit happened after `LaunchApplication` began.
+    /// only after that signal and includes accepted flushes still held by the presenter, so a boot/home frame cannot
+    /// satisfy launch readiness merely because its native commit happened after `LaunchApplication` began.
     private func waitForVisibleTaskFrame(
         packageID: String,
         taskID: Int32,
@@ -975,7 +975,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
     }
 
     private static var packageNotInstalledError: RuntimeWireError {
-        .runtime(
+        return .runtime(
             "packageNotInstalled",
             message: "This app is not installed in Android.",
             remediation: "Install the app first, then try again."
@@ -1061,7 +1061,14 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
     }
 
     private static func wireError(for failure: GuestAgentFailure) -> RuntimeWireError {
-        .runtime(
+        if case .operationFailed(let reason) = failure {
+            return .runtime(
+                "guestAgentOperationFailed",
+                message: "The Guest Agent didn't complete the request: \(reason).",
+                remediation: "Try again. If it fails again, restart Android."
+            )
+        }
+        return .runtime(
             "guestAgentOperationFailed",
             message: "The Android Guest Agent could not complete the app operation.",
             remediation: "Check the Android runtime and try again."

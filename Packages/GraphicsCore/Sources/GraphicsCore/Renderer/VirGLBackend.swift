@@ -56,12 +56,18 @@ final class RendererFailureLog: @unchecked Sendable {
         lock.withLock { count }
     }
 
-    func record(_ failure: GraphicsFailure) {
+    func record(_ failure: GraphicsFailure, contextID: UInt32? = nil) {
         lock.withLock { count += 1 }
         let operationField: String
         if case .rendererOperationFailed(let operation, _) = failure {
             // Only known fixed renderer API names are safe to include in public diagnostics.
-            operationField = RendererOperationLogLabel.field(for: operation)
+            let contextField: String
+            if operation == RendererOperationLogLabel.submit.rawValue, let contextID {
+                contextField = " context_id=\(contextID)"
+            } else {
+                contextField = ""
+            }
+            operationField = RendererOperationLogLabel.field(for: operation) + contextField
         } else {
             operationField = ""
         }
@@ -236,7 +242,7 @@ final class VirGLBackend: @unchecked Sendable {
             var fenceForQueue = fence
             if let engine = engineBox.engine {
                 if let failure = operation(engine) {
-                    failures.record(failure)
+                    failures.record(failure, contextID: context)
                 }
                 if let fence {
                     do throws(GraphicsFailure) {

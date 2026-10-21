@@ -18,6 +18,8 @@ public final class VirGLRenderer {
     #if APKRUN_TEST_READBACK
         /// The submits that virglrenderer rejected, in order, with the value and messages of each (IR-830).
         private(set) var submitRejections: [VirGLSubmitRejection] = []
+        /// Number of submit calls made by this renderer, including accepted calls.
+        private var submitOrdinal: UInt64 = 0
 
         /// The message sink of the callback context. It is nil after `destroy()`.
         private var messageSink: VirGLMessageSink? {
@@ -224,6 +226,8 @@ extension VirGLRenderer: VirGLEngine, @unchecked Sendable {
     func submit(context: UInt32, commands: [UInt8]) throws(GraphicsFailure) {
         let renderer = try live(operation: "submit")
         #if APKRUN_TEST_READBACK
+            submitOrdinal &+= 1
+            let ordinal = submitOrdinal
             let sink = messageSink
             _ = sink?.takeMessages()
             var virglResult = Int32.min
@@ -232,7 +236,12 @@ extension VirGLRenderer: VirGLEngine, @unchecked Sendable {
             }
             if status != GB_OK {
                 submitRejections.append(
-                    VirGLSubmitRejection(virglResult: virglResult, messages: sink?.takeMessages() ?? [])
+                    VirGLSubmitRejection(
+                        contextID: context,
+                        ordinal: ordinal,
+                        virglResult: virglResult,
+                        messages: sink?.takeMessages() ?? []
+                    )
                 )
             }
         #else

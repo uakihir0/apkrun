@@ -464,6 +464,25 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     #expect(failureLog.total == 1)
 }
 
+@Test func rendererFailureLogIncludesContextForSubmitFailures() throws {
+    let sink = RecordingLogSink()
+    let failureLog = RendererFailureLog(
+        logger: APKLogger(category: GraphicsLogCategory.device, sink: sink)
+    )
+
+    failureLog.record(
+        .rendererOperationFailed(operation: "submit", detail: "guest command bytes"),
+        contextID: 17
+    )
+
+    let entry = try #require(sink.entries.first)
+    #expect(
+        entry.publicMessage
+            == "virtio-gpu renderer operation failed: rendererOperationFailed operation=submit context_id=17"
+    )
+    #expect(entry.publicMessage.contains("guest command bytes") == false)
+}
+
 @Test func rendererFailureLogHidesUnknownOperationLabels() throws {
     let sink = RecordingLogSink()
     let failureLog = RendererFailureLog(

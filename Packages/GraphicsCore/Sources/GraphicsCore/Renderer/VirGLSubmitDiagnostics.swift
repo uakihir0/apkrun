@@ -4,6 +4,10 @@
     /// One `submit` that virglrenderer rejected, as the replay test sees it (IR-830). The normal path reports only the
     /// bridge status, which hides the value that virglrenderer returned and the messages it logged.
     struct VirGLSubmitRejection: Equatable, Sendable {
+        /// The guest context that submitted the rejected command stream.
+        let contextID: UInt32
+        /// The 1-based submit-call ordinal on this renderer, including accepted submissions.
+        let ordinal: UInt64
         /// The value that `virgl_renderer_submit_cmd` returned, such as `EINVAL` (22), or `Int32.min` when the bridge
         /// rejected the call before virglrenderer ran.
         let virglResult: Int32

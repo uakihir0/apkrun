@@ -766,7 +766,6 @@ Subsystem `io.apkrun.image`, categories `store`, `install`, `verify`, `instance`
 - SELinux for the vsock bridge, the agents, and the virtio-gpu sysfs label (§11.1). R-13, #36.
 - AOSP build infrastructure and upstream changes (§11.5). R-14, #36.
 - `virtio_snd` in the stock kernel (§7.5). OQ-38, #84.
-- Network setup of the stock image on VZ (§7.4). OQ-37.
 - Intermittent Wi-Fi and name resolution (§7.4, §7.8). Pending: marker checks of 20 ports on the Android kernel, and the RIL's CPU and log cost. R-12, #96.
 - `androidboot.boot_devices` `40000000.pci` across macOS builds (§5.3). R-16.
 - `drm_virgl` graphics properties (§6.2) come from source only. No capture or VZ boot confirms them. No OQ or R row covers this yet.

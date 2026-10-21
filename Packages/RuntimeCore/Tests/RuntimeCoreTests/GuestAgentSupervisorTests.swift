@@ -292,6 +292,27 @@ func startResyncsWithGetSnapshotBeforeAnythingElse() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func readySessionTokenIsAvailableOnlyWhileTheSupervisorIsReady() async throws {
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello()
+        agent.answer = { request in
+            isGetSnapshot(request) ? .getSnapshot(snapshot(displays: [0])) : pongResult(for: request)
+        }
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: transport,
+        keepaliveInterval: .seconds(60),
+        restartAgent: { _ in false }
+    )
+
+    #expect(await supervisor.readySessionToken() == nil)
+    try await supervisor.start(connectTimeout: .seconds(2))
+    #expect(await supervisor.readySessionToken() != nil)
+    await supervisor.stop()
+    #expect(await supervisor.readySessionToken() == nil)
+}
+
+@Test(.timeLimit(.minutes(1)))
 func eventsSentBeforeTheSnapshotAnswerAreAppliedAfterIt() async throws {
     let transport = InMemoryTransport { _, agent, _ in
         agent.sendHello()

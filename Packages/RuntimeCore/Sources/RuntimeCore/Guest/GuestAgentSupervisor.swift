@@ -316,6 +316,14 @@ public actor GuestAgentSupervisor {
         StatusSnapshot(state: state, protocolVersion: protocolVersion)
     }
 
+    /// Returns the current session token only while the supervisor is ready.
+    public func readySessionToken() -> Data? {
+        guard state == .ready else {
+            return nil
+        }
+        return session?.sessionToken
+    }
+
     /// Streams the current connection state followed by every later transition.
     ///
     /// Registering and yielding the initial state happen in one actor turn, so a caller cannot miss a transition

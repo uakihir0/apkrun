@@ -349,6 +349,80 @@ func aCapabilityTheAgentDidNotEnableIsAnErrorBeforeTheRequestIsSent() async thro
 }
 
 @Test(.timeLimit(.minutes(1)))
+func taskHealthAndShutdownOperationsRoundTripOnTheControlConnection() async throws {
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.answer = { request in
+            guard let operation = request.op else { return nil }
+            switch operation {
+            case .moveTaskToDisplay:
+                return .moveTaskToDisplay(GPEmpty())
+            case .listTasks:
+                var task = GPTaskInfo()
+                task.taskID = 27
+                task.displayID = 4
+                task.package = "io.apkrun.example"
+                var tasks = GPTaskList()
+                tasks.tasks = [task]
+                return .listTasks(tasks)
+            case .getHealth:
+                var health = GPHealth()
+                health.displaysCount = 2
+                return .getHealth(health)
+            case .shutdown:
+                return .shutdown(GPEmpty())
+            default:
+                return nil
+            }
+        }
+        agent.sendHello(capabilities: ["core.v1", "launch.v1", "health.v1", "system.v1"])
+    }
+    let connection = GuestConnection(endpoint: .guestControl, transport: transport)
+    _ = try await connection.open()
+
+    _ = try await connection.send(GuestMoveTaskToDisplay(taskID: 27, displayID: 4, toBack: true))
+    let tasks = try await connection.send(GuestListTasks(displayID: 4))
+    let health = try await connection.send(GuestGetHealth())
+    _ = try await connection.send(GuestShutdown(reason: "test complete"))
+
+    #expect(tasks.tasks.map(\.taskID) == [27])
+    #expect(tasks.tasks.first?.displayID == 4)
+    #expect(health.displaysCount == 2)
+    #expect(transport.agents[0].requests.count == 4)
+    await connection.close()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func taskHealthAndShutdownOperationsRequireTheirNegotiatedCapabilities() async throws {
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello(capabilities: ["core.v1"])
+    }
+    let connection = GuestConnection(endpoint: .guestControl, transport: transport)
+    _ = try await connection.open()
+
+    do {
+        _ = try await connection.send(GuestMoveTaskToDisplay(taskID: 1, displayID: 0))
+        Issue.record("MoveTaskToDisplay was sent without launch.v1")
+    } catch {
+        #expect(error == .capabilityMissing(capability: "launch.v1"))
+    }
+    do {
+        _ = try await connection.send(GuestGetHealth())
+        Issue.record("GetHealth was sent without health.v1")
+    } catch {
+        #expect(error == .capabilityMissing(capability: "health.v1"))
+    }
+    do {
+        _ = try await connection.send(GuestShutdown(reason: "test"))
+        Issue.record("Shutdown was sent without system.v1")
+    } catch {
+        #expect(error == .capabilityMissing(capability: "system.v1"))
+    }
+
+    #expect(transport.agents[0].requests.isEmpty)
+    await connection.close()
+}
+
+@Test(.timeLimit(.minutes(1)))
 func anInputAckOnTheControlChannelIsAViolation() async throws {
     let transport = InMemoryTransport { _, agent, _ in agent.sendHello() }
     let connection = GuestConnection(endpoint: .guestControl, transport: transport)

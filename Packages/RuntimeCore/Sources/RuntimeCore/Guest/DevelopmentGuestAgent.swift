@@ -387,6 +387,53 @@ public actor DevelopmentGuestAgent {
         }
     }
 
+    /// Moves one Android task to another display (guest-protocol.md §7.1 #16).
+    public func moveTask(
+        taskID: Int32,
+        toDisplay displayID: Int32,
+        toBack: Bool = false
+    ) async throws(GuestAgentFailure) {
+        try requireAvailable()
+        do {
+            _ = try await supervisor.send(
+                GuestMoveTaskToDisplay(taskID: taskID, displayID: displayID, toBack: toBack)
+            )
+        } catch {
+            throw .operation(error)
+        }
+    }
+
+    /// Lists Android tasks on one display, or across every display when `displayID` is nil.
+    public func listTasks(displayID: Int32? = nil) async throws(GuestAgentFailure) -> [GPTaskInfo] {
+        try requireAvailable()
+        do {
+            let result = try await supervisor.send(GuestListTasks(displayID: displayID))
+            return result.tasks
+        } catch {
+            throw .operation(error)
+        }
+    }
+
+    /// Reads the guest's health through Guest Agent operation 21.
+    public func getHealth() async throws(GuestAgentFailure) -> GPHealth {
+        try requireAvailable()
+        do {
+            return try await supervisor.send(GuestGetHealth())
+        } catch {
+            throw .operation(error)
+        }
+    }
+
+    /// Asks Android to shut down through Guest Agent operation 70.
+    public func shutdown(reason: String) async throws(GuestAgentFailure) {
+        try requireAvailable()
+        do {
+            _ = try await supervisor.send(GuestShutdown(reason: reason))
+        } catch {
+            throw .operation(error)
+        }
+    }
+
     /// Waits for display 0 to adopt a scanout mode, then applies the matching density and local IME policy.
     public func applyDisplayPolicy(for mode: ResolvedDisplayMode) async -> Bool {
         let width = mode.pixelSize.width

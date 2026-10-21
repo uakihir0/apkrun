@@ -28,6 +28,11 @@ final class ScanoutFrameSequence: @unchecked Sendable {
     private let lock = NSLock()
     private var nextValue: UInt64 = 1
 
+    /// The highest frame sequence assigned to a blit, even when its fence has not signaled yet.
+    var latestIssued: UInt64 {
+        lock.withLock { nextValue &- 1 }
+    }
+
     func take() -> UInt64 {
         lock.withLock {
             defer { nextValue &+= 1 }
@@ -145,6 +150,11 @@ public final class ScanoutPresenter: @unchecked Sendable {
     /// The generation of the pool.
     public var generation: UInt64 {
         pool.generation
+    }
+
+    /// The highest frame sequence assigned to a blit in this scanout, even if it is not ready to display yet.
+    var latestIssuedFrameSequence: UInt64 {
+        sequenceSource.latestIssued
     }
 
     /// The statistics so far.

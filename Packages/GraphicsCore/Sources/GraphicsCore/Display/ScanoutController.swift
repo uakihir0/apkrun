@@ -12,7 +12,12 @@ public struct ScanoutPoolHandle: @unchecked Sendable {
     public let surfaces: [IOSurface]
     /// Completed guest frames for this presenter generation.
     public let frames: AsyncStream<ScanoutFrame>
+    /// The highest frame sequence assigned to a blit, including frames that have not been offered yet.
+    public var latestIssuedFrameSequence: UInt64 {
+        latestIssuedFrameSequenceProvider()
+    }
 
+    private let latestIssuedFrameSequenceProvider: @Sendable () -> UInt64
     private let acknowledgeFrame: @Sendable (UInt64) -> Void
 
     /// Creates a pool handle. The optional acknowledgement closure is primarily useful to scanout fakes.
@@ -20,11 +25,13 @@ public struct ScanoutPoolHandle: @unchecked Sendable {
         generation: UInt64,
         surfaces: [IOSurface],
         frames: AsyncStream<ScanoutFrame>,
+        latestIssuedFrameSequence: @escaping @Sendable () -> UInt64 = { 0 },
         acknowledgeFrame: @escaping @Sendable (UInt64) -> Void = { _ in }
     ) {
         self.generation = generation
         self.surfaces = surfaces
         self.frames = frames
+        latestIssuedFrameSequenceProvider = latestIssuedFrameSequence
         self.acknowledgeFrame = acknowledgeFrame
     }
 
@@ -38,6 +45,7 @@ public struct ScanoutPoolHandle: @unchecked Sendable {
             generation: presenter.generation,
             surfaces: presenter.surfaces,
             frames: presenter.frames,
+            latestIssuedFrameSequence: { presenter.latestIssuedFrameSequence },
             acknowledgeFrame: { sequence in
                 device.frameDisplayed(
                     scanout: presenter.scanout,

@@ -476,7 +476,7 @@ func inputBindingRetriesWhenTheControlSessionChangesWhileOpening() async {
     let route = DevInputRoute()
     let binding = DevInputBinding(
         routes: [route],
-        currentSessionToken: { await scenario.sessionToken() },
+        sessionToken: { await scenario.sessionToken() },
         openInputChannel: {
             () async throws(GuestAgentFailure) -> DevBoundInputChannel in
             DevBoundInputChannel(
@@ -486,7 +486,7 @@ func inputBindingRetriesWhenTheControlSessionChangesWhileOpening() async {
         },
         focusDisplay: { displayID in await scenario.focusDisplay(displayID) },
         adbShellInvocationCount: { 0 },
-        pollingInterval: .milliseconds(1)
+        pollInterval: .milliseconds(1)
     )
     let (events, continuation) = AsyncStream.makeStream(of: DevBootEvent.self)
     let task = Task {
@@ -522,7 +522,7 @@ func inputBindingWaitsForTheControlSessionToBecomeReady() async {
     let route = DevInputRoute()
     let binding = DevInputBinding(
         routes: [route],
-        currentSessionToken: { await scenario.sessionToken() },
+        sessionToken: { await scenario.sessionToken() },
         openInputChannel: {
             () async throws(GuestAgentFailure) -> DevBoundInputChannel in
             DevBoundInputChannel(
@@ -532,7 +532,7 @@ func inputBindingWaitsForTheControlSessionToBecomeReady() async {
         },
         focusDisplay: { displayID in await scenario.focusDisplay(displayID) },
         adbShellInvocationCount: { 0 },
-        pollingInterval: .milliseconds(1)
+        pollInterval: .milliseconds(1)
     )
     let (events, continuation) = AsyncStream.makeStream(of: DevBootEvent.self)
     let task = Task {
@@ -562,7 +562,7 @@ func inputBindingRetriesWhenTheSessionChangesDuringRouteRegistration() async {
     await route.focusChanged(true, generation: 1)
     let binding = DevInputBinding(
         routes: [route],
-        currentSessionToken: { await scenario.sessionToken() },
+        sessionToken: { await scenario.sessionToken() },
         openInputChannel: {
             () async throws(GuestAgentFailure) -> DevBoundInputChannel in
             DevBoundInputChannel(
@@ -572,7 +572,7 @@ func inputBindingRetriesWhenTheSessionChangesDuringRouteRegistration() async {
         },
         focusDisplay: { displayID in await scenario.focusDisplay(displayID) },
         adbShellInvocationCount: { 0 },
-        pollingInterval: .milliseconds(1)
+        pollInterval: .milliseconds(1)
     )
     let (events, continuation) = AsyncStream.makeStream(of: DevBootEvent.self)
     let task = Task {

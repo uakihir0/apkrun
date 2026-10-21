@@ -270,7 +270,7 @@ public actor InputRouter {
     public func route(_ batch: [InputEvent], from session: SessionID) async
     public func routeText(_ event: ImeTextEvent, from session: SessionID) async
     public func focusChanged(_ session: SessionID, focused: Bool) async
-    public func sessionEnded(_ session: SessionID) async           // closes open gestures and keys
+    public func sessionEnded(_ session: SessionID, cancelGuestState: Bool = true) async
 }
 ```
 
@@ -278,7 +278,7 @@ public actor InputRouter {
 - Events are accepted only while the session is `running` or `backgrounded`. Otherwise they are dropped and counted.
 - Rate limits per session: 2000 events/s and 64 KiB of text/s. Excess is dropped with a counter and a rate-limited warning.
 - Coalescing applies when the guest stream's send buffer is above 64 KiB: consecutive `MOVE`, hover, and scroll events for the same display merge, and scroll axes add up. `DOWN`, `UP`, `CANCEL`, button, and key events are never dropped or merged.
-- During a development boot, each input connection is a secondary connection of the current control session. When the session is lost, `GuestAgentSupervisor` closes its secondary connections and `DevInputBinding` unbinds the routes until the control connection has resynchronized. It then opens an input connection with the new session token and binds the routes again.
+- During a development boot, `DevInputBinding` closes its shared route gate as soon as the state observer receives a non-ready Guest Agent state, then detaches routes and waits for a ready session token before rebinding. It prepares route registration and focus without exposing the route to `send`, reconciles the latest window focus, and rechecks the token and channel. All routes share a closed activation gate until those checks pass, then become available together. A loss observed while a binding is pending invalidates that candidate, so a late completion cannot reopen the gate. Shutdown closes the gate before inspecting the channel; it sends `cancelAll` only when the stream remains usable. If the input stream has disconnected, ending its local route skips a redundant `cancelAll`; the guest already releases held input when the stream closes.
 
 ### 7.2 Focus
 
@@ -344,7 +344,6 @@ The agent tracks per display the open touch gesture (`downTime`, last position),
 - Input errors are not user-facing. They are counters in the diagnostics snapshot: `input.dropped.rate`, `input.dropped.notRunning`, `input.dropped.invalid`, `input.dropped.channel` (events the input stream could not carry), `input.ime.unmappedCommand`, and `input.coalesced`. The health warning `agent.input.disconnected` reports a down agent input stream.
 - The `input.dropped.*` counters count what the injector sees refused. For ASYNC injection (§8), that is the refusal at the queue. An event that the framework accepts and then does not deliver is not counted, because the call returns before delivery.
 - Logging: `io.apkrun.input`, categories `translate` (wrapper), `route` (apkrund), and `ime` (both). Guest input lines use the logcat tag `ApkRunGuest` ([guest-components.md](guest-components.md) §9).
-- Development route rebinding emits a notice in the `route` category. The loss of a control session is logged by the supervisor as a recovery event.
 - The `input.route` signpost wraps `InputRouter.route`. There is no `input.translate` signpost: the window path is synchronous, and `Perf.interval` is asynchronous ([diagnostics.md](diagnostics.md) §4).
 - `InputRouter` keeps the counters. `apkrun dev boot` prints them when it stops, with the agent's `adb shell` command count. The input path starts no shell command, so the two counts are equal.
 - ACK event time: when `input.ack_trace.v1` is negotiated, and a batch requests both an ACK and its event time, `InputAck` carries the Android uptime `eventTime` of the last accepted `MotionEvent`. The field is optional and needs protocol minor version 1.1 ([guest-protocol.md](guest-protocol.md)). Android uptime is never subtracted from host timestamps.

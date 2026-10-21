@@ -76,7 +76,7 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 | Milestone | M3 (v0.1) |
 | Depends on | #25 |
 | Design | [input.md](../../02-design/input.md) §3, §7.1; [guest-components.md](../../02-design/guest-components.md) §3.3 |
-| Code | `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevInputBinding.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Guest/DevelopmentGuestAgent.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Guest/GuestAgentSupervisor.swift`, `Packages/RuntimeCore/Tests/RuntimeCoreTests/GuestAgentSupervisorTests.swift` |
+| Code | `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevInputBinding.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Guest/DevelopmentGuestAgent.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Guest/GuestAgentSupervisor.swift`, `Packages/RuntimeHost/Tests/RuntimeHostTests/DevInputBindingTests.swift`, `Packages/RuntimeCore/Tests/RuntimeCoreTests/GuestAgentSupervisorTests.swift` |
 
 **Goal.** After the guest agent restarts, pointer input works again in the same window without ending the boot. Today the bound channel stays after the loss, so input stays dead until the boot ends. This is a follow-up of #25.
 
@@ -89,12 +89,12 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 3. **Rebind.** When `GuestAgentSupervisor` reports the new agent ready, bind display 0 again. **Check:** `GuestAgentSupervisorTests` covers the loss and the rebind.
 
 **Tests.**
-- T0 and T1: `GuestAgentSupervisorTests` (loss, rebind, dropped events), and the existing supervisor tests still pass.
+- T0 and T1: `GuestAgentSupervisorTests` covers supervisor loss and reconnection; `DevInputBindingTests` covers route release, channel-drop accounting, and rebinding to the new session. The existing supervisor tests still pass.
 - T2: kill the agent during a development boot with a window, then click. The click reaches HelloText. Needs a Mac with a VM.
 - T3: none.
 
 **Done when.**
-- A T1 test in `GuestAgentSupervisorTests` covers the loss and the rebind. Events on the dead channel count as `input.dropped.channel`.
+- A T1 test covers the loss and the rebind. Events already sent to the dead channel count as `input.dropped.channel`, and later events do not use that channel.
 - On a device, after a forced kill of the agent, a click in the window reaches the app again, and the boot is not restarted.
 
 **Pitfalls.**

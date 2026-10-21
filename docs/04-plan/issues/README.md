@@ -103,6 +103,7 @@ The tasks in working order ([../roadmap.md](../roadmap.md) §1.3). A task can st
 | #14 | Reach Android init | M1 | #13 |  |
 | #96 | Cuttlefish host-service substitution | M1 | #14 |  |
 | #15 | Reach system_server and boot_completed | M1 | #14, #96 | G2 |
+| #107 | Update Android boot tests for runtime state snapshots | M1 | #15 |  |
 | #16 | ADB debugging over vsock | M1 | #15, #8 |  |
 | #17 | Install HelloText APK | M1 | #16 |  |
 | #18 | Launch HelloText APK | M1 | #17 |  |

@@ -699,6 +699,64 @@ final class AndroidInputTests: XCTestCase {
         }
     }
 
+    /// Fifty taps through the Mac window focus HelloText's field, and the next key reaches it each time (#102).
+    ///
+    /// The test moves focus away with Tab before each measured tap, then checks focus before typing. Tab never focuses
+    /// the field under test. It runs only on a dedicated lab GUI session because it posts system pointer events.
+    func testFiftyWindowTapsFocusTheFieldAndDeliverTheNextKey() async throws {
+        guard ProcessInfo.processInfo.environment["APKRUN_INPUT_INTERACTIVE_T2"] == "1" else {
+            throw XCTSkip("Run only with AndroidInputInteractive on a dedicated lab GUI session.")
+        }
+        let apk = try Self.fixture("APKRUN_FIXTURE_APK")
+        try Self.attachEnvironmentIdentity(fixture: apk, pointerDelivery: .windowServer)
+        try await AndroidInputRun.with(
+            apk: apk, package: Self.helloText, pointerDelivery: .windowServer
+        ) { run in
+            try await run.prepareForWindowServerPointerDispatch()
+            let pointer = try run.pointer()
+            let keys = try run.keyboard()
+            let countersBefore = try await run.inputCounters()
+            let touchPhasesBefore = try await run.inputWireTouchPhaseCounts()
+            let sampler = ShellInputSampler()
+            sampler.start()
+
+            do {
+                for _ in 0..<50 {
+                    try await Self.moveFocusAwayFromField(run, using: keys)
+                    let target = try await run.centre(of: Self.fieldID)
+                    try await pointer.click(at: target)
+                    try await Self.waitForFieldFocus(run, focused: true)
+                    try await keys.type("x")
+                }
+            } catch {
+                _ = await sampler.stop()
+                throw error
+            }
+
+            let shellInput = await sampler.stop()
+            let text = try await Self.fieldText(run)
+            let touchPhasesAfter = try await run.inputWireTouchPhaseCounts()
+            let countersAfter = try await run.inputCounters()
+
+            XCTAssertEqual(shellInput, [], "adb shell input processes ran during the sequence")
+            XCTAssertEqual(
+                text, String(repeating: "x", count: 50),
+                "each character sent after a tap must reach HelloText's focused field"
+            )
+            XCTAssertEqual(
+                touchPhasesAfter.delta(since: touchPhasesBefore),
+                InputWireTouchPhaseCounts(down: 50, up: 50),
+                "each Mac click must route exactly one touch DOWN and UP"
+            )
+            XCTAssertEqual(countersAfter.droppedRate - countersBefore.droppedRate, 0, "\(countersAfter)")
+            XCTAssertEqual(countersAfter.droppedNotRunning - countersBefore.droppedNotRunning, 0, "\(countersAfter)")
+            XCTAssertEqual(countersAfter.droppedNotFocused - countersBefore.droppedNotFocused, 0, "\(countersAfter)")
+            XCTAssertEqual(countersAfter.droppedInvalid - countersBefore.droppedInvalid, 0, "\(countersAfter)")
+            XCTAssertEqual(countersAfter.droppedChannel - countersBefore.droppedChannel, 0, "\(countersAfter)")
+            XCTAssertEqual(countersAfter.coalesced - countersBefore.coalesced, 0, "\(countersAfter)")
+        }
+    }
+
     /// Backspace removes the character before the cursor, the left arrow moves the cursor, and Enter is the editor action
     /// of the field, which logs `APKRUN-FIXTURE: editor action 6` (IME_ACTION_DONE, #26).
     func testBackspaceEnterAndArrowsEditTheField() async throws {
@@ -1443,6 +1501,41 @@ final class AndroidInputTests: XCTestCase {
             }
         }
         throw AndroidInputRunFailure.viewNotFound("the focus of \(fieldID)")
+    }
+
+    /// Leaves the field unfocused before the next pointer tap. This prevents a previous successful tap from hiding a
+    /// later focus failure.
+    private static func moveFocusAwayFromField(_ run: AndroidInputRun, using keys: InputKeyboard) async throws {
+        for _ in 0..<6 {
+            let xml = try await run.uiDump()
+            switch AndroidInputRun.isFocused(fieldID, in: xml) {
+            case false?:
+                return
+            case true?:
+                try await keys.tap(.tab)
+                try await Self.waitForFieldFocus(run, focused: false)
+                return
+            case nil:
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        throw AndroidInputRunFailure.viewNotFound("moving focus away from \(fieldID)")
+    }
+
+    /// Polls Android's focus state until it matches the expected value.
+    private static func waitForFieldFocus(_ run: AndroidInputRun, focused expected: Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        var lastXML = ""
+        while ContinuousClock.now < deadline {
+            lastXML = try await run.uiDump()
+            if AndroidInputRun.isFocused(fieldID, in: lastXML) == expected {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw AndroidInputRunFailure.timedOut(
+            "the focus of \(fieldID) to become \(expected); last packages: \(AndroidInputRun.packages(in: lastXML))"
+        )
     }
 
     /// The text of HelloText's field, from the fixture's `text` line after the debug `TEXT` broadcast (a query, not input).

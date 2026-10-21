@@ -551,6 +551,7 @@ Input tests run in their own configurations. Select the configuration and the me
 | Configuration | Method (`IntegrationTests/AndroidInputTests/…`) | Use and limits |
 |---|---|---|
 | `AndroidInputInteractive` | `testThreeConsecutiveHundredClickBatchesThroughWindowServer` | three 100-click batches through WindowServer (#103); posts system pointer events; trace off |
+| `AndroidInputInteractive` | `testFiftyWindowTapsFocusTheFieldAndDeliverTheNextKey` | fifty taps with focus cleared before each tap, followed by a key to HelloText's field (#102); requires a dedicated lab GUI session |
 | `AndroidInputTrace` | `testOneHundredClickDiagnosticTraceJoinsHostGuestAndFixture` | diagnostic only; its ACKs and debug listener perturb timing; cannot satisfy #25 or #103 |
 | `AndroidInputCadence` | `testThreeConsecutiveHundredClickBatchesThroughDirectView` | three batches at 50 ms press and gap through direct view dispatch; posts no system events; cannot satisfy #25 box 3 or #103 |
 | `AndroidInputCadence` | `testOneHundredClickDiagnosticTraceJoinsHostGuestAndFixtureThroughDirectView` | diagnostic only; one untraced warm-up, then a traced batch |

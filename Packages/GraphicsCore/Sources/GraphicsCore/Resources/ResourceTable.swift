@@ -359,8 +359,9 @@ struct ResourceTable: Sendable {
     /// Validates and records guest backing for `id`. Nothing changes when validation fails.
     ///
     /// Each entry must be non-empty, must not wrap the 64-bit address space, and
-    /// must lie in guest memory as `isInGuestMemory` reports. The total length must cover the
-    /// resource's bytes. Attaching backing to a resource that already has backing fails.
+    /// must lie in guest memory as `isInGuestMemory` reports. Host-only resources require backing
+    /// for their full estimate; VirGL resources may attach transfer pages smaller than that
+    /// estimate. Attaching backing to a resource that already has backing fails.
     mutating func attachBacking(
         id: UInt32,
         entries: [VirtioGPUMemoryEntry],
@@ -388,7 +389,7 @@ struct ResourceTable: Sendable {
             }
             totalLength += UInt64(entry.length)
         }
-        guard totalLength >= resource.byteEstimate else {
+        if resource.kind == .host2D, totalLength < resource.byteEstimate {
             throw .invalidParameter(field: "backing.too_small")
         }
         resources[id]?.backing = entries

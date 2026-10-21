@@ -151,16 +151,8 @@ M1 brings the stock Cuttlefish arm64 userdebug build 16373615 (Android 17, API 3
 
 **Goal.** Keep the Android boot integration test target buildable after `RuntimeSupervisor` events began carrying `RuntimeStateSnapshot` values.
 
-**Steps.**
-1. **Collect snapshot states.** Update the boot phase test to pass `snapshot.state` to its `RuntimeState` collector. **Check:** the `IntegrationTests` target builds for testing.
-2. **Verify the boot phase test.** Run `AndroidBootTests.testPhasesInOrder` against the test Android VM. **Check:** the ordered boot phases still match the expected sequence.
 
-**Tests.**
-- T2: `AndroidBootTests.testPhasesInOrder`.
-
-**Done when.**
-- The IntegrationTests target builds for testing.
-- `AndroidBootTests.testPhasesInOrder` passes on the real VM.
+**Result.** `AndroidBootTests.testPhasesInOrder` appends `RuntimeStateSnapshot.state` to the `RuntimeState` collector. The IntegrationTests target builds and the test passes against the Android VM in both test-plan repetitions. T2: `AndroidBootTests.testPhasesInOrder`.
 
 ---
 

@@ -1,0 +1,21 @@
+[package]
+name = "apkrun_vsockd"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+vsock-loopback = []
+
+[lib]
+name = "apkrun_vsockd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "apkrun_vsockd"
+path = "src/main.rs"
+
+[dependencies]
+android_logger = { version = "=0.15.1", default-features = false }
+libc = "=0.2.177"
+log = "=0.4.28"

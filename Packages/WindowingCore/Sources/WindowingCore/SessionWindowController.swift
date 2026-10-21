@@ -22,7 +22,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     private let source: any FrameSource
     private var gate: LayerFrameGate
     private var consumer: Task<Void, Never>?
-    private var presentationState = SessionWindowPresentationState()
+    private var presentationState: SessionWindowPresentationState
     private let onGeometryChanged:
         ((CGSize, CGFloat, Double, @escaping @MainActor (DisplayResizeOutcome) -> Void) -> Void)?
     private var geometryDebounce: Task<Void, Never>?
@@ -40,6 +40,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         inputSink: PointerInputSink? = nil,
         allowsResize: Bool = true,
         appIcon: NSImage? = nil,
+        holdsPlaceholderUntilAppRunning: Bool = false,
         onFocusChanged: (@MainActor (Bool) -> Void)? = nil,
         onGeometryChanged:
             ((CGSize, CGFloat, Double, @escaping @MainActor (DisplayResizeOutcome) -> Void) -> Void)? = nil
@@ -57,6 +58,9 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         self.onGeometryChanged = onGeometryChanged
         self.allowsResize = allowsResize
         self.onFocusChanged = onFocusChanged
+        presentationState = SessionWindowPresentationState(
+            holdsPlaceholderUntilAppRunning: holdsPlaceholderUntilAppRunning
+        )
         layerView.setInputEnabled(false)
         self.inputSink = inputSink
         let placeholderView = SessionWindowPlaceholderView(
@@ -136,6 +140,18 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     /// Updates the status shown until the first frame arrives.
     public func setPlaceholderStatus(_ status: String) {
         placeholderView?.setStatus(status)
+    }
+
+    /// Reveals the app after its first post-launch frame has committed to the window.
+    public func appDidPresentFirstFrame() {
+        presentationState.markAppRunning()
+        guard !presentationState.showsPlaceholder else {
+            updateInputAvailability()
+            return
+        }
+        placeholderView?.removeFromSuperview()
+        placeholderView = nil
+        updateInputAvailability()
     }
 
     /// Replaces the app frame with a persistent launch failure and its remediation.
@@ -330,18 +346,25 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     }
 }
 
-/// The placeholder remains visible until a current-generation frame has been committed to the window.
+/// Tracks frame commitment, optional app-launch readiness, and geometry safety for a session window.
 struct SessionWindowPresentationState: Equatable {
+    private let holdsPlaceholderUntilAppRunning: Bool
+    private(set) var hasAppReachedRunningState = false
     private(set) var hasPresentedFrame = false
     private(set) var hasFailed = false
     private(set) var uncertainAfterGeneration: UInt64?
 
+    init(holdsPlaceholderUntilAppRunning: Bool = false) {
+        self.holdsPlaceholderUntilAppRunning = holdsPlaceholderUntilAppRunning
+    }
+
     var showsPlaceholder: Bool {
-        !hasPresentedFrame
+        !hasPresentedFrame || (holdsPlaceholderUntilAppRunning && !hasAppReachedRunningState)
     }
 
     var acceptsInput: Bool {
-        hasPresentedFrame && !hasFailed && geometryIsCertain
+        hasPresentedFrame && (!holdsPlaceholderUntilAppRunning || hasAppReachedRunningState)
+            && !hasFailed && geometryIsCertain
     }
 
     var geometryIsCertain: Bool {
@@ -350,6 +373,10 @@ struct SessionWindowPresentationState: Equatable {
 
     mutating func markFramePresented() {
         hasPresentedFrame = true
+    }
+
+    mutating func markAppRunning() {
+        hasAppReachedRunningState = true
     }
 
     mutating func markGeometryUncertain(after generation: UInt64) {

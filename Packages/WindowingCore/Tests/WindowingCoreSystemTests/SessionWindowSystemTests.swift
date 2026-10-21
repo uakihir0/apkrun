@@ -11,7 +11,8 @@ import XCTest
 final class SessionWindowSystemTests: XCTestCase {
     func testIOSurfaceFrameReplacesThePlaceholderInANativeWindowScreenshot() async throws {
         guard CGPreflightScreenCaptureAccess() else {
-            throw XCTSkip("Screen Recording access is required to capture the test window; grant it to the test runner.")
+            throw XCTSkip(
+                "Screen Recording access is required to capture the test window; grant it to the test runner.")
         }
 
         let source = try SyntheticFrameSource()
@@ -26,7 +27,8 @@ final class SessionWindowSystemTests: XCTestCase {
             source: source,
             title: title,
             backingScale: 1,
-            allowsResize: false
+            allowsResize: false,
+            holdsPlaceholderUntilAppRunning: true
         )
         defer { windowController.close() }
 
@@ -55,7 +57,8 @@ final class SessionWindowSystemTests: XCTestCase {
             Self.hasPlaceholderContent(in: placeholderScreenshot, window: window),
             "the content area should show the placeholder's icon or text"
         )
-        XCTAssertFalse(Self.hasRedFrame(in: placeholderScreenshot), "the placeholder should remain before a frame arrives")
+        XCTAssertFalse(
+            Self.hasRedFrame(in: placeholderScreenshot), "the placeholder should remain before a frame arrives")
         Self.attach(placeholderScreenshot, named: "placeholder.png", to: self)
 
         let frameDisplayed = expectation(description: "Core Animation committed the synthetic IOSurface")
@@ -66,6 +69,20 @@ final class SessionWindowSystemTests: XCTestCase {
         }
         source.send(.frameReady(generation: 1, bufferIndex: 0, sequence: 1))
         await fulfillment(of: [frameDisplayed], timeout: 10)
+
+        let startupFrameScreenshot = screenshotDirectory.appendingPathComponent("startup-frame.png")
+        try Self.capture(window: window, to: startupFrameScreenshot)
+        XCTAssertFalse(
+            Self.hasRedFrame(in: startupFrameScreenshot),
+            "an Android frame must remain covered until the app session reaches running"
+        )
+        XCTAssertTrue(
+            Self.hasPlaceholderContent(in: startupFrameScreenshot, window: window),
+            "the placeholder should remain visible while the app is launching"
+        )
+        Self.attach(startupFrameScreenshot, named: "startup-frame.png", to: self)
+
+        windowController.appDidPresentFirstFrame()
 
         let frameScreenshot = screenshotDirectory.appendingPathComponent("iosurface-frame.png")
         try Self.capture(window: window, to: frameScreenshot)

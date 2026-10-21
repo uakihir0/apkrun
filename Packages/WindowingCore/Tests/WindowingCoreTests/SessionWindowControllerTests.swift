@@ -14,6 +14,24 @@ import Testing
     #expect(state.acceptsInput)
 }
 
+@Test func appWindowKeepsPlaceholderAndInputDisabledUntilTheAppFrameIsPresented() {
+    var state = SessionWindowPresentationState(holdsPlaceholderUntilAppRunning: true)
+
+    #expect(state.showsPlaceholder)
+    #expect(!state.acceptsInput)
+
+    state.markFramePresented()
+
+    #expect(state.hasPresentedFrame)
+    #expect(state.showsPlaceholder)
+    #expect(!state.acceptsInput)
+
+    state.markAppRunning()
+
+    #expect(!state.showsPlaceholder)
+    #expect(state.acceptsInput)
+}
+
 @Test func presentingAnotherFrameKeepsThePlaceholderHidden() {
     var state = SessionWindowPresentationState()
     state.markFramePresented()

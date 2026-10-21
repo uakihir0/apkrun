@@ -433,8 +433,8 @@ extension VirGLRendererSuite {
         device.deviceWillPause()
 
         #expect(controlQueue.completionCounts == Array(repeating: 1, count: requests.count))
-        let attachResponse = try VirtioGPUProtocol.decodeResponse(controlQueue.writtenBuffers[1])
-        #expect(attachResponse.body == .okNoData)
+        let responses = try controlQueue.writtenBuffers.map { try VirtioGPUProtocol.decodeResponse($0).body }
+        #expect(responses == Array(repeating: .okNoData, count: requests.count))
         #expect(device.statistics.rendererFailures == 0)
     }
 

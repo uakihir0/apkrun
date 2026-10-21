@@ -4,6 +4,8 @@
 # Tests/Fixtures/signing/test-fixture-a.jks.
 #
 #   scripts/build-fixtures.sh                     build out/HelloText.apk and check its signer
+#   scripts/build-fixtures.sh --app HelloText --variant debug
+#                                                 build the gate APK with the debug-only fixture diagnostics
 #   scripts/build-fixtures.sh --app HelloGL       build out/HelloGL.apk instead (the G3 gate, #24)
 #   scripts/build-fixtures.sh --app HelloCompose  build out/HelloCompose.apk instead (the list of #25, G5 of #31)
 #   scripts/build-fixtures.sh --app HelloWebView  build out/HelloWebView.apk instead (#30)
@@ -19,6 +21,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 fixtures="$repo_root/Tests/Fixtures/AndroidApps"
 app="HelloText"
+variant="release"
 build_tools_version="37.0.0"
 bundletool_version="1.18.3"
 bundletool_sha256="a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29"
@@ -27,7 +30,7 @@ bundletool_url="https://github.com/google/bundletool/releases/download/$bundleto
 expected_signer_sha256="a2f3893391ae70e6faee50a05c0d0c4b94505781f7af0d547c1625399e05f8b4"
 
 usage() {
-    printf 'usage: scripts/build-fixtures.sh [--app HelloText|HelloGL|HelloCompose|HelloWebView|HelloSplit] [--check-reproducible]\n' >&2
+    printf 'usage: scripts/build-fixtures.sh [--app HelloText|HelloGL|HelloCompose|HelloWebView|HelloSplit] [--variant release|debug] [--check-reproducible]\n' >&2
     exit 64
 }
 
@@ -40,6 +43,11 @@ while (($# > 0)); do
             app="$2"
             shift
             ;;
+        --variant)
+            (($# >= 2)) || usage
+            variant="$2"
+            shift
+            ;;
         *) usage ;;
     esac
     shift
@@ -48,8 +56,24 @@ case "$app" in
     HelloText | HelloGL | HelloCompose | HelloWebView | HelloSplit) ;;
     *) usage ;;
 esac
+case "$variant" in
+    release) ;;
+    debug)
+        [[ "$app" == HelloText ]] || usage
+        ;;
+    *) usage ;;
+esac
+[[ "$app" != HelloSplit || "$variant" == release ]] || usage
+if [[ "$variant" == debug ]]; then
+    variant_title="Debug"
+else
+    variant_title="Release"
+fi
 output_apk="$fixtures/out/$app.apk"
-gradle_apk="$fixtures/$app/build/outputs/apk/release/$app-release.apk"
+if [[ "$variant" == debug ]]; then
+    output_apk="$fixtures/out/$app-debug.apk"
+fi
+gradle_apk="$fixtures/$app/build/outputs/apk/$variant/$app-$variant.apk"
 gradle_bundle="$fixtures/$app/build/outputs/bundle/release/$app-release.aab"
 
 if [[ -z "${ANDROID_HOME:-}" ]]; then
@@ -163,7 +187,7 @@ if [[ "$mode" == "build" ]]; then
         printf 'build-fixtures: wrote %s\n' "$output_apks"
         exit 0
     fi
-    gradle_build ":$app:assembleRelease"
+    gradle_build ":$app:assemble$variant_title"
     verify_signer "$gradle_apk"
     mkdir -p "$(dirname "$output_apk")"
     cp "$gradle_apk" "$output_apk"
@@ -196,7 +220,7 @@ if [[ "$app" == "HelloSplit" ]]; then
     exit 1
 fi
 for run in 1 2; do
-    gradle_build ":$app:clean" ":$app:assembleRelease"
+        gradle_build ":$app:clean" ":$app:assemble$variant_title"
     cp "$gradle_apk" "$work/run$run.apk"
     verify_signer "$work/run$run.apk"
     "$aapt2" dump badging "$work/run$run.apk" > "$work/run$run.badging"

@@ -34,6 +34,20 @@
     <string>$(APKRUN_G3_ANDROID_HOME)</string>
     <key>APKRUN_G3_ARTIFACTS</key>
     <string>$(APKRUN_G3_ARTIFACTS)</string>
+    <key>APKRUN_G4_CLI</key>
+    <string>$(APKRUN_G4_CLI)</string>
+    <key>APKRUN_G4_BUNDLE</key>
+    <string>$(APKRUN_G4_BUNDLE)</string>
+    <key>APKRUN_G4_APK</key>
+    <string>$(APKRUN_G4_APK)</string>
+    <key>APKRUN_G4_GUEST_DIR</key>
+    <string>$(APKRUN_G4_GUEST_DIR)</string>
+    <key>APKRUN_G4_VIRGL_RUNTIME</key>
+    <string>$(APKRUN_G4_VIRGL_RUNTIME)</string>
+    <key>APKRUN_G4_ANDROID_HOME</key>
+    <string>$(APKRUN_G4_ANDROID_HOME)</string>
+    <key>APKRUN_G4_ARTIFACTS</key>
+    <string>$(APKRUN_G4_ARTIFACTS)</string>
     <key>LSMinimumSystemVersion</key>
     <string>27.0</string>
     <key>NSPrincipalClass</key>

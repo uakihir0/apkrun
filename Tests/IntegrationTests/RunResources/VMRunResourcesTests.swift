@@ -4,6 +4,9 @@ import Testing
 
 /// T0 checks of the per-run resources of the VM tests (test-strategy §3.10). They create only directories
 /// under `/tmp`, and they start no VM.
+private enum RunSetupTestError: Error {
+    case expectedFailure
+}
 
 @Test func adbPortIsKernelChosenWhenTheVariableIsUnsetOrEmpty() throws {
     #expect(try VMRunResources.adbHostPort(environment: [:]) == 0)
@@ -135,6 +138,19 @@ import Testing
         let attributes = try FileManager.default.attributesOfItem(atPath: run.home.path)
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o700)
     }
+}
+
+@Test func aFailedRunSetupRemovesItsHome() async throws {
+    let run = try VMRunResources.new(environment: [:])
+    #expect(FileManager.default.fileExists(atPath: run.home.path))
+
+    await #expect(throws: RunSetupTestError.expectedFailure) {
+        try await VMRunResources.withCleanupOnFailure(run) {
+            throw RunSetupTestError.expectedFailure
+        }
+    }
+
+    #expect(!FileManager.default.fileExists(atPath: run.home.path))
 }
 
 // MARK: - Removing a home

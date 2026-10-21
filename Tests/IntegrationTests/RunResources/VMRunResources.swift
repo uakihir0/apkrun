@@ -44,6 +44,19 @@ public struct VMRunResources: Equatable, Sendable {
         return resources
     }
 
+    /// Removes `run.home` if an asynchronous setup operation fails, preserving its original error.
+    public static func withCleanupOnFailure<Value>(
+        _ run: VMRunResources,
+        operation: () async throws -> Value
+    ) async throws -> Value {
+        do {
+            return try await operation()
+        } catch {
+            removeHomeOrReport(run.home)
+            throw error
+        }
+    }
+
     /// The developer ADB port that `environment` asks for. Unset or empty means `0`. Anything else must be a
     /// decimal port number from 0 to 65535. A malformed value is an error, never a silent default.
     public static func adbHostPort(environment: [String: String]) throws(VMRunResourcesFailure) -> UInt16 {

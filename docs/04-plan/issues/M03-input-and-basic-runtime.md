@@ -176,7 +176,7 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 | Field | Value |
 |---|---|
 | Milestone | M3 (v0.1) |
-| Depends on | #24, #25, #26 |
+| Depends on | #24, #25, #26, #107 |
 | Gate | G4 |
 | Design | [display-and-windowing.md](../../02-design/display-and-windowing.md) §5.3, §7.3, §7.6; [runtime-daemon.md](../../02-design/runtime-daemon.md) §7, §10; [cli.md](../../02-design/cli.md) §5 |
 | Code | `Packages/WindowingCore/Sources/WindowingCore/SessionWindowController.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Input/SessionRegistry.swift`, `Packages/RuntimeHost/Sources/RuntimeHost/EmbeddedRuntimeService.swift`, `CLI/apkrun/Dev/SurfacePoolFrameSource.swift`, `Tests/IntegrationTests/NativeWindowTests/` |

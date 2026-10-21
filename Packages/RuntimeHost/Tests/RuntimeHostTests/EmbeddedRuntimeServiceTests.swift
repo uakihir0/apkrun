@@ -1,6 +1,9 @@
+import CoreFoundation
 import CoreGraphics
 import Foundation
+import GraphicsCore
 import GuestProtocol
+import IOSurface
 import RuntimeAPI
 import RuntimeCore
 import Testing
@@ -234,6 +237,89 @@ func embeddedRuntimeServiceIgnoresAReadyBootFrameCommittedAfterLaunchStarts() as
 }
 
 @Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceWaitsPastAPrelaunchFlushHeldByThePresenter() async throws {
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let watermark = FrameSequenceWatermark(2)
+    let (frames, frameContinuation) = AsyncStream.makeStream(of: ScanoutFrame.self)
+    defer {
+        frameContinuation.finish()
+        display.finish()
+    }
+
+    let surfaceProperties: [String: Any] = [
+        kIOSurfaceWidth as String: display.pixelWidth,
+        kIOSurfaceHeight as String: display.pixelHeight,
+        kIOSurfaceBytesPerElement as String: 4,
+        kIOSurfaceBytesPerRow as String: display.pixelWidth * 4,
+        kIOSurfaceAllocSize as String: display.pixelWidth * display.pixelHeight * 4,
+    ]
+    let surface = try #require(IOSurfaceCreate(surfaceProperties as CFDictionary))
+    let pool = ScanoutPoolHandle(
+        generation: 1,
+        surfaces: [surface],
+        frames: frames,
+        latestIssuedFrameSequence: { watermark.value }
+    )
+    let scanout = try #require(ScanoutID(rawValue: 1))
+    let lease = DisplayLease(
+        leaseID: UUID(),
+        session: .app(UUID()),
+        scanout: scanout,
+        androidDisplayID: 3,
+        mode: display.mode,
+        pool: pool
+    )
+    try display.attach(lease: lease)
+
+    let guest = FakeEmbeddedSessionGuestAgent()
+    let probe = DevBootStopProbe()
+    let service = EmbeddedRuntimeService(
+        developerDisplay: display,
+        stopSignal: DevBootStopSignal(),
+        onAppFramePresented: {
+            await probe.record("app frame presented")
+        }
+    )
+    await service.attachGuestAgent(guest)
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let launchTask = Task {
+        try await service.launch(RuntimeLaunchRequest(packageID: package))
+    }
+
+    let visibilityDeadline = ContinuousClock.now + .seconds(2)
+    while await guest.visibilityQueryCount() < 2, ContinuousClock.now < visibilityDeadline {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await guest.launchedPackages == [package.rawValue])
+    #expect(await guest.visibilityQueryCount() >= 2)
+    #expect(await service.currentSession()?.state == .launching)
+    #expect(display.latestReadyFrameSequence == 2)
+
+    // Sequence 2 was accepted before launch but could not reach a free IOSurface until the window acknowledged one.
+    // Its ready event and commit must not satisfy the visible task's strictly-later-frame requirement.
+    display.noteFrameReady(generation: 1, sequence: 2)
+    display.frameDisplayed(generation: 1, sequence: 2)
+
+    let nextVisibilityDeadline = ContinuousClock.now + .seconds(2)
+    while await guest.visibilityQueryCount() < 3,
+        await service.currentSession()?.state == .launching,
+        ContinuousClock.now < nextVisibilityDeadline
+    {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await guest.visibilityQueryCount() >= 3)
+    #expect(await service.currentSession()?.state == .launching)
+    #expect(await probe.events.isEmpty)
+
+    watermark.set(3)
+    display.noteFrameReady(generation: 1, sequence: 3)
+    display.frameDisplayed(generation: 1, sequence: 3)
+
+    #expect(try await launchTask.value.state == .running)
+    #expect(await probe.events == ["app frame presented"])
+}
+
+@Test(.timeLimit(.minutes(1)))
 func embeddedRuntimeServiceEndsAnActiveSessionBeforePackageUninstall() async throws {
     let guest = FakeEmbeddedSessionGuestAgent()
     let service = EmbeddedRuntimeService()
@@ -364,6 +450,10 @@ func embeddedRuntimeServiceRestoresSessionWhenGuestCannotStopTasks() async throw
         Issue.record("Termination must not succeed while Android still reports package tasks.")
     } catch {
         #expect(error.code == "runtime.guestAgentOperationFailed")
+        #expect(
+            error.message
+                == "Android still reports tasks for this app."
+        )
     }
 
     #expect(await service.currentSession()?.state == .waitingForRuntime)
@@ -403,6 +493,10 @@ func embeddedRuntimeServiceReconcilesTerminalGuestSnapshotThroughMultiWindowCall
     await service.attachGuestAgent(guest)
 
     await guest.resynchronize(with: guestSnapshot(displays: [0]))
+    let reconciliationDeadline = ContinuousClock.now + .seconds(2)
+    while await reconciled.results.isEmpty, ContinuousClock.now < reconciliationDeadline {
+        try await Task.sleep(for: .milliseconds(10))
+    }
 
     let results = await reconciled.results
     #expect(results.count == 1)
@@ -427,6 +521,10 @@ func embeddedRuntimeServiceSignalsSingleWindowWhenSnapshotShowsAppExited() async
     await service.attachGuestAgent(guest)
 
     await guest.resynchronize(with: guestSnapshot(displays: [0]))
+    let stopDeadline = ContinuousClock.now + .seconds(2)
+    while await stopSignal.current() != .appExited, ContinuousClock.now < stopDeadline {
+        try await Task.sleep(for: .milliseconds(10))
+    }
 
     #expect(await service.currentSession()?.state == .ended(.appExited))
     #expect(await stopSignal.current() == .appExited)
@@ -448,6 +546,10 @@ func embeddedRuntimeServiceStopsSingleWindowAfterSnapshotLosesItsDisplay() async
     await service.attachGuestAgent(guest)
 
     await guest.resynchronize(with: guestSnapshot(displays: []))
+    let stopDeadline = ContinuousClock.now + .seconds(2)
+    while await stopSignal.current() != .appWindowCloseFailed, ContinuousClock.now < stopDeadline {
+        try await Task.sleep(for: .milliseconds(10))
+    }
 
     #expect(await service.currentSession()?.state == .ended(.error(.displayLost)))
     #expect(await stopSignal.current() == .appWindowCloseFailed)
@@ -638,6 +740,10 @@ func remoteLaunchRejectionStillEndsTheFailedSession() async throws {
         Issue.record("the simulated remote rejection must fail the launch")
     } catch {
         #expect(error.code == "runtime.guestAgentOperationFailed")
+        #expect(
+            error.message
+                == "The Guest Agent didn't complete the request: remote.launchApplication.INVALID_ARGUMENT."
+        )
     }
 
     #expect(await service.currentSession()?.state == .ended(.error(.runtimeFailed)))
@@ -908,6 +1014,7 @@ private actor FakeEmbeddedSessionGuestAgent: EmbeddedSessionGuestAgent {
     private(set) var launchedPackages: [String] = []
     private(set) var stoppedPackages: [String] = []
     private(set) var forceStoppedPackages: [String] = []
+    private var taskVisibilityQueryCount = 0
     private var taskVisibility: [Int32: (packageID: String, displayID: Int32, visible: Bool)] = [:]
     private var resynchronizationHandlerID: UUID?
     private var resynchronizationHandler: (@Sendable (GuestSnapshotState) async -> Void)?
@@ -938,10 +1045,15 @@ private actor FakeEmbeddedSessionGuestAgent: EmbeddedSessionGuestAgent {
     }
 
     func isTaskVisible(packageID: String, taskID: Int32, displayID: Int32) async -> Bool {
+        taskVisibilityQueryCount += 1
         guard let task = taskVisibility[taskID] else {
             return false
         }
         return task.packageID == packageID && task.displayID == displayID && task.visible
+    }
+
+    func visibilityQueryCount() -> Int {
+        taskVisibilityQueryCount
     }
 
     func stopApplication(package: String) async throws(GuestAgentFailure) -> Bool {
@@ -979,6 +1091,23 @@ private actor FakeEmbeddedSessionGuestAgent: EmbeddedSessionGuestAgent {
             uniquingKeysWith: { _, last in last }
         )
         await resynchronizationHandler?(snapshot)
+    }
+}
+
+private final class FrameSequenceWatermark: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValue: UInt64
+
+    init(_ value: UInt64) {
+        storedValue = value
+    }
+
+    var value: UInt64 {
+        lock.withLock { storedValue }
+    }
+
+    func set(_ value: UInt64) {
+        lock.withLock { storedValue = value }
     }
 }
 

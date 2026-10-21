@@ -157,13 +157,16 @@ public final class DeveloperDisplay: @unchecked Sendable {
         windowFrameLock.withLock { windowFrameCommitCountValue }
     }
 
-    /// The highest frame sequence delivered to the native window.
+    /// The highest issued flush sequence or relayed frame sequence.
     ///
-    /// A frame that is ready but whose Core Animation transaction has not committed is included here. Launch
-    /// readiness captures this watermark only after the Guest Agent reports the launched task visible, then waits
-    /// for a committed sequence above it.
+    /// A flush held by the presenter scheduler is included before its ready event reaches this display. Launch
+    /// readiness captures this watermark only after the Guest Agent reports the launched task visible, then waits for
+    /// a committed sequence above it.
     var latestReadyFrameSequence: UInt64 {
-        windowFrameLock.withLock { latestReadyFrameSequenceValue }
+        max(
+            windowFrameLock.withLock { latestReadyFrameSequenceValue },
+            core.latestIssuedFrameSequence
+        )
     }
 
     /// The highest frame sequence acknowledged by the native window's Core Animation completion callback.

@@ -86,6 +86,7 @@ adb shell 'CLASSPATH=$(pm path io.apkrun.guest | sed "s/^package://") \
 ### 3.3 Supervision
 
 - The host's `GuestAgentSupervisor` connects through the ADB forward ([guest-protocol.md](guest-protocol.md) §13.2). If the connection fails and `adb shell pidof apkrun_guestd` finds no process, the provisioner starts the agent again (§3.2). The restart budget is 3 restarts per 60 s. When it is spent, health `agent.guest` fails with `runtime.requiredAgentUnavailable` ([runtime-daemon.md](runtime-daemon.md) §12).
+- Secondary connections present the token of their control session. The supervisor closes them when that session ends and before restarting or reconnecting the agent. A client may open replacement connections after the supervisor has completed snapshot resynchronization and reports the new session ready.
 - The daemon has an uncaught-exception handler. It logs the stack trace (logcat tag `ApkRunGuest` and the agent log, §9) and exits with status 70.
 - In development mode the host kills the daemon before it reinstalls the APK. It finds the daemon with `pidof` and sends `kill` to that PID. Do not use `pkill -f`, which matches the device shell's own command line, or `pkill -x`, which does not match the daemon.
 

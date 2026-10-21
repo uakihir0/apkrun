@@ -91,6 +91,60 @@ private final class InputTouchEventRecorder: @unchecked Sendable {
     }
 }
 
+/// Reads the Guest Agent's shared snapshot without competing with DevBoot's task-event iterator.
+private actor GuestTaskSnapshotProbe {
+    private var supervisor: GuestAgentSupervisor?
+
+    func attach(_ supervisor: GuestAgentSupervisor) {
+        self.supervisor = supervisor
+    }
+
+    func taskIDs(package: String) async -> Set<Int32> {
+        guard let supervisor else {
+            return []
+        }
+        let snapshot = await supervisor.snapshot
+        return Set(snapshot.tasks.values.filter { $0.package == package }.map(\.taskID))
+    }
+}
+
+/// Holds the first app-frame callback so the native-window test can inspect the real placeholder.
+private actor AppFramePresentationGate {
+    private var released = false
+    private var reached = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func waitForArrival(timeout: Duration) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while !reached {
+            guard ContinuousClock.now < deadline else {
+                return false
+            }
+            try? await Task.sleep(for: min(.milliseconds(20), deadline - .now))
+        }
+        return true
+    }
+
+    func waitUntilReleased() async {
+        reached = true
+        guard !released else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        let waiting = waiters
+        waiters.removeAll()
+        for continuation in waiting {
+            continuation.resume()
+        }
+    }
+}
+
 /// One development boot with the window and input, as `apkrun dev launch` runs it (#25, decision D13).
 ///
 /// The boot is `DevBoot` with a developer display and a development input route. The window's adapters (the CLI's
@@ -107,10 +161,16 @@ final class AndroidInputRun {
     private let pointerDelivery: InputPointerDelivery
     private let display = DeveloperDisplay(pixelWidth: AndroidInputRun.width, pixelHeight: AndroidInputRun.height)
     private let route = DevInputRoute()
+    private let taskSnapshotProbe = GuestTaskSnapshotProbe()
+    private let appFramePresentationGate = AppFramePresentationGate()
+    private let appFramePresentationUpdates = AsyncStream.makeStream(of: Void.self)
+    private let appCloseRequests = AsyncStream.makeStream(of: Void.self)
+    private let closeStopsPackage: String?
     private let stop = AsyncStream.makeStream(of: Void.self)
     private let bootLog = BootLog()
     private var frames: DisplayFrames?
     private var framesSeen = 0
+    private var displayedFrameCountAtLaunch: Int?
     private var window: SessionWindowController?
     private var inputSink: WireSink?
     private var inputTraceRecorder: InputTraceRecorder?
@@ -118,17 +178,26 @@ final class AndroidInputRun {
     private var boot: Task<Void, Never>?
     private var activationPolicyToRestore: NSApplication.ActivationPolicy?
 
-    private init(home: URL, adb: AdbClient, pointerDelivery: InputPointerDelivery) {
+    private init(
+        home: URL,
+        adb: AdbClient,
+        pointerDelivery: InputPointerDelivery,
+        closeStopsPackage: String?
+    ) {
         self.home = home
         self.adb = adb
         self.pointerDelivery = pointerDelivery
+        self.closeStopsPackage = closeStopsPackage
     }
 
-    /// Runs `body` on a boot with the window and input, after `apk` is installed and `package` is started on display 0.
+    /// Runs `body` on a boot with the window and input. Most tests install and start through adb; the opted-in
+    /// native-window close test uses DevBoot's package-launch path.
     static func with(
         apk: URL,
         package: String,
         pointerDelivery: InputPointerDelivery = .directView,
+        inputBindingTimeout: Duration = .seconds(900),
+        stopPackageOnWindowClose: Bool = false,
         _ body: (AndroidInputRun) async throws -> Void
     ) async throws {
         if pointerDelivery == .windowServer, !CGPreflightPostEventAccess() {
@@ -162,11 +231,16 @@ final class AndroidInputRun {
         let run = AndroidInputRun(
             home: home,
             adb: AdbClient(executable: adbExecutable),
-            pointerDelivery: pointerDelivery
+            pointerDelivery: pointerDelivery,
+            closeStopsPackage: stopPackageOnWindowClose ? package : nil
         )
-        run.startBoot(guestAgentDirectory: URL(fileURLWithPath: guest, isDirectory: true))
+        run.startBoot(
+            guestAgentDirectory: URL(fileURLWithPath: guest, isDirectory: true),
+            apk: apk,
+            package: package
+        )
         do {
-            try await run.prepare(apk: apk, package: package)
+            try await run.prepare(apk: apk, package: package, inputBindingTimeout: inputBindingTimeout)
             try await body(run)
         } catch {
             await run.finish()
@@ -184,14 +258,8 @@ final class AndroidInputRun {
         return InputPointer(window: window, view: view, mapper: mapper, delivery: pointerDelivery)
     }
 
-    /// Activates the display window before the test posts system mouse events.
-    func prepareForWindowServerPointerDispatch() async throws {
-        guard pointerDelivery == .windowServer else {
-            throw AndroidInputRunFailure.windowNotActive("the test selected direct view delivery")
-        }
-        guard NSScreen.screens.count == 1 else {
-            throw AndroidInputRunFailure.ambiguousDisplay
-        }
+    /// Makes the app a regular, key-window owner before the test sends input through the view.
+    func activateWindowForInput() async throws {
         let (window, view) = try windowAndView()
         let application = NSApplication.shared
         if activationPolicyToRestore == nil {
@@ -204,7 +272,7 @@ final class AndroidInputRun {
         window.makeFirstResponder(view)
         let deadline = ContinuousClock.now + .seconds(5)
         while ContinuousClock.now < deadline {
-            if application.isActive, window.isKeyWindow {
+            if application.isActive, window.isKeyWindow, window.firstResponder === view {
                 return
             }
             try await Task.sleep(for: .milliseconds(50))
@@ -223,12 +291,124 @@ final class AndroidInputRun {
         )
     }
 
+    /// Activates the display window before the test posts system mouse events.
+    func prepareForWindowServerPointerDispatch() async throws {
+        guard pointerDelivery == .windowServer else {
+            throw AndroidInputRunFailure.windowNotActive("the test selected direct view delivery")
+        }
+        guard NSScreen.screens.count == 1 else {
+            throw AndroidInputRunFailure.ambiguousDisplay
+        }
+        try await activateWindowForInput()
+    }
+
     /// Waits until the window sink has routed all previously received view events.
     func drainInput() async throws {
         guard let inputSink else {
             throw AndroidInputRunFailure.inputRouteUnbound
         }
         _ = await inputSink.drain()
+    }
+
+    /// Waits for the first app frame in DevBoot's real window launch path.
+    func waitForDisplayedFrameAfterLaunch(timeout: Duration = .seconds(30)) async throws {
+        if closeStopsPackage != nil {
+            try await waitUntil(timeout: timeout, "the post-launch app frame") {
+                self.bootLog.contains("window app running")
+            }
+            return
+        }
+        guard let frames, let baseline = displayedFrameCountAtLaunch else {
+            throw AndroidInputRunFailure.inputRouteUnbound
+        }
+        let deadline = ContinuousClock.now + timeout
+        while frames.displayedFrameCount <= baseline {
+            guard ContinuousClock.now < deadline else {
+                throw AndroidInputRunFailure.timedOut(
+                    "a displayed IOSurface frame after package launch "
+                        + "(baseline \(baseline), current \(frames.displayedFrameCount))")
+            }
+            try await Task.sleep(for: min(.milliseconds(20), deadline - .now))
+        }
+    }
+
+    /// Lets a test release DevBoot after it has inspected the launch placeholder.
+    func allowAppFrameToReplacePlaceholder() async {
+        await appFramePresentationGate.release()
+    }
+
+    /// Waits until DevBoot has committed the first app frame and paused before revealing it.
+    func waitForAppFrameAtPlaceholder(timeout: Duration = .seconds(180)) async throws {
+        guard await appFramePresentationGate.waitForArrival(timeout: timeout) else {
+            throw AndroidInputRunFailure.timedOut("DevBoot to hold its first app-frame callback")
+        }
+    }
+
+    /// Closes the native window and observes successful task removal before DevBoot shuts down Android.
+    func closeWindowAndWaitForTaskVanished(package: String, timeout: Duration = .seconds(20)) async throws {
+        guard closeStopsPackage == package, let window else {
+            throw AndroidInputRunFailure.timedOut("the opted-in native window for \(package)")
+        }
+        let baselineDeadline = ContinuousClock.now + .seconds(10)
+        var baselineTaskIDs = await taskSnapshotProbe.taskIDs(package: package)
+        while baselineTaskIDs.isEmpty, ContinuousClock.now < baselineDeadline {
+            if let failure = bootLog.failureEvent {
+                throw AndroidInputRunFailure.bootEnded("before closing \(package): \(failure)")
+            }
+            try await Task.sleep(for: .milliseconds(50))
+            baselineTaskIDs = await taskSnapshotProbe.taskIDs(package: package)
+        }
+        guard !baselineTaskIDs.isEmpty else {
+            throw AndroidInputRunFailure.timedOut(
+                "a running Guest Agent task for \(package) before window close (boot: \(bootLog.recent))")
+        }
+        window.close()
+
+        let deadline = ContinuousClock.now + timeout
+        var successfulStopObserved = false
+        while ContinuousClock.now < deadline {
+            if let failure = bootLog.failureEvent ?? bootLog.closePolicyFailure(package: package) {
+                throw AndroidInputRunFailure.bootEnded("after closing \(package): \(failure)")
+            }
+            let currentTaskIDs = await taskSnapshotProbe.taskIDs(package: package)
+            let taskVanished = baselineTaskIDs.isDisjoint(with: currentTaskIDs)
+            if bootLog.finishedStoppingPackage(package),
+                taskVanished,
+                currentTaskIDs.isEmpty,
+                !bootLog.hasEnded
+            {
+                successfulStopObserved = true
+                break
+            }
+            if bootLog.hasEnded {
+                throw AndroidInputRunFailure.bootEnded(
+                    "DevBoot ended before observing its successful stop and TaskVanished for \(package); "
+                        + "remaining task IDs: \(currentTaskIDs.sorted()), boot: \(bootLog.recent)")
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard successfulStopObserved else {
+            throw AndroidInputRunFailure.timedOut(
+                "successful StopApplication and TaskVanished before DevBoot shutdown; original task IDs "
+                    + "\(baselineTaskIDs.sorted()), remaining task IDs "
+                    + "\(await taskSnapshotProbe.taskIDs(package: package).sorted()), boot: \(bootLog.recent)")
+        }
+
+        let shutdownDeadline = ContinuousClock.now + timeout
+        while !bootLog.hasEnded, ContinuousClock.now < shutdownDeadline {
+            if let failure = bootLog.failureEvent ?? bootLog.closePolicyFailure(package: package) {
+                throw AndroidInputRunFailure.bootEnded("after successful app close request: \(failure)")
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard bootLog.hasEnded else {
+            throw AndroidInputRunFailure.timedOut(
+                "DevBoot to exit after a successful StopApplication and TaskVanished; boot: \(bootLog.recent)")
+        }
+        if let failure = bootLog.failureEvent {
+            throw AndroidInputRunFailure.bootEnded("after the app close request: \(failure)")
+        }
+        await boot?.value
     }
 
     /// The route counters after all previously received view events have been routed.
@@ -563,7 +743,11 @@ final class AndroidInputRun {
     func finish() async {
         clearInputTraceCapture()
         _ = await route.stopAcknowledgementHistoryCapture()
+        await appFramePresentationGate.release()
+        appFramePresentationUpdates.continuation.finish()
+        window?.onClose = nil
         window?.close()
+        appCloseRequests.continuation.finish()
         if let activationPolicyToRestore {
             let restored = NSApplication.shared.setActivationPolicy(activationPolicyToRestore)
             if !restored {
@@ -590,13 +774,44 @@ final class AndroidInputRun {
         inputTouchEventRecorder = nil
     }
 
-    private func startBoot(guestAgentDirectory: URL) {
+    private func startBoot(guestAgentDirectory: URL, apk: URL, package: String) {
         var options = DevBootOptions(gpu: .virgl, stopWhenReady: false, guestAgentDirectory: guestAgentDirectory)
         options.developerDisplay = display
         options.inputRoute = route
+        if closeStopsPackage != nil {
+            options.launchPackage = package
+            options.launchAPKURL = apk
+        }
         let bootLog = bootLog
+        let appFramePresentationGate = appFramePresentationGate
+        let appFramePresentationUpdates = appFramePresentationUpdates
         let stops = stop.stream
+        let appCloseRequests = closeStopsPackage == nil ? nil : self.appCloseRequests.stream
         let home = home
+        let taskSnapshotProbe = self.taskSnapshotProbe
+        let adb = self.adb
+        Task { @MainActor [weak self] in
+            for await _ in appFramePresentationUpdates.stream {
+                guard let self else { return }
+                self.window?.appDidPresentFirstFrame()
+                self.bootLog.append("window app running")
+            }
+        }
+        let onRuntimeReady: (@Sendable (DevelopmentRuntimeContext) async throws -> (any RuntimeSessionService)?)?
+        if closeStopsPackage != nil {
+            onRuntimeReady = { context in
+                guard let agent = await context.supervisor.developmentGuestAgent else {
+                    return nil
+                }
+                try await adb.connect(timeout: .seconds(30))
+                _ = try await adb.shell("input keyevent 82")
+                _ = try await adb.shell("wm dismiss-keyguard")
+                await taskSnapshotProbe.attach(agent.supervisor)
+                return nil
+            }
+        } else {
+            onRuntimeReady = nil
+        }
         let report: @Sendable (DevBootEvent) -> Void = { event in
             if case .message(let text) = event { bootLog.append(text) }
             if case .warning(let text) = event { bootLog.append(text) }
@@ -607,7 +822,19 @@ final class AndroidInputRun {
         boot = Task.detached {
             do {
                 try await DevBoot().run(
-                    options: options, environment: ["APKRUN_HOME": home.path], stopRequests: stops, onEvent: report)
+                    options: options,
+                    environment: ["APKRUN_HOME": home.path],
+                    stopRequests: stops,
+                    appCloseRequests: appCloseRequests,
+                    onRuntimeReady: onRuntimeReady,
+                    onAppFramePresented: { packageID in
+                        if packageID == nil {
+                            await appFramePresentationGate.waitUntilReleased()
+                            appFramePresentationUpdates.continuation.yield(())
+                        }
+                    },
+                    onEvent: report
+                )
             } catch {
                 bootLog.append("failed: \(error)")
             }
@@ -628,7 +855,22 @@ final class AndroidInputRun {
             let scale = NSScreen.main?.backingScaleFactor ?? 1
             let sink = WireSink(route: route)
             let window = SessionWindowController(
-                source: source, title: Self.windowTitle, backingScale: scale, inputSink: sink)
+                source: source,
+                title: Self.windowTitle,
+                backingScale: scale,
+                inputSink: sink,
+                allowsResize: false,
+                holdsPlaceholderUntilAppRunning: closeStopsPackage != nil,
+                onFocusChanged: { [sink] focused in
+                    sink.focusChanged(focused)
+                }
+            )
+            if closeStopsPackage != nil {
+                let closeContinuation = appCloseRequests.continuation
+                window.onClose = {
+                    closeContinuation.yield(())
+                }
+            }
             window.show()
             frames = source
             self.window = window
@@ -643,7 +885,8 @@ final class AndroidInputRun {
 
     /// Starts the launcher activity of `package` by its component name, as AndroidPackageTests does (#18), and waits until
     /// its process runs. monkey starts nothing on this image (IR-1286). A launch that starts no process throws with the
-    /// resumed activity and the fatal lines of the guest log, so the first failure names the cause.
+    /// resumed activity and the fatal lines of the guest log, so the first failure names the cause. The native-window
+    /// test instead launches through DevBoot to exercise its production close request path.
     private func launch(_ package: String) async throws {
         try await adb.startActivity(component: "\(package)/.MainActivity")
         for _ in 0..<30 {
@@ -659,26 +902,32 @@ final class AndroidInputRun {
                 + "fatal: \(fatal.trimmingCharacters(in: .whitespacesAndNewlines))")
     }
 
-    /// Waits until the input is bound and frames have arrived, then installs `apk` and starts `package`. The launch is
-    /// `monkey` with one event, which starts the launcher activity: the boot would start a named package before the
-    /// install could happen, so the suite starts it over adb.
-    private func prepare(apk: URL, package: String) async throws {
-        try await waitUntil(seconds: 900, "input is bound to display 0") {
-            self.bootLog.contains("input is bound to display 0")
+    /// Waits until the input is bound and frames have arrived. Ordinary input tests install and start via adb; the
+    /// native-window test opts into DevBoot's real package install and launch path.
+    private func prepare(apk: URL, package: String, inputBindingTimeout: Duration) async throws {
+        try await waitUntil(timeout: inputBindingTimeout, "input is bound to display [0]") {
+            self.bootLog.contains("input is bound to display [0]")
         }
-        try await waitUntil(seconds: 120, "the first frames") { self.framesSeen >= 2 }
+        try await waitUntil(timeout: .seconds(120), "the first frames") { self.framesSeen >= 2 }
         try await adb.connect(timeout: .seconds(30))
-        try await adb.install(apk: apk)
-        // The lock screen covers the app on this image: the dump of the first failing case showed only SystemUI (IR-1285). The
-        // G3 gate wakes the screen and dismisses the keyguard the same way (G3GraphicsTests). These run before the sequence.
-        _ = try await adb.shell("input keyevent 82")
-        _ = try await adb.shell("wm dismiss-keyguard")
-        try await launch(package)
+        if closeStopsPackage != nil {
+            try await waitUntil(timeout: .seconds(180), "DevBoot to create the native launch window") {
+                self.window != nil
+            }
+        } else {
+            try await adb.install(apk: apk)
+            // The lock screen covers the app on this image: the dump of the first failing case showed only SystemUI (IR-1285). The
+            // G3 gate wakes the screen and dismisses the keyguard the same way (G3GraphicsTests). These run before the sequence.
+            _ = try await adb.shell("input keyevent 82")
+            _ = try await adb.shell("wm dismiss-keyguard")
+            displayedFrameCountAtLaunch = frames?.displayedFrameCount
+            try await launch(package)
+        }
     }
 
-    /// Polls `condition` every 200 ms until it holds. It throws when `seconds` have passed.
-    private func waitUntil(seconds: Double, _ what: String, _ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(seconds)
+    /// Polls `condition` every 200 ms until it holds or `timeout` has passed.
+    private func waitUntil(timeout: Duration, _ what: String, _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + timeout
         while !condition() {
             // A boot that has ended (a graphics failure, for example) cannot reach the condition, so stop waiting.
             if bootLog.hasEnded {
@@ -931,6 +1180,7 @@ private final class DisplayFrames: FrameSource, @unchecked Sendable {
     private let lock = NSLock()
     private var sets: [UInt64: FrameSurfaceSet]
     private var current: FrameSurfaceSet
+    private var displayedFrameTotal = 0
     let frames: AsyncStream<FrameSourceEvent>
     private let continuation: AsyncStream<FrameSourceEvent>.Continuation
     private let display: DeveloperDisplay
@@ -977,10 +1227,13 @@ private final class DisplayFrames: FrameSource, @unchecked Sendable {
 
     func frameDisplayed(generation: UInt64, sequence: UInt64) {
         display.frameDisplayed(generation: generation, sequence: sequence)
+        lock.withLock { displayedFrameTotal += 1 }
         if generation == currentSurfaceSet.generation {
             lock.withLock { sets = sets.filter { $0.key >= generation } }
         }
     }
+
+    var displayedFrameCount: Int { lock.withLock { displayedFrameTotal } }
 
     private static func frameSurfaceSet(_ surfaceSet: DeveloperSurfaceSet) -> FrameSurfaceSet {
         FrameSurfaceSet(
@@ -1053,10 +1306,12 @@ struct InputWireTouchPhaseCounts: Equatable, Sendable, CustomStringConvertible {
 private final class WireSink: PointerInputSink, @unchecked Sendable {
     private enum Command: Sendable {
         case events([InputCore.InputEvent])
+        case focusChanged(Bool, generation: UInt64)
         case drained(CheckedContinuation<InputWireTouchPhaseCounts, Never>)
     }
 
     private let queue: AsyncStream<Command>.Continuation
+    @MainActor private var focusGeneration: UInt64 = 0
     // `IOSurfaceLayerView` calls `deliver` on the main thread, and the test changes this only on MainActor before input.
     private var traceRecorder: InputTraceRecorder?
     private var touchEventRecorder: InputTouchEventRecorder?
@@ -1077,6 +1332,8 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
                         touchPhaseCounts.record(wireEvents)
                         await route.send(RuntimeAPI.InputBatch(events: wireEvents))
                     }
+                case .focusChanged(let focused, let generation):
+                    await route.focusChanged(focused, generation: generation)
                 case .drained(let continuation):
                     continuation.resume(returning: touchPhaseCounts)
                 }
@@ -1088,6 +1345,12 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
         traceRecorder?.recordTranslated(events)
         touchEventRecorder?.record(events)
         queue.yield(.events(events))
+    }
+
+    @MainActor
+    func focusChanged(_ focused: Bool) {
+        focusGeneration &+= 1
+        queue.yield(.focusChanged(focused, generation: focusGeneration))
     }
 
     func setTraceRecorder(_ recorder: InputTraceRecorder?) {
@@ -1199,6 +1462,23 @@ private final class BootLog: @unchecked Sendable {
 
     var hasEnded: Bool {
         lock.withLock { ended }
+    }
+
+    var failureEvent: String? {
+        lock.withLock { lines.first(where: { $0.hasPrefix("failed:") }) }
+    }
+
+    func finishedStoppingPackage(_ package: String) -> Bool {
+        contains("finished Android tasks for \(package)")
+    }
+
+    func closePolicyFailure(package: String) -> String? {
+        lock.withLock {
+            lines.first {
+                $0 == "Android still reports tasks for \(package) after the close request"
+                    || $0.hasPrefix("could not finish Android tasks for \(package):")
+            }
+        }
     }
 
     var recent: String {

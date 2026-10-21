@@ -179,7 +179,7 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 | Depends on | #24, #25, #26, #107 |
 | Gate | G4 |
 | Design | [display-and-windowing.md](../../02-design/display-and-windowing.md) §5.3, §7.3, §7.6; [runtime-daemon.md](../../02-design/runtime-daemon.md) §7, §10; [cli.md](../../02-design/cli.md) §5 |
-| Code | `Packages/WindowingCore/Sources/WindowingCore/SessionWindowController.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Input/SessionRegistry.swift`, `Packages/RuntimeHost/Sources/RuntimeHost/EmbeddedRuntimeService.swift`, `CLI/apkrun/Dev/SurfacePoolFrameSource.swift`, `Tests/IntegrationTests/NativeWindowTests/` |
+| Code | `Packages/GraphicsCore/Sources/GraphicsCore/Display/ScanoutController.swift`, `Packages/GraphicsCore/Sources/GraphicsCore/Display/ScanoutPresenter.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Boot/DevelopmentDisplay.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Input/SessionRegistry.swift`, `Packages/RuntimeCore/Tests/RuntimeCoreTests/DevelopmentDisplayTests.swift`, `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DeveloperDisplay.swift`, `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevBoot.swift`, `Packages/RuntimeHost/Sources/RuntimeHost/EmbeddedRuntimeService.swift`, `Packages/RuntimeHost/Tests/RuntimeHostTests/EmbeddedRuntimeServiceTests.swift`, `Packages/WindowingCore/Sources/WindowingCore/SessionWindowController.swift`, `CLI/apkrun/Dev/SurfacePoolFrameSource.swift`, `Tests/IntegrationTests/NativeWindowTests/`, `scripts/run-gate.sh`, `scripts/tools/check-g4-evidence.py`, `scripts/tests/test_run_gate_g4.sh`, `scripts/tests/test_check_g4_evidence.py` |
 
 **Goal.** `apkrun dev launch` with HelloText opens a normal Mac window that shows HelloText and accepts mouse and keyboard input. The window has no emulator chrome.
 
@@ -193,13 +193,13 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 2. **Frame source.** Bind `SurfacePoolFrameSource` to the session's `SurfaceSet` ([display-and-windowing.md](../../02-design/display-and-windowing.md) §5.3). **Check:** T2 sees the placeholder, then HelloText.
 3. **Sessions.** `SessionRegistry` opens and closes display 0 sessions, calls `ScanoutController` for scanout 0, and follows the session states of [state-machines.md](../../01-architecture/state-machines.md) §3. **Check:** T0 covers the states that apply to display 0.
 4. **Launch command.** `apkrun dev launch <apk|package>` boots Android if needed, installs the APK through `AdbClient`, launches it on display 0 through the Guest Agent, and opens the window. **Check:** T2 clicks the button and types into the field.
-5. **Close policy.** Closing the window sends `StopApplication` with `FINISH_TASKS` ([display-and-windowing.md](../../02-design/display-and-windowing.md) §7.6). The CLI exits 0 after the last window closes. **Check:** T2 receives `TaskVanished` for HelloText.
+5. **Close policy.** Closing the window sends `StopApplication` with `FINISH_TASKS` ([display-and-windowing.md](../../02-design/display-and-windowing.md) §7.6). The CLI exits 0 after the last window closes. **Check:** T2 confirms the Guest Agent snapshot no longer lists HelloText's task and DevBoot exits cleanly after window close.
 6. **Gate.** **Check:** `scripts/run-gate.sh G4` passes on the reference Mac.
 
 **Tests.**
 - T1: the screenshot test in `Packages/WindowingCore/Tests/WindowingCoreSystemTests/`.
-- T2: `NativeWindowTests`: the window, a click, and typing.
-- T3: G4 check `G4NativeWindow` ([test-strategy.md](../test-strategy.md) §5): 100 of 100 clicks, `Hello, APKRun 123!`, Esc goes to `screen main`, and the adb shell counter does not change. Manual check C01-5.
+- T2: `NativeWindowTests`: the window, a click, typing, and a Guest Agent snapshot that no longer lists HelloText's task before DevBoot exits cleanly after window close.
+- T3: G4 check `G4NativeWindow` ([test-strategy.md](../test-strategy.md) §5): 100 of 100 clicks, `Hello, APKRun 123!`, Esc goes to `screen main`, and the adb shell counter does not change. The test records only the active native window with ScreenCaptureKit. It timestamps every posted host event and requires frames from the recording stream to bracket the event range; the completed movie must contain a readable video track. Manually record C01-1 through C01-5 in [test-strategy.md](../test-strategy.md) §8.2; C01-5 launches from a new Terminal window.
 
 **Done when.**
 - Launching the test opens a normal Mac window with HelloText. Mouse and keyboard input work.

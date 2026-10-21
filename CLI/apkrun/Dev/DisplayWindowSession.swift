@@ -7,6 +7,7 @@
     private enum DisplayWindowUpdate: Sendable {
         case title(String)
         case status(String)
+        case appRunning
     }
 
     /// The window of `apkrun dev boot --window`: the display, the stop requests, and the event loop (#24).
@@ -192,6 +193,7 @@
                 display: display,
                 showStatistics: showStatistics,
                 inputSink: inputSink,
+                holdsPlaceholderUntilAppRunning: stopsAppOnClose,
                 onFocusChanged: { [inputSink] focused in
                     inputSink.focusChanged(focused)
                 },
@@ -220,6 +222,8 @@
                         pump.setWindowTitle(title)
                     case .status(let status):
                         pump.setPlaceholderStatus(status)
+                    case .appRunning:
+                        pump.appDidPresentFirstFrame()
                     }
                 }
             }
@@ -231,6 +235,10 @@
 
         func publishPlaceholderStatus(_ status: String) {
             windowUpdateContinuation.yield(.status(status))
+        }
+
+        func publishAppRunning() {
+            windowUpdateContinuation.yield(.appRunning)
         }
 
         @MainActor

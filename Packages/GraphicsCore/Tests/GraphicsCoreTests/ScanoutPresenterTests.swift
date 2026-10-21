@@ -145,6 +145,54 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
     presenter.close()
 }
 
+@Test func poolHandleWatermarkIncludesABlitWhoseFrameIsStillInFlight() async throws {
+    let harness = try PresenterHarness()
+    let presenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)
+    guard let pool = harness.device.poolHandle(for: scanoutZero) else {
+        Issue.record("the attached presenter should have a pool handle")
+        return
+    }
+    harness.engine.autoCompletePresentFences = false
+    let control = harness.send(bindAndFlush(resource: 3, rect: fullRect) + [flushRequest(resource: 3, rect: fullRect)])
+    try await eventually { control.completionCounts == [1, 1, 1] }
+    try await eventually { blitCalls(harness.engine).count == 1 }
+
+    #expect(presenter.statistics.framesPresented == 0)
+    #expect(pool.latestIssuedFrameSequence == 1)
+
+    presenter.close()
+}
+
+@Test func poolHandleWatermarkIncludesAFlushHeldUntilAConsumerAcknowledgement() async throws {
+    let harness = try PresenterHarness()
+    let presenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)
+    guard let pool = harness.device.poolHandle(for: scanoutZero) else {
+        Issue.record("the attached presenter should have a pool handle")
+        return
+    }
+
+    let first = harness.send(
+        bindAndFlush(resource: 3, rect: fullRect) + [flushRequest(resource: 3, rect: fullRect)]
+    )
+    try await eventually { first.completionCounts == [1, 1, 1] }
+    try await eventually { presenter.statistics.framesPresented == 1 }
+    for expected: UInt64 in 2...3 {
+        let next = harness.send([flushRequest(resource: 3, rect: fullRect)])
+        try await eventually { next.completionCounts == [1] }
+        try await eventually { presenter.statistics.framesPresented == expected }
+    }
+
+    let pending = harness.send([flushRequest(resource: 3, rect: fullRect)])
+    try await eventually { pending.completionCounts == [1] }
+    #expect(presenter.statistics.framesPresented == 3)
+    #expect(pool.latestIssuedFrameSequence == 4)
+
+    presenter.frameDisplayed(upTo: 3)
+    try await eventually { presenter.statistics.framesPresented == 4 }
+    #expect(pool.latestIssuedFrameSequence == 4)
+    presenter.close()
+}
+
 @Test func theTargetsAreMadeOnceForEachBufferOfTheScanout() async throws {
     let harness = try PresenterHarness()
     let presenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)

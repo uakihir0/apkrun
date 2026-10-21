@@ -162,31 +162,39 @@
                     stopRequests: stops.stream,
                     appCloseRequests: appLaunches.isEmpty ? session?.appCloseRequests.stream : nil,
                     preserveWindowOnError: session != nil,
-                    onRuntimeReady: onRuntimeReady
-                ) { event in
-                    switch event {
-                    case .state(let state):
-                        Output.writeLogLine("state: \(state)", toStandardError: true)
-                    case .windowStatus(let status):
-                        session?.publishPlaceholderStatus(status)
-                    case .windowTitle(let title):
-                        session?.publishWindowTitle(title)
-                    case .appWindowStatus(let packageID, let status):
-                        eventWindows[packageID]?.publishPlaceholderStatus(status)
-                    case .appWindowTitle(let packageID, let title):
-                        eventWindows[packageID]?.publishWindowTitle(title)
-                    case .appWindowExited(let packageID):
-                        eventWindows[packageID]?.closeForAppExit()
-                    case .console:
-                        break
-                    case .message(let text):
-                        Output.writeLogLine(text, toStandardError: true)
-                    case .warning(let text):
-                        Output.writeLogLine("warning: \(text)", toStandardError: true)
-                    case .catalogWarning(let error):
-                        ErrorOutput.write(error, json: false)
+                    onRuntimeReady: onRuntimeReady,
+                    onAppFramePresented: { packageID in
+                        if let packageID {
+                            eventWindows[packageID]?.publishAppRunning()
+                        } else {
+                            session?.publishAppRunning()
+                        }
+                    },
+                    onEvent: { event in
+                        switch event {
+                        case .state(let state):
+                            Output.writeLogLine("state: \(state)", toStandardError: true)
+                        case .windowStatus(let status):
+                            session?.publishPlaceholderStatus(status)
+                        case .windowTitle(let title):
+                            session?.publishWindowTitle(title)
+                        case .appWindowStatus(let packageID, let status):
+                            eventWindows[packageID]?.publishPlaceholderStatus(status)
+                        case .appWindowTitle(let packageID, let title):
+                            eventWindows[packageID]?.publishWindowTitle(title)
+                        case .appWindowExited(let packageID):
+                            eventWindows[packageID]?.closeForAppExit()
+                        case .console:
+                            break
+                        case .message(let text):
+                            Output.writeLogLine(text, toStandardError: true)
+                        case .warning(let text):
+                            Output.writeLogLine("warning: \(text)", toStandardError: true)
+                        case .catalogWarning(let error):
+                            ErrorOutput.write(error, json: false)
+                        }
                     }
-                }
+                )
             } catch {
                 for window in additionalWindows {
                     window.closeForAppExit()

@@ -323,6 +323,11 @@ let package = Package(
             path: "Packages/WindowingCore/Tests/WindowingCoreTests"
         ),
         .testTarget(
+            name: "WindowingCoreSystemTests",
+            dependencies: ["WindowingCore"],
+            path: "Packages/WindowingCore/Tests/WindowingCoreSystemTests"
+        ),
+        .testTarget(
             name: "GuestProtocolTests",
             dependencies: ["GuestProtocol"],
             path: "Packages/GuestProtocol/Tests/GuestProtocolTests"

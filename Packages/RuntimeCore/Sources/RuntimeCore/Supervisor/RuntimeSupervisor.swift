@@ -144,6 +144,7 @@ public actor RuntimeSupervisor {
     private let logger: APKLogger
     private let bootLogger: APKLogger
     private let environment: [String: String]
+    private let guestAgentTransportMode: GuestAgentTransportMode
     private var controller: VMController?
     /// The boot's GPU device while the VM can still accept host display operations.
     private var graphicsDevice: VirtioGPUDevice?
@@ -197,7 +198,8 @@ public actor RuntimeSupervisor {
         guestAgentBundle: GuestAgentBundle? = nil,
         guestAgentTimeout: Duration = DevelopmentGuestAgent.defaultConnectTimeout,
         requiredAgentOutageTimeout: Duration = .seconds(30),
-        developmentDisplay: DevelopmentDisplay? = nil
+        developmentDisplay: DevelopmentDisplay? = nil,
+        guestAgentTransportMode: GuestAgentTransportMode = .adb
     ) {
         self.guestAgentBundle = guestAgentBundle
         self.developmentDisplay = developmentDisplay
@@ -210,6 +212,7 @@ public actor RuntimeSupervisor {
         self.guestAgentTimeout = guestAgentTimeout
         self.requiredAgentOutageTimeout = requiredAgentOutageTimeout
         self.environment = environment
+        self.guestAgentTransportMode = guestAgentTransportMode
         let stream = AsyncStream.makeStream(of: RuntimeEvent.self, bufferingPolicy: .bufferingNewest(4096))
         events = stream.stream
         eventContinuation = stream.continuation
@@ -263,9 +266,13 @@ public actor RuntimeSupervisor {
         RuntimeStateSnapshot(revision: stateRevision, state: state)
     }
 
-    /// Stops Android: `reboot -p` over ADB (or over the serial shell when ADB is not connected) in
-    /// developer mode, then a forced stop after 20 s (vm.md §9.3).
+    /// Stops Android through Guest Protocol `Shutdown`, with ADB and serial-shell fallbacks in developer mode.
+    /// A request that may have reached Android is not resent, and the VM is forced to stop after 20 s (vm.md §9.3).
     public func stop(reason: StopReason = .user) async {
+        if OperationContext.current == nil {
+            await OperationContext.withNew { @Sendable in await self.stop(reason: reason) }
+            return
+        }
         guard let controller else {
             // A boot that has not created the VM yet checks this flag before it starts the VM.
             if isBooting {
@@ -275,20 +282,24 @@ public actor RuntimeSupervisor {
         }
         stopRequested = true
         transition(to: .stopping(reason))
+        let stopStartedAt = ContinuousClock.now
         await stopRequiredAgentOutageMonitor()
-        await stopGuestAgent()
         bootProgress?.finish()
-        // A forced stop that is rejected while the VM is still starting is left to the boot, which stops the VM itself.
-        let powerOff: (@Sendable () async -> Bool)? =
-            options.developerMode ? { @Sendable in await self.requestPowerOff() } : nil
+        // Guest Protocol Shutdown is the normal path; developer images also retain ADB/serial fallbacks.
+        let powerOff: (@Sendable () async -> Bool)? = { @Sendable in await self.requestPowerOff() }
         let stoppedByItself = await AndroidStopSequence().run(
             requestPowerOff: powerOff,
             isStopped: { await controller.state == .stopped },
             forceStop: { try? await controller.stop() }
         )
-        if options.developerMode, !stoppedByItself {
+        await stopGuestAgent()
+        if !stoppedByItself {
             logger.warning("Android did not power off in time, so the VM was stopped by force")
         }
+        let stopPath = stoppedByItself ? "graceful" : "forced"
+        logger.notice(
+            "Android stop completed via \(stopPath, .public) after \(String(describing: ContinuousClock.now - stopStartedAt), .public) for \(reason.rawValue, .public)"
+        )
         // Detach before the drain wait. The drain ends only when the VM has stopped, and a boot still starting the
         // VM sees the detached controller and stops it. Waiting while still attached would never return.
         self.controller = nil
@@ -645,9 +656,23 @@ public actor RuntimeSupervisor {
             )
             adbClient = client
             if let bundle = guestAgentBundle {
+                let guestTransport: (any GuestTransport)?
+                if guestAgentTransportMode == .vsock {
+                    guestTransport = VsockGuestTransport { [weak self] port, timeout in
+                        guard let self else {
+                            throw RuntimeBootFailure.androidBootFailed(
+                                detail: "the runtime supervisor was released"
+                            )
+                        }
+                        return try await self.connect(vsockPort: port, timeout: timeout)
+                    }
+                } else {
+                    guestTransport = nil
+                }
                 developmentGuestAgent = DevelopmentGuestAgent(
                     adb: client,
                     bundle: bundle,
+                    transport: guestTransport,
                     logSink: diagnostics.logSink
                 )
             }
@@ -708,25 +733,46 @@ public actor RuntimeSupervisor {
         )
     }
 
-    /// Asks Android to power off with `reboot -p`: over ADB when it is connected, and over the serial shell
-    /// when the ADB request fails or ADB is not connected. Returns whether a channel was tried (vm.md §9.3).
+    /// Asks Android to power off through Guest Protocol. Developer mode retains ADB and serial fallbacks.
+    /// A request with an uncertain reply is not resent, because Android may already be shutting down (vm.md §9.3).
     private func requestPowerOff() async -> Bool {
         let logger = logger
+        var guestAttempt: GuestPowerOffAttempt?
+        if let agent = developmentGuestAgent {
+            let android: any AndroidControlChannel = agent
+            do throws(GuestAgentFailure) {
+                try await android.shutdown(reason: "runtime-stop")
+                guestAttempt = .accepted
+                logger.notice("Stopping Android with Guest Protocol Shutdown")
+            } catch {
+                guestAttempt = error.shutdownAttempt
+                logger.notice(
+                    "Guest Protocol Shutdown ended with \(error.code, .public); disposition \(String(describing: guestAttempt), .public)"
+                )
+            }
+        }
+        // Disable reconnect supervision once the shutdown request has been attempted.
+        await stopGuestAgent()
+
         var adb: (@Sendable () async -> Bool)?
-        if isADBConnected, let client = adbClient {
+        if options.developerMode, isADBConnected, let client = adbClient {
             adb = { @Sendable in
                 logger.notice("Stopping Android with reboot -p over ADB")
                 return (try? await client.rebootPowerOff()) != nil
             }
         }
         var serial: (@Sendable () async -> Bool)?
-        if let shell {
+        if options.developerMode, let shell {
             serial = { @Sendable in
                 logger.notice("Stopping Android with reboot -p over the serial shell")
                 return (try? await shell.run("su 0 reboot -p", timeout: .seconds(2))) != nil
             }
         }
-        return await AndroidStopSequence.sendPowerOff(overADB: adb, overShell: serial)
+        return await AndroidStopSequence.sendPowerOff(
+            guestAttempt: guestAttempt,
+            overADB: adb,
+            overShell: serial
+        )
     }
 
     /// Stops the Guest Agent of the boot. It runs before the guest powers off, so that the supervisor does not

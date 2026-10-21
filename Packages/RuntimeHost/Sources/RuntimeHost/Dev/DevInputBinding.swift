@@ -33,7 +33,7 @@ struct DevInputBinding: Sendable {
     init(routes: [DevInputRoute], agent: DevelopmentGuestAgent, logSink: (any LogSink)?) {
         self.init(
             routes: routes,
-            currentSessionToken: { await agent.supervisor.session?.sessionToken },
+            currentSessionToken: { await agent.supervisor.readySessionToken() },
             openInputChannel: {
                 () async throws(GuestAgentFailure) -> DevBoundInputChannel in
                 let channel = try await agent.inputChannel()
@@ -82,11 +82,20 @@ struct DevInputBinding: Sendable {
             if let token = await currentSessionToken() {
                 let usable = await channel?.isUsable() ?? false
                 if token != boundToken || !usable {
+                    if channel != nil {
+                        // The old input stream belongs to a different or closed Guest Agent session. The guest
+                        // releases its input state when that stream closes, so do not send another cancelAll on it.
+                        for route in routes {
+                            await route.unbind(cancelGuestState: false)
+                        }
+                        channel = nil
+                        boundToken = nil
+                    }
                     do {
                         let next = try await openInputChannel()
-                        // Recovery may replace the control session while the secondary connection opens. It can still
-                        // be a valid channel for the new session, so retry under that session's token (#101).
-                        guard await currentSessionToken() == token else {
+                        // Recovery may replace the control session while the secondary connection opens. Retry under
+                        // that session's token, and do not bind a secondary channel that has already closed (#101).
+                        guard await currentSessionToken() == token, await next.isUsable() else {
                             try? await Task.sleep(for: pollingInterval)
                             continue
                         }
@@ -109,7 +118,21 @@ struct DevInputBinding: Sendable {
                                 boundRoutes.append(route)
                             }
                         }
+                        guard await currentSessionToken() == token, await next.isUsable() else {
+                            for route in routes {
+                                await route.unbind(cancelGuestState: false)
+                            }
+                            try? await Task.sleep(for: pollingInterval)
+                            continue
+                        }
                         await router.cancelAllRegisteredDisplays()
+                        guard await currentSessionToken() == token, await next.isUsable() else {
+                            for route in routes {
+                                await route.unbind(cancelGuestState: false)
+                            }
+                            try? await Task.sleep(for: pollingInterval)
+                            continue
+                        }
                         channel = next
                         boundToken = token
                         reportedFailure = false
@@ -131,7 +154,7 @@ struct DevInputBinding: Sendable {
             } else if channel != nil {
                 // A missing control session means the old secondary connection is no longer a valid input route.
                 for route in routes {
-                    await route.unbind()
+                    await route.unbind(cancelGuestState: false)
                 }
                 channel = nil
                 boundToken = nil

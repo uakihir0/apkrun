@@ -7,6 +7,7 @@ final class DevInputRouteActivation: @unchecked Sendable {
     private let lock = NSLock()
     private var isOpen: Bool
     private var generation: UInt64 = 0
+    private var inputChannelIsUsable: (@Sendable () async -> Bool)?
 
     init(isOpen: Bool = false) {
         self.isOpen = isOpen
@@ -31,6 +32,19 @@ final class DevInputRouteActivation: @unchecked Sendable {
             isOpen = false
             generation &+= 1
         }
+    }
+
+    func setInputChannelUsabilityCheck(_ check: @escaping @Sendable () async -> Bool) {
+        lock.withLock {
+            inputChannelIsUsable = check
+        }
+    }
+
+    func canCancelGuestState() async -> Bool {
+        guard let inputChannelIsUsable = lock.withLock({ inputChannelIsUsable }) else {
+            return true
+        }
+        return await inputChannelIsUsable()
     }
 
     var allowsInput: Bool {
@@ -95,7 +109,13 @@ public actor DevInputRoute {
     func retire() async {
         isTerminal = true
         isFocused = false
-        await unbind()
+        let activation = activation ?? preparedBinding?.activation
+        let bindings = detachBindings()
+        guard !bindings.isEmpty else {
+            return
+        }
+        let cancelGuestState = await activation?.canCancelGuestState() ?? true
+        await endBindings(bindings, cancelGuestState: cancelGuestState)
     }
 
     /// The selected Android display, for the development binding status message.
@@ -259,6 +279,11 @@ public actor DevInputRoute {
     /// Unbinds the route. The session ends on the router, so that the guest cancels its open gestures and keys. The
     /// counts of the router are kept after it ends, so that the route's total covers every router it has had.
     public func unbind(cancelGuestState: Bool = true) async {
+        let bindings = detachBindings()
+        await endBindings(bindings, cancelGuestState: cancelGuestState)
+    }
+
+    private func detachBindings() -> [(router: InputRouter, session: SessionID)] {
         var bindings: [(router: InputRouter, session: SessionID)] = []
         if let router, let session {
             self.router = nil
@@ -273,6 +298,13 @@ public actor DevInputRoute {
             }
             bindings.append((preparedBinding.router, preparedBinding.session))
         }
+        return bindings
+    }
+
+    private func endBindings(
+        _ bindings: [(router: InputRouter, session: SessionID)],
+        cancelGuestState: Bool
+    ) async {
         guard !bindings.isEmpty else {
             return
         }

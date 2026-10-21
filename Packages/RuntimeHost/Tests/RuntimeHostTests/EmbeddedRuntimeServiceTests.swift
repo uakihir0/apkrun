@@ -321,6 +321,33 @@ func embeddedRuntimeServiceClosesAnUnlaunchedWindowWithoutStoppingItsPackage() a
 }
 
 @Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceRetiresRouteWhenClosingAfterAppExit() async throws {
+    let route = DevInputRoute()
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let service = EmbeddedRuntimeService(
+        developerDisplay: display,
+        stopSignal: DevBootStopSignal(),
+        inputRoute: route
+    )
+    let packageID = "io.apkrun.fixture.hellotext"
+    defer { display.finish() }
+
+    _ = try await service.requestSession(packageID: packageID)
+    _ = try await service.displayReady()
+    _ = try await service.beginLaunch()
+    _ = try await service.launched(taskID: 23)
+    _ = try await service.firstFramePresented()
+
+    let ended = await service.taskEvent(.vanished(packageID: packageID, taskID: 23))
+    #expect(ended?.state == .ended(.appExited))
+    #expect(await route.canBind())
+
+    try await service.closeForWindow()
+
+    #expect(!(await route.canBind()))
+}
+
+@Test(.timeLimit(.minutes(1)))
 func embeddedRuntimeServiceReconcilesTerminalGuestSnapshotThroughMultiWindowCallback() async throws {
     let guest = FakeEmbeddedSessionGuestAgent()
     let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
@@ -677,12 +704,13 @@ func devBootMultiWindowCoordinatorStopsOnlyAfterEveryWindowCloses() async throws
     let (secondCloseRequests, secondCloseContinuation) = AsyncStream.makeStream(of: Void.self)
     let firstPackage = "io.apkrun.fixture.hellotext"
     let secondPackage = "io.apkrun.fixture.hellocompose"
+    let firstRoute = DevInputRoute()
     let first = DevBootAppLaunch(
         packageID: firstPackage,
         apkURL: nil,
         display: firstDisplay,
         displayMode: .primaryDisplayCompatibility,
-        inputRoute: DevInputRoute(),
+        inputRoute: firstRoute,
         closeRequests: firstCloseRequests
     )
     let second = DevBootAppLaunch(
@@ -708,6 +736,7 @@ func devBootMultiWindowCoordinatorStopsOnlyAfterEveryWindowCloses() async throws
 
     await coordinator.closeWindow(for: firstPackage)
     #expect(await first.windowState.isClosed())
+    #expect(!(await firstRoute.canBind()))
     #expect(!(await second.windowState.isClosed()))
     #expect(await signal.current() == nil)
 
@@ -771,12 +800,13 @@ func devBootClosesWindowWhenReconnectSnapshotLosesItsDisplay() async throws {
     let package = "io.apkrun.fixture.hellotext"
     let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
     let (closeRequests, closeContinuation) = AsyncStream.makeStream(of: Void.self)
+    let route = DevInputRoute()
     let launch = DevBootAppLaunch(
         packageID: package,
         apkURL: nil,
         display: display,
         displayMode: .primaryDisplayCompatibility,
-        inputRoute: DevInputRoute(),
+        inputRoute: route,
         closeRequests: closeRequests
     )
     let (events, eventContinuation) = AsyncStream.makeStream(of: DevBootEvent.self)
@@ -807,6 +837,7 @@ func devBootClosesWindowWhenReconnectSnapshotLosesItsDisplay() async throws {
     }
 
     #expect(await launch.windowState.isClosed())
+    #expect(!(await route.canBind()))
     #expect(
         reportedEvents.contains {
             if case .appWindowExited(packageID: package) = $0 { true } else { false }
@@ -817,6 +848,36 @@ func devBootClosesWindowWhenReconnectSnapshotLosesItsDisplay() async throws {
             if case .warning = $0 { true } else { false }
         }
     )
+}
+
+@Test(.timeLimit(.minutes(1)))
+func devBootRetiresRouteAfterNaturalAppExit() async throws {
+    let package = "io.apkrun.fixture.hellotext"
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let (closeRequests, closeContinuation) = AsyncStream.makeStream(of: Void.self)
+    let route = DevInputRoute()
+    let launch = DevBootAppLaunch(
+        packageID: package,
+        apkURL: nil,
+        display: display,
+        displayMode: .primaryDisplayCompatibility,
+        inputRoute: route,
+        closeRequests: closeRequests
+    )
+    let coordinator = DevBootMultiWindowCoordinator(
+        launches: [launch],
+        stopSignal: DevBootStopSignal(),
+        report: { _ in }
+    )
+    defer {
+        closeContinuation.finish()
+        display.finish()
+    }
+
+    await coordinator.appExited(packageID: package)
+
+    #expect(await launch.windowState.isClosed())
+    #expect(!(await route.canBind()))
 }
 
 @Test(.timeLimit(.minutes(1)))

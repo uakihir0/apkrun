@@ -195,6 +195,7 @@ struct DevInputBinding: Sendable {
                 guard await sessionToken() == token else {
                     continue
                 }
+                routeActivation.setInputChannelUsabilityCheck(next.isUsable)
                 let router = InputRouter(
                     channel: next.input,
                     focusDisplay: focusDisplay,

@@ -43,6 +43,10 @@ private actor BindingInputChannel: InputChannel {
         shouldFailNextSend = true
     }
 
+    func disconnect() {
+        isAlive = false
+    }
+
     func usable() async -> Bool {
         if let action = duringNextUsabilityCheck {
             duringNextUsabilityCheck = nil
@@ -446,8 +450,11 @@ func closedWindowRouteIsNotRegisteredAfterGuestAgentRebind() async throws {
         await oldInput.batches.count == 2 && reports.boundCount == 1
     }
     #expect(await oldInput.batches.map(\.displayID) == [3, 7])
+    let cancelAllAttemptsBeforeDisconnect = await oldInput.cancelAllAttempts()
+    await oldInput.disconnect()
     await closedRoute.retire()
     #expect(!(await closedRoute.canBind()))
+    #expect(await oldInput.cancelAllAttempts() == cancelAllAttemptsBeforeDisconnect)
     await agent.loseSession()
     await agent.restoreSession(token: Data([2]), channel: newChannel)
 

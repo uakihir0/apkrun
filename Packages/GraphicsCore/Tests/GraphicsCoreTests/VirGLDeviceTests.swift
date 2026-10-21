@@ -576,6 +576,30 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     #expect(entry.publicMessage.contains("guest command bytes") == false)
 }
 
+@Test func rendererFailureLogOmitsUnattributedResourceForOtherCommands() throws {
+    let sink = RecordingLogSink()
+    let failureLog = RendererFailureLog(
+        logger: APKLogger(category: GraphicsLogCategory.device, sink: sink)
+    )
+
+    failureLog.record(
+        .rendererOperationFailed(operation: "submit", detail: "guest command bytes"),
+        diagnostic: VirGLCommandDiagnostic(
+            ordinal: 13,
+            command: VirtioGPUCommand.getDisplayInfo.rawValue,
+            contextID: 0,
+            resourceID: nil
+        )
+    )
+
+    let entry = try #require(sink.entries.first)
+    #expect(
+        entry.publicMessage
+            == "virtio-gpu renderer operation failed: rendererOperationFailed operation=submit control_ordinal=13 command=256 context_id=0"
+    )
+    #expect(entry.publicMessage.contains("resource_id=") == false)
+}
+
 @Test func rendererCallbackCorrelationIsLoggedOnlyInsideItsCommandScope() throws {
     let sink = RecordingLogSink()
     let callbackContext = GraphicsRendererCallbackContext(

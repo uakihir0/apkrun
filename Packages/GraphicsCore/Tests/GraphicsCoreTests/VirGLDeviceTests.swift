@@ -571,7 +571,7 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     let entry = try #require(sink.entries.first)
     #expect(
         entry.publicMessage
-            == "virtio-gpu renderer operation failed: rendererOperationFailed operation=submit control_ordinal=12 command=519 context_id=17"
+            == "virtio-gpu renderer operation failed: rendererOperationFailed operation=submit control_ordinal=12 command=519 context_id=17 resource_id=unattributed"
     )
     #expect(entry.publicMessage.contains("guest command bytes") == false)
 }
@@ -601,6 +601,32 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
             == "VirGL renderer callback level=error control_ordinal=12 command=519 context_id=17 resource_id=128"
     )
     #expect(sink.entries.count == 1)
+}
+
+@Test func rendererCallbackCorrelationPreservesWarningSeverity() throws {
+    let sink = RecordingLogSink()
+    let callbackContext = GraphicsRendererCallbackContext(
+        onFenceCompleted: { _ in },
+        logger: APKLogger(category: GraphicsLogCategory.renderer, sink: sink)
+    )
+
+    callbackContext.withCommandDiagnostic(
+        VirGLCommandDiagnostic(
+            ordinal: 12,
+            command: VirtioGPUCommand.submit3D.rawValue,
+            contextID: 17,
+            resourceID: nil
+        )
+    ) {
+        callbackContext.logCorrelation(for: Int32(GB_LOG_WARNING))
+    }
+
+    let entry = try #require(sink.entries.first)
+    #expect(entry.level == .warning)
+    #expect(
+        entry.publicMessage
+            == "VirGL renderer callback level=warning control_ordinal=12 command=519 context_id=17 resource_id=unattributed"
+    )
 }
 
 @Test func rendererFailureLogHidesUnknownOperationLabels() throws {

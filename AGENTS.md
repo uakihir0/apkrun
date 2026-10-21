@@ -56,7 +56,6 @@ Background: [docs/00-product/vision.md](docs/00-product/vision.md), [docs/01-arc
 - a rule in this file would be broken;
 - the design looks wrong, or a step is impossible as written;
 - the work needs files or behavior outside the task's scope (file a follow-up instead, §11);
-- the same test still fails after two different fix attempts, and you do not know why;
 - you would need to delete or rewrite code that the task does not mention.
 
 ---

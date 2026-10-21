@@ -1,0 +1,21 @@
+rust_library {
+    name: "libapkrun_vsockd",
+    crate_name: "apkrun_vsockd",
+    srcs: ["src/lib.rs"],
+    edition: "2021",
+    rustlibs: [
+        "liblibc",
+        "liblog",
+    ],
+}
+
+rust_binary {
+    name: "apkrun_vsockd",
+    srcs: ["src/main.rs"],
+    edition: "2021",
+    rustlibs: [
+        "libandroid_logger",
+        "libapkrun_vsockd",
+        "liblog",
+    ],
+}

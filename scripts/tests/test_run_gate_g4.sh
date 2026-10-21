@@ -71,10 +71,13 @@ if ! grep -Fq 'VNRecognizeTextRequest()' "$acceptance_test" \
 then
     fail "the HelloText screenshot must pass a visible-content OCR check"
 fi
-if ! grep -Fq 'process.arguments = ["-v", "-V", "20", screenRecordingURL.path]' "$acceptance_test" \
+if ! grep -Fq 'screenRecordingDurationSeconds = 120' "$acceptance_test" \
+    || ! grep -Fq 'screenRecordingFinishTimeout: Duration = .seconds(135)' "$acceptance_test" \
+    || ! grep -Fq 'process.arguments = ["-v", "-V", "\(Self.screenRecordingDurationSeconds)", screenRecordingURL.path]' \
+        "$acceptance_test" \
     || ! grep -Fq 'try await Task.sleep(for: .seconds(1))' "$acceptance_test"
 then
-    fail "the test must start screencapture and wait for it to attach before posting host input"
+    fail "the test must keep screencapture alive through slow input and wait for it to attach"
 fi
 if [[ "$(grep -Fc 'try noteHostInputEventRecorded()' "$acceptance_test")" -ne 3 ]]; then
     fail "mouse and keyboard event paths must check that screencapture is running after each event"

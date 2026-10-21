@@ -358,7 +358,9 @@ private final class G4Session {
     private static let adbCountPrefix = "ADB shell invocations so far: "
     private static let windowTitle = "HelloText"
     private static let screenRecordingDurationSeconds = 120
-    private static let screenRecordingFinishTimeout: Duration = .seconds(135)
+    private static let screenRecordingStopTimeout: Duration = .seconds(15)
+    private static let screenRecordingTerminateTimeout: Duration = .seconds(5)
+    private static let screenRecordingKillTimeout: Duration = .seconds(5)
     private let inputs: G4Inputs
     let home: URL
     private var launch: Process?
@@ -567,19 +569,23 @@ private final class G4Session {
     func finishScreenRecording() async -> G4RecordingEvidence {
         let recorder = screenRecorder
         if let recorder, recorder.isRunning {
-            let deadline = ContinuousClock.now + Self.screenRecordingFinishTimeout
+            // SIGINT asks screencapture to finalize the movie immediately; -V remains the hard cap if the
+            // test process is interrupted before it can request a graceful stop.
+            kill(recorder.processIdentifier, SIGINT)
+            let deadline = ContinuousClock.now + Self.screenRecordingStopTimeout
             while recorder.isRunning, ContinuousClock.now < deadline {
                 try? await Task.sleep(for: .milliseconds(100))
             }
             if recorder.isRunning {
                 kill(recorder.processIdentifier, SIGTERM)
-                let terminationDeadline = ContinuousClock.now + .seconds(5)
+                let terminationDeadline = ContinuousClock.now + Self.screenRecordingTerminateTimeout
                 while recorder.isRunning, ContinuousClock.now < terminationDeadline {
                     try? await Task.sleep(for: .milliseconds(100))
                 }
                 if recorder.isRunning {
                     kill(recorder.processIdentifier, SIGKILL)
-                    while recorder.isRunning {
+                    let killDeadline = ContinuousClock.now + Self.screenRecordingKillTimeout
+                    while recorder.isRunning, ContinuousClock.now < killDeadline {
                         try? await Task.sleep(for: .milliseconds(100))
                     }
                 }
@@ -592,8 +598,11 @@ private final class G4Session {
             }
             screenRecordingProcessExitedAt = terminationEvidence.terminatedAt
         }
-        try? screenRecorderLog?.close()
-        screenRecorderLog = nil
+        let recorderExited = recorder.map { !$0.isRunning } ?? true
+        if recorderExited {
+            try? screenRecorderLog?.close()
+            screenRecorderLog = nil
+        }
 
         let attributes = try? FileManager.default.attributesOfItem(atPath: screenRecordingURL.path)
         let movieBytes = (attributes?[.size] as? NSNumber)?.intValue ?? 0
@@ -611,7 +620,7 @@ private final class G4Session {
         }
         return G4RecordingEvidence(
             path: "screen-recording.mov",
-            exitCode: recorder?.terminationReason == .exit ? recorder?.terminationStatus : nil,
+            exitCode: recorderExited && recorder?.terminationReason == .exit ? recorder?.terminationStatus : nil,
             movieBytes: movieBytes,
             readyBeforeFirstHostEvent: readyBeforeFirstHostEvent,
             hostInputEventCount: hostInputEventCount,

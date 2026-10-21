@@ -28,9 +28,12 @@ private struct VirGLHarness {
     let guest: SeededGuestBackend
     let context: VirtioDeviceContext
 
-    init(recorder: VirGLRecorder? = nil) throws {
+    init(
+        recorder: VirGLRecorder? = nil,
+        logger: APKLogger = APKLogger(category: GraphicsLogCategory.device)
+    ) throws {
         let ref = EngineRef()
-        device = try VirtioGPUDevice.makeVirgl(recorder: recorder) {
+        device = try VirtioGPUDevice.makeVirgl(logger: logger, recorder: recorder) {
             onFence throws(GraphicsFailure) -> any VirGLEngine in
             let engine = FakeVirGLEngine(onFence: onFence)
             ref.set(engine)
@@ -272,6 +275,27 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     let second = try #require(harness.guest.memory(at: 0x2000))
     #expect(ranges[0].base == (try first.hostMemory().baseAddress))
     #expect(ranges[1].base == (try second.hostMemory().baseAddress))
+}
+
+@Test func rejectedBackingLogsItsResourceIDWithoutGuestMemoryDetails() async throws {
+    let sink = RecordingLogSink()
+    let logger = APKLogger(category: GraphicsLogCategory.device, sink: sink)
+    let harness = try VirGLHarness(logger: logger)
+    let control = harness.send([
+        gpuRequest(
+            .resourceAttachBacking,
+            body: .resourceAttachBacking(
+                resourceID: 128,
+                entries: [VirtioGPUMemoryEntry(address: 0x1000, length: 64)]
+            )
+        )
+    ])
+    try await eventually { control.completionCounts == [1] }
+
+    #expect(try body(control.writtenBuffers[0]) == .error(.invalidResourceID))
+    let entry = try #require(sink.entries.first)
+    #expect(entry.publicMessage.contains("command=262 context_id=0 resource_id=128 response_error=4611"))
+    #expect(entry.publicMessage.contains("4096") == false)
 }
 
 @Test func backingIsReleasedOnDetachAndUnrefOnlyWhenTheResourceHadIt() async throws {

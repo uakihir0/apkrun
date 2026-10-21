@@ -54,6 +54,7 @@ expect_fail() {
 
 expect_pass "a complete directory passes G1" "$verify_artifacts" "$directory" G1
 expect_pass "a complete directory passes G2" "$verify_artifacts" "$directory" G2
+expect_pass "a complete directory passes G4" "$verify_artifacts" "$directory" G4
 
 missing_disk="$work/no-disk"
 cp -R "$directory" "$missing_disk"
@@ -73,6 +74,8 @@ rm -r "$no_bundle/android-bundle"
 expect_pass "G1 does not need the Android bundle" "$verify_artifacts" "$no_bundle" G1
 expect_fail "G2 needs the Android bundle" "android-bundle/manifest.json" \
     "$verify_artifacts" "$no_bundle" G2
+expect_fail "G4 needs the Android bundle" "android-bundle/manifest.json" \
+    "$verify_artifacts" "$no_bundle" G4
 
 no_runtime="$work/no-runtime"
 cp -R "$directory" "$no_runtime"

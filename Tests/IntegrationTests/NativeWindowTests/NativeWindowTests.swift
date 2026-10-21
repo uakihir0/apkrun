@@ -40,8 +40,6 @@ final class NativeWindowTests: XCTestCase {
             inputBindingTimeout: .seconds(180),
             stopPackageOnWindowClose: true
         ) { run in
-            try await run.waitForText("Increment")
-
             let window = try XCTUnwrap(
                 NSApplication.shared.windows.first { $0.title == Self.windowTitle },
                 "SessionWindowController did not create the display-0 window")
@@ -50,8 +48,15 @@ final class NativeWindowTests: XCTestCase {
             XCTAssertTrue(window.styleMask.contains(.closable))
             XCTAssertTrue(window.styleMask.contains(.miniaturizable))
             XCTAssertNil(window.toolbar, "The app window must not show emulator toolbar chrome.")
+            try await run.waitForAppFrameAtPlaceholder()
+            XCTAssertEqual(
+                window.contentView?.subviews.count, 2,
+                "The launch window must keep its placeholder above the IOSurface view.")
+            try await Self.waitForVisiblePlaceholder(in: window)
 
+            await run.allowAppFrameToReplacePlaceholder()
             try await run.waitForDisplayedFrameAfterLaunch()
+            try await run.waitForText("Increment")
             try await Self.waitForVisibleHelloText(in: window)
 
             let surfaceView = try XCTUnwrap(
@@ -79,6 +84,41 @@ final class NativeWindowTests: XCTestCase {
             try await Self.waitForFieldText(run, expected: Self.expectedText)
             try await run.closeWindowAndWaitForTaskVanished(package: Self.helloText)
         }
+    }
+
+    /// Verifies that the real native window shows its launch placeholder before DevBoot reveals the app frame.
+    private static func waitForVisiblePlaceholder(
+        in window: NSWindow,
+        timeout: Duration = .seconds(30)
+    ) async throws {
+        let deadline = ContinuousClock.now + timeout
+        var latestText: [String] = []
+        while ContinuousClock.now < deadline {
+            let content = try await SCShareableContent.currentProcess
+            if let shareableWindow = content.windows.first(
+                where: { $0.windowID == CGWindowID(window.windowNumber) }
+            ) {
+                let filter = SCContentFilter(desktopIndependentWindow: shareableWindow)
+                let configuration = SCStreamConfiguration()
+                configuration.width = max(1, Int(window.frame.width * window.backingScaleFactor))
+                configuration.height = max(1, Int(window.frame.height * window.backingScaleFactor))
+                let image = try await SCScreenshotManager.captureImage(
+                    contentFilter: filter,
+                    configuration: configuration
+                )
+                latestText = try Self.recognizedText(in: image)
+                if latestText.contains(where: {
+                    $0.localizedCaseInsensitiveContains("Starting Android")
+                        || $0.localizedCaseInsensitiveContains("Preparing app")
+                }) {
+                    return
+                }
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw AndroidInputRunFailure.timedOut(
+            "the launch placeholder in the native-window screenshot; OCR saw [\(latestText.joined(separator: " | "))]"
+        )
     }
 
     private static func surfaceLayerView(in view: NSView?) -> IOSurfaceLayerView? {
@@ -119,12 +159,6 @@ final class NativeWindowTests: XCTestCase {
 
     /// Checks the rendered window, rather than the guest hierarchy or an IOSurface retained from boot.
     private static func waitForVisibleHelloText(in window: NSWindow, timeout: Duration = .seconds(30)) async throws {
-        let content = try await SCShareableContent.currentProcess
-        guard let shareableWindow = content.windows.first(where: { $0.windowID == CGWindowID(window.windowNumber) })
-        else {
-            throw AndroidInputRunFailure.timedOut("the native window in ScreenCaptureKit's shareable content")
-        }
-        let filter = SCContentFilter(desktopIndependentWindow: shareableWindow)
         let configuration = SCStreamConfiguration()
         configuration.width = max(1, Int(window.frame.width * window.backingScaleFactor))
         configuration.height = max(1, Int(window.frame.height * window.backingScaleFactor))
@@ -132,21 +166,33 @@ final class NativeWindowTests: XCTestCase {
         let deadline = ContinuousClock.now + timeout
         var latestText: [String] = []
         while ContinuousClock.now < deadline {
-            let image = try await SCScreenshotManager.captureImage(
-                contentFilter: filter, configuration: configuration)
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = false
-            try VNImageRequestHandler(cgImage: image).perform([request])
-            latestText = request.results?.compactMap { $0.topCandidates(1).first?.string } ?? []
-            if latestText.contains(where: { $0.localizedCaseInsensitiveContains("Increment") }) {
-                return
+            let content = try await SCShareableContent.currentProcess
+            if let shareableWindow = content.windows.first(
+                where: { $0.windowID == CGWindowID(window.windowNumber) }
+            ) {
+                let filter = SCContentFilter(desktopIndependentWindow: shareableWindow)
+                let image = try await SCScreenshotManager.captureImage(
+                    contentFilter: filter,
+                    configuration: configuration
+                )
+                latestText = try Self.recognizedText(in: image)
+                if latestText.contains(where: { $0.localizedCaseInsensitiveContains("Increment") }) {
+                    return
+                }
             }
-            try await Task.sleep(for: .milliseconds(250))
+            try await Task.sleep(for: .milliseconds(100))
         }
         throw AndroidInputRunFailure.timedOut(
             "visible HelloText content in the native-window screenshot; OCR saw [\(latestText.joined(separator: " | "))]"
         )
+    }
+
+    private static func recognizedText(in image: CGImage) throws -> [String] {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        try VNImageRequestHandler(cgImage: image).perform([request])
+        return request.results?.compactMap { $0.topCandidates(1).first?.string } ?? []
     }
 
     /// Focuses the editor using the app's normal Tab order, checking Android focus after each key.

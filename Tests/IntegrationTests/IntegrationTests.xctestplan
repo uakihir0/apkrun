@@ -181,6 +181,45 @@
       }
     },
     {
+      "id": "0F4AFC2E-3F03-4E56-9C1F-003003003016",
+      "name": "NativeWindow",
+      "options": {
+        "environmentVariableEntries": [
+          {
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "native-window",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_NATIVE_WINDOW_T2",
+            "value": "1",
+            "enabled": true
+          },
+          {
+            "key": "ANDROID_ADB_SERVER_PORT",
+            "value": "15045",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_VIRGL_RUNTIME_PATH",
+            "value": "/tmp/apkrun-test-linux/virgl-runtime",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_GUEST_DIR",
+            "value": "/tmp/apkrun-test-guest",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_FIXTURE_APK",
+            "value": "/tmp/apkrun-test-fixtures/HelloText.apk",
+            "enabled": true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance": 1800
+      }
+    },
+    {
       "id": "0F4AFC2E-3F03-4E56-9C1F-003003003015",
       "name": "AndroidInputCadence",
       "options": {

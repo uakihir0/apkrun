@@ -56,8 +56,9 @@ final class NativeWindowTests: XCTestCase {
 
             await run.allowAppFrameToReplacePlaceholder()
             try await run.waitForDisplayedFrameAfterLaunch()
-            try await run.waitForText("Increment")
             try await Self.waitForVisibleHelloText(in: window)
+            try await run.waitForText("INCREMENT")
+            try await run.activateWindowForInput()
 
             let surfaceView = try XCTUnwrap(
                 Self.surfaceLayerView(in: window.contentView),
@@ -74,9 +75,12 @@ final class NativeWindowTests: XCTestCase {
             let clickLines = try await run.fixtureLog { lines in
                 lines.contains { $0.contains(Self.clickPrefix) }
             }
+            let inputCounters = try await run.inputCounters()
+            let wireTouchPhases = try await run.inputWireTouchPhaseCounts()
             XCTAssertTrue(
                 clickLines.contains { $0.contains(Self.clickPrefix) },
-                "The HelloText button did not receive the native-window click.")
+                "The HelloText button did not receive the native-window click. "
+                    + "Input route: \(inputCounters); wire touch phases: \(wireTouchPhases).")
 
             try await Self.focusField(run)
             try await run.keyboard().type(Self.expectedText)
@@ -198,6 +202,7 @@ final class NativeWindowTests: XCTestCase {
     /// Focuses the editor using the app's normal Tab order, checking Android focus after each key.
     private static func focusField(_ run: AndroidInputRun) async throws {
         let keyboard = try run.keyboard()
+        let countersBefore = try await run.inputCounters()
         for _ in 0..<6 {
             let xml = try await run.uiDump()
             switch AndroidInputRun.isFocused(fieldID, in: xml) {
@@ -210,7 +215,9 @@ final class NativeWindowTests: XCTestCase {
                 try await Task.sleep(for: .seconds(1))
             }
         }
-        throw AndroidInputRunFailure.viewNotFound("the focus of \(fieldID)")
+        let countersAfter = try await run.inputCounters()
+        throw AndroidInputRunFailure.viewNotFound(
+            "the focus of \(fieldID); input before \(countersBefore), after \(countersAfter)")
     }
 
     /// Reads Android's edit field through the debug fixture command; this is observation, not input.

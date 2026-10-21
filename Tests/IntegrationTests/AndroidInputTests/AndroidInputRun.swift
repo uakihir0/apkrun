@@ -258,14 +258,8 @@ final class AndroidInputRun {
         return InputPointer(window: window, view: view, mapper: mapper, delivery: pointerDelivery)
     }
 
-    /// Activates the display window before the test posts system mouse events.
-    func prepareForWindowServerPointerDispatch() async throws {
-        guard pointerDelivery == .windowServer else {
-            throw AndroidInputRunFailure.windowNotActive("the test selected direct view delivery")
-        }
-        guard NSScreen.screens.count == 1 else {
-            throw AndroidInputRunFailure.ambiguousDisplay
-        }
+    /// Makes the app a regular, key-window owner before the test sends input through the view.
+    func activateWindowForInput() async throws {
         let (window, view) = try windowAndView()
         let application = NSApplication.shared
         if activationPolicyToRestore == nil {
@@ -278,7 +272,7 @@ final class AndroidInputRun {
         window.makeFirstResponder(view)
         let deadline = ContinuousClock.now + .seconds(5)
         while ContinuousClock.now < deadline {
-            if application.isActive, window.isKeyWindow {
+            if application.isActive, window.isKeyWindow, window.firstResponder === view {
                 return
             }
             try await Task.sleep(for: .milliseconds(50))
@@ -295,6 +289,17 @@ final class AndroidInputRun {
                 + "before activation: \(stateBeforeActivation); "
                 + "after timeout: \(stateAfterActivation)"
         )
+    }
+
+    /// Activates the display window before the test posts system mouse events.
+    func prepareForWindowServerPointerDispatch() async throws {
+        guard pointerDelivery == .windowServer else {
+            throw AndroidInputRunFailure.windowNotActive("the test selected direct view delivery")
+        }
+        guard NSScreen.screens.count == 1 else {
+            throw AndroidInputRunFailure.ambiguousDisplay
+        }
+        try await activateWindowForInput()
     }
 
     /// Waits until the window sink has routed all previously received view events.
@@ -834,7 +839,10 @@ final class AndroidInputRun {
                 title: Self.windowTitle,
                 backingScale: scale,
                 inputSink: sink,
-                holdsPlaceholderUntilAppRunning: closeStopsPackage != nil
+                holdsPlaceholderUntilAppRunning: closeStopsPackage != nil,
+                onFocusChanged: { [sink] focused in
+                    sink.focusChanged(focused)
+                }
             )
             if closeStopsPackage != nil {
                 let closeContinuation = appCloseRequests.continuation
@@ -1277,10 +1285,12 @@ struct InputWireTouchPhaseCounts: Equatable, Sendable, CustomStringConvertible {
 private final class WireSink: PointerInputSink, @unchecked Sendable {
     private enum Command: Sendable {
         case events([InputCore.InputEvent])
+        case focusChanged(Bool, generation: UInt64)
         case drained(CheckedContinuation<InputWireTouchPhaseCounts, Never>)
     }
 
     private let queue: AsyncStream<Command>.Continuation
+    @MainActor private var focusGeneration: UInt64 = 0
     // `IOSurfaceLayerView` calls `deliver` on the main thread, and the test changes this only on MainActor before input.
     private var traceRecorder: InputTraceRecorder?
     private var touchEventRecorder: InputTouchEventRecorder?
@@ -1301,6 +1311,8 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
                         touchPhaseCounts.record(wireEvents)
                         await route.send(RuntimeAPI.InputBatch(events: wireEvents))
                     }
+                case .focusChanged(let focused, let generation):
+                    await route.focusChanged(focused, generation: generation)
                 case .drained(let continuation):
                     continuation.resume(returning: touchPhaseCounts)
                 }
@@ -1312,6 +1324,12 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
         traceRecorder?.recordTranslated(events)
         touchEventRecorder?.record(events)
         queue.yield(.events(events))
+    }
+
+    @MainActor
+    func focusChanged(_ focused: Bool) {
+        focusGeneration &+= 1
+        queue.yield(.focusChanged(focused, generation: focusGeneration))
     }
 
     func setTraceRecorder(_ recorder: InputTraceRecorder?) {

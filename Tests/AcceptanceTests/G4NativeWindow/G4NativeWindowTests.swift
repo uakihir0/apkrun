@@ -357,6 +357,8 @@ private enum G4Failure: Error, CustomStringConvertible {
 private final class G4Session {
     private static let adbCountPrefix = "ADB shell invocations so far: "
     private static let windowTitle = "HelloText"
+    private static let screenRecordingDurationSeconds = 120
+    private static let screenRecordingFinishTimeout: Duration = .seconds(135)
     private let inputs: G4Inputs
     let home: URL
     private var launch: Process?
@@ -542,7 +544,7 @@ private final class G4Session {
         let log = try FileHandle(forWritingTo: logURL)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        process.arguments = ["-v", "-V", "20", screenRecordingURL.path]
+        process.arguments = ["-v", "-V", "\(Self.screenRecordingDurationSeconds)", screenRecordingURL.path]
         process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
         process.standardOutput = log
         process.standardError = log
@@ -565,7 +567,7 @@ private final class G4Session {
     func finishScreenRecording() async -> G4RecordingEvidence {
         let recorder = screenRecorder
         if let recorder, recorder.isRunning {
-            let deadline = ContinuousClock.now + .seconds(75)
+            let deadline = ContinuousClock.now + Self.screenRecordingFinishTimeout
             while recorder.isRunning, ContinuousClock.now < deadline {
                 try? await Task.sleep(for: .milliseconds(100))
             }

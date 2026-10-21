@@ -94,6 +94,17 @@ public final class VirGLRenderer {
         return device
     }
 
+    /// Makes guest request identifiers available to callbacks raised synchronously by renderer work.
+    ///
+    /// All callbacks and engine calls run on this renderer's owner thread.
+    func withCommandDiagnostic<T>(_ diagnostic: VirGLCommandDiagnostic?, perform: () -> T) -> T {
+        guard let retainedCallbackContext else { return perform() }
+        let context = Unmanaged<GraphicsRendererCallbackContext>
+            .fromOpaque(retainedCallbackContext)
+            .takeUnretainedValue()
+        return context.withCommandDiagnostic(diagnostic, perform: perform)
+    }
+
     /// Returns the maximum version and buffer size for an available capset.
     public func capsetInfo(id: UInt32) throws(GraphicsFailure) -> GraphicsCapsetInfo {
         let renderer = try live(operation: "capsetInfo")
@@ -358,15 +369,45 @@ extension VirGLRenderer: VirGLEngine, @unchecked Sendable {
 }
 
 /// The renderer's callback context. Callbacks run on the render thread.
-private final class GraphicsRendererCallbackContext: Sendable {
-    let logger = APKLogger(category: .renderer)
+// UNCHECKED-SENDABLE: callbacks and active-command updates are confined to the renderer's owner thread.
+final class GraphicsRendererCallbackContext: @unchecked Sendable {
+    let logger: APKLogger
     let onFenceCompleted: @Sendable (UInt32) -> Void
+    var activeCommandDiagnostic: VirGLCommandDiagnostic?
     #if APKRUN_TEST_READBACK
         let messageSink = VirGLMessageSink()
     #endif
 
-    init(onFenceCompleted: @escaping @Sendable (UInt32) -> Void) {
+    init(
+        onFenceCompleted: @escaping @Sendable (UInt32) -> Void,
+        logger: APKLogger = APKLogger(category: .renderer)
+    ) {
         self.onFenceCompleted = onFenceCompleted
+        self.logger = logger
+    }
+
+    func withCommandDiagnostic<T>(_ diagnostic: VirGLCommandDiagnostic?, perform: () -> T) -> T {
+        let previous = activeCommandDiagnostic
+        activeCommandDiagnostic = diagnostic
+        defer { activeCommandDiagnostic = previous }
+        return perform()
+    }
+
+    func logCorrelation(for level: Int32) {
+        let severity: String
+        switch Int(level) {
+        case GB_LOG_ERROR: severity = "error"
+        case GB_LOG_WARNING: severity = "warning"
+        case GB_LOG_INFO: severity = "info"
+        default: return
+        }
+        guard let activeCommandDiagnostic else { return }
+        let message = "VirGL renderer callback level=\(severity) \(activeCommandDiagnostic.logFields)"
+        if Int(level) == GB_LOG_ERROR {
+            logger.error("\(message, .public)")
+        } else {
+            logger.info("\(message, .public)")
+        }
     }
 }
 
@@ -392,6 +433,7 @@ private let graphicsRendererLog:
         let context = Unmanaged<GraphicsRendererCallbackContext>
             .fromOpaque(contextPointer)
             .takeUnretainedValue()
+        context.logCorrelation(for: level)
         let message = String(cString: messagePointer)
         #if APKRUN_TEST_READBACK
             context.messageSink.record(message)

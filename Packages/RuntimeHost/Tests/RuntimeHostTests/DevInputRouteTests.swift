@@ -69,6 +69,34 @@ actor AcknowledgingInputChannel: InputChannel {
     }
 }
 
+private actor InputBindingScenario {
+    private var token = Data([1])
+    private var opens = 0
+    private let stale = CollectingInputChannel()
+    private let current = CollectingInputChannel()
+
+    func sessionToken() -> Data? {
+        token
+    }
+
+    func openInputChannel() -> any InputChannel {
+        opens += 1
+        if opens == 1 {
+            token = Data([2])
+            return stale
+        }
+        return current
+    }
+
+    func openCount() -> Int {
+        opens
+    }
+
+    func batchCounts() async -> (stale: Int, current: Int) {
+        (await stale.batches.count, await current.batches.count)
+    }
+}
+
 private let wireTime = RuntimeAPI.InputTimestamp(hostNanos: 77)
 private let wirePoint = RuntimeAPI.DisplayPoint(x: 12.5, y: 3)
 private let corePoint = InputCore.DisplayPoint(x: 12.5, y: 3)
@@ -372,6 +400,51 @@ func aTerminalRouteCannotRebindAfterGuestReconciliation() async {
 
     #expect(await oldChannel.batches.count == 1)
     #expect(await newChannel.batches.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func inputBindingRetriesWhenTheControlSessionChangesWhileOpening() async {
+    let scenario = InputBindingScenario()
+    let route = DevInputRoute()
+    let binding = DevInputBinding(
+        routes: [route],
+        currentSessionToken: { await scenario.sessionToken() },
+        openInputChannel: {
+            () async throws(GuestAgentFailure) -> DevBoundInputChannel in
+            DevBoundInputChannel(
+                input: await scenario.openInputChannel(),
+                isUsable: { true }
+            )
+        },
+        focusDisplay: { _ in },
+        adbShellInvocationCount: { 0 },
+        pollingInterval: .milliseconds(1)
+    )
+    let (events, continuation) = AsyncStream.makeStream(of: DevBootEvent.self)
+    let task = Task {
+        await binding.run { continuation.yield($0) }
+        continuation.finish()
+    }
+    defer {
+        task.cancel()
+        continuation.finish()
+    }
+
+    for await event in events {
+        if case let .message(message) = event,
+            message.hasPrefix("input is bound to display"),
+            message.contains("[0]")
+        {
+            break
+        }
+    }
+    await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
+    let counts = await scenario.batchCounts()
+    #expect(await scenario.openCount() == 2)
+    #expect(counts.stale == 0)
+    #expect(counts.current == 1)
+    task.cancel()
+    await task.value
 }
 
 // MARK: - The warning of an unbound route

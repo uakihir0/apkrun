@@ -323,7 +323,13 @@ let package = Package(
         ),
         .testTarget(
             name: "GraphicsCoreSystemTests",
-            dependencies: ["GraphicsCore", "GraphicsBridge", "GraphicsCoreTestSupport"],
+            dependencies: [
+                "GraphicsCore",
+                "GraphicsBridge",
+                "GraphicsCoreTestSupport",
+                "VirtioDeviceCore",
+                "VirtioDeviceCoreTestSupport",
+            ],
             path: "Packages/GraphicsCore/Tests/GraphicsCoreSystemTests",
             swiftSettings: [
                 .define("APKRUN_TEST_READBACK", .when(traits: ["TestReadback"]))

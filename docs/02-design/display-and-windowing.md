@@ -458,7 +458,7 @@ Logging: `io.apkrun.runtime`, category `display` (slot transitions, correlation,
 - **T0**, `Packages/RuntimeCore/Tests/RuntimeCoreTests/DisplayGeometryResolverTests.swift`: resolver table cases (Retina, non-Retina, 4095 cap, zoom clamp, minimum size).
 - **T0**, `Packages/RuntimeCore/Tests/RuntimeCoreTests/DisplayPoolTests.swift`: the `DisplayPool` state machine with fakes; the invariant 2 property test; serialized attach; fault retry.
 - **T0**, `Packages/GraphicsCore/Tests/GraphicsCoreTests/` (`PresentStateTests.swift`, `ScanoutPresenterTests.swift`): the buffer state machine (§5.2), with stale-generation, reordering, and coalescing cases.
-- **T1**, `Packages/WindowingCore/Tests/WindowingCoreTests/IOSurfaceLayerViewTests.swift`: `IOSurfaceLayerView` with a synthetic `FrameSource` in a real window, compared by screenshot.
+- **T1**, `Packages/WindowingCore/Tests/WindowingCoreSystemTests/SessionWindowSystemTests.swift`: `SessionWindowController` with a synthetic `FrameSource` in a real window, checked with placeholder and IOSurface screenshots.
 - **T2**, `Tests/IntegrationTests/`: pool acquire and release cycles on Android, with no stale frames, no duplicate display IDs, and every slot free at the end; secondary-display launch; two sessions; resize and backing-scale change.
 - **T3**: gate G4 (HelloText renders in a native Mac window) and gate G5 (two apps in two windows, each with independent input) ([roadmap.md](../04-plan/roadmap.md) §2).
 

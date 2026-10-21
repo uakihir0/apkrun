@@ -95,6 +95,8 @@ public final class DeveloperDisplay: @unchecked Sendable {
     let core: DevelopmentDisplay
     private let windowFrameLock = NSLock()
     private var windowFrameCommitCountValue: UInt64 = 0
+    private var latestReadyFrameSequenceValue: UInt64 = 0
+    private var latestWindowFrameSequenceValue: UInt64 = 0
     private var backingScaleValue: CGFloat
 
     /// Creates a display from the initial native window geometry.
@@ -137,6 +139,7 @@ public final class DeveloperDisplay: @unchecked Sendable {
                 case .surfacesReplaced(let surfaceSet):
                     continuation.yield(.surfacesReplaced(surfaceSet: DeveloperSurfaceSet(surfaceSet)))
                 case .frameReady(let generation, let bufferIndex, let sequence):
+                    self.noteFrameReady(generation: generation, sequence: sequence)
                     continuation.yield(
                         .frameReady(generation: generation, bufferIndex: bufferIndex, sequence: sequence)
                     )
@@ -152,6 +155,29 @@ public final class DeveloperDisplay: @unchecked Sendable {
     /// `statistics.framesPresented`, which counts completed GPU blits.
     public var windowFrameCommitCount: UInt64 {
         windowFrameLock.withLock { windowFrameCommitCountValue }
+    }
+
+    /// The highest frame sequence delivered to the native window.
+    ///
+    /// A frame that is ready but whose Core Animation transaction has not committed is included here. Launch
+    /// readiness captures this watermark only after the Guest Agent reports the launched task visible, then waits
+    /// for a committed sequence above it.
+    var latestReadyFrameSequence: UInt64 {
+        windowFrameLock.withLock { latestReadyFrameSequenceValue }
+    }
+
+    /// The highest frame sequence acknowledged by the native window's Core Animation completion callback.
+    var latestWindowFrameSequence: UInt64 {
+        windowFrameLock.withLock { latestWindowFrameSequenceValue }
+    }
+
+    /// Records a frame before it is forwarded to the native window. Kept internal so T0 tests can model a ready
+    /// frame whose Core Animation commit is deliberately delayed.
+    func noteFrameReady(generation: UInt64, sequence: UInt64) {
+        _ = generation
+        windowFrameLock.withLock {
+            latestReadyFrameSequenceValue = max(latestReadyFrameSequenceValue, sequence)
+        }
     }
 
     /// Reconfigures scanout 0 after the window geometry settles.
@@ -201,12 +227,18 @@ public final class DeveloperDisplay: @unchecked Sendable {
 
     /// The window has displayed frame `sequence` (display-and-windowing.md §5.2).
     public func frameDisplayed(generation: UInt64, sequence: UInt64) {
-        windowFrameLock.withLock { windowFrameCommitCountValue &+= 1 }
+        windowFrameLock.withLock {
+            windowFrameCommitCountValue &+= 1
+            latestWindowFrameSequenceValue = max(latestWindowFrameSequenceValue, sequence)
+        }
         core.frameDisplayed(generation: generation, sequence: sequence)
     }
 
     /// Compatibility for development tests that acknowledge the initial generation.
+    ///
+    /// Tests that use this helper model the corresponding ready event as well as its commit.
     public func frameDisplayed(sequence: UInt64) {
+        noteFrameReady(generation: 1, sequence: sequence)
         frameDisplayed(generation: 1, sequence: sequence)
     }
 

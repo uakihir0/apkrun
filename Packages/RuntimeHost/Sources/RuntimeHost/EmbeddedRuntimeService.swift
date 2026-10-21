@@ -12,7 +12,8 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
     private var sessionID: SessionID?
     private var packageID: String?
     private var taskID: Int32?
-    private var pendingLaunchFrameCount: UInt64?
+    private var launchAwaitsVisibleTaskFrame = false
+    private var visibleTaskFrameSequence: UInt64?
     private var frameReconciliationSessionID: SessionID?
     private var guestAgent: (any EmbeddedSessionGuestAgent)?
     private let developerDisplay: DeveloperDisplay?
@@ -20,6 +21,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
     private let inputRoute: DevInputRoute?
     private let stopSignal: DevBootStopSignal?
     private let windowState: DevBootAppWindowState?
+    private let onAppFramePresented: (@Sendable () async -> Void)?
     private let onTerminalSessionReconciled: (@Sendable (AppSessionSnapshot) async -> Void)?
     private var sessionOperationInFlight = false
     private var sessionOperationWaiters: [CheckedContinuation<Void, Never>] = []
@@ -33,6 +35,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         inputRoute = nil
         stopSignal = nil
         windowState = nil
+        onAppFramePresented = nil
         onTerminalSessionReconciled = nil
     }
 
@@ -44,6 +47,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         displayPool: DisplayPool? = nil,
         inputRoute: DevInputRoute? = nil,
         windowState: DevBootAppWindowState? = nil,
+        onAppFramePresented: (@Sendable () async -> Void)? = nil,
         onTerminalSessionReconciled: (@Sendable (AppSessionSnapshot) async -> Void)? = nil
     ) {
         self.registry = registry ?? SessionRegistry(logSink: logSink)
@@ -52,6 +56,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         self.inputRoute = inputRoute
         self.stopSignal = stopSignal
         self.windowState = windowState
+        self.onAppFramePresented = onAppFramePresented
         self.onTerminalSessionReconciled = onTerminalSessionReconciled
     }
 
@@ -104,6 +109,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         case .success(true):
             _ = await registry.stopCompleted(sessionID: sessionID)
             taskID = nil
+            clearLaunchFrameReadiness()
         case .success(false):
             _ = await registry.stopFailed(packageID: packageID)
             throw .runtime(
@@ -162,7 +168,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
                 remediation: "Install the app first, then launch it again."
             )
         }
-        guard let developerDisplay, let stopSignal else {
+        guard developerDisplay != nil, stopSignal != nil else {
             throw .runtime(
                 "windowUnavailable",
                 message: "APKRun couldn't open an Android app window.",
@@ -204,8 +210,6 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
             )
         }
 
-        let frameCountBeforeLaunch = pendingLaunchFrameCount ?? developerDisplay.windowFrameCommitCount
-        pendingLaunchFrameCount = frameCountBeforeLaunch
         let report: GuestLaunchReport
         do throws(GuestAgentFailure) {
             report = try await guestAgent.launch(package: requestedPackage, displayID: snapshot.displayID)
@@ -228,11 +232,11 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
             return try Self.launchResult(for: snapshot)
         }
 
-        switch await DevBoot.waitForFrame(
-            after: frameCountBeforeLaunch,
-            on: developerDisplay,
-            stopSignal: stopSignal,
-            windowState: windowState
+        switch await waitForVisibleTaskFrame(
+            packageID: requestedPackage,
+            taskID: report.taskID,
+            displayID: snapshot.displayID,
+            using: guestAgent
         ) {
         case .presented:
             do throws(SessionRegistryFailure) {
@@ -306,6 +310,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
                     _ = await registry.stopCompleted(sessionID: current.id)
                 }
                 taskID = nil
+                clearLaunchFrameReadiness()
             }
             return RuntimeTerminateResult(packageID: request.packageID, hadSession: hadSession)
         case .success(false):
@@ -367,6 +372,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
             case .success(true):
                 _ = await registry.stopCompleted(sessionID: current.id, endReason: .packageUninstalled)
                 taskID = nil
+                clearLaunchFrameReadiness()
             case .success(false):
                 _ = await registry.stopFailed(packageID: package)
                 throw .runtime(
@@ -391,7 +397,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         sessionID = snapshot.id
         self.packageID = packageID
         taskID = nil
-        pendingLaunchFrameCount = nil
+        clearLaunchFrameReadiness()
         frameReconciliationSessionID = nil
         guard snapshot.state == .requested else {
             return snapshot
@@ -457,9 +463,8 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
     @discardableResult
     public func beginLaunch() async throws(SessionRegistryFailure) -> AppSessionSnapshot {
         let snapshot = try await transition(to: .launching)
-        if pendingLaunchFrameCount == nil {
-            pendingLaunchFrameCount = developerDisplay?.windowFrameCommitCount
-        }
+        launchAwaitsVisibleTaskFrame = true
+        visibleTaskFrameSequence = nil
         return snapshot
     }
 
@@ -477,18 +482,20 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
     @discardableResult
     public func firstFramePresented() async throws(SessionRegistryFailure) -> AppSessionSnapshot {
         if let current = await currentSession(), current.state.isEnded {
-            pendingLaunchFrameCount = nil
+            clearLaunchFrameReadiness()
             return current
         }
         let snapshot = try await transition(to: .running)
-        pendingLaunchFrameCount = nil
+        clearLaunchFrameReadiness()
+        await onAppFramePresented?()
         return snapshot
     }
 
     /// Begins the close policy before the Guest Agent removes the package's tasks.
     @discardableResult
     public func windowClosed() async throws(SessionRegistryFailure) -> AppSessionSnapshot {
-        try await transition(to: .closing)
+        clearLaunchFrameReadiness()
+        return try await transition(to: .closing)
     }
 
     /// Applies the final task-vanished event after the Guest Agent confirms task removal.
@@ -497,7 +504,11 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         guard let packageID, let taskID else {
             return nil
         }
-        return await registry.taskVanished(packageID: packageID, taskID: taskID)
+        let snapshot = await registry.taskVanished(packageID: packageID, taskID: taskID)
+        if snapshot?.state.isEnded == true {
+            clearLaunchFrameReadiness()
+        }
+        return snapshot
     }
 
     /// Applies one Guest Agent task event and returns the updated session when it belongs to this package.
@@ -509,7 +520,26 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         switch event {
         case .appeared(let eventPackage, let eventTaskID) where eventPackage == packageID:
             await inputRoute?.reapplyFocusIfNeeded()
-            return await registry.taskAppeared(packageID: eventPackage, taskID: eventTaskID)
+            let snapshot = await registry.taskAppeared(packageID: eventPackage, taskID: eventTaskID)
+            if let snapshot,
+                snapshot.state == .launching,
+                snapshot.taskIDs.contains(eventTaskID),
+                taskID == eventTaskID,
+                let guestAgent
+            {
+                let isVisible = await refreshVisibleTaskFrameSequence(
+                    packageID: eventPackage,
+                    taskID: eventTaskID,
+                    displayID: snapshot.displayID,
+                    using: guestAgent
+                )
+                if isVisible {
+                    if let sessionID {
+                        scheduleFirstFrameReconciliation(sessionID: sessionID, taskID: eventTaskID)
+                    }
+                }
+            }
+            return snapshot
         case .vanished(let eventPackage, let eventTaskID) where eventPackage == packageID:
             if let snapshot = await currentSession(),
                 snapshot.taskIDs.isEmpty
@@ -518,7 +548,11 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
                 // A last-task event releases the display lease below. End the router registration first.
                 await inputRoute?.unbind()
             }
-            return await registry.taskVanished(packageID: eventPackage, taskID: eventTaskID)
+            let snapshot = await registry.taskVanished(packageID: eventPackage, taskID: eventTaskID)
+            if snapshot?.state.isEnded == true {
+                clearLaunchFrameReadiness()
+            }
+            return snapshot
         default:
             return nil
         }
@@ -584,17 +618,25 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         }
 
         if result.session.state.isEnded {
-            pendingLaunchFrameCount = nil
+            clearLaunchFrameReadiness()
             frameReconciliationSessionID = nil
             let inputCleanupTask = await inputRoute?.detachForGuestReconciliation()
             scheduleTerminalSessionReconciliation(result.session, inputCleanupTask: inputCleanupTask)
         }
 
-        if result.session.state == .launching,
-            let observedTaskID = result.session.taskIDs.sorted().first,
-            pendingLaunchFrameCount != nil
-        {
-            scheduleFirstFrameReconciliation(sessionID: sessionID, taskID: observedTaskID)
+        if result.session.state == .launching, launchAwaitsVisibleTaskFrame {
+            if let observedTaskID = visibleTaskID(in: guestSnapshot, session: result.session) {
+                taskID = observedTaskID
+                rememberVisibleTaskFrameSequence()
+                scheduleFirstFrameReconciliation(sessionID: sessionID, taskID: observedTaskID)
+            } else if let taskID,
+                let observed = guestSnapshot.tasks[taskID],
+                observed.package == result.session.packageID,
+                observed.displayID == result.session.displayID
+            {
+                // A hidden task cannot retain readiness from an earlier visible period.
+                visibleTaskFrameSequence = nil
+            }
         }
 
         guard result.action == .relaunchApplication else {
@@ -650,7 +692,8 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
             return
         }
 
-        pendingLaunchFrameCount = developerDisplay?.windowFrameCommitCount
+        visibleTaskFrameSequence = nil
+        taskID = nil
         let report: GuestLaunchReport
         do {
             report = try await guestAgent.launch(package: current.packageID, displayID: current.displayID)
@@ -670,7 +713,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         if let completed = await registry.launchCompleted(packageID: latest.packageID, taskID: report.taskID) {
             taskID = report.taskID
             if completed.state.isEnded {
-                pendingLaunchFrameCount = nil
+                clearLaunchFrameReadiness()
                 await inputRoute?.unbind()
                 if let onTerminalSessionReconciled {
                     await onTerminalSessionReconciled(completed)
@@ -721,18 +764,17 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
             let current = await registry.session(sessionID),
             current.state == .launching,
             current.taskIDs.contains(taskID),
-            let frameCountBeforeLaunch = pendingLaunchFrameCount,
-            let developerDisplay,
-            let stopSignal
+            let packageID,
+            let guestAgent
         else {
             return
         }
 
-        switch await DevBoot.waitForFrame(
-            after: frameCountBeforeLaunch,
-            on: developerDisplay,
-            stopSignal: stopSignal,
-            windowState: windowState
+        switch await waitForVisibleTaskFrame(
+            packageID: packageID,
+            taskID: taskID,
+            displayID: current.displayID,
+            using: guestAgent
         ) {
         case .presented:
             guard self.sessionID == sessionID,
@@ -757,6 +799,111 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         }
     }
 
+    /// Waits for a visible task and a later committed frame sequence.
+    ///
+    /// Guest task visibility identifies the launched app on this Android display. The frame watermark is captured
+    /// only after that signal, so a boot/home frame already delivered to the window cannot satisfy launch readiness
+    /// merely because its native commit happened after `LaunchApplication` began.
+    private func waitForVisibleTaskFrame(
+        packageID: String,
+        taskID: Int32,
+        displayID: Int32,
+        using guestAgent: any EmbeddedSessionGuestAgent,
+        timeout: Duration = .seconds(15),
+        pollInterval: Duration = .milliseconds(50)
+    ) async -> DevBoot.FrameWaitResult {
+        guard let developerDisplay, let stopSignal else {
+            return .timedOut
+        }
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if await windowState?.isClosed() == true {
+                return .windowClosed
+            }
+            if let cause = await stopSignal.current() {
+                return .stopped(cause)
+            }
+            await refreshVisibleTaskFrameSequence(
+                packageID: packageID,
+                taskID: taskID,
+                displayID: displayID,
+                using: guestAgent
+            )
+            if let visibleTaskFrameSequence,
+                developerDisplay.latestWindowFrameSequence > visibleTaskFrameSequence
+            {
+                return .presented
+            }
+            try? await Task.sleep(for: pollInterval)
+        }
+        if await windowState?.isClosed() == true {
+            return .windowClosed
+        }
+        if let cause = await stopSignal.current() {
+            return .stopped(cause)
+        }
+        return .timedOut
+    }
+
+    @discardableResult
+    private func refreshVisibleTaskFrameSequence(
+        packageID: String,
+        taskID: Int32,
+        displayID: Int32,
+        using guestAgent: any EmbeddedSessionGuestAgent
+    ) async -> Bool {
+        guard launchAwaitsVisibleTaskFrame,
+            self.packageID == packageID,
+            self.taskID == taskID,
+            let developerDisplay
+        else {
+            return false
+        }
+        let isVisible = await guestAgent.isTaskVisible(
+            packageID: packageID,
+            taskID: taskID,
+            displayID: displayID
+        )
+        guard launchAwaitsVisibleTaskFrame, self.packageID == packageID, self.taskID == taskID else {
+            return false
+        }
+        guard isVisible else {
+            visibleTaskFrameSequence = nil
+            return false
+        }
+        if visibleTaskFrameSequence == nil {
+            visibleTaskFrameSequence = developerDisplay.latestReadyFrameSequence
+        }
+        return true
+    }
+
+    private func rememberVisibleTaskFrameSequence() {
+        guard launchAwaitsVisibleTaskFrame, visibleTaskFrameSequence == nil,
+            let developerDisplay
+        else {
+            return
+        }
+        visibleTaskFrameSequence = developerDisplay.latestReadyFrameSequence
+    }
+
+    private func visibleTaskID(in snapshot: GuestSnapshotState, session: AppSessionSnapshot) -> Int32? {
+        let matches = snapshot.tasks.values.filter {
+            $0.visible
+                && $0.package == session.packageID
+                && $0.displayID == session.displayID
+                && session.taskIDs.contains($0.taskID)
+        }
+        if let taskID, matches.contains(where: { $0.taskID == taskID }) {
+            return taskID
+        }
+        return matches.count == 1 ? matches[0].taskID : nil
+    }
+
+    private func clearLaunchFrameReadiness() {
+        launchAwaitsVisibleTaskFrame = false
+        visibleTaskFrameSequence = nil
+    }
+
     private func finishFailedResynchronization(sessionID: SessionID) async {
         await markRuntimeFailed()
         await inputRoute?.unbind()
@@ -773,7 +920,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
     }
 
     private func markRuntimeFailed() async {
-        pendingLaunchFrameCount = nil
+        clearLaunchFrameReadiness()
         _ = try? await fail(.runtimeFailed)
     }
 
@@ -949,6 +1096,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
 protocol EmbeddedSessionGuestAgent: Sendable {
     func isInstalled(_ package: String) async throws(GuestAgentFailure) -> Bool
     func launch(package: String, displayID: Int32) async throws(GuestAgentFailure) -> GuestLaunchReport
+    func isTaskVisible(packageID: String, taskID: Int32, displayID: Int32) async -> Bool
     func stopApplication(package: String) async throws(GuestAgentFailure) -> Bool
     func forceStopApplication(package: String) async throws(GuestAgentFailure) -> Bool
     func addResynchronizationHandler(
@@ -958,6 +1106,10 @@ protocol EmbeddedSessionGuestAgent: Sendable {
 }
 
 extension EmbeddedSessionGuestAgent {
+    func isTaskVisible(packageID: String, taskID: Int32, displayID: Int32) async -> Bool {
+        false
+    }
+
     func addResynchronizationHandler(
         _ handler: @escaping @Sendable (GuestSnapshotState) async -> Void
     ) async -> UUID {
@@ -970,6 +1122,14 @@ extension EmbeddedSessionGuestAgent {
 extension DevelopmentGuestAgent: EmbeddedSessionGuestAgent {
     func isInstalled(_ package: String) async throws(GuestAgentFailure) -> Bool {
         try await queryPackage(package) != nil
+    }
+
+    func isTaskVisible(packageID: String, taskID: Int32, displayID: Int32) async -> Bool {
+        let snapshot = await supervisor.snapshot
+        guard let task = snapshot.tasks[taskID] else {
+            return false
+        }
+        return task.package == packageID && task.displayID == displayID && task.visible
     }
 
     func addResynchronizationHandler(

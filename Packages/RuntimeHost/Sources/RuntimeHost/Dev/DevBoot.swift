@@ -414,6 +414,7 @@ public struct DevBoot: Sendable {
         appCloseRequests: AsyncStream<Void>? = nil,
         preserveWindowOnError: Bool = false,
         onRuntimeReady: (@Sendable (DevelopmentRuntimeContext) async throws -> (any RuntimeSessionService)?)? = nil,
+        onAppFramePresented: (@Sendable (String?) -> Void)? = nil,
         onEvent: @escaping @Sendable (DevBootEvent) -> Void
     ) async throws {
         if !options.appLaunches.isEmpty {
@@ -441,6 +442,7 @@ public struct DevBoot: Sendable {
                 appCloseRequests: appCloseRequests,
                 preserveWindowOnError: preserveWindowOnError,
                 onRuntimeReady: onRuntimeReady,
+                onAppFramePresented: onAppFramePresented,
                 onEvent: onEvent
             )
         }
@@ -453,6 +455,7 @@ public struct DevBoot: Sendable {
         appCloseRequests: AsyncStream<Void>?,
         preserveWindowOnError: Bool,
         onRuntimeReady: (@Sendable (DevelopmentRuntimeContext) async throws -> (any RuntimeSessionService)?)?,
+        onAppFramePresented: (@Sendable (String?) -> Void)?,
         onEvent: @escaping @Sendable (DevBootEvent) -> Void
     ) async throws {
         var returnedNormally = false
@@ -593,7 +596,10 @@ public struct DevBoot: Sendable {
                             developerDisplay: windowDisplay,
                             stopSignal: stopSignal,
                             displayPool: displayPool,
-                            inputRoute: options.inputRoute
+                            inputRoute: options.inputRoute,
+                            onAppFramePresented: {
+                                onAppFramePresented?(nil)
+                            }
                         )
                         if await stopSignal.beginDisplayAcquisition() {
                             let mode = windowDisplay.mode
@@ -650,6 +656,9 @@ public struct DevBoot: Sendable {
                                 displayPool: displayPool,
                                 inputRoute: launch.inputRoute,
                                 windowState: launch.windowState,
+                                onAppFramePresented: {
+                                    onAppFramePresented?(launch.packageID)
+                                },
                                 onTerminalSessionReconciled: { session in
                                     await coordinator.reconcileTerminalSession(session)
                                 }

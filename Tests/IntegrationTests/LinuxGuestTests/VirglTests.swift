@@ -6,7 +6,8 @@ import XCTest
 
 /// T2 check that the Linux guest runs kmscube through VirGL without reported renderer failures.
 /// A bounded resource 4 backing sample checks for nonzero guest memory before its first submission; this does not verify pixels.
-/// `hostReadbacks` is not instrumented yet (IR-816).
+/// `hostReadbacks` has no increment path: the product has no host readback, and scripts/check-readback.sh keeps it so
+/// (graphics.md §7).
 final class VirglTests: XCTestCase {
     func testKmscubeHasNonzeroResource4BackingWithoutRendererFailures() async throws {
         try installStagedVirGLRuntime()

@@ -489,6 +489,8 @@ Metrics are recorded per scanout and globally. They are exposed through the pres
 
 The test-only readback, compiled only with `APKRUN_TEST_READBACK` (the `TestReadback` trait in tests), reads pixels for the replay and tearing tests. It is not counted, and it never runs on the normal path.
 
+The product has no host readback code, so nothing increments `hostReadbacks` today, and a zero in a gate run proves nothing by itself. The guarantee is structural: `scripts/check-readback.sh` (lint) fails when product sources call a pixel or resource read (`gb_transfer_read`, `transferRead`, `IOSurfaceLock`, `glReadPixels`, `getBytes`, `CVPixelBufferLockBaseAddress`) outside an `#if APKRUN_TEST_READBACK` block, except on the guest `TRANSFER_FROM_HOST_3D` path that `guestReadbacks` counts. A host-side read needs a design change first; if it is accepted, it increments `hostReadbacks` and gets an entry with its reason in the check's allowlist.
+
 Signposts (`io.apkrun.graphics`, category `present`): an interval `gpu.flush` (decode to completion) and an interval `gpu.present` (blit to `frameReady`). RuntimeCore emits the `FIRST_FRAME` perf marker on the first `frameReady` of a session's scanout ([diagnostics.md](diagnostics.md) §4).
 
 ---

@@ -125,7 +125,7 @@ The working order is [docs/04-plan/roadmap.md](docs/04-plan/roadmap.md) §1.3. D
 ### 6.4 Graphics
 
 - Read [docs/02-design/graphics.md](docs/02-design/graphics.md) and [docs/02-design/riftvm-analysis.md](docs/02-design/riftvm-analysis.md) before writing virtual GPU code.
-- The frame path never uses `glReadPixels`, CPU framebuffer readback, or CPU texture copies. Debug readback is behind a clearly marked switch, and the readback counters stay at 0 in tests ([docs/02-design/graphics.md](docs/02-design/graphics.md) §6–§7).
+- The frame path never uses `glReadPixels`, CPU framebuffer readback, or CPU texture copies. Debug readback is behind `#if APKRUN_TEST_READBACK`, `scripts/check-readback.sh` enforces it, and the readback counters stay at 0 in tests ([docs/02-design/graphics.md](docs/02-design/graphics.md) §6–§7).
 
 ### 6.5 Native code boundary
 

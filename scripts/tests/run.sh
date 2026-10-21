@@ -32,6 +32,7 @@ ruby "$script_dir/test_workflow_runners.rb" "$repo_root"
 "$script_dir/test_gate_status.sh"
 python3 "$script_dir/test_check_g3_evidence.py"
 python3 "$script_dir/test_check_doc_refs.py"
+python3 "$script_dir/test_check_readback.py"
 "$script_dir/test_run_checks_coverage.sh"
 
 expect_pass() {

@@ -838,7 +838,7 @@ run_gpu_hotplug_test() {
     return 1
 }
 
-# graphics.md §12 step 2 (#23): kmscube renders 60 frames headless on scanout 0 through
+# graphics.md §14 (#23): kmscube renders 60 frames headless on scanout 0 through
 # Mesa's virtio_gpu driver, which reports the virgl renderer. The host reads the
 # hostReadbacks counter of the device it attached.
 run_virgl_test() {

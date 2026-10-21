@@ -654,7 +654,19 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
         }
         let answer = session.reply(to: decoded, context: context)
         if case .error(let code) = answer.response {
-            reportGuestError("command was rejected", command: header.type)
+            let rejectedResourceID: UInt32?
+            if case .resourceAttachBacking(let resourceID, _) = decoded.body {
+                rejectedResourceID = resourceID
+            } else {
+                rejectedResourceID = nil
+            }
+            reportGuestError(
+                "command was rejected",
+                command: header.type,
+                contextID: header.contextID,
+                resourceID: rejectedResourceID,
+                responseErrorCode: code.rawValue
+            )
             return Reply(
                 bytes: errorReply(code, answering: header),
                 work: nil
@@ -833,11 +845,20 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
     // MARK: - Diagnostics
 
     /// Logs a guest-caused problem at most ten times a second, and counts the rest.
-    private func reportGuestError(_ reason: String, command: UInt32?) {
+    private func reportGuestError(
+        _ reason: String,
+        command: UInt32?,
+        contextID: UInt32? = nil,
+        resourceID: UInt32? = nil,
+        responseErrorCode: UInt32? = nil
+    ) {
         let decision = lock.withLock { errorLimiter.admit(at: clock()) }
         guard case .log(let suppressedCount) = decision else { return }
+        let contextField = contextID.map { " context_id=\($0)" } ?? ""
+        let resourceField = resourceID.map { " resource_id=\($0)" } ?? ""
+        let responseErrorField = responseErrorCode.map { " response_error=\($0)" } ?? ""
         logger.warning(
-            "virtio-gpu rejected a guest request reason=\(reason, .public) command=\(command ?? 0, .public) suppressed=\(suppressedCount, .public)"
+            "virtio-gpu rejected a guest request reason=\(reason, .public) command=\(command ?? 0, .public)\(contextField, .public)\(resourceField, .public)\(responseErrorField, .public) suppressed=\(suppressedCount, .public)"
         )
     }
 }

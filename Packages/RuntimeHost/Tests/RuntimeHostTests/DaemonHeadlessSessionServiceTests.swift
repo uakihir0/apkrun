@@ -357,10 +357,6 @@ private actor FakeDaemonHeadlessGuestAgent: DaemonHeadlessGuestAgent {
         taskEvents
     }
 
-    func isInstalled(_ package: String) async throws(GuestAgentFailure) -> Bool {
-        installed
-    }
-
     func launch(package: String, displayID: Int32) async throws(GuestAgentFailure) -> GuestLaunchReport {
         launchCalls.append(HeadlessLaunchCall(packageID: package, displayID: displayID))
         return GuestLaunchReport(
@@ -382,6 +378,39 @@ private actor FakeDaemonHeadlessGuestAgent: DaemonHeadlessGuestAgent {
 
     func applyClearPolicy(_ displayID: Int32, policy: GPClearPolicy) async throws(GuestAgentFailure) {
         clearPolicies.append((displayID: displayID, policy: policy))
+    }
+
+    func focusDisplay(displayID: Int32) async throws(GuestAgentFailure) {
+        throw .operationFailed(reason: "unused test operation")
+    }
+
+    func moveTask(taskID: Int32, toDisplay displayID: Int32, toBack: Bool) async throws(GuestAgentFailure) {
+        throw .operationFailed(reason: "unused test operation")
+    }
+
+    func listTasks(displayID: Int32?) async throws(GuestAgentFailure) -> [GPTaskInfo] {
+        throw .operationFailed(reason: "unused test operation")
+    }
+
+    func queryPackage(_ package: String) async throws(GuestAgentFailure) -> GPPackageInfo? {
+        guard installed else {
+            return nil
+        }
+        var info = GPPackageInfo()
+        info.package = package
+        return info
+    }
+
+    func listPackages(filter: GPPackageFilter) async throws(GuestAgentFailure) -> [GPPackageSummary] {
+        throw .operationFailed(reason: "unused test operation")
+    }
+
+    func getHealth() async throws(GuestAgentFailure) -> GPHealth {
+        throw .operationFailed(reason: "unused test operation")
+    }
+
+    func shutdown(reason: String) async throws(GuestAgentFailure) {
+        throw .operationFailed(reason: "unused test operation")
     }
 
     func addResynchronizationHandler(

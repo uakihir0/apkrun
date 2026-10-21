@@ -903,6 +903,7 @@ final class AndroidInputRun {
                 title: Self.windowTitle,
                 backingScale: scale,
                 inputSink: sink,
+                allowsResize: false,
                 holdsPlaceholderUntilAppRunning: closeStopsPackage != nil,
                 onFocusChanged: { [sink] focused in
                     sink.focusChanged(focused)

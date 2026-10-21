@@ -1,6 +1,7 @@
 import DiagnosticsCore
 import DiagnosticsCoreTestSupport
 import Foundation
+import GraphicsBridge
 import Testing
 import VirtioDeviceCore
 import VirtioDeviceCoreTestSupport
@@ -293,8 +294,11 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     try await eventually { control.completionCounts == [1] }
 
     #expect(try body(control.writtenBuffers[0]) == .error(.invalidResourceID))
-    let entry = try #require(sink.entries.first)
-    #expect(entry.publicMessage.contains("command=262 context_id=0 resource_id=128 response_error=4611"))
+    let entry = try #require(sink.entries.first { $0.level == .warning })
+    #expect(
+        entry.publicMessage
+            .contains("control_ordinal=1 command=262 context_id=0 resource_id=128 response_error=4611")
+    )
     #expect(entry.publicMessage.contains("4096") == false)
 }
 
@@ -470,6 +474,64 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     try await eventually { harness.device.statistics.rendererFailures == 1 }
 }
 
+@Test func commandOrdinalsCorrelateResourceRejectionsAndRendererFailures() async throws {
+    let sink = RecordingLogSink()
+    let harness = try VirGLHarness(logger: APKLogger(category: GraphicsLogCategory.device, sink: sink))
+    harness.engineRef.engine.fail("resourceAttachBacking")
+    harness.engineRef.engine.fail("submit")
+
+    let control = harness.send([
+        gpuRequest(.resourceCreate3D, body: .resourceCreate3D(resource3D(id: 5))),
+        gpuRequest(
+            .resourceAttachBacking,
+            body: .resourceAttachBacking(
+                resourceID: 5,
+                entries: [VirtioGPUMemoryEntry(address: 0x1000, length: 64)]
+            )
+        ),
+        gpuRequest(.resourceDetachBacking, body: .resourceDetachBacking(resourceID: 5)),
+        gpuRequest(
+            .resourceAttachBacking,
+            body: .resourceAttachBacking(
+                resourceID: 5,
+                entries: [VirtioGPUMemoryEntry(address: .max, length: 1)]
+            )
+        ),
+        gpuRequest(.ctxCreate, body: .ctxCreate(contextInit: 0, debugName: []), contextID: 1),
+        gpuRequest(.submit3D, body: .submit3D(commandStream: [1, 0, 0, 0]), contextID: 1),
+    ])
+    try await eventually { control.completionCounts == Array(repeating: 1, count: 6) }
+
+    // A renderer failure still leaves the already-decided guest response unchanged (IR-460).
+    #expect(gpuResponseType(control.writtenBuffers[1]) == VirtioGPUResponseType.okNoData.rawValue)
+    #expect(gpuResponseType(control.writtenBuffers[3]) == VirtioGPUErrorCode.invalidParameter.rawValue)
+    #expect(gpuResponseType(control.writtenBuffers[5]) == VirtioGPUResponseType.okNoData.rawValue)
+
+    let messages = sink.entries.map(\.publicMessage)
+    #expect(messages.contains { $0.contains("control_ordinal=1 command=516 context_id=0 resource_id=5") })
+    #expect(messages.contains { $0.contains("control_ordinal=2 command=262 context_id=0 resource_id=5") })
+    #expect(messages.contains { $0.contains("control_ordinal=3 command=263 context_id=0 resource_id=5") })
+    #expect(messages.contains { $0.contains("control_ordinal=4 command=262 context_id=0 resource_id=5") })
+    #expect(
+        messages.contains {
+            $0.contains("command was rejected")
+                && $0.contains("control_ordinal=4 command=262 context_id=0 resource_id=5")
+                && $0.contains("response_error=4613")
+        })
+    #expect(
+        messages.contains {
+            $0.contains("operation=resourceAttachBacking")
+                && $0.contains("control_ordinal=2 command=262 context_id=0 resource_id=5")
+        })
+    #expect(messages.contains { $0.contains("control_ordinal=5 command=512 context_id=1") })
+    #expect(
+        messages.contains {
+            $0.contains("operation=submit")
+                && $0.contains("control_ordinal=6 command=519 context_id=1")
+        })
+    #expect(messages.allSatisfy { !$0.contains("0x1000") && !$0.contains("command bytes") })
+}
+
 @Test func rendererFailureLogIncludesOperationWithoutDynamicDetail() throws {
     let sink = RecordingLogSink()
     let failureLog = RendererFailureLog(
@@ -488,7 +550,7 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     #expect(failureLog.total == 1)
 }
 
-@Test func rendererFailureLogIncludesContextForSubmitFailures() throws {
+@Test func rendererFailureLogIncludesCommandOrdinalForSubmitFailures() throws {
     let sink = RecordingLogSink()
     let failureLog = RendererFailureLog(
         logger: APKLogger(category: GraphicsLogCategory.device, sink: sink)
@@ -496,15 +558,47 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
 
     failureLog.record(
         .rendererOperationFailed(operation: "submit", detail: "guest command bytes"),
-        contextID: 17
+        diagnostic: VirGLCommandDiagnostic(
+            ordinal: 12,
+            command: 0x0207,
+            contextID: 17,
+            resourceID: nil
+        )
     )
 
     let entry = try #require(sink.entries.first)
     #expect(
         entry.publicMessage
-            == "virtio-gpu renderer operation failed: rendererOperationFailed operation=submit context_id=17"
+            == "virtio-gpu renderer operation failed: rendererOperationFailed operation=submit control_ordinal=12 command=519 context_id=17"
     )
     #expect(entry.publicMessage.contains("guest command bytes") == false)
+}
+
+@Test func rendererCallbackCorrelationIsLoggedOnlyInsideItsCommandScope() throws {
+    let sink = RecordingLogSink()
+    let callbackContext = GraphicsRendererCallbackContext(
+        onFenceCompleted: { _ in },
+        logger: APKLogger(category: GraphicsLogCategory.renderer, sink: sink)
+    )
+    let diagnostic = VirGLCommandDiagnostic(
+        ordinal: 12,
+        command: 0x0207,
+        contextID: 17,
+        resourceID: 128
+    )
+
+    callbackContext.withCommandDiagnostic(diagnostic) {
+        callbackContext.logCorrelation(for: Int32(GB_LOG_ERROR))
+    }
+    callbackContext.logCorrelation(for: Int32(GB_LOG_ERROR))
+
+    let entry = try #require(sink.entries.first)
+    #expect(entry.level == .error)
+    #expect(
+        entry.publicMessage
+            == "VirGL renderer callback level=error control_ordinal=12 command=519 context_id=17 resource_id=128"
+    )
+    #expect(sink.entries.count == 1)
 }
 
 @Test func rendererFailureLogHidesUnknownOperationLabels() throws {

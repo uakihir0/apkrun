@@ -89,6 +89,20 @@ public final class DevelopmentDisplay: @unchecked Sendable {
         guard let device, let scanout = ScanoutID(rawValue: 0) else { return nil }
         return device.poolHandle(for: scanout)
     }
+    /// The highest sequence assigned to an accepted flush, including requests not yet relayed as ready.
+    ///
+    /// Launch readiness reads this producer watermark after Android reports its task visible. The event relay may
+    /// still have an earlier frame queued, so its latest delivered sequence alone is not sufficient.
+    public var latestIssuedFrameSequence: UInt64 {
+        let (device, poolHandle) = lock.withLock { (self.device, self.poolHandle) }
+        if let poolHandle {
+            return poolHandle.latestIssuedFrameSequence
+        }
+        guard let device, let scanout = ScanoutID(rawValue: 0) else {
+            return 0
+        }
+        return device.poolHandle(for: scanout)?.latestIssuedFrameSequence ?? 0
+    }
     /// Whether this window is backed by a directly attached presenter with the display-0 resize path.
     public var supportsWindowResize: Bool {
         lock.withLock { device != nil }

@@ -57,9 +57,83 @@ struct InputTouchCaptureSnapshot {
     let counters: InputCounters
 }
 
+/// Captured from the runtime-owned ADB client as soon as DevBoot reaches runtime ready.
+struct GuestProtocolLaunchBaseline: Sendable {
+    let adbShellInvocationCount: Int
+}
+
 struct InputTouchEventHistory: Sendable, Equatable {
     let records: [TouchEvent]
     let discardedRecords: Int
+}
+
+private final class GuestProtocolLaunchProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var agent: DevelopmentGuestAgent?
+    private var sessionService: EmbeddedRuntimeService?
+    private var baseline: GuestProtocolLaunchBaseline?
+    private var launchReportReceived = false
+
+    func recordRuntimeReady(
+        agent: DevelopmentGuestAgent,
+        sessionService: (any RuntimeSessionService)?,
+        adbShellInvocationCount: Int
+    ) {
+        lock.withLock {
+            self.agent = agent
+            self.sessionService = sessionService as? EmbeddedRuntimeService
+            baseline = GuestProtocolLaunchBaseline(
+                adbShellInvocationCount: adbShellInvocationCount
+            )
+        }
+    }
+
+    func recordLaunchReport() {
+        lock.withLock { launchReportReceived = true }
+    }
+
+    func runtimeReadyBaseline() -> GuestProtocolLaunchBaseline? {
+        lock.withLock { baseline }
+    }
+
+    func didReceiveLaunchReport() -> Bool {
+        lock.withLock { launchReportReceived }
+    }
+
+    func guestAgent() -> DevelopmentGuestAgent? {
+        lock.withLock { agent }
+    }
+
+    func appSessionSnapshot() async -> AppSessionSnapshot? {
+        guard let sessionService = lock.withLock({ sessionService }) else {
+            return nil
+        }
+        return await sessionService.currentSession()
+    }
+
+    func adbShellInvocationCount() async -> Int? {
+        guard let agent = lock.withLock({ agent }) else {
+            return nil
+        }
+        return await agent.adbShellInvocationCount
+    }
+}
+
+private final class DisplayFrameCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sequence = 0
+
+    @discardableResult
+    func recordFrame() -> Int {
+        lock.withLock {
+            sequence += 1
+            return sequence
+        }
+    }
+
+    var current: Int {
+        lock.withLock { sequence }
+    }
 }
 
 private final class InputTouchEventRecorder: @unchecked Sendable {
@@ -109,8 +183,10 @@ final class AndroidInputRun {
     private let route = DevInputRoute()
     private let stop = AsyncStream.makeStream(of: Void.self)
     private let bootLog = BootLog()
+    private let guestProtocolLaunchProbe = GuestProtocolLaunchProbe()
+    private let frameCounter = DisplayFrameCounter()
     private var frames: DisplayFrames?
-    private var framesSeen = 0
+    private var framesSeen: Int { frameCounter.current }
     private var window: SessionWindowController?
     private var inputSink: WireSink?
     private var inputTraceRecorder: InputTraceRecorder?
@@ -180,6 +256,102 @@ final class AndroidInputRun {
             throw error
         }
         await run.finish()
+    }
+
+    /// Runs a display-backed `DevBoot` launch and captures the shell-count baseline at runtime ready.
+    static func withGuestProtocolLaunch(
+        apk: URL,
+        package: String,
+        _ body: (AndroidInputRun, GuestProtocolLaunchBaseline) async throws -> Void
+    ) async throws {
+        guard let guest = ProcessInfo.processInfo.environment["APKRUN_GUEST_DIR"], !guest.isEmpty else {
+            throw XCTSkip(
+                "APKRUN_GUEST_DIR is not set. Build the Guest Agent bundle with scripts/build-guest.sh --out.")
+        }
+        let bundle = try AndroidBootSession.bundleDirectory()
+        let adbExecutable = try AndroidTestEnvironment.adbExecutable()
+        if ProcessInfo.processInfo.environment["ANDROID_HOME"] == nil,
+            let sdk = AndroidTestEnvironment.current()["ANDROID_HOME"]
+        {
+            setenv("ANDROID_HOME", sdk, 1)
+        }
+        let home = try AndroidBootFixture.makeHome()
+        do {
+            _ = try await AndroidBootFixture(home: home, bundle: bundle)
+        } catch {
+            VMRunResources.removeHomeOrReport(home)
+            throw error
+        }
+        let run = AndroidInputRun(
+            home: home,
+            adb: AdbClient(executable: adbExecutable),
+            pointerDelivery: .directView
+        )
+        run.startGuestProtocolLaunchBoot(
+            guestAgentDirectory: URL(fileURLWithPath: guest, isDirectory: true),
+            apk: apk,
+            package: package
+        )
+        do {
+            let baseline = try await run.waitForGuestProtocolLaunchBaseline()
+            try await body(run, baseline)
+        } catch {
+            await run.finish()
+            throw error
+        }
+        await run.finish()
+    }
+
+    /// Waits for DevBoot's launch report, which follows EmbeddedRuntimeService's first committed app frame.
+    func waitForAppLaunchFrame() async throws {
+        try await waitUntil(seconds: 120, "the DevBoot launch report after the first app frame") {
+            self.guestProtocolLaunchProbe.didReceiveLaunchReport()
+        }
+    }
+
+    /// Reads the development agent's ADB shell counter after the display-backed app launch.
+    func guestProtocolLaunchAdbShellInvocationCount() async throws -> Int {
+        guard let count = await guestProtocolLaunchProbe.adbShellInvocationCount() else {
+            throw AndroidInputRunFailure.timedOut("the runtime-ready Guest Agent shell counter")
+        }
+        return count
+    }
+
+    /// Reads the display-backed app session created for the Guest Protocol launch.
+    func guestProtocolLaunchSessionSnapshot() async -> AppSessionSnapshot? {
+        await guestProtocolLaunchProbe.appSessionSnapshot()
+    }
+
+    /// The number of successful bindings for display 0 observed in the boot event stream.
+    func displayZeroInputBindingCount() -> Int {
+        bootLog.count(of: "input is bound to display [0]")
+    }
+
+    /// Waits for the development route to bind to the replacement Guest Agent input channel.
+    func waitForDisplayZeroInputRebind(after bindingCount: Int) async throws {
+        try await waitUntil(seconds: 60, "the display 0 input route to rebind after Guest Agent reconnection") {
+            self.displayZeroInputBindingCount() > bindingCount
+        }
+    }
+
+    /// Kills the guest daemon and waits for the same supervisor to reconnect with a fresh session token.
+    func killGuestAgentAndWaitForReconnect() async throws {
+        guard let agent = guestProtocolLaunchProbe.guestAgent(),
+            let previousToken = await agent.supervisor.session?.sessionToken
+        else {
+            throw AndroidInputRunFailure.timedOut("the connected Guest Agent session")
+        }
+        try await adb.terminateProcess(named: "apkrun_guestd")
+        let deadline = ContinuousClock.now + .seconds(60)
+        while ContinuousClock.now < deadline {
+            let status = await agent.supervisor.statusSnapshot()
+            let token = await agent.supervisor.session?.sessionToken
+            if status.state == .ready, token != nil, token != previousToken {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        throw AndroidInputRunFailure.timedOut("Guest Agent reconnection with a fresh session token")
     }
 
     /// The pointer of the window. Its content rectangle is the view's bounds: the window keeps the display's aspect.
@@ -646,21 +818,68 @@ final class AndroidInputRun {
     }
 
     private func startBoot(guestAgentDirectory: URL, apk: URL, package: String) {
-        var options = DevBootOptions(
-            gpu: .virgl,
-            stopWhenReady: false,
+        let adb = adb
+        startBoot(
             guestAgentDirectory: guestAgentDirectory,
-            launchPackage: package,
-            launchAPKURL: apk
+            apk: apk,
+            package: package,
+            onRuntimeReady: { _ in
+                // Wake Android and dismiss the keyguard before DevBoot installs and launches the fixture.
+                try await adb.connect(timeout: .seconds(30))
+                _ = try await adb.shell("input keyevent 82")
+                _ = try await adb.shell("wm dismiss-keyguard")
+                return nil
+            }
         )
+    }
+
+    private func startGuestProtocolLaunchBoot(guestAgentDirectory: URL, apk: URL, package: String) {
+        let probe = guestProtocolLaunchProbe
+        let adb = adb
+        startBoot(
+            guestAgentDirectory: guestAgentDirectory,
+            package: package,
+            onRuntimeReady: { context in
+                guard let agent = await context.supervisor.developmentGuestAgent else {
+                    throw GuestAgentFailure.startFailed
+                }
+                probe.recordRuntimeReady(
+                    agent: agent,
+                    sessionService: await context.makeSessionService(),
+                    adbShellInvocationCount: await agent.adbShellInvocationCount
+                )
+                try await adb.connect(timeout: .seconds(30))
+                try await agent.installAPK(apk, package: package)
+                _ = try await adb.shell("input keyevent 82")
+                _ = try await adb.shell("wm dismiss-keyguard")
+                return nil
+            }
+        )
+    }
+
+    private func startBoot(
+        guestAgentDirectory: URL,
+        apk: URL? = nil,
+        package: String?,
+        onRuntimeReady: (@Sendable (DevelopmentRuntimeContext) async throws -> (any RuntimeSessionService)?)?
+    ) {
+        var options = DevBootOptions(gpu: .virgl, stopWhenReady: false, guestAgentDirectory: guestAgentDirectory)
+        options.launchAPKURL = apk
         options.developerDisplay = display
         options.inputRoute = route
+        options.launchPackage = package
         let bootLog = bootLog
+        let probe = guestProtocolLaunchProbe
         let stops = stop.stream
         let home = home
         let adb = adb
         let report: @Sendable (DevBootEvent) -> Void = { event in
-            if case .message(let text) = event { bootLog.append(text) }
+            if case .message(let text) = event {
+                bootLog.append(text)
+                if let package, text.hasPrefix("launched \(package) on display ") {
+                    probe.recordLaunchReport()
+                }
+            }
             if case .warning(let text) = event { bootLog.append(text) }
             if case .catalogWarning(let error) = event {
                 bootLog.append("\(error.qualifiedCode): \(error.cause?.qualifiedCode ?? "no Guest Agent")")
@@ -672,13 +891,7 @@ final class AndroidInputRun {
                     options: options,
                     environment: ["APKRUN_HOME": home.path],
                     stopRequests: stops,
-                    onRuntimeReady: { _ in
-                        // Wake Android and dismiss the keyguard before DevBoot installs and launches the fixture.
-                        try await adb.connect(timeout: .seconds(30))
-                        _ = try await adb.shell("input keyevent 82")
-                        _ = try await adb.shell("wm dismiss-keyguard")
-                        return nil
-                    },
+                    onRuntimeReady: onRuntimeReady,
                     onEvent: report
                 )
             } catch {
@@ -710,9 +923,19 @@ final class AndroidInputRun {
         case .surfacesReplaced(let surfaceSet):
             frames?.replace(surfaceSet)
         case .frameReady(let generation, let bufferIndex, let sequence):
-            framesSeen += 1
+            frameCounter.recordFrame()
             frames?.ingest(generation: generation, bufferIndex: bufferIndex, sequence: sequence)
         }
+    }
+
+    private func waitForGuestProtocolLaunchBaseline() async throws -> GuestProtocolLaunchBaseline {
+        try await waitUntil(seconds: 900, "runtime-ready Guest Agent shell-count baseline") {
+            self.guestProtocolLaunchProbe.runtimeReadyBaseline() != nil
+        }
+        guard let baseline = guestProtocolLaunchProbe.runtimeReadyBaseline() else {
+            throw AndroidInputRunFailure.timedOut("runtime-ready Guest Agent shell-count baseline")
+        }
+        return baseline
     }
 
     /// Waits until the app started by DevBoot has a process, with guest evidence when it does not.
@@ -732,8 +955,8 @@ final class AndroidInputRun {
 
     /// Waits for DevBoot to bind input, present frames, and launch the app through its embedded session.
     private func prepare(package: String) async throws {
-        try await waitUntil(seconds: 900, "input is bound to display 0") {
-            self.bootLog.contains("input is bound to display [0]")
+        try await waitUntil(seconds: 900, "input is bound to display [0]") {
+            self.displayZeroInputBindingCount() > 0
         }
         try await waitUntil(seconds: 120, "the first frames") { self.framesSeen >= 2 }
         try await waitUntil(seconds: 120, "DevBoot to launch \(package) on display 0") {
@@ -1290,6 +1513,10 @@ private final class BootLog: @unchecked Sendable {
 
     func containsMessage(startingWith prefix: String) -> Bool {
         lock.withLock { lines.contains { $0.hasPrefix(prefix) } }
+    }
+
+    func count(of line: String) -> Int {
+        lock.withLock { lines.filter { $0 == line }.count }
     }
 
     /// Records that the boot task has returned, whether it stopped or failed.

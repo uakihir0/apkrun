@@ -50,9 +50,18 @@
             help: "The Guest Agent bundle directory (default: APKRUN_GUEST_DIR, then the app's Resources/guest).")
         var guestDir: String?
 
+        @Option(
+            name: .long,
+            help: "Guest Agent transport: `adb` (the default) or `vsock`."
+        )
+        var guestTransport = DevGuestTransport.adb.rawValue
+
         mutating func run() async throws {
             guard let profile = DevGPUProfile(rawValue: gpu) else {
                 throw CLIFailure.invalidArgument(argument: "--gpu", reason: "profile")
+            }
+            guard let guestTransport = DevGuestTransport(rawValue: guestTransport) else {
+                throw CLIFailure.invalidArgument(argument: "--guest-transport", reason: "transport")
             }
             guard (1...16).contains(cpus) else {
                 throw CLIFailure.invalidArgument(argument: "--cpus", reason: "range")
@@ -79,7 +88,8 @@
                     guestDir: guestDir,
                     environment: ProcessInfo.processInfo.environment,
                     executable: Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
-                )
+                ),
+                guestTransport: guestTransport
             )
 
             // With `--window`, the session holds the stop requests, because the window's close button makes one too.

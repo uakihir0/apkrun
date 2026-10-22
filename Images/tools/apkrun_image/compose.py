@@ -32,6 +32,13 @@ from apkrun_image.erofs import (
 TASK = "#36"
 BUILD_TIMESTAMP = 1230768000
 SYSTEM_EXT_PREFIX = PurePosixPath("/system_ext")
+SYSTEM_EXT_REPLACEABLE_FILES = frozenset(
+    {
+        "/system_ext/etc/selinux/system_ext_file_contexts",
+        "/system_ext/etc/selinux/system_ext_seapp_contexts",
+        "/system_ext/etc/selinux/system_ext_sepolicy.cil",
+    }
+)
 _LABEL = re.compile(r"^u:object_r:[A-Za-z0-9_]+:s0(?:[:][A-Za-z0-9_]+)?$")
 _OCTAL_MODE = re.compile(r"^[0-7]{4}$")
 
@@ -69,6 +76,7 @@ class RebuildResult:
     stock_entries: dict[str, Entry]
     composed_entries: dict[str, Entry]
     added_entries: dict[str, Entry]
+    replaced_entries: dict[str, Entry]
     stock_entries_reproduced: int
     stock_blocks: int
     filesystem_blocks: int
@@ -373,16 +381,96 @@ def apply_placements(
     return expected, members
 
 
+def _replacement_members(
+    stock_entries: Mapping[str, Entry],
+    stock_members: Sequence[TarMember],
+    replacements: Mapping[str, Path] | None,
+    tree_root: Path,
+) -> tuple[dict[str, Entry], list[TarMember]]:
+    """Replace only the allowlisted stock system_ext SELinux files in the rebuilt tar."""
+    if replacements is None:
+        return {}, []
+    if not isinstance(replacements, Mapping):
+        raise ComposeError("system_ext replacements must be a mapping of image paths to files.")
+
+    tree = tree_root.resolve(strict=True)
+    members_by_path = {member.path: member for member in stock_members}
+    replaced_entries: dict[str, Entry] = {}
+    replacement_members: list[TarMember] = []
+    for image_path, raw_source in sorted(replacements.items(), key=lambda item: str(item[0])):
+        if not isinstance(image_path, str):
+            raise ComposeError("system_ext replacement paths must be strings.")
+        path = _safe_posix_path(
+            image_path,
+            absolute=True,
+            what="system_ext replacement path",
+        )
+        normalized_path = path.as_posix()
+        if normalized_path not in SYSTEM_EXT_REPLACEABLE_FILES:
+            raise ComposeError(
+                f"{normalized_path}: replacement path is not in the system_ext SELinux allowlist."
+            )
+        erofs_path = "/" + path.relative_to(SYSTEM_EXT_PREFIX).as_posix()
+
+        if not isinstance(raw_source, (str, os.PathLike)):
+            raise ComposeError(f"{normalized_path}: replacement source must be a file path.")
+        source_path = Path(raw_source)
+        if source_path.is_symlink() or not source_path.is_file():
+            raise ComposeError(
+                f"{normalized_path}: replacement source must be a real regular file."
+            )
+        try:
+            source = source_path.resolve(strict=True)
+            source_stat = source.stat()
+        except OSError as error:
+            raise ComposeError(
+                f"{normalized_path}: cannot read replacement source: {error}"
+            ) from None
+        if not source.is_file():
+            raise ComposeError(f"{normalized_path}: replacement source must be a regular file.")
+
+        stock = stock_entries.get(erofs_path)
+        if stock is None:
+            raise ComposeError(f"{normalized_path}: replacement target is absent from stock.")
+        if stock.kind != REGULAR_FILE:
+            raise ComposeError(
+                f"{normalized_path}: replacement target is not a stock regular file."
+            )
+        member = members_by_path.get(erofs_path)
+        if member is None or member.kind != REGULAR_FILE:
+            raise ComposeError(f"{normalized_path}: stock regular file has no tar member.")
+        target = _safe_tree_target(tree, normalized_path)
+        if target.is_symlink() or not target.is_file():
+            raise ComposeError(
+                f"{normalized_path}: exported stock replacement target is missing or unsafe."
+            )
+
+        replaced_entries[erofs_path] = replace(
+            stock,
+            size=source_stat.st_size,
+            sha256=sha256_file(source),
+        )
+        replacement_members.append(replace(member, source=source))
+
+    return replaced_entries, replacement_members
+
+
 def _entry_differences(
     before: Mapping[str, Entry],
     after: Mapping[str, Entry],
     *,
     added: Mapping[str, Entry] | None = None,
+    replaced: Mapping[str, Entry] | None = None,
     allow_directory_size_changes: bool = False,
 ) -> list[str]:
     """Return semantic differences between stock and rebuilt EROFS entry maps."""
     expected_entries = added or {}
     expected_new = set(expected_entries)
+    expected_replacements = replaced or {}
+    replacement_paths = set(expected_replacements)
+    if expected_new & replacement_paths:
+        overlap = sorted(expected_new & replacement_paths)[0]
+        return [f"{overlap}: cannot be both added and replaced"]
     receiving = {str(PurePosixPath(path).parent) for path in expected_new}
     problems: list[str] = []
     for path in sorted(set(before) - set(after)):
@@ -392,13 +480,30 @@ def _entry_differences(
             problems.append(f"{path}: new in the rebuild and not expected")
     for path in sorted(expected_new - set(after)):
         problems.append(f"{path}: expected in the rebuild but missing")
+    for path in sorted(replacement_paths - set(before)):
+        problems.append(f"{path}: replacement target is absent from stock")
+    for path in sorted(replacement_paths - set(after)):
+        problems.append(f"{path}: expected replacement is missing from the rebuild")
 
     fields = ("kind", "mode", "uid", "gid", "mtime", "target", "sha256", "label")
+    preserved_fields = ("kind", "mode", "uid", "gid", "mtime", "target", "label")
     for path in sorted(set(before) & set(after)):
         if path in expected_new:
             problems.append(f"{path}: expected to be new but it exists in the stock partition")
             continue
         old, new = before[path], after[path]
+        if path in expected_replacements:
+            expected = expected_replacements[path]
+            for field in preserved_fields:
+                if getattr(old, field) != getattr(expected, field):
+                    problems.append(f"{path}: replacement plan changes stock {field}")
+                if getattr(expected, field) != getattr(new, field):
+                    problems.append(f"{path}: {field} differs from the replacement plan")
+            if expected.size != new.size:
+                problems.append(f"{path}: size differs from the replacement plan")
+            if old.kind != REGULAR_FILE:
+                problems.append(f"{path}: only stock regular files may be replaced")
+            continue
         for field in fields:
             if getattr(old, field) != getattr(new, field):
                 problems.append(f"{path}: {field} differs")
@@ -446,6 +551,7 @@ def _rebuild_system_ext(
     scratch: Path,
     *,
     image_uuid: str,
+    replacements: Mapping[str, Path] | None = None,
 ) -> RebuildResult:
     """Rebuild system_ext with the listed product entries and verify its exact semantic diff."""
     try:
@@ -467,6 +573,12 @@ def _rebuild_system_ext(
         raise ComposeError("stock system_ext entries do not share one timestamp.")
 
     stock_members = tree_members(stock_entries, stock_tree, BUILD_TIMESTAMP)
+    replaced_entries, replacement_members = _replacement_members(
+        stock_entries,
+        stock_members,
+        replacements,
+        stock_tree,
+    )
 
     roundtrip_image = _build_ero(
         image_tools,
@@ -494,7 +606,12 @@ def _rebuild_system_ext(
     )
     output_image = _build_ero(
         image_tools,
-        sorted(stock_members + added_members, key=lambda member: member.path),
+        sorted(
+            [member for member in stock_members if member.path not in replaced_entries]
+            + replacement_members
+            + added_members,
+            key=lambda member: member.path,
+        ),
         scratch,
         "system-ext-composed",
         normalized_uuid,
@@ -506,6 +623,7 @@ def _rebuild_system_ext(
         stock_entries,
         composed_entries,
         added=added_entries,
+        replaced=replaced_entries,
     )
     if problems:
         raise ComposeError(f"composed system_ext differs from its plan: {problems[0]}.")
@@ -525,6 +643,7 @@ def _rebuild_system_ext(
         stock_entries=stock_entries,
         composed_entries=composed_entries,
         added_entries=added_entries,
+        replaced_entries=replaced_entries,
         stock_entries_reproduced=len(stock_entries),
         stock_blocks=stock_blocks,
         filesystem_blocks=filesystem_blocks,
@@ -538,8 +657,9 @@ def rebuild_system_ext(
     scratch: Path,
     *,
     image_uuid: str,
+    replacements: Mapping[str, Path] | None = None,
 ) -> RebuildResult:
-    """Rebuild system_ext in a private work directory and retain only the checked image."""
+    """Rebuild system_ext, optionally replacing allowlisted SELinux files, and retain the image."""
     if scratch.is_symlink():
         raise ComposeError(f"{scratch}: scratch root must not be a symlink.")
     try:
@@ -560,6 +680,7 @@ def rebuild_system_ext(
             product_root,
             work_directory,
             image_uuid=image_uuid,
+            replacements=replacements,
         )
         candidate = scratch_root / f"system-ext-{uuid.uuid4().hex}.erofs"
         source_identity = result.image.stat(follow_symlinks=False)

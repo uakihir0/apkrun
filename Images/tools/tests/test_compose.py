@@ -271,6 +271,133 @@ def test_entry_diff_allows_only_planned_entries_and_receiving_directory_sizes() 
     ]
 
 
+def test_replacements_are_limited_to_stock_selinux_files_and_preserve_inode_metadata(
+    tmp_path: Path,
+) -> None:
+    from apkrun_image.erofs import Entry
+
+    tree = tmp_path / "tree"
+    selinux_tree = tree / "etc/selinux"
+    selinux_tree.mkdir(parents=True)
+    names = (
+        "system_ext_file_contexts",
+        "system_ext_seapp_contexts",
+        "system_ext_sepolicy.cil",
+    )
+    stock_entries = {}
+    stock_members = []
+    replacements = {}
+    for name in names:
+        relative_path = f"/etc/selinux/{name}"
+        image_path = f"/system_ext{relative_path}"
+        stock_path = selinux_tree / name
+        stock_content = f"stock {name}\n".encode()
+        stock_path.write_bytes(stock_content)
+        replacement_path = tmp_path / f"replacement-{name}"
+        replacement_content = f"product {name}\n".encode()
+        replacement_path.write_bytes(replacement_content)
+        stock_entries[relative_path] = Entry(
+            relative_path,
+            REGULAR_FILE,
+            0o640,
+            1000,
+            1000,
+            len(stock_content),
+            "stock timestamp",
+            sha256=hashlib.sha256(stock_content).hexdigest(),
+            label="u:object_r:system_file:s0",
+        )
+        stock_members.append(
+            TarMember(
+                relative_path,
+                REGULAR_FILE,
+                0o640,
+                1000,
+                1000,
+                compose.BUILD_TIMESTAMP,
+                label="u:object_r:system_file:s0",
+                source=stock_path,
+            )
+        )
+        replacements[image_path] = replacement_path
+
+    replaced_entries, replacement_members = compose._replacement_members(
+        stock_entries,
+        stock_members,
+        replacements,
+        tree,
+    )
+
+    assert set(replaced_entries) == set(stock_entries)
+    assert len(replacement_members) == len(names)
+    for name in names:
+        relative_path = f"/etc/selinux/{name}"
+        replacement_content = f"product {name}\n".encode()
+        replaced = replaced_entries[relative_path]
+        assert replaced.size == len(replacement_content)
+        assert replaced.sha256 == hashlib.sha256(replacement_content).hexdigest()
+        assert replaced.mode == stock_entries[relative_path].mode
+        assert replaced.uid == stock_entries[relative_path].uid
+        assert replaced.gid == stock_entries[relative_path].gid
+        assert replaced.mtime == stock_entries[relative_path].mtime
+        assert replaced.label == stock_entries[relative_path].label
+        assert (selinux_tree / name).read_text(encoding="utf-8") == f"stock {name}\n"
+
+    composed_entries = dict(stock_entries)
+    composed_entries.update(replaced_entries)
+    assert _entry_differences(stock_entries, composed_entries, replaced=replaced_entries) == []
+
+
+def test_replacements_reject_unlisted_targets_and_symlink_sources(tmp_path: Path) -> None:
+    tree = tmp_path / "tree"
+    (tree / "etc/selinux").mkdir(parents=True)
+    source = tmp_path / "replacement.cil"
+    source.write_text("(type example)\n", encoding="utf-8")
+    with pytest.raises(ComposeError, match="SELinux allowlist"):
+        compose._replacement_members(
+            {},
+            [],
+            {"/system_ext/etc/build.prop": source},
+            tree,
+        )
+
+    linked_source = tmp_path / "linked.cil"
+    linked_source.symlink_to(source)
+    stock_path = "/etc/selinux/system_ext_sepolicy.cil"
+    from apkrun_image.erofs import Entry
+
+    stock_entry = Entry(
+        stock_path,
+        REGULAR_FILE,
+        0o644,
+        0,
+        0,
+        0,
+        "stock timestamp",
+        sha256=hashlib.sha256(b"").hexdigest(),
+        label=LABEL,
+    )
+    (tree / stock_path.lstrip("/")).write_bytes(b"")
+    with pytest.raises(ComposeError, match="real regular file"):
+        compose._replacement_members(
+            {stock_path: stock_entry},
+            [
+                TarMember(
+                    stock_path,
+                    REGULAR_FILE,
+                    0o644,
+                    0,
+                    0,
+                    compose.BUILD_TIMESTAMP,
+                    label=LABEL,
+                    source=tree / stock_path.lstrip("/"),
+                )
+            ],
+            {"/system_ext" + stock_path: linked_source},
+            tree,
+        )
+
+
 def test_rebuild_system_ext_checks_the_stock_round_trip_and_exact_placements(
     tmp_path: Path,
 ) -> None:
@@ -341,3 +468,110 @@ def test_rebuild_system_ext_checks_the_stock_round_trip_and_exact_placements(
     )
     assert (outside / "keep").read_text(encoding="utf-8") == "unmodified\n"
     assert (scratch / "system-ext-stock-tree").is_symlink()
+
+
+def test_rebuild_system_ext_replaces_only_allowlisted_stock_policy_files(
+    tmp_path: Path,
+) -> None:
+    if not TOOLS_ROOT:
+        pytest.skip("set APKRUN_EROFS_UTILS to a fetched erofs-utils root (erofs-tools)")
+    tools: ErofsTools = verify_tools(Path(TOOLS_ROOT))
+    stock_source = tmp_path / "stock-tree"
+    selinux_source = stock_source / "etc/selinux"
+    selinux_source.mkdir(parents=True)
+    names = (
+        "system_ext_file_contexts",
+        "system_ext_seapp_contexts",
+        "system_ext_sepolicy.cil",
+    )
+    stock_members = [
+        TarMember("/", DIRECTORY, 0o755, 0, 0, compose.BUILD_TIMESTAMP, label=LABEL),
+        TarMember("/etc", DIRECTORY, 0o755, 0, 0, compose.BUILD_TIMESTAMP, label=LABEL),
+        TarMember(
+            "/etc/stock.conf",
+            REGULAR_FILE,
+            0o644,
+            0,
+            0,
+            compose.BUILD_TIMESTAMP,
+            label=LABEL,
+            source=stock_source / "etc/stock.conf",
+        ),
+        TarMember(
+            "/etc/selinux",
+            DIRECTORY,
+            0o755,
+            0,
+            0,
+            compose.BUILD_TIMESTAMP,
+            label=LABEL,
+        ),
+    ]
+    (stock_source / "etc").mkdir(parents=True, exist_ok=True)
+    (stock_source / "etc/stock.conf").write_text("preserve stock\n", encoding="utf-8")
+    for name in names:
+        source = selinux_source / name
+        source.write_text(f"stock {name}\n", encoding="utf-8")
+        stock_members.append(
+            TarMember(
+                f"/etc/selinux/{name}",
+                REGULAR_FILE,
+                0o644,
+                0,
+                0,
+                compose.BUILD_TIMESTAMP,
+                label=LABEL,
+                source=source,
+            )
+        )
+    stock_tar = tmp_path / "stock.tar"
+    write_tar(stock_members, stock_tar)
+    stock_image = tmp_path / "system_ext_a.img"
+    build_image(
+        tools,
+        stock_tar,
+        stock_image,
+        timestamp=compose.BUILD_TIMESTAMP,
+        uuid=FIXED_UUID,
+    )
+
+    product = tmp_path / "product"
+    product.mkdir()
+    (product / "marker.txt").write_text("boot marker\n", encoding="utf-8")
+    write_plan(
+        product,
+        [
+            directory("/system_ext/etc/apkrun"),
+            regular_file("marker.txt", "/system_ext/etc/apkrun/marker.txt"),
+        ],
+    )
+    replacement_root = tmp_path / "replacement"
+    replacement_root.mkdir()
+    replacements = {}
+    for name in names:
+        replacement = replacement_root / name
+        replacement.write_text(f"product {name}\n", encoding="utf-8")
+        replacements[f"/system_ext/etc/selinux/{name}"] = replacement
+
+    result = rebuild_system_ext(
+        tools,
+        stock_image,
+        product,
+        tmp_path / "scratch",
+        image_uuid=FIXED_UUID,
+        replacements=replacements,
+    )
+
+    assert set(result.replaced_entries) == {f"/etc/selinux/{name}" for name in names}
+    assert set(result.composed_entries) == set(result.stock_entries) | set(result.added_entries)
+    assert result.composed_entries["/etc/stock.conf"] == result.stock_entries["/etc/stock.conf"]
+    for name in names:
+        path = f"/etc/selinux/{name}"
+        assert (
+            result.composed_entries[path].sha256
+            == hashlib.sha256(f"product {name}\n".encode()).hexdigest()
+        )
+    assert set(result.added_entries) == {
+        "/etc/apkrun",
+        "/etc/apkrun/marker.txt",
+    }

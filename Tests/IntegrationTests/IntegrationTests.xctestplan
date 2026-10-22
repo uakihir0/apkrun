@@ -103,6 +103,56 @@
     }
     ,
     {
+      "id" : "0F4AFC2E-3F03-4E56-9C1F-003003003016",
+      "name" : "AndroidStockCLIXPC",
+      "options" : {
+        "environmentVariableEntries" : [
+          {
+            "key" : "APKRUN_INTEGRATION_SUITE",
+            "value" : "cli-xpc",
+            "enabled" : true
+          },
+          {
+            "key" : "APKRUN_FIXTURE_APK",
+            "value" : "/tmp/apkrun-test-fixtures/HelloText.apk",
+            "enabled" : true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance" : 1800
+      }
+    }
+    ,
+    {
+      "id" : "0F4AFC2E-3F03-4E56-9C1F-003003003017",
+      "name" : "AndroidStockCLIXPCRelease",
+      "options" : {
+        "environmentVariableEntries" : [
+          {
+            "key" : "APKRUN_INTEGRATION_SUITE",
+            "value" : "cli-xpc",
+            "enabled" : true
+          },
+          {
+            "key" : "APKRUN_TEST_CLI",
+            "value" : "/Applications/APKRun.app/Contents/Resources/bin/apkrun",
+            "enabled" : true
+          },
+          {
+            "key" : "APKRUN_TEST_EXPECT_PRODUCTION_OWNER",
+            "value" : "1",
+            "enabled" : true
+          },
+          {
+            "key" : "APKRUN_TEST_PRODUCTION_OWNER_ONLY",
+            "value" : "1",
+            "enabled" : true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance" : 900
+      }
+    }
+    ,
+    {
       "id": "0F4AFC2E-3F03-4E56-9C1F-003003003011",
       "name": "AndroidGuestAgent",
       "options": {

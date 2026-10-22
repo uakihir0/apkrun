@@ -18,8 +18,9 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     private let onSessionEnded: @Sendable (String) async -> Void
     private var sessionsByPackage: [String: SessionID] = [:]
     private var frameDrainers: [SessionID: Task<Void, Never>] = [:]
-    private var sessionsAwaitingReadyFrameForTesting: Set<UUID> = []
+    private var readyFrameSequenceWatermarksForTesting: [UUID: UInt64] = [:]
     private var sessionsWithReadyFrameForTesting: Set<UUID> = []
+    private var launchComponentsForTesting: [UUID: String] = [:]
     private var taskEventMonitor: Task<Void, Never>?
     private var guestResynchronizationHandlerID: UUID?
     private var reconciliationTasks: [UUID: Task<Void, Never>] = [:]
@@ -175,6 +176,12 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 await endFailedLaunch(session.id)
             }
             throw Self.wireError(for: error)
+        }
+        if case .app(let sessionID) = session.id {
+            launchComponentsForTesting[sessionID] = report.component
+            // The Guest Agent has resolved the launched task and its top component. Exclude every
+            // frame sequence already issued for this lease, including frames still waiting on a GPU fence.
+            readyFrameSequenceWatermarksForTesting[sessionID] = lease.pool.latestIssuedFrameSequence
         }
 
         guard let completed = await registry.launchCompleted(packageID: packageID, taskID: report.taskID) else {
@@ -659,7 +666,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                     return
                 }
                 if case .frameReady(_, _, let sequence) = frame {
-                    await self?.recordReadyFrameForTesting(sessionID)
+                    await self?.recordReadyFrameForTesting(sessionID, sequence: sequence)
                     pool.frameDisplayed(sequence: sequence)
                 }
             }
@@ -670,18 +677,18 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         sessionsWithReadyFrameForTesting.contains(sessionID)
     }
 
-    func beginReadyFrameObservationForTesting(sessionID: UUID) {
-        sessionsWithReadyFrameForTesting.remove(sessionID)
-        sessionsAwaitingReadyFrameForTesting.insert(sessionID)
+    func launchComponentForTesting(sessionID: UUID) -> String? {
+        launchComponentsForTesting[sessionID]
     }
 
-    private func recordReadyFrameForTesting(_ session: SessionID) {
+    private func recordReadyFrameForTesting(_ session: SessionID, sequence: UInt64) {
         guard case .app(let sessionID) = session,
-            sessionsAwaitingReadyFrameForTesting.contains(sessionID)
+            let watermark = readyFrameSequenceWatermarksForTesting[sessionID],
+            sequence > watermark
         else {
             return
         }
-        sessionsAwaitingReadyFrameForTesting.remove(sessionID)
+        readyFrameSequenceWatermarksForTesting.removeValue(forKey: sessionID)
         sessionsWithReadyFrameForTesting.insert(sessionID)
     }
 
@@ -692,7 +699,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         task.cancel()
         await task.value
         if case .app(let appSessionID) = sessionID {
-            sessionsAwaitingReadyFrameForTesting.remove(appSessionID)
+            readyFrameSequenceWatermarksForTesting.removeValue(forKey: appSessionID)
         }
     }
 
@@ -711,8 +718,9 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         if sessionsByPackage[packageID] == sessionID {
             sessionsByPackage[packageID] = nil
             if case .app(let appSessionID) = sessionID {
-                sessionsAwaitingReadyFrameForTesting.remove(appSessionID)
+                readyFrameSequenceWatermarksForTesting.removeValue(forKey: appSessionID)
                 sessionsWithReadyFrameForTesting.remove(appSessionID)
+                launchComponentsForTesting.removeValue(forKey: appSessionID)
             }
             await onSessionEnded(packageID)
         }

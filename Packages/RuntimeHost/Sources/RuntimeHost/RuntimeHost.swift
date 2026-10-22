@@ -641,11 +641,11 @@ public actor RuntimeHost {
         return await service.hasReadyFrameForTesting(sessionID: sessionID)
     }
 
-    func beginReadyFrameObservationForTesting(sessionID: UUID) async {
+    func launchComponentForTesting(sessionID: UUID) async -> String? {
         guard let service = headlessSessionService as? DaemonHeadlessSessionService else {
-            return
+            return nil
         }
-        await service.beginReadyFrameObservationForTesting(sessionID: sessionID)
+        return await service.launchComponentForTesting(sessionID: sessionID)
     }
 
     func performanceEventsForTesting() -> [PerfEvent] {

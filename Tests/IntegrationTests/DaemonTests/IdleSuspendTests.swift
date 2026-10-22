@@ -238,6 +238,12 @@ final class IdleSuspendTests: XCTestCase {
                     break
                 }
                 XCTAssertEqual(launch.state, .running, "run \(run): HelloText did not reach the running state")
+                let component = await host.launchComponentForTesting(sessionID: launch.sessionID)
+                let launchedHelloText = component?.hasPrefix("\(packageID.rawValue)/") == true
+                XCTAssertTrue(launchedHelloText, "run \(run): the Guest Agent did not report a HelloText activity")
+                guard launchedHelloText else {
+                    break
+                }
 
                 let newPerformanceEvents = await host.performanceEventsForTesting().dropFirst(performanceEventCount)
                 guard let resumed = newPerformanceEvents.first(where: { $0.marker == .vmResumed }),
@@ -250,13 +256,12 @@ final class IdleSuspendTests: XCTestCase {
                 }
                 resumeDurations.append(Self.seconds(resumed.time.duration(to: runtimeReady.time)))
 
-                await host.beginReadyFrameObservationForTesting(sessionID: launch.sessionID)
                 let firstFrameReady = await Self.waitUntil(.seconds(15)) {
                     await host.hasReadyFrameForTesting(sessionID: launch.sessionID)
                 }
                 XCTAssertTrue(
                     firstFrameReady,
-                    "run \(run): HelloText produced no frame after its session reached running"
+                    "run \(run): no new IOSurface frame followed the HelloText launch report"
                 )
                 guard firstFrameReady else {
                     break

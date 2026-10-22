@@ -247,6 +247,25 @@ func instanceStoreProvisionsLoadsAndDetectsAMissingDisk() async throws {
     }
 }
 
+@Test
+func instanceStoreUpdatesRuntimeSizingAndPreservesProvisionedUserdata() async throws {
+    let bundle = try FixtureBundle.make()
+    defer { bundle.remove() }
+    let store = InstanceStore(paths: bundle.paths, diagnostics: .testing())
+    let original = try await store.provision(
+        image: bundle.image,
+        sizing: InstanceSizing(cpuCount: 2, memoryBytes: 2 << 30, userdataBytes: 64 * 1024 * 1024)
+    )
+
+    let updated = try await store.updateRuntimeSizing(cpuCount: 6, memoryBytes: 6 << 30)
+
+    #expect(updated.instanceID == original.instanceID)
+    #expect(updated.machineIdentifier == original.machineIdentifier)
+    #expect(updated.macAddresses == original.macAddresses)
+    #expect(updated.sizing == InstanceSizing(cpuCount: 6, memoryBytes: 6 << 30, userdataBytes: 64 * 1024 * 1024))
+    #expect(try await store.load(image: bundle.image) == updated)
+}
+
 private var repositoryRoot: URL {
     var url = URL(fileURLWithPath: #filePath)
     for _ in 0..<5 {

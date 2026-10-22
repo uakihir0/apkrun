@@ -102,6 +102,39 @@ public actor InstanceStore {
         return configuration
     }
 
+    /// Updates CPU and memory sizing without changing the provisioned Android storage.
+    ///
+    /// CPU and memory take effect on the next runtime start. Userdata is fixed when the
+    /// instance is provisioned and can only change when Android is reset.
+    public func updateRuntimeSizing(
+        cpuCount: Int,
+        memoryBytes: UInt64
+    ) throws(ImageFailure) -> InstanceConfiguration {
+        guard FileManager.default.fileExists(atPath: paths.instanceInfoFile.path) else {
+            throw .instanceMissing
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: paths.instanceInfoFile)
+        } catch {
+            throw .instanceCorrupt(reason: "instance.json could not be read")
+        }
+        let configuration: InstanceConfiguration
+        do {
+            configuration = try JSONDecoder().decode(
+                InstanceConfiguration.self,
+                from: data
+            )
+        } catch {
+            throw .instanceCorrupt(reason: "instance.json does not decode")
+        }
+        var updated = configuration
+        updated.sizing.cpuCount = cpuCount
+        updated.sizing.memoryBytes = memoryBytes
+        try write(updated)
+        return updated
+    }
+
     /// Deletes the instance disks and provisions a fresh instance ("Reset Android").
     public func resetAndroid(
         image: InstalledImage,

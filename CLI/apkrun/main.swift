@@ -2,6 +2,8 @@ import ArgumentParser
 import Darwin
 import DiagnosticsCore
 import Foundation
+import RuntimeAPI
+import RuntimeClient
 
 @main
 struct APKRunCommand: AsyncParsableCommand {
@@ -13,7 +15,9 @@ struct APKRunCommand: AsyncParsableCommand {
                 version: Output.versionFlag(BuildInfo.current),
                 subcommands: [
                     VersionCommand.self,
+                    StatusCommand.self,
                     RuntimeCommand.self,
+                    ConfigCommand.self,
                     LogsCommand.self,
                     InstallCommand.self,
                     UninstallCommand.self,
@@ -31,7 +35,9 @@ struct APKRunCommand: AsyncParsableCommand {
                 version: Output.versionFlag(BuildInfo.current),
                 subcommands: [
                     VersionCommand.self,
+                    StatusCommand.self,
                     RuntimeCommand.self,
+                    ConfigCommand.self,
                     LogsCommand.self,
                     InstallCommand.self,
                     UninstallCommand.self,
@@ -136,7 +142,7 @@ struct APKRunCommand: AsyncParsableCommand {
     }
 }
 
-struct VersionCommand: ParsableCommand {
+struct VersionCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "version",
         abstract: "Show APKRun version information."
@@ -156,14 +162,62 @@ struct VersionCommand: ParsableCommand {
     }
 
     var renderedOutput: String {
-        json
-            ? Output.versionJSON(versionInformation)
-            : Output.versionHuman(versionInformation)
+        renderedOutput(runtimeDetails: nil)
     }
 
-    mutating func run() throws {
+    func renderedOutput(runtimeDetails: VersionRuntimeDetails?) -> String {
+        json
+            ? Output.versionJSON(versionInformation, runtimeDetails: runtimeDetails)
+            : Output.versionHuman(versionInformation, runtimeDetails: runtimeDetails)
+    }
+
+    func resolvedOutput() async -> String {
+        await Self.resolvedOutput(
+            versionInformation: versionInformation,
+            json: json
+        )
+    }
+
+    static func resolvedOutput(
+        versionInformation: BuildInfo,
+        json: Bool
+    ) async -> String {
+        await resolvedOutput(
+            versionInformation: versionInformation,
+            json: json,
+            runtimeInfoProvider: loadRuntimeDetails
+        )
+    }
+
+    static func resolvedOutput(
+        versionInformation: BuildInfo,
+        json: Bool,
+        runtimeInfoProvider: @Sendable () async -> VersionRuntimeDetails?
+    ) async -> String {
+        let runtimeDetails = await runtimeInfoProvider()
+        return json
+            ? Output.versionJSON(versionInformation, runtimeDetails: runtimeDetails)
+            : Output.versionHuman(versionInformation, runtimeDetails: runtimeDetails)
+    }
+
+    mutating func run() async throws {
         Self.recordInvocation(using: APKLogger(category: .command))
-        Output.write(renderedOutput)
+        Output.write(await resolvedOutput())
+    }
+
+    private static func loadRuntimeDetails() async -> VersionRuntimeDetails? {
+        do {
+            let client = try RuntimeControlClient(clientKind: .cli)
+            let hello = try await client.connect()
+            let status = try? await client.runtimeStatus()
+            return VersionRuntimeDetails(
+                daemonVersion: hello.runtimeVersion,
+                daemonBuild: hello.runtimeBuild,
+                imageVersion: status?.imageVersion
+            )
+        } catch {
+            return nil
+        }
     }
 
     static func recordInvocation(using logger: APKLogger) {

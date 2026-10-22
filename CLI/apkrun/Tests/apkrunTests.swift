@@ -332,25 +332,21 @@ import Testing
     #expect(command is RuntimeResetCommand)
 }
 
-@Test func packageInfoRejectsTheDisplayOptionWithAnActionableCatalogError() async throws {
+@Test func packageInfoParsesRuntimeDisplayOption() async throws {
     let command = try await APKRunCommand.asyncParseAsRoot(["info", "--displays"])
     guard var infoCommand = command as? PackageInfoCommand else {
         Issue.record("info --displays did not parse as PackageInfoCommand")
         return
     }
-    do {
-        try await infoCommand.run()
-        Issue.record("--displays unexpectedly returned without display snapshots")
-    } catch let failure as CLIFailure {
-        #expect(failure.code == "displayStatusUnavailable")
-        #expect(ExitCodes.code(for: failure) == ExitCodes.unavailable)
-    }
+    #expect(infoCommand.displays)
+    infoCommand.runtime = true
+    #expect(infoCommand.runtime)
 }
 
 @Test func runtimeInfoHumanOutputIncludesAvailableDaemonAndBuildDetails() {
-    let status = sampleRuntimeInfoStatus
+    let info = sampleRuntimeInfo
     let output = RuntimeInfoOutput.human(
-        status,
+        info,
         buildInfo: releaseBuildInfo,
         includeRuntimeDetails: true
     )
@@ -361,12 +357,21 @@ import Testing
     #expect(output.contains("Image: android-17"))
     #expect(output.contains("Guest Agent: connected"))
     #expect(output.contains("Guest Agent protocol: 1.4"))
+    #expect(output.contains("Runtime sizing: 4 CPUs, 4 GiB memory, 32 GiB Android storage"))
+    #expect(output.contains("Slot 0: reserved"))
+
+    let developmentOutput = RuntimeInfoOutput.human(
+        info,
+        buildInfo: developmentBuildInfo,
+        includeRuntimeDetails: true
+    )
+    #expect(developmentOutput.contains("Owner: apkrun-dev"))
 }
 
 @Test func runtimeInfoJSONIncludesStableCoreFieldsAndOptionalRuntimeDetails() throws {
     let data = Data(
         try RuntimeInfoOutput.json(
-            sampleRuntimeInfoStatus,
+            sampleRuntimeInfo,
             buildInfo: releaseBuildInfo,
             includeRuntimeDetails: false
         ).utf8
@@ -385,7 +390,9 @@ import Testing
 }
 
 @Test func runtimeStatusJSONReportsDaemonOwnership() throws {
-    let data = Data(try RuntimeStatusOutput.json(sampleRuntimeInfoStatus).utf8)
+    let data = Data(
+        try RuntimeStatusOutput.json(sampleRuntimeInfoStatus, buildInfo: releaseBuildInfo).utf8
+    )
     let envelope = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
     let result = try #require(envelope["result"] as? [String: Any])
 
@@ -404,6 +411,86 @@ import Testing
                 "owner", "hostState", "runtimeState", "crashLoopActive", "daemonPID",
                 "imageVersion", "guestAgentState", "guestAgentProtocolVersion",
             ]
+    )
+}
+
+@Test func runtimeStatusReportsDevelopmentRuntimeOwner() throws {
+    let data = Data(
+        try RuntimeStatusOutput.json(sampleRuntimeInfoStatus, buildInfo: developmentBuildInfo).utf8
+    )
+    let envelope = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let result = try #require(envelope["result"] as? [String: Any])
+    #expect(result["owner"] as? String == "apkrun-dev")
+    #expect(
+        RuntimeStatusOutput.human(sampleRuntimeInfoStatus, buildInfo: developmentBuildInfo)
+            .contains("Owner: apkrun-dev"))
+}
+
+@Test func runtimeStopActivityFindsLiveSessionsAndPackageOperations() throws {
+    let packageID = try #require(RuntimePackageID(rawValue: "com.example.app"))
+    let activeSession = SessionSummary(
+        sessionID: UUID(),
+        packageID: packageID,
+        displayName: "Example",
+        state: .running,
+        clientKind: .cli,
+        openedAt: Date(timeIntervalSince1970: 1),
+        windowMode: .primaryDisplayCompatibility,
+        recording: false
+    )
+    let endedSession = SessionSummary(
+        sessionID: UUID(),
+        packageID: packageID,
+        displayName: "Example",
+        state: .ended,
+        clientKind: .cli,
+        openedAt: Date(timeIntervalSince1970: 1),
+        windowMode: .primaryDisplayCompatibility,
+        recording: false
+    )
+    let activeInstall = OperationSnapshot(
+        operationID: OperationID(),
+        kind: .install,
+        startedAt: Date(timeIntervalSince1970: 1)
+    )
+    let completedUpdate = OperationSnapshot(
+        operationID: OperationID(),
+        kind: .update,
+        startedAt: Date(timeIntervalSince1970: 1),
+        result: .succeeded(.none),
+        finishedAt: Date(timeIntervalSince1970: 2)
+    )
+    let activity = RuntimeStopActivity(
+        sessions: [activeSession, endedSession],
+        operations: [activeInstall, completedUpdate]
+    )
+
+    #expect(activity.activeSessionCount == 1)
+    #expect(activity.activePackageMutationCount == 1)
+    #expect(activity.requiresConfirmation)
+    #expect(activity.confirmationPrompt.contains("1 open app session(s)"))
+}
+
+@Test func runtimeStopActivityIgnoresEndedAndCompletedWork() {
+    let activity = RuntimeStopActivity(sessions: [], operations: [])
+    #expect(!activity.requiresConfirmation)
+}
+
+@Test func runtimeStopPackageMutationBlockIsTypedAndDoesNotBecomeConfirmation() {
+    let packageID = RuntimePackageID(rawValue: "com.example.app")!
+    let activeInstall = OperationSnapshot(
+        operationID: OperationID(),
+        kind: .install,
+        packageID: packageID,
+        startedAt: Date(timeIntervalSince1970: 1)
+    )
+    let activity = RuntimeStopActivity(sessions: [], operations: [activeInstall])
+
+    #expect(activity.activePackageMutationCount == 1)
+    #expect(!activity.requiresConfirmation)
+    #expect(RuntimeStopActivity.packageMutationFailure.code == "runtime.invalidTransition")
+    #expect(
+        RuntimeStopActivity.packageMutationFailure.remediation?.contains("Wait for the package operation") == true
     )
 }
 
@@ -433,6 +520,16 @@ private let sampleRuntimeInfoStatus = RuntimeHostStatus(
     imageVersion: "android-17",
     guestAgentState: .connected,
     guestAgentProtocolVersion: "1.4"
+)
+
+private let sampleRuntimeInfo = RuntimeInfo(
+    status: sampleRuntimeInfoStatus,
+    sizing: RuntimeSizing(cpuCount: 4, memoryGiB: 4, userdataGiB: 32),
+    displayPoolSize: 16,
+    resources: ResourceUsage(daemonPhysicalFootprintBytes: 1024),
+    displays: [
+        RuntimeDisplaySlotSnapshot(slot: 0, state: .reserved, androidDisplayID: 0)
+    ]
 )
 
 @Test func launchAndStopCommandsParsePackageArguments() async throws {
@@ -509,10 +606,10 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
     #expect(Output.versionFlag(version) == golden("version-flag.txt"))
 }
 
-@Test func versionCommandParsesJSONFlag() throws {
-    let command = try VersionCommand.parse(["--json"])
+@Test func versionCommandParsesJSONFlag() async throws {
+    let parsed = try await APKRunCommand.asyncParseAsRoot(["version", "--json"])
 
-    #expect(command.json)
+    #expect((parsed as? VersionCommand)?.json == true)
 }
 
 @Test func rootParserPreservesVersionSubcommandJSONFlag() async throws {
@@ -563,8 +660,11 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
         let start = try await APKRunCommand.asyncParseAsRoot(["runtime", "start"])
         #expect(start is RuntimeStartCommand)
 
-        let stop = try await APKRunCommand.asyncParseAsRoot(["runtime", "stop"])
-        #expect(stop is RuntimeStopCommand)
+        let stop = try await APKRunCommand.asyncParseAsRoot([
+            "runtime", "stop", "--force", "--yes",
+        ])
+        #expect((stop as? RuntimeStopCommand)?.force == true)
+        #expect((stop as? RuntimeStopCommand)?.yes == true)
 
     }
 
@@ -694,6 +794,52 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
 
     command.json = true
     #expect(command.renderedOutput == golden("version-json.txt"))
+}
+
+@Test func versionCommandAddsReachableDaemonAndImageDetails() async {
+    let remote = VersionRuntimeDetails(
+        daemonVersion: "0.2.0",
+        daemonBuild: 200,
+        imageVersion: "android-17"
+    )
+    #expect(
+        await VersionCommand.resolvedOutput(
+            versionInformation: releaseBuildInfo,
+            json: false,
+            runtimeInfoProvider: { remote }
+        ) == "apkrun 0.1.0 (1)\nDaemon: 0.2.0 (200)\nAndroid image: android-17"
+    )
+
+    let data = Data(
+        (await VersionCommand.resolvedOutput(
+            versionInformation: releaseBuildInfo,
+            json: true,
+            runtimeInfoProvider: { remote }
+        )).utf8
+    )
+    let envelope = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
+    let result = envelope["result"] as! [String: Any]
+    #expect((result["daemon"] as? [String: Any])?["version"] as? String == "0.2.0")
+    #expect((result["daemon"] as? [String: Any])?["build"] as? Int == 200)
+    #expect((result["android"] as? [String: Any])?["imageVersion"] as? String == "android-17")
+}
+
+@Test func versionCommandFallsBackToLocalBuildWhenDaemonIsUnavailable() async {
+    #expect(
+        await VersionCommand.resolvedOutput(
+            versionInformation: releaseBuildInfo,
+            json: false,
+            runtimeInfoProvider: { nil }
+        ) == golden("version-human.txt")
+    )
+
+    #expect(
+        await VersionCommand.resolvedOutput(
+            versionInformation: releaseBuildInfo,
+            json: true,
+            runtimeInfoProvider: { nil }
+        ) == golden("version-json.txt")
+    )
 }
 
 @Test func versionCommandWritesOneNoticeToTheCLICommandSubsystem() throws {
@@ -1028,5 +1174,16 @@ private let releaseBuildInfo = BuildInfo(
         "APKRunGitCommit": "abcdef0",
         "APKRunConfiguration": "Release",
         "APKRunEmbeddedRuntime": false,
+    ]
+)
+
+private let developmentBuildInfo = BuildInfo(
+    infoDictionary: [
+        "CFBundleShortVersionString": "0.1.0-dev",
+        "CFBundleVersion": "1",
+        "APKRunBuildIdentity": "dev",
+        "APKRunGitCommit": "abcdef0",
+        "APKRunConfiguration": "Debug",
+        "APKRunEmbeddedRuntime": true,
     ]
 )

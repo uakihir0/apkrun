@@ -365,6 +365,17 @@ def add_material_tokens(tokens, binary_tokens, material):
     tokens.add(":".join(fingerprint[index : index + 2] for index in range(0, 64, 2)))
     binary_tokens.add(material)
 
+def openssl_output(arguments, data):
+    result = subprocess.run(
+        ["openssl", *arguments],
+        input=data,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
 KEYSTORE_WINDOW = 16
 KEYSTORE_WINDOWS = 16
 BASE64_URLSAFE_TRANSLATION = bytes.maketrans(b"-_", b"+/")
@@ -437,20 +448,53 @@ def add_key_tokens(path):
     private_key = None
     rsa_private_key = None
     avb_public_key = None
+    certificate_der = None
+    certificate_public_key = None
     if path.suffix.lower() in {".jks", ".keystore", ".p12", ".pfx", ".der", ".crt", ".cer"}:
         unsupported = f"{path}: unsupported binary or certificate signing fixture format"
     elif b"-----BEGIN CERTIFICATE-----" in data:
-        unsupported = f"{path}: certificate signing fixture cannot be inspected"
+        certificate_der = openssl_output(["x509", "-inform", "PEM", "-outform", "DER"], data)
+        if certificate_der is None:
+            unsupported = f"{path}: certificate signing fixture cannot be inspected"
+        else:
+            certificate_pem_key = openssl_output(
+                ["x509", "-inform", "DER", "-pubkey", "-noout"],
+                certificate_der,
+            )
+            if certificate_pem_key is None:
+                unsupported = f"{path}: certificate signing fixture cannot be inspected"
+            else:
+                certificate_public_key = openssl_output(
+                    ["pkey", "-pubin", "-outform", "DER"],
+                    certificate_pem_key,
+                )
+                if certificate_public_key is None:
+                    unsupported = f"{path}: certificate signing fixture cannot be inspected"
     else:
         raw_public_key = parse_ed25519_public_key(data)
         private_key = parse_pkcs8_private_key(data)
+        if private_key is None and path.suffix.lower() == ".pk8":
+            private_key_der = openssl_output(
+                ["pkey", "-inform", "DER", "-outform", "DER"],
+                data,
+            )
+            if private_key_der is not None:
+                private_key_pem = (
+                    b"-----BEGIN PRIVATE KEY-----\n"
+                    + base64.encodebytes(private_key_der)
+                    + b"-----END PRIVATE KEY-----\n"
+                )
+                private_key = parse_pkcs8_private_key(private_key_pem)
         rsa_private_key = parse_pkcs1_rsa_private_key(data)
         if private_key is None and rsa_private_key is not None:
             private_key = rsa_private_key[0]
         avb_public_key = parse_avb_public_key(data) if path.suffix.lower() == ".avbpubkey" else None
 
     binary_tokens = set()
-    if raw_public_key is not None:
+    if certificate_der is not None and certificate_public_key is not None:
+        add_material_tokens(tokens, binary_tokens, certificate_der)
+        add_material_tokens(tokens, binary_tokens, certificate_public_key)
+    elif raw_public_key is not None:
         add_material_tokens(tokens, binary_tokens, raw_public_key)
     elif unsupported is None and private_key is not None:
         add_material_tokens(tokens, binary_tokens, private_key)
@@ -1089,7 +1133,13 @@ if image_bundle is not None:
             failures.append(
                 f"{manifest_path}: a stock image cannot be published (kind {manifest.get('kind')!r})"
             )
-        revisions = manifest.get("provenance", {}).get("revisions", {})
+        provenance = manifest.get("provenance")
+        if isinstance(provenance, dict) and "composition" in provenance:
+            failures.append(
+                f"{manifest_path}: a composed image cannot be published "
+                "(provenance.composition is present)"
+            )
+        revisions = provenance.get("revisions", {}) if isinstance(provenance, dict) else {}
         for name in ("imagesTools", "guest"):
             value = revisions.get(name) if isinstance(revisions, dict) else None
             if isinstance(value, str) and value.endswith("-dirty"):

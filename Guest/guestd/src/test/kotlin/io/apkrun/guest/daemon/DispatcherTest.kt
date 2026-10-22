@@ -22,6 +22,7 @@ import io.apkrun.guest.protocol.v1.Shutdown
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
 import io.apkrun.guest.protocol.v1.StopMode
+import io.apkrun.guest.protocol.v1.SyncTime
 import io.apkrun.guest.runtime.ServiceMethodMissing
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -155,6 +156,21 @@ class DispatcherTest {
         val response = dispatcher(FakeOperations()).dispatch(1, request, everything)
         assertEquals(42L, response.getPing().getNonce())
         assertEquals(1_000L, response.getPing().getGuestUptimeMs())
+    }
+
+    @Test
+    fun syncTimeIsUnsupportedInTheDevelopmentShellAgent() = runBlocking {
+        val request =
+            Request.newBuilder()
+                .setSyncTime(SyncTime.newBuilder().setUnixTimeMs(1_800_000_000_123L).setRttMs(37))
+                .build()
+
+        val response =
+            dispatcher(FakeOperations()).dispatch(1, request, everything + GuestCapability.LOCALE)
+
+        assertEquals(GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED, response.getError().getCode())
+        assertTrue(response.getError().getMessage().contains("privileged APKRun agent"))
+        assertFalse(GuestCapability.LOCALE in Connection.IMPLEMENTED)
     }
 
     @Test

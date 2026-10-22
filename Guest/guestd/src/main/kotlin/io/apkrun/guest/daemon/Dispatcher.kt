@@ -41,6 +41,12 @@ class Dispatcher(
      * did not enable, is answered with UNSUPPORTED (guest-protocol.md §5.2, §5.3).
      */
     suspend fun dispatch(id: Long, request: Request, enabled: Set<GuestCapability>): Response {
+        if (request.opCase == Request.OpCase.SYNC_TIME) {
+            return failure(
+                GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
+                "SyncTime requires the privileged APKRun agent",
+            )
+        }
         val capability = requiredCapability(request.opCase)
         if (capability == null) {
             return failure(

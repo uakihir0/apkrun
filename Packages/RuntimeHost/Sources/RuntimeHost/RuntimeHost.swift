@@ -1,3 +1,4 @@
+import Darwin
 import DiagnosticsCore
 import Foundation
 import ImageCore
@@ -5,6 +6,39 @@ import RuntimeAPI
 import RuntimeCore
 
 typealias WireOperationID = RuntimeAPI.OperationID
+
+struct RuntimeExecutionSettings: Equatable, Sendable {
+    let bootTimeouts: BootTimeouts
+    let maxDisplaySessions: Int
+
+    static let `default` = Self(bootTimeouts: .standard, maxDisplaySessions: 8)
+
+    init(bootTimeouts: BootTimeouts, maxDisplaySessions: Int) {
+        self.bootTimeouts = bootTimeouts
+        self.maxDisplaySessions = maxDisplaySessions
+    }
+
+    init(snapshot: ConfigurationSnapshot) {
+        func integer(_ key: String, fallback: Int) -> Int {
+            guard let entry = snapshot.entries.first(where: { $0.key == key }),
+                case .integer(let value) = entry.value,
+                let resolved = Int(exactly: value)
+            else {
+                return fallback
+            }
+            return resolved
+        }
+
+        let standard = BootTimeouts.standard
+        bootTimeouts = BootTimeouts(
+            whole: .seconds(integer("runtime.bootTimeoutSeconds", fallback: 180)),
+            firstBoot: .seconds(integer("runtime.firstBootTimeoutSeconds", fallback: 900)),
+            stall: standard.stall,
+            firstBootStall: standard.firstBootStall
+        )
+        maxDisplaySessions = integer("display.maxSessions", fallback: 8)
+    }
+}
 
 /// Failures that prevent the daemon from accepting lifecycle operations.
 public enum RuntimeHostError: Error, Equatable, Sendable {
@@ -24,12 +58,36 @@ public enum RuntimeHostError: Error, Equatable, Sendable {
     case shuttingDown
     /// The requested lifecycle change is not valid in the current runtime state.
     case invalidTransition
+    /// The runtime has active sessions and the caller did not request a forced stop.
+    case busy
     /// The Guest Agent bundle is missing or invalid.
     case guestAgentBundle(String)
     /// Runtime boot failed.
     case runtimeBoot(RuntimeBootFailure)
     /// The daemon lifecycle record could not be updated.
     case stateStore(DaemonStateStoreError)
+}
+
+enum RuntimeStopPolicy {
+    static func transitionError(
+        isStopping: Bool,
+        isResetting: Bool,
+        isRestarting: Bool,
+        activeRuntimeStarts: Int,
+        activePackageMutations: Int,
+        hasActivePackageLaunches: Bool
+    ) -> RuntimeHostError? {
+        guard !isStopping, !isResetting, !isRestarting,
+            activeRuntimeStarts == 0, activePackageMutations == 0, !hasActivePackageLaunches
+        else {
+            return .invalidTransition
+        }
+        return nil
+    }
+
+    static func sessionError(force: Bool, hasActiveSessions: Bool) -> RuntimeHostError? {
+        !force && hasActiveSessions ? .busy : nil
+    }
 }
 
 private struct RuntimeTrackedOperation {
@@ -56,6 +114,7 @@ public actor RuntimeHost {
     private var logger: APKLogger?
     private var instanceLock: InstanceLock?
     private var stateStore: DaemonStateStore?
+    private var globalSettingsStore: GlobalSettingsStore?
     private var startupAssessment: DaemonStartupAssessment?
     private var image: InstalledImage?
     private var instanceStore: InstanceStore?
@@ -178,10 +237,35 @@ public actor RuntimeHost {
             }
         }
 
-        // The broker must be available while image recovery runs. Preserve the time captured
-        // immediately after NSXPCListener.resume() even though diagnostics were initialized first.
+        // Initialize the settings store before publishing so an early information request can read
+        // it. Publish after steps 1–3 so the broker remains available during slower settings and
+        // image recovery; requests serialize with the store actor's first load.
+        let settingsStore = instanceLock == nil ? nil : GlobalSettingsStore(fileURL: paths.settingsFile)
+        globalSettingsStore = settingsStore
         let listenerReadyAt = try publishListener()
         markDaemonReady(at: listenerReadyAt)
+
+        // Startup step 4: load global settings. A newer schema stays untouched and leaves the
+        // broker available for diagnostics and recovery.
+        if let settingsStore {
+            do {
+                let result = try await settingsStore.load()
+                for diagnostic in result.diagnostics {
+                    switch diagnostic {
+                    case .unknownKey(let key):
+                        logger.warning("Ignoring unknown global setting \(key, .public)")
+                    case .invalidValue(let key):
+                        logger.warning("Ignoring invalid global setting \(key, .public)")
+                    case .corruptFile:
+                        logger.warning("The global settings file was invalid; defaults are in use")
+                    case .migrated(let fromSchema):
+                        logger.notice("Migrated global settings from schema \(fromSchema, .public)")
+                    }
+                }
+            } catch {
+                recordDegradedStartup(step: 4, code: "runtime.hostStartupFailed")
+            }
+        }
 
         if startupAssessment?.previousExitWasUnclean == true {
             let recovery =
@@ -225,6 +309,12 @@ public actor RuntimeHost {
             )
             do {
                 let guestAgent = try GuestAgentBundle.load(directory: guestDirectory)
+                let executionSettings: RuntimeExecutionSettings
+                if let settingsStore, let snapshot = try? await settingsStore.snapshot() {
+                    executionSettings = RuntimeExecutionSettings(snapshot: snapshot)
+                } else {
+                    executionSettings = .default
+                }
                 let runtimeSupervisor = RuntimeSupervisor(
                     image: image,
                     instanceStore: instanceStore,
@@ -234,6 +324,8 @@ public actor RuntimeHost {
                         captureLogcat: false
                     ),
                     diagnostics: diagnostics,
+                    timeouts: executionSettings.bootTimeouts,
+                    maxDisplaySessions: executionSettings.maxDisplaySessions,
                     guestAgentBundle: guestAgent,
                     guestAgentTimeout: .seconds(30)
                 )
@@ -350,13 +442,34 @@ public actor RuntimeHost {
         }
         let instance: InstanceConfiguration
         do {
+            let settings = try? await globalSettingsStore?.snapshot()
             if let existing = try await instanceStore.load(image: image) {
-                instance = existing
+                let sizing = Self.instanceSizing(
+                    from: settings,
+                    preservingUserdataBytes: existing.sizing.userdataBytes
+                )
+                guard let sizing else {
+                    throw Self.userdataCapacityFailure(at: paths.settingsFile)
+                }
+                instance = try await instanceStore.updateRuntimeSizing(
+                    cpuCount: sizing.cpuCount,
+                    memoryBytes: sizing.memoryBytes
+                )
             } else {
-                instance = try await instanceStore.provision(image: image, sizing: .default)
+                instance = try await instanceStore.provision(
+                    image: image,
+                    sizing: try Self.provisioningSizing(from: settings, settingsFile: paths.settingsFile)
+                )
             }
+        } catch let failure as ImageFailure {
+            throw .image(failure)
         } catch {
-            throw .image(error)
+            let underlying = error as NSError
+            throw .image(
+                .cloneFailed(
+                    underlying: UnderlyingError(domain: underlying.domain, code: underlying.code)
+                )
+            )
         }
         guard !isShuttingDown || allowingReservedPackageMutation || activePackageMutations > 0 else {
             throw .shuttingDown
@@ -400,21 +513,40 @@ public actor RuntimeHost {
     }
 
     /// Stops Android but keeps the daemon available for a later request.
-    public func stopRuntime() async throws(RuntimeHostError) {
-        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, activeRuntimeStarts == 0,
-            activePackageMutations == 0
-        else {
-            throw .invalidTransition
+    public func stopRuntime(force: Bool = false) async throws(RuntimeHostError) {
+        if let error = RuntimeStopPolicy.transitionError(
+            isStopping: isRuntimeStopping,
+            isResetting: isRuntimeResetting,
+            isRestarting: isRuntimeRestarting,
+            activeRuntimeStarts: activeRuntimeStarts,
+            activePackageMutations: activePackageMutations,
+            hasActivePackageLaunches: packageActivityReservations.hasAnyActiveLaunches
+        ) {
+            throw error
         }
         isRuntimeStopping = true
         defer { isRuntimeStopping = false }
+        let hasActiveSessions = force ? false : await hasActiveAppSessions()
+        if let error = RuntimeStopPolicy.sessionError(
+            force: force,
+            hasActiveSessions: hasActiveSessions
+        ) {
+            throw error
+        }
         try await stopRuntimeBody(reason: .user)
+    }
+
+    private func hasActiveAppSessions() async -> Bool {
+        guard let service = headlessSessionService as? DaemonHeadlessSessionService else {
+            return false
+        }
+        return !(await service.inventory()).sessions.isEmpty
     }
 
     /// Restarts Android under one reserved lifecycle transition.
     public func restartRuntime(reason: StartReason) async throws(RuntimeHostError) {
         guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, activeRuntimeStarts == 0,
-            activePackageMutations == 0
+            activePackageMutations == 0, !packageActivityReservations.hasAnyActiveLaunches
         else {
             throw .invalidTransition
         }
@@ -440,7 +572,7 @@ public actor RuntimeHost {
     /// Clears the automatic boot-loop guard without starting Android or deleting user data.
     public func resetRuntime() async throws(RuntimeHostError) -> RuntimeHostStatus {
         guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, activeRuntimeStarts == 0,
-            activePackageMutations == 0
+            activePackageMutations == 0, !packageActivityReservations.hasAnyActiveLaunches
         else {
             throw .invalidTransition
         }
@@ -1046,6 +1178,9 @@ public actor RuntimeHost {
     }
 
     private func beginPackageLaunch(_ packageID: RuntimePackageID) throws(RuntimeWireError) {
+        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
+            throw Self.sessionWireError(for: .invalidTransition)
+        }
         do {
             try packageActivityReservations.beginLaunch(packageID: packageID.rawValue)
         } catch {
@@ -1055,6 +1190,16 @@ public actor RuntimeHost {
 
     private func finishPackageLaunch(_ packageID: RuntimePackageID) {
         packageActivityReservations.finishLaunch(packageID: packageID.rawValue)
+    }
+
+    func logWrapperAuthorizationFailure(packageID: RuntimePackageID, operationID: UUID) {
+        guard let diagnostics else { return }
+        let logger = APKLogger(
+            category: RuntimeLogCategory.xpc,
+            sink: diagnostics.logSink,
+            context: LogContext(operationID: operationID.uuidString, packageID: packageID.rawValue)
+        )
+        logger.warning("Wrapper package authorization denied", errorCode: "runtime.notAuthorized")
     }
 
     private func waitForPackageLaunches(_ package: String) async throws(RuntimeWireError) {
@@ -1234,6 +1379,135 @@ public actor RuntimeHost {
             guestAgentState: guestAgentStateName,
             guestAgentProtocolVersion: guestAgentStatus?.protocolVersion?.description
         )
+    }
+
+    /// Returns runtime state, configured sizing, and any requested diagnostics without starting Android.
+    public func runtimeInfo(_ request: RuntimeInfoRequest = RuntimeInfoRequest()) async -> RuntimeInfo {
+        let currentStatus = await status()
+        let settings = try? await globalSettingsStore?.snapshot()
+        let sizing = RuntimeSizing(
+            cpuCount: Self.integerSetting("runtime.cpuCount", in: settings) ?? 4,
+            memoryGiB: Self.integerSetting("runtime.memoryGiB", in: settings) ?? 4,
+            userdataGiB: settings.flatMap { Self.integerSetting("runtime.userdataGiB", in: $0) }
+        )
+        let resources: ResourceUsage?
+        if request.resources {
+            let footprint = Self.currentPhysicalFootprintBytes()
+            resources = footprint.map { ResourceUsage(daemonPhysicalFootprintBytes: $0) }
+        } else {
+            resources = nil
+        }
+        let displays: [RuntimeDisplaySlotSnapshot]?
+        if request.displays {
+            displays = await displaySnapshots(runtimeIsReady: currentStatus.runtimeState == "ready")
+        } else {
+            displays = nil
+        }
+        return RuntimeInfo(
+            status: currentStatus,
+            sizing: sizing,
+            displayPoolSize: 16,
+            resources: resources,
+            displays: displays
+        )
+    }
+
+    /// Lists live daemon-owned app sessions with their display and window geometry.
+    public func listSessions() async -> [SessionSummary] {
+        guard let service = headlessSessionService as? DaemonHeadlessSessionService else {
+            return []
+        }
+        let inventory = await service.inventory()
+        let packageService = packageQueryServiceInstance()
+        var summaries: [SessionSummary] = []
+        summaries.reserveCapacity(inventory.sessions.count)
+        for session in inventory.sessions {
+            guard case .app(let sessionID) = session.id,
+                let packageID = RuntimePackageID(rawValue: session.packageID)
+            else {
+                continue
+            }
+            let details = try? await packageService.packageInfo(RuntimePackageRequest(packageID: packageID))
+            let lease = inventory.leases[sessionID]
+            let phase: RuntimeSessionPhase
+            switch session.state {
+            case .requested:
+                phase = .starting
+            case .waitingForRuntime:
+                phase = .booting
+            case .acquiringDisplay:
+                phase = .acquiringDisplay
+            case .launching:
+                phase = .launching
+            case .running, .backgrounded:
+                phase = .running
+            case .closing:
+                phase = .closing
+            case .ended:
+                phase = .ended
+            }
+            let pointSize: CGSize?
+            if let mode = lease?.mode, mode.renderScale.isFinite, mode.renderScale > 0 {
+                pointSize = CGSize(
+                    width: Double(mode.pixelSize.width) / mode.renderScale,
+                    height: Double(mode.pixelSize.height) / mode.renderScale
+                )
+            } else {
+                pointSize = nil
+            }
+            summaries.append(
+                SessionSummary(
+                    sessionID: sessionID,
+                    packageID: packageID,
+                    displayName: details?.summary.displayName ?? session.packageID,
+                    state: phase,
+                    displayID: lease.flatMap { DisplayID(rawValue: $0.leaseID.uuidString.lowercased()) },
+                    clientKind: .cli,
+                    openedAt: session.openedAt,
+                    windowMode: session.displayID == 0 ? .primaryDisplayCompatibility : .secondaryDisplay,
+                    recording: false,
+                    pointSize: pointSize
+                )
+            )
+        }
+        return summaries
+    }
+
+    /// Reads the complete resolved global configuration.
+    public func configuration() async throws(RuntimeWireError) -> ConfigurationSnapshot {
+        guard let globalSettingsStore else {
+            throw Self.configurationStartupError
+        }
+        do {
+            return try await globalSettingsStore.snapshot()
+        } catch {
+            throw Self.configurationWireError(for: error)
+        }
+    }
+
+    /// Validates and persists global configuration before publishing its change event.
+    public func updateConfiguration(_ patch: ConfigurationPatch) async throws(RuntimeWireError)
+        -> ConfigurationSnapshot
+    {
+        guard let globalSettingsStore else {
+            throw Self.configurationStartupError
+        }
+        do {
+            let result = try await globalSettingsStore.update(patch)
+            if !result.changedKeys.isEmpty, let supervisor {
+                let executionSettings = RuntimeExecutionSettings(snapshot: result.snapshot)
+                await supervisor.applyRuntimeSettings(
+                    timeouts: executionSettings.bootTimeouts,
+                    maxDisplaySessions: executionSettings.maxDisplaySessions
+                )
+            }
+            if !result.changedKeys.isEmpty {
+                eventHub.publishRuntimeChange(.configurationChanged(keys: result.changedKeys))
+            }
+            return result.snapshot
+        } catch {
+            throw Self.configurationWireError(for: error)
+        }
     }
 
     /// Whether the daemon can exit after its idle grace period without cancelling an operation.
@@ -1761,6 +2035,193 @@ public actor RuntimeHost {
         message: "The Android Guest Agent is unavailable.",
         remediation: "Start Android and try again."
     )
+    private static let configurationStartupError = RuntimeWireError.runtime(
+        "hostStartupFailed",
+        message: "APKRun couldn't load global settings.",
+        remediation: "Run apkrun runtime status for details, then follow the reported error's instructions."
+    )
+
+    private func displaySnapshots(runtimeIsReady: Bool) async -> [RuntimeDisplaySlotSnapshot] {
+        let slots: [RuntimeCore.DisplaySlotSnapshot]
+        let leases: [UUID: DisplayLease]
+        if let service = headlessSessionService as? DaemonHeadlessSessionService {
+            let inventory = await service.inventory()
+            slots = inventory.slots
+            leases = inventory.leases
+        } else if runtimeIsReady, let displayPool = await supervisor?.makeDisplayPool() {
+            slots = await displayPool.snapshot()
+            leases = [:]
+        } else {
+            slots = []
+            leases = [:]
+        }
+
+        var result = [
+            RuntimeDisplaySlotSnapshot(
+                slot: 0,
+                state: runtimeIsReady ? .reserved : .free,
+                androidDisplayID: runtimeIsReady ? 0 : nil
+            )
+        ]
+        result.reserveCapacity(16)
+        for slot in slots {
+            let ownerID: UUID?
+            switch slot.state {
+            case .attaching(let owner), .allocated(let owner), .releasing(let owner):
+                ownerID = Self.appSessionUUID(for: owner)
+            case .free, .faulted:
+                ownerID = nil
+            }
+            let lease = ownerID.flatMap { leases[$0] }
+            let pixelSize = slot.mode.map {
+                RuntimeAPI.PixelSize(width: $0.pixelSize.width, height: $0.pixelSize.height)
+            }
+            result.append(
+                RuntimeDisplaySlotSnapshot(
+                    slot: slot.scanout,
+                    state: Self.wireDisplayState(for: slot.state),
+                    displayID: lease.flatMap { DisplayID(rawValue: $0.leaseID.uuidString.lowercased()) },
+                    androidDisplayID: slot.androidDisplayID,
+                    pixelSize: pixelSize,
+                    densityDpi: slot.mode?.densityDpi
+                )
+            )
+        }
+        return result.sorted { $0.slot < $1.slot }
+    }
+
+    private static func integerSetting(_ key: String, in snapshot: ConfigurationSnapshot?) -> Int? {
+        guard let entry = snapshot?.entries.first(where: { $0.key == key }),
+            case .integer(let value) = entry.value
+        else {
+            return nil
+        }
+        return Int(exactly: value)
+    }
+
+    static func instanceSizing(
+        from snapshot: ConfigurationSnapshot?,
+        preservingUserdataBytes: UInt64? = nil
+    ) -> InstanceSizing? {
+        let bytesPerGiB: UInt64 = 1_073_741_824
+        let cpuCount = integerSetting("runtime.cpuCount", in: snapshot) ?? InstanceSizing.default.cpuCount
+        let memoryGiB =
+            integerSetting("runtime.memoryGiB", in: snapshot)
+            ?? Int(InstanceSizing.default.memoryBytes / bytesPerGiB)
+        let userdataBytes: UInt64
+        if let preservingUserdataBytes {
+            userdataBytes = preservingUserdataBytes
+        } else {
+            let userdataEntry = snapshot?.entries.first(where: { $0.key == "runtime.userdataGiB" })
+            if let userdataEntry, userdataEntry.value == .null {
+                return nil
+            }
+            userdataBytes = UInt64(integerSetting("runtime.userdataGiB", in: snapshot) ?? 32) * bytesPerGiB
+        }
+        return InstanceSizing(
+            cpuCount: cpuCount,
+            memoryBytes: UInt64(memoryGiB) * bytesPerGiB,
+            userdataBytes: userdataBytes
+        )
+    }
+
+    static func provisioningSizing(
+        from snapshot: ConfigurationSnapshot?,
+        settingsFile: URL
+    ) throws(ImageFailure) -> InstanceSizing {
+        guard let sizing = instanceSizing(from: snapshot) else {
+            throw userdataCapacityFailure(at: settingsFile)
+        }
+        return sizing
+    }
+
+    private static func userdataCapacityFailure(at settingsFile: URL) -> ImageFailure {
+        let volumeURL = settingsFile.deletingLastPathComponent()
+        let attributes = try? FileManager.default.attributesOfFileSystem(forPath: volumeURL.path)
+        let availableBytes = max(0, (attributes?[.systemFreeSize] as? NSNumber)?.int64Value ?? 0)
+        // Configuration requires the 8 GiB minimum userdata disk plus the 10 GiB free-space reserve.
+        let requiredBytes: Int64 = 18 * 1_073_741_824
+        return .insufficientSpace(required: requiredBytes, available: availableBytes)
+    }
+
+    private static func currentPhysicalFootprintBytes() -> Int64? {
+        var information = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size
+        )
+        let result = withUnsafeMutablePointer(to: &information) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { informationPointer in
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(TASK_VM_INFO),
+                    informationPointer,
+                    &count
+                )
+            }
+        }
+        guard result == KERN_SUCCESS else { return nil }
+        return Int64(information.phys_footprint)
+    }
+
+    private static func appSessionUUID(for sessionID: SessionID) -> UUID? {
+        guard case .app(let identifier) = sessionID else { return nil }
+        return identifier
+    }
+
+    private static func wireDisplayState(for state: RuntimeCore.DisplaySlotState) -> WireDisplayState {
+        switch state {
+        case .free:
+            .free
+        case .attaching(let sessionID):
+            appSessionUUID(for: sessionID).map(WireDisplayState.attaching) ?? .reserved
+        case .allocated(let sessionID):
+            appSessionUUID(for: sessionID).map(WireDisplayState.allocated) ?? .reserved
+        case .releasing(let sessionID):
+            appSessionUUID(for: sessionID).map(WireDisplayState.releasing) ?? .reserved
+        case .faulted(let fault):
+            .faulted(wireDisplayFault(fault))
+        }
+    }
+
+    private static func wireDisplayFault(_ fault: DisplayFault) -> RuntimeAPI.WireError {
+        switch fault {
+        case .graphics(let failure):
+            RuntimeAPI.WireError(domain: "graphics", code: "graphics.\(failure.code)")
+        case .guestAgentUnavailable:
+            RuntimeAPI.WireError(domain: "runtime", code: "runtime.guestAgent")
+        case .attachTimedOut, .releaseTimedOut, .reconfigurationUncertain:
+            RuntimeAPI.WireError(domain: "runtime", code: "runtime.graphics")
+        }
+    }
+
+    private static func configurationWireError(for error: any Error) -> RuntimeWireError {
+        guard let settingsError = error as? GlobalSettingsStoreError else {
+            return configurationStartupError
+        }
+        switch settingsError {
+        case .unknownSetting:
+            return .runtime(
+                "unknownSetting",
+                message: "This global setting isn't recognized.",
+                remediation: "Run apkrun config list to see supported settings."
+            )
+        case .invalidSettingValue(_, let allowed):
+            return .runtime(
+                "invalidSettingValue",
+                message: "The requested global setting value isn't supported.",
+                remediation: allowed
+            )
+        case .unsupportedSchema:
+            return configurationStartupError
+        case .storage:
+            let entry = ErrorCatalog.entry(for: "runtime.settingsStorageFailed")
+            return RuntimeWireError.runtime(
+                "settingsStorageFailed",
+                message: entry?.message?["en"] ?? "APKRun couldn't read or save global settings.",
+                remediation: entry?.remediation?["en"] ?? "Check permissions for APKRun's data folder, then try again."
+            )
+        }
+    }
 
     private static func sessionWireError(for error: RuntimeHostError) -> RuntimeWireError {
         let code: String
@@ -1777,6 +2238,8 @@ public actor RuntimeHost {
             code = "runtime.hostShuttingDown"
         case .invalidTransition:
             code = "runtime.invalidTransition"
+        case .busy:
+            code = "runtime.busy"
         case .guestAgentBundle:
             code = "runtime.guestAgentBundleMissing"
         case .runtimeBoot(let failure):

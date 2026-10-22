@@ -31,8 +31,7 @@ struct APKRunApp: App {
 
     var body: some Scene {
         WindowGroup("APKRun") {
-            Text("APKRun")
-                .frame(minWidth: 480, minHeight: 320)
+            RuntimeStatusView()
                 .alert(registrationTitle, isPresented: $isRegistrationErrorPresented) {
                     Button("Open Login Items Settings") {
                         SMAppService.openSystemSettingsLoginItems()

@@ -37,9 +37,9 @@ struct RuntimeStatusCommand: AsyncParsableCommand {
             let client = try RuntimeControlClient(clientKind: .cli)
             let status = try await client.runtimeStatus()
             if json {
-                Output.write(try RuntimeStatusOutput.json(status))
+                Output.write(try RuntimeStatusOutput.json(status, buildInfo: .current))
             } else {
-                Output.write(RuntimeStatusOutput.human(status))
+                Output.write(RuntimeStatusOutput.human(status, buildInfo: .current))
             }
         } catch {
             throw await RuntimeStatusOutput.commandFailure(error)
@@ -70,14 +70,102 @@ struct RuntimeStopCommand: AsyncParsableCommand {
         abstract: "Stop Android while leaving the background service available."
     )
 
+    @Flag(name: .long, help: "Stop even while Android app sessions are open.")
+    var force = false
+
+    @Flag(name: .long, help: "Skip confirmation.")
+    var yes = false
+
     mutating func run() async throws {
+        let client: RuntimeControlClient
         do {
-            let client = try RuntimeControlClient(clientKind: .cli)
-            let status = try await client.stopRuntime()
-            Output.write("Android is \(status.runtimeState).")
+            client = try RuntimeControlClient(clientKind: .cli)
         } catch {
             throw await RuntimeStatusOutput.commandFailure(error)
         }
+
+        let shouldForceStop: Bool
+        if force {
+            shouldForceStop = true
+        } else {
+            let sessions: [SessionSummary]
+            let operations: [OperationSnapshot]
+            do {
+                sessions = try await client.listSessions()
+                operations = try await client.listOperations()
+            } catch {
+                throw await RuntimeStatusOutput.commandFailure(error)
+            }
+            let activity = RuntimeStopActivity(sessions: sessions, operations: operations)
+            if activity.activePackageMutationCount > 0 {
+                throw RuntimeStopActivity.packageMutationFailure
+            }
+            if activity.requiresConfirmation {
+                try CLIConfirmation.confirm(activity.confirmationPrompt, yes: yes)
+                shouldForceStop = true
+            } else {
+                shouldForceStop = false
+            }
+        }
+
+        do {
+            let status = try await client.stopRuntime(force: shouldForceStop)
+            Output.write("Android is \(status.runtimeState).")
+        } catch {
+            if !force, !shouldForceStop, RuntimeStopActivity.isBusyStopFailure(error) {
+                try CLIConfirmation.confirm(
+                    "Android became busy before it could stop.",
+                    yes: yes
+                )
+                do {
+                    let status = try await client.stopRuntime(force: true)
+                    Output.write("Android is \(status.runtimeState).")
+                } catch {
+                    throw await RuntimeStatusOutput.commandFailure(error)
+                }
+            } else {
+                throw await RuntimeStatusOutput.commandFailure(error)
+            }
+        }
+    }
+}
+
+struct RuntimeStopActivity {
+    let activeSessionCount: Int
+    let activePackageMutationCount: Int
+
+    init(sessions: [SessionSummary], operations: [OperationSnapshot]) {
+        activeSessionCount = sessions.filter { $0.state != .ended }.count
+        activePackageMutationCount =
+            operations.filter {
+                $0.result == nil && [.install, .uninstall, .repair, .rollback, .update].contains($0.kind)
+            }.count
+    }
+
+    var requiresConfirmation: Bool {
+        activeSessionCount > 0
+    }
+
+    var confirmationPrompt: String {
+        "Android has \(activeSessionCount) open app session(s). Stopping it will end those sessions."
+    }
+
+    static var packageMutationFailure: RuntimeWireError {
+        RuntimeWireError(
+            domain: "runtime",
+            code: "runtime.invalidTransition",
+            message: "Android cannot stop while a package operation is active.",
+            remediation: "Wait for the package operation to finish, then run `apkrun runtime stop` again."
+        )
+    }
+
+    static func isBusyStopFailure(_ error: any Error) -> Bool {
+        guard let clientError = error as? RuntimeControlClientError,
+            case .remoteFailure(let code, _) = clientError
+        else {
+            return false
+        }
+        return code == "runtime.busy"
     }
 }
 
@@ -132,18 +220,18 @@ enum RuntimeStatusOutput {
         return failure(error, runtimeRegistration: registration)
     }
 
-    static func json(_ status: RuntimeHostStatus) throws -> String {
+    static func json(_ status: RuntimeHostStatus, buildInfo: BuildInfo = .current) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(RuntimeStatusEnvelope(status: status))
+        let data = try encoder.encode(RuntimeStatusEnvelope(status: status, buildInfo: buildInfo))
         return String(decoding: data, as: UTF8.self)
     }
 
-    static func human(_ status: RuntimeHostStatus) -> String {
+    static func human(_ status: RuntimeHostStatus, buildInfo: BuildInfo = .current) -> String {
         var lines = [
             "Background service: \(status.hostState)",
             "Android: \(status.runtimeState)",
-            "Owner: apkrund",
+            "Owner: \(ownerName(for: buildInfo))",
         ]
         if let progress = status.bootProgress {
             lines.append("Boot progress: \(Int((progress * 100).rounded()))%")
@@ -158,6 +246,10 @@ enum RuntimeStatusOutput {
             lines.append("Startup issue: step \(step) (\(code))")
         }
         return lines.joined(separator: "\n")
+    }
+
+    static func ownerName(for buildInfo: BuildInfo) -> String {
+        buildInfo.launchAgentLabel == "io.apkrun.apkrund.dev" ? "apkrun-dev" : "apkrund"
     }
 
     static func failure(
@@ -203,6 +295,14 @@ enum RuntimeStatusOutput {
                 fallbackRemediation: "Quit and reopen APKRun."
             )
         case .remoteFailure(let code, let message):
+            if code == "runtime.invalidTransition" {
+                return RuntimeWireError(
+                    domain: "runtime",
+                    code: code,
+                    message: "Android can't change state while another runtime operation is active.",
+                    remediation: "Wait for the active operation to finish, then retry."
+                )
+            }
             return fromCatalog(code, fallbackMessage: message)
         case .requestTimedOut(let operation):
             let failure = fromCatalog(
@@ -280,13 +380,13 @@ private struct RuntimeStatusEnvelope: Encodable {
     let schemaVersion = 1
     let result: RuntimeStatusResult
 
-    init(status: RuntimeHostStatus) {
-        result = RuntimeStatusResult(status: status)
+    init(status: RuntimeHostStatus, buildInfo: BuildInfo) {
+        result = RuntimeStatusResult(status: status, buildInfo: buildInfo)
     }
 }
 
 private struct RuntimeStatusResult: Encodable {
-    let owner = "apkrund"
+    let owner: String
     let hostState: String
     let runtimeState: String
     let bootProgress: Double?
@@ -298,7 +398,8 @@ private struct RuntimeStatusResult: Encodable {
     let guestAgentState: GuestAgentConnectionState?
     let guestAgentProtocolVersion: String?
 
-    init(status: RuntimeHostStatus) {
+    init(status: RuntimeHostStatus, buildInfo: BuildInfo) {
+        owner = RuntimeStatusOutput.ownerName(for: buildInfo)
         hostState = status.hostState
         runtimeState = status.runtimeState
         bootProgress = status.bootProgress

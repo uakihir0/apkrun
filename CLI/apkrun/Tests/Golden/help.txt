@@ -8,9 +8,12 @@ OPTIONS:
 
 SUBCOMMANDS:
   version                 Show APKRun version information.
+  status                  Show the Android runtime and open app sessions.
   runtime                 Inspect and control the Android runtime.
+  config                  Read and update app-wide APKRun settings.
   logs                    Read APKRun host logs.
   install                 Inspect and install one APK or a set of APK splits.
+  uninstall               Remove an installed Android app.
   list                    List installed Android apps.
   info                    Show runtime status or details for one Android app.
   launch                  Launch an installed Android app.

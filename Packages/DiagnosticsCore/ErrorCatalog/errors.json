@@ -1096,6 +1096,46 @@
       }
     },
     {
+      "code": "runtime.busy",
+      "parameters": [],
+      "message": {
+        "en": "Android has app sessions open.",
+        "ja": "Android でアプリのセッションが開いています。"
+      },
+      "remediation": {
+        "en": "Close the apps, or run `apkrun runtime stop --force` and confirm that their sessions should end.",
+        "ja": "アプリを閉じるか、`apkrun runtime stop --force` を実行してセッション終了を確認してください。"
+      },
+      "action": "retry",
+      "cliExit": 75,
+      "doc": {
+        "case": "busy",
+        "when": "the user requests a runtime stop while app sessions are open without force",
+        "raisedBy": "RuntimeHost",
+        "ref": "[runtime-daemon.md](../02-design/runtime-daemon.md) §3.5"
+      }
+    },
+    {
+      "code": "runtime.invalidTransition",
+      "parameters": [],
+      "message": {
+        "en": "That runtime operation can't run while another operation is active.",
+        "ja": "別の操作が実行中のため、ランタイム操作を実行できません。"
+      },
+      "remediation": {
+        "en": "Wait for the current operation to finish, then try again.",
+        "ja": "現在の操作が完了してから、もう一度お試しください。"
+      },
+      "action": "retry",
+      "cliExit": 75,
+      "doc": {
+        "case": "invalidTransition",
+        "when": "a lifecycle operation conflicts with an active runtime or package operation",
+        "raisedBy": "RuntimeHost",
+        "ref": "[runtime-daemon.md](../02-design/runtime-daemon.md) §3.5"
+      }
+    },
+    {
       "code": "runtime.cancelled",
       "parameters": [],
       "message": {
@@ -1149,6 +1189,66 @@
         "when": "`operationStatus`, `cancel`, or `apkrun operations wait` receives an unknown or expired ID",
         "raisedBy": "RuntimeHost",
         "ref": "[runtime-api.md](runtime-api.md) §4.7, [../02-design/cli.md](../02-design/cli.md) §4.9"
+      }
+    },
+    {
+      "code": "runtime.unknownSetting",
+      "parameters": [],
+      "message": {
+        "en": "That global setting isn't recognized.",
+        "ja": "そのグローバル設定は認識されません。"
+      },
+      "remediation": {
+        "en": "Run `apkrun config list` to see supported settings.",
+        "ja": "サポート対象の設定を確認するには `apkrun config list` を実行してください。"
+      },
+      "action": "none",
+      "cliExit": 4,
+      "doc": {
+        "case": "unknownSetting(key:)",
+        "when": "`configuration` or `updateConfiguration` receives an unsupported setting key",
+        "raisedBy": "RuntimeHost",
+        "ref": "[runtime-api.md](runtime-api.md) §14, [../02-design/cli.md](../02-design/cli.md) §4.6"
+      }
+    },
+    {
+      "code": "runtime.invalidSettingValue",
+      "parameters": [],
+      "message": {
+        "en": "That value isn't supported for the global setting.",
+        "ja": "その値はグローバル設定ではサポートされていません。"
+      },
+      "remediation": {
+        "en": "Run `apkrun config get <key>` to see the supported value and range.",
+        "ja": "サポートされる値と範囲を確認するには `apkrun config get <key>` を実行してください。"
+      },
+      "action": "none",
+      "cliExit": 64,
+      "doc": {
+        "case": "invalidSettingValue(key:allowed:)",
+        "when": "`updateConfiguration` receives a value with the wrong type or outside a setting's allowed range",
+        "raisedBy": "RuntimeHost",
+        "ref": "[runtime-api.md](runtime-api.md) §14, [../02-design/cli.md](../02-design/cli.md) §4.6"
+      }
+    },
+    {
+      "code": "runtime.settingsStorageFailed",
+      "parameters": [],
+      "message": {
+        "en": "APKRun couldn't read or save global settings.",
+        "ja": "APKRun がグローバル設定を読み書きできませんでした。"
+      },
+      "remediation": {
+        "en": "Check permissions for APKRun's data folder, then try again.",
+        "ja": "APKRun データフォルダのアクセス権を確認してから、もう一度お試しください。"
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "storage(domain:code:)",
+        "when": "the global settings file cannot be read or atomically replaced",
+        "raisedBy": "RuntimeHost",
+        "ref": "[runtime-api.md](runtime-api.md) §14, [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §2.2"
       }
     },
     {

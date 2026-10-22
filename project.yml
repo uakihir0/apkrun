@@ -260,6 +260,8 @@ targets:
       - path: Tests/IntegrationTests/AndroidSupport
       - path: Tests/IntegrationTests/AndroidBootTests
       - path: Tests/IntegrationTests/AndroidGraphicsTests
+      - path: Tests/IntegrationTests/CLITests
+      - path: Tests/IntegrationTests/SecurityTests
       - path: Tests/IntegrationTests/G3GraphicsTests
       - path: Tests/IntegrationTests/GuestAgentTests
       - path: Tests/IntegrationTests/AndroidInputTests

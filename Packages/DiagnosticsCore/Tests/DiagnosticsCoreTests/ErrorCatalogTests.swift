@@ -28,9 +28,10 @@ import Testing
             ].map { "cli.\($0)" }
             + [
                 "instanceLocked", "instanceLockFailed", "hostShuttingDown", "hostStartupFailed",
-                "serviceUnavailable", "apiVersionMismatch", "operationResultUnknown",
+                "serviceUnavailable", "apiVersionMismatch", "operationResultUnknown", "operationNotFound",
                 "requestTimedOut", "cancelled", "notAuthorized", "malformedRequest",
-                "internal", "devLinuxTimedOut",
+                "internal", "devLinuxTimedOut", "busy", "invalidTransition", "settingsStorageFailed",
+                "unknownSetting", "invalidSettingValue",
                 "devLinuxInvalidOptions", "devLinuxArtifactDirectoryMustBeAbsolute",
                 "devLinuxCheckFailed", "devLinuxDidNotFinish",
                 "adbExecutableMissing", "adbLaunchFailed", "adbConnectionUnavailable",

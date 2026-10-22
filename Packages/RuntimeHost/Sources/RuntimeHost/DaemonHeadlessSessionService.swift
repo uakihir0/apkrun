@@ -53,6 +53,30 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         self.displayConfiguration = displayConfiguration
     }
 
+    /// Returns the current app sessions, pool slots, and leases for read-only runtime diagnostics.
+    func inventory() async -> (
+        sessions: [AppSessionSnapshot],
+        slots: [RuntimeCore.DisplaySlotSnapshot],
+        leases: [UUID: DisplayLease]
+    ) {
+        let sessions = await registry.snapshot().filter {
+            if case .ended = $0.state {
+                return false
+            }
+            return true
+        }
+        var leases: [UUID: DisplayLease] = [:]
+        for session in sessions {
+            guard case .app(let sessionID) = session.id,
+                let lease = await registry.displayLease(session.id)
+            else {
+                continue
+            }
+            leases[sessionID] = lease
+        }
+        return (sessions, await displayPool.snapshot(), leases)
+    }
+
     /// Stops background observers before Android is shut down by the daemon.
     func shutdown() async {
         if didCompleteShutdown {
@@ -745,7 +769,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         remediation: "Try again after the runtime has started."
     )
 
-    private static func launchResult(for session: AppSessionSnapshot) throws(RuntimeWireError) -> RuntimeLaunchResult {
+    static func launchResult(for session: AppSessionSnapshot) throws(RuntimeWireError) -> RuntimeLaunchResult {
         guard case .app(let sessionID) = session.id,
             let packageID = RuntimePackageID(rawValue: session.packageID)
         else {
@@ -757,8 +781,9 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         case .launching: phase = .launching
         case .requested: phase = .starting
         case .waitingForRuntime: phase = .booting
-        case .acquiringDisplay: phase = .waitingForPackage
-        case .closing, .ended: phase = .ended
+        case .acquiringDisplay: phase = .acquiringDisplay
+        case .closing: phase = .closing
+        case .ended: phase = .ended
         }
         return RuntimeLaunchResult(sessionID: sessionID, packageID: packageID, state: phase)
     }

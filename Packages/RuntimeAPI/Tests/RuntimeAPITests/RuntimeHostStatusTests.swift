@@ -3,8 +3,8 @@ import Testing
 
 @testable import RuntimeAPI
 
-@Test func runtimeTrackedUninstallAdvancesAPIMinorVersion() {
-    #expect(APIVersion.current == APIVersion(major: 1, minor: 11))
+@Test func forcedRuntimeStopAdvancesAPIMinorVersion() {
+    #expect(APIVersion.current == APIVersion(major: 1, minor: 15))
 }
 
 @Test func runtimeRestartRequestRoundTripsVersionedHeader() throws {
@@ -18,6 +18,26 @@ import Testing
 
     #expect(decoded == request)
     #expect(decoded.header.apiVersion == APIVersion.current)
+}
+
+@Test func stopRuntimeRequestRoundTripsForceAndDecodesLegacyRequests() throws {
+    let header = APIRequestHeader(
+        operationID: UUID(),
+        clientKind: .cli
+    )
+    let request = StopRuntimeRequest(header: header, force: true)
+    let data = try JSONEncoder().encode(request)
+    let decoded = try JSONDecoder().decode(StopRuntimeRequest.self, from: data)
+    #expect(decoded == request)
+    #expect(decoded.force)
+    #expect(decoded.header.apiVersion == APIVersion.current)
+
+    let legacy = try JSONDecoder().decode(
+        StopRuntimeRequest.self,
+        from: JSONEncoder().encode(["header": header] as [String: APIRequestHeader])
+    )
+    #expect(legacy.header == header)
+    #expect(!legacy.force)
 }
 
 @Test func runtimeResetControlRequestRoundTripsVersionedHeader() throws {
@@ -42,6 +62,21 @@ import Testing
             from: Data("\"futureBrokerRejection\"".utf8)
         ) == .unknown
     )
+}
+
+@Test func wrapperEndpointRequestsRoundTripTheirScopedIdentity() throws {
+    let request = RuntimeEndpointRequest(
+        kind: .wrapper,
+        clientKind: .wrapper,
+        claimedIdentity: "io.apkrun.android.io.apkrun.fixture.hellotext",
+        apiVersion: .current
+    )
+    let data = try JSONEncoder().encode(request)
+    let decoded = try JSONDecoder().decode(RuntimeEndpointRequest.self, from: data)
+
+    #expect(decoded == request)
+    #expect(decoded.kind == .wrapper)
+    #expect(decoded.clientKind == .wrapper)
 }
 
 private func status(

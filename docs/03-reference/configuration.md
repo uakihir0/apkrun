@@ -2,11 +2,12 @@
 
 This document lists every input that changes APKRun's behavior: global settings, per-package settings, wrapper defaults, environment variables, launch arguments, build constants, and plist keys. Design documents own the behavior; each entry links to them.
 
-Keys use dots. **Applies** uses these values:
+Keys use dots. **Applies** reports the effect implemented by this APKRun version. The **Design** column links to the intended behavior; a stored-only value may be saved and reported by `configuration()`, but no consumer applies it yet.
 
 | Applies | Meaning |
 |---|---|
 | live | takes effect at once |
+| stored only | saved and reported, but not applied in this version |
 | next session | the next time the app's window opens. An open window keeps the old value |
 | runtime restart | the next Android start. The UI offers **Restart Android Now** |
 | next check | the next scheduled or manual check |
@@ -71,7 +72,7 @@ Signatures are in [runtime-api.md](runtime-api.md) §14, the authority for them.
 |---|---|---|
 | `configuration()` → `ConfigurationSnapshot` | control | every key of §2 with effective value, default, whether set, and when a change applies |
 | `updateConfiguration(patch)` | control | RFC 7396 merge patch on the nested form (§1.2). `null` resets a key. The whole patch is validated first (§8.1). A patch with `sharedFolders` is refused |
-| `sharedFolders()`, `addSharedFolder`, `removeSharedFolder`, `setSharedFolderAccess` | control | the only way to change `sharedFolders.roots` ([desktop-integration.md](../02-design/desktop-integration.md) §6.4) |
+| `sharedFolders.roots` | target control API ([runtime-api.md](runtime-api.md) §11.1) | shared-folder endpoints are not implemented in this version. The snapshot can retain the stored value, but `updateConfiguration` rejects writes to `sharedFolders` |
 | `packageSettings(id)` → `ResolvedPackageSettings` | control | every key of §3 with effective value and source: `globalSwitch`, `user`, `recommended`, or `default` (§3.2) |
 | `updatePackageSettings(id, patch)` | control | validated merge patch on package settings ([package-store.md](../02-design/package-store.md) §11.1). `null` removes the user value |
 | `setUpdatePolicy(id, UpdatePolicy)` | control | writes authority, provider, and `update.mode` together ([update-system.md](../02-design/update-system.md) §2.3) |
@@ -87,12 +88,10 @@ Signatures are in [runtime-api.md](runtime-api.md) §14, the authority for them.
 |---|---|---|
 | `configurationChanged(keys: [String])` | `runtime` | global keys changed (dotted keys) |
 | `settingsChanged(PackageID, keys: [String])` | `packages` | package keys changed ([package-store.md](../02-design/package-store.md) §11.3) |
-| `sharedFoldersChanged` | `integrations` | a shared folder root was added, removed, or changed |
 | `windowPrefsChanged(WindowPrefs)` | session channel | `window.resizable`, `window.alwaysOnTop`, or `window.zoom` changed |
 
-- Consumers read the current value after the event and never cache across it ([package-store.md](../02-design/package-store.md) §2.4).
-- Components inside apkrund (IdleController, UpdateScheduler, IntegrationPolicy, DisplayPool, ImageUpdateCoordinator) receive the change in process.
-- APKRun.app applies the Sparkle settings at launch and on each `configurationChanged` that contains a `maintenance.*` key ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.2).
+- `configurationChanged` reports persisted global-setting changes; it does not by itself apply them. RuntimeHost currently applies boot-timeout changes to the next boot and updates the display-session limit live. Other consumers will be added with their owning tasks.
+- `sharedFoldersChanged` is a target event ([runtime-api.md](runtime-api.md) §11.1); no host publisher is implemented yet.
 
 ### 1.6 What is not a setting
 
@@ -122,10 +121,10 @@ Stored in `settings.json` (§1.1). The **UI** column names the tab in APKRun Set
 
 | Key | Type | Allowed values | Default | Applies | UI | Design |
 |---|---|---|---|---|---|---|
-| `runtime.startPolicy` | enum | `onDemand`, `atLogin` | `onDemand` | next login | Runtime: "Start Android" | [runtime-daemon.md](../02-design/runtime-daemon.md) §5.4 |
-| `runtime.idleSuspendMinutes` | integer | 0–1440; `0` = never | `10` | live | Runtime: "Put Android to sleep after ‹n› minutes without apps" | [runtime-daemon.md](../02-design/runtime-daemon.md) §5.2 |
-| `runtime.idleStopMinutes` | integer | 0–1440; `0` = never | `60` | live | Runtime: "Stop Android after ‹n› minutes" | [runtime-daemon.md](../02-design/runtime-daemon.md) §5.2 |
-| `runtime.autoRestart` | bool | `true`, `false` | `true` | live | Runtime: "Restart Android automatically after a crash" | [runtime-daemon.md](../02-design/runtime-daemon.md) §3.6 |
+| `runtime.startPolicy` | enum | `onDemand`, `atLogin` | `onDemand` | stored only | Runtime: "Start Android" | [runtime-daemon.md](../02-design/runtime-daemon.md) §5.4 |
+| `runtime.idleSuspendMinutes` | integer | 0–1440; `0` = never | `10` | stored only | Runtime: "Put Android to sleep after ‹n› minutes without apps" | [runtime-daemon.md](../02-design/runtime-daemon.md) §5.2 |
+| `runtime.idleStopMinutes` | integer | 0–1440; `0` = never | `60` | stored only | Runtime: "Stop Android after ‹n› minutes" | [runtime-daemon.md](../02-design/runtime-daemon.md) §5.2 |
+| `runtime.autoRestart` | bool | `true`, `false` | `true` | stored only | Runtime: "Restart Android automatically after a crash" | [runtime-daemon.md](../02-design/runtime-daemon.md) §3.6 |
 | `runtime.cpuCount` | integer | 2 … min(8, performance + efficiency cores) | `4` | runtime restart | Runtime: "Memory, processors" | [vm.md](../02-design/vm.md) §10 |
 | `runtime.memoryGiB` | integer (GiB) | 3 … 50 % of physical memory, rounded down | `4`, lowered to fit 50 % | runtime restart | Runtime: "Memory, processors" | [vm.md](../02-design/vm.md) §10, [runtime-daemon.md](../02-design/runtime-daemon.md) §12 |
 | `runtime.userdataGiB` | integer (GiB) | 8–256; at provisioning at most the free space minus 10 GiB | `32` | provisioning | Runtime: "Android storage" (not yet in host-ui.md) | [android-image.md](../02-design/android-image.md) §5.2 |
@@ -135,8 +134,10 @@ Stored in `settings.json` (§1.1). The **UI** column names the tab in APKRun Set
 - `runtime.idleStopMinutes` counts from when idleness began, including suspended time. A value below `runtime.idleSuspendMinutes` means stop without suspending. A change does not reset the idle clock ([runtime-daemon.md](../02-design/runtime-daemon.md) §5.2).
 - `runtime.startPolicy = atLogin` preboots 60 s after login. Preboot is skipped on battery below 30 % and while the boot-loop guard is active ([runtime-daemon.md](../02-design/runtime-daemon.md) §5.4).
 - `cpuCount`, `memoryGiB`, and `userdataGiB` depend on the Mac. `set` checks them against this Mac. A stored value that no longer fits is clamped when used; the file is not changed (§8.2).
+- If free space minus the 10 GiB reserve is below the 8 GiB userdata minimum, `runtime.userdataGiB` has no effective value: `configuration` reports `null`, and `set` rejects a value until enough space is available.
 - `userdataGiB` is fixed at provisioning. A change takes effect only with **Reset Android**, which deletes Android data. `config set` prints "Applies after Reset Android."
 - The two boot timeouts have no UI. They are for slow Macs and testing.
+- `startPolicy`, the idle timers, and `autoRestart` are stored for compatibility but do not affect runtime behavior in this version. Their owning runtime tasks add those behaviors.
 
 ### 2.2 `display.*`
 
@@ -150,10 +151,10 @@ System sessions (for example the update health check, at most 90 s) do not count
 
 | Key | Type | Allowed values | Default | Applies | UI | Design |
 |---|---|---|---|---|---|---|
-| `graphics.safeMode` | bool | `true`, `false` | `false` | runtime restart | Troubleshooting: **Start in Graphics Safe Mode** | [graphics.md](../02-design/graphics.md) §9 |
-| `graphics.limits.*` | integer | see below; development builds only | see below | runtime restart | none | [graphics.md](../02-design/graphics.md) §5.4 |
+| `graphics.safeMode` | bool | `true`, `false` | `false` | stored only (current implementation) | Troubleshooting: **Start in Graphics Safe Mode** | [graphics.md](../02-design/graphics.md) §9 |
+| `graphics.limits.*` | integer | see below; development builds only | see below | stored only (current implementation) | none | [graphics.md](../02-design/graphics.md) §5.4 |
 
-- `graphics.safeMode = true` boots with the `guestSwiftshader` profile instead of `drmVirgl` (`BootOptions.gpuProfile`, [android-image.md](../02-design/android-image.md) §9.1). There is no automatic fallback. While on, the health check `graphics.safeMode` warns: "Graphics safe mode is on. Apps are slower."
+These keys are currently stored only. Planned behavior from the linked design: safe mode boots with the `guestSwiftshader` profile instead of `drmVirgl`, and the health check warns while it is on.
 
 Development-only limits. Release builds treat them as unknown keys (§8.1).
 
@@ -171,21 +172,17 @@ Development-only limits. Release builds treat them as unknown keys (§8.1).
 
 | Key | Type | Allowed values | Default | Applies | UI | Design |
 |---|---|---|---|---|---|---|
-| `audio.output` | bool | `true`, `false` | `true` | runtime restart | Runtime: "Sound output" | [desktop-integration.md](../02-design/desktop-integration.md) §8.1, [vm.md](../02-design/vm.md) §11 |
+| `audio.output` | bool | `true`, `false` | `true` | stored only (current implementation) | Runtime: "Sound output" | [desktop-integration.md](../02-design/desktop-integration.md) §8.1, [vm.md](../02-design/vm.md) §11 |
 
-The microphone is not a global key. It follows the per-package `integrations.microphone` values (§3.1).
+This setting is currently stored only. The microphone is not a global key in the intended design; it follows per-package `integrations.microphone` values (§3.1).
 
 ### 2.5 `developer.*`
 
 | Key | Type | Allowed values | Default | Applies | UI | Design |
 |---|---|---|---|---|---|---|
-| `developer.enabled` | bool | `true`, `false` | `false` | runtime restart for ADB and logcat capture; live for UI items | Advanced: **Developer mode** (asks for confirmation) | [android-image.md](../02-design/android-image.md) §11.3, [security-model.md](../01-architecture/security-model.md) |
+| `developer.enabled` | bool | `true`, `false` | `false` | stored only (current implementation) | Advanced: **Developer mode** (asks for confirmation) | [android-image.md](../02-design/android-image.md) §11.3, [security-model.md](../01-architecture/security-model.md) |
 
-- At the next Android start it sets `androidboot.apkrun.devmode=1`: ADB listens on host loopback `127.0.0.1:6520`, and logcat is captured ([filesystem-layout.md](../01-architecture/filesystem-layout.md) §2).
-- At once it shows LocalProvider ([update-system.md](../02-design/update-system.md) §4.3) and the frame statistics overlay ([display-and-windowing.md](../02-design/display-and-windowing.md) §7.7).
-- The header and menu bar show "Developer mode" while the key is on, or while running Android still has ADB on.
-- Health check `agent.developerMode` fails when ADB is on while the key is off.
-- `config set developer.enabled true` asks `Continue? [y/N]`; `--yes` skips the question. Without a terminal and without `--yes` it fails with `cli.confirmationRequired` ([cli.md](../02-design/cli.md) §3.4).
+This setting is currently stored only. The linked design describes the planned behavior: configure developer mode on Android start, expose the related UI and diagnostics, and require confirmation when enabling it from the CLI.
 
 ### 2.6 `maintenance.*` (APKRun and Android system updates)
 
@@ -193,58 +190,56 @@ Meanings: [runtime-maintenance.md](../02-design/runtime-maintenance.md) §6.
 
 | Key | Type | Allowed values | Default | Applies | UI | Design |
 |---|---|---|---|---|---|---|
-| `maintenance.checkAutomatically` | bool | `true`, `false` | `true` | live | General: "Check for updates automatically" | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §6 |
-| `maintenance.channel` | enum | `stable`, `beta` | `stable` | live; starts an Android system update check at once | General: channel | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §4, §6 |
-| `maintenance.installAPKRunAutomatically` | bool | `true`, `false` | `false` | live | General: "Install APKRun updates automatically" | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.5.1, §6 |
-| `maintenance.downloadImagesAutomatically` | bool | `true`, `false` | `true` | next check | General: "Download Android system updates in the background" | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.4 |
-| `maintenance.installImages` | enum | `automatic`, `ask` | `automatic` | live; used at the next idle-gate evaluation (every 5 min) | General: **Install automatically when the Mac is idle** / **Ask before installing** | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.6 |
-| `maintenance.notifyImageInstalled` | bool | `true`, `false` | `false` | live | General: "Notify me when Android was updated" | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §6, §7.1 |
+| `maintenance.checkAutomatically` | bool | `true`, `false` | `true` | stored only (current implementation) | General: "Check for updates automatically" | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §6 |
+| `maintenance.channel` | enum | `stable`, `beta` | `stable` | stored only (current implementation) | General: channel | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §4, §6 |
+| `maintenance.installAPKRunAutomatically` | bool | `true`, `false` | `false` | stored only (current implementation) | General: "Install APKRun updates automatically" | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.5.1, §6 |
+| `maintenance.downloadImagesAutomatically` | bool | `true`, `false` | `true` | stored only (current implementation) | General: "Download Android system updates in the background" | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.4 |
+| `maintenance.installImages` | enum | `automatic`, `ask` | `automatic` | stored only (current implementation) | General: **Install automatically when the Mac is idle** / **Ask before installing** | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.6 |
+| `maintenance.notifyImageInstalled` | bool | `true`, `false` | `false` | stored only (current implementation) | General: "Notify me when Android was updated" | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §6, §7.1 |
 
-- Sparkle gets its settings from these keys: `automaticallyChecksForUpdates` from `maintenance.checkAutomatically`, and `automaticallyDownloadsUpdates` from `maintenance.installAPKRunAutomatically`. `allowedChannels` is `["beta"]` on the beta channel ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.2).
-- Switching from `beta` to `stable` never downgrades APKRun or Android.
+These settings are currently stored only. The linked design describes their planned effects on Sparkle and Android system updates, including channel selection and install policy.
 
 ### 2.7 `updates.*` (Android app updates)
 
 | Key | Type | Allowed values | Default | Applies | UI | Design |
 |---|---|---|---|---|---|---|
-| `updates.checkIntervalHours` | integer | `1`, `3`, `6`, `12`, `24`, `72`, `168` | `6` | next check; each package's next check is recomputed from its last check | Updates: check interval | [update-system.md](../02-design/update-system.md) §3.2 |
-| `updates.downloadOnExpensiveNetwork` | bool | `true`, `false` | `false` | live; waiting downloads start when turned on | Updates: "Download on expensive networks" | [update-system.md](../02-design/update-system.md) §3.4 |
-| `updates.startRuntimeToInstall` | bool | `true`, `false` | `false` | live | Updates: "Start Android to install updates" | [update-system.md](../02-design/update-system.md) §3.5 |
-| `updates.notifyInstalled` | bool | `true`, `false` | `false` | live | Updates: "Notify me after automatic updates" | [update-system.md](../02-design/update-system.md) §9 |
+| `updates.checkIntervalHours` | integer | `1`, `3`, `6`, `12`, `24`, `72`, `168` | `6` | stored only (current implementation) | Updates: check interval | [update-system.md](../02-design/update-system.md) §3.2 |
+| `updates.downloadOnExpensiveNetwork` | bool | `true`, `false` | `false` | stored only (current implementation) | Updates: "Download on expensive networks" | [update-system.md](../02-design/update-system.md) §3.4 |
+| `updates.startRuntimeToInstall` | bool | `true`, `false` | `false` | stored only (current implementation) | Updates: "Start Android to install updates" | [update-system.md](../02-design/update-system.md) §3.5 |
+| `updates.notifyInstalled` | bool | `true`, `false` | `false` | stored only (current implementation) | Updates: "Notify me after automatic updates" | [update-system.md](../02-design/update-system.md) §9 |
+
+These settings are currently stored only. The linked design describes their planned Android app-update behavior.
 
 ### 2.8 `integrations.*` and `sharedFolders.*`
 
 | Key | Type | Allowed values | Default | Applies | UI | Design |
 |---|---|---|---|---|---|---|
-| `integrations.enabled.clipboard`, `.notifications`, `.links`, `.files`, `.sharedFolders`, `.microphone` | bool | `true`, `false` | `true` | live | Privacy: global switches | [desktop-integration.md](../02-design/desktop-integration.md) §2.2 |
-| `integrations.defaults.clipboard`, `.notifications`, `.files` | bool | `true`, `false` | `true` | new packages | Privacy: defaults for new apps | [desktop-integration.md](../02-design/desktop-integration.md) §2.2 |
-| `integrations.defaults.links` | enum | `ask`, `mac`, `android` | `ask` | new packages | same | same |
-| `integrations.defaults.sharedFolders` | enum | `off`, `readOnly`, `readWrite` | `off` | new packages | same | same |
-| `integrations.defaults.microphone` | bool | `true`, `false` | `false` | new packages | same | same |
-| `sharedFolders.roots` | list of `{id, bookmark, access}` | `access`: `readOnly`, `readWrite`; at most 32 added folders | empty (only the built-in Shared folder) | live | Files: the folder list | [desktop-integration.md](../02-design/desktop-integration.md) §6.4 |
+| `integrations.enabled.clipboard`, `.notifications`, `.links`, `.files`, `.sharedFolders`, `.microphone` | bool | `true`, `false` | `true` | stored only (current implementation) | Privacy: global switches | [desktop-integration.md](../02-design/desktop-integration.md) §2.2 |
+| `integrations.defaults.clipboard`, `.notifications`, `.files` | bool | `true`, `false` | `true` | stored only (current implementation) | Privacy: defaults for new apps | [desktop-integration.md](../02-design/desktop-integration.md) §2.2 |
+| `integrations.defaults.links` | enum | `ask`, `mac`, `android` | `ask` | stored only (current implementation) | same | same |
+| `integrations.defaults.sharedFolders` | enum | `off`, `readOnly`, `readWrite` | `off` | stored only (current implementation) | same | same |
+| `integrations.defaults.microphone` | bool | `true`, `false` | `false` | stored only (current implementation) | same | same |
+| `sharedFolders.roots` | list of `{id, bookmark, access}` | `access`: `readOnly`, `readWrite`; at most 32 added folders | empty (only the built-in Shared folder) | stored only (current implementation) | Files: the folder list | [desktop-integration.md](../02-design/desktop-integration.md) §6.4 |
 
-- `integrations.enabled.<name> = false` turns the integration off for every package. It changes no package's settings (§3.2).
-- `integrations.defaults.*` are copied into a package's settings at its first record (§3.3). `wrapper.json` values win for packages installed from a portable wrapper, within the cap of §3.3.
-- `sharedFolders.roots`: `id` is a UUID string; `bookmark` is base64 security-scoped bookmark data, so moved and renamed folders are followed; `access` is the maximum.
-- The APKRun Shared folder (`~/Library/Application Support/APKRun/Shared/`) is built in, not stored, always first, `readWrite`, and cannot be removed.
-- `apkrun shared-folders add` without `--read-write` adds `readOnly`. `config reset --all` does not touch `sharedFolders.roots`.
+The `integrations.*` values are currently stored only; the linked design describes their planned policies. `sharedFolders.roots` is not writable through `updateConfiguration`, and the dedicated shared-folder endpoints are not implemented yet.
 
 ### 2.9 `system.*`
 
 | Key | Type | Allowed values | Default | Applies | UI | Design |
 |---|---|---|---|---|---|---|
-| `system.syncLocale` | bool | `true`, `false` | `true` | live; pushed to a running Android and at every boot | Language & Region: "Use the Mac's language in Android" | [desktop-integration.md](../02-design/desktop-integration.md) §9 |
-| `system.syncTimeZone` | bool | `true`, `false` | `true` | as above | Language & Region: "Use the Mac's time zone" | same |
-| `system.syncClockFormat` | bool | `true`, `false` | `true` | as above | Language & Region: "Use the Mac's 12/24-hour setting" | same |
+| `system.syncLocale` | bool | `true`, `false` | `true` | stored only (current implementation) | Language & Region: "Use the Mac's language in Android" | [desktop-integration.md](../02-design/desktop-integration.md) §9 |
+| `system.syncTimeZone` | bool | `true`, `false` | `true` | stored only (current implementation) | Language & Region: "Use the Mac's time zone" | same |
+| `system.syncClockFormat` | bool | `true`, `false` | `true` | stored only (current implementation) | Language & Region: "Use the Mac's 12/24-hour setting" | same |
+
+These settings are currently stored only. The linked design describes synchronizing the Mac's locale, time zone, and clock format to Android.
 
 ### 2.10 `wrappers.*` and the menu bar item
 
 | Key | Type | Allowed values | Default | Applies | UI | Design |
 |---|---|---|---|---|---|---|
-| `wrappers.defaultLocation` | enum | `userApplications` (`~/Applications`), `allUsersApplications` (`/Applications`), `ask` | `userApplications` | live (the next add flow) | General: "Default location for new Mac apps" | [host-ui.md](../02-design/host-ui.md) §6, §9.1, [wrapper.md](../02-design/wrapper.md) §6.3 |
+| `wrappers.defaultLocation` | enum | `userApplications` (`~/Applications`), `allUsersApplications` (`/Applications`), `ask` | `userApplications` | stored only (current implementation) | General: "Default location for new Mac apps" | [host-ui.md](../02-design/host-ui.md) §6, §9.1, [wrapper.md](../02-design/wrapper.md) §6.3 |
 
-- The add flow's location pop-up starts at this value. `ask` shows the pop-up with no preselected folder.
-- `allUsersApplications` is offered only to administrators. For a non-administrator it acts as `ask`.
+This setting is currently stored only. The linked design describes the planned add-flow behavior.
 - The CLI does not use this key. `apkrun wrap --output` defaults to `~/Applications` ([wrapper.md](../02-design/wrapper.md) §12.2).
 - **Show APKRun in the menu bar** has no key. It shows and changes the APKRunMenuBar login item registration (`SMAppService.loginItem(identifier:)`). It is on by default; removing the login item in System Settings makes it show off. It is not in `apkrun config`.
 
@@ -401,8 +396,8 @@ References: [cli.md](../02-design/cli.md) §3.6, [package-store.md](../02-design
 
 | Parameter | Set from | Builds | Reference |
 |---|---|---|---|
-| `androidboot.apkrun.devmode=0\|1` | `developer.enabled`, at every boot | custom image | [android-image.md](../02-design/android-image.md) §6.2, §11.3 |
-| GPU profile (`drmVirgl` or `guestSwiftshader`) | `graphics.safeMode`, at every boot | all | [graphics.md](../02-design/graphics.md) §9 |
+| `androidboot.apkrun.devmode=0\|1` | planned from `developer.enabled` | custom image | [android-image.md](../02-design/android-image.md) §6.2, §11.3 |
+| GPU profile (`drmVirgl` or `guestSwiftshader`) | planned from `graphics.safeMode` | all | [graphics.md](../02-design/graphics.md) §9 |
 | `androidboot.apkrun.test.*` (`marker=<value>`, `fail_health=1`, `fail_boot=1`) | test harness | test image bundles only; a CI check keeps them out of release manifests | [android-image.md](../02-design/android-image.md) §6.2 |
 | `apkrun.test=…`, `apkrun.test.poweroff=1` | test harness | Linux test guest only | [vm.md](../02-design/vm.md) §12 |
 
@@ -414,7 +409,7 @@ References: [cli.md](../02-design/cli.md) §3.6, [package-store.md](../02-design
 
 | Configuration | What changes | Reference |
 |---|---|---|
-| Debug | `.dev` identities (`io.apkrun.APKRun.dev`, `io.apkrun.apkrund.dev`, `io.apkrun.apkrund.dev.xpc`); `APKRun-Dev` data roots; no `SUFeedURL`; `APKRUN_EMBEDDED_RUNTIME` compiles `apkrun dev`. Debug-only variables of §5.1 and `graphics.limits.*` are honored | [runtime-daemon.md](../02-design/runtime-daemon.md) §2.6, [cli.md](../02-design/cli.md) §5 |
+| Debug | `.dev` identities (`io.apkrun.APKRun.dev`, `io.apkrun.apkrund.dev`, `io.apkrun.apkrund.dev.xpc`); `APKRun-Dev` data roots; no `SUFeedURL`; `APKRUN_EMBEDDED_RUNTIME` compiles `apkrun dev`. Debug-only variables of §5.1 are honored; `graphics.limits.*` are stored only | [runtime-daemon.md](../02-design/runtime-daemon.md) §2.6, [cli.md](../02-design/cli.md) §5 |
 | Release | shipped build: Developer ID signed, notarized, with the Sparkle feed of [runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.2 | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.2 |
 | `ReleaseUpdateTest` | release code; `SUFeedURL` points at the local appcast server; test key `Tests/Fixtures/signing/test-sparkle-ed25519.pub`; signed, not notarized; honors `APKRUN_TEST_MARKER_TIMEOUT`; trusts the build machine's development image key as well ([android-image.md](../02-design/android-image.md) §10.1) | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.2 |
 
@@ -428,7 +423,7 @@ These values are compiled in, not settings. The owning document wins on any diff
 | Boot | stall 90 s (first boot 600 s); agent handshake 30 s; boot-loop guard 3 failures in 10 min; automatic restart: one cold boot, not retried within 10 min; graceful stop up to 40 s | [runtime-daemon.md](../02-design/runtime-daemon.md) §3.2, §3.5, §3.6 |
 | Host | at least 8 GiB physical memory; reset recovery point kept 7 days | [runtime-daemon.md](../02-design/runtime-daemon.md) §9.5, §12 |
 | Display | 15 slots; system sessions at most 90 s; minimum content 320 × 400 dp × zoom; density 120–640 dpi; backing at most 4095 px; close timeout 5 s | [display-and-windowing.md](../02-design/display-and-windowing.md) §2, §6.2, §7.6 |
-| Graphics | defaults of `graphics.limits.*` (§2.3) | [graphics.md](../02-design/graphics.md) §5.4 |
+| Graphics | stored defaults for `graphics.limits.*` (§2.3); the runtime limits are not applied yet | [graphics.md](../02-design/graphics.md) §5.4 |
 | Clipboard | text 1 MiB; HTML 1 MiB; image 16 MiB and 8192 px | [desktop-integration.md](../02-design/desktop-integration.md) §4.4 |
 | Files | drops: at most 20 files, 2 GiB each, 4 GiB total; shared folders: 4096 entries per page, 1 MiB per read or write, 64 open handles per package | [desktop-integration.md](../02-design/desktop-integration.md) §6 |
 | Links | at most 8 KiB, 3 per 10 s; prompt timeout 60 s | [desktop-integration.md](../02-design/desktop-integration.md) §7 |

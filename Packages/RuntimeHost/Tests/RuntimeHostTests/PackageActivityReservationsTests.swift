@@ -8,6 +8,7 @@ func packageReservationsSerializeMutationsWithLaunches() throws {
     let packageID = "io.apkrun.fixture.hellotext"
 
     try reservations.beginLaunch(packageID: packageID)
+    #expect(reservations.hasAnyActiveLaunches)
     try reservations.beginUninstall(packageID: packageID)
 
     #expect(reservations.hasActiveLaunches(packageID: packageID))
@@ -19,6 +20,7 @@ func packageReservationsSerializeMutationsWithLaunches() throws {
 
     reservations.finishLaunch(packageID: packageID)
     #expect(!reservations.hasActiveLaunches(packageID: packageID))
+    #expect(!reservations.hasAnyActiveLaunches)
     #expect(reservations.isUninstalling(packageID: packageID))
 
     reservations.finishUninstall(packageID: packageID)
@@ -27,6 +29,7 @@ func packageReservationsSerializeMutationsWithLaunches() throws {
 
     try reservations.beginLaunch(packageID: packageID)
     try reservations.beginInstall(packageID: packageID)
+    #expect(reservations.hasAnyActiveLaunches)
     #expect(reservations.hasActiveLaunches(packageID: packageID))
     #expect(
         throws: PackageActivityReservations.Failure.installInProgress
@@ -58,4 +61,5 @@ func packageReservationsSerializeMutationsWithLaunches() throws {
     try reservations.beginLaunch(packageID: packageID)
     reservations.finishLaunch(packageID: packageID)
     reservations.finishForget(packageID: packageID)
+    #expect(!reservations.hasAnyActiveLaunches)
 }

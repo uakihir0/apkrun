@@ -82,6 +82,19 @@ func daemonTerminateWithoutSessionRejectsAnUninstalledPackage() async throws {
     #expect((await fixture.displayPool.snapshot())[0].state == .free)
 }
 
+@Test
+func daemonHeadlessLaunchResultPreservesDisplayAcquisitionAndClosingPhases() async throws {
+    let registry = SessionRegistry()
+    let session = try await registry.request(packageID: "io.apkrun.fixture.hellotext")
+    let acquiringDisplay = try await registry.transition(session.id, to: .acquiringDisplay)
+    let closing = try await registry.transition(session.id, to: .closing)
+
+    #expect(
+        try DaemonHeadlessSessionService.launchResult(for: acquiringDisplay).state == .acquiringDisplay
+    )
+    #expect(try DaemonHeadlessSessionService.launchResult(for: closing).state == .closing)
+}
+
 @Test(.timeLimit(.minutes(1)))
 func daemonHeadlessSessionDoesNotBlockAnImmediateGuestSnapshot() async throws {
     let fixture = makeHeadlessServiceFixture(

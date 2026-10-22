@@ -127,17 +127,28 @@ struct PackageInfoCommand: AsyncParsableCommand {
     }
 
     private func showRuntimeInfo() async throws {
-        if displays {
-            throw CLIFailure.displayStatusUnavailable
-        }
-
         do {
             let client = try RuntimeControlClient(clientKind: .cli)
-            let status = try await client.runtimeStatus()
+            let info = try await client.runtimeInfo(
+                RuntimeInfoRequest(resources: runtime, displays: displays)
+            )
+            let includeRuntimeDetails = runtime || displays
             if json {
-                Output.write(try RuntimeInfoOutput.json(status, buildInfo: .current, includeRuntimeDetails: runtime))
+                Output.write(
+                    try RuntimeInfoOutput.json(
+                        info,
+                        buildInfo: .current,
+                        includeRuntimeDetails: includeRuntimeDetails
+                    )
+                )
             } else {
-                Output.write(RuntimeInfoOutput.human(status, buildInfo: .current, includeRuntimeDetails: runtime))
+                Output.write(
+                    RuntimeInfoOutput.human(
+                        info,
+                        buildInfo: .current,
+                        includeRuntimeDetails: includeRuntimeDetails
+                    )
+                )
             }
         } catch let failure as RuntimeWireError {
             throw failure
@@ -197,28 +208,30 @@ enum PackageQueryOutput {
 
 enum RuntimeInfoOutput {
     static func json(
-        _ status: RuntimeHostStatus,
+        _ info: RuntimeInfo,
         buildInfo: BuildInfo,
         includeRuntimeDetails: Bool
     ) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let status = info.status
         let result = RuntimeInfoResult(
             buildInfo: buildInfo,
             hostState: status.hostState,
             runtimeState: status.runtimeState,
             imageVersion: status.imageVersion,
-            runtimeDetails: includeRuntimeDetails ? status : nil
+            runtimeDetails: includeRuntimeDetails ? info : nil
         )
         let data = try encoder.encode(RuntimeInfoEnvelope(result: result))
         return String(decoding: data, as: UTF8.self)
     }
 
     static func human(
-        _ status: RuntimeHostStatus,
+        _ info: RuntimeInfo,
         buildInfo: BuildInfo,
         includeRuntimeDetails: Bool
     ) -> String {
+        let status = info.status
         var lines = [
             "APKRun: \(buildInfo.marketingVersion) (\(buildInfo.buildNumber))",
             "Background service: \(PackageQueryOutput.safeTerminalText(status.hostState))",
@@ -229,11 +242,18 @@ enum RuntimeInfoOutput {
             return lines.joined(separator: "\n")
         }
 
-        lines.append("Owner: apkrund")
+        lines.append("Owner: \(RuntimeStatusOutput.ownerName(for: buildInfo))")
         lines.append("Daemon PID: \(status.daemonPID)")
         lines.append("Guest Agent: \(status.guestAgentState?.rawValue ?? "unknown")")
         if let protocolVersion = status.guestAgentProtocolVersion {
             lines.append("Guest Agent protocol: \(PackageQueryOutput.safeTerminalText(protocolVersion))")
+        }
+        lines.append(
+            "Runtime sizing: \(info.sizing.cpuCount) CPUs, \(info.sizing.memoryGiB) GiB memory, "
+                + "\(info.sizing.userdataGiB.map { String($0) } ?? "unavailable") GiB Android storage"
+        )
+        if let footprint = info.resources?.daemonPhysicalFootprintBytes {
+            lines.append("Daemon memory: \(footprint) bytes")
         }
         if let progress = status.bootProgress {
             lines.append("Boot progress: \(Int((progress * 100).rounded()))%")
@@ -244,7 +264,28 @@ enum RuntimeInfoOutput {
         if let step = status.startupFailureStep, let code = status.startupFailureCode {
             lines.append("Startup issue: step \(step) (\(PackageQueryOutput.safeTerminalText(code)))")
         }
+        if let displays = info.displays {
+            lines.append("Displays:")
+            for display in displays {
+                let mode = display.pixelSize.map { "\($0.width)×\($0.height)" } ?? "no mode"
+                lines.append(
+                    "  Slot \(display.slot): \(displayStateName(display.state)), \(mode)"
+                )
+            }
+        }
         return lines.joined(separator: "\n")
+    }
+
+    private static func displayStateName(_ state: WireDisplayState) -> String {
+        switch state {
+        case .free: "free"
+        case .reserved: "reserved"
+        case .attaching: "attaching"
+        case .allocated: "allocated"
+        case .releasing: "releasing"
+        case .faulted(let error): "faulted (\(error.code))"
+        case .unknown: "unknown"
+        }
     }
 }
 
@@ -263,5 +304,5 @@ private struct RuntimeInfoResult: Encodable {
     let hostState: String
     let runtimeState: String
     let imageVersion: String?
-    let runtimeDetails: RuntimeHostStatus?
+    let runtimeDetails: RuntimeInfo?
 }

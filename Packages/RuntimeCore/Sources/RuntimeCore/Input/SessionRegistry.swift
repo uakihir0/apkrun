@@ -5,6 +5,8 @@ import Foundation
 public struct AppSessionSnapshot: Sendable, Equatable {
     /// The stable identity used by the input router.
     public let id: SessionID
+    /// The instant this app session was first requested.
+    public let openedAt: Date
     /// The Android package owned by this session.
     public let packageID: String
     /// The Android display used by this session.
@@ -62,6 +64,7 @@ public enum SessionRegistryFailure: Error, Sendable, Equatable {
 public actor SessionRegistry {
     private struct Entry {
         let id: SessionID
+        let openedAt: Date
         let packageID: String
         var displayID: Int32
         var displayMode: AndroidWindowMode?
@@ -75,7 +78,14 @@ public actor SessionRegistry {
         var vanishedDuringLaunch: Set<Int32> = []
 
         var snapshot: AppSessionSnapshot {
-            AppSessionSnapshot(id: id, packageID: packageID, displayID: displayID, state: state, taskIDs: taskIDs)
+            AppSessionSnapshot(
+                id: id,
+                openedAt: openedAt,
+                packageID: packageID,
+                displayID: displayID,
+                state: state,
+                taskIDs: taskIDs
+            )
         }
     }
 
@@ -108,6 +118,7 @@ public actor SessionRegistry {
         let id = SessionID.app(UUID())
         let entry = Entry(
             id: id,
+            openedAt: Date(),
             packageID: packageID,
             displayID: 0,
             displayMode: .primaryDisplayCompatibility,
@@ -149,6 +160,7 @@ public actor SessionRegistry {
         let id = SessionID.app(UUID())
         let entry = Entry(
             id: id,
+            openedAt: Date(),
             packageID: packageID,
             displayID: 0,
             displayMode: configuration.mode,

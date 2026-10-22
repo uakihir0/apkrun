@@ -35,6 +35,7 @@ import Testing
     #expect(try await client.runtimeStatus() == status)
     #expect(try await client.startRuntime() == status)
     #expect(try await client.stopRuntime() == status)
+    #expect(try await client.stopRuntime(force: true) == status)
     #expect(try await client.resetRuntime() == status)
 
     let snapshot = transport.snapshot()
@@ -58,7 +59,7 @@ import Testing
 
     #expect(snapshot.statusRequests.count == 2)
     #expect(snapshot.startRequests.count == 1)
-    #expect(snapshot.stopRequests.count == 1)
+    #expect(snapshot.stopRequests.count == 2)
     #expect(snapshot.resetRequests.count == 1)
     let resetRequest = try JSONDecoder().decode(
         RuntimeResetControlRequest.self,
@@ -66,11 +67,238 @@ import Testing
     )
     #expect(resetRequest.header.apiVersion == APIVersion.current)
     #expect(resetRequest.header.clientKind == RuntimeClientKind.cli)
+    let gracefulStop = try JSONDecoder().decode(StopRuntimeRequest.self, from: snapshot.stopRequests[0])
+    let forcedStop = try JSONDecoder().decode(StopRuntimeRequest.self, from: snapshot.stopRequests[1])
+    #expect(!gracefulStop.force)
+    #expect(forcedStop.force)
     for data in snapshot.statusRequests + snapshot.startRequests + snapshot.stopRequests + snapshot.resetRequests {
         let request = try JSONDecoder().decode(ControlRequestHeader.self, from: data)
         #expect(request.header.apiVersion == APIVersion.current)
         #expect(request.header.clientKind == RuntimeClientKind.cli)
     }
+}
+
+@Test func wrapperControlClientRequestsItsPackageScopedEndpoint() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .wrapper,
+        claimedIdentity: "io.apkrun.android.io.apkrun.fixture.hellotext",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let status = RuntimeHostStatus(
+        hostState: "running",
+        runtimeState: "ready",
+        bootProgress: nil,
+        startupFailureStep: nil,
+        startupFailureCode: nil,
+        crashLoopActive: false,
+        daemonPID: 42,
+        imageVersion: "test-image"
+    )
+    let transport = try MockRuntimeTransport(hello: hello, status: status)
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    #expect(try await client.runtimeStatus() == status)
+
+    let snapshot = transport.snapshot()
+    let endpointRequest = try JSONDecoder().decode(RuntimeEndpointRequest.self, from: snapshot.endpointRequests[0])
+    let statusRequest = try JSONDecoder().decode(RuntimeStatusRequest.self, from: snapshot.statusRequests[0])
+    #expect(endpointRequest.kind == .wrapper)
+    #expect(endpointRequest.clientKind == .wrapper)
+    #expect(endpointRequest.claimedIdentity == configuration.claimedIdentity)
+    #expect(statusRequest.header.clientKind == .wrapper)
+}
+
+@Test func controlClientReadsRuntimeInfoSessionsAndConfiguration() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let status = RuntimeHostStatus(
+        hostState: "running",
+        runtimeState: "ready",
+        bootProgress: nil,
+        startupFailureStep: nil,
+        startupFailureCode: nil,
+        crashLoopActive: false,
+        daemonPID: 42,
+        imageVersion: "test-image"
+    )
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let info = RuntimeInfo(
+        status: status,
+        sizing: RuntimeSizing(cpuCount: 4, memoryGiB: 6, userdataGiB: 32),
+        displayPoolSize: 3,
+        resources: ResourceUsage(daemonPhysicalFootprintBytes: 4_194_304),
+        displays: []
+    )
+    let sessions = [
+        SessionSummary(
+            sessionID: UUID(uuidString: "ea9bf3b2-0520-4ed7-a5ab-13cda15bc481")!,
+            packageID: packageID,
+            displayName: "Hello Text",
+            state: .running,
+            clientKind: .wrapper,
+            openedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            windowMode: .secondaryDisplay,
+            recording: false
+        )
+    ]
+    let resolved = ConfigurationSnapshot(
+        entries: [
+            ConfigurationEntry(
+                key: "runtime.memoryGiB",
+                value: .integer(6),
+                defaultValue: .integer(6),
+                isSet: false,
+                applies: .nextBoot
+            )
+        ]
+    )
+    let updated = ConfigurationSnapshot(
+        entries: [
+            ConfigurationEntry(
+                key: "runtime.memoryGiB",
+                value: .integer(8),
+                defaultValue: .integer(6),
+                isSet: true,
+                applies: .nextBoot
+            )
+        ]
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: status,
+        runtimeInfoReply: RuntimeInfoControlReply(result: info),
+        listSessionsReply: RuntimeListSessionsControlReply(result: sessions),
+        configurationReply: RuntimeConfigurationControlReply(result: resolved),
+        updateConfigurationReply: RuntimeUpdateConfigurationControlReply(result: updated)
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let infoRequest = RuntimeInfoRequest(resources: true, displays: false)
+    let patch = ConfigurationPatch(
+        patch: .object(["runtime": .object(["memoryGiB": .integer(8)])])
+    )
+
+    #expect(try await client.runtimeInfo(infoRequest) == info)
+    #expect(try await client.listSessions() == sessions)
+    #expect(try await client.configuration() == resolved)
+    #expect(try await client.updateConfiguration(patch) == updated)
+
+    let snapshot = transport.snapshot()
+    #expect(snapshot.runtimeInfoRequests.count == 1)
+    #expect(snapshot.listSessionsRequests.count == 1)
+    #expect(snapshot.configurationRequests.count == 1)
+    #expect(snapshot.updateConfigurationRequests.count == 1)
+    let runtimeInfoRequest = try JSONDecoder().decode(
+        RuntimeInfoControlRequest.self,
+        from: snapshot.runtimeInfoRequests[0]
+    )
+    let listSessionsRequest = try JSONDecoder().decode(
+        RuntimeListSessionsControlRequest.self,
+        from: snapshot.listSessionsRequests[0]
+    )
+    let configurationRequest = try JSONDecoder().decode(
+        RuntimeConfigurationControlRequest.self,
+        from: snapshot.configurationRequests[0]
+    )
+    let updateRequest = try JSONDecoder().decode(
+        RuntimeUpdateConfigurationControlRequest.self,
+        from: snapshot.updateConfigurationRequests[0]
+    )
+    #expect(runtimeInfoRequest.header.apiVersion == APIVersion.current)
+    #expect(runtimeInfoRequest.header.clientKind == .cli)
+    #expect(runtimeInfoRequest.request == infoRequest)
+    #expect(listSessionsRequest.header.clientKind == .cli)
+    #expect(configurationRequest.header.clientKind == .cli)
+    #expect(updateRequest.header.clientKind == .cli)
+    #expect(updateRequest.request == patch)
+}
+
+@Test func controlClientMapsTypedErrorsAndInvalidatesAfterTransportFailure() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let status = RuntimeHostStatus(
+        hostState: "running",
+        runtimeState: "ready",
+        bootProgress: nil,
+        startupFailureStep: nil,
+        startupFailureCode: nil,
+        crashLoopActive: false,
+        daemonPID: 42,
+        imageVersion: "test-image"
+    )
+    let failure = RuntimeWireError.runtime(
+        "hostUnavailable",
+        message: "The runtime service is unavailable.",
+        remediation: "Open APKRun and retry."
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: status,
+        runtimeInfoReply: RuntimeInfoControlReply(error: failure),
+        listSessionsReply: RuntimeListSessionsControlReply(error: failure),
+        configurationReply: RuntimeConfigurationControlReply(error: failure),
+        updateConfigurationReply: RuntimeUpdateConfigurationControlReply(error: failure)
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    for operation in 0..<4 {
+        do {
+            switch operation {
+            case 0:
+                _ = try await client.runtimeInfo()
+            case 1:
+                _ = try await client.listSessions()
+            case 2:
+                _ = try await client.configuration()
+            default:
+                _ = try await client.updateConfiguration(ConfigurationPatch(patch: .object([:])))
+            }
+            Issue.record("The control endpoint's typed failure was not returned to the caller.")
+        } catch {
+            #expect(error == .remoteFailure(code: failure.code, message: failure.message))
+        }
+    }
+    #expect(transport.snapshot().controlConnections == 1)
+
+    transport.failNextRuntimeInfo()
+    do {
+        _ = try await client.runtimeInfo()
+        Issue.record("The mock runtimeInfo transport failure was not returned to the caller.")
+    } catch {
+        #expect(error == .transportFailure(domain: "NSCocoaErrorDomain", code: 4099))
+    }
+    #expect(transport.snapshot().controlConnections == 1)
+
+    do {
+        _ = try await client.runtimeInfo()
+        Issue.record("The mock typed error was not returned after reconnecting.")
+    } catch {
+        #expect(error == .remoteFailure(code: failure.code, message: failure.message))
+    }
+    #expect(transport.snapshot().controlConnections == 2)
 }
 
 @Test func controlClientSubscribesToOperationEventsAndDeliversEnvelopes() async throws {
@@ -1314,6 +1542,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private let endpointBusyData: Data
     private let endpoint: RuntimeXPCListenerEndpoint?
     private let statusData: Data
+    private let runtimeInfoData: Data
+    private let listSessionsData: Data
+    private let configurationData: Data
+    private let updateConfigurationData: Data
     private let packageListData: Data
     private let packageInfoData: Data
     private let importPackageData: Data
@@ -1332,6 +1564,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var helloRequestsValue: [Data] = []
     private var endpointRequestsValue: [Data] = []
     private var statusRequestsValue: [Data] = []
+    private var runtimeInfoRequestsValue: [Data] = []
+    private var listSessionsRequestsValue: [Data] = []
+    private var configurationRequestsValue: [Data] = []
+    private var updateConfigurationRequestsValue: [Data] = []
     private var startRequestsValue: [Data] = []
     private var stopRequestsValue: [Data] = []
     private var restartRequestsValue: [Data] = []
@@ -1354,6 +1590,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var controlConnectionsValue = 0
     private var brokerInvalidationsValue = 0
     private var failNextStatusValue = false
+    private var failNextRuntimeInfoValue = false
     private var failNextLaunchValue = false
     private var failNextTerminateValue = false
     private var failNextRestartValue = false
@@ -1384,7 +1621,11 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         cancelOperationReply: RuntimeCancelOperationControlReply? = nil,
         beginInstallImportedReplyData: Data? = nil,
         launchReply: RuntimeLaunchControlReply? = nil,
-        terminateReply: RuntimeTerminateControlReply? = nil
+        terminateReply: RuntimeTerminateControlReply? = nil,
+        runtimeInfoReply: RuntimeInfoControlReply? = nil,
+        listSessionsReply: RuntimeListSessionsControlReply? = nil,
+        configurationReply: RuntimeConfigurationControlReply? = nil,
+        updateConfigurationReply: RuntimeUpdateConfigurationControlReply? = nil
     ) throws {
         if let helloFailure {
             helloData = try JSONEncoder().encode(BrokerErrorEnvelope(error: helloFailure))
@@ -1400,6 +1641,18 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         }
         endpointBusyData = try JSONEncoder().encode(RuntimeEndpointReply.rejected(.busy))
         endpointBusyRejectionsValue = endpointBusyRejections
+        let defaultStatus =
+            status
+            ?? RuntimeHostStatus(
+                hostState: "running",
+                runtimeState: "ready",
+                bootProgress: nil,
+                startupFailureStep: nil,
+                startupFailureCode: nil,
+                crashLoopActive: false,
+                daemonPID: 42,
+                imageVersion: "test-image"
+            )
         if let status {
             statusData = try JSONEncoder().encode(RuntimeControlReply(status: status))
         } else {
@@ -1407,6 +1660,24 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 RuntimeControlReply(error: RuntimeControlError(code: "runtime.test", message: "test failure"))
             )
         }
+        let defaultRuntimeInfo = RuntimeInfo(
+            status: defaultStatus,
+            sizing: RuntimeSizing(cpuCount: 4, memoryGiB: 6, userdataGiB: 32),
+            displayPoolSize: 3
+        )
+        runtimeInfoData = try JSONEncoder().encode(
+            runtimeInfoReply ?? RuntimeInfoControlReply(result: defaultRuntimeInfo)
+        )
+        listSessionsData = try JSONEncoder().encode(
+            listSessionsReply ?? RuntimeListSessionsControlReply(result: [])
+        )
+        let defaultConfiguration = ConfigurationSnapshot(entries: [])
+        configurationData = try JSONEncoder().encode(
+            configurationReply ?? RuntimeConfigurationControlReply(result: defaultConfiguration)
+        )
+        updateConfigurationData = try JSONEncoder().encode(
+            updateConfigurationReply ?? RuntimeUpdateConfigurationControlReply(result: defaultConfiguration)
+        )
         let packageID = RuntimePackageID(rawValue: "com.example.app")!
         let defaultSummary = RuntimePackageSummary(
             packageID: packageID,
@@ -1538,6 +1809,33 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
             throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
         }
         return statusData
+    }
+
+    func runtimeInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        let shouldFail = lock.withLock {
+            runtimeInfoRequestsValue.append(request)
+            defer { failNextRuntimeInfoValue = false }
+            return failNextRuntimeInfoValue
+        }
+        if shouldFail {
+            throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+        }
+        return runtimeInfoData
+    }
+
+    func listSessions(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { listSessionsRequestsValue.append(request) }
+        return listSessionsData
+    }
+
+    func configuration(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { configurationRequestsValue.append(request) }
+        return configurationData
+    }
+
+    func updateConfiguration(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { updateConfigurationRequestsValue.append(request) }
+        return updateConfigurationData
     }
 
     func startRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data {
@@ -1728,6 +2026,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 helloRequests: helloRequestsValue,
                 endpointRequests: endpointRequestsValue,
                 statusRequests: statusRequestsValue,
+                runtimeInfoRequests: runtimeInfoRequestsValue,
+                listSessionsRequests: listSessionsRequestsValue,
+                configurationRequests: configurationRequestsValue,
+                updateConfigurationRequests: updateConfigurationRequestsValue,
                 startRequests: startRequestsValue,
                 stopRequests: stopRequestsValue,
                 restartRequests: restartRequestsValue,
@@ -1755,6 +2057,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
 
     func failNextStatus() {
         lock.withLock { failNextStatusValue = true }
+    }
+
+    func failNextRuntimeInfo() {
+        lock.withLock { failNextRuntimeInfoValue = true }
     }
 
     func failNextLaunch() {
@@ -1811,6 +2117,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let helloRequests: [Data]
         let endpointRequests: [Data]
         let statusRequests: [Data]
+        let runtimeInfoRequests: [Data]
+        let listSessionsRequests: [Data]
+        let configurationRequests: [Data]
+        let updateConfigurationRequests: [Data]
         let startRequests: [Data]
         let stopRequests: [Data]
         let restartRequests: [Data]

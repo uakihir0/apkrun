@@ -50,6 +50,14 @@ plutil -create xml1 "$plist"
 embedded_runtime=false
 if [[ "$configuration" == "Debug" ]]; then
     embedded_runtime=true
+    if [[ "${APKRUN_CLI_TRAITS+x}" == "x" ]]; then
+        embedded_runtime=false
+        case ",$APKRUN_CLI_TRAITS," in
+            *,EmbeddedRuntime,*)
+                embedded_runtime=true
+                ;;
+        esac
+    fi
 fi
 /usr/libexec/PlistBuddy -c "Add :APKRunEmbeddedRuntime bool $embedded_runtime" "$plist"
 
@@ -61,13 +69,24 @@ linker_arguments=(
 )
 if [[ "$configuration" == "Debug" ]]; then
     # APKRUN_CLI_TRAITS replaces the trait list. The G3 gate sets EmbeddedRuntime,TestReadback for its tearing check
-    # (#24). The default is unchanged.
-    cli_traits="${APKRUN_CLI_TRAITS:-EmbeddedRuntime}"
-    swift build --package-path "$repo_root" \
-        --configuration "$swift_configuration" \
-        --product apkrun \
-        --traits "$cli_traits" \
-        "${linker_arguments[@]}"
+    # (#24). An unset variable retains the default; an explicitly empty value disables all traits.
+    if [[ "${APKRUN_CLI_TRAITS+x}" == "x" ]]; then
+        cli_traits="$APKRUN_CLI_TRAITS"
+    else
+        cli_traits=EmbeddedRuntime
+    fi
+    if [[ -n "$cli_traits" ]]; then
+        swift build --package-path "$repo_root" \
+            --configuration "$swift_configuration" \
+            --product apkrun \
+            --traits "$cli_traits" \
+            "${linker_arguments[@]}"
+    else
+        swift build --package-path "$repo_root" \
+            --configuration "$swift_configuration" \
+            --product apkrun \
+            "${linker_arguments[@]}"
+    fi
 else
     swift build --package-path "$repo_root" \
         --configuration "$swift_configuration" \

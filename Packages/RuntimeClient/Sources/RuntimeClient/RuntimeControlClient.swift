@@ -133,10 +133,10 @@ public actor RuntimeControlClient {
     }
 
     /// Starts Android and waits until the daemon reports it ready.
-    public func startRuntime() async throws(RuntimeControlClientError) -> RuntimeHostStatus {
+    public func startRuntime(hold: Bool = false) async throws(RuntimeControlClientError) -> RuntimeHostStatus {
         let opened = try await ensureControl()
         do {
-            let request = StartRuntimeRequest(header: makeHeader())
+            let request = StartRuntimeRequest(header: makeHeader(), hold: hold ? true : nil)
             let data = try Self.encode(request)
             return try Self.decodeControlReply(from: await opened.channel.startRuntime(data))
         } catch {

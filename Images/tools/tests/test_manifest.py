@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+import apkrun_image.inventory as inventory_module
 from apkrun_image.__main__ import main as package_main
 from apkrun_image.inventory import inventory, serialize_inventory
 from apkrun_image.manifest import (
@@ -391,6 +392,71 @@ def test_generator_rejects_missing_fetched_build_provenance(tmp_path: Path) -> N
         match="actual archive inventory is missing complete fetched build metadata",
     ):
         generate_manifest(inventory_document, source=archive_path)
+
+
+def _write_apkrun_build_info(download: Path, archive: Path, guest_apk: bytes) -> Path:
+    """Write a build-info sidecar matching the focused AOSP manifest fixture."""
+    metadata = {
+        "schemaVersion": 1,
+        "buildNumber": "ar000123",
+        "revision": "1" * 40,
+        "variant": "userdebug",
+        "branch": "aosp-android-latest-release",
+        "target": "apkrun_arm64-trunk_staging-userdebug",
+        "pinnedManifestSha256": "2" * 64,
+        "builderImageDigest": "sha256:" + "3" * 64,
+        "apkSha256": {"guest": hashlib.sha256(guest_apk).hexdigest()},
+        "agents": {"guest": {"versionCode": 123}},
+        "archive": {
+            "name": archive.name,
+            "size": archive.stat().st_size,
+            "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        },
+    }
+    path = download / "build-info.json"
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+    return path
+
+
+def test_generator_preserves_verified_apkrun_origin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A matching AOSP sidecar selects the builder origin without changing schema."""
+    download = tmp_path / "download"
+    download.mkdir()
+    archive = download / "apkrun_arm64-img-ar000123.zip"
+    archive.write_bytes(FIXTURE_ARCHIVE.read_bytes())
+    guest_apk = b"guest apk bytes"
+    staged_apk = tmp_path / "ApkRunGuest.apk"
+    staged_apk.write_bytes(guest_apk)
+    monkeypatch.setattr(inventory_module, "BUILD_INFO_GUEST_APK", staged_apk)
+    _write_apkrun_build_info(download, archive, guest_apk)
+
+    inventory_document = inventory(download)
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text(serialize_inventory(inventory_document), encoding="utf-8")
+    generated = generate_manifest(inventory_document, source=download)
+
+    assert generated["source"] == {
+        "origin": "apkrun-builder",
+        "branch": "aosp-android-latest-release",
+        "target": "apkrun_arm64-trunk_staging-userdebug",
+        "buildId": "ar000123",
+        "archives": [
+            {
+                "name": archive.name,
+                "size": archive.stat().st_size,
+                "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+            }
+        ],
+    }
+    assert validate_manifest(
+        generated,
+        include_files=True,
+        source=download,
+        inventory_path=inventory_path,
+    ) == []
 
 
 def test_vbmeta_role_order_follows_top_level_descriptor_order() -> None:

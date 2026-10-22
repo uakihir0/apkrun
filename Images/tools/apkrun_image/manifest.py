@@ -621,21 +621,51 @@ def _validate_inventory_provenance(
         actual_inventory.get("source") if isinstance(actual_inventory.get("source"), dict) else {}
         for actual_inventory in actual_inventories
     ]
+    origin = inventory_source.get("origin", "ci.android.com")
+    provenance_fields = ["branch", "buildId", "target"]
+    if origin == "apkrun-builder":
+        provenance_fields.extend(
+            (
+                "origin",
+                "revision",
+                "pinnedManifestSha256",
+                "builderImageDigest",
+                "apkSha256",
+                "agents",
+                "variant",
+            )
+        )
     has_complete_fetched_provenance = bool(actual_sources) and all(
         isinstance(actual_source.get(field), str) and actual_source[field]
         for actual_source in actual_sources
         for field in ("branch", "buildId", "target")
+    ) and (
+        origin != "apkrun-builder"
+        or all(
+            actual_source.get("origin") == "apkrun-builder"
+            and all(actual_source.get(field) is not None for field in provenance_fields)
+            and actual_source.get("branchProvenance") == "build-info-sidecar"
+            for actual_source in actual_sources
+        )
     )
     if not has_complete_fetched_provenance:
-        failures.append(
-            "source: actual archive inventory is missing complete fetched build metadata "
-            "(branch, buildId, target). Pass the fetched download directory or create a "
-            "valid fetch.json."
-        )
-    for field in ("branch", "buildId", "target"):
+        if origin == "apkrun-builder":
+            failures.append(
+                "source: actual archive inventory is missing complete verified build metadata. "
+                "Pass the matching AOSP build-info.json."
+            )
+        else:
+            failures.append(
+                "source: actual archive inventory is missing complete fetched build metadata "
+                "(branch, buildId, target). Pass the fetched download directory or create a "
+                "valid fetch.json."
+            )
+    for field in ("origin", "branch", "buildId", "target"):
         expected = inventory_source.get(field)
+        if field == "origin" and expected is None:
+            expected = "ci.android.com"
         found = manifest_source.get(field)
-        if not isinstance(expected, str):
+        if expected is None or (isinstance(expected, str) and not expected):
             failures.append(
                 f"inventory.json: source.{field} is missing. Re-run inventory on the "
                 "fetched archive."
@@ -646,12 +676,12 @@ def _validate_inventory_provenance(
                 f'inventory.json source.{field} "{_safe_diagnostic_value(expected)}". '
                 "Re-run manifest generation."
             )
-        elif isinstance(found, str):
+        else:
             for actual_source in actual_sources:
                 actual_value = actual_source.get(field)
                 if (
                     has_complete_fetched_provenance
-                    and isinstance(actual_value, str)
+                    and (field != "origin" or origin == "apkrun-builder")
                     and found != actual_value
                 ):
                     failures.append(
@@ -659,6 +689,23 @@ def _validate_inventory_provenance(
                         "the fetched archive metadata "
                         f'"{_safe_diagnostic_value(actual_value)}". '
                         "Re-run inventory or manifest generation."
+                    )
+
+    if origin == "apkrun-builder":
+        for field in provenance_fields:
+            expected = inventory_source.get(field)
+            if expected is None:
+                failures.append(
+                    f"inventory.json: source.{field} is missing. Re-run inventory on the "
+                    "AOSP archive."
+                )
+                continue
+            for actual_source in actual_sources:
+                actual_value = actual_source.get(field)
+                if has_complete_fetched_provenance and actual_value != expected:
+                    failures.append(
+                        f"inventory.json: source.{field} does not match AOSP build-info.json. "
+                        "Re-run inventory."
                     )
 
     if inventory_source.get("type") != "zip":
@@ -1234,6 +1281,27 @@ def generate_manifest(
                 f"inventory.json: source.{required} is missing; re-run inventory "
                 "on the fetched archive."
             )
+    origin = inventory_source.get("origin", "ci.android.com")
+    if not isinstance(origin, str) or origin not in {"ci.android.com", "apkrun-builder"}:
+        raise ManifestError("inventory.json: source.origin is unsupported.")
+    build_info_fields = (
+        "revision",
+        "pinnedManifestSha256",
+        "builderImageDigest",
+        "apkSha256",
+        "agents",
+        "variant",
+    )
+    if origin == "apkrun-builder":
+        if inventory_source.get("branchProvenance") != "build-info-sidecar":
+            raise ManifestError(
+                "inventory.json: apkrun-builder metadata must come from a verified "
+                "build-info.json sidecar."
+            )
+        if any(inventory_source.get(field) is None for field in build_info_fields):
+            raise ManifestError(
+                "inventory.json: source is missing verified AOSP build-info metadata."
+            )
     archive_record = inventory_source
     if archive_record.get("type") != "zip":
         raise ManifestError("manifest generation requires a fetched archive inventory.")
@@ -1269,6 +1337,11 @@ def generate_manifest(
         for actual_inventory in actual_inventories
     )
     if missing_fetched_provenance:
+        if origin == "apkrun-builder":
+            raise ManifestError(
+                "source: actual archive inventory is missing complete verified build metadata. "
+                "Pass the matching AOSP build-info.json."
+            )
         raise ManifestError(
             "source: actual archive inventory is missing complete fetched build metadata "
             "(branch, buildId, target). Pass the fetched download directory or create a "
@@ -1287,10 +1360,21 @@ def generate_manifest(
     for actual_inventory in actual_inventories:
         actual_source = actual_inventory.get("source")
         assert isinstance(actual_source, dict)
-        for field in ("branch", "buildId", "target"):
-            if actual_source[field] != inventory_source.get(field):
+        fields = ("branch", "buildId", "target")
+        if origin == "apkrun-builder":
+            if (
+                actual_source.get("origin") != "apkrun-builder"
+                or actual_source.get("branchProvenance") != "build-info-sidecar"
+            ):
                 raise ManifestError(
-                    f"inventory.json: source.{field} does not match the fetched source. "
+                    "source: actual archive inventory does not contain matching "
+                    "build-info.json provenance."
+                )
+            fields = (*fields, *build_info_fields)
+        for field in fields:
+            if actual_source.get(field) != inventory_source.get(field):
+                raise ManifestError(
+                    f"inventory.json: source.{field} does not match the verified source. "
                     "Re-run inventory."
                 )
     by_path = {str(entry["path"]): entry for entry in files if isinstance(entry.get("path"), str)}
@@ -1385,15 +1469,16 @@ def generate_manifest(
     android_info_entry = android_info_entries[0]
     android_info = _classification_details(android_info_entry)["values"]
 
+    manifest_source: dict[str, Any] = {
+        "origin": origin,
+        "branch": inventory_source["branch"],
+        "target": target,
+        "buildId": inventory_source["buildId"],
+        "archives": archives,
+    }
     manifest: dict[str, Any] = {
         "schemaVersion": 1,
-        "source": {
-            "origin": "ci.android.com",
-            "branch": inventory_source["branch"],
-            "target": target,
-            "buildId": inventory_source["buildId"],
-            "archives": archives,
-        },
+        "source": manifest_source,
         "android": {
             "release": release,
             "sdk": sdk,

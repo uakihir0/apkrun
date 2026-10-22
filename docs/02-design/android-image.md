@@ -628,7 +628,7 @@ Proposed for release: pass `orange` and unlocked, but keep dm-verity on through 
 ### 11.5 Build
 
 - The host is x86-64 Linux with 64 GB of RAM and 400 GB of disk ([environment-setup.md](../05-development/environment-setup.md) §5). macOS cannot build AOSP.
-- `repo init` with the pinned manifest, `repo sync`, `lunch apkrun_arm64-trunk_staging-userdebug`, `m`, `m dist DIST_DIR=out/dist` with `BUILD_NUMBER=ar<counter>` (`scripts/aosp/build-product.sh`). The `*-img-*.zip` goes through §3–§10.
+- `repo init` with the pinned manifest, `repo sync`, `lunch apkrun_arm64-trunk_staging-userdebug`, `m`, `m dist DIST_DIR=out/dist` with `BUILD_NUMBER=ar<counter>` (`scripts/aosp/build-product.sh`). The builder writes `build-info.json` beside the copied `*-img-*.zip`; inventory verifies the archive fingerprint and carries the AOSP origin and build metadata. The generated AndroidImageManifest goes through §3–§10, and `bundle` takes the matching sidecar with `--build-info`.
 - After `m`, `scripts/check-sepolicy.sh` checks the compiled policy: the Guest Agent and `apkrun_vsockd` domains must be permissive in `userdebug`; `user` must have no permissive domains. `m dist` runs only after this check.
 - `provenance` records the pinned manifest, the builder image digest, and the `Guest/` git revision.
 - Acceptance (#36): the custom image reaches `boot_completed`, the agents start, and the reference diff has no unexplained differences beyond the documented product changes.

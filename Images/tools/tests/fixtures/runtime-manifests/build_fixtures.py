@@ -191,9 +191,7 @@ def _apkrun_missing_guest(d: Document) -> None:
     product = apkrun_variant(d)
     d.clear()
     d.update(product)
-    d["requirements"]["agents"] = [
-        {"package": "io.apkrun.store", "versionCode": 12}
-    ]
+    d["requirements"]["agents"] = [{"package": "io.apkrun.store", "versionCode": 12}]
 
 
 def _userdata_not_contained(d: Document) -> None:

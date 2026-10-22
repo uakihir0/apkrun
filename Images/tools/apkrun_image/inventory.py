@@ -253,9 +253,7 @@ def verify_local_guest_apk(build_info: Mapping[str, object]) -> None:
             f"{BUILD_INFO_GUEST_APK}: could not inspect the staged Guest APK: {error}"
         ) from error
     if not stat.S_ISREG(path_stat.st_mode):
-        raise InventoryError(
-            f"{BUILD_INFO_GUEST_APK}: staged Guest APK must be a regular file"
-        )
+        raise InventoryError(f"{BUILD_INFO_GUEST_APK}: staged Guest APK must be a regular file")
     guest_apk = build_info.get("apkSha256")
     expected_sha256 = guest_apk.get("guest") if isinstance(guest_apk, dict) else None
     try:
@@ -267,9 +265,7 @@ def verify_local_guest_apk(build_info: Mapping[str, object]) -> None:
     with os.fdopen(descriptor, "rb") as stream:
         initial_stat = os.fstat(descriptor)
         if not stat.S_ISREG(initial_stat.st_mode):
-            raise InventoryError(
-                f"{BUILD_INFO_GUEST_APK}: staged Guest APK must be a regular file"
-            )
+            raise InventoryError(f"{BUILD_INFO_GUEST_APK}: staged Guest APK must be a regular file")
         actual_sha256 = _hash_stream(
             stream,
             initial_stat.st_size,
@@ -292,9 +288,7 @@ def verify_local_guest_apk(build_info: Mapping[str, object]) -> None:
                 f"{BUILD_INFO_GUEST_APK}: staged Guest APK changed while being read"
             )
     if actual_sha256 != expected_sha256:
-        raise InventoryError(
-            f"{BUILD_INFO_GUEST_APK}: SHA-256 does not match build-info.json"
-        )
+        raise InventoryError(f"{BUILD_INFO_GUEST_APK}: SHA-256 does not match build-info.json")
 
 
 @dataclass(frozen=True)
@@ -1447,17 +1441,13 @@ def _build_info_context(
         return None
     fetch_path = directory / "fetch.json"
     if fetch_path.exists() or fetch_path.is_symlink():
-        raise InventoryError(
-            f"{directory}: use either build-info.json or fetch.json, not both"
-        )
+        raise InventoryError(f"{directory}: use either build-info.json or fetch.json, not both")
     build_info = load_build_info(build_info_path)
     archive = build_info["archive"]
     assert isinstance(archive, dict)
     name = archive["name"]
     if expected_name is not None and name != expected_name:
-        raise InventoryError(
-            f"{build_info_path}: archive name does not match {expected_name}"
-        )
+        raise InventoryError(f"{build_info_path}: archive name does not match {expected_name}")
     verify_local_guest_apk(build_info)
     return {
         "agents": build_info["agents"],

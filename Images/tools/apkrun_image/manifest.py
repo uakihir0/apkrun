@@ -635,17 +635,21 @@ def _validate_inventory_provenance(
                 "variant",
             )
         )
-    has_complete_fetched_provenance = bool(actual_sources) and all(
-        isinstance(actual_source.get(field), str) and actual_source[field]
-        for actual_source in actual_sources
-        for field in ("branch", "buildId", "target")
-    ) and (
-        origin != "apkrun-builder"
-        or all(
-            actual_source.get("origin") == "apkrun-builder"
-            and all(actual_source.get(field) is not None for field in provenance_fields)
-            and actual_source.get("branchProvenance") == "build-info-sidecar"
+    has_complete_fetched_provenance = (
+        bool(actual_sources)
+        and all(
+            isinstance(actual_source.get(field), str) and actual_source[field]
             for actual_source in actual_sources
+            for field in ("branch", "buildId", "target")
+        )
+        and (
+            origin != "apkrun-builder"
+            or all(
+                actual_source.get("origin") == "apkrun-builder"
+                and all(actual_source.get(field) is not None for field in provenance_fields)
+                and actual_source.get("branchProvenance") == "build-info-sidecar"
+                for actual_source in actual_sources
+            )
         )
     )
     if not has_complete_fetched_provenance:

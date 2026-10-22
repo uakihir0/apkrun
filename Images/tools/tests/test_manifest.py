@@ -451,12 +451,15 @@ def test_generator_preserves_verified_apkrun_origin(
             }
         ],
     }
-    assert validate_manifest(
-        generated,
-        include_files=True,
-        source=download,
-        inventory_path=inventory_path,
-    ) == []
+    assert (
+        validate_manifest(
+            generated,
+            include_files=True,
+            source=download,
+            inventory_path=inventory_path,
+        )
+        == []
+    )
 
 
 def test_vbmeta_role_order_follows_top_level_descriptor_order() -> None:

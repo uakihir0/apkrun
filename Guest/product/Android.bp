@@ -1,0 +1,8 @@
+android_app_import {
+    name: "ApkRunGuest",
+    apk: "prebuilt/ApkRunGuest.apk",
+    certificate: "platform",
+    privileged: true,
+    presigned: false,
+    system_ext_specific: true,
+}

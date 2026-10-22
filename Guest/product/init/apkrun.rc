@@ -1,0 +1,16 @@
+on property:ro.boot.apkrun.devmode=1
+    setprop service.adb.listen_addrs vsock:5555
+    start adbd
+
+on property:ro.boot.apkrun.devmode=0
+    stop adbd
+
+on property:init.svc.adbd=running && property:ro.boot.apkrun.devmode=0
+    stop adbd
+
+service apkrun_vsockd /system_ext/bin/apkrun_vsockd
+    class main
+    user system
+    group system
+    capabilities
+    restart_period 1

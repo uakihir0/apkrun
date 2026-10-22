@@ -214,14 +214,77 @@ private final class RuntimeXPCControlListener: @unchecked Sendable {
             host: host,
             clientKind: clientKind,
             reservationID: reservationID,
-            connectionRegistry: connectionRegistry
+            connectionRegistry: connectionRegistry,
+            eventSinkHandshakeTimeout: .seconds(1)
         )
         listener = NSXPCListener.anonymous()
         listener.setConnectionCodeSigningRequirement(requirement)
         listener.delegate = delegate
         listener.resume()
     }
+
+    #if DEBUG
+        init(
+            forTestingWith host: RuntimeHost,
+            clientKind: RuntimeClientKind,
+            reservationID: UUID,
+            connectionRegistry: RuntimeXPCConnectionRegistry
+        ) {
+            delegate = ControlListenerDelegate(
+                host: host,
+                clientKind: clientKind,
+                reservationID: reservationID,
+                connectionRegistry: connectionRegistry,
+                // Keep deliberately held handshakes open while the test fills all 64 request slots.
+                eventSinkHandshakeTimeout: .seconds(30)
+            )
+            listener = NSXPCListener.anonymous()
+            listener.delegate = delegate
+            listener.resume()
+        }
+    #endif
 }
+
+#if DEBUG
+    /// Builds the production control exporter behind an anonymous listener for host integration tests.
+    ///
+    /// The test listener omits code-signing identity enforcement so the test process can connect to
+    /// it. Production endpoint grants still use `RuntimeXPCServer` and always provide a requirement.
+    final class RuntimeXPCAnonymousControlTestServer: @unchecked Sendable {
+        private let listener: NSXPCListener
+        private let connectionRegistry: RuntimeXPCConnectionRegistry
+
+        init(host: RuntimeHost, clientKind: RuntimeClientKind) {
+            let connectionRegistry = RuntimeXPCConnectionRegistry(eventHub: host.eventHub)
+            let reservationID = UUID()
+            let controlListener = RuntimeXPCControlListener(
+                forTestingWith: host,
+                clientKind: clientKind,
+                reservationID: reservationID,
+                connectionRegistry: connectionRegistry
+            )
+            precondition(
+                connectionRegistry.reserveControlConnection(
+                    for: clientKind,
+                    on: ObjectIdentifier(controlListener),
+                    reservationID: reservationID,
+                    controlListener: controlListener
+                ),
+                "A new test control listener must be reservable."
+            )
+            listener = controlListener.listener
+            self.connectionRegistry = connectionRegistry
+        }
+
+        var endpoint: NSXPCListenerEndpoint {
+            listener.endpoint
+        }
+
+        func invalidate() {
+            connectionRegistry.close()
+        }
+    }
+#endif
 
 private enum RuntimeXPCRequestRejection {
     case busy
@@ -1004,17 +1067,20 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
     private let clientKind: RuntimeClientKind
     private let reservationID: UUID
     private let connectionRegistry: RuntimeXPCConnectionRegistry
+    private let eventSinkHandshakeTimeout: DispatchTimeInterval
 
     init(
         host: RuntimeHost,
         clientKind: RuntimeClientKind,
         reservationID: UUID,
-        connectionRegistry: RuntimeXPCConnectionRegistry
+        connectionRegistry: RuntimeXPCConnectionRegistry,
+        eventSinkHandshakeTimeout: DispatchTimeInterval
     ) {
         self.host = host
         self.clientKind = clientKind
         self.reservationID = reservationID
         self.connectionRegistry = connectionRegistry
+        self.eventSinkHandshakeTimeout = eventSinkHandshakeTimeout
     }
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
@@ -1053,7 +1119,8 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
             clientKind: clientKind,
             connectionRegistry: connectionRegistry,
             connectionID: connectionID,
-            eventSink: remoteSink.map(RuntimeEventSinkReference.init(value:))
+            eventSink: remoteSink.map(RuntimeEventSinkReference.init(value:)),
+            eventSinkHandshakeTimeout: eventSinkHandshakeTimeout
         )
         connection.resume()
         listener.invalidate()
@@ -1162,19 +1229,22 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     private let connectionID: ObjectIdentifier
     private let eventSink: RuntimeEventSinkReference?
     private let outputQueue: DispatchQueue
+    private let eventSinkHandshakeTimeout: DispatchTimeInterval
 
     init(
         host: RuntimeHost,
         clientKind: RuntimeClientKind,
         connectionRegistry: RuntimeXPCConnectionRegistry,
         connectionID: ObjectIdentifier,
-        eventSink: RuntimeEventSinkReference?
+        eventSink: RuntimeEventSinkReference?,
+        eventSinkHandshakeTimeout: DispatchTimeInterval
     ) {
         self.host = host
         self.clientKind = clientKind
         self.connectionRegistry = connectionRegistry
         self.connectionID = connectionID
         self.eventSink = eventSink
+        self.eventSinkHandshakeTimeout = eventSinkHandshakeTimeout
         outputQueue =
             connectionRegistry.outputQueue(for: connectionID)
             ?? DispatchQueue(label: "io.apkrun.RuntimeHost.xpc-output-fallback.\(UUID().uuidString)")
@@ -1779,7 +1849,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             let timeout = DispatchWorkItem {
                 gate.complete(false)
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(1), execute: timeout)
+            DispatchQueue.global().asyncAfter(deadline: .now() + eventSinkHandshakeTimeout, execute: timeout)
             outputQueue.async {
                 sink.value.handshake { available in
                     timeout.cancel()

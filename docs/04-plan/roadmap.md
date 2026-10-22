@@ -44,7 +44,7 @@ Work in this order. Inside each step, the task index ([issues/README.md](issues/
 4. **Rest of M4.** #35, #67, #70, #71, #54, #72.
 5. **Custom image (M5).** #36, #37. #36 needs the Linux AOSP builder and long builds (R-14): set up the builder ([../05-development/environment-setup.md](../05-development/environment-setup.md) §5) during step 3.
 6. **Updates (M6).** #74, #38, #39, #40, #41 (G7), #42, #43, #44, #51, #75.
-7. **Rest of M7.** #56, #57, #49, #50 (G9), #76, #77, #78, #79, #80, #90.
+7. **Rest of M7.** #56, #57, #49, #50 (G9), #76, #77, #78, #79, #80, #116, #90.
 8. **M8 to M11**, then **M12**.
 
 ### 1.4 Parallel work

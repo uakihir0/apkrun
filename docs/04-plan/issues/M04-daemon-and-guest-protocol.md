@@ -200,11 +200,11 @@ The runtime moves out of the CLI into apkrund, a per-user LaunchAgent that launc
 | Milestone | M4 (v0.2) |
 | Depends on | #32 |
 | Design | [runtime-daemon.md](../../02-design/runtime-daemon.md) §5, §6; [desktop-integration.md](../../02-design/desktop-integration.md) §9 |
-| Code | `Packages/RuntimeCore/` (`IdleController`, `RuntimeActivityAssertion`); `Packages/RuntimeHost/` (`PowerObserver`, preboot, memory pressure); `Guest/guestd/` (`SyncTime`); `CLI/apkrun/Commands/Dev/Power.swift`; `Tests/IntegrationTests/DaemonTests/` |
+| Code | `Packages/RuntimeCore/` (`IdleController`, `RuntimeActivityAssertion`); `Packages/RuntimeHost/` (`PowerObserver`, preboot, memory pressure); `Guest/guestd/` (`SyncTime`); `CLI/apkrun/Dev/DevPower.swift`; `Tests/IntegrationTests/DaemonTests/` |
 
 **Goal.** After no app has been open for a while, the runtime suspends and then stops, and apkrund uses almost no CPU while suspended; the next launch resumes quickly. Host sleep and wake pause and resume the VM, and the guest clock is correct afterwards.
 
-**Out of scope.** Locale, time zone, and clock format (#86). The timer settings UI (#80). A memory balloon before a pause (OQ-32; default: none in v1). VM save and restore (R-07, accepted).
+**Out of scope.** Locale, time zone, and clock format (#86). The timer settings UI (#80). Connecting `window.closeBehavior = keepRunning` to a background-task activity hold (#116; requires the session client and per-app settings). A memory balloon before a pause (OQ-32; default: none in v1). VM save and restore (R-07, accepted).
 
 **Steps.**
 1. **IdleController.** `IdleController` (RuntimeCore actor) tracks the activity sources of [runtime-daemon.md](../../02-design/runtime-daemon.md) §5.1, each held through `RuntimeActivityAssertion`. `runtime.idleSuspendMinutes` (default 10) and `runtime.idleStopMinutes` (default 60) use `SuspendingClock`; `0` means never. **Check:** T0 `IdleControllerTests` with a manual clock: each source holds the runtime, both timers fire, and sleep is not counted.
@@ -221,7 +221,7 @@ The runtime moves out of the CLI into apkrund, a per-user LaunchAgent that launc
 - With `idleSuspendMinutes = 1` and no sessions, the runtime is `suspended` after 1 minute, with apkrund under 1 % CPU (FR-VM-10, NFR-PERF-06).
 - Opening HelloText from `suspended` shows its first frame; `VM_RESUMED` to `RUNTIME_READY` is p50 of at most 500 ms over 20 runs (FR-VM-10).
 - With `idleStopMinutes = 2`, the runtime stops gracefully when no client is connected (FR-VM-10).
-- A `keepRunning` task, a connected `adb shell`, and a running install each prevent suspend.
+- A connected `adb shell` and a running install each prevent suspend.
 - On host sleep the VM pauses within 5 s; within 5 s of wake the guest clock is within 2 s of the host (FR-VM-11).
 
 **Pitfalls.**

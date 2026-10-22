@@ -544,7 +544,7 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
 - Use `-derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd"` and an `APKRUN_ANDROID_HOME` that holds a copy of `platform-tools`. CI uses `$RUNNER_TEMP`. `scripts/run-gate.sh` builds under `build/gates/` in the checkout.
 - `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY` (the SHA-1 fingerprint of the certificate) come from the environment or from CI repository variables. The fingerprint is explicit, because the generic `Apple Development` name does not reliably select the lab certificate.
 - `APKRunTestHost` and the hosted test bundles disable hardened runtime; that exception is limited to test targets.
-- `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per test group: `LinuxGuest`, `AndroidADB`, `AndroidPackage`, `AndroidBoot`, `AndroidNetwork`, `AndroidGraphics`, `AndroidGuestAgent`, `AndroidInput`, and the four input configurations below. The T2 suites of [test-strategy.md](../04-plan/test-strategy.md) §2.4 are `LinuxGuest`, `AndroidStock`, `AndroidCustom`, and `Maintenance`; the last three are planned. T2 has one automatic retry ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
+- `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per test group: `LinuxGuest`, `AndroidADB`, `AndroidPackage`, `AndroidBoot`, `AndroidNetwork`, `AndroidGraphics`, `AndroidGuestAgent`, `AndroidIdleSuspend`, `AndroidSleepWake`, `AndroidInput`, and the four input configurations below. `AndroidIdleSuspend` and `AndroidSleepWake` are focused AndroidStock configurations for #70; they run the listed single method below. `AndroidIdleSuspend` stages the debug HelloText fixture in `APKRUN_FIXTURE_APK` and enables the Debug headless-launch hook for its resume/first-frame test. The T2 suites of [test-strategy.md](../04-plan/test-strategy.md) §2.4 are `LinuxGuest`, `AndroidStock`, `AndroidCustom`, and `Maintenance`; the last three are planned. T2 has one automatic retry ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
 
 Input tests run in their own configurations. Select the configuration and the method together:
 
@@ -555,6 +555,12 @@ Input tests run in their own configurations. Select the configuration and the me
 | `AndroidInputCadence` | `testThreeConsecutiveHundredClickBatchesThroughDirectView` | three batches at 50 ms press and gap through direct view dispatch; posts no system events; cannot satisfy #25 box 3 or #103 |
 | `AndroidInputCadence` | `testOneHundredClickDiagnosticTraceJoinsHostGuestAndFixtureThroughDirectView` | diagnostic only; one untraced warm-up, then a traced batch |
 | `AndroidInputEdges` | `testDragsBeyondTopAndLeftEdgesCloseTheGuestTouch` | the #25 top and left guest-edge check; `SessionWindowController.show()` activates the window |
+| `AndroidIdleSuspend` | `testIdlePolicySuspendsThenStopsTheRuntime` | #70 T2 against a real Android VM; checks one-minute suspend and two-minute stop deadlines |
+| `AndroidIdleSuspend` | `testConnectedADBCommandKeepsRuntimeReadyPastSuspendDeadline` | #70 T2 holds a real ADB shell open past the one-minute suspend deadline |
+| `AndroidIdleSuspend` | `testPendingInstallKeepsRuntimeReadyPastSuspendDeadline` | #70 T2 holds a PackageStore install at the guest commit boundary while advancing the idle clock |
+| `AndroidIdleSuspend` | `testRuntimeStartRequestResumesSuspendedVM` | #70 T2 resumes the idle-suspended VM through RuntimeHost |
+| `AndroidIdleSuspend` | `testHelloTextFirstFrameAppearsAfterIdleResumeWithP50Under500Milliseconds` | #70 T2 opens HelloText after 20 idle resumes, confirms a new IOSurface frame each time, and measures p50 from `VM_RESUMED` to `RUNTIME_READY` |
+| `AndroidSleepWake` | `testHostSleepPausesAndWakeResumesWithSynchronizedGuestClock` | #70 T2 against a real Android VM; injects sleep/wake through the shared developer event handler and checks guest time |
 
 - The interactive and edge tests need a dedicated lab GUI session with exactly one display. They activate the test window; the interactive test moves and clicks the desktop pointer. Run them only on a dedicated desktop (typically the reference Mac), never on a desktop used for other work, in unattended CI, or on a self-hosted GUI runner.
 - Run each command separately, with a new `-resultBundlePath` per attempt:
@@ -571,6 +577,65 @@ xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Integrat
   -only-testing:IntegrationTests/AndroidInputTests/testThreeConsecutiveHundredClickBatchesThroughWindowServer test
 ```
 
+- Run each #70 Android configuration separately, with a new result bundle per attempt:
+
+```bash
+xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+  -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd" \
+  -resultBundlePath "${TMPDIR:-/tmp}/apkrun-idle-suspend.xcresult" \
+  APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+  DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
+  -only-test-configuration AndroidIdleSuspend \
+  -only-testing:IntegrationTests/IdleSuspendTests/testIdlePolicySuspendsThenStopsTheRuntime test
+
+xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+  -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd" \
+  -resultBundlePath "${TMPDIR:-/tmp}/apkrun-adb-idle.xcresult" \
+  APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+  DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
+  -only-test-configuration AndroidIdleSuspend \
+  -only-testing:IntegrationTests/IdleSuspendTests/testConnectedADBCommandKeepsRuntimeReadyPastSuspendDeadline test
+
+xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+  -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd" \
+  -resultBundlePath "${TMPDIR:-/tmp}/apkrun-install-idle.xcresult" \
+  APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+  DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
+  -only-test-configuration AndroidIdleSuspend \
+  -only-testing:IntegrationTests/IdleSuspendTests/testPendingInstallKeepsRuntimeReadyPastSuspendDeadline test
+
+xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+  -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd" \
+  -resultBundlePath "${TMPDIR:-/tmp}/apkrun-resume-idle.xcresult" \
+  APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+  DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
+  -only-test-configuration AndroidIdleSuspend \
+  -only-testing:IntegrationTests/IdleSuspendTests/testRuntimeStartRequestResumesSuspendedVM test
+
+xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+  -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd" \
+  -resultBundlePath "${TMPDIR:-/tmp}/apkrun-resume-first-frame.xcresult" \
+  APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+  DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
+  -only-test-configuration AndroidIdleSuspend \
+  -only-testing:IntegrationTests/IdleSuspendTests/testHelloTextFirstFrameAppearsAfterIdleResumeWithP50Under500Milliseconds test
+
+xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+  -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd" \
+  -resultBundlePath "${TMPDIR:-/tmp}/apkrun-sleep-wake.xcresult" \
+  APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+  DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
+  -only-test-configuration AndroidSleepWake \
+  -only-testing:IntegrationTests/SleepWakeTests/testHostSleepPausesAndWakeResumesWithSynchronizedGuestClock test
+```
+
+- These #70 T2 checks need a signed test host, the Android SDK tools, the development Guest Agent bundle, and the debug HelloText APK at `/tmp/apkrun-test-fixtures/HelloText.apk`. Build it with `Tests/Fixtures/AndroidApps/gradlew -p Tests/Fixtures/AndroidApps :HelloText:assembleDebug`, then copy `Tests/Fixtures/AndroidApps/HelloText/build/outputs/apk/debug/HelloText-debug.apk` to that path. The resume/first-frame case runs 20 suspend/resume cycles using the test's manual idle clock, checks a new IOSurface frame for each launched session, and measures `VM_RESUMED` to `RUNTIME_READY` from the performance timeline. Sleep/wake is injected through the same serialized handler used by the control socket; it does not exercise live IOKit notifications or physically sleep the test Mac. The `pmset sleepnow` acceptance and the `control.sock`/IOKit path remain T3 checks on the reference Mac.
 - On macOS 27, the hosted `APKRunTestHost` checks `CGPreflightPostEventAccess()`. When it fails, enable the exact `APKRunTestHost.app` path from the skip message under System Settings → Privacy & Security → Device Control and Data Access. A grant to Terminal, Xcode, or another app does not satisfy it. Sign the host with the configured identity so its designated requirement stays stable.
 - These tests exercise the embedded `DevBoot` and `DevInputRoute` path, not the wrapper-to-apkrund XPC route.
 - `Tests/AcceptanceTests/AcceptanceTests.xctestplan` has one configuration per gate (`G1`–`G9`; each gate task adds its own), plus `ReleaseSmoke` and `Network`. Current configurations: `G1`, `G2`, `G3`, `Network`. Automatic retry is off, except one retry for `Network` ([test-strategy.md](../04-plan/test-strategy.md) §2.7).

@@ -7,7 +7,7 @@ import RuntimeCore
 /// Connects the package store to the currently running embedded development runtime.
 ///
 /// This adapter owns no package state. It asks the supervisor to make Android ready, then
-/// builds a channel from the Guest Agent and the supervisor's current ADB forwarder.
+/// builds a channel from the Guest Agent and the supervisor's private ADB forwarder.
 public actor DevelopmentStoreRuntimeAccess: StoreRuntimeAccess {
     private let makeChannel: @Sendable () async throws -> any StoreAgentChannel
     private let readUserdataGeneration: @Sendable () async -> UUID?
@@ -33,7 +33,7 @@ public actor DevelopmentStoreRuntimeAccess: StoreRuntimeAccess {
             guard let agent = await supervisor.developmentGuestAgent else {
                 throw DevelopmentStoreRuntimeAccessFailure.guestAgentUnavailable
             }
-            guard let port = await supervisor.developmentADBHostPort else {
+            guard let port = await supervisor.developmentADBClientHostPort else {
                 throw DevelopmentStoreRuntimeAccessFailure.adbForwarderUnavailable
             }
 

@@ -90,4 +90,8 @@ struct PackageActivityReservations {
     func hasActiveLaunches(packageID: String) -> Bool {
         activeLaunches[packageID, default: 0] > 0
     }
+
+    var hasActiveLaunches: Bool {
+        !activeLaunches.isEmpty
+    }
 }

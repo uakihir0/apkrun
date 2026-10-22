@@ -656,6 +656,13 @@ public actor RuntimeHost {
         await idleController?.activeActivityKinds ?? []
     }
 
+    func assertRuntimeActivity(_ kind: RuntimeCore.ActivityKind) async -> RuntimeActivityAssertion? {
+        guard !isShuttingDown, let idleController else {
+            return nil
+        }
+        return await idleController.assertActivity(kind)
+    }
+
     func configurePackageStoreMutationGateForTesting(_ gate: @escaping @Sendable () async -> Void) {
         precondition(!hasStarted)
         packageStoreMutationTestGate = gate

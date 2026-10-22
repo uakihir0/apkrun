@@ -34,6 +34,10 @@ final class ScanoutFrameSequence: @unchecked Sendable {
             return nextValue
         }
     }
+
+    func latestIssued() -> UInt64 {
+        lock.withLock { nextValue &- 1 }
+    }
 }
 
 /// Presents one scanout into a pool of IOSurfaces (graphics.md §6.1 to §6.3, #24).

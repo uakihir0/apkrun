@@ -359,6 +359,7 @@ cargo fmt --all --check
 ```
 
 - Development builds use cargo-ndk with the pinned NDK ([environment-setup.md](environment-setup.md) §2.6); they serve the #35 validation, pushing the binary with `adb` to a userdebug image.
+- `scripts/build-vsockd.sh` checks the crate's Rust, cargo-ndk, and NDK pins, builds with `--locked`, and stages the executable at `Guest/product/prebuilt/apkrun_vsockd` for the composed image. `--check` validates the pins without building.
 - The product compiles the same sources with Soong (§9). The crate uses only `std`, `libc`, `log`, and `android_logger`, all in AOSP `external/rust/crates`.
 - The ignored `vsock_loopback` test is T1 and exercises production peer dispatch and bidirectional copying over AF_VSOCK to an abstract agent socket. Run it on Linux with the kernel module loaded: `sudo modprobe vsock_loopback && cargo test --locked --features vsock-loopback -- --ignored vsock_loopback`. The `test-vsockd` job compiles this feature test and runs it when its Ubuntu kernel supports `vsock_loopback`; if unavailable, it emits a notice and a Linux host with the module is required to claim T1 passed. T0 tests and host/Android target lint also run in that job.
 

@@ -84,11 +84,11 @@ apkrund sets a requirement on each listener with `setConnectionCodeSigningRequir
 
 ### 2.1 Constants
 
-`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 11}`. Ordering compares `major`, then `minor`.
+`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 12}`. Ordering compares `major`, then `minor`.
 
 ```swift
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
-    public static let current = APIVersion(major: 1, minor: 11)
+    public static let current = APIVersion(major: 1, minor: 12)
     public let major: Int
     public let minor: Int
 }
@@ -110,6 +110,7 @@ Target constants (not in code): `wrapperMajors = [1]` (served on the wrapper end
 | 1.9 | `subscribe`, `unsubscribe`; event-sink handshake; sequenced batches |
 | 1.10 | `packages.installed` and `packages.updated` events |
 | 1.11 | `beginUninstallPackage`; `PackageChange.removed`; `OperationSnapshot.requestFingerprint` |
+| 1.12 | Optional `StartRuntimeRequest.hold` keeps a CLI start activity until its control connection closes |
 
 ### 2.2 Rules per endpoint
 
@@ -526,7 +527,7 @@ Lists are returned whole. A check requested while the same check runs joins it.
 
 | Request | Built fields | Target fields |
 |---|---|---|
-| `StartRuntimeRequest` | `header` | `hold` (Bool: keep a `cli` activity until the connection closes); `timeoutMs` (Int64?) |
+| `StartRuntimeRequest` | `header`, `hold` (optional Bool: keep a `cli` activity until the connection closes) | `timeoutMs` (Int64?) |
 | `StopRuntimeRequest` | `header` | `force` (Bool: stop even with sessions or activities) |
 | `RestartRuntimeRequest`, `RuntimeResetControlRequest` | `header` | — |
 

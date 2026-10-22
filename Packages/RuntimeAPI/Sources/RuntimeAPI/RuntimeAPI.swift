@@ -7,8 +7,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.4 adds package queries; 1.5 adds runtime reset; 1.6 adds one-request runtime restart;
     /// 1.7 adds daemon-backed package import and install; 1.8 adds asynchronous install handles
     /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
-    /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints.
-    public static let current = APIVersion(major: 1, minor: 11)
+    /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
+    /// 1.12 adds the optional held-runtime start request.
+    public static let current = APIVersion(major: 1, minor: 12)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -279,10 +280,15 @@ public struct RuntimeStatusRequest: Codable, Equatable, Sendable {
 public struct StartRuntimeRequest: Codable, Equatable, Sendable {
     /// The request metadata.
     public let header: APIRequestHeader
+    /// Keeps the runtime active until the requesting client disconnects.
+    ///
+    /// Nil is equivalent to false and preserves compatibility with clients that omit this field.
+    public let hold: Bool?
 
     /// Creates a start request.
-    public init(header: APIRequestHeader) {
+    public init(header: APIRequestHeader, hold: Bool? = nil) {
         self.header = header
+        self.hold = hold
     }
 }
 

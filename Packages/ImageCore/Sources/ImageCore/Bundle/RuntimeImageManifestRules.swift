@@ -443,8 +443,8 @@ enum RuntimeImageManifestRules {
         }
         if m.kind == .apkrun {
             try expect(
-                Set(agents).isSuperset(of: ["io.apkrun.guest", "io.apkrun.store"]), rule: "S10",
-                path: "/requirements/agents", reason: "an apkrun image lists the guest and store agents"
+                agents.contains("io.apkrun.guest"), rule: "S10",
+                path: "/requirements/agents", reason: "an apkrun image lists the guest agent"
             )
         }
         try expect(isUnique(agents), rule: "S10", path: "/requirements/agents", reason: "agent packages must be unique")

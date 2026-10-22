@@ -173,8 +173,8 @@ def semantic_violations(document: Mapping[str, Any]) -> list[Violation]:
     agents = [agent["package"] for agent in document["requirements"]["agents"]]
     if document["kind"] == "stock" and agents:
         fail("S10", "/requirements/agents", "a stock image has no agents")
-    if document["kind"] == "apkrun" and not {"io.apkrun.guest", "io.apkrun.store"} <= set(agents):
-        fail("S10", "/requirements/agents", "an apkrun image lists the guest and store agents")
+    if document["kind"] == "apkrun" and "io.apkrun.guest" not in agents:
+        fail("S10", "/requirements/agents", "an apkrun image lists the guest agent")
     if len(set(agents)) != len(agents):
         fail("S10", "/requirements/agents", "agent packages must be unique")
 

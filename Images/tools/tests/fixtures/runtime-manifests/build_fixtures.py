@@ -64,6 +64,16 @@ def apkrun_variant(stock: Document) -> Document:
     return document
 
 
+def apkrun_guest_only_variant(stock: Document) -> Document:
+    document = apkrun_variant(stock)
+    document["requirements"]["agents"] = [
+        agent
+        for agent in document["requirements"]["agents"]
+        if agent["package"] == "io.apkrun.guest"
+    ]
+    return document
+
+
 def userdata_at_the_bound(stock: Document) -> Document:
     """The userdata integers at 2^63 - 1, the largest value that every reader holds exactly."""
     document = copy.deepcopy(stock)
@@ -177,6 +187,15 @@ def _stock_agent(d: Document) -> None:
     d["requirements"]["agents"] = [{"package": "io.apkrun.guest", "versionCode": 12}]
 
 
+def _apkrun_missing_guest(d: Document) -> None:
+    product = apkrun_variant(d)
+    d.clear()
+    d.update(product)
+    d["requirements"]["agents"] = [
+        {"package": "io.apkrun.store", "versionCode": 12}
+    ]
+
+
 def _userdata_not_contained(d: Document) -> None:
     d["userdata"] = {"schemaVersion": 2, "upgradableFrom": [1]}
 
@@ -245,6 +264,7 @@ INVALID_CASES: tuple[tuple[str, str, Callable[[Document], None]], ...] = (
     ("s8-override-not-in-profile", "S8", _unknown_override),
     ("s9-protocol-range-reversed", "S9", _protocol_range),
     ("s10-stock-with-agent", "S10", _stock_agent),
+    ("s10-apkrun-without-guest", "S10", _apkrun_missing_guest),
     ("s11-upgradable-without-schema", "S11", _userdata_not_contained),
     ("s12-minimum-above-image", "S12", _minimum_above_image),
     ("s13-stock-with-guest-revision", "S13", _stock_guest_revision),
@@ -270,6 +290,7 @@ def main() -> int:
     write_json(VALID / "stock-cf16373615.json", stock)
     write_json(VALID / "stock-with-legal-notice.json", with_legal(stock))
     write_json(VALID / "apkrun-ar000123.json", apkrun_variant(stock))
+    write_json(VALID / "apkrun-guest-only.json", apkrun_guest_only_variant(stock))
     write_json(VALID / "userdata-at-int64-maximum.json", userdata_at_the_bound(stock))
     for name, rule, mutate in INVALID_CASES:
         document = copy.deepcopy(stock)

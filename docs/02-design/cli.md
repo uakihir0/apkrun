@@ -133,14 +133,14 @@ For operations that return an `OperationHandle` ([runtime-daemon.md](runtime-dae
 |---|---|---|
 | `apkrun version [--json]` | #2 | CLI version and build. When apkrund is reachable, also its version and the installed Android image version. `apkrun --version` prints only the CLI version |
 | `apkrun setup [--image <path>] [--yes]` | #67 | First-run provisioning ([runtime-daemon.md](runtime-daemon.md) §9). If apkrund is not registered, opens `APKRun.app --register-runtime` (only the app bundle can register its agent) and waits up to 5 minutes for approval in System Settings, printing the instructions. Then runs `setup` with the image source. `--image` takes a bundle directory or an `.aar`. Without it, release builds use the image feed (#88) and development builds fail with a hint to pass `--image`. Shows the `ProvisioningState` steps and resumes at the first incomplete step. When already complete, prints "Setup is complete." and exits 0 |
-| `apkrun status [--json]` | #33 | The menu bar summary ([host-ui.md](host-ui.md) §12): runtime state, running apps, available updates, developer mode, and microphone in use |
-| `apkrun runtime status [--json]` | #32, #33 | Daemon and runtime state, boot progress, startup failure, boot-loop guard, daemon PID, and image version. Also the owner, uptime, idle timers, and agent connections |
+| `apkrun status [--json]` | #33 | Background-service and Android state, plus open app sessions. Available updates, developer mode, and microphone status are not included yet |
+| `apkrun runtime status [--json]` | #32, #33 | Daemon and runtime state, owner, boot progress, startup failure, boot-loop guard, daemon PID, image version, and Guest Agent state and protocol version when available. Uptime and idle timers are not exposed yet |
 | `apkrun runtime start [--hold] [--timeout <s>]` | #32, #33 | Starts Android and returns when it is ready. Prints boot progress on stderr. `--hold` keeps the runtime ready until the CLI exits or is interrupted ([runtime-daemon.md](runtime-daemon.md) §5.1). `--timeout` limits the wait |
-| `apkrun runtime stop [--force] [--yes]` | #32, #33 | Gracefully stops Android and leaves apkrund running. Asks for confirmation when sessions or installs are active. `--force` skips the busy check ([runtime-daemon.md](runtime-daemon.md) §3.5) |
+| `apkrun runtime stop [--force] [--yes]` | #32, #33 | Stops Android and leaves apkrund running. Asks for confirmation when app sessions are open; `--force` ends them. An active package operation prevents stopping even with `--force`; wait for it to finish and retry ([runtime-daemon.md](runtime-daemon.md) §3.5) |
 | `apkrun runtime restart [--yes]` | #33 | Sends one authenticated `restartRuntime` request. apkrund stops and starts Android under one lifecycle reservation. Asks before restarting unless `--yes` is given. Until `runtimeStatus` reports active sessions, the prompt appears on every restart. The reply is the final runtime status. A client timeout or cancellation can end the wait without stopping the restart, so check `apkrun runtime status` before retrying |
 | `apkrun runtime reset` | #33 | Clears the automatic boot-loop guard. Does not start or stop Android, and does not delete Android data. Reports the current runtime state |
 | `apkrun runtime reset --erase [--no-backup] [--yes]` | #67 | **Reset Android** ([runtime-daemon.md](runtime-daemon.md) §9.5): deletes all Android data. Creates a 7-day recovery point unless `--no-backup`. Requires typing `Reset` (§3.4) |
-| `apkrun info [--runtime] [--displays] [--json]` | #33, #29 | Without a package: CLI version and build, daemon and Android state, and image version. `--runtime` adds the fields of `RuntimeHostStatus`. `--displays` shows display snapshots (#29). Until the daemon exposes them, it fails with an unavailable error that gives the remediation |
+| `apkrun info [--runtime] [--displays] [--json]` | #33, #29 | Without a package: CLI version and build, daemon and Android state, and image version. `--runtime` adds daemon ownership, PID, Guest Agent state, runtime sizing, resource measurements, boot progress, and startup details. `--displays` adds the current display-slot snapshots |
 
 ### 4.2 Apps
 
@@ -201,10 +201,10 @@ Per-package integration settings use `apkrun settings <package> set integrations
 
 | Command | Task | Behavior |
 |---|---|---|
-| `apkrun config list [--json]` | #33 | Every global key ([configuration.md](../03-reference/configuration.md)) with its value and default |
-| `apkrun config get <key>` | #33 | One value |
-| `apkrun config set <key> <value>` | #33 | Validated like `settings set`. Keys that apply at the next Android start say so: `runtime.memoryGiB`, `runtime.cpuCount`, `audio.output`, `graphics.safeMode`, `developer.enabled`. `runtime.userdataGiB` says "Applies after Reset Android." |
-| `apkrun config reset (<key> \| --all)` | #33 | Back to the default |
+| `apkrun config list [--json]` | #33 | Every global key ([configuration.md](../03-reference/configuration.md)), its current and default values, and when changes apply |
+| `apkrun config get <key> [--json]` | #33 | One setting's current value, default, whether it is explicitly set, and when changes apply |
+| `apkrun config set <key> <value> [--yes] [--json]` | #33 | Boolean values accept `true`, `false`, `on`, or `off`; enum values use their names; numbers are parsed as decimal. Shows the value and when it applies, then asks for confirmation before changing a setting. Enabling developer mode uses a specific confirmation. The output says when the change takes effect |
+| `apkrun config reset (<key> \| --all) [--yes] [--json]` | #33 | Removes explicit values so defaults apply and asks for confirmation when a value will change. `--all` keeps `sharedFolders.roots`; use `apkrun shared-folders` to manage those roots |
 
 ### 4.7 Android image and APKRun updates
 

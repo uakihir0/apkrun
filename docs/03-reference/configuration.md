@@ -122,10 +122,10 @@ Stored in `settings.json` (§1.1). The **UI** column names the tab in APKRun Set
 
 | Key | Type | Allowed values | Default | Applies | UI | Design |
 |---|---|---|---|---|---|---|
-| `runtime.startPolicy` | enum | `onDemand`, `atLogin` | `onDemand` | next login | Runtime: "Start Android" | [runtime-daemon.md](../02-design/runtime-daemon.md) §5.4 |
-| `runtime.idleSuspendMinutes` | integer | 0–1440; `0` = never | `10` | live | Runtime: "Put Android to sleep after ‹n› minutes without apps" | [runtime-daemon.md](../02-design/runtime-daemon.md) §5.2 |
-| `runtime.idleStopMinutes` | integer | 0–1440; `0` = never | `60` | live | Runtime: "Stop Android after ‹n› minutes" | [runtime-daemon.md](../02-design/runtime-daemon.md) §5.2 |
-| `runtime.autoRestart` | bool | `true`, `false` | `true` | live | Runtime: "Restart Android automatically after a crash" | [runtime-daemon.md](../02-design/runtime-daemon.md) §3.6 |
+| `runtime.startPolicy` | enum | `onDemand`, `atLogin` | `onDemand` | stored only | Runtime: "Start Android" | [runtime-daemon.md](../02-design/runtime-daemon.md) §5.4 |
+| `runtime.idleSuspendMinutes` | integer | 0–1440; `0` = never | `10` | stored only | Runtime: "Put Android to sleep after ‹n› minutes without apps" | [runtime-daemon.md](../02-design/runtime-daemon.md) §5.2 |
+| `runtime.idleStopMinutes` | integer | 0–1440; `0` = never | `60` | stored only | Runtime: "Stop Android after ‹n› minutes" | [runtime-daemon.md](../02-design/runtime-daemon.md) §5.2 |
+| `runtime.autoRestart` | bool | `true`, `false` | `true` | stored only | Runtime: "Restart Android automatically after a crash" | [runtime-daemon.md](../02-design/runtime-daemon.md) §3.6 |
 | `runtime.cpuCount` | integer | 2 … min(8, performance + efficiency cores) | `4` | runtime restart | Runtime: "Memory, processors" | [vm.md](../02-design/vm.md) §10 |
 | `runtime.memoryGiB` | integer (GiB) | 3 … 50 % of physical memory, rounded down | `4`, lowered to fit 50 % | runtime restart | Runtime: "Memory, processors" | [vm.md](../02-design/vm.md) §10, [runtime-daemon.md](../02-design/runtime-daemon.md) §12 |
 | `runtime.userdataGiB` | integer (GiB) | 8–256; at provisioning at most the free space minus 10 GiB | `32` | provisioning | Runtime: "Android storage" (not yet in host-ui.md) | [android-image.md](../02-design/android-image.md) §5.2 |
@@ -135,8 +135,10 @@ Stored in `settings.json` (§1.1). The **UI** column names the tab in APKRun Set
 - `runtime.idleStopMinutes` counts from when idleness began, including suspended time. A value below `runtime.idleSuspendMinutes` means stop without suspending. A change does not reset the idle clock ([runtime-daemon.md](../02-design/runtime-daemon.md) §5.2).
 - `runtime.startPolicy = atLogin` preboots 60 s after login. Preboot is skipped on battery below 30 % and while the boot-loop guard is active ([runtime-daemon.md](../02-design/runtime-daemon.md) §5.4).
 - `cpuCount`, `memoryGiB`, and `userdataGiB` depend on the Mac. `set` checks them against this Mac. A stored value that no longer fits is clamped when used; the file is not changed (§8.2).
+- If free space minus the 10 GiB reserve is below the 8 GiB userdata minimum, `runtime.userdataGiB` has no effective value: `configuration` reports `null`, and `set` rejects a value until enough space is available.
 - `userdataGiB` is fixed at provisioning. A change takes effect only with **Reset Android**, which deletes Android data. `config set` prints "Applies after Reset Android."
 - The two boot timeouts have no UI. They are for slow Macs and testing.
+- `startPolicy`, the idle timers, and `autoRestart` are stored for compatibility but do not affect runtime behavior in this version. Their owning runtime tasks add those behaviors.
 
 ### 2.2 `display.*`
 

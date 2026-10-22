@@ -227,8 +227,9 @@ An immediate failure ends the boot. `Kernel panic - not syncing` on the console 
 
 ```text
 stop(reason, force)
-  0. refuse with RuntimeFailure.busy(activities) if assertions other than .backgroundTask are held
-     and force == false (the GUI asks "Android is installing ‹App›. Stop anyway?")
+  0. refuse with RuntimeFailure.busy if app sessions are open and force == false
+     (the CLI asks before retrying with force)
+     refuse with RuntimeFailure.invalidTransition while a package mutation is active, even with force
   1. state: → stopping(reason); new ensureReady callers wait (§3.1)
   2. SessionRegistry.endAll(.runtimeStopped): wrappers receive stateChanged(.ended) and close
      (reasons .hostUpdate and .migration end them with .runtimeUpdating instead: the wrapper shows screen U
@@ -244,7 +245,8 @@ stop(reason, force)
 - With `reason == .hostShutdown` the whole sequence has a 40 s deadline (§2.4). Step 6 then goes straight to `stop()` when the deadline is near.
 - Without a Guest Agent, step 4 is skipped.
 - Every stop logs the path it took (`graceful`, `powerButton`, `forced`) and its duration. `apkrun doctor` warns when the last 3 stops were forced.
-- While a package install is active, RuntimeHost rejects user stop, restart, and reset with `runtime.invalidTransition`. Daemon shutdown drains the install before it stops Android. This reservation lasts until the tracked install reaches a terminal result.
+- Without `force`, RuntimeHost rejects a stop with `runtime.busy` while app sessions are open. The CLI asks for confirmation and retries with `force`; that stop ends the sessions with `.runtimeStopped`.
+- While a package mutation or launch is active, RuntimeHost rejects user stop, restart, and reset with `runtime.invalidTransition`, including a forced stop. A lifecycle transition also rejects new launches until it finishes. Daemon shutdown drains a package mutation before it stops Android. A launch reservation lasts until the launch returns.
 
 ### 3.6 Failure handling and automatic restart
 

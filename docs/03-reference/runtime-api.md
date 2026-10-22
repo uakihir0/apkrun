@@ -8,7 +8,7 @@ This document is the wire contract of RuntimeAPI, the XPC interface between apkr
 
 ### 1.1 Scope and modules
 
-Built operations: broker `hello`, `requestEndpoint`; control `runtimeStatus`, `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime`, `listPackages`, `packageInfo`, `importPackage`, `installImported`, `beginInstallImported`, `beginUninstallPackage`, `cancelOperation`, `listOperations`, `operationStatus`, `subscribe`, `unsubscribe`, `launch`, `terminate`; event sink `handshake`, `deliver`. Every other operation and type is target contract.
+Built operations: broker `hello`, `requestEndpoint`; control `runtimeStatus`, `runtimeInfo`, `listSessions`, `configuration`, `updateConfiguration`, `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime`, `listPackages`, `packageInfo`, `importPackage`, `installImported`, `beginInstallImported`, `beginUninstallPackage`, `cancelOperation`, `listOperations`, `operationStatus`, `subscribe`, `unsubscribe`, `launch`, `terminate`; wrapper-scoped `runtimeStatus` and `packageInfo`; event sink `handshake`, `deliver`. The wrapper endpoint is an early package-scoped `RuntimeControlXPC` grant supplied through `WrapperAuthorizer`; generated wrappers and the persistent wrapper registry are not connected yet. Every other operation and type is target contract.
 
 | Part | Module | Role |
 |---|---|---|
@@ -23,7 +23,7 @@ Built operations: broker `hello`, `requestEndpoint`; control `runtimeStatus`, `s
 | Broker | Mach service `io.apkrun.apkrund.xpc` (dev: `.dev.xpc`; update-test: `io.apkrun.apkrund.updatetest.xpc`) | any process of the user | `RuntimeBrokerXPC` | every revision |
 | Control | anonymous listener per grant, bound to the client's code requirement | APKRun.app, APKRunMenuBar, apkrun, APKRunLauncher | `RuntimeControlXPC` | same major, minor ≤ server |
 | Maintenance (target) | anonymous listener per host client | APKRun.app, APKRunMenuBar, apkrun | `MaintenanceControl` | frozen, additive only |
-| Wrapper (target) | anonymous listener per registered wrapper, dropped 10 min after its last connection | that wrapper's launcher | `RuntimeWrapperXPC` | major N and N−1 |
+| Wrapper (early) | one-use anonymous listener when `WrapperAuthorizer` has a registration | a wrapper process matching that registration's code requirement | `RuntimeControlXPC`, limited to `runtimeStatus` and its own `packageInfo` | same major; minor ≤ server |
 
 Clients that subscribe or open sessions export one `RuntimeEventSink` on their endpoint connection (§4.1). The broker exposes no capabilities ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2).
 
@@ -35,7 +35,7 @@ Clients that subscribe or open sessions export one `RuntimeEventSink` on their e
 | `menuBar` | APKRunMenuBar | `io.apkrun.APKRunMenuBar` | control |
 | `cli` | apkrun | `io.apkrun.cli` | control |
 | `launcher` | APKRunLauncher (`--package <id>`) | `io.apkrun.APKRunLauncher` | control, restricted (§1.4) |
-| `wrapper` (target) | a wrapper's launcher | `io.apkrun.android.<mapped package>` ([wrapper.md](../02-design/wrapper.md) §4) | wrapper |
+| `wrapper` (early) | a registered wrapper process | `io.apkrun.android.<mapped package>` ([wrapper.md](../02-design/wrapper.md) §4) | wrapper |
 
 Dev builds append `.dev`; update-test builds append `.updatetest` to host identifiers ([runtime-daemon.md](../02-design/runtime-daemon.md) §2.6). Wrapper identifiers do not change.
 
@@ -46,13 +46,13 @@ Dev builds append `.dev`; update-test builds append `.updatetest` to host identi
 | C | APKRun.app, APKRunMenuBar, apkrun | control |
 | A | APKRun.app only | control |
 | L | the generic launcher | control |
-| W | a wrapper, for its own package only (target) | wrapper |
+| W | a registered wrapper, for its own package only | wrapper |
 | M | APKRun.app, APKRunMenuBar, apkrun (target) | maintenance |
 | B | any process | broker |
 
 - C is the full control surface. A narrows operations that answer prompts or report Sparkle state.
 - L may call `runtimeStatus`, `packageInfo`, and `subscribe`/`unsubscribe` for topic `runtime`. Target: `packageIcon` and the session operations of §6. Anything else returns `runtime.notAuthorized`.
-- W may call only the operations of §10.1. A request naming another package returns `runtime.notAuthorized` and writes a security log entry ([runtime-daemon.md](../02-design/runtime-daemon.md) §8.2).
+- W currently may call `runtimeStatus` and `packageInfo` only; `packageInfo` for another package returns `runtime.notAuthorized`. The remaining operations in §10.1 are target contract ([runtime-daemon.md](../02-design/runtime-daemon.md) §8.2).
 - The server derives the client kind from the listener that accepted the connection. A header `clientKind` that differs, or an operation the kind may not call, returns `runtime.notAuthorized`.
 
 ### 1.5 Code-signing requirements
@@ -84,11 +84,11 @@ apkrund sets a requirement on each listener with `setConnectionCodeSigningRequir
 
 ### 2.1 Constants
 
-`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 11}`. Ordering compares `major`, then `minor`.
+`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 15}`. Ordering compares `major`, then `minor`.
 
 ```swift
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
-    public static let current = APIVersion(major: 1, minor: 11)
+    public static let current = APIVersion(major: 1, minor: 15)
     public let major: Int
     public let minor: Int
 }
@@ -110,6 +110,10 @@ Target constants (not in code): `wrapperMajors = [1]` (served on the wrapper end
 | 1.9 | `subscribe`, `unsubscribe`; event-sink handshake; sequenced batches |
 | 1.10 | `packages.installed` and `packages.updated` events |
 | 1.11 | `beginUninstallPackage`; `PackageChange.removed`; `OperationSnapshot.requestFingerprint` |
+| 1.12 | `runtimeInfo`, `listSessions`, `configuration`, and `updateConfiguration`; global settings change events |
+| 1.13 | `StopRuntimeRequest.force`; forced stops end open app sessions, while active package operations still block stopping |
+| 1.14 | `RuntimeEndpointKind.wrapper`; package-scoped wrapper grants for their registered bundle identity |
+| 1.15 | `SettingApplies.storedOnly`; a saved configuration value that is not applied by this APKRun version |
 
 ### 2.2 Rules per endpoint
 
@@ -195,9 +199,9 @@ client                                     apkrund
 
 | Field | Type | Meaning |
 |---|---|---|
-| `kind` | `RuntimeEndpointKind` | `control` in code. Target: `maintenance`, `wrapper(bundleID:)` |
+| `kind` | `RuntimeEndpointKind` | `control` or `wrapper` |
 | `clientKind` | `RuntimeClientKind` | must match the listener |
-| `claimedIdentity` | String | must equal this build's identifier for `clientKind`, else `unknownClient` |
+| `claimedIdentity` | String | control: must equal this build's identifier; wrapper: selects a `WrapperAuthorizer` registration, else `unknownClient` |
 | `apiVersion` | `APIVersion` | §2 |
 | `selfCdhash` | String? (target) | wrappers; advisory only |
 
@@ -206,7 +210,7 @@ client                                     apkrund
 | `RuntimeEndpointRejection` | Meaning |
 |---|---|
 | `unknownClient` | no listener for the claimed identity |
-| `malformedRequest` | over 16 KiB, undecodable, kind not `control`, major 0, or minor above the server's |
+| `malformedRequest` | over 16 KiB, undecodable, incompatible client-kind/endpoint-kind pair, major 0, or minor above the server's |
 | `hostShuttingDown` | apkrund is draining; retry after launchd restarts it |
 | `busy` | grant or control limit reached (§4.10) |
 | `unknown` | decode-only |
@@ -512,9 +516,9 @@ Lists are returned whole. A check requested while the same check runs joins it.
 | Operation | Request → Reply | Clients | Kind | Events | Design |
 |---|---|---|---|---|---|
 | `runtimeStatus` | `RuntimeStatusRequest` → `RuntimeControlReply` (`status`: `RuntimeHostStatus`) | C, L | Q | — | [runtime-daemon.md](../02-design/runtime-daemon.md) §8.1 |
-| `runtimeInfo` (target) | `RuntimeInfoRequest` → `RuntimeInfo` | C | Q | — | [cli.md](../02-design/cli.md) §4.1 |
+| `runtimeInfo` (built) | `RuntimeInfoRequest` → `RuntimeInfo` | C | Q | — | [cli.md](../02-design/cli.md) §4.1 |
 | `startRuntime` | `StartRuntimeRequest` → `RuntimeControlReply` | C | W | `runtime.stateChanged`, `runtime.bootProgress` | [runtime-daemon.md](../02-design/runtime-daemon.md) §3.1–§3.2 |
-| `stopRuntime` | `StopRuntimeRequest` → `RuntimeControlReply` | C | W | `runtime.stateChanged`, `sessions.ended` | [runtime-daemon.md](../02-design/runtime-daemon.md) §3.5 |
+| `stopRuntime` (built) | `StopRuntimeRequest` → `RuntimeControlReply` | C | W | `runtime.stateChanged`, `sessions.ended` | [runtime-daemon.md](../02-design/runtime-daemon.md) §3.5 |
 | `restartRuntime` | `RestartRuntimeRequest` → `RuntimeControlReply` | C | W | — | [cli.md](../02-design/cli.md) §4.1 |
 | `resetRuntime` | `RuntimeResetControlRequest` → `RuntimeControlReply` | C | U | `runtime.stateChanged`, `runtime.bootLoopGuardChanged` | [runtime-daemon.md](../02-design/runtime-daemon.md) §3.6 |
 | `resetAndroid` (target) | `ResetAndroidRequest` → `OperationHandle` (`resetAndroid`) | C | L | `runtime.*`, `packages.stateChanged`, `operations.*` | [runtime-daemon.md](../02-design/runtime-daemon.md) §9.5 |
@@ -527,11 +531,11 @@ Lists are returned whole. A check requested while the same check runs joins it.
 | Request | Built fields | Target fields |
 |---|---|---|
 | `StartRuntimeRequest` | `header` | `hold` (Bool: keep a `cli` activity until the connection closes); `timeoutMs` (Int64?) |
-| `StopRuntimeRequest` | `header` | `force` (Bool: stop even with sessions or activities) |
+| `StopRuntimeRequest` | `header`, `force` (Bool; defaults to `false` when omitted) | — |
 | `RestartRuntimeRequest`, `RuntimeResetControlRequest` | `header` | — |
 
 - `startRuntime` calls `ensureReady(.cli)` for the CLI and `ensureReady(.user)` for APKRun.app and the menu bar. It returns when the runtime is `ready`, with `RuntimeControlReply.status`. A boot failure returns its error (for example `runtime.bootTimedOut`). Target: it clears the boot-loop guard, and progress arrives on `runtime` (coalesced).
-- `stopRuntime` is synchronous and replies with the status after the stop. Target: without `force` it refuses with `runtime.busy(activities:)` while sessions or non-idle activities exist; the client asks, then repeats with `force`. With `force`, sessions end with `runtimeStopped`, and the stop reason is `user`.
+- `stopRuntime` is synchronous and replies with the status after the stop. Without `force`, it refuses with `runtime.busy` while app sessions are open; the CLI asks, then retries with `force`. A forced stop ends those sessions with `runtimeStopped`. An active package mutation returns `runtime.invalidTransition` even with `force`; wait for the operation to finish and retry.
 - `restartRuntime` stops and starts Android in one request and returns the final status. It emits no progress and returns no handle. Cancelling the caller's wait returns `runtime.cancelled` and does not stop the daemon-side restart.
 - `resetRuntime` clears `failed` and the boot-loop guard and returns the status. It is a no-op when neither applies.
 
@@ -556,7 +560,7 @@ Lists are returned whole. A check requested while the same check runs joins it.
 
 Target `RuntimeStatus` replaces `RuntimeHostStatus` for `runtimeStatus`. Fields: `state` (`WireRuntimeState`), `bootProgress`, `owner` (`apkrund` or `apkrunDev`), `hostState` (§3.7), `provisioning` (`WireProvisioningState`), `uptimeMs`, `idle` (`IdleStatus`), `bootLoopGuard`, `imageVersion`, `agents` (`[AgentConnection]`), `developerMode`, `runtimeVersion`, `runtimeBuild`, `lastFailure` (`WireError`?), `lastStopReason`. Target `RuntimeSummary` (wrapper view): `state`, `bootProgress`, `hostState`, `provisioned`, `runtimeVersion`.
 
-`RuntimeInfo` (target): `status`, `sizing` (`cpuCount`, `memoryGiB`, `userdataGiB`), `displayPoolSize`, `resources` (`ResourceUsage`?), `displays` (`[DisplaySlotSnapshot]`?). `RuntimeInfoRequest`: `resources`, `displays` (Bool each). It never starts Android.
+`RuntimeInfo` (built): `status`, `sizing` (`cpuCount`, `memoryGiB`, `userdataGiB`?), `displayPoolSize`, `resources` (`ResourceUsage`?), `displays` (`[RuntimeDisplaySlotSnapshot]`?). `RuntimeSizing.userdataGiB` is `nil` when the host cannot provide the minimum Android userdata capacity after its free-space reserve. `RuntimeInfoRequest`: `resources`, `displays` (Bool each). Resource and display details are omitted unless requested; the query never starts Android.
 
 ### 5.4 Setup, Reset Android, provisioning (target)
 
@@ -587,12 +591,12 @@ Target `RuntimeStatus` replaces `RuntimeHostStatus` for `runtimeStatus`. Fields:
 | `launch` (built) | `RuntimeLaunchControlRequest` (`packageID`) → `RuntimeLaunchControlReply` (`result`: `RuntimeLaunchResult`) | C | W | `sessions.*` (target) | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.2 |
 | `terminate` (built) | `RuntimeTerminateControlRequest` (`packageID`) → `RuntimeTerminateControlReply` (`result`: `RuntimeTerminateResult`) | C | U | `sessions.ended` (target) | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.2 |
 | `openSession` (target) | `OpenSessionRequest` → `SessionDescriptor` + `[IOSurface]` | W, L | W | session channel, `sessions.opened` | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.1 |
-| `listSessions` (target) | — → `[SessionSummary]` | C | Q | — | [runtime-daemon.md](../02-design/runtime-daemon.md) §8.6 |
+| `listSessions` (built) | `RuntimeListSessionsControlRequest` → `[SessionSummary]` | C | Q | — | [runtime-daemon.md](../02-design/runtime-daemon.md) §8.6 |
 
 APKRun.app and the CLI never open app sessions. They call `launch`, and the launched process opens the session (ADR-0006). Debug builds can use `APKRUN_TEST_HEADLESS_LAUNCH=1` for a daemon-owned headless session until #69 removes it ([configuration.md](configuration.md) §5.1).
 
 - `RuntimeLaunchResult`: `sessionID` (UUID), `packageID`, `state` (`RuntimeSessionPhase`).
-- `RuntimeSessionPhase` (built): `starting`, `booting`, `waitingForPackage`, `launching`, `running`, `ended`, `unknown`.
+- `RuntimeSessionPhase` (built): `starting`, `booting`, `waitingForPackage`, `acquiringDisplay`, `launching`, `running`, `closing`, `ended`, `unknown`.
 - `RuntimeTerminateResult`: `packageID`, `hadSession` (Bool).
 - `launch` opens the registered wrapper when its `WrapperStatus.state` is `valid`, otherwise the generic launcher. A running wrapper is activated. The process must connect within 20 s, or `runtime.launchTimedOut`.
 - `terminate` closes the window and force-stops the app through the Guest Agent. Without a session it force-stops only when Android is `ready`. It never starts Android.
@@ -617,7 +621,7 @@ While the reply is pending, `stateChanged` arrives at least every 10 s.
 
 `SessionPhase` (target): `starting`, `booting(BootProgress)`, `waitingForPackage`, `launching`, `running`, `ended(SessionEndReason)`, `unknown`. `SessionEndReason`: `userClosed`, `appExited`, `appCrashed`, `runtimeStopped`, `updating`, `runtimeUpdating`, `packageUninstalled`, `error(WireError)`, `unknown`. `closing` and `backgrounded` are not sent.
 
-`SessionSummary` (target): `sessionID`, `packageID`, `displayName`, `state`, `displayID`?, `clientKind` (`wrapper` or `launcher`), `openedAt`, `windowMode`, `recording` (Bool), `pointSize` (CGSize?; for **Use Current Size**, §14.3).
+`SessionSummary` (built): `sessionID`, `packageID`, `displayName`, `state`, `displayID`?, `clientKind`, `openedAt`, `windowMode`, `recording` (Bool), `pointSize` (CGSize?; for **Use Current Size**, §14.3). The current headless CLI launch reports `clientKind = cli`; window clients report their own kind.
 
 ### 6.3 Session channel (target)
 
@@ -721,7 +725,7 @@ Store semantics: [package-store.md](../02-design/package-store.md) §11. A wrapp
 | `beginInstallImported` (built) | `RuntimeBeginInstallImportedControlRequest` → `RuntimeBeginInstallImportedControlReply` (`result`: `OperationHandle`) | C | L | `operations.*` | [package-store.md](../02-design/package-store.md) §6.2 |
 | `beginUninstallPackage` (built) | `RuntimeBeginUninstallPackageControlRequest` (`RuntimeUninstallPackageRequest`) → `RuntimeBeginUninstallPackageControlReply` (`result`: `OperationHandle`) | C | L | `operations.*`, `packages.removed`, `sessions.ended(packageUninstalled)` (target) | [package-store.md](../02-design/package-store.md) §8 |
 | `listPackages` (built) | `RuntimeListPackagesControlRequest` (`filter`) → `RuntimeListPackagesControlReply` (`result`: `RuntimePackageListResult`) | C | Q | — | [package-store.md](../02-design/package-store.md) §9 |
-| `packageInfo` (built) | `RuntimePackageInfoControlRequest` (`packageID`) → `RuntimePackageInfoControlReply` (`result`: `RuntimePackageDetails`) | C, L | Q | — | [package-store.md](../02-design/package-store.md) §11.1 |
+| `packageInfo` (built) | `RuntimePackageInfoControlRequest` (`packageID`) → `RuntimePackageInfoControlReply` (`result`: `RuntimePackageDetails`) | C, L, W (own package only) | Q | — | [package-store.md](../02-design/package-store.md) §11.1 |
 | `inspectFile` (target) | `ImportPackageRequest` + files → `OperationHandle` (`inspect`) | C | L | `operations.*` | [package-store.md](../02-design/package-store.md) §4.3 |
 | `cancelImport` (target) | `CancelImportRequest` (`ticket`) → `RuntimeEmpty` | C | U | — | [package-store.md](../02-design/package-store.md) §11.1 |
 | `packageIcon` (target) | `PackageIconRequest` (`packageID`, `sizePx`) → `PackageIcon` | C, L, W | Q | `packages.iconChanged` | [package-store.md](../02-design/package-store.md) §10 |
@@ -895,8 +899,10 @@ A wrapper's launcher calls exactly these operations, and only for its own packag
 | Endpoint | Operation | Section |
 |---|---|---|
 | broker | `hello`, `requestEndpoint`, `requestApproval` | §3.2–§3.4 |
-| wrapper | `runtimeStatus` (`RuntimeSummary`), `openSession` and the session channel | §5.3, §6.2–§6.3 |
-| wrapper | `packageInfo`, `packageIcon` | §8.3 |
+| wrapper | `runtimeStatus` (`RuntimeHostStatus` currently; target `RuntimeSummary`) | §2.2 |
+| wrapper | `packageInfo` (own package only) | §8.3 |
+| wrapper (target) | `openSession` and the session channel | §5.3, §6.2–§6.3 |
+| wrapper (target) | `packageIcon` | §8.3 |
 | wrapper | `importBootstrap` | §10.7 |
 | wrapper | `notificationRelay` (stream), `notificationRelayResponse` | §11.3 |
 | wrapper | `subscribe`, `unsubscribe` (topic `operations`, own operations) | §16.1 |
@@ -1241,10 +1247,10 @@ Semantics: [configuration.md](configuration.md) §1.4, §1.5, §3. Global keys l
 
 | Operation | Request → Reply | Clients | Kind | Events |
 |---|---|---|---|---|
-| `configuration` | — → `ConfigurationSnapshot` | C | Q | — |
-| `updateConfiguration` | `ConfigurationPatch` → `ConfigurationSnapshot` | C | U | `runtime.configurationChanged(keys)` |
-| `packageSettings` | `RuntimePackageRequest` → `ResolvedPackageSettings` | C | Q | — |
-| `updatePackageSettings` | `PackageSettingsPatch` → `ResolvedPackageSettings` | C | U | `packages.settingsChanged(id, keys)`, session `windowPrefsChanged` |
+| `configuration` (built) | `RuntimeConfigurationControlRequest` → `ConfigurationSnapshot` | C | Q | — |
+| `updateConfiguration` (built) | `ConfigurationPatch` → `ConfigurationSnapshot` | C | U | `runtime.configurationChanged(keys)` |
+| `packageSettings` (target) | `RuntimePackageRequest` → `ResolvedPackageSettings` | C | Q | — |
+| `updatePackageSettings` (target) | `PackageSettingsPatch` → `ResolvedPackageSettings` | C | U | `packages.settingsChanged(id, keys)`, session `windowPrefsChanged` |
 
 A launcher reads its own settings from `packageInfo`, `SessionDescriptor.windowPrefs` and `.inputPrefs`, and `windowPrefsChanged`. It changes only `window.zoom`, through `resize` (§14.3). It cannot read or change other settings ([configuration.md](configuration.md) §1.4).
 
@@ -1254,7 +1260,7 @@ A launcher reads its own settings from `packageInfo`, `SessionDescriptor.windowP
 - `ConfigurationPatch`: `patch` (`JSONValue`, RFC 7396 merge patch on the nested form, [configuration.md](configuration.md) §1.2).
 - `PackageSettingsPatch`: `packageID`, `patch` (`JSONValue`, merge patch on package keys, [configuration.md](configuration.md) §3.1).
 - `ResolvedPackageSettings`: `packageID`, `entries` (`ResolvedSetting`: `key`, `value`, `source` (`SettingSource`), `defaultValue`, `recommended`? (compatibility database), `applies`), `window` (`WindowSettings`), `input` (`InputPrefs`).
-- `SettingSource`: `globalSwitch`, `user`, `recommended`, `default`, `unknown`. `SettingApplies`: `live`, `nextSession`, `runtimeRestart`, `nextCheck`, `nextLogin`, `newPackages`, `provisioning`, `nextBoot`, `nextHealthCheckResult`, `nextUpdate`, `unknown`. For compound values, `applies` is the first.
+- `SettingSource`: `globalSwitch`, `user`, `recommended`, `default`, `unknown`. `SettingApplies`: `live`, `nextSession`, `runtimeRestart`, `nextCheck`, `nextLogin`, `newPackages`, `provisioning`, `nextBoot`, `nextHealthCheckResult`, `nextUpdate`, `storedOnly`, `unknown`. `storedOnly` means the setting is persisted but has no effect in this APKRun version. For compound values, `applies` is the first.
 - `WindowSettings`: `mode` (`secondaryDisplay` or `primaryDisplayCompatibility`), `defaultWidth` (≥ 320), `defaultHeight` (≥ 400), `resizable`, `alwaysOnTop`, `zoom` (0.75…2.0), `closeBehavior` (`stop`, `keepRunning`).
 - `InputPrefs`: `escapeKey` (`back`, `escape`), `secondaryClick` (`mouseSecondary`, `longPress`), `scrollMode` (`scroll`, `touchDrag`), `hover` (Bool), `sendCommandKey` (Bool).
 - `packageSettings` works for unmanaged packages. Every source is then `globalSwitch` or `default`, and `integrations.notifications` is `false` ([configuration.md](configuration.md) §3.2).
@@ -1401,7 +1407,7 @@ Topic `operations`. Reports every long operation of §4.7, including sub-operati
 
 Built: `RuntimeEmpty` is an empty struct that encodes as `{}`. It is the argument and result of operations that carry none.
 
-Target: `JSONValue` encodes as plain JSON (`true`, `1.25`, `"ask"`, `{…}`). It is the only exception to §4.2's enum rule. It carries setting values and patches. `null` in a patch means reset; in a value it means no value. Integers are exact up to 2^53.
+Built: `JSONValue` encodes as plain JSON (`true`, `1.25`, `"ask"`, `{…}`). It is the only exception to §4.2's enum rule. It carries global setting values and patches. `null` in a patch means reset; in a value it means no value. Integers are signed 64-bit values.
 
 ### 17.2 Types defined here
 
@@ -1411,8 +1417,12 @@ Target: `JSONValue` encodes as plain JSON (`true`, `1.25`, `"ask"`, `{…}`). It
 | `AgentKind` (built) | `guest`, `store`, `unknown` |
 | `AgentConnectionState` (built) | `notStarted`, `connecting`, `connected`, `reconnecting`, `unresponsive`, `unavailable`, `incompatible`, `unknown` |
 | `ImageVersion` (built) | §4.3 |
-| `WireDisplayState` (target) | `free`, `attaching`, `allocated(SessionID)`, `releasing`, `faulted(WireError)`, `unknown` ([state-machines.md](../01-architecture/state-machines.md) §4) |
-| `DisplaySlotSnapshot` (target) | `slot` (0 is Android's primary display), `state`, `displayID`?, `androidDisplayID` (Int32?), `pixelSize`?, `densityDpi`? |
+| `RuntimeSizing`, `ResourceUsage`, `RuntimeInfo` (built) | configured VM sizing, host/guest resource measurements, runtime state |
+| `WireDisplayState` (built) | `free`, `reserved`, `attaching(UUID)`, `allocated(UUID)`, `releasing(UUID)`, `faulted(WireError)`, `unknown` |
+| `RuntimeDisplaySlotSnapshot` (built) | `slot` (0 is Android's primary display), `state`, `displayID`?, `androidDisplayID` (Int32?), `pixelSize`?, `densityDpi`? |
+| `RuntimeAndroidWindowMode`, `SessionSummary` (built) | window mode and an open app session summary |
+| `RuntimeSessionPhase` (built) | `starting`, `booting`, `waitingForPackage`, `acquiringDisplay`, `launching`, `running`, `closing`, `ended`, `unknown` |
+| `JSONValue`, `SettingApplies`, `ConfigurationEntry`, `ConfigurationSnapshot`, `ConfigurationPatch` (built) | JSON values and global configuration (§14) |
 | `StoreOperationStage` (target) | §16.2 |
 | `AndroidWindowMode`, `ClosePolicy`, `EscapeKeyMapping`, `SecondaryClickMapping`, `ScrollMode` (target) | the cases of §6.2 and §14.2, each with `unknown` |
 | `PixelSize` (target) | `width`, `height` (Int) |
@@ -1471,12 +1481,12 @@ Uses the control endpoint, and the maintenance endpoint only for `self-update fi
 |---|---|---|
 | `version` | `hello`, `runtimeStatus` | CLI version alone when apkrund is unreachable |
 | `setup [--image]` | `setup` (target) | `--image <file>` sends `archive(fileIndex:)`; registers first if needed |
-| `status` | `runtimeStatus`, `listSessions`, `listUpdates`, `activeRecordings` | menu bar summary |
+| `status` | `runtimeInfo`, `listSessions` | background-service state, Android state, and open app sessions |
 | `runtime status` / `restart` / `reset` | `runtimeStatus` / `restartRuntime` / `resetRuntime` | |
 | `runtime start [--hold] [--timeout]` | `startRuntime` | `hold`, `timeoutMs` (target) |
-| `runtime stop [--force]` | `stopRuntime` | on `runtime.busy` asks, then `force` (target) |
+| `runtime stop [--force] [--yes]` | `stopRuntime` (built) | `--force` ends open app sessions. Active package operations still reject stopping with `runtime.invalidTransition`; wait and retry. `--yes` skips the confirmation prompt |
 | `runtime reset --erase [--no-backup]` | `resetAndroid` (target) | `keepBackup = !--no-backup`; `confirmed` after prompt or `--yes` |
-| `info [--runtime] [--displays]` | `runtimeInfo` (target) | |
+| `info [--runtime] [--displays]` | `runtimeInfo` | `--runtime` includes resource measurements; `--displays` includes display-slot snapshots |
 | `install <file>…` | `importPackage`, `installImported` | `--provider`, `--updates` become `RuntimeInstallOptions`; `--updates manual` sets `authority = manual`; `--wrap` adds `createWrapper` (target) |
 | `uninstall <package>` | `beginUninstallPackage` | `--keep-data`, `--keep-wrapper`, `--forget` set the options |
 | `list [--all]`, `info <package>` | `listPackages`, `packageInfo` | |
@@ -1490,7 +1500,7 @@ Uses the control endpoint, and the maintenance endpoint only for `self-update fi
 | `update policy`, `authority`, `skip`, `unskip`, `history` | `setUpdatePolicy`, `setUpdateAuthority`, `skipVersion`, `unskipVersion`, `updateHistory` | target |
 | `integrations status <package>` | `integrationStatus` | target |
 | `shared-folders list`, `add`, `remove` | `sharedFolders`, `addSharedFolder`, `removeSharedFolder` | `add` creates the bookmark in the CLI |
-| `config list`, `get`, `set`, `reset` | `configuration`, `updateConfiguration` | `reset` sends `null` |
+| `config list`, `get`, `set`, `reset` | `configuration`, `updateConfiguration` | reads and writes global settings; reset sends `null` for one key or every resettable key |
 | `image list`, `check`, `install`, `rollback`, `recovery-points` | `listImages`, `checkImageUpdate`, `installImage`, `rollbackImage`, `recoveryPoints`, `deleteRecoveryPoint` | target; `install --latest` sends `.latest` with `apply = true` |
 | `self-update check` / `install` / `finish` | `checkSelfUpdate` / no operation / `restartForUpdate` | `install` opens `apkrun://settings/general` |
 | `doctor [--deep] [--fix]` | `healthReport`, `applyHealthFixes` | `--fix` sends `checks = []` (target) |

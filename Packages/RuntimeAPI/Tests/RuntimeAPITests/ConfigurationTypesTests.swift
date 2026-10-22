@@ -27,6 +27,10 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
         from: Data(#""afterTheNextGalaxy""#.utf8)
     )
     #expect(decodedFutureApplies == .unknown)
+    #expect(try roundTrip(SettingApplies.storedOnly) == .storedOnly)
+    #expect(throws: (any Error).self) {
+        try JSONEncoder().encode(SettingApplies.unknown)
+    }
 }
 
 @Test func configurationDTOsRoundTrip() throws {
@@ -61,6 +65,20 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     )
     #expect(try roundTrip(RuntimeConfigurationControlReply(error: failure)).error == failure)
     #expect(try roundTrip(RuntimeUpdateConfigurationControlReply(error: failure)).error == failure)
+}
+
+@Test func configurationRepliesRequireExactlyOneOutcome() {
+    for payload in [
+        #"{"result":null,"error":null}"#,
+        #"{"result":{"entries":[]},"error":{"domain":"runtime","code":"malformedRequest","message":"Invalid."}}"#,
+    ] {
+        #expect(throws: (any Error).self) {
+            try JSONDecoder().decode(RuntimeConfigurationControlReply.self, from: Data(payload.utf8))
+        }
+        #expect(throws: (any Error).self) {
+            try JSONDecoder().decode(RuntimeUpdateConfigurationControlReply.self, from: Data(payload.utf8))
+        }
+    }
 }
 
 @Test func configurationPatchKeepsNestedMergePatchShapeAndNullResets() throws {

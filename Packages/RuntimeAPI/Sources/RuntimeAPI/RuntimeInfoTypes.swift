@@ -39,11 +39,11 @@ public struct RuntimeSizing: Codable, Equatable, Sendable {
     public let cpuCount: Int
     /// Configured guest memory in GiB.
     public let memoryGiB: Int
-    /// Configured Android userdata capacity in GiB.
-    public let userdataGiB: Int
+    /// Configured Android userdata capacity in GiB, or nil when the host lacks minimum free space.
+    public let userdataGiB: Int?
 
     /// Creates a sizing snapshot.
-    public init(cpuCount: Int, memoryGiB: Int, userdataGiB: Int) {
+    public init(cpuCount: Int, memoryGiB: Int, userdataGiB: Int?) {
         self.cpuCount = cpuCount
         self.memoryGiB = memoryGiB
         self.userdataGiB = userdataGiB
@@ -122,6 +122,8 @@ public struct PixelSize: Codable, Equatable, Sendable {
 public enum WireDisplayState: Codable, Equatable, Sendable {
     /// The slot is free.
     case free
+    /// The slot is reserved by Android or an internal runtime operation without an app session.
+    case reserved
     /// A session is attaching its Android display.
     case attaching(UUID)
     /// The display is allocated to a session.
@@ -145,6 +147,8 @@ public enum WireDisplayState: Codable, Equatable, Sendable {
         switch key.stringValue {
         case "free":
             self = .free
+        case "reserved":
+            self = .reserved
         case "attaching":
             let payload = try container.nestedContainer(
                 keyedBy: RuntimeInfoCodingKey.self,
@@ -182,6 +186,11 @@ public enum WireDisplayState: Codable, Equatable, Sendable {
             _ = container.nestedContainer(
                 keyedBy: RuntimeInfoCodingKey.self,
                 forKey: RuntimeInfoCodingKey("free")
+            )
+        case .reserved:
+            _ = container.nestedContainer(
+                keyedBy: RuntimeInfoCodingKey.self,
+                forKey: RuntimeInfoCodingKey("reserved")
             )
         case .attaching(let sessionID):
             var payload = container.nestedContainer(

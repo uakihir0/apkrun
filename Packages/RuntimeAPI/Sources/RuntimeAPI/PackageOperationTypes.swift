@@ -695,8 +695,10 @@ public enum RuntimeSessionPhase: String, Codable, Sendable, Equatable {
     case starting
     case booting
     case waitingForPackage
+    case acquiringDisplay
     case launching
     case running
+    case closing
     case ended
     case unknown
 

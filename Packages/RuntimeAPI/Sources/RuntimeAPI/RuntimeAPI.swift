@@ -7,8 +7,10 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.4 adds package queries; 1.5 adds runtime reset; 1.6 adds one-request runtime restart;
     /// 1.7 adds daemon-backed package import and install; 1.8 adds asynchronous install handles
     /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
-    /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints.
-    public static let current = APIVersion(major: 1, minor: 11)
+    /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
+    /// 1.12 adds runtime information, session inventory, and global configuration operations;
+    /// 1.13 adds forced runtime stops; 1.14 adds wrapper endpoint grants; 1.15 adds stored-only settings metadata.
+    public static let current = APIVersion(major: 1, minor: 15)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -94,6 +96,8 @@ public struct RuntimeHelloReply: Codable, Equatable, Sendable {
 public enum RuntimeEndpointKind: String, Codable, Equatable, Sendable {
     /// APKRun.app, menu bar, CLI, and launcher control surface.
     case control
+    /// A package-scoped endpoint for one registered wrapper bundle.
+    case wrapper
 }
 
 /// Requests one authenticated endpoint from the broker.
@@ -290,10 +294,25 @@ public struct StartRuntimeRequest: Codable, Equatable, Sendable {
 public struct StopRuntimeRequest: Codable, Equatable, Sendable {
     /// The request metadata.
     public let header: APIRequestHeader
+    /// Whether the stop may end active Android app sessions.
+    public let force: Bool
 
     /// Creates a stop request.
-    public init(header: APIRequestHeader) {
+    public init(header: APIRequestHeader, force: Bool = false) {
         self.header = header
+        self.force = force
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case header
+        case force
+    }
+
+    /// Older clients omitted `force`; preserve their graceful-stop behavior.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        header = try container.decode(APIRequestHeader.self, forKey: .header)
+        force = try container.decodeIfPresent(Bool.self, forKey: .force) ?? false
     }
 }
 
@@ -569,6 +588,14 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
 @objc public protocol RuntimeControlXPC {
     /// Returns runtime and daemon status.
     func runtimeStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns runtime sizing and the requested resource or display details.
+    func runtimeInfo(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Lists open application sessions.
+    func listSessions(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns effective global configuration values.
+    func configuration(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Validates and persists a global configuration patch.
+    func updateConfiguration(_ request: Data, reply: @escaping (Data) -> Void)
     /// Starts Android and waits for it to become ready.
     func startRuntime(_ request: Data, reply: @escaping (Data) -> Void)
     /// Stops Android but leaves the daemon running.

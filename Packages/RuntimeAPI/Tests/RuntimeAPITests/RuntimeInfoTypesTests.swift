@@ -15,14 +15,16 @@ import Testing
 @Test func runtimeInfoOmitsUnrequestedInventories() throws {
     let info = RuntimeInfo(
         status: runtimeInfoStatus(),
-        sizing: RuntimeSizing(cpuCount: 4, memoryGiB: 6, userdataGiB: 32),
+        sizing: RuntimeSizing(cpuCount: 4, memoryGiB: 6, userdataGiB: nil),
         displayPoolSize: 3
     )
     let data = try JSONEncoder().encode(info)
     let decoded = try JSONDecoder().decode(RuntimeInfo.self, from: data)
     let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let sizing = try #require(object["sizing"] as? [String: Any])
 
     #expect(decoded == info)
+    #expect(sizing["userdataGiB"] == nil)
     #expect(object["resources"] == nil)
     #expect(object["displays"] == nil)
 }
@@ -41,6 +43,7 @@ import Testing
             daemonCPUPercent: 12.5
         ),
         displays: [
+            RuntimeDisplaySlotSnapshot(slot: 0, state: .reserved, androidDisplayID: 0),
             RuntimeDisplaySlotSnapshot(
                 slot: 1,
                 state: .allocated(sessionID),
@@ -48,19 +51,21 @@ import Testing
                 androidDisplayID: 2,
                 pixelSize: PixelSize(width: 1920, height: 1080),
                 densityDpi: 240
-            )
+            ),
         ]
     )
     let data = try JSONEncoder().encode(info)
     let decoded = try JSONDecoder().decode(RuntimeInfo.self, from: data)
     let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     let displays = try #require(object["displays"] as? [[String: Any]])
-    let state = try #require(displays[0]["state"] as? [String: Any])
+    let reservedState = try #require(displays[0]["state"] as? [String: Any])
+    let state = try #require(displays[1]["state"] as? [String: Any])
     let allocatedPayload = try #require(state["allocated"] as? [String: String])
 
     #expect(decoded == info)
     #expect(object["resources"] != nil)
     #expect(object["displays"] != nil)
+    #expect(reservedState["reserved"] != nil)
     #expect(allocatedPayload["_0"] == sessionID.uuidString)
 }
 

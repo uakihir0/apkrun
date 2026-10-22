@@ -112,6 +112,8 @@ public enum SettingApplies: String, Codable, Equatable, Sendable {
     case nextHealthCheckResult
     /// The change takes effect during the next package update.
     case nextUpdate
+    /// The value is saved, but this APKRun version does not apply it yet.
+    case storedOnly
     /// The server returned an applies value this client does not recognize.
     case unknown
 
@@ -123,6 +125,12 @@ public enum SettingApplies: String, Codable, Equatable, Sendable {
 
     /// Encodes the stable wire spelling of this applies value.
     public func encode(to encoder: any Encoder) throws {
+        guard self != .unknown else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath, debugDescription: "Unknown applies values cannot be encoded.")
+            )
+        }
         var container = encoder.singleValueContainer()
         try container.encode(rawValue)
     }
@@ -208,6 +216,44 @@ public struct RuntimeConfigurationControlReply: Codable, Equatable, Sendable {
         result = nil
         self.error = error
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case result
+        case error
+    }
+
+    /// Decodes exactly one result or error.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let result = try container.decodeIfPresent(ConfigurationSnapshot.self, forKey: .result)
+        let error = try container.decodeIfPresent(RuntimeWireError.self, forKey: .error)
+        guard (result == nil) != (error == nil) else {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "A configuration reply must contain exactly one result or error."
+                )
+            )
+        }
+        self.result = result
+        self.error = error
+    }
+
+    /// Encodes exactly one result or error.
+    public func encode(to encoder: any Encoder) throws {
+        guard (result == nil) != (error == nil) else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "A configuration reply must contain exactly one result or error."
+                )
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(result, forKey: .result)
+        try container.encodeIfPresent(error, forKey: .error)
+    }
 }
 
 /// Requests an RFC 7396 global configuration update through the authenticated control endpoint.
@@ -241,5 +287,43 @@ public struct RuntimeUpdateConfigurationControlReply: Codable, Equatable, Sendab
     public init(error: RuntimeWireError) {
         result = nil
         self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case result
+        case error
+    }
+
+    /// Decodes exactly one result or error.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let result = try container.decodeIfPresent(ConfigurationSnapshot.self, forKey: .result)
+        let error = try container.decodeIfPresent(RuntimeWireError.self, forKey: .error)
+        guard (result == nil) != (error == nil) else {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "A configuration reply must contain exactly one result or error."
+                )
+            )
+        }
+        self.result = result
+        self.error = error
+    }
+
+    /// Encodes exactly one result or error.
+    public func encode(to encoder: any Encoder) throws {
+        guard (result == nil) != (error == nil) else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "A configuration reply must contain exactly one result or error."
+                )
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(result, forKey: .result)
+        try container.encodeIfPresent(error, forKey: .error)
     }
 }

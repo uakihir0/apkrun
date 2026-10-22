@@ -2,6 +2,7 @@
 # Builds the development Guest Agent APK (build-system.md §7.1, guest-components.md §2, #73).
 #
 #   scripts/build-guest.sh                       build Guest/build/out/apkrun-guest.apk and its version record
+#   scripts/build-guest.sh --for-aosp            build Guest/product/prebuilt/ApkRunGuest.apk
 #   scripts/build-guest.sh --version-code N --out DIR
 #                                                build with another versionCode into DIR (the reinstall test)
 #
@@ -25,9 +26,11 @@ package_name="io.apkrun.guest"
 
 out_dir="$guest_dir/build/out"
 version_code_override=""
+for_aosp=0
+out_dir_explicit=0
 
 usage() {
-    printf 'usage: scripts/build-guest.sh [--version-code N] [--out DIR]\n' >&2
+    printf 'usage: scripts/build-guest.sh [--version-code N] [--out DIR] [--for-aosp]\n' >&2
     exit 64
 }
 
@@ -41,11 +44,29 @@ while (($# > 0)); do
         --out)
             (($# >= 2)) || usage
             out_dir="$2"
+            out_dir_explicit=1
             shift 2
+            ;;
+        --for-aosp)
+            ((for_aosp == 0)) || usage
+            for_aosp=1
+            shift
             ;;
         *) usage ;;
     esac
 done
+
+if ((for_aosp)); then
+    ((out_dir_explicit == 0)) || {
+        printf 'build-guest: --for-aosp chooses Guest/product/prebuilt as its output directory\n' >&2
+        exit 64
+    }
+    [[ ! -L "$repo_root/Guest/product" && ! -L "$repo_root/Guest/product/prebuilt" ]] || {
+        printf 'build-guest: Guest/product and its prebuilt directory must not be symlinks\n' >&2
+        exit 78
+    }
+    out_dir="$repo_root/Guest/product/prebuilt"
+fi
 
 if [[ -n "$version_code_override" && ! "$version_code_override" =~ ^[0-9]+$ ]]; then
     printf 'build-guest: --version-code must be a whole number\n' >&2
@@ -71,10 +92,16 @@ fi
 git_revision="$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
 version_name="$marketing_version+$git_revision"
 
-"$repo_root/gradlew" -p "$guest_dir" --console=plain \
-    -PapkrunGuestVersionCode="$version_code" \
-    -PapkrunGuestVersionName="$version_name" \
-    :guestd:assembleRelease
+gradle_args=(
+    -p "$guest_dir"
+    --console=plain
+    "-PapkrunGuestVersionCode=$version_code"
+    "-PapkrunGuestVersionName=$version_name"
+)
+if ((for_aosp)); then
+    gradle_args+=("-PapkrunPersistentAgent=true")
+fi
+"$repo_root/gradlew" "${gradle_args[@]}" :guestd:assembleRelease
 
 shopt -s nullglob
 built=("$guest_dir"/guestd/build/outputs/apk/release/*.apk)
@@ -91,7 +118,30 @@ if [[ -z "$signers" || "$signers" != "$expected_signer_sha256" ]]; then
 fi
 
 mkdir -p "$out_dir"
-cp "${built[0]}" "$out_dir/apkrun-guest.apk"
+if ((for_aosp)); then
+    [[ ! -L "$out_dir" && -d "$out_dir" ]] || {
+        printf 'build-guest: Guest/product/prebuilt must be a real directory\n' >&2
+        exit 78
+    }
+fi
+apk_name="apkrun-guest.apk"
+metadata_name="apkrun-guest.json"
+if ((for_aosp)); then
+    apk_name="ApkRunGuest.apk"
+    metadata_name="ApkRunGuest.json"
+fi
+[[ ! -L "$out_dir/$apk_name" && ! -L "$out_dir/$metadata_name" ]] || {
+    printf 'build-guest: output files must not be symlinks\n' >&2
+    exit 78
+}
+apk_temporary="$(mktemp "$out_dir/.guest-apk.XXXXXX")"
+metadata_temporary="$(mktemp "$out_dir/.guest-metadata.XXXXXX")"
+trap 'rm -f "$apk_temporary" "$metadata_temporary"' EXIT
+install -m 0644 "${built[0]}" "$apk_temporary"
 printf '{\n  "packageName": "%s",\n  "versionCode": %s,\n  "versionName": "%s"\n}\n' \
-    "$package_name" "$version_code" "$version_name" > "$out_dir/apkrun-guest.json"
-printf 'build-guest: wrote %s (versionCode %s)\n' "$out_dir/apkrun-guest.apk" "$version_code"
+    "$package_name" "$version_code" "$version_name" > "$metadata_temporary"
+chmod 0644 "$metadata_temporary"
+mv -f "$apk_temporary" "$out_dir/$apk_name"
+mv -f "$metadata_temporary" "$out_dir/$metadata_name"
+trap - EXIT
+printf 'build-guest: wrote %s (versionCode %s)\n' "$out_dir/$apk_name" "$version_code"

@@ -81,7 +81,7 @@ adb shell 'CLASSPATH=$(pm path io.apkrun.guest | sed "s/^package://") \
 - `app_process` with the installed APK on the class path is the scrcpy pattern. The process runs under the shell uid in the `shell` SELinux domain, with the shell's permissions (§5).
 - `setsid nohup … &` detaches it from the ADB session, so it survives host reconnects.
 - Single instance: the daemon binds the abstract socket `@apkrun-guestd-control` first. If the bind fails with `EADDRINUSE`, another instance runs, and the new one exits with status 3.
-- `Main` calls `Looper.prepareMainLooper()`, creates the service objects, binds `@apkrun-guestd-control`, `@apkrun-guestd-input`, and `@apkrun-guestd-bulk`, and runs the looper. There is no `Context`. System services are reached through `SystemServices` (§6.2).
+- `Main` calls `Looper.prepareMainLooper()`, creates the service objects, binds `@apkrun-guestd-control`, `@apkrun-guestd-input`, and `@apkrun-guestd-bulk`, and runs the looper. The development `app_process` path has no app `Context`; system services are reached through `SystemServices` (§6.2). The custom-image Application supplies its real context to the same daemon.
 
 ### 3.3 Supervision
 
@@ -91,12 +91,12 @@ adb shell 'CLASSPATH=$(pm path io.apkrun.guest | sed "s/^package://") \
 
 ### 3.4 Device setup applied at start
 
-The daemon applies these once per start. They are idempotent, and each is one service call, not a shell command.
+The daemon applies these once per start. They are idempotent and use one service call for each setting.
 
 | Setting | Call (shell equivalent) | Why |
 |---|---|---|
 | Stay awake | `Settings.Global.STAY_ON_WHILE_PLUGGED_IN = 7`, `Settings.System.SCREEN_OFF_TIMEOUT = Int.MAX_VALUE` (`svc power stayon true`) | external displays follow the power state of display 0 ([display-and-windowing.md](display-and-windowing.md) §4) |
-| No keyguard | `ILockSettings.setLockScreenDisabled(true, 0)` (`cmd lock_settings set-disabled true`) | a keyguard would cover app displays |
+| No keyguard | `ILockSettings.setBoolean("lockscreen.disabled", true, 0)` (`cmd lock_settings set-disabled true`) | a keyguard would cover app displays |
 | APKRun IME enabled and default | `Settings.Secure.ENABLED_INPUT_METHODS` += the IME, `DEFAULT_INPUT_METHOD` = the IME (`ime enable`, `ime set`) | [input.md](input.md) §5.6 |
 | Window animations | unchanged | apps expect normal animation. `apkrun dev --no-animations` turns them off for tests |
 | Show IME with a hardware keyboard | `Settings.Secure.SHOW_IME_WITH_HARD_KEYBOARD = 1` | keeps Android from hiding the IME's input connection when key events come from a "physical" keyboard source |
@@ -105,7 +105,7 @@ The IME rows are the IME steps. The daemon applies the other rows without the IM
 
 The original values are not restored when the agent stops. The stock image is a development runtime.
 
-The steps run through each service's shell entry point (`IBinder.shellCommand`). The settings provider and the keyguard switch refuse direct calls from the shell uid. The keyguard switch is the `lockscreen.disabled` key (R-18).
+In development mode the steps run through each service's shell entry point (`IBinder.shellCommand`), because the settings provider and keyguard switch refuse direct calls from the shell uid. On the custom image the privileged app uses `Settings.Global` and `Settings.System` for the stay-awake settings, and `ILockSettings.setBoolean("lockscreen.disabled", true, 0)` for keyguard (R-18). Neither path starts a process.
 
 ---
 
@@ -113,7 +113,7 @@ The steps run through each service's shell entry point (`IBinder.shellCommand`).
 
 ### 4.1 Manifest
 
-The application is `io.apkrun.guest`, with `android:persistent="true"`, `directBootAware="true"`, `defaultToDeviceProtectedStorage="true"`, `allowBackup="false"`, class `.GuestAgentApplication`, and label "APKRun Guest Agent".
+The application is `io.apkrun.guest`, with `android:persistent="true"` in the AOSP prebuilt and false in the development APK, `directBootAware="true"`, `defaultToDeviceProtectedStorage="true"`, `allowBackup="false"`, class `.GuestAgentApplication`, and label "APKRun Guest Agent".
 
 | Component | Declaration | Purpose |
 |---|---|---|
@@ -320,7 +320,7 @@ The content rules of the host apply ([guest-protocol.md](guest-protocol.md) §14
 - For each port: `socket(AF_VSOCK, SOCK_STREAM)`, bind `VMADDR_CID_ANY:<port>`, and listen. On accept, check that the peer CID is `VMADDR_CID_HOST` (2). Then connect to the abstract socket and splice both directions until either side closes. `SO_KEEPALIVE` stays off. Liveness is the protocol's job.
 - Limits: at most 8 concurrent connections per port. Excess connections are closed at once. If the upstream connect fails (the agent is not running), the vsock connection is closed at once, and the host's backoff handles it ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3.1).
 - The bridge does not parse, log, or buffer payloads beyond a 64 KiB copy buffer per direction.
-- The agents accept the bridge by its uid (`PeerCheck`, the `SO_PEERCRED` rule of [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3.1). On the custom image they accept `system` (1000, the bridge) and `root` (0), and `shell` (2000, the ADB forward) only with developer mode on. On the stock image in development mode they accept `shell` and `root`, because adbd is the only peer there; that is the rule built so far. #36 adds the custom-image rule.
+- The agents accept peers by uid (`PeerCheck`, the `SO_PEERCRED` rule of [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3.1). The daemon maps its explicit `AgentMode` to a peer policy for each socket: `PRIVILEGED_APP` selects the custom-image rule, allowing `system` (1000, the bridge) and `root` (0), plus `shell` (2000) only when `ro.boot.apkrun.devmode=1`; an unreadable or unset developer-mode property never enables `shell`. `DEVELOPMENT_SHELL` is the stock-image path and accepts only `shell` and `root`, because adbd is the only peer there. Unknown modes are refused. The custom-image rule does not depend on reading `ro.apkrun.product` from the app domain.
 
 ### 10.2 Implementation
 

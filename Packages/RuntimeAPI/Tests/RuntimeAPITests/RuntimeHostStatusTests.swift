@@ -36,6 +36,7 @@ import Testing
 @Test func runtimeStartRequestDecodesWithoutOptionalHold() throws {
     let request = StartRuntimeRequest(
         header: APIRequestHeader(
+            apiVersion: APIVersion(major: 1, minor: 11),
             operationID: UUID(),
             clientKind: .cli
         )
@@ -44,6 +45,7 @@ import Testing
     let decoded = try JSONDecoder().decode(StartRuntimeRequest.self, from: data)
 
     #expect(decoded == request)
+    #expect(decoded.header.apiVersion == APIVersion(major: 1, minor: 11))
     #expect(decoded.hold == nil)
 }
 

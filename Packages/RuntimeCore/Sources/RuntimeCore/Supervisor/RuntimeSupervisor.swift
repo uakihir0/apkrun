@@ -435,6 +435,7 @@ public actor RuntimeSupervisor {
                 throw error
             }
         }
+        Perf.mark(.runtimeReady, timeline: diagnostics.perfTimeline)
         transition(to: .ready)
         await startRequiredAgentOutageMonitor()
     }

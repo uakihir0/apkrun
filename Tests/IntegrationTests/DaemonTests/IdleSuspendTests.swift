@@ -196,6 +196,13 @@ final class IdleSuspendTests: XCTestCase {
             idleClock: clock
         ) { host, _ in
             try await Self.installHelloText(at: URL(fileURLWithPath: fixturePath), on: host)
+            let storeActivityReleased = await Self.waitUntil(.seconds(5)) {
+                !(await host.idleActivityKindsForTesting().contains(.storeOperation))
+            }
+            XCTAssertTrue(storeActivityReleased, "installing HelloText did not release its store activity assertion")
+            guard storeActivityReleased else {
+                return
+            }
             let packageID = try XCTUnwrap(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
             var resumeDurations: [Double] = []
             resumeDurations.reserveCapacity(20)
@@ -243,10 +250,14 @@ final class IdleSuspendTests: XCTestCase {
                 }
                 resumeDurations.append(Self.seconds(resumed.time.duration(to: runtimeReady.time)))
 
+                await host.beginReadyFrameObservationForTesting(sessionID: launch.sessionID)
                 let firstFrameReady = await Self.waitUntil(.seconds(15)) {
                     await host.hasReadyFrameForTesting(sessionID: launch.sessionID)
                 }
-                XCTAssertTrue(firstFrameReady, "run \(run): HelloText produced no first frame for its IOSurface")
+                XCTAssertTrue(
+                    firstFrameReady,
+                    "run \(run): HelloText produced no frame after its session reached running"
+                )
                 guard firstFrameReady else {
                     break
                 }

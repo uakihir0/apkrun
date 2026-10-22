@@ -641,6 +641,13 @@ public actor RuntimeHost {
         return await service.hasReadyFrameForTesting(sessionID: sessionID)
     }
 
+    func beginReadyFrameObservationForTesting(sessionID: UUID) async {
+        guard let service = headlessSessionService as? DaemonHeadlessSessionService else {
+            return
+        }
+        await service.beginReadyFrameObservationForTesting(sessionID: sessionID)
+    }
+
     func performanceEventsForTesting() -> [PerfEvent] {
         diagnostics?.perfTimeline.snapshot() ?? []
     }

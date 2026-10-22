@@ -121,7 +121,7 @@ Each check is a script that runs without arguments. `scripts/ci/run-checks.sh`, 
 | `scripts/tests/run.sh` | self-tests of `scripts/` | #63 | yes |
 | `scripts/check-raw-adb.sh` | no `adb shell` or `pm ` outside the allowlist: `ADBStoreAgentChannel.swift`, `AdbClient.swift`, tests, `scripts/dev/`, `Tests/Compatibility/`, `Experiments/`, `Images/tools/reference/`, generated protobuf ([test-strategy.md](../04-plan/test-strategy.md) §3.3) | #28 | no |
 | `scripts/check-launcher.sh` | built APKRunLauncher: `otool -L` lists only `/System/Library` and `/usr/lib`; `lipo -archs` is `arm64`; minimum OS 27.0 | #69 (planned) | no |
-| `scripts/check-sepolicy.sh` | release (`user`) product sources declare no permissive domain (R-13) | #36 (planned) | no |
+| `scripts/check-sepolicy.sh` | release (`user`) product sources declare no permissive domain (R-13) | #120 (planned) | no |
 | `scripts/check-fixtures.sh` | APKs in `Tests/Fixtures/apks/` are newer than their sources; no committed fixture over 10 MiB (§8) | #42 (planned) | no |
 | `scripts/check-compatibility-db.sh` | `compatibility.json` against `compatibility.schema.json` ([diagnostics.md](../02-design/diagnostics.md) §10) | #91 (planned) | no |
 | `scripts/check-licenses.sh` | SPDX license and committed `licenseFiles` for every lock entry, `Package.resolved`, and the Gradle and Cargo locks; allowed licenses per `ships` ([legal-and-licensing.md](legal-and-licensing.md) §4); the `Derived from RiftVM` marker names the pin ([legal-and-licensing.md](legal-and-licensing.md) §3.1) | #94 (planned) | no |
@@ -341,7 +341,7 @@ ls Guest/build/out/               # apkrun-guest.apk  apkrun-guest.json
 - `Guest/settings.gradle.kts` includes `protocol`, `agentruntime`, and `guestd`. The Store Agent module `APKRunStore` (output `apkrun-store.apk`) is planned (#37; [guest-components.md](../02-design/guest-components.md) §2).
 - `minSdk` 34, `compileSdk` 37, `targetSdk` 37, Java and Kotlin JVM target 17. Dependencies: Kotlin stdlib, kotlinx-coroutines, and protobuf-javalite only. Release builds compile out debug logging through `BuildConfig.DEBUG`.
 - `versionCode = major × 1,000,000 + minor × 1,000 + patch` of `MARKETING_VERSION`; `versionName` is that plus the short Git revision. `scripts/build-guest.sh --version-code N --out DIR` builds another versionCode for the reinstall test. `apkrun-guest.json` is the record the host reads before install ([guest-components.md](../02-design/guest-components.md) §3.1).
-- Signing: the test key `Tests/Fixtures/signing/test-guest-dev.jks` (alias `apkrun-test-guest-dev`). The script fails unless the signer's certificate SHA-256 is `c58db702f39e9b809ad166d173f165478b4c7cb718d4d0cc89ebe8956438c900`. On the custom image the product re-signs with the platform key (planned, #36).
+- Signing: the test key `Tests/Fixtures/signing/test-guest-dev.jks` (alias `apkrun-test-guest-dev`). The script fails unless the signer's certificate SHA-256 is `c58db702f39e9b809ad166d173f165478b4c7cb718d4d0cc89ebe8956438c900`. For the composed image, `--platform-test-key` signs with the public AOSP test platform key instead (planned, #36; [android-image.md](../02-design/android-image.md) §11.5). The release image re-signs with the APKRun platform key (#120).
 - `scripts/build/embed-guest.sh` copies both files to `APKRun.app/Contents/Resources/guest/`, the development copy for stock images.
 
 ### 7.2 apkrun_vsockd (Rust)
@@ -402,7 +402,7 @@ The build is reproducible: the same sources and pinned tools give the same APK b
 
 ## 9. AOSP product build (planned)
 
-The APKRun product (`Guest/product/`, [android-image.md](../02-design/android-image.md) §11) builds on the Linux builder of [environment-setup.md](environment-setup.md) §5.
+The release image (#120) builds the APKRun product (`Guest/product/`, [android-image.md](../02-design/android-image.md) §11.6) on the Linux builder of [environment-setup.md](environment-setup.md) §5. This section is the AOSP product route; #120 may re-sign the CI target files instead. Development images are composed on the Mac, not built ([android-image.md](../02-design/android-image.md) §11.5).
 
 `scripts/aosp/build-product.sh --revision <commit> --variant userdebug|user` runs in the builder container:
 
@@ -410,7 +410,7 @@ The APKRun product (`Guest/product/`, [android-image.md](../02-design/android-im
 2. Writes `.repo/local_manifests/apkrun.xml`: this repository at `<commit>`, `Guest/product/` mapped to `device/apkrun/apkrun_arm64/`. The Rust crate has its own `Android.bp` in `Guest/vsockd/`, because Soong does not accept `..` in `srcs`. Kati and Soong must each see every product file exactly once. If a `repo` `<linkfile>` cannot do this, the script copies the directories.
 3. Runs `scripts/build-guest.sh` and copies the agent APKs to `Guest/product/prebuilt/` (git-ignored); `android_app_import` reads them with `certificate: "platform"`, `privileged: true`, `presigned: false`.
 4. Runs `lunch apkrun_arm64-trunk_staging-<variant>`, `m`, and `m dist`, with `BUILD_NUMBER=ar<counter>`.
-5. For `user` builds, signs the target files with the release keys and rebuilds the zip (flow fixed by #36; OQ-36).
+5. For `user` builds, signs the target files with the release keys and rebuilds the zip (flow fixed by #120; OQ-36).
 6. Writes `build-info.json`: pinned manifest SHA-256, container digest, APKRun revision, APK SHA-256s, `BUILD_NUMBER`.
 
 The result, `apkrun_arm64-img-ar<counter>.zip`, enters the stock pipeline (§10). For `user` builds, `scripts/check-sepolicy.sh` runs before step 4 (R-13).

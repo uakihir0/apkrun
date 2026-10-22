@@ -10,7 +10,7 @@ This guide lists the machines and tools needed to build and test APKRun, and how
 |---|---|---|---|
 | Developer Mac | host code, Guest Gradle and Rust builds, image tooling, T0–T2 tests | Apple silicon (M1 or later), macOS 27, 16 GB RAM, 150 GiB free | §2 |
 | Developer Mac, M3 or later | the Cuttlefish reference host as a nested-virtualization VM (#65) | M3 or later, 24 GB RAM recommended | §3.3 |
-| Linux x86_64 AOSP builder | the APKRun AOSP product (#36); CI runner `apkrun-aosp` | ≥ 64 GB RAM, ≥ 400 GB disk | §5 |
+| Linux x86_64 AOSP builder | the release image (#120); CI runner `apkrun-aosp` | ≥ 64 GB RAM, ≥ 400 GB disk | §5 |
 | Image build machine | `user` release images, signed with the offline AOSP release keys; never a CI runner | as the AOSP builder | §5.6 |
 | GitHub-hosted `xcode-27` | static checks, builds, and Swift T0 tests for pull requests and `main` pushes | Apple silicon, 3 cores, 7 GB RAM, 14 GB SSD; one fresh VM per job | §6.1 |
 | `apkrun-ci` | self-hosted runner for trusted default-branch jobs | bare-metal Apple silicon, macOS 27 | §6 |
@@ -125,7 +125,7 @@ The product build uses the Rust prebuilt of the pinned AOSP tree (`prebuilts/rus
 | `APKRUN_ANDROID_HOME` | SDK root outside `~/Documents` holding `platform-tools` (§4) | T2 Android suites |
 | `APKRUN_TEST_DEVELOPMENT_TEAM` | Apple Development team ID of the lab test host | signed T2 and G1 tests |
 | `APKRUN_TEST_CODE_SIGN_IDENTITY` | SHA-1 fingerprint of that team's Apple Development certificate | signed T2 and G1 tests |
-| `APKRUN_AOSP_BUILDER` | `user@host` of the Linux builder (planned, #36) | `scripts/aosp/remote-build.sh` (§5.5) |
+| `APKRUN_AOSP_BUILDER` | `user@host` of the Linux builder (planned, #120) | `scripts/aosp/remote-build.sh` (§5.5) |
 | `APKRUN_CI` | `1` on CI runners only; turns "skip with a message" into a failure | all tests and scripts |
 
 Put the exports in `~/.zprofile`. Nothing in this table is committed.
@@ -144,7 +144,7 @@ Put the exports in `~/.zprofile`. Nothing in this table is committed.
 | Python packages | `Images/tools/pyproject.toml` |
 | Third-party native code, test Linux kernel and rootfs, vendored mkbootimg and avbtool | `ThirdParty/ThirdParty.lock.json` ([build-system.md](build-system.md) §6) |
 | Cuttlefish build | `Images/manifests/<buildId>/android-image.json` |
-| AOSP source | `Guest/product/manifest/pinned.xml` (planned, #36) |
+| AOSP source | `Guest/product/manifest/pinned.xml` (planned, #120) |
 
 ---
 
@@ -258,7 +258,7 @@ xcodebuild test -scheme IntegrationTests \
 
 ## 5. Linux x86_64 AOSP builder (planned)
 
-The APKRun AOSP product and every release image are built on a Linux x86_64 machine, because macOS cannot build AOSP. Set the builder up before #36 starts ([roadmap.md](../04-plan/roadmap.md) §1.3; R-14).
+Release images are built on a Linux x86_64 machine, because macOS cannot build AOSP. Development images are composed on the Mac and need no builder ([android-image.md](../02-design/android-image.md) §11.5). Set the builder up before #120 starts (R-14). This section describes the AOSP product build route; #120 may choose to re-sign the CI target files instead.
 
 ### 5.1 Hardware
 
@@ -274,8 +274,8 @@ A cloud VM is fine for development builds. Release builds need the AOSP release 
 ### 5.2 OS and container
 
 - The host can be any 64-bit Linux that runs Docker or Podman. The build runs in a container.
-- `scripts/aosp/builder.Dockerfile` (planned, #36) is based on `ubuntu:22.04`. It includes the AOSP packages (`git-core gnupg flex bison build-essential zip curl zlib1g-dev libc6-dev-i386 x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3`), the `repo` launcher, JDK 17, and the Android SDK packages of §2.5.
-- Build the image once per Dockerfile change, and reference it by digest in the bundle `provenance` ([android-image.md](../02-design/android-image.md) §11.5).
+- `scripts/aosp/builder.Dockerfile` (planned, #120) is based on `ubuntu:22.04`. It includes the AOSP packages (`git-core gnupg flex bison build-essential zip curl zlib1g-dev libc6-dev-i386 x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3`), the `repo` launcher, JDK 17, and the Android SDK packages of §2.5.
+- Build the image once per Dockerfile change, and reference it by digest in the bundle `provenance` ([android-image.md](../02-design/android-image.md) §11.6).
 
 ```bash
 docker build -t apkrun-aosp-builder -f scripts/aosp/builder.Dockerfile scripts/aosp
@@ -316,17 +316,17 @@ The zip goes through the same pipeline as the stock image, starting with invento
 
 ```bash
 export APKRUN_AOSP_BUILDER=builder@aosp-builder.example
-git push origin task/36-apkrun-aosp-product      # the builder fetches this commit
+git push origin task/120-release-apkrun-image      # the builder fetches this commit
 scripts/aosp/remote-build.sh --revision "$(git rev-parse HEAD)" --variant userdebug
 ```
 
-`scripts/aosp/remote-build.sh` (planned, #36): checks that the revision exists on `origin` (the builder never receives uncommitted work); runs `build-product.sh` inside the container; copies `out/dist/apkrun_arm64-img-<n>.zip` and `build-info.json` to `Images/work/ar<n>/download/`; and prints the next commands (`scripts/inventory-cuttlefish.py`, `apkrun_image bundle`). The log stays on the builder under `~/aosp/logs/<BUILD_NUMBER>.log`.
+`scripts/aosp/remote-build.sh` (planned, #120): checks that the revision exists on `origin` (the builder never receives uncommitted work); runs `build-product.sh` inside the container; copies `out/dist/apkrun_arm64-img-<n>.zip` and `build-info.json` to `Images/work/ar<n>/download/`; and prints the next commands (`scripts/inventory-cuttlefish.py`, `apkrun_image bundle`). The log stays on the builder under `~/aosp/logs/<BUILD_NUMBER>.log`.
 
 ### 5.6 Keys on the builder
 
 - `userdebug` builds use the AOSP test keys of the tree. They are for development and CI only.
 - `user` builds use the APKRun platform and release keys. The keys are offline and live only on the image build machine ([security-model.md](../01-architecture/security-model.md) §7). They are permanent: changing them breaks updates of the platform-signed agents.
-- The release signing flow is fixed by #36 (OQ-36; [android-image.md](../02-design/android-image.md) §11.4).
+- The release signing flow is fixed by #120 (OQ-36; [android-image.md](../02-design/android-image.md) §11.4).
 
 ### 5.7 Build numbers and provenance
 

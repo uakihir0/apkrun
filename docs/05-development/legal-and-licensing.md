@@ -27,7 +27,7 @@ The ADR also decides the header format. The proposal is one line, `SPDX-License-
 
 ## 2. Prebuilt Cuttlefish image
 
-The `kind: stock` image comes from a ci.android.com build ([android-image.md](../02-design/android-image.md) §2). It is for development only (M1–M4; [android-image.md](../02-design/android-image.md) §2.3).
+The `kind: stock` image comes from a ci.android.com build ([android-image.md](../02-design/android-image.md) §2). It is for development only (M1–M4; [android-image.md](../02-design/android-image.md) §2.3). A composed `kind: apkrun` bundle ([ADR-0019](../01-architecture/decisions/0019-composed-development-image.md)) contains it, so every rule of this section applies to composed bundles too.
 
 | Allowed | Never |
 |---|---|

@@ -585,17 +585,17 @@ python3 -m apkrun_image bundle \
 
 ## 11. APKRun AOSP product
 
-The guest agents are designed in [guest-components.md](guest-components.md). This section covers the image build, which #36 implements.
+The guest agents are designed in [guest-components.md](guest-components.md). This section covers the image. Development images are composed from the stock build on the Mac (§11.5, #36). Release images are built from source (§11.6, #120). Both take the product files from `Guest/product/` ([ADR-0019](../01-architecture/decisions/0019-composed-development-image.md)).
 
 ### 11.1 Product definition
 
-The source is `Guest/product/`, mapped into the AOSP tree as `device/apkrun/apkrun_arm64/`. It contains `AndroidProducts.mk` (lunch targets `apkrun_arm64-trunk_staging-userdebug` and `-user`), `apkrun_arm64.mk` (inherits `device/google/cuttlefish/vsoc_arm64_only/phone/aosp_cf.mk`; `PRODUCT_PACKAGES += apkrun_vsockd ApkRunGuest ApkRunStore`), `Android.bp` (agent APKs with the platform certificate, privileged, in `/system_ext/priv-app`), `prebuilt/` (git-ignored agent APKs copied by `scripts/build-guest.sh`), `init/apkrun.rc`, `sepolicy/`, `permissions/`, `overlay/`, `settings/`, and `manifest/pinned.xml` (the `repo manifest -r` snapshot for release builds).
+The source is `Guest/product/`. The composer reads its placement list `compose.json` (§11.5). A source build maps it into the AOSP tree as `device/apkrun/apkrun_arm64/`. It contains `compose.json`, `AndroidProducts.mk` (lunch targets `apkrun_arm64-trunk_staging-userdebug` and `-user`), `apkrun_arm64.mk` (inherits `device/google/cuttlefish/vsoc_arm64_only/phone/aosp_cf.mk`; `PRODUCT_PACKAGES += apkrun_vsockd ApkRunGuest ApkRunStore`), `Android.bp` (agent APKs with the platform certificate, privileged, in `/system_ext/priv-app`), `prebuilt/` (git-ignored agent APKs copied by `scripts/build-guest.sh`), `init/apkrun.rc`, `sepolicy/` (CIL fragments), `permissions/`, `overlay/`, `settings/`, and `manifest/pinned.xml` (the `repo manifest -r` snapshot for release builds).
 
-- The policy starts in `BOARD_SEPOLICY_DIRS`. If Treble `neverallow` checks reject `/system_ext` types, #36 moves those rules to `SYSTEM_EXT_PRIVATE_SEPOLICY_DIRS` and records the split here.
-- `PRODUCT_IGNORE_ALL_ANDROIDMK := true`: all modules use `Android.bp`. The base product uses a 16 KiB page size, which the Rust and Kotlin components do not assume.
+- The policy is CIL, the form of the image's split policy. Its types are `system_ext` types. How a source build carries the CIL into Soong is decided by #120.
+- In a source build, `PRODUCT_IGNORE_ALL_ANDROIDMK := true`: all modules use `Android.bp`. The base product uses a 16 KiB page size, which the Rust and Kotlin components do not assume.
 - `ro.apkrun.product=1`, plus the default profile's GPU properties. `bundle --image-version` sets the image version, and ImageCore passes `androidboot.apkrun.image` at every boot.
 - `Guest/product/mesa/` (#99) holds the pinned EGL, GLES, and Gallium prebuilts, staged by `scripts/guest/stage-mesa-product.sh`. It supplies neither the product nor a SELinux policy.
-- The guest loads `/odm/etc/selinux/precompiled_sepolicy`, not the `/sepolicy` of the boot ramdisk. The product build must change that ODM policy or its split inputs. A sysfs label comes from `genfscon`, so a vendor `file_contexts` entry cannot change it.
+- The guest loads `/odm/etc/selinux/precompiled_sepolicy`, not the `/sepolicy` of the boot ramdisk. The composer compiles a new ODM policy from the split inputs (§11.5). A sysfs label comes from `genfscon`, so a vendor `file_contexts` entry cannot change it.
 - The virtio-gpu PCI nodes under `/sys/devices/platform/40000000.pci/` carry the default `sysfs` label. On the `odm4` bundle the launcher (`priv_app`) and Settings (`system_app`) fail Mesa's DRM probe, while platform and untrusted apps pass. The untested candidate is a `genfscon` label `sysfs_gpu` on that path, plus a decision on `system_app` (R-13).
 
 ### 11.2 What the product changes, and what it does not
@@ -620,17 +620,31 @@ The source is `Guest/product/`, mapped into the AOSP tree as `device/apkrun/apkr
 
 | Build | Variant | AVB state |
 |---|---|---|
-| Development | `apkrun_arm64-trunk_staging-userdebug` (M5 onward, CI) | `orange`, unlocked |
-| Release | `apkrun_arm64-trunk_staging-user`, release keys | open (OQ-36) |
+| Development | the stock `userdebug` build, composed (§11.5; M5 onward, CI); AOSP test keys | `orange`, unlocked |
+| Release | `user`, built from source with APKRun release keys (§11.6) | open (OQ-36) |
 
 Proposed for release: pass `orange` and unlocked, but keep dm-verity on through the vbmeta hashtree descriptors. The guest has no bootloader, so it cannot establish a hardware root of trust. The integrity chain is host-side: signed manifest, file hashes, then `os.img` read-only. Claiming `green` would misstate the device state.
 
-### 11.5 Build
+### 11.5 Composition (development images)
+
+`python3 -m apkrun_image compose` (#36) makes the development image from the pinned stock build, on the developer Mac ([ADR-0019](../01-architecture/decisions/0019-composed-development-image.md)).
+
+- **Placement.** Every added file is listed in `Guest/product/compose.json` with its image path, mode, owner, and SELinux label. Added files go into `system_ext_a`. The composer exports the stock tree, adds the files, rebuilds the EROFS image (§4.6), and checks that every stock entry is unchanged.
+- **Growth.** `system_ext_a` has no free space. The composer grows it in the super metadata inside its group (`google_system_dynamic_partitions_a`), and refuses to exceed the group's maximum size. No other partition moves.
+- **Policy.** The CIL fragments are added to `system_ext_sepolicy.cil`, and the entries to `system_ext_seapp_contexts` and `system_ext_file_contexts`. A pinned `secilc` compiles `precompiled_sepolicy` from the same inputs as `init`, and the composer writes the matching SHA-256 files into `odm_a`. `secilc` enforces `neverallow`.
+- **Signing.** The agents are signed with the public AOSP test platform key (certificate SHA-256 `c8a2e9bc…2ab8`), which `seinfo=platform` of the stock build names. The hashtrees and FEC are rebuilt with the pinned avbtool, and `vbmeta_system_a` and `vbmeta_a` are re-signed with the AOSP AVB test key (§4.6).
+- **Bundle.** `kind: apkrun`, with the stock build and the composition inputs in `provenance` ([runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.3). A composed bundle contains the stock build, so it is never published ([legal-and-licensing.md](../05-development/legal-and-licensing.md) §2).
+- **Limits.** No `user` variant, no kernel or module change, and no release keys. Those need §11.6.
+- Acceptance (#36): the composed image reaches `boot_completed`, the agents start, and the reference diff has no unexplained differences beyond the documented product changes.
+
+### 11.6 Release build
+
+This is the plan for #120, which may instead re-sign the CI target files ([ADR-0019](../01-architecture/decisions/0019-composed-development-image.md)).
 
 - The host is x86-64 Linux with 64 GB of RAM and 400 GB of disk ([environment-setup.md](../05-development/environment-setup.md) §5). macOS cannot build AOSP.
 - `repo init` with the pinned manifest, `repo sync`, `lunch apkrun_arm64-trunk_staging-userdebug`, `m`, `m dist DIST_DIR=out/dist` with `BUILD_NUMBER=ar<counter>` (`scripts/aosp/build-product.sh`). The `*-img-*.zip` goes through §3–§10.
 - `provenance` records the pinned manifest, the builder image digest, and the `Guest/` git revision.
-- Acceptance (#36): the custom image reaches `boot_completed`, the agents start, and the reference diff has no unexplained differences beyond the documented product changes.
+- Acceptance (#120): the image passes the suites of the composed image, and no AOSP test key signs it.
 
 ---
 
@@ -764,7 +778,8 @@ Subsystem `io.apkrun.image`, categories `store`, `install`, `verify`, `instance`
 - Archive extraction writes zero runs before holes are punched (§10.4). R-25.
 - Licensing of redistributed images (§2.3). R-10, #94.
 - SELinux for the vsock bridge, the agents, and the virtio-gpu sysfs label (§11.1). R-13, #36.
-- AOSP build infrastructure and upstream changes (§11.5). R-14, #36.
+- AOSP build infrastructure and upstream changes (§11.6). R-14, #120.
+- Differences between the composed image and a source build (§11.5). R-26, #120.
 - `virtio_snd` in the stock kernel (§7.5). OQ-38, #84.
 - Intermittent Wi-Fi and name resolution (§7.4, §7.8). Pending: marker checks of 20 ports on the Android kernel, and the RIL's CPU and log cost. R-12, #96.
 - `androidboot.boot_devices` `40000000.pci` across macOS builds (§5.3). R-16.

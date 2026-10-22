@@ -1,17 +1,11 @@
 package io.apkrun.guest.daemon
 
 import android.os.Looper
+import io.apkrun.guest.protocol.v1.AgentMode
 import io.apkrun.guest.runtime.AgentLog
 import io.apkrun.guest.runtime.SocketNameInUse
 import io.apkrun.guest.runtime.SystemContext
-import java.io.File
 import kotlin.system.exitProcess
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-
-/** The agent log of a development agent (guest-components.md §9). */
-private const val DEVELOPMENT_LOG_PATH = "/data/local/tmp/apkrun/agent.log"
 
 /** The exit status when another agent already serves the sockets (guest-components.md §3.2). */
 private const val EXIT_ALREADY_RUNNING = 3
@@ -35,14 +29,15 @@ object Main {
         // The system context needs the main looper, so it is created here, on the main thread. A
         // worker thread that
         // asks for it later would fail, because it has no looper.
-        SystemContext.get()
-        File(DEVELOPMENT_LOG_PATH).parentFile?.mkdirs()
-        AgentLog.install(File(DEVELOPMENT_LOG_PATH))
+        val daemon =
+            GuestAgentRuntime.create(
+                context = SystemContext.get(),
+                mode = AgentMode.AGENT_MODE_DEVELOPMENT_SHELL,
+            )
         Thread.setDefaultUncaughtExceptionHandler { _, error ->
             AgentLog.error("uncaught exception", error)
             exitProcess(EXIT_UNCAUGHT)
         }
-        val daemon = Daemon(CoroutineScope(SupervisorJob() + Dispatchers.Default))
         try {
             daemon.start()
         } catch (error: SocketNameInUse) {

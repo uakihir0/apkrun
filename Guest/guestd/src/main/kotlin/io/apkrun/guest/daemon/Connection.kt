@@ -9,7 +9,6 @@ import io.apkrun.guest.protocol.GuestProtocolFailure
 import io.apkrun.guest.protocol.ProtocolVersion
 import io.apkrun.guest.protocol.v1.AgentInfo
 import io.apkrun.guest.protocol.v1.AgentKind
-import io.apkrun.guest.protocol.v1.AgentMode
 import io.apkrun.guest.protocol.v1.AndroidInfo
 import io.apkrun.guest.protocol.v1.ChannelKind
 import io.apkrun.guest.protocol.v1.Envelope
@@ -254,7 +253,7 @@ class Connection(
             )
             .addAllCapabilities(daemon.supportedCapabilities().map { it.wireName })
             .setChannel(channel)
-            .setMode(AgentMode.AGENT_MODE_DEVELOPMENT_SHELL)
+            .setMode(daemon.mode)
             .build()
 
     companion object {

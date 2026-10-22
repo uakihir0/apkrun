@@ -12,6 +12,7 @@ plugins {
 // Set by scripts/build-guest.sh. The defaults only serve a direct Gradle run.
 val guestVersionCode = (findProperty("apkrunGuestVersionCode") as String?)?.toInt() ?: 1000
 val guestVersionName = (findProperty("apkrunGuestVersionName") as String?) ?: "0.1.0-dev"
+val persistentAgent = providers.gradleProperty("apkrunPersistentAgent").orElse("false").get()
 
 android {
     namespace = "io.apkrun.guest"
@@ -28,6 +29,7 @@ android {
         targetSdk = 37
         versionCode = guestVersionCode
         versionName = guestVersionName
+        manifestPlaceholders["apkrunPersistentAgent"] = persistentAgent
     }
 
     buildFeatures {

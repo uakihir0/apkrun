@@ -1,8 +1,12 @@
 package io.apkrun.guest.daemon
 
+import android.content.Context
 import android.os.ResultReceiver
+import android.provider.Settings
+import io.apkrun.guest.protocol.v1.AgentMode
 import io.apkrun.guest.runtime.AgentLog
 import io.apkrun.guest.runtime.HiddenApi
+import io.apkrun.guest.runtime.SystemServices
 import java.io.FileDescriptor
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -20,8 +24,16 @@ import java.lang.reflect.InvocationTargetException
  * agent starts no process for it.
  */
 object DeviceSetup {
-    /** Applies the steps. */
-    fun apply() {
+    /** Applies the steps through shell commands in development and app APIs on the custom image. */
+    fun apply(mode: AgentMode, context: Context) {
+        if (mode == AgentMode.AGENT_MODE_PRIVILEGED_APP) {
+            applyForPrivilegedApp(context)
+        } else {
+            applyForDevelopmentShell()
+        }
+    }
+
+    private fun applyForDevelopmentShell() {
         step("stay awake") {
             serviceCommand(
                 "settings",
@@ -32,8 +44,32 @@ object DeviceSetup {
             )
             serviceCommand("settings", "put", "system", "screen_off_timeout", "${Int.MAX_VALUE}")
         }
+        step("no keyguard") { serviceCommand("lock_settings", "set-disabled", "true") }
+    }
+
+    private fun applyForPrivilegedApp(context: Context) {
+        step("stay awake") {
+            check(
+                Settings.Global.putInt(
+                    context.contentResolver,
+                    Settings.Global.STAY_ON_WHILE_PLUGGED_IN,
+                    STAY_ON_ALL_POWER_SOURCES,
+                )
+            ) {
+                "SettingsProvider rejected stay_on_while_plugged_in"
+            }
+            check(
+                Settings.System.putInt(
+                    context.contentResolver,
+                    Settings.System.SCREEN_OFF_TIMEOUT,
+                    Int.MAX_VALUE,
+                )
+            ) {
+                "SettingsProvider rejected screen_off_timeout"
+            }
+        }
         step("no keyguard") {
-            serviceCommand("lock_settings", "set-disabled", "true")
+            SystemServices.lockSettings.call("setBoolean", LOCKSCREEN_DISABLED, true, SYSTEM_USER)
         }
     }
 
@@ -99,4 +135,6 @@ object DeviceSetup {
      * sets it.
      */
     private const val STAY_ON_ALL_POWER_SOURCES = 7
+    private const val LOCKSCREEN_DISABLED = "lockscreen.disabled"
+    private const val SYSTEM_USER = 0
 }

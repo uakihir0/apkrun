@@ -3,13 +3,15 @@
 #
 #   scripts/build-guest.sh                       build Guest/build/out/apkrun-guest.apk and its version record
 #   scripts/build-guest.sh --for-aosp            build Guest/product/prebuilt/ApkRunGuest.apk
+#   scripts/build-guest.sh --platform-test-key    build persistent, platform-signed prebuilt APK
 #   scripts/build-guest.sh --version-code N --out DIR
 #                                                build with another versionCode into DIR (the reinstall test)
 #
 # The APK is signed with the test-only development key Tests/Fixtures/signing/test-guest-dev.jks, and the script
-# fails unless the signer is that key. The versionCode is major * 1 000 000 + minor * 1 000 + patch of the
-# MARKETING_VERSION in project.yml (build-system.md §7.1). The version record `apkrun-guest.json` next to the APK
-# is what the host reads before it installs (guest-components.md §3.1). The host build copies both files into
+# fails unless the build signer is that key. `--platform-test-key` re-signs the persistent AOSP prebuilt with
+# the public AOSP test platform key. The versionCode is major * 1 000 000 + minor * 1 000 + patch of the
+# MARKETING_VERSION in project.yml (build-system.md §7.1). The version record next to the APK is what the host
+# reads before it installs (guest-components.md §3.1). The host build copies the development APK into
 # APKRun.app/Contents/Resources/guest/.
 #
 # Needs a JDK that Gradle can run (17 or newer), and ANDROID_HOME with build-tools 37.0.0 (environment-setup.md §2.5).
@@ -22,15 +24,19 @@ guest_dir="$repo_root/Guest"
 build_tools_version="37.0.0"
 # The SHA-256 of the DER certificate of test-guest-dev.jks. Any other signer fails the build.
 expected_signer_sha256="c58db702f39e9b809ad166d173f165478b4c7cb718d4d0cc89ebe8956438c900"
+expected_platform_signer_sha256="c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8"
 package_name="io.apkrun.guest"
+platform_test_key="$repo_root/Tests/Fixtures/signing/aosp-test-platform.pk8"
+platform_test_certificate="$repo_root/Tests/Fixtures/signing/aosp-test-platform.x509.pem"
 
 out_dir="$guest_dir/build/out"
 version_code_override=""
 for_aosp=0
+platform_test_key_enabled=0
 out_dir_explicit=0
 
 usage() {
-    printf 'usage: scripts/build-guest.sh [--version-code N] [--out DIR] [--for-aosp]\n' >&2
+    printf 'usage: scripts/build-guest.sh [--version-code N] [--out DIR] [--for-aosp] [--platform-test-key]\n' >&2
     exit 64
 }
 
@@ -52,6 +58,12 @@ while (($# > 0)); do
             for_aosp=1
             shift
             ;;
+        --platform-test-key)
+            ((platform_test_key_enabled == 0)) || usage
+            platform_test_key_enabled=1
+            for_aosp=1
+            shift
+            ;;
         *) usage ;;
     esac
 done
@@ -66,6 +78,18 @@ if ((for_aosp)); then
         exit 78
     }
     out_dir="$repo_root/Guest/product/prebuilt"
+fi
+if ((platform_test_key_enabled)); then
+    [[ -f "$platform_test_key" && ! -L "$platform_test_key" ]] || {
+        printf 'build-guest: the AOSP platform test key is missing or symlinked: %s\n' \
+            "$platform_test_key" >&2
+        exit 78
+    }
+    [[ -f "$platform_test_certificate" && ! -L "$platform_test_certificate" ]] || {
+        printf 'build-guest: the AOSP platform test certificate is missing or symlinked: %s\n' \
+            "$platform_test_certificate" >&2
+        exit 78
+    }
 fi
 
 if [[ -n "$version_code_override" && ! "$version_code_override" =~ ^[0-9]+$ ]]; then
@@ -113,7 +137,8 @@ fi
 
 signers="$("$apksigner" verify --print-certs "${built[0]}" | awk '/certificate SHA-256 digest/ { print $NF }' | sort -u)"
 if [[ -z "$signers" || "$signers" != "$expected_signer_sha256" ]]; then
-    printf 'build-guest: %s is not signed by the test guest key (signer %s)\n' "${built[0]}" "$signers" >&2
+    printf 'build-guest: %s is not signed by the test guest development key (signer %s)\n' \
+        "${built[0]}" "$signers" >&2
     exit 1
 fi
 
@@ -136,12 +161,39 @@ fi
 }
 apk_temporary="$(mktemp "$out_dir/.guest-apk.XXXXXX")"
 metadata_temporary="$(mktemp "$out_dir/.guest-metadata.XXXXXX")"
-trap 'rm -f "$apk_temporary" "$metadata_temporary"' EXIT
-install -m 0644 "${built[0]}" "$apk_temporary"
+platform_temporary=""
+cleanup_temporary_files() {
+    rm -f -- "$apk_temporary" "$metadata_temporary"
+    if [[ -n "$platform_temporary" ]]; then
+        rm -f -- "$platform_temporary" "$platform_temporary.idsig"
+    fi
+}
+trap cleanup_temporary_files EXIT
+apk_to_copy="${built[0]}"
+if ((platform_test_key_enabled)); then
+    platform_temporary="$(mktemp "$out_dir/.guest-platform-signed.XXXXXX")"
+    "$apksigner" sign \
+        --key "$platform_test_key" \
+        --cert "$platform_test_certificate" \
+        --out "$platform_temporary" \
+        "${built[0]}"
+    platform_signers="$("$apksigner" verify --print-certs "$platform_temporary" |
+        awk '/certificate SHA-256 digest/ { print $NF }' | sort -u)"
+    if [[ -z "$platform_signers" || "$platform_signers" != "$expected_platform_signer_sha256" ]]; then
+        printf 'build-guest: %s is not signed by the pinned AOSP test platform key (signer %s)\n' \
+            "$platform_temporary" "$platform_signers" >&2
+        exit 1
+    fi
+    apk_to_copy="$platform_temporary"
+fi
+install -m 0644 "$apk_to_copy" "$apk_temporary"
 printf '{\n  "packageName": "%s",\n  "versionCode": %s,\n  "versionName": "%s"\n}\n' \
     "$package_name" "$version_code" "$version_name" > "$metadata_temporary"
 chmod 0644 "$metadata_temporary"
 mv -f "$apk_temporary" "$out_dir/$apk_name"
 mv -f "$metadata_temporary" "$out_dir/$metadata_name"
 trap - EXIT
+if [[ -n "$platform_temporary" ]]; then
+    rm -f -- "$platform_temporary" "$platform_temporary.idsig"
+fi
 printf 'build-guest: wrote %s (versionCode %s)\n' "$out_dir/$apk_name" "$version_code"

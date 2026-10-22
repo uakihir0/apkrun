@@ -142,7 +142,7 @@ The tasks in working order ([../roadmap.md](../roadmap.md) §1.3). A task can st
 | #71 | Performance harness | M4 | #32, #69 |  |
 | #54 | Clipboard, plain text | M4 | #35, #69 |  |
 | #72 | APKRun IME | M4 | #35, #69 |  |
-| #36 | APKRun AOSP product | M5 | #35 |  |
+| #36 | Composed APKRun custom image | M5 | #35 |  |
 | #37 | Store Agent | M5 | #36 |  |
 | #74 | Host inspection and import formats | M6 | #37 |  |
 | #38 | LocalUpdateProvider | M6 | #37 |  |
@@ -183,7 +183,8 @@ The tasks in working order ([../roadmap.md](../roadmap.md) §1.3). A task can st
 | #91 | Compatibility database | M12 | #60 |  |
 | #92 | Security hardening and fuzzing | M12 | #32, #35 |  |
 | #93 | Localization and accessibility | M12 | #78 |  |
-| #94 | Legal and licensing compliance | M12 | #21, #36 |  |
+| #120 | Release APKRun image | M12 | #36 |  |
+| #94 | Legal and licensing compliance | M12 | #21, #120 |  |
 | #95 | v1.0 release readiness | M12 | every other v1.0 task |  |
 | #97 | Vulkan track | Post-v1 | #24, #36 |  |
 | #98 | Google Play authority | Post-v1 | #40, #50 |  |

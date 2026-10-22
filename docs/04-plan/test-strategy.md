@@ -78,7 +78,7 @@ The CI jobs that run each tier are in [../05-development/build-system.md](../05-
 |---|---|---|---|
 | LinuxGuest | Linux test guest: devices, disks, bootconfig, `net`, `rng`, `gpu`, `virgl` | `linux-guest` | ≤ 15 min |
 | AndroidStock | stock Cuttlefish image: boot, ADB, install and launch, graphics, input, windows, development-mode agent | `android-stock` | ≤ 60 min |
-| AndroidCustom | custom `userdebug` image (#36): Store Agent, updates, rollback, wrappers, desktop integration, diagnostics, SELinux, image migration | `android-custom` | ≤ 90 min |
+| AndroidCustom | composed custom image (#36), and the release image (#120): Store Agent, updates, rollback, wrappers, desktop integration, diagnostics, SELinux, image migration | `android-custom` | ≤ 90 min |
 | Maintenance | APKRun N → N+1 and its variants (`ReleaseUpdateTest`), feed-driven image update | `maintenance` | ≤ 120 min |
 
 - **Triggers.** The jobs are in `integration.yml` ([../05-development/build-system.md](../05-development/build-system.md) §15.1). `linux-guest` runs only on manual dispatch from `main` until an `apkrun-lab` runner exists. Pull-request T2 runs are off until a disposable runner exists. Until then, the reviewed commit runs on the reference Mac, and the result is linked before the task-closing pull request merges. A label never authorizes unreviewed code on a persistent self-hosted runner. The nightly `t2-all` job runs all four suites on `main`.
@@ -147,7 +147,7 @@ Runner labels and setup: [../05-development/environment-setup.md](../05-developm
 | `apkrun-lab`, the reference Mac (OQ-02: M1, 16 GB, bare metal, §3.6) | trusted `main` and nightly runs, gate checks, NFR numbers and baselines, release smoke matrix, notarization, manual checklists |
 | Seed lab Mac (every macOS 27.x beta and release) | the full T2 set and the gate checks on each new build (R-16, §9.4) |
 | Information Mac (optional, M3 or later) | the nightly T2 set; performance numbers for information only |
-| AOSP builder (x86-64 Linux, [environment-setup.md](../05-development/environment-setup.md) §5) | custom image builds and test image bundles (§3.5) |
+| AOSP builder (x86-64 Linux, [environment-setup.md](../05-development/environment-setup.md) §5) | release image builds (#120) |
 
 T2 and T3 never run inside a VM (P3). Hosted macOS VMs may run T0 tests that need only the process and ordinary temporary files. T1 requires its declared host resources. A pull-request T1, T2, or T3 job uses a disposable runner. Until one exists, run the reviewed commit on the required Mac and attach the result.
 
@@ -223,7 +223,7 @@ Defined in [../02-design/vm.md](../02-design/vm.md) §12.
 | Image | Source | Used by |
 |---|---|---|
 | Stock Cuttlefish `aosp_cf_arm64_only_phone-userdebug`, build 16373615, Android 17 (API 37) | Android CI, fetched by the #9 tool, pinned in the image manifest | AndroidStock suite, tasks of M1–M4, development mode |
-| Custom `apkrun_arm64-trunk_staging-userdebug` | AOSP builder ([../02-design/android-image.md](../02-design/android-image.md) §11.5) | AndroidCustom suite (#36), test bundles |
+| Composed custom `userdebug` | `apkrun_image compose` on the Mac ([../02-design/android-image.md](../02-design/android-image.md) §11.5) | AndroidCustom suite (#36), test bundles |
 | Custom `-user` | image build machine, release signing | image release candidates, release smoke matrix, performance |
 | Current and previous stable images | the published image feed | release smoke matrix (§9.2) |
 | Reference captures (`default`, `target`, `swiftshader`) | `Images/tools/reference/capture.sh` → `Images/reference/<buildId>/` | the G2 reference diff ([../02-design/android-image.md](../02-design/android-image.md) §8.4), `BootPhaseDetector` golden tests |

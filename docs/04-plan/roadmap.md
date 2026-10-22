@@ -42,7 +42,7 @@ Work in this order. Inside each step, the task index ([issues/README.md](issues/
 2. **Resident runtime.** #32 (verify), #33, #69 (G6).
 3. **First Mac app (G8).** #45, #46, #47, #48. They need neither the custom image nor the update system, so they come before M5 and M6. G8 is the first time an Android app runs as a Mac app.
 4. **Rest of M4.** #35, #67, #70, #71, #54, #72.
-5. **Custom image (M5).** #36, #37. #36 needs the Linux AOSP builder and long builds (R-14): set up the builder ([../05-development/environment-setup.md](../05-development/environment-setup.md) §5) during step 3.
+5. **Custom image (M5).** #36, #37. #36 composes the custom image on the Mac from the stock build ([ADR-0019](../01-architecture/decisions/0019-composed-development-image.md)). Only the release image (#120, M12) needs the Linux builder ([../05-development/environment-setup.md](../05-development/environment-setup.md) §5; R-14).
 6. **Updates (M6).** #74, #38, #39, #40, #41 (G7), #42, #43, #44, #51, #75.
 7. **Rest of M7.** #56, #57, #49, #50 (G9), #76, #77, #78, #79, #80, #90.
 8. **M8 to M11**, then **M12**.
@@ -120,7 +120,7 @@ Also: first-run provisioning (#67), idle pause and host sleep/wake (#70), perfor
 | Gentle updates | #41 (G7) |
 | Signature verification, split APKs, rollback | #42, #43, #44 |
 
-From v0.3 on, the APKRun AOSP product (#36) is the image the product is tested on.
+From v0.3 on, the composed custom image (#36) is the image the product is tested on. From v1.0, the release image (#120) is too.
 
 ### 3.4 v0.4: Android app as a Mac app, first public demo
 

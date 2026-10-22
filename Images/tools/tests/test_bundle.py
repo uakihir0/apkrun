@@ -150,6 +150,74 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _composition_fixture(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
+    directory = tmp_path / "composition"
+    directory.mkdir()
+    document = json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))
+    document["artifacts"].append({"partition": "vbmeta_system", "size": 7})
+    contents = {
+        "super.img": b"composed super",
+        "vbmeta_system_a.img": b"system!",
+        "vbmeta_a.img": b"v" * 1536,
+    }
+    for filename, data in contents.items():
+        (directory / filename).write_bytes(data)
+    record = {
+        "schemaVersion": 1,
+        "sourceManifest": {
+            "path": FIXTURE_MANIFEST.relative_to(REPOSITORY_ROOT).as_posix(),
+            "sha256": _sha256(FIXTURE_MANIFEST),
+        },
+        "productInputs": [
+            {"path": "Guest/product/compose.json", "sha256": "a" * 64},
+        ],
+        "apkrunRevision": "b" * 40,
+        "outputHashes": {
+            filename: hashlib.sha256(data).hexdigest() for filename, data in contents.items()
+        },
+    }
+    (directory / "composition.json").write_text(json.dumps(record), encoding="utf-8")
+    return directory, document
+
+
+def test_composition_outputs_match_the_recorded_hashes(tmp_path: Path) -> None:
+    directory, document = _composition_fixture(tmp_path)
+
+    composition, overrides = bundle_module._composition_inputs(
+        directory, document, FIXTURE_MANIFEST
+    )
+
+    assert set(overrides) == {"super", "vbmeta_system", "vbmeta"}
+    assert (
+        composition["sourceManifest"]["path"]
+        == FIXTURE_MANIFEST.relative_to(REPOSITORY_ROOT).as_posix()
+    )
+
+
+@pytest.mark.parametrize("filename", ["super.img", "vbmeta_system_a.img", "vbmeta_a.img"])
+def test_composition_rejects_an_output_changed_after_provenance(
+    tmp_path: Path, filename: str
+) -> None:
+    directory, document = _composition_fixture(tmp_path)
+    output = directory / filename
+    data = output.read_bytes()
+    output.write_bytes(bytes([data[0] ^ 1]) + data[1:])
+
+    with pytest.raises(BundleError, match="SHA-256 differs from the composition record"):
+        bundle_module._composition_inputs(directory, document, FIXTURE_MANIFEST)
+
+
+def test_composition_requires_hashes_for_exactly_its_output_files(tmp_path: Path) -> None:
+    directory, document = _composition_fixture(tmp_path)
+    record_path = directory / "composition.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["outputHashes"].pop("vbmeta_a.img")
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    with pytest.raises(BundleError, match="output hashes"):
+        bundle_module._composition_inputs(directory, document, FIXTURE_MANIFEST)
+
+
 def test_signed_bundle_has_the_documented_tree_and_manifest(tmp_path: Path) -> None:
     output = tmp_path / "bundle"
     manifest = _build(tmp_path, output)

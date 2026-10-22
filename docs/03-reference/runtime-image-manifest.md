@@ -449,7 +449,7 @@ How ImageCore uses them ([android-image.md](../02-design/android-image.md) §9.2
 | `minimumRuntimeVersion` | string | yes | `MAJOR.MINOR.PATCH`, no leading zeros | the oldest APKRun that may boot this image (release rule R3) |
 | `guestProtocol.min` | integer | yes | 1 to 65535 | lowest guest protocol major the image's agents speak |
 | `guestProtocol.max` | integer | yes | `min` to 65535 | highest major |
-| `agents` | array | yes | 0 to 16 entries. Empty for `stock`. For `apkrun`, contains `io.apkrun.guest` and `io.apkrun.store` | agents built into the image |
+| `agents` | array | yes | 0 to 16 entries. Empty for `stock`. For `apkrun`, contains `io.apkrun.guest`; earlier product images may omit `io.apkrun.store` until #37 integrates it | agents built into the image |
 | `agents[].package` | string | yes | an Android package name ([package-metadata-json.md](package-metadata-json.md) §2). Unique | agent package |
 | `agents[].versionCode` | integer | yes | 1 to 9223372036854775807 | its `longVersionCode` |
 
@@ -899,7 +899,7 @@ The order is fixed: signature, then schema, then files ([android-image.md](../02
 | S7 | `consolePorts[i].index == i`. Exactly one `systemConsole`, at index 0. Names are unique |
 | S8 | Each GPU profile's `overrides` lists only keys that the profile's `bootconfig` also sets |
 | S9 | `guestProtocol.min ≤ guestProtocol.max` |
-| S10 | `kind: stock` has no `agents`. `kind: apkrun` lists `io.apkrun.guest` and `io.apkrun.store`. Agent packages are unique |
+| S10 | `kind: stock` has no `agents`. `kind: apkrun` lists `io.apkrun.guest`; `io.apkrun.store` is optional until #37. Agent packages are unique |
 | S11 | `userdata.upgradableFrom` is ascending and contains `userdata.schemaVersion` |
 | S12 | `compatibility.upgradeFrom.minimumImageVersion` ≤ the triple of `imageVersion` |
 | S13 | `kind: apkrun` has non-null `revisions.guest`, `pinnedManifestSHA256`, and `builderImageDigest`. `kind: stock` has them all null |

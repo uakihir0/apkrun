@@ -180,9 +180,8 @@ final class IdleSuspendTests: XCTestCase {
         }
     }
 
-    /// Every idle resume returns to ready within the documented budget and emits a frame for the new HelloText
-    /// session's IOSurface.
-    func testHelloTextFirstFrameAppearsAfterIdleResumeWithP50Under500Milliseconds() async throws {
+    /// Measures VM_RESUMED → RUNTIME_READY and checks for a new GPU-completed frame on HelloText's leased IOSurface.
+    func testIdleResumeReadyP50IsUnder500MillisecondsAndHelloTextGetsNewIOSurfaceFrame() async throws {
         guard let fixturePath = AndroidTestEnvironment.current()["APKRUN_FIXTURE_APK"],
             !fixturePath.isEmpty,
             FileManager.default.fileExists(atPath: fixturePath)
@@ -261,7 +260,7 @@ final class IdleSuspendTests: XCTestCase {
                 }
                 XCTAssertTrue(
                     firstFrameReady,
-                    "run \(run): no new IOSurface frame followed the HelloText launch report"
+                    "run \(run): no new IOSurface frame followed HelloText's launch report"
                 )
                 guard firstFrameReady else {
                     break
@@ -277,7 +276,7 @@ final class IdleSuspendTests: XCTestCase {
                 }
             }
 
-            XCTAssertEqual(resumeDurations.count, 20, "all 20 idle-resume launches must reach a first frame")
+            XCTAssertEqual(resumeDurations.count, 20, "all 20 idle-resume launches must reach ready and offer a frame")
             let sortedDurations = resumeDurations.sorted()
             if sortedDurations.count == 20 {
                 let p50 = (sortedDurations[9] + sortedDurations[10]) / 2

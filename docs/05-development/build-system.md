@@ -559,7 +559,7 @@ Input tests run in their own configurations. Select the configuration and the me
 | `AndroidIdleSuspend` | `testConnectedADBCommandKeepsRuntimeReadyPastSuspendDeadline` | #70 T2 holds a real ADB shell open past the one-minute suspend deadline |
 | `AndroidIdleSuspend` | `testPendingInstallKeepsRuntimeReadyPastSuspendDeadline` | #70 T2 holds a PackageStore install at the guest commit boundary while advancing the idle clock |
 | `AndroidIdleSuspend` | `testRuntimeStartRequestResumesSuspendedVM` | #70 T2 resumes the idle-suspended VM through RuntimeHost |
-| `AndroidIdleSuspend` | `testHelloTextFirstFrameAppearsAfterIdleResumeWithP50Under500Milliseconds` | #70 T2 opens HelloText after 20 idle resumes, confirms a new IOSurface frame each time, and measures p50 from `VM_RESUMED` to `RUNTIME_READY` |
+| `AndroidIdleSuspend` | `testIdleResumeReadyP50IsUnder500MillisecondsAndHelloTextGetsNewIOSurfaceFrame` | #70 T2 opens HelloText after 20 idle resumes, confirms a new IOSurface frame each time, and measures p50 from `VM_RESUMED` to `RUNTIME_READY` |
 | `AndroidSleepWake` | `testHostSleepPausesAndWakeResumesWithSynchronizedGuestClock` | #70 T2 against a real Android VM; injects sleep/wake through the shared developer event handler and checks guest time |
 
 - The interactive and edge tests need a dedicated lab GUI session with exactly one display. They activate the test window; the interactive test moves and clicks the desktop pointer. Run them only on a dedicated desktop (typically the reference Mac), never on a desktop used for other work, in unattended CI, or on a self-hosted GUI runner.
@@ -623,7 +623,7 @@ xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Integrat
   DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
   -only-test-configuration AndroidIdleSuspend \
-  -only-testing:IntegrationTests/IdleSuspendTests/testHelloTextFirstFrameAppearsAfterIdleResumeWithP50Under500Milliseconds test
+  -only-testing:IntegrationTests/IdleSuspendTests/testIdleResumeReadyP50IsUnder500MillisecondsAndHelloTextGetsNewIOSurfaceFrame test
 
 xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
   -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd" \

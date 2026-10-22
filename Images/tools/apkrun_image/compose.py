@@ -4,13 +4,30 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
+import tempfile
+import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
-from apkrun_image.erofs import DIRECTORY, REGULAR_FILE, Entry, TarMember
+from apkrun_image.erofs import (
+    BLOCK_SIZE,
+    DIRECTORY,
+    REGULAR_FILE,
+    Entry,
+    ErofsTools,
+    TarMember,
+    build_image,
+    export_tree,
+    image_geometry,
+    read_tree,
+    sha256_file,
+    tree_members,
+    write_tar,
+)
 
 TASK = "#36"
 BUILD_TIMESTAMP = 1230768000
@@ -39,6 +56,22 @@ class Placement:
     def erofs_path(self) -> str:
         """Return the path relative to the root of the system_ext filesystem."""
         return PurePosixPath(self.image_path).relative_to(SYSTEM_EXT_PREFIX).as_posix()
+
+
+@dataclass(frozen=True)
+class RebuildResult:
+    """A composed EROFS image and the semantic checks performed on it."""
+
+    image: Path
+    stock_sha256: str
+    plan_sha256: str
+    image_uuid: str
+    stock_entries: dict[str, Entry]
+    composed_entries: dict[str, Entry]
+    added_entries: dict[str, Entry]
+    stock_entries_reproduced: int
+    stock_blocks: int
+    filesystem_blocks: int
 
 
 def _safe_posix_path(value: object, *, absolute: bool, what: str) -> PurePosixPath:
@@ -265,7 +298,11 @@ def _preflight_placements(
 
 
 def apply_placements(
-    placements: Sequence[Placement], product_root: Path, tree_root: Path
+    placements: Sequence[Placement],
+    product_root: Path,
+    tree_root: Path,
+    *,
+    entry_mtime: str | None = None,
 ) -> tuple[dict[str, Entry], list[TarMember]]:
     """Add only planned entries to an exported tree and return their expected metadata."""
     if product_root.is_symlink() or not product_root.is_dir():
@@ -309,7 +346,7 @@ def apply_placements(
                 uid=placement.uid,
                 gid=placement.gid,
                 size=size,
-                mtime=str(BUILD_TIMESTAMP),
+                mtime=entry_mtime if entry_mtime is not None else str(BUILD_TIMESTAMP),
                 sha256=digest,
                 label=placement.label,
             )
@@ -334,3 +371,216 @@ def apply_placements(
                 target.unlink(missing_ok=True)
         raise
     return expected, members
+
+
+def _entry_differences(
+    before: Mapping[str, Entry],
+    after: Mapping[str, Entry],
+    *,
+    added: Mapping[str, Entry] | None = None,
+    allow_directory_size_changes: bool = False,
+) -> list[str]:
+    """Return semantic differences between stock and rebuilt EROFS entry maps."""
+    expected_entries = added or {}
+    expected_new = set(expected_entries)
+    receiving = {str(PurePosixPath(path).parent) for path in expected_new}
+    problems: list[str] = []
+    for path in sorted(set(before) - set(after)):
+        problems.append(f"{path}: missing from the rebuild")
+    for path in sorted(set(after) - set(before)):
+        if path not in expected_new:
+            problems.append(f"{path}: new in the rebuild and not expected")
+    for path in sorted(expected_new - set(after)):
+        problems.append(f"{path}: expected in the rebuild but missing")
+
+    fields = ("kind", "mode", "uid", "gid", "mtime", "target", "sha256", "label")
+    for path in sorted(set(before) & set(after)):
+        if path in expected_new:
+            problems.append(f"{path}: expected to be new but it exists in the stock partition")
+            continue
+        old, new = before[path], after[path]
+        for field in fields:
+            if getattr(old, field) != getattr(new, field):
+                problems.append(f"{path}: {field} differs")
+        may_change_size = old.kind == DIRECTORY and (
+            allow_directory_size_changes or path in receiving
+        )
+        if not may_change_size and old.size != new.size:
+            problems.append(f"{path}: size differs")
+
+    for path in sorted(expected_new & set(after)):
+        expected, actual = expected_entries[path], after[path]
+        for field in fields:
+            if getattr(expected, field) != getattr(actual, field):
+                problems.append(f"{path}: {field} differs from the placement plan")
+        if expected.kind != DIRECTORY and expected.size != actual.size:
+            problems.append(f"{path}: size differs from the placement plan")
+    return problems
+
+
+def _build_ero(
+    image_tools: ErofsTools,
+    members: Sequence[TarMember],
+    scratch: Path,
+    name: str,
+    image_uuid: str,
+) -> Path:
+    tar_path = scratch / f"{name}.tar"
+    image_path = scratch / f"{name}.erofs"
+    write_tar(members, tar_path)
+    build_image(
+        image_tools,
+        tar_path,
+        image_path,
+        timestamp=BUILD_TIMESTAMP,
+        uuid=image_uuid,
+    )
+    tar_path.unlink()
+    return image_path
+
+
+def _rebuild_system_ext(
+    image_tools: ErofsTools,
+    stock_image: Path,
+    product_root: Path,
+    scratch: Path,
+    *,
+    image_uuid: str,
+) -> RebuildResult:
+    """Rebuild system_ext with the listed product entries and verify its exact semantic diff."""
+    try:
+        normalized_uuid = str(uuid.UUID(image_uuid))
+    except ValueError:
+        raise ComposeError(f"{image_uuid!r}: image UUID is invalid.") from None
+
+    plan_path = product_root / "compose.json"
+    placements = load_placements(plan_path, product_root)
+    plan_sha256 = sha256_file(plan_path)
+    stock_tree = scratch / "system-ext-stock-tree"
+    export_tree(image_tools, stock_image, stock_tree)
+    stock_entries = read_tree(image_tools, stock_image, stock_tree)
+    block_size, stock_blocks, _ = image_geometry(image_tools, stock_image)
+    if block_size != BLOCK_SIZE:
+        raise ComposeError(f"stock system_ext uses {block_size}-byte blocks, not {BLOCK_SIZE}.")
+    mtimes = {entry.mtime for entry in stock_entries.values()}
+    if len(mtimes) != 1:
+        raise ComposeError("stock system_ext entries do not share one timestamp.")
+
+    stock_members = tree_members(stock_entries, stock_tree, BUILD_TIMESTAMP)
+
+    roundtrip_image = _build_ero(
+        image_tools,
+        stock_members,
+        scratch,
+        "system-ext-roundtrip",
+        normalized_uuid,
+    )
+    roundtrip_tree = scratch / "system-ext-roundtrip-tree"
+    export_tree(image_tools, roundtrip_image, roundtrip_tree)
+    roundtrip_entries = read_tree(image_tools, roundtrip_image, roundtrip_tree)
+    roundtrip_problems = _entry_differences(
+        stock_entries, roundtrip_entries, allow_directory_size_changes=True
+    )
+    if roundtrip_problems:
+        raise ComposeError(f"stock system_ext round trip changed {roundtrip_problems[0]}.")
+    shutil.rmtree(roundtrip_tree)
+    roundtrip_image.unlink()
+
+    added_entries, added_members = apply_placements(
+        placements,
+        product_root,
+        stock_tree,
+        entry_mtime=next(iter(mtimes)),
+    )
+    output_image = _build_ero(
+        image_tools,
+        sorted(stock_members + added_members, key=lambda member: member.path),
+        scratch,
+        "system-ext-composed",
+        normalized_uuid,
+    )
+    composed_tree = scratch / "system-ext-composed-tree"
+    export_tree(image_tools, output_image, composed_tree)
+    composed_entries = read_tree(image_tools, output_image, composed_tree)
+    problems = _entry_differences(
+        stock_entries,
+        composed_entries,
+        added=added_entries,
+    )
+    if problems:
+        raise ComposeError(f"composed system_ext differs from its plan: {problems[0]}.")
+
+    block_size, filesystem_blocks, _ = image_geometry(image_tools, output_image)
+    if block_size != BLOCK_SIZE:
+        raise ComposeError(f"rebuilt system_ext uses {block_size}-byte blocks, not {BLOCK_SIZE}.")
+    if output_image.stat().st_size != filesystem_blocks * block_size:
+        raise ComposeError("rebuilt system_ext has bytes beyond its EROFS filesystem.")
+    shutil.rmtree(composed_tree)
+
+    return RebuildResult(
+        image=output_image,
+        stock_sha256=sha256_file(stock_image),
+        plan_sha256=plan_sha256,
+        image_uuid=normalized_uuid,
+        stock_entries=stock_entries,
+        composed_entries=composed_entries,
+        added_entries=added_entries,
+        stock_entries_reproduced=len(stock_entries),
+        stock_blocks=stock_blocks,
+        filesystem_blocks=filesystem_blocks,
+    )
+
+
+def rebuild_system_ext(
+    image_tools: ErofsTools,
+    stock_image: Path,
+    product_root: Path,
+    scratch: Path,
+    *,
+    image_uuid: str,
+) -> RebuildResult:
+    """Rebuild system_ext in a private work directory and retain only the checked image."""
+    if scratch.is_symlink():
+        raise ComposeError(f"{scratch}: scratch root must not be a symlink.")
+    try:
+        scratch.mkdir(parents=True, exist_ok=True)
+        scratch_root = scratch.resolve(strict=True)
+    except OSError as error:
+        raise ComposeError(f"{scratch}: cannot create scratch root: {error}") from None
+    if not scratch_root.is_dir():
+        raise ComposeError(f"{scratch_root}: scratch root must be a directory.")
+
+    work_directory = Path(tempfile.mkdtemp(prefix=".apkrun-compose-", dir=scratch_root))
+    output_image: Path | None = None
+    output_identity: tuple[int, int] | None = None
+    try:
+        result = _rebuild_system_ext(
+            image_tools,
+            stock_image,
+            product_root,
+            work_directory,
+            image_uuid=image_uuid,
+        )
+        candidate = scratch_root / f"system-ext-{uuid.uuid4().hex}.erofs"
+        source_identity = result.image.stat(follow_symlinks=False)
+        try:
+            os.link(result.image, candidate, follow_symlinks=False)
+        except FileExistsError as error:
+            raise ComposeError(f"{candidate}: output already exists.") from error
+        output_image = candidate
+        output_identity = (source_identity.st_dev, source_identity.st_ino)
+        created = output_image.lstat()
+        if (created.st_dev, created.st_ino) != output_identity:
+            raise ComposeError(f"{output_image}: published image differs from the verified build.")
+        return replace(result, image=output_image)
+    except BaseException:
+        if output_image is not None and output_identity is not None:
+            try:
+                current = output_image.lstat()
+            except FileNotFoundError:
+                current = None
+            if current is not None and (current.st_dev, current.st_ino) == output_identity:
+                output_image.unlink()
+        raise
+    finally:
+        shutil.rmtree(work_directory, ignore_errors=True)

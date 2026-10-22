@@ -4,15 +4,32 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from apkrun_image import compose
-from apkrun_image.compose import ComposeError, apply_placements, load_placements
-from apkrun_image.erofs import DIRECTORY, REGULAR_FILE
+from apkrun_image.compose import (
+    ComposeError,
+    _entry_differences,
+    apply_placements,
+    load_placements,
+    rebuild_system_ext,
+)
+from apkrun_image.erofs import (
+    DIRECTORY,
+    REGULAR_FILE,
+    ErofsTools,
+    TarMember,
+    build_image,
+    verify_tools,
+    write_tar,
+)
 
 LABEL = "u:object_r:system_file:s0"
+TOOLS_ROOT = os.environ.get("APKRUN_EROFS_UTILS")
+FIXED_UUID = "11111111-2222-4333-8444-555555555555"
 
 
 def write_plan(product: Path, entries: list[dict[str, object]], *, schema_version: int = 1) -> Path:
@@ -207,3 +224,120 @@ def test_application_rolls_back_partial_file_copy_and_created_directories(
         apply_placements(load_placements(plan, product), product, tree)
 
     assert list(tree.rglob("*")) == [tree / "etc"]
+
+
+def test_entry_diff_allows_only_planned_entries_and_receiving_directory_sizes() -> None:
+    from apkrun_image.erofs import Entry
+
+    stock = {
+        "/": Entry("/", DIRECTORY, 0o755, 0, 0, 64, "stock"),
+        "/etc": Entry("/etc", DIRECTORY, 0o755, 0, 0, 64, "stock", label=LABEL),
+    }
+    planned = {
+        "/etc/apkrun": Entry("/etc/apkrun", DIRECTORY, 0o755, 0, 0, 0, "stock", label=LABEL),
+        "/etc/apkrun/marker": Entry(
+            "/etc/apkrun/marker",
+            REGULAR_FILE,
+            0o644,
+            0,
+            0,
+            5,
+            "stock",
+            sha256=hashlib.sha256(b"hello").hexdigest(),
+            label=LABEL,
+        ),
+    }
+    composed = {
+        **stock,
+        "/etc": Entry("/etc", DIRECTORY, 0o755, 0, 0, 96, "stock", label=LABEL),
+        "/etc/apkrun": Entry("/etc/apkrun", DIRECTORY, 0o755, 0, 0, 32, "stock", label=LABEL),
+        "/etc/apkrun/marker": planned["/etc/apkrun/marker"],
+    }
+
+    assert _entry_differences(stock, composed, added=planned) == []
+    unexpected = Entry(
+        "/etc/unlisted",
+        REGULAR_FILE,
+        0o644,
+        0,
+        0,
+        1,
+        "stock",
+        sha256=hashlib.sha256(b"x").hexdigest(),
+        label=LABEL,
+    )
+    assert _entry_differences(stock, {**composed, "/etc/unlisted": unexpected}, added=planned) == [
+        "/etc/unlisted: new in the rebuild and not expected"
+    ]
+
+
+def test_rebuild_system_ext_checks_the_stock_round_trip_and_exact_placements(
+    tmp_path: Path,
+) -> None:
+    if not TOOLS_ROOT:
+        pytest.skip("set APKRUN_EROFS_UTILS to a fetched erofs-utils root (erofs-tools)")
+    tools: ErofsTools = verify_tools(Path(TOOLS_ROOT))
+    stock_source = tmp_path / "stock-tree"
+    (stock_source / "etc").mkdir(parents=True)
+    (stock_source / "etc/stock.conf").write_text("stock\n", encoding="utf-8")
+    stock_members = [
+        TarMember("/", DIRECTORY, 0o755, 0, 0, compose.BUILD_TIMESTAMP, label=LABEL),
+        TarMember("/etc", DIRECTORY, 0o755, 0, 0, compose.BUILD_TIMESTAMP, label=LABEL),
+        TarMember(
+            "/etc/stock.conf",
+            REGULAR_FILE,
+            0o644,
+            0,
+            0,
+            compose.BUILD_TIMESTAMP,
+            label=LABEL,
+            source=stock_source / "etc/stock.conf",
+        ),
+    ]
+    stock_tar = tmp_path / "stock.tar"
+    write_tar(stock_members, stock_tar)
+    stock_image = tmp_path / "system_ext_a.img"
+    build_image(
+        tools,
+        stock_tar,
+        stock_image,
+        timestamp=compose.BUILD_TIMESTAMP,
+        uuid=FIXED_UUID,
+    )
+
+    product = tmp_path / "product"
+    product.mkdir()
+    (product / "marker.txt").write_text("boot marker\n", encoding="utf-8")
+    write_plan(
+        product,
+        [
+            directory("/system_ext/etc/apkrun"),
+            regular_file("marker.txt", "/system_ext/etc/apkrun/marker.txt"),
+        ],
+    )
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep").write_text("unmodified\n", encoding="utf-8")
+    (scratch / "system-ext-stock-tree").symlink_to(outside, target_is_directory=True)
+    result = rebuild_system_ext(
+        tools,
+        stock_image,
+        product,
+        scratch,
+        image_uuid=FIXED_UUID,
+    )
+
+    assert result.stock_entries_reproduced == len(result.stock_entries) == 3
+    assert set(result.added_entries) == {
+        "/etc/apkrun",
+        "/etc/apkrun/marker.txt",
+    }
+    assert set(result.composed_entries) == set(result.stock_entries) | set(result.added_entries)
+    assert (
+        result.composed_entries["/etc/apkrun/marker.txt"].sha256
+        == hashlib.sha256(b"boot marker\n").hexdigest()
+    )
+    assert (outside / "keep").read_text(encoding="utf-8") == "unmodified\n"
+    assert (scratch / "system-ext-stock-tree").is_symlink()

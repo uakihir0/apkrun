@@ -42,7 +42,7 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     let getRequest = RuntimeConfigurationControlRequest(header: header)
     let updateRequest = RuntimeUpdateConfigurationControlRequest(
         header: header,
-        patch: ConfigurationPatch(patch: .object(["runtime": .object(["memoryGiB": .integer(6)])]))
+        request: ConfigurationPatch(patch: .object(["runtime": .object(["memoryGiB": .integer(6)])]))
     )
     let getReply = RuntimeConfigurationControlReply(result: snapshot)
     let updateReply = RuntimeUpdateConfigurationControlReply(result: snapshot)

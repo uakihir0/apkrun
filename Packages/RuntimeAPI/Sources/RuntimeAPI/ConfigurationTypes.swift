@@ -214,13 +214,13 @@ public struct RuntimeConfigurationControlReply: Codable, Equatable, Sendable {
 public struct RuntimeUpdateConfigurationControlRequest: Codable, Equatable, Sendable {
     /// The request metadata.
     public let header: APIRequestHeader
-    /// The nested configuration merge patch.
-    public let patch: ConfigurationPatch
+    /// The configuration merge patch.
+    public let request: ConfigurationPatch
 
     /// Creates a configuration update request.
-    public init(header: APIRequestHeader, patch: ConfigurationPatch) {
+    public init(header: APIRequestHeader, request: ConfigurationPatch) {
         self.header = header
-        self.patch = patch
+        self.request = request
     }
 }
 

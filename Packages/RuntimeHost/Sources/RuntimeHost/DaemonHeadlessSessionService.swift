@@ -18,6 +18,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     private let onSessionEnded: @Sendable (String) async -> Void
     private var sessionsByPackage: [String: SessionID] = [:]
     private var frameDrainers: [SessionID: Task<Void, Never>] = [:]
+    private var sessionsWithReadyFrameForTesting: Set<UUID> = []
     private var taskEventMonitor: Task<Void, Never>?
     private var guestResynchronizationHandlerID: UUID?
     private var reconciliationTasks: [UUID: Task<Void, Never>] = [:]
@@ -650,16 +651,29 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             return
         }
         let pool = lease.pool
-        frameDrainers[lease.session] = Task.detached {
+        let sessionID = lease.session
+        frameDrainers[sessionID] = Task.detached { [weak self] in
             for await frame in pool.frames {
                 guard !Task.isCancelled else {
                     return
                 }
                 if case .frameReady(_, _, let sequence) = frame {
+                    await self?.recordReadyFrameForTesting(sessionID)
                     pool.frameDisplayed(sequence: sequence)
                 }
             }
         }
+    }
+
+    func hasReadyFrameForTesting(sessionID: UUID) -> Bool {
+        sessionsWithReadyFrameForTesting.contains(sessionID)
+    }
+
+    private func recordReadyFrameForTesting(_ session: SessionID) {
+        guard case .app(let sessionID) = session else {
+            return
+        }
+        sessionsWithReadyFrameForTesting.insert(sessionID)
     }
 
     private func stopDrainingFrames(for sessionID: SessionID) async {
@@ -684,6 +698,9 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     private func forgetSession(packageID: String, sessionID: SessionID) async {
         if sessionsByPackage[packageID] == sessionID {
             sessionsByPackage[packageID] = nil
+            if case .app(let appSessionID) = sessionID {
+                sessionsWithReadyFrameForTesting.remove(appSessionID)
+            }
             await onSessionEnded(packageID)
         }
     }

@@ -634,6 +634,17 @@ public actor RuntimeHost {
         await supervisor?.developmentADBHostPort
     }
 
+    func hasReadyFrameForTesting(sessionID: UUID) async -> Bool {
+        guard let service = headlessSessionService as? DaemonHeadlessSessionService else {
+            return false
+        }
+        return await service.hasReadyFrameForTesting(sessionID: sessionID)
+    }
+
+    func performanceEventsForTesting() -> [PerfEvent] {
+        diagnostics?.perfTimeline.snapshot() ?? []
+    }
+
     func idleActivityKindsForTesting() async -> Set<RuntimeCore.ActivityKind> {
         await idleController?.activeActivityKinds ?? []
     }

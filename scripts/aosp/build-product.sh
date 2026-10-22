@@ -253,20 +253,19 @@ output_dir="$source_root/Images/work/$build_number/download"
 mkdir -p "$output_dir"
 install -m 0644 "$dist_archive" "$output_dir/apkrun_arm64-img-$build_number.zip"
 build_info="$output_dir/build-info.json"
-cat >"$build_info" <<INFO
-{
-  "schemaVersion": 1,
-  "buildNumber": "$build_number",
-  "revision": "$revision",
-  "variant": "$variant",
-  "pinnedManifestSha256": "$manifest_sha256",
-  "builderImageDigest": "$build_image_digest",
-  "apkSha256": {
-    "guest": "${guest_apk_sha256:-}"
-  }
-}
-INFO
-chmod 0644 "$build_info"
-python3 -m json.tool "$build_info" >/dev/null || fail "generated build-info.json is invalid"
+guest_metadata="$source_root/Guest/product/prebuilt/ApkRunGuest.json"
+[[ "$guest_apk_sha256" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "the APKRun product must contain a Guest Agent APK with a recorded SHA-256"
+python3 "$script_dir/write-build-info.py" \
+    --archive "$output_dir/apkrun_arm64-img-$build_number.zip" \
+    --guest-metadata "$guest_metadata" \
+    --out "$build_info" \
+    --revision "$revision" \
+    --variant "$variant" \
+    --build-number "$build_number" \
+    --pinned-manifest-sha256 "$manifest_sha256" \
+    --builder-image-digest "$build_image_digest" \
+    --guest-apk-sha256 "$guest_apk_sha256" \
+    || fail "could not write verified build-info.json"
 printf 'build-product: wrote %s\n' "$output_dir/apkrun_arm64-img-$build_number.zip"
 printf 'build-product: wrote %s\n' "$build_info"

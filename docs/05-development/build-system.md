@@ -411,7 +411,7 @@ The APKRun product (`Guest/product/`, [android-image.md](../02-design/android-im
 3. Runs `scripts/build-guest.sh --for-aosp`, which builds the Guest Agent with `apkrunPersistentAgent=true` and writes `Guest/product/prebuilt/ApkRunGuest.apk` (git-ignored). The container stages that exact APK before Soong runs; `android_app_import` signs it with `certificate: "platform"`, `privileged: true`, `presigned: false`. The ordinary development APK defaults to `apkrunPersistentAgent=false`.
 4. Runs `lunch apkrun_arm64-trunk_staging-<variant>` and `m`, then checks the compiled policy with `scripts/check-sepolicy.sh` before running `m dist`, with `BUILD_NUMBER=ar<counter>`.
 5. `user` builds fail closed while OQ-36 leaves the release signing flow open. The builder never accepts or mounts unused release keys.
-6. Writes `build-info.json`: pinned manifest SHA-256, container digest, APKRun revision, APK SHA-256s, `BUILD_NUMBER`.
+6. Writes `build-info.json`: pinned manifest SHA-256, container digest, APKRun revision, APK SHA-256s and version codes, build target, and the copied archive's name, size, and SHA-256.
 
 The result, `apkrun_arm64-img-ar<counter>.zip`, enters the stock pipeline (§10). `scripts/check-sepolicy.sh` runs for each built variant after `m` and before `m dist` (R-13).
 

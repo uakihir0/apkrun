@@ -59,10 +59,76 @@ grep -q 'APKRUN_BUILD_NUMBER=%s' "$aosp_dir/build-product.sh"
 grep -q 'scripts/build-guest.sh" --for-aosp' "$aosp_dir/build-product.sh"
 grep -q 'Guest/product/prebuilt/ApkRunGuest.apk' "$aosp_dir/build-product.sh"
 grep -q 'check-sepolicy.sh' "$aosp_dir/build-product.sh"
+grep -q 'write-build-info.py' "$aosp_dir/build-product.sh"
 grep -q -- '-PapkrunPersistentAgent=true' "$repo_root/scripts/build-guest.sh"
 grep -q 'apk_name="ApkRunGuest.apk"' "$repo_root/scripts/build-guest.sh"
 expect_status 64 "build-guest-rejects-aosp-output-override" \
     "$repo_root/scripts/build-guest.sh" --for-aosp --out "$temporary_root/custom"
+
+archive="$temporary_root/apkrun_arm64-img-ar000123.zip"
+printf 'fixture AOSP archive\n' >"$archive"
+guest_metadata="$temporary_root/ApkRunGuest.json"
+cat >"$guest_metadata" <<'JSON'
+{
+  "packageName": "io.apkrun.guest",
+  "versionCode": 1000,
+  "versionName": "0.3.0+fixture"
+}
+JSON
+build_info="$temporary_root/build-info.json"
+python3 "$aosp_dir/write-build-info.py" \
+    --archive "$archive" \
+    --guest-metadata "$guest_metadata" \
+    --out "$build_info" \
+    --revision "$revision" \
+    --variant userdebug \
+    --build-number ar000123 \
+    --pinned-manifest-sha256 "$(printf 'a%.0s' {1..64})" \
+    --builder-image-digest "sha256:$(printf 'b%.0s' {1..64})" \
+    --guest-apk-sha256 "$(printf 'c%.0s' {1..64})"
+python3 - "$archive" "$build_info" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+archive = pathlib.Path(sys.argv[1])
+info = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+assert info["schemaVersion"] == 1
+assert info["buildNumber"] == "ar000123"
+assert info["branch"] == "aosp-android-latest-release"
+assert info["target"] == "apkrun_arm64-trunk_staging-userdebug"
+assert info["agents"]["guest"]["versionCode"] == 1000
+assert info["archive"] == {
+    "name": archive.name,
+    "size": archive.stat().st_size,
+    "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+}
+PY
+expect_status 1 "build-info-rejects-archive-build-number-mismatch" \
+    python3 "$aosp_dir/write-build-info.py" \
+    --archive "$archive" \
+    --guest-metadata "$guest_metadata" \
+    --out "$temporary_root/invalid-build-info.json" \
+    --revision "$revision" \
+    --variant userdebug \
+    --build-number ar000124 \
+    --pinned-manifest-sha256 "$(printf 'a%.0s' {1..64})" \
+    --builder-image-digest "sha256:$(printf 'b%.0s' {1..64})" \
+    --guest-apk-sha256 "$(printf 'c%.0s' {1..64})"
+invalid_guest_metadata="$temporary_root/invalid-guest-metadata.json"
+printf '{"packageName":"io.apkrun.guest","versionCode":0}\n' >"$invalid_guest_metadata"
+expect_status 1 "build-info-rejects-invalid-guest-version-code" \
+    python3 "$aosp_dir/write-build-info.py" \
+    --archive "$archive" \
+    --guest-metadata "$invalid_guest_metadata" \
+    --out "$temporary_root/invalid-guest-build-info.json" \
+    --revision "$revision" \
+    --variant userdebug \
+    --build-number ar000123 \
+    --pinned-manifest-sha256 "$(printf 'a%.0s' {1..64})" \
+    --builder-image-digest "sha256:$(printf 'b%.0s' {1..64})" \
+    --guest-apk-sha256 "$(printf 'c%.0s' {1..64})"
 
 cat >"$temporary_root/pinned.xml" <<'XML'
 <manifest>

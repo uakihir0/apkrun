@@ -50,7 +50,8 @@ public final class RuntimeXPCServer: @unchecked Sendable {
     public init(
         host: RuntimeHost,
         appBundleURL: URL,
-        buildInfo: BuildInfo = .current
+        buildInfo: BuildInfo = .current,
+        wrapperAuthorizer: WrapperAuthorizer = .empty
     ) throws {
         let identity = try RuntimeXPCServerIdentity(buildInfo: buildInfo)
         guard Self.isExpectedAppBundle(appBundleURL, identifier: identity.appIdentifier) else {
@@ -85,6 +86,7 @@ public final class RuntimeXPCServer: @unchecked Sendable {
             host: host,
             buildInfo: buildInfo,
             clientRequirements: clientRequirements,
+            wrapperAuthorizer: wrapperAuthorizer,
             connectionRegistry: connectionRegistry
         )
         let brokerListener = NSXPCListener(machServiceName: identity.machServiceName)
@@ -208,13 +210,15 @@ private final class RuntimeXPCControlListener: @unchecked Sendable {
         clientKind: RuntimeClientKind,
         requirement: String,
         reservationID: UUID,
-        connectionRegistry: RuntimeXPCConnectionRegistry
+        connectionRegistry: RuntimeXPCConnectionRegistry,
+        authorizedPackageID: RuntimePackageID? = nil
     ) {
         delegate = ControlListenerDelegate(
             host: host,
             clientKind: clientKind,
             reservationID: reservationID,
             connectionRegistry: connectionRegistry,
+            authorizedPackageID: authorizedPackageID,
             eventSinkHandshakeTimeout: .seconds(1)
         )
         listener = NSXPCListener.anonymous()
@@ -228,13 +232,15 @@ private final class RuntimeXPCControlListener: @unchecked Sendable {
             forTestingWith host: RuntimeHost,
             clientKind: RuntimeClientKind,
             reservationID: UUID,
-            connectionRegistry: RuntimeXPCConnectionRegistry
+            connectionRegistry: RuntimeXPCConnectionRegistry,
+            authorizedPackageID: RuntimePackageID? = nil
         ) {
             delegate = ControlListenerDelegate(
                 host: host,
                 clientKind: clientKind,
                 reservationID: reservationID,
                 connectionRegistry: connectionRegistry,
+                authorizedPackageID: authorizedPackageID,
                 // Keep deliberately held handshakes open while the test fills all 64 request slots.
                 eventSinkHandshakeTimeout: .seconds(30)
             )
@@ -254,14 +260,19 @@ private final class RuntimeXPCControlListener: @unchecked Sendable {
         private let listener: NSXPCListener
         private let connectionRegistry: RuntimeXPCConnectionRegistry
 
-        init(host: RuntimeHost, clientKind: RuntimeClientKind) {
+        init(
+            host: RuntimeHost,
+            clientKind: RuntimeClientKind,
+            authorizedPackageID: RuntimePackageID? = nil
+        ) {
             let connectionRegistry = RuntimeXPCConnectionRegistry(eventHub: host.eventHub)
             let reservationID = UUID()
             let controlListener = RuntimeXPCControlListener(
                 forTestingWith: host,
                 clientKind: clientKind,
                 reservationID: reservationID,
-                connectionRegistry: connectionRegistry
+                connectionRegistry: connectionRegistry,
+                authorizedPackageID: authorizedPackageID
             )
             precondition(
                 connectionRegistry.reserveControlConnection(
@@ -282,6 +293,29 @@ private final class RuntimeXPCControlListener: @unchecked Sendable {
 
         func invalidate() {
             connectionRegistry.close()
+        }
+    }
+
+    final class RuntimeXPCAnonymousWrapperTestServer: @unchecked Sendable {
+        private let controlServer: RuntimeXPCAnonymousControlTestServer
+
+        init(host: RuntimeHost, bundleID: String, authorizer: WrapperAuthorizer) {
+            guard let registration = authorizer.registration(for: bundleID) else {
+                preconditionFailure("The wrapper fixture must be registered before it gets an endpoint.")
+            }
+            controlServer = RuntimeXPCAnonymousControlTestServer(
+                host: host,
+                clientKind: .wrapper,
+                authorizedPackageID: registration.packageID
+            )
+        }
+
+        var endpoint: NSXPCListenerEndpoint {
+            controlServer.endpoint
+        }
+
+        func invalidate() {
+            controlServer.invalidate()
         }
     }
 #endif
@@ -830,17 +864,20 @@ private final class BrokerListenerDelegate: NSObject, NSXPCListenerDelegate, @un
     private let host: RuntimeHost
     private let buildInfo: BuildInfo
     private let clientRequirements: [String: String]
+    private let wrapperAuthorizer: WrapperAuthorizer
     private let connectionRegistry: RuntimeXPCConnectionRegistry
 
     init(
         host: RuntimeHost,
         buildInfo: BuildInfo,
         clientRequirements: [String: String],
+        wrapperAuthorizer: WrapperAuthorizer,
         connectionRegistry: RuntimeXPCConnectionRegistry
     ) {
         self.host = host
         self.buildInfo = buildInfo
         self.clientRequirements = clientRequirements
+        self.wrapperAuthorizer = wrapperAuthorizer
         self.connectionRegistry = connectionRegistry
     }
 
@@ -862,6 +899,7 @@ private final class BrokerListenerDelegate: NSObject, NSXPCListenerDelegate, @un
             host: host,
             buildInfo: buildInfo,
             clientRequirements: clientRequirements,
+            wrapperAuthorizer: wrapperAuthorizer,
             connectionRegistry: connectionRegistry,
             connectionID: connectionID
         )
@@ -874,6 +912,7 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
     private let host: RuntimeHost
     private let buildInfo: BuildInfo
     private let clientRequirements: [String: String]
+    private let wrapperAuthorizer: WrapperAuthorizer
     private let connectionRegistry: RuntimeXPCConnectionRegistry
     private let connectionID: ObjectIdentifier
 
@@ -881,18 +920,20 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
         host: RuntimeHost,
         buildInfo: BuildInfo,
         clientRequirements: [String: String],
+        wrapperAuthorizer: WrapperAuthorizer,
         connectionRegistry: RuntimeXPCConnectionRegistry,
         connectionID: ObjectIdentifier
     ) {
         self.host = host
         self.buildInfo = buildInfo
         self.clientRequirements = clientRequirements
+        self.wrapperAuthorizer = wrapperAuthorizer
         self.connectionRegistry = connectionRegistry
         self.connectionID = connectionID
     }
 
     func hello(_ request: Data, reply: @escaping (Data) -> Void) {
-        let replyHandler = XPCDataReply(reply)
+        let replyHandler = ReplyGuard(reply)
         let admission = connectionRegistry.beginRequest(on: connectionID, allowDuringShutdown: true)
         guard case .accepted(let pending) = admission else {
             let rejection = Self.rejection(for: admission)
@@ -948,7 +989,6 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
             let endpointRequest = try? JSONDecoder().decode(RuntimeEndpointRequest.self, from: request),
             endpointRequest.apiVersion.major > 0,
             endpointRequest.apiVersion.minor >= 0,
-            endpointRequest.kind == .control,
             endpointRequest.apiVersion.major == runtimeAPIVersion.major,
             endpointRequest.apiVersion.minor <= runtimeAPIVersion.minor
         else {
@@ -956,13 +996,30 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
             return
         }
 
-        guard
-            let identifier = Self.expectedIdentifier(
-                for: endpointRequest.clientKind,
-                buildIdentity: buildInfo.buildIdentity
-            ), endpointRequest.claimedIdentity == identifier,
-            let requirement = clientRequirements[endpointRequest.clientKind.rawValue]
-        else {
+        let requirement: String
+        let authorizedPackageID: RuntimePackageID?
+        switch (endpointRequest.kind, endpointRequest.clientKind) {
+        case (.control, .app), (.control, .menuBar), (.control, .cli), (.control, .launcher):
+            guard
+                let identifier = Self.expectedIdentifier(
+                    for: endpointRequest.clientKind,
+                    buildIdentity: buildInfo.buildIdentity
+                ), endpointRequest.claimedIdentity == identifier,
+                let clientRequirement = clientRequirements[endpointRequest.clientKind.rawValue]
+            else {
+                reply(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
+                return
+            }
+            requirement = clientRequirement
+            authorizedPackageID = nil
+        case (.wrapper, .wrapper):
+            guard let registration = wrapperAuthorizer.registration(for: endpointRequest) else {
+                reply(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
+                return
+            }
+            requirement = registration.codeSigningRequirement
+            authorizedPackageID = registration.packageID
+        case (.control, .wrapper), (.wrapper, .app), (.wrapper, .menuBar), (.wrapper, .cli), (.wrapper, .launcher):
             reply(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
             return
         }
@@ -972,7 +1029,8 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
             clientKind: endpointRequest.clientKind,
             requirement: requirement,
             reservationID: reservationID,
-            connectionRegistry: connectionRegistry
+            connectionRegistry: connectionRegistry,
+            authorizedPackageID: authorizedPackageID
         )
         guard
             connectionRegistry.reserveControlConnection(
@@ -1067,6 +1125,7 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
     private let clientKind: RuntimeClientKind
     private let reservationID: UUID
     private let connectionRegistry: RuntimeXPCConnectionRegistry
+    private let authorizedPackageID: RuntimePackageID?
     private let eventSinkHandshakeTimeout: DispatchTimeInterval
 
     init(
@@ -1074,12 +1133,14 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
         clientKind: RuntimeClientKind,
         reservationID: UUID,
         connectionRegistry: RuntimeXPCConnectionRegistry,
+        authorizedPackageID: RuntimePackageID?,
         eventSinkHandshakeTimeout: DispatchTimeInterval
     ) {
         self.host = host
         self.clientKind = clientKind
         self.reservationID = reservationID
         self.connectionRegistry = connectionRegistry
+        self.authorizedPackageID = authorizedPackageID
         self.eventSinkHandshakeTimeout = eventSinkHandshakeTimeout
     }
 
@@ -1117,6 +1178,7 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
         connection.exportedObject = ControlService(
             host: host,
             clientKind: clientKind,
+            authorizedPackageID: authorizedPackageID,
             connectionRegistry: connectionRegistry,
             connectionID: connectionID,
             eventSink: remoteSink.map(RuntimeEventSinkReference.init(value:)),
@@ -1133,6 +1195,10 @@ private protocol VersionedControlRequest: Decodable {
 }
 
 extension RuntimeStatusRequest: VersionedControlRequest {}
+extension RuntimeInfoControlRequest: VersionedControlRequest {}
+extension RuntimeListSessionsControlRequest: VersionedControlRequest {}
+extension RuntimeConfigurationControlRequest: VersionedControlRequest {}
+extension RuntimeUpdateConfigurationControlRequest: VersionedControlRequest {}
 extension StartRuntimeRequest: VersionedControlRequest {}
 extension StopRuntimeRequest: VersionedControlRequest {}
 extension RestartRuntimeRequest: VersionedControlRequest {}
@@ -1153,6 +1219,10 @@ extension RuntimeUnsubscribeControlRequest: VersionedControlRequest {}
 
 enum RuntimeControlOperation {
     case runtimeStatus
+    case runtimeInfo
+    case listSessions
+    case configuration
+    case updateConfiguration
     case startRuntime
     case stopRuntime
     case restartRuntime
@@ -1178,6 +1248,13 @@ enum RuntimeControlOperation {
             case .app, .menuBar, .cli, .launcher:
                 true
             case .wrapper:
+                true
+            }
+        case .runtimeInfo, .listSessions, .configuration, .updateConfiguration:
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
                 false
             }
         case .startRuntime, .stopRuntime, .restartRuntime, .resetRuntime,
@@ -1209,7 +1286,7 @@ enum RuntimeControlOperation {
             case .app, .menuBar, .cli, .launcher:
                 true
             case .wrapper:
-                false
+                true
             }
         case .launch, .terminate:
             switch clientKind {
@@ -1225,6 +1302,7 @@ enum RuntimeControlOperation {
 private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Sendable {
     private let host: RuntimeHost
     private let clientKind: RuntimeClientKind
+    private let authorizedPackageID: RuntimePackageID?
     private let connectionRegistry: RuntimeXPCConnectionRegistry
     private let connectionID: ObjectIdentifier
     private let eventSink: RuntimeEventSinkReference?
@@ -1234,6 +1312,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     init(
         host: RuntimeHost,
         clientKind: RuntimeClientKind,
+        authorizedPackageID: RuntimePackageID?,
         connectionRegistry: RuntimeXPCConnectionRegistry,
         connectionID: ObjectIdentifier,
         eventSink: RuntimeEventSinkReference?,
@@ -1241,6 +1320,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     ) {
         self.host = host
         self.clientKind = clientKind
+        self.authorizedPackageID = authorizedPackageID
         self.connectionRegistry = connectionRegistry
         self.connectionID = connectionID
         self.eventSink = eventSink
@@ -1270,6 +1350,129 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             }
             response.beginSnapshotBarrier()
             response.send(Self.encode(RuntimeControlReply(status: await host.status())))
+        }
+    }
+
+    func runtimeInfo(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply, snapshotBarrier: true)
+        let admission = connectionRegistry.beginRequest(on: connectionID, allowDuringShutdown: true)
+        guard case .accepted(let pending) = admission else {
+            response.send(Self.encode(RuntimeInfoControlReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .runtimeInfo,
+                as: RuntimeInfoControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeInfoControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimeInfoControlRequest.self, from: request) else {
+                response.send(Self.encode(RuntimeInfoControlReply(error: Self.malformedWireError)))
+                return
+            }
+            response.beginSnapshotBarrier()
+            let info = await host.runtimeInfo(decoded.request)
+            response.send(Self.encode(RuntimeInfoControlReply(result: info)))
+        }
+    }
+
+    func listSessions(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply, snapshotBarrier: true)
+        let admission = connectionRegistry.beginRequest(on: connectionID, allowDuringShutdown: true)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeListSessionsControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .listSessions,
+                as: RuntimeListSessionsControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeListSessionsControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            response.beginSnapshotBarrier()
+            let sessions = await host.listSessions()
+            response.send(Self.encode(RuntimeListSessionsControlReply(result: sessions)))
+        }
+    }
+
+    func configuration(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply, snapshotBarrier: true)
+        let admission = connectionRegistry.beginRequest(on: connectionID, allowDuringShutdown: true)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeConfigurationControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .configuration,
+                as: RuntimeConfigurationControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeConfigurationControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            response.beginSnapshotBarrier()
+            do {
+                let snapshot = try await host.configuration()
+                response.send(Self.encode(RuntimeConfigurationControlReply(result: snapshot)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeConfigurationControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func updateConfiguration(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeUpdateConfigurationControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .updateConfiguration,
+                as: RuntimeUpdateConfigurationControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeUpdateConfigurationControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimeUpdateConfigurationControlRequest.self, from: request)
+            else {
+                response.send(Self.encode(RuntimeUpdateConfigurationControlReply(error: Self.malformedWireError)))
+                return
+            }
+            response.beginSnapshotBarrier()
+            do {
+                let snapshot = try await host.updateConfiguration(decoded.request)
+                response.send(Self.encode(RuntimeUpdateConfigurationControlReply(result: snapshot)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeUpdateConfigurationControlReply(error: wireError)))
+            }
         }
     }
 
@@ -1318,8 +1521,17 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 response.send(Self.errorReply(for: failure))
                 return
             }
+            guard let decoded = try? JSONDecoder().decode(StopRuntimeRequest.self, from: request) else {
+                response.send(
+                    Self.errorReply(
+                        for: RuntimeControlError(
+                            code: "runtime.malformedRequest",
+                            message: "APKRun's background service couldn't read the request."
+                        )))
+                return
+            }
             do {
-                try await host.stopRuntime()
+                try await host.stopRuntime(force: decoded.force)
                 response.send(Self.encode(RuntimeControlReply(status: await host.status())))
             } catch {
                 response.send(Self.errorReply(for: Self.controlError(for: error)))
@@ -1448,6 +1660,23 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 response.send(
                     Self.encode(RuntimePackageInfoControlReply(error: Self.malformedWireError))
                 )
+                return
+            }
+            if clientKind == .wrapper,
+                !RuntimeWrapperAuthorization.allowsPackageInfo(
+                    decoded.packageID,
+                    authorizedPackageID: authorizedPackageID
+                )
+            {
+                await host.logWrapperAuthorizationFailure(
+                    packageID: decoded.packageID,
+                    operationID: decoded.header.operationID
+                )
+                let error = RuntimeControlError(
+                    code: "runtime.notAuthorized",
+                    message: safeMessage(for: "runtime.notAuthorized")
+                )
+                response.send(Self.encode(RuntimePackageInfoControlReply(error: Self.wireError(for: error))))
                 return
             }
             do {
@@ -1977,7 +2206,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     private func makeReplyHandler(
         _ reply: @escaping (Data) -> Void,
         snapshotBarrier: Bool = false
-    ) -> XPCDataReply {
+    ) -> ReplyGuard {
         let eventHub = host.eventHub
         let connectionID = self.connectionID
         let beginSnapshotBarrier: (@Sendable () -> Void)?
@@ -2007,7 +2236,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             }
             sendAfterBarrier = nil
         }
-        return XPCDataReply(
+        return ReplyGuard(
             reply,
             outputQueue: outputQueue,
             beforeSend: beforeSend,
@@ -2087,6 +2316,8 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 code = "runtime.hostShuttingDown"
             case .invalidTransition:
                 code = "runtime.invalidTransition"
+            case .busy:
+                code = "runtime.busy"
             case .alreadyStarted:
                 code = "runtime.internal"
             case .startupFailed(_, let startupCode):
@@ -2125,13 +2356,14 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     }
 }
 
-private final class XPCDataReply: @unchecked Sendable {
+final class ReplyGuard: @unchecked Sendable {
     private let lock = NSLock()
     private var handler: ReplyHandler?
     private let outputQueue: DispatchQueue?
     private let beforeSend: (@Sendable () -> Void)?
     private let startSnapshotBarrier: (@Sendable () -> Void)?
     private let sendAfterBarrier: (@Sendable (@escaping @Sendable () -> Void) -> Void)?
+    private let onDuplicateReply: @Sendable () -> Void
     private var snapshotBarrierStarted = false
 
     init(
@@ -2139,13 +2371,17 @@ private final class XPCDataReply: @unchecked Sendable {
         outputQueue: DispatchQueue? = nil,
         beforeSend: (@Sendable () -> Void)? = nil,
         beginSnapshotBarrier: (@Sendable () -> Void)? = nil,
-        sendAfterBarrier: (@Sendable (@escaping @Sendable () -> Void) -> Void)? = nil
+        sendAfterBarrier: (@Sendable (@escaping @Sendable () -> Void) -> Void)? = nil,
+        onDuplicateReply: @escaping @Sendable () -> Void = {
+            assertionFailure("ReplyGuard may send a reply only once.")
+        }
     ) {
         self.handler = ReplyHandler(handler)
         self.outputQueue = outputQueue
         self.beforeSend = beforeSend
         startSnapshotBarrier = beginSnapshotBarrier
         self.sendAfterBarrier = sendAfterBarrier
+        self.onDuplicateReply = onDuplicateReply
     }
 
     func beginSnapshotBarrier() {
@@ -2157,15 +2393,49 @@ private final class XPCDataReply: @unchecked Sendable {
     }
 
     func send(_ data: Data) {
+        guard let (handler, snapshotBarrierStarted) = takeHandler(assertOnDuplicate: true) else {
+            return
+        }
+        deliver(data, to: handler, snapshotBarrierStarted: snapshotBarrierStarted)
+    }
+
+    deinit {
+        guard let (handler, snapshotBarrierStarted) = takeHandler(assertOnDuplicate: false) else {
+            return
+        }
+        let error = RuntimeWireError.runtime(
+            "internal",
+            message: safeMessage(for: "runtime.internal")
+        )
+        let fallback =
+            (try? JSONEncoder().encode(FailureEnvelope(error: error)))
+            ?? Data(
+                #"{"error":{"domain":"runtime","code":"runtime.internal","message":"Something went wrong in APKRun's background service."}}"#
+                    .utf8
+            )
+        deliver(fallback, to: handler, snapshotBarrierStarted: snapshotBarrierStarted)
+    }
+
+    private func takeHandler(assertOnDuplicate: Bool) -> (ReplyHandler, Bool)? {
         lock.lock()
         let handler = self.handler
+        guard let handler else {
+            lock.unlock()
+            if assertOnDuplicate {
+                #if DEBUG
+                    onDuplicateReply()
+                #endif
+            }
+            return nil
+        }
         self.handler = nil
         let snapshotBarrierStarted = self.snapshotBarrierStarted
         self.snapshotBarrierStarted = false
         lock.unlock()
-        guard let handler else {
-            return
-        }
+        return (handler, snapshotBarrierStarted)
+    }
+
+    private func deliver(_ data: Data, to handler: ReplyHandler, snapshotBarrierStarted: Bool) {
         if snapshotBarrierStarted, let sendAfterBarrier {
             let sendReply: @Sendable () -> Void = {
                 handler.send(data)
@@ -2181,6 +2451,10 @@ private final class XPCDataReply: @unchecked Sendable {
         } else {
             handler.send(data)
         }
+    }
+
+    private struct FailureEnvelope: Encodable {
+        let error: RuntimeWireError
     }
 
     private final class ReplyHandler: @unchecked Sendable {

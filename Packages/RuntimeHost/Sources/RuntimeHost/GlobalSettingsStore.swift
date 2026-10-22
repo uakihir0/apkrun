@@ -661,10 +661,10 @@ public actor GlobalSettingsStore {
     private static func settings(limits: GlobalSettingsStoreLimits) -> [GlobalSetting] {
         var result: [GlobalSetting] = [
             .enumeration(
-                "runtime.startPolicy", default: "onDemand", values: ["onDemand", "atLogin"], applies: .nextLogin),
-            .integer("runtime.idleSuspendMinutes", default: 10, minimum: 0, maximum: 1440, applies: .live),
-            .integer("runtime.idleStopMinutes", default: 60, minimum: 0, maximum: 1440, applies: .live),
-            .boolean("runtime.autoRestart", default: true, applies: .live),
+                "runtime.startPolicy", default: "onDemand", values: ["onDemand", "atLogin"], applies: .storedOnly),
+            .integer("runtime.idleSuspendMinutes", default: 10, minimum: 0, maximum: 1440, applies: .storedOnly),
+            .integer("runtime.idleStopMinutes", default: 60, minimum: 0, maximum: 1440, applies: .storedOnly),
+            .boolean("runtime.autoRestart", default: true, applies: .storedOnly),
             .integer(
                 "runtime.cpuCount", default: min(4, limits.cpuCount), minimum: 2, maximum: limits.cpuCount,
                 applies: .runtimeRestart),

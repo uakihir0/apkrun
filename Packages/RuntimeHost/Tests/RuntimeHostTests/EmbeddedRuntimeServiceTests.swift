@@ -37,6 +37,7 @@ func embeddedRuntimeServiceTracksLaunchFrameCloseAndTaskVanished() async throws 
 
     let displayReady = try await service.displayReady()
     #expect(displayReady.state == .acquiringDisplay)
+    #expect(try EmbeddedRuntimeService.launchResult(for: displayReady).state == .acquiringDisplay)
     let launching = try await service.beginLaunch()
     #expect(launching.state == .launching)
 
@@ -47,6 +48,7 @@ func embeddedRuntimeServiceTracksLaunchFrameCloseAndTaskVanished() async throws 
 
     let closing = try await service.windowClosed()
     #expect(closing.state == .closing)
+    #expect(try EmbeddedRuntimeService.launchResult(for: closing).state == .closing)
     let ended = await service.taskVanished()
     #expect(ended?.state == .ended(.userClosed))
     #expect(try await service.runtimeStopped() == nil)

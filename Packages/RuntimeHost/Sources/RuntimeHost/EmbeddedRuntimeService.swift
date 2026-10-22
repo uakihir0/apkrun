@@ -777,7 +777,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         _ = try? await fail(.runtimeFailed)
     }
 
-    private static func launchResult(for snapshot: AppSessionSnapshot) throws(RuntimeWireError) -> RuntimeLaunchResult {
+    static func launchResult(for snapshot: AppSessionSnapshot) throws(RuntimeWireError) -> RuntimeLaunchResult {
         guard case .app(let sessionID) = snapshot.id,
             let packageID = RuntimePackageID(rawValue: snapshot.packageID)
         else {
@@ -794,12 +794,14 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         case .waitingForRuntime:
             phase = .booting
         case .acquiringDisplay:
-            phase = .waitingForPackage
+            phase = .acquiringDisplay
         case .launching:
             phase = .launching
         case .running, .backgrounded:
             phase = .running
-        case .closing, .ended:
+        case .closing:
+            phase = .closing
+        case .ended:
             phase = .ended
         }
         return RuntimeLaunchResult(sessionID: sessionID, packageID: packageID, state: phase)

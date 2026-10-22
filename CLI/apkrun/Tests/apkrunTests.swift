@@ -586,6 +586,9 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
         let start = try await APKRunCommand.asyncParseAsRoot(["runtime", "start"])
         #expect(start is RuntimeStartCommand)
 
+        let heldStart = try await APKRunCommand.asyncParseAsRoot(["runtime", "start", "--hold"])
+        #expect((heldStart as? RuntimeStartCommand)?.hold == true)
+
         let stop = try await APKRunCommand.asyncParseAsRoot(["runtime", "stop"])
         #expect(stop is RuntimeStopCommand)
 

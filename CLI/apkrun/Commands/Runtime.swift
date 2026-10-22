@@ -1,5 +1,7 @@
 import ArgumentParser
+import Darwin
 import DiagnosticsCore
+import Dispatch
 import Foundation
 import RuntimeAPI
 import RuntimeClient
@@ -53,14 +55,74 @@ struct RuntimeStartCommand: AsyncParsableCommand {
         abstract: "Start Android and wait until it is ready."
     )
 
+    @Flag(name: .long, help: "Keep Android ready until this command receives SIGINT or SIGTERM.")
+    var hold = false
+
     mutating func run() async throws {
         do {
             let client = try RuntimeControlClient(clientKind: .cli)
-            let status = try await client.startRuntime()
-            Output.write("Android is \(status.runtimeState).")
+            let status = try await client.startRuntime(hold: hold)
+            if hold {
+                Output.write("Android is \(status.runtimeState). Holding until Ctrl-C or SIGTERM.")
+                await RuntimeStartHoldSignalWaiter().wait()
+                // The client's XPC connection owns the server-side `.cli` activity hold.
+                withExtendedLifetime(client) {}
+            } else {
+                Output.write("Android is \(status.runtimeState).")
+            }
         } catch {
             throw await RuntimeStatusOutput.commandFailure(error)
         }
+    }
+}
+
+/// Waits for a termination signal while retaining the CLI's runtime-start control connection.
+private final class RuntimeStartHoldSignalWaiter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var sources: [DispatchSourceSignal] = []
+
+    func wait() async {
+        let previousSIGINTHandler = Darwin.signal(SIGINT, SIG_IGN)
+        let previousSIGTERMHandler = Darwin.signal(SIGTERM, SIG_IGN)
+        await withCheckedContinuation { continuation in
+            let sources = [SIGINT, SIGTERM].map { signalNumber in
+                let source = DispatchSource.makeSignalSource(
+                    signal: signalNumber,
+                    queue: .global(qos: .userInitiated)
+                )
+                source.setEventHandler { [weak self] in
+                    self?.receiveSignal()
+                }
+                return source
+            }
+            lock.withLock {
+                self.continuation = continuation
+                self.sources = sources
+            }
+            for source in sources {
+                source.resume()
+            }
+        }
+        let sources = lock.withLock {
+            let sources = self.sources
+            self.sources = []
+            return sources
+        }
+        for source in sources {
+            source.cancel()
+        }
+        _ = Darwin.signal(SIGINT, previousSIGINTHandler)
+        _ = Darwin.signal(SIGTERM, previousSIGTERMHandler)
+    }
+
+    private func receiveSignal() {
+        let continuation = lock.withLock {
+            let continuation = self.continuation
+            self.continuation = nil
+            return continuation
+        }
+        continuation?.resume()
     }
 }
 

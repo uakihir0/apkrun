@@ -57,14 +57,12 @@ grep -q 'libc6-dev-i386' "$aosp_dir/builder.Dockerfile"
 grep -q 'repo sync -c -j' "$aosp_dir/build-product.sh"
 grep -q 'for-each-ref --contains' "$aosp_dir/remote-build.sh"
 grep -q 'verify-build-info.py' "$aosp_dir/remote-build.sh"
+grep -q 'publish-build-transfer.sh' "$aosp_dir/remote-build.sh"
 literal_dollar='$'
 grep -Fq "rm -- ${literal_dollar}remote_archive_path ${literal_dollar}remote_info_path" \
     "$aosp_dir/remote-build.sh"
 grep -q -- '--build-info %s/build-info.json' "$aosp_dir/remote-build.sh"
 grep -q -- '--source %s --out' "$aosp_dir/remote-build.sh"
-grep -q 'published_archive=.*archive_name' "$aosp_dir/remote-build.sh"
-grep -q 'could not publish build-info.json' "$aosp_dir/remote-build.sh"
-grep -q 'could not remove partial archive' "$aosp_dir/remote-build.sh"
 grep -q 'APKRUN_BUILDER_IMAGE_DIGEST' "$aosp_dir/build-product.sh"
 grep -q 'status --porcelain --untracked-files=all' "$aosp_dir/build-product.sh"
 grep -q 'APKRUN_BUILD_NUMBER=%s' "$aosp_dir/build-product.sh"
@@ -125,6 +123,48 @@ python3 "$aosp_dir/verify-build-info.py" \
     --revision "$revision" \
     --variant userdebug \
     --build-number ar000123
+transfer_output="$temporary_root/transfer-output"
+mkdir -p "$transfer_output"
+transfer_archive_temporary="$temporary_root/.apkrun-image.publish"
+transfer_info_temporary="$temporary_root/.build-info.publish"
+cp "$archive" "$transfer_archive_temporary"
+cp "$build_info" "$transfer_info_temporary"
+fake_bin="$temporary_root/fail-second-mv"
+mkdir -p "$fake_bin"
+mv_count_file="$temporary_root/mv-count"
+printf '0\n' >"$mv_count_file"
+real_mv="$(command -v mv)"
+cat >"$fake_bin/mv" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+IFS= read -r count <"$APKRUN_MV_COUNT_FILE"
+count=$((count + 1))
+printf '%s\n' "$count" >"$APKRUN_MV_COUNT_FILE"
+if ((count == 2)); then
+    exit 73
+fi
+exec "$APKRUN_REAL_MV" "$@"
+SH
+chmod +x "$fake_bin/mv"
+transfer_status=0
+PATH="$fake_bin:$PATH" \
+    APKRUN_MV_COUNT_FILE="$mv_count_file" \
+    APKRUN_REAL_MV="$real_mv" \
+    "$aosp_dir/publish-build-transfer.sh" \
+    "$transfer_archive_temporary" \
+    "$transfer_info_temporary" \
+    "$transfer_output" \
+    "apkrun_arm64-img-ar000123.zip" \
+    >"$temporary_root/transfer-rollback.log" 2>&1 || transfer_status=$?
+if [[ "$transfer_status" -eq 0 ]]; then
+    printf 'FAIL transfer-rolls-back-on-sidecar-publish-failure: expected failure\n' >&2
+    exit 1
+fi
+grep -q 'could not publish build-info.json' "$temporary_root/transfer-rollback.log"
+[[ ! -e "$transfer_output/apkrun_arm64-img-ar000123.zip" ]]
+[[ ! -e "$transfer_output/build-info.json" ]]
+[[ ! -e "$transfer_archive_temporary" && ! -e "$transfer_info_temporary" ]]
+[[ "$(cat "$mv_count_file")" == "2" ]]
 invalid_build_info="$temporary_root/invalid-build-info.json"
 python3 - "$build_info" "$invalid_build_info" <<'PY'
 import json

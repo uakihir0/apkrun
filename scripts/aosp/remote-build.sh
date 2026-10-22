@@ -209,13 +209,8 @@ mkdir -p "$local_output_dir"
     || fail "local output already exists at $local_output_dir"
 archive_temporary="$(mktemp "$local_output_dir/.apkrun-image.XXXXXX")"
 info_temporary="$(mktemp "$local_output_dir/.build-info.XXXXXX")"
-published_archive=""
 cleanup_transfer() {
     rm -f -- "$archive_temporary" "$info_temporary"
-    if [[ -n "$published_archive" ]]; then
-        rm -f -- "$published_archive" \
-            || printf 'remote-build: warning: could not remove partial archive %s\n' "$published_archive" >&2
-    fi
 }
 trap cleanup_transfer EXIT
 printf -v remote_archive_path '%q' "$build_output_dir/$archive_name"
@@ -231,12 +226,8 @@ python3 "$script_dir/verify-build-info.py" \
     --build-number "$build_number" \
     || fail "downloaded archive does not match its build-info.json"
 unzip -Z1 "$archive_temporary" >/dev/null || fail "downloaded AOSP artifact is not a valid zip archive"
-mv "$archive_temporary" "$local_output_dir/$archive_name"
-published_archive="$local_output_dir/$archive_name"
-if ! mv "$info_temporary" "$local_output_dir/build-info.json"; then
-    fail "could not publish build-info.json; removed the partial archive"
-fi
-published_archive=""
+"$script_dir/publish-build-transfer.sh" \
+    "$archive_temporary" "$info_temporary" "$local_output_dir" "$archive_name"
 trap - EXIT
 
 printf -v remote_output_path '%q' "$build_output_dir"

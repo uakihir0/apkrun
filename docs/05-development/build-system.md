@@ -356,6 +356,7 @@ cargo clippy --all-targets -- -D warnings
 ```
 
 - Development builds use cargo-ndk with the pinned NDK ([environment-setup.md](environment-setup.md) §2.6); they serve the #35 validation, pushing the binary with `adb` to a userdebug image.
+- `scripts/build-vsockd.sh` checks the crate's Rust, cargo-ndk, and NDK pins, builds with `--locked`, and stages the executable at `Guest/product/prebuilt/apkrun_vsockd` for the composed image. `--check` validates the pins without building.
 - The product compiles the same sources with Soong (§9). The crate uses only `std`, `libc`, `log`, and `android_logger`, all in AOSP `external/rust/crates`.
 - The `vsock_loopback` test is T1, in the planned `test-linux` job on `ubuntu-latest` ([test-strategy.md](../04-plan/test-strategy.md) §2.3): `sudo modprobe vsock_loopback && cargo test --features vsock-loopback -- --ignored vsock_loopback`. If the hosted kernel lacks the module, the test moves to the `apkrun-aosp` runner (#36).
 

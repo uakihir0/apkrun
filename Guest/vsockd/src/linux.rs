@@ -1,6 +1,6 @@
 use crate::{
-    ConnectionLimiter, PortMapping, COPY_BUFFER_BYTES, HOST_VSOCK_CID, MAX_CONNECTIONS_PER_PORT,
-    PORT_MAPPINGS,
+    ConnectionLimiter, ConnectionPermit, PortMapping, COPY_BUFFER_BYTES, HOST_VSOCK_CID,
+    MAX_CONNECTIONS_PER_PORT, PORT_MAPPINGS,
 };
 use std::{
     fs::File,
@@ -58,18 +58,8 @@ fn serve_port(mapping: PortMapping) {
                         stream,
                         peer_cid,
                         mapping,
-                        |stream, connection_mapping| {
-                            let Some(permit) = limiter.try_acquire() else {
-                                let active = limiter.active.load(Ordering::Acquire);
-                                log::warn!(
-                                "closed excess connection on vsock port {} from CID {} (active {})",
-                                connection_mapping.port,
-                                peer_cid,
-                                active
-                            );
-                                drop(stream);
-                                return;
-                            };
+                        &limiter,
+                        |stream, connection_mapping, permit| {
                             let active = limiter.active.load(Ordering::Acquire);
                             log::info!(
                                 "accepted host CID {} on vsock port {} (active {}/{})",
@@ -116,7 +106,8 @@ fn dispatch_if_authorized(
     stream: File,
     peer_cid: u32,
     mapping: PortMapping,
-    dispatch: impl FnOnce(File, PortMapping),
+    limiter: &ConnectionLimiter,
+    dispatch: impl FnOnce(File, PortMapping, ConnectionPermit),
 ) -> bool {
     if !is_authorized_host(peer_cid) {
         log::warn!(
@@ -129,7 +120,19 @@ fn dispatch_if_authorized(
         return false;
     }
 
-    dispatch(stream, mapping);
+    let Some(permit) = limiter.try_acquire() else {
+        let active = limiter.active.load(Ordering::Acquire);
+        log::warn!(
+            "closed excess connection on vsock port {} from CID {} (active {})",
+            mapping.port,
+            peer_cid,
+            active
+        );
+        drop(stream);
+        return false;
+    };
+
+    dispatch(stream, mapping, permit);
     true
 }
 
@@ -337,9 +340,11 @@ mod tests {
 #[cfg(all(test, feature = "vsock-loopback", target_os = "linux"))]
 mod vsock_loopback_tests {
     use super::*;
+    use std::os::fd::OwnedFd;
     use std::{
         io::{Read, Write},
         os::fd::AsRawFd,
+        os::unix::net::UnixStream,
         time::Duration,
     };
 
@@ -353,8 +358,63 @@ mod vsock_loopback_tests {
         assert!(!is_authorized_host(LOOPBACK_CID));
         assert!(!is_authorized_host(u32::MAX));
 
+        assert_authorized_peer_connection_limit();
         assert_production_dispatch_refuses_loopback_peer();
         assert_vsock_abstract_socket_bridge_copies_in_both_directions();
+    }
+
+    fn assert_authorized_peer_connection_limit() {
+        let limiter = ConnectionLimiter::new(MAX_CONNECTIONS_PER_PORT, 6100);
+        let mapping = PortMapping {
+            port: 6100,
+            abstract_socket: "unused-test-mapping",
+        };
+        let mut permits = Vec::with_capacity(MAX_CONNECTIONS_PER_PORT);
+        let mut peers = Vec::with_capacity(MAX_CONNECTIONS_PER_PORT);
+
+        for _ in 0..MAX_CONNECTIONS_PER_PORT {
+            let (server, peer) = UnixStream::pair().expect("create accepted stream pair");
+            let accepted = dispatch_if_authorized(
+                File::from(OwnedFd::from(server)),
+                HOST_VSOCK_CID,
+                mapping,
+                &limiter,
+                |stream, _mapping, permit| {
+                    drop(stream);
+                    permits.push(permit);
+                },
+            );
+            assert!(
+                accepted,
+                "the first eight host connections must be admitted"
+            );
+            peers.push(peer);
+        }
+
+        let (server, mut ninth_peer) = UnixStream::pair().expect("create ninth test stream pair");
+        let accepted = dispatch_if_authorized(
+            File::from(OwnedFd::from(server)),
+            HOST_VSOCK_CID,
+            mapping,
+            &limiter,
+            |_, _, _| panic!("the ninth host connection must not be dispatched"),
+        );
+        assert!(!accepted, "the ninth host connection must be refused");
+        let mut byte = [0_u8; 1];
+        assert_eq!(
+            ninth_peer
+                .read(&mut byte)
+                .expect("read refused stream closure"),
+            0,
+            "the refused ninth stream must be closed"
+        );
+
+        drop(permits);
+        assert!(
+            limiter.try_acquire().is_some(),
+            "a released slot must admit another connection"
+        );
+        drop(peers);
     }
 
     fn assert_production_dispatch_refuses_loopback_peer() {
@@ -377,6 +437,7 @@ mod vsock_loopback_tests {
         );
 
         let mut forwarded = false;
+        let limiter = ConnectionLimiter::new(MAX_CONNECTIONS_PER_PORT, port);
         let accepted = dispatch_if_authorized(
             server,
             peer_cid,
@@ -384,7 +445,8 @@ mod vsock_loopback_tests {
                 port,
                 abstract_socket: "unused-test-mapping",
             },
-            |stream, _mapping| {
+            &limiter,
+            |stream, _mapping, _permit| {
                 forwarded = true;
                 drop(stream);
                 let upstream =

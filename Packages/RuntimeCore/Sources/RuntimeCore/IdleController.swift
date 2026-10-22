@@ -234,6 +234,14 @@ public actor IdleController {
         }
     }
 
+    /// Stops idle timers during daemon shutdown.
+    public func stop() {
+        guard isStarted else { return }
+        isStarted = false
+        idleSince = nil
+        cancelTimer()
+    }
+
     /// Acquires a hold for an activity source and notifies the lifecycle owner on idle-to-active.
     ///
     /// This returns only after the lifecycle owner has handled the activity action. Lifecycle
@@ -277,6 +285,30 @@ public actor IdleController {
             return
         }
         scheduleNextDeadline()
+    }
+
+    /// Starts a fresh idle period after Android becomes ready or stops.
+    ///
+    /// An active assertion keeps its existing lifecycle boundary; releasing the final assertion starts the next
+    /// idle period. This method is safe to call while an app or operation owns the runtime.
+    public func resetIdlePeriod() {
+        guard isStarted, assertions.isEmpty else {
+            return
+        }
+        idleSince = clock.now
+        didSuspend = false
+        didStop = false
+        scheduleNextDeadline()
+    }
+
+    /// Reports whether at least one assertion of the requested source is active.
+    public func hasActivity(of kind: ActivityKind) -> Bool {
+        assertions.values.contains(kind)
+    }
+
+    /// The set of activity sources with at least one live assertion.
+    public var activeActivityKinds: Set<ActivityKind> {
+        Set(assertions.values)
     }
 
     /// Returns the active number of assertions, primarily for health reporting and tests.

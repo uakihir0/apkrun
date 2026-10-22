@@ -5,7 +5,7 @@ import GuestProtocol
 import ImageCore
 import VirtualMachineCore
 
-/// The runtime's state (state-machines.md §2). The M1 cut has no suspend.
+/// The runtime's state (state-machines.md §2).
 public enum RuntimeState: Equatable, Sendable {
     /// No VM.
     case stopped
@@ -13,6 +13,8 @@ public enum RuntimeState: Equatable, Sendable {
     case booting(BootPhase)
     /// Android reported boot completion (M1: `ready` is `.bootCompleted`).
     case ready
+    /// The VM is paused and will resume before serving guest operations.
+    case suspended
     /// Android is shutting down.
     case stopping(StopReason)
     /// The boot or the VM failed.
@@ -59,6 +61,8 @@ public enum StartReason: Sendable {
     case user
     /// A registered package session or other automatic launch request.
     case automatic
+    /// The configured one-time start after the user logs in.
+    case preboot
 }
 
 /// The boot deadlines of runtime-daemon.md §3.2.
@@ -140,10 +144,12 @@ public actor RuntimeSupervisor {
     private let timeouts: BootTimeouts
     private let guestAgentTimeout: Duration
     private let requiredAgentOutageTimeout: Duration
+    private let bootClock: any RuntimeIdleClock
     private let eventContinuation: AsyncStream<RuntimeEvent>.Continuation
     private let logger: APKLogger
     private let bootLogger: APKLogger
     private let environment: [String: String]
+    private let adbClientConnectionCountChanged: @Sendable (UInt64, UInt64, Int) -> Void
     private var controller: VMController?
     /// The boot's GPU device while the VM can still accept host display operations.
     private var graphicsDevice: VirtioGPUDevice?
@@ -154,6 +160,8 @@ public actor RuntimeSupervisor {
     private var requiredAgentOutageMonitor: RequiredAgentOutageMonitor?
     /// The loopback forwarder of developer ADB (`127.0.0.1:<port>` to guest vsock 5555), while Android runs.
     private var forwarder: VsockLoopbackForwarder?
+    /// A separate loopback forwarder for the supervisor's ADB client and Guest Agent.
+    private var adbClientForwarder: VsockLoopbackForwarder?
     /// The developer's adb client, when adb was found.
     private var adbClient: AdbClient?
     /// Polls ADB for the boot signals until boot completion.
@@ -169,8 +177,18 @@ public actor RuntimeSupervisor {
     public var developmentADBHostPort: UInt16? {
         forwarder?.port
     }
+    /// The private loopback port used by the supervisor's ADB client and Guest Agent.
+    public var developmentADBClientHostPort: UInt16? {
+        adbClientForwarder?.port
+    }
+    /// The latest developer ADB forwarder generation, used by RuntimeHost to reject callbacks after stop.
+    public var developmentADBForwarderGeneration: UInt64 {
+        adbForwarderGeneration
+    }
     /// Whether the ADB poller has connected to the development endpoint in this boot.
     private var isADBConnected = false
+    /// Distinguishes callbacks from each replacement loopback forwarder.
+    private var adbForwarderGeneration: UInt64 = 0
 
     /// The guest vsock port where adbd listens (android-image.md §7.3).
     static let developmentADBGuestPort: UInt32 = 5555
@@ -182,6 +200,12 @@ public actor RuntimeSupervisor {
     private var stopRequested = false
     /// True from the start of `ensureReady` until the boot returns or fails.
     private var isBooting = false
+    /// A host sleep overlapped a boot and may require a time sync when Android becomes ready.
+    private var hostSleepDuringBoot = false
+    private var hostWakeRequiresTimeSync = false
+    /// Serializes start, suspend, resume, and stop operations while the actor is reentrant across awaits.
+    private var isLifecycleOperationInProgress = false
+    private var lifecycleOperationWaiters: [CheckedContinuation<Void, Never>] = []
     /// What `perf/boots.jsonl` needs about the boot in flight. Set once the VM is about to start.
     private var bootDraft: BootDraft?
 
@@ -197,7 +221,9 @@ public actor RuntimeSupervisor {
         guestAgentBundle: GuestAgentBundle? = nil,
         guestAgentTimeout: Duration = DevelopmentGuestAgent.defaultConnectTimeout,
         requiredAgentOutageTimeout: Duration = .seconds(30),
-        developmentDisplay: DevelopmentDisplay? = nil
+        developmentDisplay: DevelopmentDisplay? = nil,
+        adbClientConnectionCountChanged: @escaping @Sendable (UInt64, UInt64, Int) -> Void = { _, _, _ in },
+        bootClock: any RuntimeIdleClock = SuspendingRuntimeIdleClock()
     ) {
         self.guestAgentBundle = guestAgentBundle
         self.developmentDisplay = developmentDisplay
@@ -209,7 +235,9 @@ public actor RuntimeSupervisor {
         self.timeouts = timeouts
         self.guestAgentTimeout = guestAgentTimeout
         self.requiredAgentOutageTimeout = requiredAgentOutageTimeout
+        self.bootClock = bootClock
         self.environment = environment
+        self.adbClientConnectionCountChanged = adbClientConnectionCountChanged
         let stream = AsyncStream.makeStream(of: RuntimeEvent.self, bufferingPolicy: .bufferingNewest(4096))
         events = stream.stream
         eventContinuation = stream.continuation
@@ -219,10 +247,16 @@ public actor RuntimeSupervisor {
 
     /// Boots Android and waits until it reports boot completion.
     public func ensureReady(_ reason: StartReason) async throws(RuntimeBootFailure) {
+        await acquireLifecycleOperation()
+        defer { releaseLifecycleOperation() }
         // A boot in progress holds the state at `.stopped` until the VM has been created. A second call must not
         // start another boot, and it must not clear `stopRequested` (a stop during the instance load would be lost).
         guard !isBooting else {
             throw .androidBootFailed(detail: "a boot is already in progress")
+        }
+        if state == .suspended {
+            try await resumeWhileSerialized()
+            return
         }
         guard state == .stopped else {
             if state == .ready {
@@ -233,9 +267,16 @@ public actor RuntimeSupervisor {
         stopRequested = false
         lastGuestAgentStatus = nil
         isBooting = true
+        hostSleepDuringBoot = false
+        hostWakeRequiresTimeSync = false
         defer { isBooting = false }
         do {
             try await boot()
+            if hostWakeRequiresTimeSync {
+                try await synchronizeActiveGuestTime()
+                hostWakeRequiresTimeSync = false
+                hostSleepDuringBoot = false
+            }
         } catch {
             let outcome = stopRequested ? "stopped" : "failed:\(error.qualifiedCode)"
             await fail(error)
@@ -245,6 +286,8 @@ public actor RuntimeSupervisor {
                 // explicit start retry possible without requiring a daemon restart.
                 transition(to: .stopped)
             }
+            hostSleepDuringBoot = false
+            hostWakeRequiresTimeSync = false
             throw error
         }
         writeBootRecord(outcome: "ready")
@@ -263,9 +306,162 @@ public actor RuntimeSupervisor {
         RuntimeStateSnapshot(revision: stateRevision, state: state)
     }
 
+    /// Pauses Android after the Guest Agent stops keepalives and request timers.
+    public func suspend() async throws(RuntimeBootFailure) {
+        await acquireLifecycleOperation()
+        defer { releaseLifecycleOperation() }
+        try await suspendWhileSerialized()
+    }
+
+    /// Pauses a ready runtime before host sleep, or records that an in-progress boot will sleep with its VM.
+    ///
+    /// Virtualization.framework pauses a booting VM with the host. Boot deadlines use a suspending clock, and boot
+    /// performs the initial guest-time sync before entering `ready`.
+    public func prepareForHostSleep() async throws(RuntimeBootFailure) -> Bool {
+        if isBooting {
+            hostSleepDuringBoot = true
+            return true
+        }
+        await acquireLifecycleOperation()
+        defer { releaseLifecycleOperation() }
+        guard state == .ready else { return false }
+        try await suspendWhileSerialized()
+        return true
+    }
+
+    /// Completes a host sleep or cancellation for a VM that `prepareForHostSleep()` accepted.
+    public func completeHostSleep(cancelled: Bool) async throws(RuntimeBootFailure) {
+        if isBooting, state != .ready {
+            if cancelled {
+                hostSleepDuringBoot = false
+                hostWakeRequiresTimeSync = false
+            } else {
+                hostWakeRequiresTimeSync = true
+            }
+            return
+        }
+        await acquireLifecycleOperation()
+        defer { releaseLifecycleOperation() }
+        if state == .suspended {
+            try await resumeWhileSerialized()
+            hostSleepDuringBoot = false
+            hostWakeRequiresTimeSync = false
+            return
+        }
+        guard !cancelled, hostSleepDuringBoot, state == .ready else {
+            hostSleepDuringBoot = false
+            hostWakeRequiresTimeSync = false
+            return
+        }
+        try await synchronizeActiveGuestTime()
+        hostSleepDuringBoot = false
+        hostWakeRequiresTimeSync = false
+    }
+
+    private func synchronizeActiveGuestTime() async throws(RuntimeBootFailure) {
+        guard let agent = developmentGuestAgent else { return }
+        let roundTrip: Duration
+        do throws(GuestAgentFailure) {
+            roundTrip = try await agent.resume(connectTimeout: .seconds(2))
+        } catch {
+            let failure: RuntimeBootFailure =
+                error == .connectTimedOut || error == .requiredAgentUnavailable || error == .startFailed
+                ? .requiredAgentUnavailable(agent: .guestAgent)
+                : .guestAgent(error)
+            throw failure
+        }
+        try await synchronizeGuestTime(roundTrip: roundTrip, using: agent)
+    }
+
+    private func suspendWhileSerialized() async throws(RuntimeBootFailure) {
+        guard state != .suspended else {
+            return
+        }
+        guard state == .ready, let controller else {
+            throw .androidBootFailed(detail: "the runtime is not ready to suspend")
+        }
+        await stopRequiredAgentOutageMonitor()
+        await developmentGuestAgent?.supervisor.pause()
+        do {
+            try await controller.pause()
+        } catch {
+            let failure = Self.vmFailure(error)
+            await failAndReturnToStopped(failure)
+            throw failure
+        }
+        Perf.mark(.vmPaused, timeline: diagnostics.perfTimeline)
+        transition(to: .suspended)
+    }
+
+    /// Resumes Android, verifies its required agent, then returns the runtime to `ready`.
+    public func resume() async throws(RuntimeBootFailure) {
+        await acquireLifecycleOperation()
+        defer { releaseLifecycleOperation() }
+        try await resumeWhileSerialized()
+    }
+
+    private func resumeWhileSerialized() async throws(RuntimeBootFailure) {
+        guard state != .ready else {
+            return
+        }
+        guard state == .suspended, let controller else {
+            throw .androidBootFailed(detail: "the runtime is not suspended")
+        }
+        do {
+            try await controller.resume()
+        } catch {
+            let failure = Self.vmFailure(error)
+            await failAndReturnToStopped(failure)
+            throw failure
+        }
+        Perf.mark(.vmResumed, timeline: diagnostics.perfTimeline)
+
+        if let agent = developmentGuestAgent {
+            let roundTrip: Duration
+            do throws(GuestAgentFailure) {
+                roundTrip = try await agent.resume(connectTimeout: .seconds(2))
+            } catch {
+                let failure: RuntimeBootFailure =
+                    error == .connectTimedOut || error == .requiredAgentUnavailable || error == .startFailed
+                    ? .requiredAgentUnavailable(agent: .guestAgent)
+                    : .guestAgent(error)
+                await failAndReturnToStopped(failure)
+                throw failure
+            }
+            do {
+                try await synchronizeGuestTime(roundTrip: roundTrip, using: agent)
+            } catch {
+                await failAndReturnToStopped(error)
+                throw error
+            }
+        }
+        transition(to: .ready)
+        await startRequiredAgentOutageMonitor()
+    }
+
     /// Stops Android: `reboot -p` over ADB (or over the serial shell when ADB is not connected) in
     /// developer mode, then a forced stop after 20 s (vm.md §9.3).
     public func stop(reason: StopReason = .user) async {
+        // `stop()` deliberately bypasses the lifecycle gate during boot so that it can cancel the
+        // in-flight boot. All other stop calls serialize behind suspend/resume.
+        let acquiredLifecycleOperation = !isBooting
+        if acquiredLifecycleOperation {
+            await acquireLifecycleOperation()
+        }
+        defer {
+            if acquiredLifecycleOperation {
+                releaseLifecycleOperation()
+            }
+        }
+        if state == .suspended {
+            do {
+                try await resumeWhileSerialized()
+            } catch {
+                // Resume failure already captures diagnostics and stops the VM. Do not attempt a guest shutdown over
+                // a connection that could not be restored.
+                return
+            }
+        }
         guard let controller else {
             // A boot that has not created the VM yet checks this flag before it starts the VM.
             if isBooting {
@@ -299,6 +495,99 @@ public actor RuntimeSupervisor {
         graphicsDevice = nil
         shell = nil
         transition(to: .stopped)
+    }
+
+    private func acquireLifecycleOperation() async {
+        guard isLifecycleOperationInProgress else {
+            isLifecycleOperationInProgress = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            lifecycleOperationWaiters.append(continuation)
+        }
+    }
+
+    private func releaseLifecycleOperation() {
+        guard !lifecycleOperationWaiters.isEmpty else {
+            isLifecycleOperationInProgress = false
+            return
+        }
+        lifecycleOperationWaiters.removeFirst().resume()
+    }
+
+    private func failAndReturnToStopped(_ failure: RuntimeBootFailure) async {
+        await fail(failure)
+        if !stopRequested, state == .failed(failure) {
+            transition(to: .stopped)
+        }
+    }
+
+    private func synchronizeGuestTime(
+        roundTrip: Duration,
+        using agent: DevelopmentGuestAgent
+    ) async throws(RuntimeBootFailure) {
+        let unixTimeMilliseconds = Int64(Date().timeIntervalSince1970 * 1_000)
+        let rttMilliseconds = UInt32(clamping: roundTrip.wholeMilliseconds)
+        do throws(GuestProtocolFailure) {
+            _ = try await agent.supervisor.send(
+                GuestSyncTime(
+                    unixTimeMilliseconds: unixTimeMilliseconds,
+                    rttMilliseconds: rttMilliseconds
+                )
+            )
+        } catch {
+            guard Self.isSyncTimeUnsupported(error) else {
+                throw .guestAgent(.operationFailed(reason: String(describing: error)))
+            }
+            #if DEBUG
+                guard options.developerMode, let adbClient else {
+                    throw .guestAgent(.operationFailed(reason: String(describing: error)))
+                }
+                let buildType: String
+                do throws(AdbFailure) {
+                    buildType = try await adbClient.getprop("ro.build.type")
+                } catch {
+                    logger.error("The Android build type could not be checked for time sync", errorCode: error.code)
+                    throw .guestAgent(.adb(error))
+                }
+                guard buildType == "userdebug" else {
+                    throw .guestAgent(.operationFailed(reason: String(describing: error)))
+                }
+                do throws(AdbFailure) {
+                    try await adbClient.restartAsRoot(timeout: .seconds(60))
+                    let seconds = Int64(Date().timeIntervalSince1970.rounded(.down))
+                    let reply = try await adbClient.shell("date -u @\(seconds)", timeout: .seconds(5))
+                    guard reply.status == 0 else {
+                        throw .commandFailed(command: "date", status: reply.status)
+                    }
+                } catch {
+                    logger.error("The Android wall clock could not be synchronized", errorCode: error.qualifiedCode)
+                    throw .guestAgent(.adb(error))
+                }
+                do throws(GuestAgentFailure) {
+                    _ = try await agent.resume(connectTimeout: .seconds(10))
+                } catch {
+                    logger.error(
+                        "The Guest Agent did not reconnect after the developer ADB root transition",
+                        errorCode: error.qualifiedCode
+                    )
+                    throw .requiredAgentUnavailable(agent: .guestAgent)
+                }
+            #else
+                throw .guestAgent(.operationFailed(reason: String(describing: error)))
+            #endif
+        }
+    }
+
+    private static func isSyncTimeUnsupported(_ failure: GuestProtocolFailure) -> Bool {
+        switch failure {
+        case .capabilityMissing(let capability) where capability == GuestCapability.locale.rawValue:
+            true
+        case .remote(code: .unsupported, _, operation: "SyncTime"):
+            true
+        default:
+            false
+        }
     }
 
     /// Finishes the event stream after the owning daemon has completed its final stop.
@@ -349,6 +638,7 @@ public actor RuntimeSupervisor {
     private func boot() async throws(RuntimeBootFailure) {
         // The whole-boot limit counts from the start of the boot (runtime-daemon.md §3.2), VM start included.
         let bootStarted = ContinuousClock.now
+        let bootTimeoutStarted = bootClock.now
         // The GPU device is decided before anything is written. For drmVirgl that starts the renderer, so a renderer
         // failure ends the boot here, before the VM is created (#22, #23, graphics.md §8).
         let gpuDevices = try AndroidGraphicsDevices.devices(
@@ -437,7 +727,13 @@ public actor RuntimeSupervisor {
         if options.developerMode {
             startADBBridge(controller: controller, tracker: tracker, progress: progress.continuation)
         }
-        try await waitForBootCompletion(progress.stream, firstBoot: isFirstBoot, started: bootStarted)
+        try await waitForBootCompletion(
+            progress.stream,
+            firstBoot: isFirstBoot,
+            started: bootTimeoutStarted,
+            measurementStarted: bootStarted,
+            clock: bootClock
+        )
         let requiredAgentDeadline: ContinuousClock.Instant? =
             options.developerMode && guestAgentBundle != nil
             ? ContinuousClock.now + guestAgentTimeout
@@ -489,6 +785,13 @@ public actor RuntimeSupervisor {
                     await agent.applyDisplayPolicy(for: mode)
                 }
             }
+            let roundTrip: Duration
+            do throws(GuestAgentFailure) {
+                roundTrip = try await agent.resume(connectTimeout: .seconds(2))
+            } catch {
+                throw .guestAgent(error)
+            }
+            try await synchronizeGuestTime(roundTrip: roundTrip, using: agent)
         }
         try throwIfStopped()
         Perf.mark(.runtimeReady, timeline: diagnostics.perfTimeline)
@@ -602,19 +905,43 @@ public actor RuntimeSupervisor {
         }
     }
 
-    /// Opens the developer ADB bridge: the loopback forwarder, then the ADB poller.
+    /// Opens the developer ADB bridge and a separate internal ADB endpoint.
     ///
-    /// Neither failure stops the boot. Without the forwarder the ADB signals and `apkrun dev adb`
-    /// are unavailable, and the console signals still decide the phases. The forwarder is not
-    /// started against a port that another process already uses, because adb would then talk to
-    /// that process.
+    /// Neither failure stops the boot. The public forwarder reports external connections as user
+    /// activity, while the private forwarder carries supervisor and Guest Agent traffic without
+    /// affecting the idle policy. The public forwarder is not started against a port that another
+    /// process already uses, because adb would then talk to that process.
     private func startADBBridge(
         controller: VMController,
         tracker: BootPhaseTracker,
         progress: AsyncStream<Progress>.Continuation
     ) {
+        adbForwarderGeneration &+= 1
+        let forwarderGeneration = adbForwarderGeneration
+        let connectionCountChanged = adbClientConnectionCountChanged
         let forwarder = VsockLoopbackForwarder(
             requestedPort: options.adbHostPort,
+            guestPort: Self.developmentADBGuestPort,
+            logSink: diagnostics.logSink,
+            connectionCountChanged: { revision, count in
+                connectionCountChanged(forwarderGeneration, revision, count)
+            },
+            connectGuest: { port in
+                try await controller.connect(vsockPort: port, timeout: .seconds(5))
+            }
+        )
+        do {
+            try forwarder.start()
+            self.forwarder = forwarder
+        } catch {
+            logger.warning(
+                "The public ADB loopback forwarder did not start",
+                errorCode: error.qualifiedCode
+            )
+        }
+
+        let adbClientForwarder = VsockLoopbackForwarder(
+            requestedPort: 0,
             guestPort: Self.developmentADBGuestPort,
             logSink: diagnostics.logSink,
             connectGuest: { port in
@@ -622,18 +949,17 @@ public actor RuntimeSupervisor {
             }
         )
         do {
-            try forwarder.start()
+            try adbClientForwarder.start()
+            self.adbClientForwarder = adbClientForwarder
         } catch {
             logger.warning(
-                "Booting without ADB: the loopback forwarder did not start",
+                "Booting without internal ADB: the loopback forwarder did not start",
                 errorCode: error.qualifiedCode
             )
             return
         }
-        self.forwarder = forwarder
-        // The forwarder reports the port it bound, which is the requested port unless the request was 0.
-        guard let hostPort = forwarder.port else {
-            logger.warning("Booting without ADB: the loopback forwarder has no bound port")
+        guard let hostPort = adbClientForwarder.port else {
+            logger.warning("Booting without internal ADB: the loopback forwarder has no bound port")
             return
         }
         do {
@@ -751,7 +1077,7 @@ public actor RuntimeSupervisor {
         }
         let state: GuestAgentSupervisor.State =
             switch status.state {
-            case .connecting, .ready, .reconnecting, .unresponsive:
+            case .connecting, .ready, .reconnecting, .paused, .unresponsive:
                 .unavailable
             case .incompatible, .stopped, .unavailable:
                 status.state
@@ -759,22 +1085,27 @@ public actor RuntimeSupervisor {
         return GuestAgentSupervisor.StatusSnapshot(state: state, protocolVersion: status.protocolVersion)
     }
 
-    /// Closes the forwarder and forgets the ADB client of the boot that just ended.
-    /// Closes the forwarder and forgets the ADB client of the boot that just ended. The forwarder is awaited without
-    /// blocking a thread of the Swift concurrency pool, so a teardown after a failed boot cannot hold it.
+    /// Closes both forwarders and forgets the ADB client of the boot that just ended.
+    /// Each forwarder is awaited without blocking a thread of the Swift concurrency pool, so a teardown after a
+    /// failed boot cannot hold it.
     private func closeDevelopmentChannels() async {
         let closing = forwarder
+        let closingADBClient = adbClientForwarder
         forwarder = nil
+        adbClientForwarder = nil
         adbClient = nil
         adbPollTask = nil
         isADBConnected = false
         await closing?.stopAndWait()
+        await closingADBClient?.stopAndWait()
     }
 
     private func waitForBootCompletion(
         _ progress: AsyncStream<Progress>,
         firstBoot: Bool,
-        started: ContinuousClock.Instant
+        started: Duration,
+        measurementStarted: ContinuousClock.Instant,
+        clock: any RuntimeIdleClock
     ) async throws(RuntimeBootFailure) {
         var watch = BootWatch(
             started: started,
@@ -809,10 +1140,10 @@ public actor RuntimeSupervisor {
             if case .entered(let entered) = input {
                 transition(to: .booting(entered))
                 logger.info(
-                    "Android boot entered \(entered.description, .public) after \(String(describing: ContinuousClock.now - started), .public)"
+                    "Android boot entered \(entered.description, .public) after \(String(describing: ContinuousClock.now - measurementStarted), .public)"
                 )
             }
-            switch watch.receive(input, at: .now) {
+            switch watch.receive(input, at: clock.now) {
             case .keepWaiting:
                 continue
             case .bootCompleted:

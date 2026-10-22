@@ -41,7 +41,7 @@ import Testing
             daemonCPUPercent: 12.5
         ),
         displays: [
-            DisplaySlotSnapshot(
+            RuntimeDisplaySlotSnapshot(
                 slot: 1,
                 state: .allocated(sessionID),
                 displayID: displayID,
@@ -108,12 +108,12 @@ import Testing
     #expect(summaryObject["pointSize"] == nil)
     #expect(try JSONDecoder().decode(SessionSummary.self, from: encodedSummary) == summary)
     #expect(try JSONDecoder().decode(WireDisplayState.self, from: unknownDisplayState) == .unknown)
-    #expect(try JSONDecoder().decode(AndroidWindowMode.self, from: unknownWindowMode) == .unknown)
+    #expect(try JSONDecoder().decode(RuntimeAndroidWindowMode.self, from: unknownWindowMode) == .unknown)
     #expect(throws: (any Error).self) {
         try JSONEncoder().encode(WireDisplayState.unknown)
     }
     #expect(throws: (any Error).self) {
-        try JSONEncoder().encode(AndroidWindowMode.unknown)
+        try JSONEncoder().encode(RuntimeAndroidWindowMode.unknown)
     }
 }
 

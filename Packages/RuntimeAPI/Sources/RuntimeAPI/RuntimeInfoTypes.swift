@@ -86,7 +86,7 @@ public struct RuntimeInfo: Codable, Equatable, Sendable {
     /// Resource measurements, absent unless requested and available.
     public let resources: ResourceUsage?
     /// Display-slot details, absent unless requested.
-    public let displays: [DisplaySlotSnapshot]?
+    public let displays: [RuntimeDisplaySlotSnapshot]?
 
     /// Creates a runtime information snapshot.
     public init(
@@ -94,7 +94,7 @@ public struct RuntimeInfo: Codable, Equatable, Sendable {
         sizing: RuntimeSizing,
         displayPoolSize: Int,
         resources: ResourceUsage? = nil,
-        displays: [DisplaySlotSnapshot]? = nil
+        displays: [RuntimeDisplaySlotSnapshot]? = nil
     ) {
         self.status = status
         self.sizing = sizing
@@ -217,7 +217,7 @@ public enum WireDisplayState: Codable, Equatable, Sendable {
 }
 
 /// A snapshot of one configured display slot.
-public struct DisplaySlotSnapshot: Codable, Equatable, Sendable {
+public struct RuntimeDisplaySlotSnapshot: Codable, Equatable, Sendable {
     /// The zero-based slot index; slot 0 is Android's primary display.
     public let slot: Int
     /// The slot lifecycle state.
@@ -250,7 +250,7 @@ public struct DisplaySlotSnapshot: Codable, Equatable, Sendable {
 }
 
 /// The host-window strategy associated with a session.
-public enum AndroidWindowMode: String, Codable, Equatable, Sendable {
+public enum RuntimeAndroidWindowMode: String, Codable, Equatable, Sendable {
     /// The Android app has its own secondary display.
     case secondaryDisplay
     /// The app uses Android's primary display for compatibility.
@@ -294,7 +294,7 @@ public struct SessionSummary: Codable, Equatable, Sendable {
     /// When the session opened.
     public let openedAt: Date
     /// The window strategy used for the session.
-    public let windowMode: AndroidWindowMode
+    public let windowMode: RuntimeAndroidWindowMode
     /// Whether a screen recording is active for the session.
     public let recording: Bool
     /// The last known window size in points, for the **Use Current Size** action.
@@ -309,7 +309,7 @@ public struct SessionSummary: Codable, Equatable, Sendable {
         displayID: DisplayID? = nil,
         clientKind: RuntimeClientKind,
         openedAt: Date,
-        windowMode: AndroidWindowMode,
+        windowMode: RuntimeAndroidWindowMode,
         recording: Bool,
         pointSize: CGSize? = nil
     ) {
@@ -323,6 +323,79 @@ public struct SessionSummary: Codable, Equatable, Sendable {
         self.windowMode = windowMode
         self.recording = recording
         self.pointSize = pointSize
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionID
+        case packageID
+        case displayName
+        case state
+        case displayID
+        case clientKind
+        case openedAt
+        case windowMode
+        case recording
+        case pointSize
+    }
+
+    /// Decodes `CGSize` through its documented `{width, height}` wire shape.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sessionID = try container.decode(UUID.self, forKey: .sessionID)
+        packageID = try container.decode(RuntimePackageID.self, forKey: .packageID)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        state = try container.decode(RuntimeSessionPhase.self, forKey: .state)
+        displayID = try container.decodeIfPresent(DisplayID.self, forKey: .displayID)
+        clientKind = try container.decode(RuntimeClientKind.self, forKey: .clientKind)
+        openedAt = try container.decode(Date.self, forKey: .openedAt)
+        windowMode = try container.decode(RuntimeAndroidWindowMode.self, forKey: .windowMode)
+        recording = try container.decode(Bool.self, forKey: .recording)
+        pointSize = try container.decodeIfPresent(RuntimeInfoPointSize.self, forKey: .pointSize)?.size
+    }
+
+    /// Encodes `CGSize` using the documented `{width, height}` wire shape.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(sessionID, forKey: .sessionID)
+        try container.encode(packageID, forKey: .packageID)
+        try container.encode(displayName, forKey: .displayName)
+        try container.encode(state, forKey: .state)
+        try container.encodeIfPresent(displayID, forKey: .displayID)
+        try container.encode(clientKind, forKey: .clientKind)
+        try container.encode(openedAt, forKey: .openedAt)
+        try container.encode(windowMode, forKey: .windowMode)
+        try container.encode(recording, forKey: .recording)
+        if let pointSize {
+            try container.encode(RuntimeInfoPointSize(pointSize), forKey: .pointSize)
+        }
+    }
+
+    /// Compares point sizes by their dimensions because `CGSize` is not Equatable here.
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.sessionID == rhs.sessionID
+            && lhs.packageID == rhs.packageID
+            && lhs.displayName == rhs.displayName
+            && lhs.state == rhs.state
+            && lhs.displayID == rhs.displayID
+            && lhs.clientKind == rhs.clientKind
+            && lhs.openedAt == rhs.openedAt
+            && lhs.windowMode == rhs.windowMode
+            && lhs.recording == rhs.recording
+            && lhs.pointSize.map(RuntimeInfoPointSize.init) == rhs.pointSize.map(RuntimeInfoPointSize.init)
+    }
+}
+
+private struct RuntimeInfoPointSize: Codable, Equatable, Sendable {
+    let width: Double
+    let height: Double
+
+    init(_ size: CGSize) {
+        width = Double(size.width)
+        height = Double(size.height)
+    }
+
+    var size: CGSize {
+        CGSize(width: width, height: height)
     }
 }
 

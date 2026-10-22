@@ -12,7 +12,7 @@ public struct ScanoutPoolHandle: @unchecked Sendable {
     public let surfaces: [IOSurface]
     /// Completed guest frames for this presenter generation.
     public let frames: AsyncStream<ScanoutFrame>
-    /// The latest sequence assigned to a guest frame, including blits that have not completed yet.
+    /// The latest sequence assigned to an accepted guest flush, including one held before its blit starts.
     public var latestIssuedFrameSequence: UInt64 {
         latestSequence()
     }

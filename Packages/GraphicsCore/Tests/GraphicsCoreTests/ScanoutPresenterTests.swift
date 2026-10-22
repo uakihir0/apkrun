@@ -179,6 +179,8 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
 @Test func aFrameIsHeldWhileNoBufferIsFreeUntilTheConsumerDisplaysOne() async throws {
     let harness = try PresenterHarness()
     let presenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)
+    let pool = ScanoutPoolHandle(presenter: presenter, device: harness.device)
+    var frames = presenter.frames.makeAsyncIterator()
     let control = harness.send(
         bindAndFlush(resource: 3, rect: fullRect) + [flushRequest(resource: 3, rect: fullRect)]
     )
@@ -186,10 +188,19 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
     // Three frames fill the three buffers, which the consumer does not display. Each flush waits until its frame is
     // offered, so no flush is held behind an earlier blit.
     try await eventually { presenter.statistics.framesPresented == 1 }
+    #expect(await frames.next() == .frameReady(generation: 1, bufferIndex: 0, sequence: 1))
     for expected: UInt64 in 2...3 {
         let next = harness.send([flushRequest(resource: 3, rect: fullRect)])
         try await eventually { next.completionCounts == [1] }
         try await eventually { presenter.statistics.framesPresented == expected }
+        #expect(
+            await frames.next()
+                == .frameReady(
+                    generation: 1,
+                    bufferIndex: Int(expected - 1),
+                    sequence: expected
+                )
+        )
     }
     #expect(presenter.statistics.framesPresented == 3)
     #expect(blitCalls(harness.engine).count == 3)
@@ -198,11 +209,15 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
     let held = harness.send([flushRequest(resource: 3, rect: fullRect)])
     try await eventually { held.completionCounts == [1] }
     #expect(blitCalls(harness.engine).count == 3)
+    // Its sequence is assigned at acceptance, so a launch watermark taken now includes this held flush.
+    #expect(pool.latestIssuedFrameSequence == 4)
 
     // The consumer displays frame 3, which frees frames 1 and 2 (display-and-windowing.md §5.2). The held frame starts.
     presenter.frameDisplayed(upTo: 3)
     try await eventually { presenter.statistics.framesPresented == 4 }
     #expect(blitCalls(harness.engine).count == 4)
+    #expect(await frames.next() == .frameReady(generation: 1, bufferIndex: 0, sequence: 4))
+    #expect(pool.latestIssuedFrameSequence == 4)
     presenter.close()
 }
 

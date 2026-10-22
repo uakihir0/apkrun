@@ -677,51 +677,51 @@ public actor GlobalSettingsStore {
             .integer("runtime.bootTimeoutSeconds", default: 180, minimum: 120, maximum: 1800, applies: .nextBoot),
             .integer("runtime.firstBootTimeoutSeconds", default: 900, minimum: 600, maximum: 3600, applies: .nextBoot),
             .integer("display.maxSessions", default: 8, minimum: 1, maximum: 15, applies: .live),
-            .boolean("graphics.safeMode", default: false, applies: .runtimeRestart),
-            .boolean("audio.output", default: true, applies: .runtimeRestart),
-            .boolean("developer.enabled", default: false, applies: .runtimeRestart),
-            .boolean("maintenance.checkAutomatically", default: true, applies: .live),
-            .enumeration("maintenance.channel", default: "stable", values: ["stable", "beta"], applies: .live),
-            .boolean("maintenance.installAPKRunAutomatically", default: false, applies: .live),
-            .boolean("maintenance.downloadImagesAutomatically", default: true, applies: .nextCheck),
+            .boolean("graphics.safeMode", default: false, applies: .storedOnly),
+            .boolean("audio.output", default: true, applies: .storedOnly),
+            .boolean("developer.enabled", default: false, applies: .storedOnly),
+            .boolean("maintenance.checkAutomatically", default: true, applies: .storedOnly),
+            .enumeration("maintenance.channel", default: "stable", values: ["stable", "beta"], applies: .storedOnly),
+            .boolean("maintenance.installAPKRunAutomatically", default: false, applies: .storedOnly),
+            .boolean("maintenance.downloadImagesAutomatically", default: true, applies: .storedOnly),
             .enumeration(
-                "maintenance.installImages", default: "automatic", values: ["automatic", "ask"], applies: .live),
-            .boolean("maintenance.notifyImageInstalled", default: false, applies: .live),
+                "maintenance.installImages", default: "automatic", values: ["automatic", "ask"], applies: .storedOnly),
+            .boolean("maintenance.notifyImageInstalled", default: false, applies: .storedOnly),
             .integer(
                 "updates.checkIntervalHours",
                 default: 6,
                 minimum: 1,
                 maximum: 168,
                 allowedValues: [1, 3, 6, 12, 24, 72, 168],
-                applies: .nextCheck
+                applies: .storedOnly
             ),
-            .boolean("updates.downloadOnExpensiveNetwork", default: false, applies: .live),
-            .boolean("updates.startRuntimeToInstall", default: false, applies: .live),
-            .boolean("updates.notifyInstalled", default: false, applies: .live),
-            .boolean("integrations.enabled.clipboard", default: true, applies: .live),
-            .boolean("integrations.enabled.notifications", default: true, applies: .live),
-            .boolean("integrations.enabled.links", default: true, applies: .live),
-            .boolean("integrations.enabled.files", default: true, applies: .live),
-            .boolean("integrations.enabled.sharedFolders", default: true, applies: .live),
-            .boolean("integrations.enabled.microphone", default: true, applies: .live),
-            .boolean("integrations.defaults.clipboard", default: true, applies: .newPackages),
-            .boolean("integrations.defaults.notifications", default: true, applies: .newPackages),
-            .boolean("integrations.defaults.files", default: true, applies: .newPackages),
+            .boolean("updates.downloadOnExpensiveNetwork", default: false, applies: .storedOnly),
+            .boolean("updates.startRuntimeToInstall", default: false, applies: .storedOnly),
+            .boolean("updates.notifyInstalled", default: false, applies: .storedOnly),
+            .boolean("integrations.enabled.clipboard", default: true, applies: .storedOnly),
+            .boolean("integrations.enabled.notifications", default: true, applies: .storedOnly),
+            .boolean("integrations.enabled.links", default: true, applies: .storedOnly),
+            .boolean("integrations.enabled.files", default: true, applies: .storedOnly),
+            .boolean("integrations.enabled.sharedFolders", default: true, applies: .storedOnly),
+            .boolean("integrations.enabled.microphone", default: true, applies: .storedOnly),
+            .boolean("integrations.defaults.clipboard", default: true, applies: .storedOnly),
+            .boolean("integrations.defaults.notifications", default: true, applies: .storedOnly),
+            .boolean("integrations.defaults.files", default: true, applies: .storedOnly),
             .enumeration(
-                "integrations.defaults.links", default: "ask", values: ["ask", "mac", "android"], applies: .newPackages),
+                "integrations.defaults.links", default: "ask", values: ["ask", "mac", "android"], applies: .storedOnly),
             .enumeration(
                 "integrations.defaults.sharedFolders", default: "off", values: ["off", "readOnly", "readWrite"],
-                applies: .newPackages),
-            .boolean("integrations.defaults.microphone", default: false, applies: .newPackages),
-            .array("sharedFolders.roots", default: [], applies: .live),
-            .boolean("system.syncLocale", default: true, applies: .live),
-            .boolean("system.syncTimeZone", default: true, applies: .live),
-            .boolean("system.syncClockFormat", default: true, applies: .live),
+                applies: .storedOnly),
+            .boolean("integrations.defaults.microphone", default: false, applies: .storedOnly),
+            .array("sharedFolders.roots", default: [], applies: .storedOnly),
+            .boolean("system.syncLocale", default: true, applies: .storedOnly),
+            .boolean("system.syncTimeZone", default: true, applies: .storedOnly),
+            .boolean("system.syncClockFormat", default: true, applies: .storedOnly),
             .enumeration(
                 "wrappers.defaultLocation",
                 default: "userApplications",
                 values: ["userApplications", "allUsersApplications", "ask"],
-                applies: .live
+                applies: .storedOnly
             ),
         ]
 
@@ -729,23 +729,23 @@ public actor GlobalSettingsStore {
             result += [
                 .integer(
                     "graphics.limits.totalResourceMemoryMiB", default: 2048, minimum: 1, maximum: Int.max,
-                    applies: .runtimeRestart),
+                    applies: .storedOnly),
                 .integer(
                     "graphics.limits.maxResourceMiB", default: 256, minimum: 1, maximum: Int.max,
-                    applies: .runtimeRestart),
+                    applies: .storedOnly),
                 .integer(
-                    "graphics.limits.maxDimension", default: 8192, minimum: 1, maximum: 16_384, applies: .runtimeRestart
+                    "graphics.limits.maxDimension", default: 8192, minimum: 1, maximum: 16_384, applies: .storedOnly
                 ),
                 .integer(
-                    "graphics.limits.maxContexts", default: 256, minimum: 1, maximum: Int.max, applies: .runtimeRestart),
+                    "graphics.limits.maxContexts", default: 256, minimum: 1, maximum: Int.max, applies: .storedOnly),
                 .integer(
                     "graphics.limits.maxResources", default: 65_536, minimum: 1, maximum: Int.max,
-                    applies: .runtimeRestart),
+                    applies: .storedOnly),
                 .integer(
                     "graphics.limits.maxBackingEntries", default: 16_384, minimum: 1, maximum: Int.max,
-                    applies: .runtimeRestart),
+                    applies: .storedOnly),
                 .integer(
-                    "graphics.limits.maxSubmit3DMiB", default: 4, minimum: 1, maximum: Int.max, applies: .runtimeRestart
+                    "graphics.limits.maxSubmit3DMiB", default: 4, minimum: 1, maximum: Int.max, applies: .storedOnly
                 ),
             ]
         }

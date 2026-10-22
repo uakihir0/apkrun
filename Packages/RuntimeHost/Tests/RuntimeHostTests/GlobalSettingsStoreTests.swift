@@ -34,7 +34,65 @@ private let testLimits = GlobalSettingsStoreLimits(
     #expect(setting("runtime.memoryGiB", in: snapshot)?.isSet == false)
     #expect(setting("sharedFolders.roots", in: snapshot)?.value == .array([]))
     #expect(setting("graphics.limits.maxDimension", in: snapshot)?.value == .integer(8192))
-    #expect(setting("wrappers.defaultLocation", in: snapshot)?.applies == .live)
+}
+
+@Test func globalSettingsReportsOnlyImplementedApplyEffects() async throws {
+    let location = makeSettingsURL()
+    defer { try? FileManager.default.removeItem(at: location.directory) }
+    let store = GlobalSettingsStore(fileURL: location.file, limits: testLimits)
+
+    let snapshot = try await store.snapshot()
+    let actual = Dictionary(uniqueKeysWithValues: snapshot.entries.map { ($0.key, $0.applies) })
+    let expected: [String: SettingApplies] = [
+        "runtime.startPolicy": .storedOnly,
+        "runtime.idleSuspendMinutes": .storedOnly,
+        "runtime.idleStopMinutes": .storedOnly,
+        "runtime.autoRestart": .storedOnly,
+        "runtime.cpuCount": .runtimeRestart,
+        "runtime.memoryGiB": .runtimeRestart,
+        "runtime.userdataGiB": .provisioning,
+        "runtime.bootTimeoutSeconds": .nextBoot,
+        "runtime.firstBootTimeoutSeconds": .nextBoot,
+        "display.maxSessions": .live,
+        "graphics.safeMode": .storedOnly,
+        "audio.output": .storedOnly,
+        "developer.enabled": .storedOnly,
+        "maintenance.checkAutomatically": .storedOnly,
+        "maintenance.channel": .storedOnly,
+        "maintenance.installAPKRunAutomatically": .storedOnly,
+        "maintenance.downloadImagesAutomatically": .storedOnly,
+        "maintenance.installImages": .storedOnly,
+        "maintenance.notifyImageInstalled": .storedOnly,
+        "updates.checkIntervalHours": .storedOnly,
+        "updates.downloadOnExpensiveNetwork": .storedOnly,
+        "updates.startRuntimeToInstall": .storedOnly,
+        "updates.notifyInstalled": .storedOnly,
+        "integrations.enabled.clipboard": .storedOnly,
+        "integrations.enabled.notifications": .storedOnly,
+        "integrations.enabled.links": .storedOnly,
+        "integrations.enabled.files": .storedOnly,
+        "integrations.enabled.sharedFolders": .storedOnly,
+        "integrations.enabled.microphone": .storedOnly,
+        "integrations.defaults.clipboard": .storedOnly,
+        "integrations.defaults.notifications": .storedOnly,
+        "integrations.defaults.files": .storedOnly,
+        "integrations.defaults.links": .storedOnly,
+        "integrations.defaults.sharedFolders": .storedOnly,
+        "integrations.defaults.microphone": .storedOnly,
+        "sharedFolders.roots": .storedOnly,
+        "system.syncLocale": .storedOnly,
+        "system.syncTimeZone": .storedOnly,
+        "system.syncClockFormat": .storedOnly,
+        "wrappers.defaultLocation": .storedOnly,
+        "graphics.limits.totalResourceMemoryMiB": .storedOnly,
+        "graphics.limits.maxResourceMiB": .storedOnly,
+        "graphics.limits.maxDimension": .storedOnly,
+        "graphics.limits.maxContexts": .storedOnly,
+        "graphics.limits.maxResources": .storedOnly,
+        "graphics.limits.maxBackingEntries": .storedOnly,
+        "graphics.limits.maxSubmit3DMiB": .storedOnly,
+    ]
+    #expect(actual == expected)
 }
 
 @Test func globalSettingsUpdatesValidatePersistAndPreserveExplicitDefaults() async throws {

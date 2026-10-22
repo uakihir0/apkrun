@@ -137,7 +137,8 @@ public actor RuntimeSupervisor {
     private let options: BootOptions
     private let diagnostics: DiagnosticsContext
     private let planner: AndroidBootPlanner
-    private let timeouts: BootTimeouts
+    private var timeouts: BootTimeouts
+    private var maxDisplaySessions: Int
     private let guestAgentTimeout: Duration
     private let requiredAgentOutageTimeout: Duration
     private let eventContinuation: AsyncStream<RuntimeEvent>.Continuation
@@ -193,6 +194,7 @@ public actor RuntimeSupervisor {
         diagnostics: DiagnosticsContext,
         platform: VZPlatformProfile = .macOS27,
         timeouts: BootTimeouts = .standard,
+        maxDisplaySessions: Int = 8,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         guestAgentBundle: GuestAgentBundle? = nil,
         guestAgentTimeout: Duration = DevelopmentGuestAgent.defaultConnectTimeout,
@@ -207,6 +209,7 @@ public actor RuntimeSupervisor {
         self.diagnostics = diagnostics
         planner = AndroidBootPlanner(platform: platform, paths: diagnostics.paths)
         self.timeouts = timeouts
+        self.maxDisplaySessions = DisplayPoolLimits(maxSessions: maxDisplaySessions).maxSessions
         self.guestAgentTimeout = guestAgentTimeout
         self.requiredAgentOutageTimeout = requiredAgentOutageTimeout
         self.environment = environment
@@ -261,6 +264,14 @@ public actor RuntimeSupervisor {
     /// Returns the current state with the revision used by state events.
     public func stateSnapshot() -> RuntimeStateSnapshot {
         RuntimeStateSnapshot(revision: stateRevision, state: state)
+    }
+
+    /// Applies global runtime configuration. Boot timeout changes apply to the next boot, and a
+    /// display session limit change is enforced on the next acquisition without ending open apps.
+    public func applyRuntimeSettings(timeouts: BootTimeouts, maxDisplaySessions: Int) async {
+        self.timeouts = timeouts
+        self.maxDisplaySessions = DisplayPoolLimits(maxSessions: maxDisplaySessions).maxSessions
+        await displayPool?.updateMaxSessions(self.maxDisplaySessions)
     }
 
     /// Stops Android: `reboot -p` over ADB (or over the serial shell when ADB is not connected) in
@@ -328,7 +339,8 @@ public actor RuntimeSupervisor {
         let pool = DisplayPool(
             scanouts: VirtioGPUScanoutController(device: graphicsDevice),
             guest: developmentGuestAgent,
-            primaryPool: developmentDisplay?.currentPoolHandle
+            primaryPool: developmentDisplay?.currentPoolHandle,
+            limits: DisplayPoolLimits(maxSessions: maxDisplaySessions)
         )
         displayPool = pool
         let restartEvents = developmentGuestAgent.androidRestartEvents
@@ -347,6 +359,9 @@ public actor RuntimeSupervisor {
     }
 
     private func boot() async throws(RuntimeBootFailure) {
+        // Capture next-boot settings before any suspension. A live settings update must not change
+        // the deadline for a boot that is already in flight.
+        let timeoutsForBoot = timeouts
         // The whole-boot limit counts from the start of the boot (runtime-daemon.md §3.2), VM start included.
         let bootStarted = ContinuousClock.now
         // The GPU device is decided before anything is written. For drmVirgl that starts the renderer, so a renderer
@@ -437,7 +452,12 @@ public actor RuntimeSupervisor {
         if options.developerMode {
             startADBBridge(controller: controller, tracker: tracker, progress: progress.continuation)
         }
-        try await waitForBootCompletion(progress.stream, firstBoot: isFirstBoot, started: bootStarted)
+        try await waitForBootCompletion(
+            progress.stream,
+            firstBoot: isFirstBoot,
+            started: bootStarted,
+            timeouts: timeoutsForBoot
+        )
         let requiredAgentDeadline: ContinuousClock.Instant? =
             options.developerMode && guestAgentBundle != nil
             ? ContinuousClock.now + guestAgentTimeout
@@ -774,7 +794,8 @@ public actor RuntimeSupervisor {
     private func waitForBootCompletion(
         _ progress: AsyncStream<Progress>,
         firstBoot: Bool,
-        started: ContinuousClock.Instant
+        started: ContinuousClock.Instant,
+        timeouts: BootTimeouts
     ) async throws(RuntimeBootFailure) {
         var watch = BootWatch(
             started: started,

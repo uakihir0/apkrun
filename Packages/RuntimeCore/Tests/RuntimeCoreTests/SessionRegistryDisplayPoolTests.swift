@@ -31,6 +31,7 @@ func leasedSessionUsesSecondaryDisplayAndReleasesLeaseOnRuntimeStop() async thro
         displayPool: displayPool
     )
     #expect(repeated.id == session.id)
+    #expect(repeated.openedAt == session.openedAt)
     #expect(scanouts.configuredScanouts == [1])
     await #expect(throws: SessionRegistryFailure.sessionAlreadyExists(packageID: session.packageID)) {
         try await registry.request(packageID: session.packageID)

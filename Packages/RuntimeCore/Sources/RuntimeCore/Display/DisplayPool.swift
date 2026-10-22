@@ -337,7 +337,7 @@ public actor DisplayPool {
 
     private let scanouts: any ScanoutController
     private let guest: any DisplayControlChannel
-    private let limits: DisplayPoolLimits
+    private var limits: DisplayPoolLimits
     private let primaryPool: ScanoutPoolHandle?
     private let logger = APKLogger(category: RuntimeLogCategory.sessions)
     private let displayEvents: DisplayEventInbox
@@ -696,6 +696,14 @@ public actor DisplayPool {
     /// Returns a stable snapshot of every hardware slot.
     public func snapshot() -> [DisplaySlotSnapshot] {
         slots.map(Self.snapshot)
+    }
+
+    /// Applies the live `display.maxSessions` setting. Existing leases remain active; the new limit
+    /// is enforced on the next app-session acquisition.
+    public func updateMaxSessions(_ maxSessions: Int) async {
+        await acquireOperationPermit()
+        defer { releaseOperationPermit() }
+        limits.maxSessions = min(15, max(1, maxSessions))
     }
 
     /// Clears boot-local fault counts after Android restarts and retries quarantined scanouts.

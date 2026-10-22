@@ -61,6 +61,29 @@ func displayPoolEnforcesTheSoftAppSessionLimit() async throws {
 }
 
 @Test
+func displayPoolAppliesLoweredLiveSessionLimitWithoutRevokingExistingLease() async throws {
+    let guest = FakeDisplayControlChannel()
+    let scanouts = FakeScanoutController(guest: guest)
+    let pool = DisplayPool(
+        scanouts: scanouts,
+        guest: guest,
+        limits: DisplayPoolLimits(maxSessions: 3)
+    )
+    let configuration = DisplayConfiguration(
+        geometry: DisplayGeometry(pointSize: CGSize(width: 480, height: 850), backingScale: 1)
+    )
+    let existing = try await pool.acquire(for: .app(UUID()), configuration: configuration)
+
+    await pool.updateMaxSessions(1)
+
+    await #expect(throws: DisplayPoolFailure.exhausted(maxSessions: 1)) {
+        try await pool.acquire(for: .app(UUID()), configuration: configuration)
+    }
+    #expect((await pool.snapshot())[0].state == .allocated(existing.session))
+    #expect(await pool.release(existing) == .released)
+}
+
+@Test
 func displayPoolLeasesPrimaryCompatibilityDisplayExclusivelyAndRestoresDensity() async throws {
     let guest = FakeDisplayControlChannel()
     guest.emit(

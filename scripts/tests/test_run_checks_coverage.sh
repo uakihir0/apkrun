@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Checks that scripts/ci/run-checks.sh runs every scripts/check-*.sh script of
-# build-system.md §3. A check that is missing from the runner would pass in
-# lint without ever running, so each one must be registered there.
+# Checks that scripts/ci/run-checks.sh runs every general lint check and that
+# product-build checks with required artifact inputs are called by their build.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,9 +8,11 @@ repo_root="$(cd "$script_dir/../.." && pwd)"
 temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
 
-# Checks that are not part of lint: check-compile-fail.sh is the manual T1
+# Checks that need an artifact or a specific test stage, rather than running in
+# generic lint. check-sepolicy.sh requires compiled AOSP policy and is invoked
+# by scripts/aosp/build-product.sh. check-compile-fail.sh is the manual T1
 # compiler-failure check of build-system.md §12.
-manual_checks=(check-compile-fail.sh)
+manual_checks=(check-compile-fail.sh check-sepolicy.sh)
 
 # unregistered_checks <root>: prints each scripts/check-*.sh that the runner in
 # <root> does not register and that is not a manual check.

@@ -13,6 +13,7 @@ rust_binary {
     name: "apkrun_vsockd",
     srcs: ["src/main.rs"],
     edition: "2021",
+    system_ext_specific: true,
     rustlibs: [
         "libandroid_logger",
         "libapkrun_vsockd",

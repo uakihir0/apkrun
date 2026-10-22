@@ -399,6 +399,40 @@
         ],
         "maximumTestExecutionTimeAllowance": 1800
       }
+    },
+    {
+      "id": "0F4AFC2E-3F03-4E56-9C1F-003003003036",
+      "name": "AndroidCustom",
+      "options": {
+        "environmentVariableEntries": [
+          {
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "android-custom",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_TEST_ANDROID_CUSTOM_DIR",
+            "value": "/tmp/apkrun-test-android-custom",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_TEST_ADB_PORT",
+            "value": "6520",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_FIXTURE_PROBE_APK",
+            "value": "/tmp/apkrun-test-fixtures/HelloProbe.apk",
+            "enabled": true
+          },
+          {
+            "key": "ANDROID_ADB_SERVER_PORT",
+            "value": "15050",
+            "enabled": true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance": 5400
+      }
     }
   ],
   "defaultOptions" : {

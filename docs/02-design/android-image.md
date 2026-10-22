@@ -585,13 +585,13 @@ python3 -m apkrun_image bundle \
 
 ## 11. APKRun AOSP product
 
-The guest agents are designed in [guest-components.md](guest-components.md). This section covers the image build, which #36 implements.
+The guest agents are designed in [guest-components.md](guest-components.md). Issue #36 adds the Guest Agent and runtime bridge to the image; #37 adds the Store Agent.
 
 ### 11.1 Product definition
 
-The source is `Guest/product/`, mapped into the AOSP tree as `device/apkrun/apkrun_arm64/`. It contains `AndroidProducts.mk` (lunch targets `apkrun_arm64-trunk_staging-userdebug` and `-user`), `apkrun_arm64.mk` (inherits `device/google/cuttlefish/vsoc_arm64_only/phone/aosp_cf.mk`; `PRODUCT_PACKAGES += apkrun_vsockd ApkRunGuest ApkRunStore`), `Android.bp` (agent APKs with the platform certificate, privileged, in `/system_ext/priv-app`), `prebuilt/` (git-ignored agent APKs copied by `scripts/build-guest.sh`), `init/apkrun.rc`, `sepolicy/`, `permissions/`, `overlay/`, `settings/`, and `manifest/pinned.xml` (the `repo manifest -r` snapshot for release builds).
+The source is `Guest/product/`, mapped into the AOSP tree as `device/apkrun/apkrun_arm64/`. It contains `AndroidProducts.mk` (lunch targets `apkrun_arm64-trunk_staging-userdebug` and `-user`), `BoardConfig.mk` (system_ext policy integration), `apkrun_arm64.mk` (inherits `device/google/cuttlefish/vsoc_arm64_only/phone/aosp_cf.mk`; #36 adds `apkrun_vsockd ApkRunGuest`, and #37 adds `ApkRunStore`), `Android.bp` (platform-signed privileged agent APKs in `/system_ext/priv-app`), `prebuilt/` (git-ignored agent APKs copied by the guest build), `init/apkrun.rc`, `sepolicy/`, `permissions/`, `overlay/`, `settings/`, and `manifest/pinned.xml` (the `repo manifest -r` snapshot for release builds).
 
-- The policy starts in `BOARD_SEPOLICY_DIRS`. If Treble `neverallow` checks reject `/system_ext` types, #36 moves those rules to `SYSTEM_EXT_PRIVATE_SEPOLICY_DIRS` and records the split here.
+- `BoardConfig.mk` adds the Guest Agent and bridge rules directly through `SYSTEM_EXT_PRIVATE_SEPOLICY_DIRS`. This matches their `/system_ext` placement; the exact Android 17 policy compile remains to be verified by the pinned AOSP build.
 - `PRODUCT_IGNORE_ALL_ANDROIDMK := true`: all modules use `Android.bp`. The base product uses a 16 KiB page size, which the Rust and Kotlin components do not assume.
 - `ro.apkrun.product=1`, plus the default profile's GPU properties. `bundle --image-version` sets the image version, and ImageCore passes `androidboot.apkrun.image` at every boot.
 - `Guest/product/mesa/` (#99) holds the pinned EGL, GLES, and Gallium prebuilts, staged by `scripts/guest/stage-mesa-product.sh`. It supplies neither the product nor a SELinux policy.
@@ -602,7 +602,7 @@ The source is `Guest/product/`, mapped into the AOSP tree as `device/apkrun/apkr
 
 | Change | Why |
 |---|---|
-| Adds the Guest Agent, Store Agent, `apkrun_vsockd`, their sepolicy and privapp permissions | production control path ([ADR-0008](../01-architecture/decisions/0008-guest-agents.md)) |
+| #36 adds the Guest Agent and `apkrun_vsockd`; #37 adds the Store Agent and each agent's sepolicy and privapp permissions | production control path ([ADR-0008](../01-architecture/decisions/0008-guest-agents.md)) |
 | Defaults KeyMint and Gatekeeper to the in-guest APEX variants; adds `virtio_snd` if missing | §7.2, §7.5 |
 | `Settings.Global.AUTO_TIME = 0`, `AUTO_TIME_ZONE = 0` | the host is the only time source ([desktop-integration.md](desktop-integration.md) §9) |
 | Adds an in-Android browser (AOSP `Browser2`) if the base has none | "Keep in Android" for links ([desktop-integration.md](desktop-integration.md) §7.1) |
@@ -612,8 +612,8 @@ The source is `Guest/product/`, mapped into the AOSP tree as `device/apkrun/apkr
 
 ### 11.3 Developer mode on custom images
 
-- `androidboot.apkrun.devmode=1` makes `init/apkrun.rc` start adbd on vsock 5555 (trigger `ro.boot.apkrun.devmode`). With `0`, the default, `apkrun.rc` stops adbd even in a userdebug build. #36 verifies that no other trigger restarts it.
-- `user` builds have `ro.adb.secure=1`. The Guest Agent authorizes the host's ADB key with `AdbManager.allowDebugging` (needs `MANAGE_DEBUGGING`), so no dialog appears on an unseen display.
+- `androidboot.apkrun.devmode=1` makes `init/apkrun.rc` set `service.adb.listen_addrs=vsock:5555` and start adbd (trigger `ro.boot.apkrun.devmode`). With `0`, the default, `apkrun.rc` stops adbd even in a userdebug build and stops it again if another trigger starts it. `persist.sys.usb.config=none` prevents a USB transport from being configured.
+- All product variants set `ro.adb.secure=1`. The Guest Agent authorizes the host's ADB key with `AdbManager.allowDebugging` (needs `MANAGE_DEBUGGING`), so no dialog appears on an unseen display.
 - A change of the devmode setting takes effect at the next runtime start, like the microphone setting.
 
 ### 11.4 Variants and verified boot
@@ -628,7 +628,8 @@ Proposed for release: pass `orange` and unlocked, but keep dm-verity on through 
 ### 11.5 Build
 
 - The host is x86-64 Linux with 64 GB of RAM and 400 GB of disk ([environment-setup.md](../05-development/environment-setup.md) §5). macOS cannot build AOSP.
-- `repo init` with the pinned manifest, `repo sync`, `lunch apkrun_arm64-trunk_staging-userdebug`, `m`, `m dist DIST_DIR=out/dist` with `BUILD_NUMBER=ar<counter>` (`scripts/aosp/build-product.sh`). The `*-img-*.zip` goes through §3–§10.
+- `repo init` with the pinned manifest, `repo sync`, `lunch apkrun_arm64-trunk_staging-userdebug`, `m`, `m dist DIST_DIR=out/dist` with `BUILD_NUMBER=ar<counter>` (`scripts/aosp/build-product.sh`). The builder writes `build-info.json` beside the copied `*-img-*.zip`; inventory verifies the archive fingerprint and carries the AOSP origin and build metadata. The generated AndroidImageManifest goes through §3–§10, and `bundle` takes the matching sidecar with `--build-info`.
+- After `m`, `scripts/check-sepolicy.sh` checks the compiled policy: the Guest Agent and `apkrun_vsockd` domains must be permissive in `userdebug`; `user` must have no permissive domains. `m dist` runs only after this check.
 - `provenance` records the pinned manifest, the builder image digest, and the `Guest/` git revision.
 - Acceptance (#36): the custom image reaches `boot_completed`, the agents start, and the reference diff has no unexplained differences beyond the documented product changes.
 

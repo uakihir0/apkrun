@@ -38,6 +38,12 @@ from apkrun_image.bootconfig import (
 from apkrun_image.disks import DisksError, build_disks
 from apkrun_image.extract import RAMDISK_OUTPUT, ExtractError, _open_artifact, extract_images
 from apkrun_image.gpt import GptError
+from apkrun_image.inventory import (
+    InventoryError,
+    load_build_info,
+    verify_build_info_archive,
+    verify_local_guest_apk,
+)
 from apkrun_image.layout import LayoutError, load_layout
 from apkrun_image.manifest import (
     ManifestError,
@@ -178,6 +184,7 @@ def build_bundle(
     output_directory: Path,
     source: Path | None = None,
     inventory_path: Path | None = None,
+    build_info: Path | None = None,
     sign_key: Path,
 ) -> dict[str, object]:
     """Build a signed bundle in `output_directory`."""
@@ -190,8 +197,68 @@ def build_bundle(
     layout = load_layout(layout_path, device_family)
     if not layout.console_ports or layout.gpu_profiles is None:
         raise BundleError("the layout needs consolePorts and gpuProfiles to build a bundle.")
-    source_block = document["source"]
-    full_version = f"{image_version}-cf{source_block['buildId']}-arm64"
+    source_block = document.get("source")
+    if not isinstance(source_block, dict):
+        raise BundleError("manifest source is missing or invalid.")
+    source_origin = source_block.get("origin")
+    apkrun_build_info: dict[str, object] | None = None
+    if source_origin == "apkrun-builder":
+        if build_info is None:
+            raise BundleError(
+                "an apkrun-builder manifest requires --build-info with the matching "
+                "AOSP build-info.json."
+            )
+        try:
+            apkrun_build_info = load_build_info(build_info)
+            verify_local_guest_apk(apkrun_build_info)
+        except InventoryError as error:
+            raise BundleError(str(error)) from error
+        archives = source_block.get("archives")
+        android = document.get("android")
+        if (
+            not isinstance(archives, list)
+            or len(archives) != 1
+            or not isinstance(archives[0], dict)
+        ):
+            raise BundleError("an apkrun-builder manifest must declare exactly one source archive.")
+        if not isinstance(android, dict):
+            raise BundleError("an apkrun-builder manifest has no Android variant metadata.")
+        archive = archives[0]
+        archive_name = archive.get("name")
+        archive_size = archive.get("size")
+        archive_sha256 = archive.get("sha256")
+        if (
+            not isinstance(archive_name, str)
+            or isinstance(archive_size, bool)
+            or not isinstance(archive_size, int)
+            or not isinstance(archive_sha256, str)
+        ):
+            raise BundleError("an apkrun-builder manifest has invalid source archive metadata.")
+        try:
+            verify_build_info_archive(
+                apkrun_build_info,
+                name=archive_name,
+                size=archive_size,
+                sha256=archive_sha256,
+            )
+        except InventoryError as error:
+            raise BundleError(str(error)) from error
+        expected_identity = {
+            "branch": source_block.get("branch"),
+            "buildNumber": source_block.get("buildId"),
+            "target": source_block.get("target"),
+            "variant": android.get("variant"),
+        }
+        if any(apkrun_build_info.get(key) != value for key, value in expected_identity.items()):
+            raise BundleError(
+                "AOSP build-info.json does not match the manifest's source identity and variant."
+            )
+    elif build_info is not None:
+        raise BundleError("--build-info is only valid for an apkrun-builder manifest.")
+    if source_origin == "apkrun-builder":
+        full_version = f"{image_version}-{source_block['buildId']}-arm64"
+    else:
+        full_version = f"{image_version}-cf{source_block['buildId']}-arm64"
 
     output_directory = output_directory.expanduser()
     if output_directory.exists() and not output_directory.is_dir():
@@ -296,7 +363,7 @@ def build_bundle(
         manifest: dict[str, object] = {
             "schemaVersion": SCHEMA_VERSION,
             "imageVersion": full_version,
-            "kind": "stock",
+            "kind": "apkrun" if apkrun_build_info is not None else "stock",
             "provenance": {
                 "source": source_block,
                 "android": android,
@@ -311,9 +378,22 @@ def build_bundle(
                     "mkbootimg": _lock_commit("aosp-mkbootimg"),
                     "avbtool": _lock_commit("aosp-avbtool"),
                 },
-                "revisions": {"imagesTools": _tools_revision(), "guest": None},
-                "pinnedManifestSHA256": None,
-                "builderImageDigest": None,
+                "revisions": {
+                    "imagesTools": _tools_revision(),
+                    "guest": (
+                        apkrun_build_info["revision"] if apkrun_build_info is not None else None
+                    ),
+                },
+                "pinnedManifestSHA256": (
+                    apkrun_build_info["pinnedManifestSha256"]
+                    if apkrun_build_info is not None
+                    else None
+                ),
+                "builderImageDigest": (
+                    apkrun_build_info["builderImageDigest"]
+                    if apkrun_build_info is not None
+                    else None
+                ),
             },
             "guest": {
                 "sdk": android["sdk"],
@@ -335,7 +415,16 @@ def build_bundle(
             "requirements": {
                 "minimumRuntimeVersion": MINIMUM_RUNTIME_VERSION,
                 "guestProtocol": GUEST_PROTOCOL,
-                "agents": [],
+                "agents": (
+                    [
+                        {
+                            "package": "io.apkrun.guest",
+                            "versionCode": apkrun_build_info["agents"]["guest"]["versionCode"],
+                        }
+                    ]
+                    if apkrun_build_info is not None
+                    else []
+                ),
             },
             "userdata": {
                 "schemaVersion": USERDATA_SCHEMA_VERSION,
@@ -368,6 +457,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--source", type=Path, help="source archive or directory")
     parser.add_argument("--inventory", type=Path, help="inventory.json for manifest checks")
+    parser.add_argument(
+        "--build-info",
+        type=Path,
+        help="verified build-info.json required for an apkrun-builder manifest",
+    )
     parser.add_argument("--layout", type=Path, help="defaults to layouts/<deviceFamily>.json")
     parser.add_argument("--reference", type=Path, help="the reference capture used for the layout")
     parser.add_argument("--image-version", required=True, help="short form YYYY.MM.N")
@@ -399,6 +493,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_directory=arguments.out,
             source=arguments.source,
             inventory_path=arguments.inventory,
+            build_info=arguments.build_info,
             sign_key=arguments.sign_key,
         )
     except (
@@ -410,6 +505,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         GptError,
         LayoutError,
         ManifestError,
+        InventoryError,
         SparseImageError,
         OSError,
     ) as error:

@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 import apkrun_image.bundle as bundle_module
+import apkrun_image.inventory as inventory_module
 from apkrun_image.bootconfig import (
     BootconfigLayer,
     merge_bootconfig_layers,
@@ -18,6 +19,8 @@ from apkrun_image.bootconfig import (
     serialize_bootconfig,
 )
 from apkrun_image.bundle import BundleError, build_bundle, main
+from apkrun_image.inventory import inventory, serialize_inventory
+from apkrun_image.manifest import generate_manifest
 from apkrun_image.runtime_manifest import validate
 from apkrun_image.sign import decode_public_key, key_id_of, parse_signature, verify_signature
 
@@ -150,6 +153,45 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _apkrun_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[dict[str, Any], Path, Path, Path]:
+    """Create archive-backed manifest and sidecar inputs for a builder image."""
+    download = tmp_path / "apkrun-download"
+    download.mkdir()
+    archive = download / "apkrun_arm64-img-ar000123.zip"
+    archive.write_bytes(FIXTURE_ARCHIVE.read_bytes())
+    guest_apk = b"fixture persistent Guest Agent APK"
+    staged_apk = tmp_path / "ApkRunGuest.apk"
+    staged_apk.write_bytes(guest_apk)
+    monkeypatch.setattr(inventory_module, "BUILD_INFO_GUEST_APK", staged_apk)
+    build_info = {
+        "schemaVersion": 1,
+        "buildNumber": "ar000123",
+        "revision": "1" * 40,
+        "variant": "userdebug",
+        "branch": "aosp-android-latest-release",
+        "target": "apkrun_arm64-trunk_staging-userdebug",
+        "pinnedManifestSha256": "2" * 64,
+        "builderImageDigest": "sha256:" + "3" * 64,
+        "apkSha256": {"guest": hashlib.sha256(guest_apk).hexdigest()},
+        "agents": {"guest": {"versionCode": 123}},
+        "archive": {
+            "name": archive.name,
+            "size": archive.stat().st_size,
+            "sha256": _sha256(archive),
+        },
+    }
+    build_info_path = download / "build-info.json"
+    build_info_path.write_text(json.dumps(build_info), encoding="utf-8")
+    inventory_document = inventory(download)
+    inventory_path = tmp_path / "apkrun-inventory.json"
+    inventory_path.write_text(serialize_inventory(inventory_document), encoding="utf-8")
+    manifest = generate_manifest(inventory_document, source=download)
+    return manifest, download, inventory_path, build_info_path
+
+
 def test_signed_bundle_has_the_documented_tree_and_manifest(tmp_path: Path) -> None:
     output = tmp_path / "bundle"
     manifest = _build(tmp_path, output)
@@ -195,6 +237,62 @@ def test_signed_bundle_has_the_documented_tree_and_manifest(tmp_path: Path) -> N
     assert json.loads((output / "manifest.json").read_text()) == manifest
     assert (output / "manifest.json").read_text().endswith("}\n")
     assert validate(manifest) == []
+
+
+def test_apkrun_bundle_requires_and_records_matching_build_info(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only an archive-matched sidecar promotes a bundle to the apkrun kind."""
+    document, source, inventory_path, build_info_path = _apkrun_inputs(tmp_path, monkeypatch)
+    options = {
+        "layout_path": _layout(tmp_path),
+        "reference": None,
+        "image_version": "2026.10.0",
+        "output_directory": tmp_path / "apkrun-bundle",
+        "source": source,
+        "inventory_path": inventory_path,
+        "sign_key": TEST_KEY,
+    }
+
+    with pytest.raises(BundleError, match="requires --build-info"):
+        build_bundle(document, **options)
+
+    manifest = build_bundle(document, build_info=build_info_path, **options)
+
+    assert manifest["kind"] == "apkrun"
+    assert manifest["imageVersion"] == "2026.10.0-ar000123-arm64"
+    assert manifest["provenance"]["revisions"]["guest"] == "1" * 40
+    assert manifest["provenance"]["pinnedManifestSHA256"] == "2" * 64
+    assert manifest["provenance"]["builderImageDigest"] == "sha256:" + "3" * 64
+    assert manifest["requirements"]["agents"] == [
+        {"package": "io.apkrun.guest", "versionCode": 123}
+    ]
+    assert validate(manifest) == []
+
+
+def test_apkrun_bundle_rejects_build_info_for_another_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A valid sidecar for different archive bytes cannot promote a manifest."""
+    document, source, inventory_path, build_info_path = _apkrun_inputs(tmp_path, monkeypatch)
+    sidecar = json.loads(build_info_path.read_text(encoding="utf-8"))
+    sidecar["archive"]["sha256"] = "4" * 64
+    build_info_path.write_text(json.dumps(sidecar), encoding="utf-8")
+
+    with pytest.raises(BundleError, match="does not match build-info.json"):
+        build_bundle(
+            document,
+            layout_path=_layout(tmp_path),
+            reference=None,
+            image_version="2026.10.0",
+            output_directory=tmp_path / "apkrun-bundle",
+            source=source,
+            inventory_path=inventory_path,
+            build_info=build_info_path,
+            sign_key=TEST_KEY,
+        )
 
 
 def test_sha256sums_lists_every_file_in_files_order(tmp_path: Path) -> None:

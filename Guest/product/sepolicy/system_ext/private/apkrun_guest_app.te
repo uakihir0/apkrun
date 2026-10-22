@@ -1,0 +1,24 @@
+type apkrun_guest_app, domain;
+typeattribute apkrun_guest_app coredomain;
+app_domain(apkrun_guest_app)
+priv_app_domain(apkrun_guest_app)
+platform_app_domain(apkrun_guest_app)
+
+allow apkrun_guest_app {
+    activity_service
+    activity_task_service
+    input_service
+    input_method_service
+    window_service
+    display_service
+    clipboard_service
+    notification_service
+    power_service
+    package_service
+    lock_settings_service
+    role_service
+    adb_service
+    alarm_service
+}:service_manager find;
+
+allow apkrun_vsockd apkrun_guest_app:unix_stream_socket connectto;

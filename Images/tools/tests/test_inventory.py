@@ -1231,3 +1231,107 @@ def test_inventory_cli_does_not_write_inside_input_directory(
     assert not output.exists()
     assert not output.parent.exists()
     assert original.read_text(encoding="utf-8") == "config=phone\n"
+
+
+def _write_build_info(directory: Path, archive: Path, guest_apk: bytes = b"guest-apk") -> Path:
+    """Write a valid sidecar bound to a synthetic APKRun archive."""
+    document = {
+        "schemaVersion": 1,
+        "buildNumber": "ar000123",
+        "revision": "1" * 40,
+        "variant": "userdebug",
+        "branch": "aosp-android-latest-release",
+        "target": "apkrun_arm64-trunk_staging-userdebug",
+        "pinnedManifestSha256": "2" * 64,
+        "builderImageDigest": "sha256:" + "3" * 64,
+        "apkSha256": {"guest": hashlib.sha256(guest_apk).hexdigest()},
+        "agents": {"guest": {"versionCode": 123}},
+        "archive": {
+            "name": archive.name,
+            "size": archive.stat().st_size,
+            "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        },
+    }
+    path = directory / "build-info.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    return path
+
+
+def test_apkrun_build_info_is_verified_and_preserved_in_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AOSP source identity is retained only after the sidecar matches the archive."""
+    download = tmp_path / "download"
+    download.mkdir()
+    archive = download / "apkrun_arm64-img-ar000123.zip"
+    write_zip(archive, {"android-info.txt": b"config=phone\n"})
+    apk = tmp_path / "ApkRunGuest.apk"
+    apk.write_bytes(b"guest-apk")
+    monkeypatch.setattr(inventory_module, "BUILD_INFO_GUEST_APK", apk)
+    _write_build_info(download, archive)
+
+    result = inventory(download)
+
+    assert result["source"] == {
+        "agents": {"guest": {"versionCode": 123}},
+        "apkSha256": {"guest": hashlib.sha256(b"guest-apk").hexdigest()},
+        "branch": "aosp-android-latest-release",
+        "branchProvenance": "build-info-sidecar",
+        "buildId": "ar000123",
+        "builderImageDigest": "sha256:" + "3" * 64,
+        "name": archive.name,
+        "origin": "apkrun-builder",
+        "pinnedManifestSha256": "2" * 64,
+        "revision": "1" * 40,
+        "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        "size": archive.stat().st_size,
+        "target": "apkrun_arm64-trunk_staging-userdebug",
+        "type": "zip",
+        "variant": "userdebug",
+    }
+    assert [entry["path"] for entry in result["files"]] == ["android-info.txt"]
+
+
+def test_apkrun_build_info_rejects_archive_hash_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Edited build metadata cannot be attached to different archive bytes."""
+    download = tmp_path / "download"
+    download.mkdir()
+    archive = download / "apkrun_arm64-img-ar000123.zip"
+    write_zip(archive, {"android-info.txt": b"config=phone\n"})
+    monkeypatch.setattr(inventory_module, "BUILD_INFO_GUEST_APK", tmp_path / "absent.apk")
+    _write_build_info(download, archive)
+    write_zip(archive, {"android-info.txt": b"config=changed\n"})
+
+    with pytest.raises(InventoryError, match="does not match build-info.json"):
+        inventory(download)
+
+
+def test_apkrun_build_info_rejects_a_stale_local_guest_apk(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the staged APK exists, its bytes must match the claimed APK digest."""
+    download = tmp_path / "download"
+    download.mkdir()
+    archive = download / "apkrun_arm64-img-ar000123.zip"
+    write_zip(archive, {"android-info.txt": b"config=phone\n"})
+    apk = tmp_path / "ApkRunGuest.apk"
+    apk.write_bytes(b"stale-guest-apk")
+    monkeypatch.setattr(inventory_module, "BUILD_INFO_GUEST_APK", apk)
+    _write_build_info(download, archive, guest_apk=b"current-guest-apk")
+
+    with pytest.raises(InventoryError, match="SHA-256 does not match build-info.json"):
+        inventory(download)
+
+
+def test_apkrun_build_info_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    """Duplicate JSON keys cannot make metadata readers disagree."""
+    sidecar = tmp_path / "build-info.json"
+    sidecar.write_text('{"schemaVersion": 1, "schemaVersion": 1}', encoding="utf-8")
+
+    with pytest.raises(InventoryError, match="invalid build-info JSON"):
+        inventory_module.load_build_info(sidecar)

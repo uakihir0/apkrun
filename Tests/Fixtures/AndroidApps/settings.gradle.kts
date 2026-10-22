@@ -23,6 +23,7 @@ include(":HelloGL")
 include(":HelloCompose")
 include(":HelloWebView")
 include(":HelloSplit")
+include(":HelloProbe")
 include(":feature")
 
 project(":feature").projectDir = file("HelloSplitFeature")

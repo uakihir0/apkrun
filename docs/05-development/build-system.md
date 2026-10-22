@@ -107,7 +107,7 @@ All executables in one APKRun.app carry the same `CFBundleShortVersionString` an
 
 ## 3. Static checks
 
-Each check is a script that runs without arguments. `scripts/ci/run-checks.sh`, run by the `lint` job, runs the checks marked *yes*.
+Most checks run without arguments. `scripts/ci/run-checks.sh`, run by the `lint` job, runs the checks marked *yes*. Checks that need build artifacts run at the stage that creates them.
 
 | Script | Checks | Task | `lint` |
 |---|---|---|---|
@@ -119,9 +119,9 @@ Each check is a script that runs without arguments. `scripts/ci/run-checks.sh`, 
 | `scripts/check-lock.sh` | `ThirdParty/ThirdParty.lock.json` and patches; Swift pins against `Package.resolved` and `project.yml` (§6.1). `--apply` applies patches (§6.2) | #63; `--apply` #21 | yes |
 | `scripts/check-protos.sh` | `buf lint` on `Packages/GuestProtocol` | #34 | yes |
 | `scripts/tests/run.sh` | self-tests of `scripts/` | #63 | yes |
-| `scripts/check-raw-adb.sh` | no `adb shell` or `pm ` outside the allowlist: `ADBStoreAgentChannel.swift`, `AdbClient.swift`, tests, `scripts/dev/`, `Tests/Compatibility/`, `Experiments/`, `Images/tools/reference/`, generated protobuf ([test-strategy.md](../04-plan/test-strategy.md) §3.3) | #28 | no |
+| `scripts/check-raw-adb.sh` | no `adb shell` or `pm ` outside the allowlist: `ADBStoreAgentChannel.swift`, `AdbClient.swift`, tests, `scripts/dev/`, `Tests/Compatibility/`, `Experiments/`, `Images/tools/reference/`, generated protobuf ([test-strategy.md](../04-plan/test-strategy.md) §3.3) | #28 | yes |
 | `scripts/check-launcher.sh` | built APKRunLauncher: `otool -L` lists only `/System/Library` and `/usr/lib`; `lipo -archs` is `arm64`; minimum OS 27.0 | #69 (planned) | no |
-| `scripts/check-sepolicy.sh` | release (`user`) product sources declare no permissive domain (R-13) | #36 (planned) | no |
+| `scripts/check-sepolicy.sh` | compiled policy: userdebug contains the two #36 agent domains as permissive; `user` contains none (R-13) | #36 | no (AOSP build) |
 | `scripts/check-fixtures.sh` | APKs in `Tests/Fixtures/apks/` are newer than their sources; no committed fixture over 10 MiB (§8) | #42 (planned) | no |
 | `scripts/check-compatibility-db.sh` | `compatibility.json` against `compatibility.schema.json` ([diagnostics.md](../02-design/diagnostics.md) §10) | #91 (planned) | no |
 | `scripts/check-licenses.sh` | SPDX license and committed `licenseFiles` for every lock entry, `Package.resolved`, and the Gradle and Cargo locks; allowed licenses per `ships` ([legal-and-licensing.md](legal-and-licensing.md) §4); the `Derived from RiftVM` marker names the pin ([legal-and-licensing.md](legal-and-licensing.md) §3.1) | #94 (planned) | no |
@@ -406,14 +406,16 @@ The APKRun product (`Guest/product/`, [android-image.md](../02-design/android-im
 
 `scripts/aosp/build-product.sh --revision <commit> --variant userdebug|user` runs in the builder container:
 
-1. Syncs the tree to `Guest/product/manifest/pinned.xml` if needed.
+1. Validates that `Guest/product/manifest/pinned.xml` is self-contained and every project resolves to a full commit SHA, then syncs that exact tree if needed.
 2. Writes `.repo/local_manifests/apkrun.xml`: this repository at `<commit>`, `Guest/product/` mapped to `device/apkrun/apkrun_arm64/`. The Rust crate has its own `Android.bp` in `Guest/vsockd/`, because Soong does not accept `..` in `srcs`. Kati and Soong must each see every product file exactly once. If a `repo` `<linkfile>` cannot do this, the script copies the directories.
-3. Runs `scripts/build-guest.sh` and copies the agent APKs to `Guest/product/prebuilt/` (git-ignored); `android_app_import` reads them with `certificate: "platform"`, `privileged: true`, `presigned: false`.
-4. Runs `lunch apkrun_arm64-trunk_staging-<variant>`, `m`, and `m dist`, with `BUILD_NUMBER=ar<counter>`.
-5. For `user` builds, signs the target files with the release keys and rebuilds the zip (flow fixed by #36; OQ-36).
-6. Writes `build-info.json`: pinned manifest SHA-256, container digest, APKRun revision, APK SHA-256s, `BUILD_NUMBER`.
+3. Runs `scripts/build-guest.sh --for-aosp`, which builds the Guest Agent with `apkrunPersistentAgent=true` and writes `Guest/product/prebuilt/ApkRunGuest.apk` (git-ignored). The container stages that exact APK before Soong runs; `android_app_import` signs it with `certificate: "platform"`, `privileged: true`, `presigned: false`. The ordinary development APK defaults to `apkrunPersistentAgent=false`.
+4. Runs `lunch apkrun_arm64-trunk_staging-<variant>` and `m`, then checks the compiled policy with `scripts/check-sepolicy.sh` before running `m dist`, with `BUILD_NUMBER=ar<counter>`.
+5. `user` builds fail closed while OQ-36 leaves the release signing flow open. The builder never accepts or mounts unused release keys.
+6. Writes `build-info.json`: pinned manifest SHA-256, container digest, APKRun revision, APK SHA-256s and version codes, build target, and the copied archive's name, size, and SHA-256.
 
-The result, `apkrun_arm64-img-ar<counter>.zip`, enters the stock pipeline (§10). For `user` builds, `scripts/check-sepolicy.sh` runs before step 4 (R-13).
+The result, `apkrun_arm64-img-ar<counter>.zip`, enters the stock pipeline (§10). `scripts/check-sepolicy.sh` runs for each built variant after `m` and before `m dist` (R-13).
+
+`scripts/aosp/builder.Dockerfile` pins its Ubuntu amd64 base and an immutable Ubuntu archive snapshot, plus the Android command-line tools archive and `repo` client. Update the snapshot only in a reviewed change, then rebuild the container and run the builder checks. The inspected container digest, pinned manifest SHA-256, Guest Agent identity, and dist archive hash are written to `build-info.json`. `remote-build.sh` verifies the transferred files against that sidecar, removes only the transferred archive and sidecar from the builder, and keeps the full build log at `~/aosp/logs/<BUILD_NUMBER>.log`.
 
 ---
 
@@ -545,9 +547,23 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
 - Path rules: `APKRUN_TEST_LINUX_DIR`, `APKRUN_ANDROID_HOME`, and `-derivedDataPath` are absolute and outside `~/Documents`, even when `HOME` is overridden. The scripts and the test host reject direct paths and symlink aliases into Documents.
 - The hosted test reads `APKRUN_TEST_LINUX_DIR` from `APKRunTestHost.app/Contents/Info.plist`. Pass it as a build setting; a shell export is not forwarded to the hosted process.
 - Use `-derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd"` and an `APKRUN_ANDROID_HOME` that holds a copy of `platform-tools`. CI uses `$RUNNER_TEMP`. `scripts/run-gate.sh` builds under `build/gates/` in the checkout.
+- For the #36 `AndroidCustom` configuration, stage the signed `apkrun_image bundle` output at `/tmp/apkrun-test-android-custom/android-bundle` and `HelloProbe.apk` at `/tmp/apkrun-test-fixtures/HelloProbe.apk`; the test plan supplies these paths. Replace `ar000123` below with the build number produced by the AOSP builder:
+
+```bash
+build_number=ar000123
+custom_root=/tmp/apkrun-test-android-custom
+fixture_root=/tmp/apkrun-test-fixtures
+rm -rf "$custom_root/android-bundle" "$fixture_root/HelloProbe.apk"
+mkdir -p "$custom_root" "$fixture_root"
+cp -R "Images/work/$build_number/bundle" "$custom_root/android-bundle"
+scripts/build-fixtures.sh --app HelloProbe
+cp Tests/Fixtures/AndroidApps/out/HelloProbe.apk "$fixture_root/HelloProbe.apk"
+```
+
+Run `AndroidCustom` with `APKRUN_CI=1` on the required runner so missing staged inputs fail the job rather than skip the checks.
 - `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY` (the SHA-1 fingerprint of the certificate) come from the environment or from CI repository variables. The fingerprint is explicit, because the generic `Apple Development` name does not reliably select the lab certificate.
 - `APKRunTestHost` and the hosted test bundles disable hardened runtime; that exception is limited to test targets.
-- `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per test group: `LinuxGuest`, `AndroidADB`, `AndroidPackage`, `AndroidBoot`, `AndroidNetwork`, `AndroidGraphics`, `AndroidGuestAgent`, `AndroidGuestProtocolLaunch`, `AndroidInput`, and the four input configurations below. The T2 suites of [test-strategy.md](../04-plan/test-strategy.md) §2.4 are `LinuxGuest`, `AndroidStock`, `AndroidCustom`, and `Maintenance`; the last three are planned. T2 has one automatic retry ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
+- `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per test group: `LinuxGuest`, `AndroidADB`, `AndroidPackage`, `AndroidBoot`, `AndroidNetwork`, `AndroidGraphics`, `AndroidGuestAgent`, `AndroidGuestProtocolLaunch`, `AndroidCustom` (#36 product-image checks), `AndroidInput`, and the four input configurations below. The T2 suites of [test-strategy.md](../04-plan/test-strategy.md) §2.4 are `LinuxGuest`, `AndroidStock`, `AndroidCustom`, and `Maintenance`; `AndroidStock` and `Maintenance` remain planned. T2 has one automatic retry ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
 
 Input tests run in their own configurations. Select the configuration and the method together:
 

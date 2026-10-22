@@ -25,7 +25,7 @@ The JSON Schema of §7 is the structure. The rules of §4 to §8 apply on top of
 |---|---|---|
 | `Images/manifests/<buildId>/inventory.json` | yes | the inventory (§4) |
 | `Images/manifests/<buildId>/android-image.json` | yes | the manifest (§5, §6) |
-| `Images/work/<buildId>/download/` | no | the downloaded archives and the local `fetch.json` sidecar (name, size, SHA-256 per download; branch marked caller-asserted) |
+| `Images/work/<buildId>/download/` | no | the downloaded archive and either `fetch.json` or the AOSP builder's `build-info.json` sidecar |
 | `Images/work/<buildId>/boot/`, `disks/`, `bundle/` | no | outputs of `extract`, `disks`, and `bundle` (§9) |
 | `Images/tools/schemas/android-image-manifest.schema.json` | yes | the JSON Schema of §7, byte for byte |
 | `Images/tools/layouts/<deviceFamily>.json` | yes | the disk plan, console port plan, and bootconfig baseline. It names partitions, never files (§9) |
@@ -46,7 +46,7 @@ The tools are Python 3.12 in `Images/tools/` (package `apkrun_image`). Run them 
 | `python3 -m apkrun_image manifest --check …/android-image.json [--no-files]` | the manifest, the inventory, the archive | nothing. Exit 0, or 1 with every failed check (§8) |
 | `python3 -m apkrun_image extract --manifest … --out Images/work/<buildId>/boot/` | manifest `roles` | kernel, ramdisk, cmdline, vendor bootconfig, `extraction.json` |
 | `python3 -m apkrun_image disks --manifest … --layout layouts/<deviceFamily>.json --out Images/work/<buildId>/disks/` | manifest `artifacts`, `blankPartitions`, `logicalPartitions` | `os.img`, `userdata.img`, `disks.json` |
-| `python3 -m apkrun_image bundle --manifest … --layout … --reference … --image-version … --sign-key … --out …` | everything above | the runtime image bundle ([runtime-image-manifest.md](runtime-image-manifest.md) §3) |
+| `python3 -m apkrun_image bundle --manifest … --layout … --reference … --image-version … --sign-key … --out … [--build-info …]` | everything above; AOSP product manifests also require their matching `build-info.json` | the runtime image bundle ([runtime-image-manifest.md](runtime-image-manifest.md) §3) |
 | `python3 -m apkrun_image inspect <file>` | any image file | a human-readable dump (headers, GPT, sparse chunks) |
 
 - `scripts/inventory-cuttlefish.py` is a thin wrapper around `apkrun_image.inventory`. `manifest.py` holds the model, the schema validation, and the semantic checks.
@@ -164,9 +164,17 @@ Shortened to four files. The real file lists every file in the archive.
 | `source.branchProvenance` | string | with `source.branch` | `caller-asserted` | the Build API request is keyed by build ID and target. The branch is not independently confirmed |
 | `source.target` | string | when `fetch.json` is present | non-empty | the target supplied to `fetch` |
 | `source.buildId` | string | when `fetch.json` is present | non-empty | the build ID supplied to `fetch` |
+| `source.origin` | string | when `build-info.json` is present | `apkrun-builder` | identifies an APKRun AOSP product archive whose sidecar matches its name, size, and SHA-256 |
+| `source.revision` | string | with `source.origin` | 40 lowercase hex | APKRun source revision recorded by the builder |
+| `source.pinnedManifestSha256` | string | with `source.origin` | 64 lowercase hex | hash of the pinned AOSP repo manifest |
+| `source.builderImageDigest` | string | with `source.origin` | `sha256:` plus 64 lowercase hex | digest of the Linux builder image |
+| `source.apkSha256.guest` | string | with `source.origin` | 64 lowercase hex | Guest Agent APK hash recorded by the builder |
+| `source.agents.guest.versionCode` | integer | with `source.origin` | 1 to 9223372036854775807 | Guest Agent `longVersionCode` from its build metadata |
 | `files` | array of entry (§4.3) | yes | sorted by `path`, byte order of UTF-8 | one entry per regular file. Directories are not listed |
 
-`fetch.json` is an unsigned local consistency record. The inventory checks that its archive name, size, and SHA-256 match the archive, and it copies the build ID, target, and caller-asserted branch into `source`. These checks detect missing or stale sidecars. They cannot authenticate the build metadata: a local user who can edit the sidecar can assert those fields.
+`fetch.json` is an unsigned local consistency record. The inventory checks that its archive name, size, and SHA-256 match the archive, and it copies the build ID, target, and caller-asserted branch into `source`.
+
+`build-info.json` is also a local consistency record, not a signature. The inventory requires its fixed AOSP branch, exact product target, revision and digest formats, Guest Agent version metadata, and archive fingerprint. It verifies a staged `Guest/product/prebuilt/ApkRunGuest.apk` against `apkSha256.guest` when that file is present. The generated AndroidImageManifest records `origin: apkrun-builder` with the matching branch, target, build number, and archive fingerprint. `bundle --build-info` requires the same sidecar and uses its verified revision, pins, builder digest, and Guest Agent version code in the runtime manifest. Editing the sidecar can change those provenance claims; signed runtime manifests bind the values to the bundle.
 
 ### 4.3 File entry
 
@@ -234,7 +242,7 @@ Inventory inputs are untrusted. These limits apply before any allocation or deco
 
 ### 4.7 Determinism
 
-A second run gives byte-identical output. The writer uses UTF-8, sorted keys, 2-space indentation, and a trailing newline. It writes no time stamps and no absolute paths. `files` is sorted by `path`. When an input directory holds one archive and its `fetch.json`, the sidecar is verified against the archive and is not itself an entry.
+A second run gives byte-identical output. The writer uses UTF-8, sorted keys, 2-space indentation, and a trailing newline. It writes no time stamps and no absolute paths. `files` is sorted by `path`. When an input directory holds one archive and either `fetch.json` or `build-info.json`, the sidecar is verified against the archive and is not itself an entry.
 
 ## 5. `android-image.json`: complete example
 
@@ -669,7 +677,7 @@ Every anchored string pattern in the schema ends with an end-of-input assertion,
 | M7 | no duplicate partition names across `artifacts` and `blankPartitions` |
 | M8 | artifact ids are unique |
 | M9 | `android.variant` equals the suffix of `source.target` |
-| M10 | each `file` is in exactly one archive, and its inventory entry has the same size, hash, and kind. The recorded inventory is archive-backed: its archive name, size, and hash match `source.archives`, and its branch, build ID, and target match the checked `fetch.json` (§4.2). A recorded inventory whose `source.type` is not `zip` fails, because it cannot establish the archive fingerprint. Missing sidecar metadata fails closed |
+| M10 | each `file` is in exactly one archive, and its inventory entry has the same size, hash, and kind. The recorded inventory is archive-backed: its archive name, size, and hash match `source.archives`, and its source identity matches the actual checked `fetch.json` or `build-info.json` (§4.2). A recorded inventory whose `source.type` is not `zip` fails, because it cannot establish the archive fingerprint. Missing sidecar metadata fails closed |
 | M11 | every inventory vbmeta file is a `kind: vbmeta` artifact listed in `roles.vbmeta`. Chain items follow item 0's descriptor order |
 | M12 | `logicalPartitions` equals the non-empty partitions in the super metadata (name, size, filesystem) |
 | M13 | `android.release` and `securityPatch` equal the `roles.kernel` boot header `os_version`, and `sdk` equals the table entry for `release` |
@@ -698,7 +706,7 @@ The layout file names partitions, and this manifest maps partitions to files. Th
 - Unknown fields are rejected. This file is written by APKRun, so a typo must fail. (The Direct provider manifest does the opposite, because third parties write it: [direct-provider-manifest.md](direct-provider-manifest.md) §9.)
 - Any change to the schema, even an optional field, raises `schemaVersion`. The schema `$id` carries the version.
 - ImageCore converts JSON decoding errors to typed manifest failures without decoder debug text or raw values. It escapes control, quoting, and bidirectional-formatting characters in input-derived paths and values, and limits each displayed value to 128 Unicode scalars.
-- `inventory.json` has its own `schemaVersion` with the same rules. Version `2` is current: it adds the bounded AVB footer `vbmetaSize` and `version` fields, and build metadata from the checked `fetch.json` sidecar in `source`. Inventory files are regenerated, never migrated.
+- `inventory.json` has its own `schemaVersion` with the same rules. Version `2` is current: it adds the bounded AVB footer `vbmetaSize` and `version` fields, and verified build metadata from the checked `fetch.json` or `build-info.json` sidecar in `source`. Inventory files are regenerated, never migrated.
 
 ## 11. Writers and readers
 

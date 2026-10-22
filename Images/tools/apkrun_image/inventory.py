@@ -7,6 +7,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import struct
@@ -37,6 +38,10 @@ MAX_VENDOR_RAMDISK_TABLE_SIZE = 16 * 1024 * 1024
 MAX_VENDOR_RAMDISK_ENTRIES = 4096
 MAX_ARCHIVE_SIZE = 16 * 1024 * 1024 * 1024
 MAX_INVENTORY_SNAPSHOT_SIZE = 16 * 1024 * 1024 * 1024
+BUILD_INFO_BRANCH = "aosp-android-latest-release"
+BUILD_INFO_GUEST_APK = (
+    Path(__file__).resolve().parents[3] / "Guest/product/prebuilt/ApkRunGuest.apk"
+)
 MAX_ARCHIVE_ENTRIES = 4096
 MAX_CENTRAL_DIRECTORY_SIZE = 64 * 1024 * 1024
 MAX_ZIP64_RECORD_SIZE = 1024 * 1024
@@ -84,6 +89,206 @@ def _avb_digest_size(algorithm: str) -> int | None:
 
 class InventoryError(ValueError):
     """An invalid or unsupported Android artifact set."""
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Reject duplicate keys so every reader sees the same build metadata."""
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
+def load_build_info(path: Path) -> dict[str, object]:
+    """Read and validate an AOSP build-info sidecar with a closed schema."""
+    if path.is_symlink():
+        raise InventoryError(f"{path}: build-info metadata must be a regular file")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise InventoryError(
+            f"{path}: could not safely open build-info metadata: {error}"
+        ) from error
+    with os.fdopen(descriptor, "rb") as stream:
+        initial_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(initial_stat.st_mode):
+            raise InventoryError(f"{path}: build-info metadata must be a regular file")
+        if initial_stat.st_size > MAX_TEXT_SIZE:
+            raise InventoryError(f"{path}: build-info metadata exceeds the 1 MiB limit")
+        try:
+            content = stream.read(MAX_TEXT_SIZE + 1)
+            path_stat = path.lstat()
+        except OSError as error:
+            raise InventoryError(f"{path}: could not read build-info metadata: {error}") from error
+        final_stat = os.fstat(descriptor)
+        if (
+            len(content) > MAX_TEXT_SIZE
+            or not _same_file_identity(initial_stat, final_stat)
+            or not _same_file_identity(final_stat, path_stat)
+            or not stat.S_ISREG(path_stat.st_mode)
+        ):
+            raise InventoryError(f"{path}: build-info metadata changed while being read")
+    try:
+        value = json.loads(
+            content.decode("utf-8"),
+            object_pairs_hook=_unique_json_object,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise InventoryError(f"{path}: invalid build-info JSON: {error}") from error
+    except RecursionError as error:
+        raise InventoryError(f"{path}: build-info JSON exceeds the nesting limit") from error
+
+    if not isinstance(value, dict):
+        raise InventoryError(f"{path}: build-info metadata must be a JSON object")
+    required_fields = {
+        "schemaVersion",
+        "buildNumber",
+        "revision",
+        "variant",
+        "branch",
+        "target",
+        "pinnedManifestSha256",
+        "builderImageDigest",
+        "apkSha256",
+        "agents",
+        "archive",
+    }
+    if set(value) != required_fields:
+        raise InventoryError(f"{path}: build-info metadata has missing or unknown fields")
+    build_number = value.get("buildNumber")
+    variant = value.get("variant")
+    revision = value.get("revision")
+    pinned_manifest_sha256 = value.get("pinnedManifestSha256")
+    builder_image_digest = value.get("builderImageDigest")
+    apk_hashes = value.get("apkSha256")
+    agents = value.get("agents")
+    archive = value.get("archive")
+    if (
+        isinstance(value.get("schemaVersion"), bool)
+        or value.get("schemaVersion") != 1
+        or not isinstance(build_number, str)
+        or re.fullmatch(r"ar[0-9]{6}", build_number) is None
+        or not isinstance(variant, str)
+        or variant not in {"user", "userdebug"}
+        or not isinstance(revision, str)
+        or re.fullmatch(r"[0-9a-f]{40}", revision) is None
+        or value.get("branch") != BUILD_INFO_BRANCH
+        or value.get("target") != f"apkrun_arm64-trunk_staging-{variant}"
+        or not isinstance(pinned_manifest_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", pinned_manifest_sha256) is None
+        or not isinstance(builder_image_digest, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", builder_image_digest) is None
+    ):
+        raise InventoryError(f"{path}: build-info metadata has invalid product provenance")
+    if not isinstance(apk_hashes, dict) or set(apk_hashes) != {"guest"}:
+        raise InventoryError(f"{path}: build-info metadata must contain only apkSha256.guest")
+    guest_apk_sha256 = apk_hashes.get("guest")
+    if (
+        not isinstance(guest_apk_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", guest_apk_sha256) is None
+    ):
+        raise InventoryError(f"{path}: apkSha256.guest must be a lowercase SHA-256")
+    if not isinstance(agents, dict) or set(agents) != {"guest"}:
+        raise InventoryError(f"{path}: build-info metadata must contain only agents.guest")
+    guest_agent = agents.get("guest")
+    if not isinstance(guest_agent, dict) or set(guest_agent) != {"versionCode"}:
+        raise InventoryError(f"{path}: agents.guest must contain only versionCode")
+    version_code = guest_agent.get("versionCode")
+    if (
+        isinstance(version_code, bool)
+        or not isinstance(version_code, int)
+        or not 1 <= version_code <= 9223372036854775807
+    ):
+        raise InventoryError(
+            f"{path}: agents.guest.versionCode must be a positive signed 64-bit integer"
+        )
+    if not isinstance(archive, dict) or set(archive) != {"name", "size", "sha256"}:
+        raise InventoryError(f"{path}: build-info archive metadata is incomplete")
+    archive_name = archive.get("name")
+    archive_size = archive.get("size")
+    archive_sha256 = archive.get("sha256")
+    if (
+        not isinstance(archive_name, str)
+        or archive_name != f"apkrun_arm64-img-{build_number}.zip"
+        or isinstance(archive_size, bool)
+        or not isinstance(archive_size, int)
+        or not 1 <= archive_size <= MAX_ARCHIVE_SIZE
+        or not isinstance(archive_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", archive_sha256) is None
+    ):
+        raise InventoryError(f"{path}: build-info archive metadata is invalid")
+    return value
+
+
+def verify_build_info_archive(
+    build_info: Mapping[str, object],
+    *,
+    name: str,
+    size: int,
+    sha256: str,
+) -> None:
+    """Require build-info to identify the exact archive being processed."""
+    archive = build_info.get("archive")
+    if (
+        not isinstance(archive, dict)
+        or archive.get("name") != name
+        or archive.get("size") != size
+        or archive.get("sha256") != sha256
+    ):
+        raise InventoryError(
+            f"{name}: archive name, size, or SHA-256 does not match build-info.json"
+        )
+
+
+def verify_local_guest_apk(build_info: Mapping[str, object]) -> None:
+    """Verify the staged Guest APK against build-info when this checkout has it."""
+    try:
+        path_stat = BUILD_INFO_GUEST_APK.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise InventoryError(
+            f"{BUILD_INFO_GUEST_APK}: could not inspect the staged Guest APK: {error}"
+        ) from error
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise InventoryError(f"{BUILD_INFO_GUEST_APK}: staged Guest APK must be a regular file")
+    guest_apk = build_info.get("apkSha256")
+    expected_sha256 = guest_apk.get("guest") if isinstance(guest_apk, dict) else None
+    try:
+        descriptor = os.open(BUILD_INFO_GUEST_APK, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise InventoryError(
+            f"{BUILD_INFO_GUEST_APK}: could not safely open the staged Guest APK: {error}"
+        ) from error
+    with os.fdopen(descriptor, "rb") as stream:
+        initial_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(initial_stat.st_mode):
+            raise InventoryError(f"{BUILD_INFO_GUEST_APK}: staged Guest APK must be a regular file")
+        actual_sha256 = _hash_stream(
+            stream,
+            initial_stat.st_size,
+            str(BUILD_INFO_GUEST_APK),
+            maximum_size=MAX_MEMBER_SIZE,
+        )
+        final_stat = os.fstat(descriptor)
+        try:
+            final_path_stat = BUILD_INFO_GUEST_APK.lstat()
+        except OSError as error:
+            raise InventoryError(
+                f"{BUILD_INFO_GUEST_APK}: staged Guest APK changed while being read"
+            ) from error
+        if (
+            not _same_file_identity(initial_stat, final_stat)
+            or not _same_file_identity(final_stat, final_path_stat)
+            or not stat.S_ISREG(final_path_stat.st_mode)
+        ):
+            raise InventoryError(
+                f"{BUILD_INFO_GUEST_APK}: staged Guest APK changed while being read"
+            )
+    if actual_sha256 != expected_sha256:
+        raise InventoryError(f"{BUILD_INFO_GUEST_APK}: SHA-256 does not match build-info.json")
 
 
 @dataclass(frozen=True)
@@ -1225,6 +1430,53 @@ def _fetch_context(
     }
 
 
+def _build_info_context(
+    directory: Path,
+    *,
+    expected_name: str | None = None,
+) -> dict[str, object] | None:
+    """Read an AOSP build sidecar and map its claims to inventory provenance."""
+    build_info_path = directory / "build-info.json"
+    if not build_info_path.exists() and not build_info_path.is_symlink():
+        return None
+    fetch_path = directory / "fetch.json"
+    if fetch_path.exists() or fetch_path.is_symlink():
+        raise InventoryError(f"{directory}: use either build-info.json or fetch.json, not both")
+    build_info = load_build_info(build_info_path)
+    archive = build_info["archive"]
+    assert isinstance(archive, dict)
+    name = archive["name"]
+    if expected_name is not None and name != expected_name:
+        raise InventoryError(f"{build_info_path}: archive name does not match {expected_name}")
+    verify_local_guest_apk(build_info)
+    return {
+        "agents": build_info["agents"],
+        "apkSha256": build_info["apkSha256"],
+        "archive": archive,
+        "branch": build_info["branch"],
+        "branchProvenance": "build-info-sidecar",
+        "buildId": build_info["buildNumber"],
+        "builderImageDigest": build_info["builderImageDigest"],
+        "origin": "apkrun-builder",
+        "pinnedManifestSha256": build_info["pinnedManifestSha256"],
+        "revision": build_info["revision"],
+        "target": build_info["target"],
+        "variant": build_info["variant"],
+    }
+
+
+def _source_context(
+    directory: Path,
+    *,
+    expected_name: str | None = None,
+) -> dict[str, object] | None:
+    """Choose exactly one recognized provenance sidecar for an archive."""
+    build_info = _build_info_context(directory, expected_name=expected_name)
+    if build_info is not None:
+        return build_info
+    return _fetch_context(directory, expected_name=expected_name)
+
+
 def _zip_entry_count(stream: BinaryIO, source: Path) -> int:
     """Count central-directory records before ZipFile materializes them."""
     try:
@@ -1403,7 +1655,7 @@ def _inventory_archive(
     source: Path,
     fetch_context: dict[str, object] | None,
 ) -> dict[str, object]:
-    """Inventory one stable archive and attach matching fetch provenance."""
+    """Inventory one stable archive and attach matching sidecar provenance."""
     try:
         descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError as error:
@@ -1435,7 +1687,30 @@ def _inventory_archive(
                 "size": archive_size,
                 "type": "zip",
             }
-            if fetch_context is not None:
+            if fetch_context is not None and fetch_context.get("origin") == "apkrun-builder":
+                build_info = {
+                    "archive": fetch_context["archive"],
+                    "agents": fetch_context["agents"],
+                    "apkSha256": fetch_context["apkSha256"],
+                    "builderImageDigest": fetch_context["builderImageDigest"],
+                    "pinnedManifestSha256": fetch_context["pinnedManifestSha256"],
+                    "revision": fetch_context["revision"],
+                }
+                verify_build_info_archive(
+                    build_info,
+                    name=source.name,
+                    size=archive_size,
+                    sha256=archive_sha256,
+                )
+                source_info.update(
+                    {
+                        key: value
+                        for key, value in fetch_context.items()
+                        if key not in {"archive", "branchProvenance"}
+                    }
+                )
+                source_info["branchProvenance"] = fetch_context["branchProvenance"]
+            elif fetch_context is not None:
                 artifact = fetch_context["artifact"]
                 if not isinstance(artifact, dict):
                     raise InventoryError("fetch metadata contains an invalid artifact record")
@@ -1496,12 +1771,16 @@ def _inventory_unlocked(source_path: Path) -> dict[str, object]:
     if source.is_symlink():
         raise InventoryError(f"{source}: input must not be a symbolic link")
     if source.is_dir():
-        fetch_context = _fetch_context(source)
+        fetch_context = _source_context(source)
         if fetch_context is not None:
-            artifact = fetch_context["artifact"]
-            if not isinstance(artifact, dict) or not isinstance(artifact.get("name"), str):
-                raise InventoryError("fetch.json contains an invalid artifact name")
-            archive_path = source / artifact["name"]
+            if fetch_context.get("origin") == "apkrun-builder":
+                archive_record = fetch_context.get("archive")
+            else:
+                archive_record = fetch_context.get("artifact")
+            archive_name = archive_record.get("name") if isinstance(archive_record, dict) else None
+            if not isinstance(archive_name, str):
+                raise InventoryError("build metadata contains an invalid artifact name")
+            archive_path = source / archive_name
             if archive_path.is_symlink() or not archive_path.is_file():
                 raise InventoryError(
                     f"{archive_path}: downloaded archive is missing or not a regular file"
@@ -1519,7 +1798,7 @@ def _inventory_unlocked(source_path: Path) -> dict[str, object]:
     elif source.is_file() and zipfile.is_zipfile(source):
         return _inventory_archive(
             source,
-            _fetch_context(source.parent, expected_name=source.name),
+            _source_context(source.parent, expected_name=source.name),
         )
     else:
         raise InventoryError(f"{source} is neither a directory nor a readable zip archive.")

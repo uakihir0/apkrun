@@ -125,7 +125,7 @@ The product build uses the Rust prebuilt of the pinned AOSP tree (`prebuilts/rus
 | `APKRUN_ANDROID_HOME` | SDK root outside `~/Documents` holding `platform-tools` (§4) | T2 Android suites |
 | `APKRUN_TEST_DEVELOPMENT_TEAM` | Apple Development team ID of the lab test host | signed T2 and G1 tests |
 | `APKRUN_TEST_CODE_SIGN_IDENTITY` | SHA-1 fingerprint of that team's Apple Development certificate | signed T2 and G1 tests |
-| `APKRUN_AOSP_BUILDER` | `user@host` of the Linux builder (planned, #36) | `scripts/aosp/remote-build.sh` (§5.5) |
+| `APKRUN_AOSP_BUILDER` | `user@host` of the Linux builder | `scripts/aosp/remote-build.sh` (§5.5) |
 | `APKRUN_CI` | `1` on CI runners only; turns "skip with a message" into a failure | all tests and scripts |
 
 Put the exports in `~/.zprofile`. Nothing in this table is committed.
@@ -274,7 +274,7 @@ A cloud VM is fine for development builds. Release builds need the AOSP release 
 ### 5.2 OS and container
 
 - The host can be any 64-bit Linux that runs Docker or Podman. The build runs in a container.
-- `scripts/aosp/builder.Dockerfile` (planned, #36) is based on `ubuntu:22.04`. It includes the AOSP packages (`git-core gnupg flex bison build-essential zip curl zlib1g-dev libc6-dev-i386 x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3`), the `repo` launcher, JDK 17, and the Android SDK packages of §2.5.
+- `scripts/aosp/builder.Dockerfile` is based on `ubuntu:22.04`. It includes the AOSP packages (`git-core gnupg flex bison build-essential zip curl zlib1g-dev libc6-dev-i386 x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3`), the pinned `repo` launcher, JDK 17, and the Android SDK packages of §2.5.
 - Build the image once per Dockerfile change, and reference it by digest in the bundle `provenance` ([android-image.md](../02-design/android-image.md) §11.5).
 
 ```bash
@@ -320,13 +320,13 @@ git push origin task/36-apkrun-aosp-product      # the builder fetches this comm
 scripts/aosp/remote-build.sh --revision "$(git rev-parse HEAD)" --variant userdebug
 ```
 
-`scripts/aosp/remote-build.sh` (planned, #36): checks that the revision exists on `origin` (the builder never receives uncommitted work); runs `build-product.sh` inside the container; copies `out/dist/apkrun_arm64-img-<n>.zip` and `build-info.json` to `Images/work/ar<n>/download/`; and prints the next commands (`scripts/inventory-cuttlefish.py`, `apkrun_image bundle`). The log stays on the builder under `~/aosp/logs/<BUILD_NUMBER>.log`.
+`scripts/aosp/remote-build.sh` checks that the revision exists on `origin` (the builder never receives uncommitted work); runs `build-product.sh` inside the container; copies `out/dist/apkrun_arm64-img-<n>.zip` and `build-info.json` to `Images/work/ar<n>/download/`; and prints the next commands (`scripts/inventory-cuttlefish.py`, `apkrun_image bundle`). The log stays on the builder under `~/aosp/logs/<BUILD_NUMBER>.log`. `--variant user` remains disabled until OQ-36 resolves the release signing flow.
 
 ### 5.6 Keys on the builder
 
 - `userdebug` builds use the AOSP test keys of the tree. They are for development and CI only.
 - `user` builds use the APKRun platform and release keys. The keys are offline and live only on the image build machine ([security-model.md](../01-architecture/security-model.md) §7). They are permanent: changing them breaks updates of the platform-signed agents.
-- The release signing flow is fixed by #36 (OQ-36; [android-image.md](../02-design/android-image.md) §11.4).
+- OQ-36 is still open; `build-product.sh` and `remote-build.sh` refuse `--variant user` until the release signing flow is defined ([android-image.md](../02-design/android-image.md) §11.4).
 
 ### 5.7 Build numbers and provenance
 

@@ -16,6 +16,7 @@ import io.apkrun.guest.protocol.v1.AgentMode
 import io.apkrun.guest.protocol.v1.ChannelKind
 import io.apkrun.guest.runtime.AgentLog
 import io.apkrun.guest.runtime.AgentSocketServer
+import io.apkrun.guest.runtime.PeerPolicy
 import io.apkrun.guest.runtime.ServiceMethodMissing
 import io.apkrun.guest.runtime.SystemContext
 import kotlinx.coroutines.CoroutineScope
@@ -36,7 +37,10 @@ const val BULK_SOCKET = "apkrun-guestd-bulk"
  * (guest-components.md §6.1). It is built once per process. [start] binds the sockets, starts the
  * callbacks, and applies the device setup.
  */
-class Daemon(internal val scope: CoroutineScope) {
+class Daemon(
+    internal val scope: CoroutineScope,
+    internal val mode: AgentMode = AgentMode.AGENT_MODE_DEVELOPMENT_SHELL,
+) {
     private val callbackThread = HandlerThread("apkrun-callbacks").apply { start() }
     private val callbackHandler = android.os.Handler(callbackThread.looper)
     /**
@@ -81,7 +85,7 @@ class Daemon(internal val scope: CoroutineScope) {
         HealthService(
             events = events,
             uptimeMillis = { SystemClock.elapsedRealtime() },
-            mode = { AgentMode.AGENT_MODE_DEVELOPMENT_SHELL },
+            mode = { mode },
             displaysCount = {
                 try {
                     displays.readDisplays().size
@@ -135,15 +139,22 @@ class Daemon(internal val scope: CoroutineScope) {
             uptimeMillis = { SystemClock.elapsedRealtime() },
         )
 
+    private val peerPolicy =
+        when (mode) {
+            AgentMode.AGENT_MODE_DEVELOPMENT_SHELL -> PeerPolicy.STOCK_DEVELOPMENT
+            AgentMode.AGENT_MODE_PRIVILEGED_APP -> PeerPolicy.CUSTOM_PRODUCT
+            else -> PeerPolicy.REJECT_ALL
+        }
+
     private val sockets =
         listOf(
-            AgentSocketServer(CONTROL_SOCKET) { socket, _ ->
+            AgentSocketServer(CONTROL_SOCKET, peerPolicy) { socket, _ ->
                 serve(socket, ChannelKind.CHANNEL_KIND_GUEST_CONTROL)
             },
-            AgentSocketServer(INPUT_SOCKET) { socket, _ ->
+            AgentSocketServer(INPUT_SOCKET, peerPolicy) { socket, _ ->
                 serve(socket, ChannelKind.CHANNEL_KIND_GUEST_INPUT)
             },
-            AgentSocketServer(BULK_SOCKET) { socket, _ ->
+            AgentSocketServer(BULK_SOCKET, peerPolicy) { socket, _ ->
                 serve(socket, ChannelKind.CHANNEL_KIND_GUEST_BULK)
             },
         )
@@ -161,7 +172,7 @@ class Daemon(internal val scope: CoroutineScope) {
         appProcessMonitor.start()
         systemStateMonitor.start()
         registerPackageChangeReceiver()
-        DeviceSetup.apply()
+        DeviceSetup.apply(mode, SystemContext.get())
         sockets.forEach { it.start() }
         AgentLog.info("apkrun_guestd is serving the control, input, and bulk sockets")
     }

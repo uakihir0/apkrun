@@ -1,0 +1,25 @@
+type apkrun_vsockd, domain;
+type apkrun_vsockd_exec, exec_type, system_file_type, file_type;
+init_daemon_domain(apkrun_vsockd)
+typeattribute apkrun_vsockd unconstrained_vsock_violators;
+
+allow apkrun_vsockd self:vsock_socket {
+    create
+    bind
+    listen
+    accept
+    read
+    write
+    getattr
+    getopt
+    setopt
+    shutdown
+};
+allow apkrun_vsockd self:unix_stream_socket {
+    create
+    connect
+    read
+    write
+    getattr
+    shutdown
+};

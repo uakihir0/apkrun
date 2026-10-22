@@ -56,3 +56,16 @@ def test_the_first_valid_fixture_is_the_documented_example() -> None:
     assert document["imageVersion"] == "2026.10.0-cf16373615-arm64"
     assert document["kind"] == "stock"
     assert len(document["consolePorts"]) == 20
+
+
+def test_composed_apkrun_fixture_retains_the_stock_source_and_hashes_inputs() -> None:
+    path = FIXTURES / "valid/apkrun-composed-cf16373615.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert load_and_validate(path.read_bytes()) == []
+    assert document["kind"] == "apkrun"
+    assert document["provenance"]["source"]["origin"] == "ci.android.com"
+    assert document["provenance"]["composition"]["sourceManifest"]["sha256"] == "4" * 64
+    assert [entry["path"] for entry in document["provenance"]["composition"]["productInputs"]] == [
+        "compose.json",
+        "init/apkrun.rc",
+    ]

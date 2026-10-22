@@ -210,6 +210,30 @@ enum RuntimeImageManifestRules {
                 "/provenance/builderImageDigest", "digest"
             )
         }
+        if let composition = m.provenance.composition {
+            try schema(composition.schemaVersion == 1, "/provenance/composition/schemaVersion", "must be 1")
+            try schema(
+                isRepositoryPath(composition.sourceManifest.path),
+                "/provenance/composition/sourceManifest/path", "path"
+            )
+            try schema(
+                isSHA256(composition.sourceManifest.sha256),
+                "/provenance/composition/sourceManifest/sha256", "not a SHA-256"
+            )
+            try schema(
+                (1...256).contains(composition.productInputs.count),
+                "/provenance/composition/productInputs", "1 to 256 product inputs"
+            )
+            for (index, input) in composition.productInputs.enumerated() {
+                let base = "/provenance/composition/productInputs/\(index)"
+                try schema(isRepositoryPath(input.path), base + "/path", "path")
+                try schema(isSHA256(input.sha256), base + "/sha256", "not a SHA-256")
+            }
+            try schema(
+                isTreeRevision(composition.apkrunRevision),
+                "/provenance/composition/apkrunRevision", "revision"
+            )
+        }
 
         let guest = m.guest
         try schema((1...10000).contains(guest.sdk), "/guest/sdk", "SDK out of range")
@@ -331,9 +355,16 @@ enum RuntimeImageManifestRules {
             String(base) == expectedBase, rule: "S1", path: "/imageVersion",
             reason: "base \(base) must be \(expectedBase)"
         )
+        let hasComposition = m.provenance.composition != nil
+        let expectedKind: RuntimeImageManifest.Kind?
+        if source.origin == "ci.android.com" {
+            expectedKind = hasComposition ? .apkrun : .stock
+        } else {
+            expectedKind = hasComposition ? nil : .apkrun
+        }
         try expect(
-            (m.kind == .stock) == (source.origin == "ci.android.com"), rule: "S2", path: "/kind",
-            reason: "kind is stock exactly when the origin is ci.android.com"
+            m.kind == expectedKind, rule: "S2", path: "/kind",
+            reason: "kind must match the CI source and composition"
         )
 
         var files: [String: RuntimeImageManifest.FileEntry] = [:]
@@ -462,21 +493,31 @@ enum RuntimeImageManifestRules {
             path: "/compatibility/upgradeFrom/minimumImageVersion", reason: "above this image"
         )
 
-        let revisions = [
-            m.provenance.revisions.guest,
-            m.provenance.pinnedManifestSHA256,
-            m.provenance.builderImageDigest,
-        ]
-        if m.kind == .apkrun {
+        let guestRevision = m.provenance.revisions.guest
+        let pins = [m.provenance.pinnedManifestSHA256, m.provenance.builderImageDigest]
+        if let composition = m.provenance.composition {
+            let inputPaths = composition.productInputs.map(\.path)
             try expect(
-                revisions.allSatisfy { $0 != nil }, rule: "S13", path: "/provenance",
-                reason: "an apkrun image records the guest revision and pins"
+                inputPaths == inputPaths.sorted() && isUnique(inputPaths),
+                rule: "S13", path: "/provenance/composition/productInputs",
+                reason: "composition product inputs must be sorted by path with no duplicates"
             )
-        }
-        if m.kind == .stock {
             try expect(
-                revisions.allSatisfy { $0 == nil }, rule: "S13", path: "/provenance",
-                reason: "a stock image records no guest revision or pins"
+                guestRevision != nil && pins.allSatisfy { $0 == nil },
+                rule: "S13", path: "/provenance",
+                reason: "a composed image records guest revision and composition without builder pins"
+            )
+        } else if m.kind == .apkrun {
+            try expect(
+                guestRevision != nil && pins.allSatisfy { $0 != nil },
+                rule: "S13", path: "/provenance",
+                reason: "a builder image records guest revision and both builder pins"
+            )
+        } else {
+            try expect(
+                guestRevision == nil && pins.allSatisfy { $0 == nil },
+                rule: "S13", path: "/provenance",
+                reason: "a stock image has no guest revision, builder pins, or composition"
             )
         }
 

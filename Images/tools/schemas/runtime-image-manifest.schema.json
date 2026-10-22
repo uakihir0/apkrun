@@ -82,7 +82,23 @@
           }
         },
         "pinnedManifestSHA256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
-        "builderImageDigest": { "anyOf": [{ "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }, { "type": "null" }] }
+        "builderImageDigest": { "anyOf": [{ "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }, { "type": "null" }] },
+        "composition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schemaVersion", "sourceManifest", "productInputs", "apkrunRevision"],
+          "properties": {
+            "schemaVersion": { "const": 1 },
+            "sourceManifest": { "$ref": "#/$defs/repositoryFile" },
+            "productInputs": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": { "$ref": "#/$defs/repositoryFile" }
+            },
+            "apkrunRevision": { "$ref": "#/$defs/treeRevision" }
+          }
+        }
       }
     },
     "guest": {
@@ -245,6 +261,15 @@
       "maxLength": 255,
       "pattern": "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$",
       "not": { "pattern": "(^|/)\\.{1,2}(/|$)" }
+    },
+    "repositoryFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/repoPath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
     },
     "bundlePath": { "type": "string", "pattern": "^(boot|disks|templates|legal)/[a-z0-9][a-z0-9._-]{0,63}$" },
     "fileEntry": {

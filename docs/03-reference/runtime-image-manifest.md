@@ -26,7 +26,7 @@ The design is in [android-image.md](../02-design/android-image.md) (the bundle, 
 
 ```text
 YYYY.MM.N-<base>-<arch>
-2026.10.0-cf16373615-arm64      stock image from ci.android.com build 16373615
+2026.10.0-cf16373615-arm64      stock or composed image from ci.android.com build 16373615
 2026.10.0-ar000123-arm64        APKRun product image from builder build ar000123
 ```
 
@@ -334,7 +334,7 @@ A product image (`kind: apkrun`, M5 and later) differs in these blocks. The frag
 |---|---|---|---|---|
 | `schemaVersion` | integer | yes | `1` | format version of the manifest (§11) |
 | `imageVersion` | string | yes | full form (§2.1). Base consistent with `provenance.source` (S1) | the version of this bundle. Equals the directory name |
-| `kind` | string | yes | `stock` or `apkrun`. `stock` exactly when `provenance.source.origin` is `ci.android.com` (S2) | `stock`: a ci.android.com build, development only. `apkrun`: the APKRun product image |
+| `kind` | string | yes | `stock` or `apkrun`. A CI image is `stock` without `provenance.composition` and `apkrun` with it; a builder image is `apkrun` without composition (S2) | `stock`: an unmodified ci.android.com image, development only. `apkrun`: an APKRun product image |
 | `provenance` | object | yes | §4.3 | where the bundle came from |
 | `guest` | object | yes | §4.3 | guest facts for package checks before the first boot |
 | `boot` | object | yes | §4.4 | direct-boot files |
@@ -352,7 +352,7 @@ Unknown fields are rejected at every level (§11).
 
 ### 4.3 `provenance` and `guest`
 
-`provenance` is informational. ImageCore shows it but decides only from S1, S2, and S14.
+`provenance` is displayed to users. ImageCore validates its image identity and composition with S1, S2, S13, and S14.
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
@@ -364,8 +364,11 @@ Unknown fields are rejected at every level (§11).
 | `tools` | object | yes | `apkrunImage`: `MAJOR.MINOR.PATCH`. `mkbootimg`, `avbtool`: 40 hex digits | tool versions: the `apkrun_image` package and the pinned AOSP tools (`ThirdParty.lock.json`) |
 | `revisions.imagesTools` | string | yes | 40 lowercase hex digits, optionally followed by `-dirty` | git revision of `Images/tools` |
 | `revisions.guest` | string or null | yes | same pattern. Null for `stock` | git revision of `Guest/` |
-| `pinnedManifestSHA256` | string or null | yes | 64 lowercase hex. Null for `stock`, required for `apkrun` | SHA-256 of `Guest/product/manifest/pinned.xml` ([android-image.md](../02-design/android-image.md) §11.5) |
-| `builderImageDigest` | string or null | yes | `sha256:` + 64 lowercase hex. Null for `stock`, required for `apkrun` | digest of the builder container image |
+| `pinnedManifestSHA256` | string or null | yes | 64 lowercase hex. Null for `stock` and composed images; required for builder images | SHA-256 of `Guest/product/manifest/pinned.xml` for a builder image ([android-image.md](../02-design/android-image.md) §11.6) |
+| `builderImageDigest` | string or null | yes | `sha256:` + 64 lowercase hex. Null for `stock` and composed images; required for builder images | digest of the builder container image |
+| `composition` | object | no | Required for composed CI images. `{schemaVersion: 1, sourceManifest: {path, sha256}, productInputs: [{path, sha256}], apkrunRevision}`. Paths are repository-relative; product inputs are sorted by path and unique | the stock Android manifest and APKRun product inputs used to compose the image |
+
+`composition.productInputs` contains 1 to 256 entries. Each `path` is a safe repository-relative path and each `sha256` is 64 lowercase hex digits. `composition.apkrunRevision` is a 40-digit lowercase git revision, optionally followed by `-dirty`. A composed image keeps the stock CI build in `source` and records the product code revision in both `revisions.guest` and `composition.apkrunRevision`.
 
 The bundle has no timestamps, so it is deterministic ([android-image.md](../02-design/android-image.md) §10.2).
 
@@ -577,7 +580,23 @@ This schema is copied byte for byte into `Images/tools/schemas/runtime-image-man
           }
         },
         "pinnedManifestSHA256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
-        "builderImageDigest": { "anyOf": [{ "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }, { "type": "null" }] }
+        "builderImageDigest": { "anyOf": [{ "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }, { "type": "null" }] },
+        "composition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schemaVersion", "sourceManifest", "productInputs", "apkrunRevision"],
+          "properties": {
+            "schemaVersion": { "const": 1 },
+            "sourceManifest": { "$ref": "#/$defs/repositoryFile" },
+            "productInputs": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": { "$ref": "#/$defs/repositoryFile" }
+            },
+            "apkrunRevision": { "$ref": "#/$defs/treeRevision" }
+          }
+        }
       }
     },
     "guest": {
@@ -741,6 +760,15 @@ This schema is copied byte for byte into `Images/tools/schemas/runtime-image-man
       "pattern": "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$",
       "not": { "pattern": "(^|/)\\.{1,2}(/|$)" }
     },
+    "repositoryFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/repoPath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
     "bundlePath": { "type": "string", "pattern": "^(boot|disks|templates|legal)/[a-z0-9][a-z0-9._-]{0,63}$" },
     "fileEntry": {
       "type": "object",
@@ -891,7 +919,7 @@ The order is fixed: signature, then schema, then files ([android-image.md](../02
 | # | Rule |
 |---|---|
 | S1 | `imageVersion` parses (§2.2). Its base is `cf` + `provenance.source.buildId` for `ci.android.com`, or equals `buildId` for `apkrun-builder`. Its architecture is `arm64` |
-| S2 | `kind` is `stock` exactly when `provenance.source.origin` is `ci.android.com` |
+| S2 | A CI image is `stock` exactly when `provenance.composition` is absent. A composed image is `apkrun` with a CI source; a builder image is `apkrun` with no composition |
 | S3 | Every path named in `boot`, `disks`, `templates`, and `legal` has one `files` entry with the same size and hash, and `files` has no other entries. Each disk's `logicalSize` equals its file size |
 | S4 | `files` is sorted by path in byte order, with no duplicates |
 | S5 | Partitions of each disk are in ascending `firstLBA` order and do not overlap. The last sector of each partition is at most `logicalSize / 512 − 34` (room for the backup GPT) |
@@ -902,7 +930,7 @@ The order is fixed: signature, then schema, then files ([android-image.md](../02
 | S10 | `kind: stock` has no `agents`. `kind: apkrun` lists `io.apkrun.guest`; `io.apkrun.store` is optional until #37. Agent packages are unique |
 | S11 | `userdata.upgradableFrom` is ascending and contains `userdata.schemaVersion` |
 | S12 | `compatibility.upgradeFrom.minimumImageVersion` ≤ the triple of `imageVersion` |
-| S13 | `kind: apkrun` has non-null `revisions.guest`, `pinnedManifestSHA256`, and `builderImageDigest`. `kind: stock` has them all null |
+| S13 | A composed `kind: apkrun` image has non-null `revisions.guest` and `composition`, with null builder pins. A builder `kind: apkrun` image has non-null `revisions.guest`, `pinnedManifestSHA256`, and `builderImageDigest`, with no composition. A `kind: stock` image has null guest revision, builder pins, and composition |
 | S14 | `guest.sdk == provenance.android.sdk`. `guest.targetSdkFloor` is 23 for SDK 34 and 24 for SDK 35 or later |
 
 Boot preparation adds the bootconfig and cmdline checks of §3.2 and §3.3 (`bootconfigConflict`, `bootconfigTooLarge`, `cmdlineTooLong`).

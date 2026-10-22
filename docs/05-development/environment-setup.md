@@ -122,7 +122,7 @@ The product build uses the Rust prebuilt of the pinned AOSP tree (`prebuilts/rus
 | `APKRUN_TEST_LINUX_DIR` | unset; default `/tmp/apkrun-test-linux/`. Absolute, outside `~/Documents` ([build-system.md](build-system.md) §12.4) | T2 Linux guest tests, Debug CLI |
 | `APKRUN_ANDROID_HOME` | SDK root outside `~/Documents` holding `platform-tools` (§4) | T2 Android suites |
 | `APKRUN_TEST_DEVELOPMENT_TEAM` | Apple Development team ID of the lab test host | signed T2 and G1 tests |
-| `APKRUN_TEST_CODE_SIGN_IDENTITY` | SHA-1 fingerprint of that team's Apple Development certificate | signed T2 and G1 tests |
+| `APKRUN_TEST_CODE_SIGN_IDENTITY` | SHA-1 fingerprint of that team's Apple Development certificate | signed T2 and G1 tests; the Release XPC test also needs a valid identity for the installed app's team |
 | `APKRUN_AOSP_BUILDER` | `user@host` of the Linux builder (planned, #36) | `scripts/aosp/remote-build.sh` (§5.5) |
 | `APKRUN_CI` | `1` on CI runners only; turns "skip with a message" into a failure | all tests and scripts |
 
@@ -250,6 +250,39 @@ xcodebuild test -scheme IntegrationTests \
 - VM tests need `com.apple.security.virtualization`, so they run in the signed `APKRunTestHost` ([build-system.md](build-system.md) §12.4).
 - For the Android suites, pass `-derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd"` and an `APKRUN_ANDROID_HOME` outside `~/Documents` that holds `platform-tools`: `mkdir -p "${TMPDIR:-/tmp}/apkrun-test-sdk" && cp -R "$ANDROID_HOME/platform-tools" "${TMPDIR:-/tmp}/apkrun-test-sdk/"`. The copy is the same `adb` binary.
 - The Guest Agent, package, and input suites read `APKRUN_GUEST_DIR` (`scripts/build-guest.sh --out /tmp/apkrun-test-guest`) and `APKRUN_FIXTURE_APK` (HelloText). The AndroidPackage suite uses RuntimeAPI for import, install, list, details, and uninstall; its headless activity and force-stop checks still use ADB.
+- `AndroidStockCLIXPC` runs the launch and XPC authorization checks against the exact daemon-backed CLI embedded in the installed Debug app. The LaunchAgent authorizes that CLI by its code hash, so a separately built copy cannot be used. Build APKRun with the embedded-runtime trait disabled, set the LaunchAgent environment before it starts, and stage HelloText:
+
+  ```bash
+  scripts/generate-project.sh
+  APKRUN_CLI_TRAITS= xcodebuild -project APKRun.xcodeproj -scheme APKRun \
+    -configuration Debug -derivedDataPath /tmp/apkrun-xpc-derived build
+  launchctl bootout "gui/$(id -u)/io.apkrun.apkrund.dev" 2>/dev/null || true
+  launchctl setenv APKRUN_TEST_HEADLESS_LAUNCH 1
+  APKRUN_BUILD_PRODUCTS_DIR=/tmp/apkrun-xpc-derived/Build/Products/Debug \
+    scripts/dev/install-dev-app.sh
+  mkdir -p /tmp/apkrun-test-fixtures
+  scripts/build-fixtures.sh --app HelloText
+  cp Tests/Fixtures/AndroidApps/out/HelloText.apk /tmp/apkrun-test-fixtures/HelloText.apk
+  xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests \
+    -testPlan IntegrationTests -configuration Debug \
+    -only-test-configuration AndroidStockCLIXPC -jobs 1 \
+    -derivedDataPath /tmp/apkrun-dd
+  ```
+
+  Run under the dedicated AndroidStock test user. The test verifies that HelloText stays running after the CLI process exits, that a copied CLI with an alternate code signature is rejected by the XPC listener (ad-hoc in Debug), and that the trusted CLI still connects afterward. Debug reports `owner: apkrun-dev`; it does not satisfy the production-owner check.
+
+- `AndroidStockCLIXPCRelease` checks production XPC ownership and code-signing rejection without launching an Android app. Run it on a host with the signed production APKRun app installed at `/Applications/APKRun.app` and its production LaunchAgent registered:
+
+  ```bash
+  xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests \
+    -testPlan IntegrationTests -configuration Release \
+    -only-test-configuration AndroidStockCLIXPCRelease -jobs 1 \
+    -derivedDataPath /tmp/apkrun-xpc-release-derived \
+    DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" \
+    CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY"
+  ```
+
+  This configuration fails if the CLI reports an owner other than `apkrund`; unlike the Debug configuration, it cannot skip the production-owner assertion. The signing identity used by the test must match the installed CLI's Team ID so the alternate signature reaches the XPC listener. The test fails if the keychain has no matching valid identity or if the CLI fails before XPC authorization.
 - `AndroidInputTests` also reads `APKRUN_FIXTURE_COMPOSE_APK` (`scripts/build-fixtures.sh --app HelloCompose`, copied to `/tmp`). It needs the debug HelloText, whose `TEXT` and `DETAILS` broadcasts exist only in the debug manifest: `Tests/Fixtures/AndroidApps/gradlew -p Tests/Fixtures/AndroidApps :HelloText:assembleDebug`, then copy `HelloText/build/outputs/apk/debug/HelloText-debug.apk` to `APKRUN_FIXTURE_APK`. The input configuration also reads the staged `virgl-runtime/`, because a host built outside the checkout cannot find the VirGL libraries from its executable.
 
 ---

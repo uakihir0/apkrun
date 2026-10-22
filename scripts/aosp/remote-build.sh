@@ -177,25 +177,19 @@ printf 'remote-build: full log: %s\n' "$final_log"
 latest_info="$source_root/Images/work/$build_number/download/build-info.json"
 [[ -s "$latest_info" && ! -L "$latest_info" ]] \
     || { printf 'remote-build: build-info.json was not produced for %s\n' "$build_number" >&2; exit 1; }
-python3 - "$latest_info" "$revision" "$variant" <<'PY'
-import json
+latest_archive="$source_root/Images/work/$build_number/download/apkrun_arm64-img-$build_number.zip"
+python3 "$source_root/scripts/aosp/verify-build-info.py" \
+    --archive "$latest_archive" \
+    --build-info "$latest_info" \
+    --revision "$revision" \
+    --variant "$variant" \
+    --build-number "$build_number"
+python3 - "$latest_info" "$build_number" <<'PY'
 import pathlib
-import re
 import sys
 
 info_path = pathlib.Path(sys.argv[1])
-info = json.loads(info_path.read_text(encoding="utf-8"))
-build_number = info.get("buildNumber")
-if not isinstance(build_number, str) or not re.fullmatch(r"ar[0-9]{6,}", build_number):
-    raise SystemExit("remote-build: invalid build number in build-info.json")
-if info.get("revision") != sys.argv[2]:
-    raise SystemExit("remote-build: build-info.json revision does not match request")
-if info.get("variant") != sys.argv[3]:
-    raise SystemExit("remote-build: build-info.json variant does not match request")
-archive = info_path.parent / f"apkrun_arm64-img-{build_number}.zip"
-if not archive.is_file() or archive.is_symlink() or archive.stat().st_size == 0:
-    raise SystemExit(f"remote-build: missing dist archive {archive}")
-print(f"APKRUN_BUILD_NUMBER={build_number}")
+print(f"APKRUN_BUILD_NUMBER={sys.argv[2]}")
 print(f"APKRUN_BUILD_OUTPUT_DIR={info_path.parent}")
 PY
 REMOTE_SCRIPT
@@ -215,8 +209,13 @@ mkdir -p "$local_output_dir"
     || fail "local output already exists at $local_output_dir"
 archive_temporary="$(mktemp "$local_output_dir/.apkrun-image.XXXXXX")"
 info_temporary="$(mktemp "$local_output_dir/.build-info.XXXXXX")"
+published_archive=""
 cleanup_transfer() {
-    rm -f "$archive_temporary" "$info_temporary"
+    rm -f -- "$archive_temporary" "$info_temporary"
+    if [[ -n "$published_archive" ]]; then
+        rm -f -- "$published_archive" \
+            || printf 'remote-build: warning: could not remove partial archive %s\n' "$published_archive" >&2
+    fi
 }
 trap cleanup_transfer EXIT
 printf -v remote_archive_path '%q' "$build_output_dir/$archive_name"
@@ -224,25 +223,30 @@ printf -v remote_info_path '%q' "$build_output_dir/build-info.json"
 ssh -o BatchMode=yes -- "$builder" "cat -- $remote_archive_path" >"$archive_temporary"
 ssh -o BatchMode=yes -- "$builder" "cat -- $remote_info_path" >"$info_temporary"
 [[ -s "$archive_temporary" && -s "$info_temporary" ]] || fail "downloaded build artifacts are empty"
-python3 - "$info_temporary" "$revision" "$variant" "$build_number" <<'PY'
-import json
-import pathlib
-import sys
-
-info = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-if info.get("revision") != sys.argv[2]:
-    raise SystemExit("remote-build: downloaded build-info.json revision mismatch")
-if info.get("variant") != sys.argv[3]:
-    raise SystemExit("remote-build: downloaded build-info.json variant mismatch")
-if info.get("buildNumber") != sys.argv[4]:
-    raise SystemExit("remote-build: downloaded build-info.json build number mismatch")
-PY
+python3 "$script_dir/verify-build-info.py" \
+    --archive "$archive_temporary" \
+    --build-info "$info_temporary" \
+    --revision "$revision" \
+    --variant "$variant" \
+    --build-number "$build_number" \
+    || fail "downloaded archive does not match its build-info.json"
 unzip -Z1 "$archive_temporary" >/dev/null || fail "downloaded AOSP artifact is not a valid zip archive"
 mv "$archive_temporary" "$local_output_dir/$archive_name"
-mv "$info_temporary" "$local_output_dir/build-info.json"
+published_archive="$local_output_dir/$archive_name"
+if ! mv "$info_temporary" "$local_output_dir/build-info.json"; then
+    fail "could not publish build-info.json; removed the partial archive"
+fi
+published_archive=""
 trap - EXIT
 
+printf -v remote_output_path '%q' "$build_output_dir"
+if ssh -o BatchMode=yes -- "$builder" \
+    "rm -- $remote_archive_path $remote_info_path && rmdir -- $remote_output_path"; then
+    printf 'remote-build: removed the transferred archive and sidecar from the builder\n'
+else
+    printf 'remote-build: warning: could not remove transferred artifacts from %s\n' "$build_output_dir" >&2
+fi
 printf 'remote-build: copied %s and build-info.json to %s\n' "$archive_name" "$local_output_dir"
 printf 'Next: scripts/inventory-cuttlefish.py %s\n' "$local_output_dir"
-printf 'Then: source Images/tools/.venv/bin/activate && python3 -m apkrun_image bundle --manifest Images/manifests/%s/android-image.json --layout Images/tools/layouts/cuttlefish-phone-arm64.json --input %s --out Images/work/%s/bundle/ --image-version <YYYY.MM.N>\n' \
-    "$build_number" "$local_output_dir" "$build_number"
+printf 'Then: source Images/tools/.venv/bin/activate && python3 -m apkrun_image bundle --manifest Images/manifests/%s/android-image.json --build-info %s/build-info.json --layout Images/tools/layouts/cuttlefish-phone-arm64.json --source %s --out Images/work/%s/bundle/ --image-version <YYYY.MM.N>\n' \
+    "$build_number" "$local_output_dir" "$local_output_dir" "$build_number"

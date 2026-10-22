@@ -48,11 +48,23 @@ expect_status 78 "remote-rejects-builder-shell-syntax" \
 }
 
 grep -q 'ubuntu:22.04@sha256:' "$aosp_dir/builder.Dockerfile"
+grep -q 'ARG UBUNTU_SNAPSHOT=20261020T000000Z' "$aosp_dir/builder.Dockerfile"
+grep -q 'https://snapshot.ubuntu.com/ubuntu/' "$aosp_dir/builder.Dockerfile"
+grep -q 'Acquire::Check-Valid-Until=false update' "$aosp_dir/builder.Dockerfile"
 grep -q 'CMDLINE_TOOLS_SHA256=' "$aosp_dir/builder.Dockerfile"
 grep -q 'REPO_LAUNCHER_SHA256=' "$aosp_dir/builder.Dockerfile"
 grep -q 'libc6-dev-i386' "$aosp_dir/builder.Dockerfile"
 grep -q 'repo sync -c -j' "$aosp_dir/build-product.sh"
 grep -q 'for-each-ref --contains' "$aosp_dir/remote-build.sh"
+grep -q 'verify-build-info.py' "$aosp_dir/remote-build.sh"
+literal_dollar='$'
+grep -Fq "rm -- ${literal_dollar}remote_archive_path ${literal_dollar}remote_info_path" \
+    "$aosp_dir/remote-build.sh"
+grep -q -- '--build-info %s/build-info.json' "$aosp_dir/remote-build.sh"
+grep -q -- '--source %s --out' "$aosp_dir/remote-build.sh"
+grep -q 'published_archive=.*archive_name' "$aosp_dir/remote-build.sh"
+grep -q 'could not publish build-info.json' "$aosp_dir/remote-build.sh"
+grep -q 'could not remove partial archive' "$aosp_dir/remote-build.sh"
 grep -q 'APKRUN_BUILDER_IMAGE_DIGEST' "$aosp_dir/build-product.sh"
 grep -q 'status --porcelain --untracked-files=all' "$aosp_dir/build-product.sh"
 grep -q 'APKRUN_BUILD_NUMBER=%s' "$aosp_dir/build-product.sh"
@@ -105,6 +117,68 @@ assert info["archive"] == {
     "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
 }
 PY
+transfer_archive="$temporary_root/.apkrun-image.transfer"
+cp "$archive" "$transfer_archive"
+python3 "$aosp_dir/verify-build-info.py" \
+    --archive "$transfer_archive" \
+    --build-info "$build_info" \
+    --revision "$revision" \
+    --variant userdebug \
+    --build-number ar000123
+invalid_build_info="$temporary_root/invalid-build-info.json"
+python3 - "$build_info" "$invalid_build_info" <<'PY'
+import json
+import pathlib
+import sys
+
+info = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+info["archive"]["sha256"] = "0" * 64
+pathlib.Path(sys.argv[2]).write_text(json.dumps(info), encoding="utf-8")
+PY
+expect_status 1 "build-info-verifier-rejects-archive-mismatch" \
+    python3 "$aosp_dir/verify-build-info.py" \
+    --archive "$archive" \
+    --build-info "$invalid_build_info" \
+    --revision "$revision" \
+    --variant userdebug \
+    --build-number ar000123
+unknown_build_info="$temporary_root/unknown-build-info.json"
+python3 - "$build_info" "$unknown_build_info" <<'PY'
+import json
+import pathlib
+import sys
+
+info = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+info["agents"]["guest"]["unexpected"] = True
+pathlib.Path(sys.argv[2]).write_text(json.dumps(info), encoding="utf-8")
+PY
+expect_status 1 "build-info-verifier-rejects-unknown-fields" \
+    python3 "$aosp_dir/verify-build-info.py" \
+    --archive "$transfer_archive" \
+    --build-info "$unknown_build_info" \
+    --revision "$revision" \
+    --variant userdebug \
+    --build-number ar000123
+duplicate_build_info="$temporary_root/duplicate-build-info.json"
+python3 - "$build_info" "$duplicate_build_info" <<'PY'
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = '  "schemaVersion": 1,'
+assert source.count(needle) == 1
+pathlib.Path(sys.argv[2]).write_text(
+    source.replace(needle, needle + '\n  "schemaVersion": 1,', 1),
+    encoding="utf-8",
+)
+PY
+expect_status 1 "build-info-verifier-rejects-duplicate-keys" \
+    python3 "$aosp_dir/verify-build-info.py" \
+    --archive "$transfer_archive" \
+    --build-info "$duplicate_build_info" \
+    --revision "$revision" \
+    --variant userdebug \
+    --build-number ar000123
 expect_status 1 "build-info-rejects-archive-build-number-mismatch" \
     python3 "$aosp_dir/write-build-info.py" \
     --archive "$archive" \

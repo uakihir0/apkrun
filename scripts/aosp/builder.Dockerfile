@@ -2,6 +2,7 @@
 FROM --platform=linux/amd64 ubuntu:22.04@sha256:98510ac07bb4545e389be502a8918b385c018bfe4ceeb5ac7e0375c782268b04
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG UBUNTU_SNAPSHOT=20261020T000000Z
 ARG CMDLINE_TOOLS_URL=https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip
 ARG CMDLINE_TOOLS_SHA256=7ec965280a073311c339e571cd5de778b9975026cfcbe79f2b1cdcb1e15317ee
 ARG REPO_LAUNCHER_SHA256=6ed2f6325705b6ea0af99466d6ebd04adec387a5b6a906cd77bc8c6da65123e5
@@ -15,9 +16,17 @@ ENV ANDROID_HOME=/opt/android-sdk \
     LC_ALL=en_US.UTF-8 \
     PATH=/opt/android-sdk/cmdline-tools/19.0/bin:/opt/android-sdk/platform-tools:/usr/local/bin:/usr/bin:/bin
 
-RUN test "$(dpkg --print-architecture)" = amd64 \
-    && apt-get update \
-    && apt-get install --no-install-recommends -y \
+RUN set -eu; \
+    test "$(dpkg --print-architecture)" = amd64; \
+    printf 'deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/%s/ jammy main restricted universe multiverse\n' "$UBUNTU_SNAPSHOT" > /etc/apt/sources.list; \
+    printf '%s\n' \
+        "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/$UBUNTU_SNAPSHOT/ jammy-updates main restricted universe multiverse" \
+        "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/$UBUNTU_SNAPSHOT/ jammy-backports main restricted universe multiverse" \
+        "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/$UBUNTU_SNAPSHOT/ jammy-security main restricted universe multiverse" \
+        >> /etc/apt/sources.list; \
+    rm -f /etc/apt/sources.list.d/ubuntu.sources; \
+    apt-get -o Acquire::Check-Valid-Until=false update; \
+    apt-get install --no-install-recommends -y \
         bc \
         bison \
         build-essential \

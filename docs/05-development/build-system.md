@@ -415,7 +415,7 @@ The APKRun product (`Guest/product/`, [android-image.md](../02-design/android-im
 
 The result, `apkrun_arm64-img-ar<counter>.zip`, enters the stock pipeline (§10). `scripts/check-sepolicy.sh` runs for each built variant after `m` and before `m dist` (R-13).
 
-`scripts/aosp/builder.Dockerfile` pins its Ubuntu amd64 base, Android command-line tools archive, and `repo` client. The inspected container digest and pinned manifest SHA-256 are written to `build-info.json` beside the dist archive. `remote-build.sh` keeps the full build log on the Linux builder at `~/aosp/logs/<BUILD_NUMBER>.log`.
+`scripts/aosp/builder.Dockerfile` pins its Ubuntu amd64 base and an immutable Ubuntu archive snapshot, plus the Android command-line tools archive and `repo` client. Update the snapshot only in a reviewed change, then rebuild the container and run the builder checks. The inspected container digest, pinned manifest SHA-256, Guest Agent identity, and dist archive hash are written to `build-info.json`. `remote-build.sh` verifies the transferred files against that sidecar, removes only the transferred archive and sidecar from the builder, and keeps the full build log at `~/aosp/logs/<BUILD_NUMBER>.log`.
 
 ---
 
@@ -547,9 +547,23 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
 - Path rules: `APKRUN_TEST_LINUX_DIR`, `APKRUN_ANDROID_HOME`, and `-derivedDataPath` are absolute and outside `~/Documents`, even when `HOME` is overridden. The scripts and the test host reject direct paths and symlink aliases into Documents.
 - The hosted test reads `APKRUN_TEST_LINUX_DIR` from `APKRunTestHost.app/Contents/Info.plist`. Pass it as a build setting; a shell export is not forwarded to the hosted process.
 - Use `-derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd"` and an `APKRUN_ANDROID_HOME` that holds a copy of `platform-tools`. CI uses `$RUNNER_TEMP`. `scripts/run-gate.sh` builds under `build/gates/` in the checkout.
+- For the #36 `AndroidCustom` configuration, stage the signed `apkrun_image bundle` output at `/tmp/apkrun-test-android-custom/android-bundle` and `HelloProbe.apk` at `/tmp/apkrun-test-fixtures/HelloProbe.apk`; the test plan supplies these paths. Replace `ar000123` below with the build number produced by the AOSP builder:
+
+```bash
+build_number=ar000123
+custom_root=/tmp/apkrun-test-android-custom
+fixture_root=/tmp/apkrun-test-fixtures
+rm -rf "$custom_root/android-bundle" "$fixture_root/HelloProbe.apk"
+mkdir -p "$custom_root" "$fixture_root"
+cp -R "Images/work/$build_number/bundle" "$custom_root/android-bundle"
+scripts/build-fixtures.sh --app HelloProbe
+cp Tests/Fixtures/AndroidApps/out/HelloProbe.apk "$fixture_root/HelloProbe.apk"
+```
+
+Run `AndroidCustom` with `APKRUN_CI=1` on the required runner so missing staged inputs fail the job rather than skip the checks.
 - `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY` (the SHA-1 fingerprint of the certificate) come from the environment or from CI repository variables. The fingerprint is explicit, because the generic `Apple Development` name does not reliably select the lab certificate.
 - `APKRunTestHost` and the hosted test bundles disable hardened runtime; that exception is limited to test targets.
-- `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per test group: `LinuxGuest`, `AndroidADB`, `AndroidPackage`, `AndroidBoot`, `AndroidNetwork`, `AndroidGraphics`, `AndroidGuestAgent`, `AndroidGuestProtocolLaunch`, `AndroidInput`, and the four input configurations below. The T2 suites of [test-strategy.md](../04-plan/test-strategy.md) §2.4 are `LinuxGuest`, `AndroidStock`, `AndroidCustom`, and `Maintenance`; the last three are planned. T2 has one automatic retry ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
+- `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per test group: `LinuxGuest`, `AndroidADB`, `AndroidPackage`, `AndroidBoot`, `AndroidNetwork`, `AndroidGraphics`, `AndroidGuestAgent`, `AndroidGuestProtocolLaunch`, `AndroidCustom` (#36 product-image checks), `AndroidInput`, and the four input configurations below. The T2 suites of [test-strategy.md](../04-plan/test-strategy.md) §2.4 are `LinuxGuest`, `AndroidStock`, `AndroidCustom`, and `Maintenance`; `AndroidStock` and `Maintenance` remain planned. T2 has one automatic retry ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
 
 Input tests run in their own configurations. Select the configuration and the method together:
 

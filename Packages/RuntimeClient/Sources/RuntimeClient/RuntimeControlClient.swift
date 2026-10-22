@@ -209,10 +209,10 @@ public actor RuntimeControlClient {
     }
 
     /// Stops Android while leaving the daemon available for another request.
-    public func stopRuntime() async throws(RuntimeControlClientError) -> RuntimeHostStatus {
+    public func stopRuntime(force: Bool = false) async throws(RuntimeControlClientError) -> RuntimeHostStatus {
         let opened = try await ensureControl()
         do {
-            let request = StopRuntimeRequest(header: makeHeader())
+            let request = StopRuntimeRequest(header: makeHeader(), force: force)
             let data = try Self.encode(request)
             return try Self.decodeControlReply(from: await opened.channel.stopRuntime(data))
         } catch {
@@ -963,7 +963,7 @@ public actor RuntimeControlClient {
         }
 
         let endpointRequest = RuntimeEndpointRequest(
-            kind: .control,
+            kind: clientConfiguration.clientKind == .wrapper ? .wrapper : .control,
             clientKind: clientConfiguration.clientKind,
             claimedIdentity: clientConfiguration.claimedIdentity,
             apiVersion: APIVersion.current
@@ -1317,6 +1317,9 @@ struct RuntimeControlClientConfiguration: Equatable, Sendable {
         case development
         case release(teamIdentifier: String)
         case releaseUpdateTest(teamIdentifier: String)
+        #if DEBUG
+            case systemTest(daemonCodeSigningRequirement: String)
+        #endif
     }
 
     let clientKind: RuntimeClientKind
@@ -1367,6 +1370,11 @@ struct RuntimeControlClientConfiguration: Equatable, Sendable {
             daemonCodeSigningRequirement =
                 "anchor apple generic and certificate leaf[subject.OU] = \"\(teamIdentifier)\" "
                 + "and identifier \"io.apkrun.apkrund.updatetest\""
+        #if DEBUG
+            case .systemTest(let requirement):
+                serviceName = "io.apkrun.systemtest.apkrund.xpc"
+                daemonCodeSigningRequirement = requirement
+        #endif
         }
     }
 
@@ -1497,7 +1505,7 @@ protocol RuntimeXPCConnectionFactory: Sendable {
     ) throws(RuntimeControlClientError) -> any RuntimeControlChannel
 }
 
-private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
+struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
     func makeBroker(
         serviceName: String,
         signingRequirement: String

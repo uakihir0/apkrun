@@ -35,6 +35,7 @@ import Testing
     #expect(try await client.runtimeStatus() == status)
     #expect(try await client.startRuntime() == status)
     #expect(try await client.stopRuntime() == status)
+    #expect(try await client.stopRuntime(force: true) == status)
     #expect(try await client.resetRuntime() == status)
 
     let snapshot = transport.snapshot()
@@ -58,7 +59,7 @@ import Testing
 
     #expect(snapshot.statusRequests.count == 2)
     #expect(snapshot.startRequests.count == 1)
-    #expect(snapshot.stopRequests.count == 1)
+    #expect(snapshot.stopRequests.count == 2)
     #expect(snapshot.resetRequests.count == 1)
     let resetRequest = try JSONDecoder().decode(
         RuntimeResetControlRequest.self,
@@ -66,11 +67,51 @@ import Testing
     )
     #expect(resetRequest.header.apiVersion == APIVersion.current)
     #expect(resetRequest.header.clientKind == RuntimeClientKind.cli)
+    let gracefulStop = try JSONDecoder().decode(StopRuntimeRequest.self, from: snapshot.stopRequests[0])
+    let forcedStop = try JSONDecoder().decode(StopRuntimeRequest.self, from: snapshot.stopRequests[1])
+    #expect(!gracefulStop.force)
+    #expect(forcedStop.force)
     for data in snapshot.statusRequests + snapshot.startRequests + snapshot.stopRequests + snapshot.resetRequests {
         let request = try JSONDecoder().decode(ControlRequestHeader.self, from: data)
         #expect(request.header.apiVersion == APIVersion.current)
         #expect(request.header.clientKind == RuntimeClientKind.cli)
     }
+}
+
+@Test func wrapperControlClientRequestsItsPackageScopedEndpoint() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .wrapper,
+        claimedIdentity: "io.apkrun.android.io.apkrun.fixture.hellotext",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let status = RuntimeHostStatus(
+        hostState: "running",
+        runtimeState: "ready",
+        bootProgress: nil,
+        startupFailureStep: nil,
+        startupFailureCode: nil,
+        crashLoopActive: false,
+        daemonPID: 42,
+        imageVersion: "test-image"
+    )
+    let transport = try MockRuntimeTransport(hello: hello, status: status)
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    #expect(try await client.runtimeStatus() == status)
+
+    let snapshot = transport.snapshot()
+    let endpointRequest = try JSONDecoder().decode(RuntimeEndpointRequest.self, from: snapshot.endpointRequests[0])
+    let statusRequest = try JSONDecoder().decode(RuntimeStatusRequest.self, from: snapshot.statusRequests[0])
+    #expect(endpointRequest.kind == .wrapper)
+    #expect(endpointRequest.clientKind == .wrapper)
+    #expect(endpointRequest.claimedIdentity == configuration.claimedIdentity)
+    #expect(statusRequest.header.clientKind == .wrapper)
 }
 
 @Test func controlClientReadsRuntimeInfoSessionsAndConfiguration() async throws {

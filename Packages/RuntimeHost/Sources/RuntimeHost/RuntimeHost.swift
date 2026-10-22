@@ -1,10 +1,21 @@
 import DiagnosticsCore
+import Dispatch
 import Foundation
 import ImageCore
 import RuntimeAPI
 import RuntimeCore
 
 typealias WireOperationID = RuntimeAPI.OperationID
+
+protocol RuntimeHostPowerObserver: Sendable {
+    func start() throws(PowerObserverFailure)
+    func stop()
+}
+
+extension PowerObserver: RuntimeHostPowerObserver {}
+
+typealias RuntimeHostPowerObserverFactory =
+    @Sendable (@escaping PowerObserver.EventHandler) -> any RuntimeHostPowerObserver
 
 /// Failures that prevent the daemon from accepting lifecycle operations.
 public enum RuntimeHostError: Error, Equatable, Sendable {
@@ -35,9 +46,14 @@ public enum RuntimeHostError: Error, Equatable, Sendable {
 private struct RuntimeTrackedOperation {
     let handle: OperationHandle
     let requestPayload: Data
+    let packageMutationToken: UUID
     var snapshot: OperationSnapshot
     var isCancellable: Bool
     var task: Task<Void, Never>?
+}
+
+private struct PackageMutationActivity {
+    let assertion: RuntimeActivityAssertion?
 }
 
 /// Composes the daemon's per-user runtime and owns it for the process lifetime.
@@ -51,7 +67,10 @@ public actor RuntimeHost {
     private let buildInfo: BuildInfo
     private let environment: [String: String]
     private let executableURL: URL
+    private let adbHostPort: UInt16
     private let uncleanExitRecoveryOverride: (any DaemonUncleanExitRecovering)?
+    private let idleSettingsOverride: RuntimeIdleSettings?
+    private let idleClock: any RuntimeIdleClock
     private var diagnostics: DiagnosticsContext?
     private var logger: APKLogger?
     private var instanceLock: InstanceLock?
@@ -61,6 +80,21 @@ public actor RuntimeHost {
     private var instanceStore: InstanceStore?
     private var supervisor: RuntimeSupervisor?
     private var supervisorEventsTask: Task<Void, Never>?
+    private var idleSettings = RuntimeIdleSettings.default
+    private var idleController: IdleController?
+    private var packageStoreMutationTestGate: (@Sendable () async -> Void)?
+    private var sessionActivityAssertions: [String: RuntimeActivityAssertion] = [:]
+    private var adbClientActivityAssertion: RuntimeActivityAssertion?
+    private var adbClientActivityTracker = ADBClientActivityTracker()
+    private var isAcquiringADBClientActivity = false
+    private var packageMutationActivities: [UUID: PackageMutationActivity] = [:]
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
+    private var prebootTask: Task<Void, Never>?
+    private var powerEventHandler: PowerObserver.EventHandler?
+    private var powerObserver: (any RuntimeHostPowerObserver)?
+    private var powerObserverFactory: RuntimeHostPowerObserverFactory = { handler in
+        PowerObserver(handler: handler)
+    }
     private var packageQueryService: EmbeddedPackageService?
     private var headlessSessionService: (any RuntimeSessionService)?
     private var runtimeSessionGeneration: UInt64 = 0
@@ -82,6 +116,8 @@ public actor RuntimeHost {
     private var activeLifecycleOperations = 0
     private var activeRuntimeStarts = 0
     private var activePackageMutations = 0
+    private var idleSuspendTransitionInProgress = false
+    private var idleSuspendTransitionWaiters: [CheckedContinuation<Void, Never>] = []
     private var runtimeStartTask: Task<Result<Void, RuntimeHostError>, Never>?
     private var isRuntimeStopping = false
     private var isRuntimeResetting = false
@@ -98,13 +134,19 @@ public actor RuntimeHost {
         buildInfo: BuildInfo = .current,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         executableURL: URL = URL(fileURLWithPath: CommandLine.arguments.first ?? "apkrund"),
-        uncleanExitRecovery: (any DaemonUncleanExitRecovering)? = nil
+        uncleanExitRecovery: (any DaemonUncleanExitRecovering)? = nil,
+        adbHostPort: UInt16 = BootOptions.defaultADBHostPort,
+        idleSettings: RuntimeIdleSettings? = nil,
+        idleClock: any RuntimeIdleClock = SuspendingRuntimeIdleClock()
     ) {
         self.paths = paths
         self.buildInfo = buildInfo
         self.environment = environment
         self.executableURL = executableURL
+        self.adbHostPort = adbHostPort
         uncleanExitRecoveryOverride = uncleanExitRecovery
+        idleSettingsOverride = idleSettings
+        self.idleClock = idleClock
     }
 
     /// Performs daemon startup. The LaunchAgent listener is published after the instance lock and
@@ -139,6 +181,24 @@ public actor RuntimeHost {
         self.diagnostics = diagnostics
         let logger = APKLogger(category: RuntimeLogCategory.host, sink: diagnostics.logSink)
         self.logger = logger
+        if let idleSettingsOverride {
+            idleSettings = idleSettingsOverride
+        } else {
+            do {
+                idleSettings = try RuntimeIdleSettingsLoader.load(from: paths.settingsFile)
+            } catch {
+                idleSettings = .default
+                logger.warning(
+                    "Runtime idle settings are invalid; using defaults",
+                    errorCode: "runtime.idleSettingsInvalid"
+                )
+            }
+        }
+        let idleController = IdleController(settings: idleSettings, clock: idleClock) { [weak self] action in
+            await self?.handleIdleAction(action)
+        }
+        self.idleController = idleController
+        await idleController.start()
         recordedBootOperationIDs = Set(
             BootRecordLog.read(from: paths.bootPerformanceFile).map(\.operationID)
         )
@@ -231,14 +291,31 @@ public actor RuntimeHost {
                     options: BootOptions(
                         gpuProfile: .drmVirgl,
                         developerMode: buildInfo.configuration == .debug,
-                        captureLogcat: false
+                        captureLogcat: false,
+                        adbHostPort: adbHostPort
                     ),
                     diagnostics: diagnostics,
                     guestAgentBundle: guestAgent,
-                    guestAgentTimeout: .seconds(30)
+                    guestAgentTimeout: .seconds(30),
+                    adbClientConnectionCountChanged: { [weak self] generation, revision, connectionCount in
+                        Task {
+                            await self?.updateADBClientActivity(
+                                generation: generation,
+                                revision: revision,
+                                connectionCount: connectionCount
+                            )
+                        }
+                    }
                 )
                 supervisor = runtimeSupervisor
                 observeSupervisorEvents(from: runtimeSupervisor)
+                let powerLogger = APKLogger(category: RuntimeLogCategory.power, sink: diagnostics.logSink)
+                let powerService = EmbeddedDeveloperService(supervisor: runtimeSupervisor) { message in
+                    powerLogger.warning("\(message, .public)")
+                }
+                powerEventHandler = { event in
+                    await powerService.receivePowerObserverEvent(event)
+                }
             } catch {
                 recordDegradedStartup(step: 8, code: error.qualifiedCode)
             }
@@ -249,12 +326,354 @@ public actor RuntimeHost {
             return
         }
         hostState = startupFailure == nil ? "running" : "degraded"
+        startPowerObserver()
+        startMemoryPressureObserver()
+        schedulePrebootIfNeeded()
         logger.notice("Daemon startup completed with host state \(hostState, .public)")
         completeStartup()
     }
 
+    private func handleIdleAction(_ action: IdleControllerAction) async {
+        switch action {
+        case .activityBegan:
+            do {
+                try await startRuntime(reason: .automatic)
+            } catch {
+                logger?.warning(
+                    "Android could not be made ready for active work",
+                    errorCode: Self.runtimeHostErrorCode(error)
+                )
+            }
+        case .suspend:
+            _ = await handleSuspendAction(ignoringActivityKinds: [])
+        case .stop:
+            guard !isShuttingDown, !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting,
+                activeRuntimeStarts == 0, activePackageMutations == 0
+            else {
+                return
+            }
+            isRuntimeStopping = true
+            defer { isRuntimeStopping = false }
+            do {
+                try await stopRuntimeBody(reason: .idle)
+            } catch {
+                logger?.error(
+                    "The idle policy could not stop Android",
+                    errorCode: Self.runtimeHostErrorCode(error)
+                )
+            }
+        }
+    }
+
+    @discardableResult
+    private func handleSuspendAction(ignoringActivityKinds: Set<RuntimeCore.ActivityKind>) async -> Bool {
+        guard beginIdleSuspendTransition() else { return false }
+        defer { finishIdleSuspendTransition() }
+
+        guard !isShuttingDown, let idleController, let supervisor, await supervisor.state == .ready else {
+            return false
+        }
+        let blockingActivityKinds = await idleController.activeActivityKinds.subtracting(ignoringActivityKinds)
+        guard blockingActivityKinds.isEmpty else { return false }
+        if ignoringActivityKinds.contains(.session) {
+            let hasVisibleSession: Bool
+            if let sessionService = headlessSessionService as? DaemonHeadlessSessionService {
+                hasVisibleSession = await sessionService.hasVisibleSession()
+            } else {
+                hasVisibleSession = false
+            }
+            guard !hasVisibleSession,
+                !(await idleController.hasActivity(of: .backgroundTask)),
+                !packageActivityReservations.hasActiveLaunches
+            else {
+                return false
+            }
+        }
+        do {
+            try await supervisor.suspend()
+            return true
+        } catch {
+            logger?.error(
+                "The idle policy could not suspend Android",
+                errorCode: error.qualifiedCode
+            )
+            return false
+        }
+    }
+
+    private func beginIdleSuspendTransition() -> Bool {
+        guard !idleSuspendTransitionInProgress else { return false }
+        idleSuspendTransitionInProgress = true
+        return true
+    }
+
+    private func finishIdleSuspendTransition() {
+        idleSuspendTransitionInProgress = false
+        let waiters = idleSuspendTransitionWaiters
+        idleSuspendTransitionWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func waitForIdleSuspendTransition() async {
+        guard idleSuspendTransitionInProgress else { return }
+        await withCheckedContinuation { continuation in
+            if idleSuspendTransitionInProgress {
+                idleSuspendTransitionWaiters.append(continuation)
+            } else {
+                continuation.resume()
+            }
+        }
+    }
+
+    private func startMemoryPressureObserver() {
+        guard memoryPressureSource == nil else { return }
+        let source = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.warning, .critical],
+            queue: DispatchQueue(label: "io.apkrun.runtime.memory-pressure")
+        )
+        source.setEventHandler { [weak self, weak source] in
+            guard let source else { return }
+            let events = source.data
+            let isWarning = events.contains(.warning)
+            let isCritical = events.contains(.critical)
+            Task {
+                await self?.handleMemoryPressure(isWarning: isWarning, isCritical: isCritical)
+            }
+        }
+        source.resume()
+        memoryPressureSource = source
+    }
+
+    private func handleMemoryPressure(isWarning: Bool, isCritical: Bool) async {
+        if isWarning {
+            logger?.warning(
+                "runtime.memoryPressure is warning",
+                errorCode: "runtime.memoryPressure.warning"
+            )
+        }
+        guard isCritical, !isShuttingDown, let supervisor, await supervisor.state == .ready else {
+            return
+        }
+        if await handleSuspendAction(ignoringActivityKinds: [.session]) {
+            logger?.warning("runtime.memoryPressure is critical; the runtime was suspended")
+        }
+    }
+
+    private func stopMemoryPressureObserver() {
+        let source = memoryPressureSource
+        memoryPressureSource = nil
+        source?.setEventHandler {}
+        source?.cancel()
+    }
+
+    private func schedulePrebootIfNeeded() {
+        guard idleSettings.startPolicy == .atLogin, prebootTask == nil else { return }
+        prebootTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(60))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            await self?.performConfiguredPreboot()
+        }
+    }
+
+    private func performConfiguredPreboot() async {
+        guard !isShuttingDown, idleSettings.startPolicy == .atLogin else { return }
+        let bootLoopBlocked: Bool
+        do {
+            bootLoopBlocked = try stateStore?.bootLoopGuardIsActive() ?? false
+        } catch {
+            logger?.warning(
+                "Preboot was skipped because the boot-loop guard could not be checked"
+            )
+            return
+        }
+        let powerSource = RuntimePrebootPolicy.currentPowerSourceState()
+        guard
+            RuntimePrebootPolicy.shouldPreboot(
+                settings: idleSettings,
+                bootLoopBlocked: bootLoopBlocked,
+                powerSource: powerSource
+            )
+        else {
+            if case .battery(let percentage) = powerSource, percentage < 30 {
+                logger?.notice("Preboot was skipped because battery power is below 30 percent")
+            }
+            return
+        }
+        do {
+            try await startRuntime(reason: .preboot)
+        } catch {
+            logger?.warning(
+                "Configured preboot did not start Android",
+                errorCode: Self.runtimeHostErrorCode(error)
+            )
+        }
+    }
+
+    private func releaseSessionActivity(_ packageID: String) {
+        sessionActivityAssertions.removeValue(forKey: packageID)?.release()
+    }
+
+    private func releaseSessionActivityIfInactive(_ packageID: RuntimePackageID) async {
+        if let headlessSessionService {
+            guard let sessionHandling = headlessSessionService as? any PackageMutationSessionHandling else {
+                return
+            }
+            guard !(await sessionHandling.hasActiveSession(packageID: packageID)) else { return }
+        }
+        releaseSessionActivity(packageID.rawValue)
+    }
+
+    private func updateADBClientActivity(
+        generation: UInt64,
+        revision: UInt64,
+        connectionCount: Int
+    ) async {
+        guard
+            adbClientActivityTracker.receive(
+                generation: generation,
+                revision: revision,
+                connectionCount: connectionCount
+            )
+        else { return }
+        guard adbClientActivityTracker.connectionCount > 0 else {
+            adbClientActivityAssertion?.release()
+            adbClientActivityAssertion = nil
+            return
+        }
+        guard !isShuttingDown, !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
+            return
+        }
+        guard adbClientActivityAssertion == nil, !isAcquiringADBClientActivity,
+            let idleController
+        else {
+            return
+        }
+        isAcquiringADBClientActivity = true
+        await waitForIdleSuspendTransition()
+        guard adbClientActivityTracker.connectionCount > 0 else {
+            isAcquiringADBClientActivity = false
+            return
+        }
+        let assertion = await idleController.assertActivity(.adbClient)
+        isAcquiringADBClientActivity = false
+        guard adbClientActivityTracker.connectionCount > 0 else {
+            assertion.release()
+            return
+        }
+        if adbClientActivityAssertion == nil {
+            adbClientActivityAssertion = assertion
+        } else {
+            assertion.release()
+        }
+    }
+
+    private func releaseADBClientActivity() async {
+        if let supervisor {
+            let generation = await supervisor.developmentADBForwarderGeneration
+            adbClientActivityTracker.invalidate(afterGeneration: generation)
+        } else {
+            adbClientActivityTracker.clearConnectionCount()
+        }
+        adbClientActivityAssertion?.release()
+        adbClientActivityAssertion = nil
+    }
+
+    private func releaseAllSessionActivity() {
+        let assertions = sessionActivityAssertions.values
+        sessionActivityAssertions.removeAll()
+        for assertion in assertions {
+            assertion.release()
+        }
+    }
+
+    private static func runtimeHostErrorCode(_ error: any Error) -> String {
+        if let error = error as? any APKRunError {
+            return error.qualifiedCode
+        }
+        return String(describing: error)
+    }
+
+    private func startPowerObserver() {
+        guard !isShuttingDown, powerObserver == nil else { return }
+        let observer = powerObserverFactory { [weak self] event in
+            await self?.receivePowerObserverEvent(event)
+        }
+        do {
+            try observer.start()
+            powerObserver = observer
+            logger?.notice("Registered for host sleep and wake events")
+        } catch {
+            observer.stop()
+            logger?.warning("Host sleep and wake notifications could not be registered")
+        }
+    }
+
+    private func receivePowerObserverEvent(_ event: PowerObserverEvent) async {
+        await powerEventHandler?(event)
+    }
+
+    private func stopPowerObserver() {
+        let observer = powerObserver
+        powerObserver = nil
+        observer?.stop()
+        powerEventHandler = nil
+    }
+
+    func configurePowerObserverForTesting(factory: @escaping RuntimeHostPowerObserverFactory) {
+        precondition(!hasStarted)
+        powerObserverFactory = factory
+    }
+
+    func developmentADBHostPortForTesting() async -> UInt16? {
+        await supervisor?.developmentADBHostPort
+    }
+
+    func hasReadyFrameForTesting(sessionID: UUID) async -> Bool {
+        guard let service = headlessSessionService as? DaemonHeadlessSessionService else {
+            return false
+        }
+        return await service.hasReadyFrameForTesting(sessionID: sessionID)
+    }
+
+    func launchComponentForTesting(sessionID: UUID) async -> String? {
+        guard let service = headlessSessionService as? DaemonHeadlessSessionService else {
+            return nil
+        }
+        return await service.launchComponentForTesting(sessionID: sessionID)
+    }
+
+    func performanceEventsForTesting() -> [PerfEvent] {
+        diagnostics?.perfTimeline.snapshot() ?? []
+    }
+
+    func idleActivityKindsForTesting() async -> Set<RuntimeCore.ActivityKind> {
+        await idleController?.activeActivityKinds ?? []
+    }
+
+    func assertRuntimeActivity(_ kind: RuntimeCore.ActivityKind) async -> RuntimeActivityAssertion? {
+        guard !isShuttingDown, let idleController else {
+            return nil
+        }
+        return await idleController.assertActivity(kind)
+    }
+
+    func configurePackageStoreMutationGateForTesting(_ gate: @escaping @Sendable () async -> Void) {
+        precondition(!hasStarted)
+        packageStoreMutationTestGate = gate
+    }
+
     /// Boots Android on demand. An explicit start is allowed after the crash-loop guard activates.
     public func startRuntime(reason: StartReason = .user) async throws(RuntimeHostError) {
+        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
+            throw .invalidTransition
+        }
+        await waitForIdleSuspendTransition()
         guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
             throw .invalidTransition
         }
@@ -282,6 +701,7 @@ public actor RuntimeHost {
 
         if let runtimeStartTask {
             try await runtimeStartTask.value.get()
+            await idleController?.resetIdlePeriod()
             return
         }
 
@@ -302,6 +722,7 @@ public actor RuntimeHost {
         runtimeStartTask = task
         defer { runtimeStartTask = nil }
         try await task.value.get()
+        await idleController?.resetIdlePeriod()
     }
 
     private func performRuntimeStart(
@@ -335,7 +756,7 @@ public actor RuntimeHost {
                     throw .stateStore(error)
                 }
                 logger?.notice("The user explicitly cleared the runtime crash-loop guard")
-            case .automatic:
+            case .automatic, .preboot:
                 throw .crashLoopActive
             }
         }
@@ -434,6 +855,8 @@ public actor RuntimeHost {
         }
         await supervisor?.stop(reason: reason)
         await packageQueryService?.detachRuntime()
+        releaseAllSessionActivity()
+        await releaseADBClientActivity()
         headlessSessionService = nil
     }
 
@@ -488,20 +911,35 @@ public actor RuntimeHost {
     /// Debug-only headless acceptance hook. The headless session owns a DisplayPool lease and
     /// leaves frame surfaces unconsumed.
     public func launch(_ request: RuntimeLaunchRequest) async throws(RuntimeWireError) -> RuntimeLaunchResult {
+        await waitForIdleSuspendTransition()
         try beginPackageLaunch(request.packageID)
         defer { finishPackageLaunch(request.packageID) }
         guard headlessLaunchHookIsEnabled else {
             throw Self.launchUnavailableError
         }
+        if sessionActivityAssertions[request.packageID.rawValue] == nil,
+            let idleController
+        {
+            sessionActivityAssertions[request.packageID.rawValue] =
+                await idleController.assertActivity(.session)
+        }
         do {
             try await startRuntime(reason: .automatic)
         } catch {
+            await releaseSessionActivityIfInactive(request.packageID)
             throw Self.sessionWireError(for: error)
         }
-        try requirePackageLaunchAllowed(request.packageID)
-        let service = try await makeHeadlessSessionService()
-        try requirePackageLaunchAllowed(request.packageID)
-        return try await service.launch(request)
+        do {
+            try requirePackageLaunchAllowed(request.packageID)
+            let service = try await makeHeadlessSessionService()
+            try requirePackageLaunchAllowed(request.packageID)
+            let result = try await service.launch(request)
+            await releaseSessionActivityIfInactive(request.packageID)
+            return result
+        } catch {
+            await releaseSessionActivityIfInactive(request.packageID)
+            throw error
+        }
     }
 
     /// Stops a package session through the daemon-owned Guest Agent.
@@ -512,7 +950,11 @@ public actor RuntimeHost {
             return RuntimeTerminateResult(packageID: request.packageID, hadSession: false)
         }
         if let headlessSessionService {
-            return try await headlessSessionService.terminate(request)
+            let result = try await headlessSessionService.terminate(request)
+            if result.hadSession {
+                releaseSessionActivity(request.packageID.rawValue)
+            }
+            return result
         }
         guard let guestAgent = await supervisor.developmentGuestAgent else {
             throw Self.guestAgentUnavailableError
@@ -539,15 +981,16 @@ public actor RuntimeHost {
     ) async throws(RuntimeWireError) -> RuntimePackageSummary {
         let packageID = try await resolvePackageIDForInstall(request)
         try reservePackageInstall(packageID)
+        let mutationToken: UUID
         do {
-            try beginPackageMutation()
+            mutationToken = try await beginPackageMutation()
         } catch {
             packageActivityReservations.finishInstall(packageID: packageID.rawValue)
             throw Self.sessionWireError(for: error)
         }
         defer {
             packageActivityReservations.finishInstall(packageID: packageID.rawValue)
-            finishPackageMutation()
+            finishPackageMutation(mutationToken)
         }
 
         return try await performInstallImported(
@@ -614,8 +1057,9 @@ public actor RuntimeHost {
             return existing.handle
         }
         try reservePackageInstall(packageID)
+        let mutationToken: UUID
         do {
-            try beginPackageMutation()
+            mutationToken = try await beginPackageMutation()
         } catch {
             packageActivityReservations.finishInstall(packageID: packageID.rawValue)
             throw Self.sessionWireError(for: error)
@@ -634,6 +1078,7 @@ public actor RuntimeHost {
         trackedOperations[requestedID] = RuntimeTrackedOperation(
             handle: handle,
             requestPayload: requestPayload,
+            packageMutationToken: mutationToken,
             snapshot: snapshot,
             isCancellable: true,
             task: nil
@@ -669,7 +1114,7 @@ public actor RuntimeHost {
         _ request: RuntimeUninstallPackageRequest,
         operationID requestedID: WireOperationID,
         clientKind: RuntimeClientKind
-    ) throws(RuntimeWireError) -> OperationHandle {
+    ) async throws(RuntimeWireError) -> OperationHandle {
         guard !request.options.forget || !request.options.keepData else {
             throw Self.incompatibleUninstallOptionsError
         }
@@ -705,8 +1150,9 @@ public actor RuntimeHost {
         } catch {
             throw Self.packageOperationInProgressError
         }
+        let mutationToken: UUID
         do {
-            try beginPackageMutation()
+            mutationToken = try await beginPackageMutation(activity: request.options.forget ? nil : .storeOperation)
         } catch {
             if request.options.forget {
                 packageActivityReservations.finishForget(packageID: request.packageID.rawValue)
@@ -732,6 +1178,7 @@ public actor RuntimeHost {
         trackedOperations[requestedID] = RuntimeTrackedOperation(
             handle: handle,
             requestPayload: requestPayload,
+            packageMutationToken: mutationToken,
             snapshot: snapshot,
             isCancellable: true,
             task: nil
@@ -815,9 +1262,12 @@ public actor RuntimeHost {
         operationID: WireOperationID,
         clientKind: RuntimeClientKind
     ) async {
+        let mutationToken = trackedOperations[operationID]?.packageMutationToken
         defer {
             packageActivityReservations.finishInstall(packageID: packageID.rawValue)
-            finishPackageMutation()
+            if let mutationToken {
+                finishPackageMutation(mutationToken)
+            }
         }
         do {
             let result = try await performInstallImported(
@@ -847,13 +1297,16 @@ public actor RuntimeHost {
         operationID: WireOperationID,
         clientKind: RuntimeClientKind
     ) async {
+        let mutationToken = trackedOperations[operationID]?.packageMutationToken
         defer {
             if request.options.forget {
                 packageActivityReservations.finishForget(packageID: request.packageID.rawValue)
             } else {
                 packageActivityReservations.finishUninstall(packageID: request.packageID.rawValue)
             }
-            finishPackageMutation()
+            if let mutationToken {
+                finishPackageMutation(mutationToken)
+            }
         }
         do {
             try await performUninstallPackage(
@@ -1109,7 +1562,11 @@ public actor RuntimeHost {
         operationID: WireOperationID?,
         stage: String,
         message: String
-    ) throws(RuntimeWireError) {
+    ) async throws(RuntimeWireError) {
+        guard !Task.isCancelled else {
+            throw Self.cancelledOperationError
+        }
+        await packageStoreMutationTestGate?()
         guard !Task.isCancelled else {
             throw Self.cancelledOperationError
         }
@@ -1211,6 +1668,7 @@ public actor RuntimeHost {
         if let guestAgentStatus {
             switch guestAgentStatus.state {
             case .stopped: guestAgentStateName = .notStarted
+            case .paused: guestAgentStateName = .unavailable
             case .connecting: guestAgentStateName = .connecting
             case .ready: guestAgentStateName = .connected
             case .reconnecting: guestAgentStateName = .reconnecting
@@ -1309,6 +1767,8 @@ public actor RuntimeHost {
             .booting(wireBootPhase(phase))
         case .ready:
             .ready
+        case .suspended:
+            .suspended
         case .stopping(let reason):
             .stopping(wireStopReason(reason))
         case .failed(let failure):
@@ -1429,6 +1889,12 @@ public actor RuntimeHost {
         isShuttingDown = true
         runtimeSessionGeneration &+= 1
         hostState = "shuttingDown"
+        prebootTask?.cancel()
+        prebootTask = nil
+        stopPowerObserver()
+        stopMemoryPressureObserver()
+        await idleController?.stop()
+        await releaseADBClientActivity()
         guard hasStarted else {
             hostState = "stopped"
             completeShutdown()
@@ -1438,13 +1904,16 @@ public actor RuntimeHost {
         if let service = headlessSessionService as? DaemonHeadlessSessionService {
             await service.shutdown()
         }
+        releaseAllSessionActivity()
         headlessSessionService = nil
         // Mark an in-flight VM start for cancellation before waiting for any storage work to finish.
         await supervisor?.stop(reason: .hostShutdown)
         await waitForLifecycleOperations()
+        stopPowerObserver()
         // A start that was already inside RuntimeSupervisor may have finished its cancellation path
         // while this actor was waiting. Stop once more before recording a clean process exit.
         await supervisor?.stop(reason: .hostShutdown)
+        await releaseADBClientActivity()
         await supervisor?.finishEventStream()
         if let supervisorEventsTask {
             await supervisorEventsTask.value
@@ -1489,16 +1958,30 @@ public actor RuntimeHost {
         }
     }
 
-    private func beginPackageMutation() throws(RuntimeHostError) {
+    private func beginPackageMutation(
+        activity: RuntimeCore.ActivityKind? = .storeOperation
+    ) async throws(RuntimeHostError) -> UUID {
+        await waitForIdleSuspendTransition()
         guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
             throw .invalidTransition
         }
         try beginLifecycleOperation()
         activePackageMutations += 1
+        let assertion: RuntimeActivityAssertion?
+        if let activity, let idleController {
+            assertion = await idleController.assertActivity(activity)
+        } else {
+            assertion = nil
+        }
+        let token = UUID()
+        packageMutationActivities[token] = PackageMutationActivity(assertion: assertion)
+        return token
     }
 
-    private func finishPackageMutation() {
+    private func finishPackageMutation(_ token: UUID) {
+        let activity = packageMutationActivities.removeValue(forKey: token)
         activePackageMutations -= 1
+        activity?.assertion?.release()
         if activePackageMutations == 0 {
             let waiters = packageMutationWaiters
             packageMutationWaiters.removeAll()
@@ -1707,7 +2190,10 @@ public actor RuntimeHost {
         let service = DaemonHeadlessSessionService(
             guestAgent: guestAgent,
             displayPool: displayPool,
-            logSink: diagnostics?.logSink
+            logSink: diagnostics?.logSink,
+            onSessionEnded: { [weak self] packageID in
+                await self?.releaseSessionActivity(packageID)
+            }
         )
         headlessSessionService = service
         return service
@@ -1813,6 +2299,7 @@ public actor RuntimeHost {
         case .stopped: "stopped"
         case .booting(let phase): "booting(\(phase.description))"
         case .ready: "ready"
+        case .suspended: "suspended"
         case .stopping(_): "stopping"
         case .failed: "failed"
         }

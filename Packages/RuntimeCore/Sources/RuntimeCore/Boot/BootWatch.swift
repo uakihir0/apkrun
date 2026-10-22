@@ -37,21 +37,21 @@ struct BootWatch: Sendable {
     /// The phase the boot is in.
     private(set) var phase: BootPhase = .kernel
     /// The instant of the last phase change, or of the start.
-    private(set) var lastProgress: ContinuousClock.Instant
-    private let started: ContinuousClock.Instant
+    private(set) var lastProgress: Duration
+    private let started: Duration
     private let whole: Duration
     private let stall: Duration
 
-    /// Creates a watch for a boot that started at `started`.
-    init(started: ContinuousClock.Instant, whole: Duration, stall: Duration) {
+    /// Creates a watch for a boot that started at an awake-time offset.
+    init(started: Duration, whole: Duration, stall: Duration) {
         self.started = started
         lastProgress = started
         self.whole = whole
         self.stall = stall
     }
 
-    /// Applies one input at `now` and returns the decision.
-    mutating func receive(_ input: Input, at now: ContinuousClock.Instant) -> Decision {
+    /// Applies one input at an awake-time offset and returns the decision.
+    mutating func receive(_ input: Input, at now: Duration) -> Decision {
         switch input {
         case .entered(let entered):
             phase = entered

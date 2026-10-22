@@ -189,9 +189,11 @@ private final class ManualSuspendingClock: RuntimeIdleClock, @unchecked Sendable
     for kind in ActivityKind.runtimeSources {
         let assertion = await controller.assertActivity(kind)
         #expect(await controller.activeAssertionCount == 1)
+        #expect(await controller.hasActivity(of: kind))
         #expect(await recorder.actions.last == .activityBegan(kind))
         assertion.release()
         #expect(await eventually { await controller.activeAssertionCount == 0 })
+        #expect(!(await controller.hasActivity(of: kind)))
     }
 
     clock.advanceAwakeTime(by: .seconds(59))
@@ -199,6 +201,31 @@ private final class ManualSuspendingClock: RuntimeIdleClock, @unchecked Sendable
     #expect(!(await recorder.actions.contains(.suspend)))
     clock.advanceAwakeTime(by: .seconds(1))
     #expect(await eventually { await recorder.actions.contains(.suspend) })
+}
+
+@Test func idleControllerCanRebaseTheIdlePeriodAfterRuntimeLifecycleChanges() async throws {
+    let clock = ManualSuspendingClock()
+    let recorder = IdleActionRecorder()
+    let settings = try RuntimeIdleSettings(idleSuspendMinutes: 1, idleStopMinutes: 2)
+    let controller = IdleController(settings: settings, clock: clock) { action in
+        await recorder.append(action)
+    }
+
+    await controller.start()
+    clock.advanceAwakeTime(by: .seconds(30))
+    await controller.resetIdlePeriod()
+    clock.advanceAwakeTime(by: .seconds(59))
+    await Task.yield()
+    #expect(!(await recorder.actions.contains(.suspend)))
+
+    clock.advanceAwakeTime(by: .seconds(1))
+    #expect(await eventually { await recorder.actions.contains(.suspend) })
+
+    let assertion = await controller.assertActivity(.session)
+    await controller.resetIdlePeriod()
+    #expect(await controller.hasActivity(of: .session))
+    assertion.release()
+    #expect(await eventually { await controller.activeAssertionCount == 0 })
 }
 
 @Test func zeroDisablesEachIdleDeadline() async throws {

@@ -42,6 +42,7 @@ private enum EnvelopeSchema {
     let results = EnvelopeSchema.fields(of: "Response")
     let pairs: [(name: String, number: Int)] = [
         ("ping", GuestPing.number),
+        ("sync_time", GuestSyncTime.number),
         ("get_snapshot", GuestGetSnapshot.number),
         ("set_display_policy", GuestSetDisplayPolicy.number),
         ("clear_display", GuestClearDisplay.number),
@@ -71,6 +72,17 @@ private enum EnvelopeSchema {
         #expect(ping.nonce == 5)
     } else {
         Issue.record("GuestPing does not build the ping request")
+    }
+    let syncTime = GuestSyncTime(unixTimeMilliseconds: 1_800_000_000_123, rttMilliseconds: 37)
+    #expect(syncTime.capability == .locale)
+    #expect(syncTime.timeout == .seconds(5))
+    let syncTimeRequest: GPRequest.OneOf_Op? = syncTime.request()
+    if case .syncTime(let time)? = syncTimeRequest {
+        #expect(time.unixTimeMs == 1_800_000_000_123)
+        #expect(time.rttMs == 37)
+        #expect(GuestSyncTime.decode(.syncTime(GPEmpty())) != nil)
+    } else {
+        Issue.record("GuestSyncTime does not build the sync-time request")
     }
     let launchRequest: GPRequest.OneOf_Op? = GuestLaunchApplication(
         package: "io.apkrun.fixture.hellotext", displayID: 0

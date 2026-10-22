@@ -4,7 +4,7 @@ import Testing
 @testable import RuntimeAPI
 
 @Test func runtimeTrackedUninstallAdvancesAPIMinorVersion() {
-    #expect(APIVersion.current == APIVersion(major: 1, minor: 11))
+    #expect(APIVersion.current == APIVersion(major: 1, minor: 12))
 }
 
 @Test func runtimeRestartRequestRoundTripsVersionedHeader() throws {
@@ -18,6 +18,35 @@ import Testing
 
     #expect(decoded == request)
     #expect(decoded.header.apiVersion == APIVersion.current)
+}
+
+@Test func runtimeStartRequestRoundTripsHold() throws {
+    let header = APIRequestHeader(
+        operationID: UUID(),
+        clientKind: .cli
+    )
+    let request = StartRuntimeRequest(header: header, hold: true)
+    let data = try JSONEncoder().encode(request)
+    let decoded = try JSONDecoder().decode(StartRuntimeRequest.self, from: data)
+
+    #expect(decoded == request)
+    #expect(decoded.hold == true)
+}
+
+@Test func runtimeStartRequestDecodesWithoutOptionalHold() throws {
+    let request = StartRuntimeRequest(
+        header: APIRequestHeader(
+            apiVersion: APIVersion(major: 1, minor: 11),
+            operationID: UUID(),
+            clientKind: .cli
+        )
+    )
+    let data = try JSONEncoder().encode(request)
+    let decoded = try JSONDecoder().decode(StartRuntimeRequest.self, from: data)
+
+    #expect(decoded == request)
+    #expect(decoded.header.apiVersion == APIVersion(major: 1, minor: 11))
+    #expect(decoded.hold == nil)
 }
 
 @Test func runtimeResetControlRequestRoundTripsVersionedHeader() throws {

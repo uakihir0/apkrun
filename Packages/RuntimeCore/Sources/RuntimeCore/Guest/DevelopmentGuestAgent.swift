@@ -135,6 +135,32 @@ public actor DevelopmentGuestAgent {
         try await start(until: ContinuousClock.now + connectTimeout)
     }
 
+    /// Reconnects after VM resume, restarting an unresponsive agent within the normal restart budget.
+    ///
+    /// The initial connection check and ping are each bounded to two seconds by the caller. A failed check uses the
+    /// same process restart path as a lost Guest Agent instead of leaving the runtime ready without its required agent.
+    public func resume(connectTimeout: Duration = .seconds(2)) async throws(GuestAgentFailure) -> Duration {
+        do {
+            try await supervisor.start(connectTimeout: connectTimeout)
+            return try await pingForResume()
+        } catch {
+            await supervisor.pause()
+            guard await handleLoss(.unresponsive) else {
+                throw .requiredAgentUnavailable
+            }
+            try await supervisor.start(connectTimeout: connectTimeout)
+            return try await pingForResume()
+        }
+    }
+
+    private func pingForResume() async throws(GuestAgentFailure) -> Duration {
+        do {
+            return try await supervisor.ping(timeout: .seconds(2))
+        } catch {
+            throw .operationFailed(reason: String(describing: error))
+        }
+    }
+
     /// Starts the development agent against an absolute deadline supplied by the boot sequence.
     func start(until deadline: ContinuousClock.Instant) async throws(GuestAgentFailure) {
         let started = generation

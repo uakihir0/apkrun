@@ -24,6 +24,9 @@ public enum ScanoutFrame: Equatable, Sendable {
 }
 
 /// A sequence shared by successive pools of one scanout, so late frame acknowledgements remain unambiguous.
+///
+/// A sequence is assigned when a flush is accepted, before scheduling can hold or replace it. This preserves the
+/// ordering boundary between flushes accepted before and after a consumer snapshot.
 final class ScanoutFrameSequence: @unchecked Sendable {
     private let lock = NSLock()
     private var nextValue: UInt64 = 1
@@ -33,6 +36,10 @@ final class ScanoutFrameSequence: @unchecked Sendable {
             defer { nextValue &+= 1 }
             return nextValue
         }
+    }
+
+    func latestIssued() -> UInt64 {
+        lock.withLock { nextValue &- 1 }
     }
 }
 
@@ -160,7 +167,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
     func flush(resource: UInt32, source: VirtioGPURect) -> VirGLRenderWork? {
         lock.withLock {
             guard !isClosed, !isReconfiguring else { return nil }
-            let request = PresentRequest(resource: resource, source: source)
+            let request = PresentRequest(resource: resource, source: source, sequence: sequenceSource.take())
             guard let runnable = scheduler.submit(request) else {
                 return nil
             }
@@ -252,7 +259,6 @@ public final class ScanoutPresenter: @unchecked Sendable {
         guard let index = pool.acquire() else {
             return nil
         }
-        let sequence = sequenceSource.take()
         scheduler.beginBlit()
         let target = targets[index]
         return { [self] engine in
@@ -262,7 +268,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
                     sourceRect: request.source,
                     into: target
                 )
-                self.blitSubmitted(fence, index: index, sequence: sequence)
+                self.blitSubmitted(fence, index: index, sequence: request.sequence)
                 return nil
             } catch {
                 self.blitFailed(index: index)
@@ -355,6 +361,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
 struct PresentRequest: Equatable, Sendable {
     let resource: UInt32
     let source: VirtioGPURect
+    let sequence: UInt64
 }
 
 /// Carries the IOSurfaces into the render-thread closure, which only reads their identity.

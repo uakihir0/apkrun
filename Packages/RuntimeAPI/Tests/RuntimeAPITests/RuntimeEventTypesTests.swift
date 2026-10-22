@@ -16,7 +16,7 @@ private func eventRoundTrip<Value: Codable & Equatable>(_ value: Value) throws -
     let subscribe = RuntimeSubscribeControlRequest(header: header, topics: [.operations, .packages])
     let unsubscribe = RuntimeUnsubscribeControlRequest(header: header, topics: [.operations])
 
-    #expect(APIVersion.current == APIVersion(major: 1, minor: 11))
+    #expect(APIVersion.current == APIVersion(major: 1, minor: 12))
     #expect(try topics.map(eventRoundTrip) == topics)
     #expect(try eventRoundTrip(subscribe) == subscribe)
     #expect(try eventRoundTrip(unsubscribe) == unsubscribe)

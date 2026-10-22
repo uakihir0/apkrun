@@ -179,6 +179,8 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
 @Test func aFrameIsHeldWhileNoBufferIsFreeUntilTheConsumerDisplaysOne() async throws {
     let harness = try PresenterHarness()
     let presenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)
+    let pool = ScanoutPoolHandle(presenter: presenter, device: harness.device)
+    var frames = presenter.frames.makeAsyncIterator()
     let control = harness.send(
         bindAndFlush(resource: 3, rect: fullRect) + [flushRequest(resource: 3, rect: fullRect)]
     )
@@ -186,10 +188,19 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
     // Three frames fill the three buffers, which the consumer does not display. Each flush waits until its frame is
     // offered, so no flush is held behind an earlier blit.
     try await eventually { presenter.statistics.framesPresented == 1 }
+    #expect(await frames.next() == .frameReady(generation: 1, bufferIndex: 0, sequence: 1))
     for expected: UInt64 in 2...3 {
         let next = harness.send([flushRequest(resource: 3, rect: fullRect)])
         try await eventually { next.completionCounts == [1] }
         try await eventually { presenter.statistics.framesPresented == expected }
+        #expect(
+            await frames.next()
+                == .frameReady(
+                    generation: 1,
+                    bufferIndex: Int(expected - 1),
+                    sequence: expected
+                )
+        )
     }
     #expect(presenter.statistics.framesPresented == 3)
     #expect(blitCalls(harness.engine).count == 3)
@@ -198,11 +209,15 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
     let held = harness.send([flushRequest(resource: 3, rect: fullRect)])
     try await eventually { held.completionCounts == [1] }
     #expect(blitCalls(harness.engine).count == 3)
+    // Its sequence is assigned at acceptance, so a launch watermark taken now includes this held flush.
+    #expect(pool.latestIssuedFrameSequence == 4)
 
     // The consumer displays frame 3, which frees frames 1 and 2 (display-and-windowing.md §5.2). The held frame starts.
     presenter.frameDisplayed(upTo: 3)
     try await eventually { presenter.statistics.framesPresented == 4 }
     #expect(blitCalls(harness.engine).count == 4)
+    #expect(await frames.next() == .frameReady(generation: 1, bufferIndex: 0, sequence: 4))
+    #expect(pool.latestIssuedFrameSequence == 4)
     presenter.close()
 }
 
@@ -297,6 +312,8 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
 @Test func livePresenterReplacementAdvancesGenerationAndClosesTheOldPresenterAfterItsBlit() async throws {
     let harness = try PresenterHarness()
     let oldPresenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)
+    let oldPool = ScanoutPoolHandle(presenter: oldPresenter, device: harness.device)
+    #expect(oldPool.latestIssuedFrameSequence == 0)
     harness.device.deviceDidStart(context: harness.context, negotiatedFeatures: 0)
     var oldFrames = oldPresenter.frames.makeAsyncIterator()
 
@@ -305,11 +322,14 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
     )
     try await eventually { first.completionCounts == [1, 1, 1] && oldPresenter.statistics.framesPresented == 1 }
     #expect(await oldFrames.next() == .frameReady(generation: 1, bufferIndex: 0, sequence: 1))
+    #expect(oldPool.latestIssuedFrameSequence == 1)
 
     let mode = DisplayMode(widthPixels: 800, heightPixels: 600, refreshHz: 60, dotsPerInch: 160)
     let newPresenter = try harness.device.reconfigurePresenter(
         scanoutZero, mode: mode, width: mode.widthPixels, height: mode.heightPixels)
+    let newPool = ScanoutPoolHandle(presenter: newPresenter, device: harness.device)
     #expect(newPresenter.generation == 2)
+    #expect(newPool.latestIssuedFrameSequence == 1)
     #expect(newPresenter.surfaces.first?.width == 800)
     #expect(newPresenter.surfaces.first?.height == 600)
     #expect(harness.engine.calls.filter { if case .presentTargetDestroy = $0 { true } else { false } }.count == 3)
@@ -318,6 +338,7 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
     let second = harness.send([flushRequest(resource: 3, rect: fullRect)])
     try await eventually { second.completionCounts == [1] && newPresenter.statistics.framesPresented == 1 }
     #expect(await newFrames.next() == .frameReady(generation: 2, bufferIndex: 0, sequence: 2))
+    #expect(newPool.latestIssuedFrameSequence == 2)
 
     harness.device.frameDisplayed(scanout: scanoutZero, generation: 2, sequence: 2)
     harness.device.deviceWillStop()
@@ -326,12 +347,14 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
 @Test func livePresenterReplacementWaitsForTheOldScanoutFence() async throws {
     let harness = try PresenterHarness()
     let oldPresenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)
+    let oldPool = ScanoutPoolHandle(presenter: oldPresenter, device: harness.device)
     harness.device.deviceDidStart(context: harness.context, negotiatedFeatures: 0)
     harness.engine.autoCompletePresentFences = false
     let first = harness.send(
         bindAndFlush(resource: 3, rect: fullRect) + [flushRequest(resource: 3, rect: fullRect)]
     )
     try await eventually { first.completionCounts == [1, 1, 1] && blitCalls(harness.engine).count == 1 }
+    #expect(oldPool.latestIssuedFrameSequence == 1)
 
     let completion = ReplacementCompletion()
     let mode = DisplayMode(widthPixels: 800, heightPixels: 600, refreshHz: 60, dotsPerInch: 160)

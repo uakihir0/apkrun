@@ -556,12 +556,38 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
 }
 
 #if APKRUN_EMBEDDED_RUNTIME
+    @Test func developerPowerCommandsParseBothActions() async throws {
+        let sleep = try await APKRunCommand.asyncParseAsRoot(["dev", "power", "sleep"])
+        #expect((sleep as? DevPowerCommand)?.action == "sleep")
+
+        let wake = try await APKRunCommand.asyncParseAsRoot(["dev", "power", "wake"])
+        #expect((wake as? DevPowerCommand)?.action == "wake")
+    }
+
+    @Test func developerPowerCommandRejectsUnknownActions() async throws {
+        var command = try #require(
+            await APKRunCommand.asyncParseAsRoot(["dev", "power", "hibernate"]) as? DevPowerCommand
+        )
+        do {
+            try await command.run()
+            Issue.record("An unsupported developer power action unexpectedly succeeded.")
+        } catch CLIFailure.invalidArgument(let argument, let reason) {
+            #expect(argument == "action")
+            #expect(reason == "power")
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
     @Test func runtimeControlCommandsParseStatusStartAndStop() async throws {
         let status = try await APKRunCommand.asyncParseAsRoot(["runtime", "status", "--json"])
         #expect((status as? RuntimeStatusCommand)?.json == true)
 
         let start = try await APKRunCommand.asyncParseAsRoot(["runtime", "start"])
         #expect(start is RuntimeStartCommand)
+
+        let heldStart = try await APKRunCommand.asyncParseAsRoot(["runtime", "start", "--hold"])
+        #expect((heldStart as? RuntimeStartCommand)?.hold == true)
 
         let stop = try await APKRunCommand.asyncParseAsRoot(["runtime", "stop"])
         #expect(stop is RuntimeStopCommand)

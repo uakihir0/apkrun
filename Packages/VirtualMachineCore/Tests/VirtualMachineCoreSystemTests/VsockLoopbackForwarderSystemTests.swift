@@ -62,6 +62,45 @@ func loopbackForwarderClosesOpenConnectionsOnStop() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func loopbackForwarderReportsConnectionsAndReturnsToZeroOnCloseAndStop() async throws {
+    let guests = GuestStandInFactory()
+    let counts = ConnectionCountRecorder()
+    let forwarder = VsockLoopbackForwarder(
+        requestedPort: 0,
+        guestPort: 5555,
+        logSink: nil,
+        connectionCountChanged: { revision, count in counts.record(revision: revision, count: count) },
+        connectGuest: { _ in try guests.connection() }
+    )
+    try forwarder.start()
+    defer { forwarder.stop() }
+    let port = try #require(forwarder.port)
+
+    var firstClient: Int32? = try connectToLoopback(port: port)
+    defer {
+        if let firstClient {
+            Darwin.close(firstClient)
+        }
+    }
+    #expect(await counts.waitForEventCount(1)?.map(\.1) == [1])
+
+    if let descriptor = firstClient {
+        Darwin.close(descriptor)
+        firstClient = nil
+    }
+    #expect(await counts.waitForEventCount(2)?.map(\.1) == [1, 0])
+
+    let secondClient = try connectToLoopback(port: port)
+    defer { Darwin.close(secondClient) }
+    #expect(await counts.waitForEventCount(3)?.map(\.1) == [1, 0, 1])
+
+    await forwarder.stopAndWait()
+    let stoppedClientBytes = try await readExactly(1, from: secondClient, expectingEnd: true)
+    #expect(stoppedClientBytes.isEmpty)
+    #expect(await counts.waitForEventCount(4)?.map(\.1) == [1, 0, 1, 0])
+}
+
+@Test(.timeLimit(.minutes(1)))
 func loopbackForwarderReportsAPortThatAnotherProcessListensOn() async throws {
     let wildcard = try makeListener(port: 0)
     defer { Darwin.close(wildcard.descriptor) }
@@ -214,6 +253,50 @@ private final class GuestStandIn: @unchecked Sendable {
             }
             if peerOpen {
                 Darwin.close(peerDescriptor)
+            }
+        }
+    }
+}
+
+/// Retains one socketpair stand-in for every guest connection opened by the forwarder.
+private final class GuestStandInFactory: @unchecked Sendable {
+    private let lock = NSLock()
+    private var guests: [GuestStandIn] = []
+
+    func connection() throws -> VsockConnection {
+        let guest = try GuestStandIn()
+        lock.withLock {
+            guests.append(guest)
+        }
+        return guest.connection()
+    }
+}
+
+/// Records ordered connection-count callbacks and waits for test markers without fixed sleeps.
+private final class ConnectionCountRecorder: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var counts: [(UInt64, Int)] = []
+
+    func record(revision: UInt64, count: Int) {
+        condition.lock()
+        counts.append((revision, count))
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    func waitForEventCount(_ count: Int, timeout: TimeInterval = 2) async -> [(UInt64, Int)]? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                self.condition.lock()
+                let deadline = Date().addingTimeInterval(timeout)
+                while self.counts.count < count {
+                    guard self.condition.wait(until: deadline) else {
+                        break
+                    }
+                }
+                let result = self.counts.count >= count ? self.counts : nil
+                self.condition.unlock()
+                continuation.resume(returning: result)
             }
         }
     }

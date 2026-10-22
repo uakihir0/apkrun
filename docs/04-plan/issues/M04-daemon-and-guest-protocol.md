@@ -200,20 +200,20 @@ The runtime moves out of the CLI into apkrund, a per-user LaunchAgent that launc
 | Milestone | M4 (v0.2) |
 | Depends on | #32 |
 | Design | [runtime-daemon.md](../../02-design/runtime-daemon.md) §5, §6; [desktop-integration.md](../../02-design/desktop-integration.md) §9 |
-| Code | `Packages/RuntimeCore/` (`IdleController`, `RuntimeActivityAssertion`); `Packages/RuntimeHost/` (`PowerObserver`, preboot, memory pressure); `Guest/guestd/` (`SyncTime`); `CLI/apkrun/Commands/Dev/Power.swift`; `Tests/IntegrationTests/DaemonTests/` |
+| Code | `Packages/RuntimeCore/` (`IdleController`, `RuntimeActivityAssertion`); `Packages/RuntimeHost/` (`PowerObserver`, preboot, memory pressure); `Guest/guestd/` (`SyncTime`); `CLI/apkrun/Dev/DevPower.swift`; `Tests/IntegrationTests/DaemonTests/` |
 
 **Goal.** After no app has been open for a while, the runtime suspends and then stops, and apkrund uses almost no CPU while suspended; the next launch resumes quickly. Host sleep and wake pause and resume the VM, and the guest clock is correct afterwards.
 
-**Out of scope.** Locale, time zone, and clock format (#86). The timer settings UI (#80). A memory balloon before a pause (OQ-32; default: none in v1). VM save and restore (R-07, accepted).
+**Out of scope.** Locale, time zone, and clock format (#86). The timer settings UI (#80). Connecting `window.closeBehavior = keepRunning` to a background-task activity hold (#116; requires the session client and per-app settings). A memory balloon before a pause (OQ-32; default: none in v1). VM save and restore (R-07, accepted).
 
 **Steps.**
-1. **IdleController.** `IdleController` (RuntimeCore actor) tracks the activity sources of [runtime-daemon.md](../../02-design/runtime-daemon.md) §5.1, each held through `RuntimeActivityAssertion`. `runtime.idleSuspendMinutes` (default 10) and `runtime.idleStopMinutes` (default 60) use `SuspendingClock`; `0` means never. **Check:** T0 `IdleControllerTests` with a manual clock: each source holds the runtime, both timers fire, and sleep is not counted.
+1. **IdleController.** `IdleController` (RuntimeCore actor) tracks the activity sources of [runtime-daemon.md](../../02-design/runtime-daemon.md) §5.1, each held through `RuntimeActivityAssertion`. `runtime.idleSuspendMinutes` (default 10) and `runtime.idleStopMinutes` (default 60) use `SuspendingClock`; `0` means never. **Check:** T0 `IdleControllerTests` with a manual clock: each source holds the runtime, both timers fire, and sleep is not counted; T0 `RuntimeXPCConnectionRegistryTests` confirms `apkrun runtime start --hold` holds `.cli` until its control connection closes.
 2. **Suspend, resume, preboot.** Suspend pauses the agents, calls `VMController.pause()` (`VM_PAUSED`), and sets `suspended`. Resume calls `resume()` (`VM_RESUMED`), pings each required agent within 2 s, runs `SyncTime`, and sets `ready` ([runtime-daemon.md](../../02-design/runtime-daemon.md) §5.3). A launch while suspended resumes first. `atLogin` preboot waits 60 s after login, and is skipped on battery below 30 % and while the boot-loop guard blocks boots. `.critical` memory pressure with no visible session suspends at once. **Check:** T2 `IdleSuspendTests` with `idleSuspendMinutes = 1` and `idleStopMinutes = 2`.
 3. **Sleep and wake.** `PowerObserver` registers with `IORegisterForSystemPower` on a serial queue. On `kIOMessageSystemWillSleep`, pause within 5 s, then allow the sleep. On `kIOMessageSystemHasPoweredOn`, resume on every wake. `apkrun dev power sleep|wake` sends the same messages over `control.sock` to the running `apkrun dev boot`. **Check:** T2 `SleepWakeTests`: the VM pauses before the acknowledgment and resumes after wake.
 4. **Time sync.** `SyncTime` (operation 48) applies host time when it differs by over 500 ms, corrected by half the `Ping` round trip. The shell-mode agent answers `UNSUPPORTED`. Only Debug builds on stock userdebug may fall back to `adb root` and `adb shell date -u @<seconds>`. **Check:** T2 `SleepWakeTests`: within 5 s of wake, the guest clock is within 2 s of the host.
 
 **Tests.**
-- T0: `Packages/RuntimeCore/Tests/RuntimeCoreTests/` (`IdleControllerTests`).
+- T0: `Packages/RuntimeCore/Tests/RuntimeCoreTests/` (`IdleControllerTests`); `Packages/RuntimeHost/Tests/RuntimeHostTests/` (`RuntimeXPCConnectionRegistryTests`).
 - T2 (`Tests/IntegrationTests/DaemonTests/`, AndroidStock): `IdleSuspendTests`, `SleepWakeTests`.
 - T3: nightly `pmset sleepnow`; the `idle-cpu` scenario of #71; checklists C02-4 and C10-9 of [test-strategy.md](../test-strategy.md) §8.
 
@@ -221,7 +221,7 @@ The runtime moves out of the CLI into apkrund, a per-user LaunchAgent that launc
 - With `idleSuspendMinutes = 1` and no sessions, the runtime is `suspended` after 1 minute, with apkrund under 1 % CPU (FR-VM-10, NFR-PERF-06).
 - Opening HelloText from `suspended` shows its first frame; `VM_RESUMED` to `RUNTIME_READY` is p50 of at most 500 ms over 20 runs (FR-VM-10).
 - With `idleStopMinutes = 2`, the runtime stops gracefully when no client is connected (FR-VM-10).
-- A `keepRunning` task, a connected `adb shell`, and a running install each prevent suspend.
+- A connected `adb shell` and a running install each prevent suspend.
 - On host sleep the VM pauses within 5 s; within 5 s of wake the guest clock is within 2 s of the host (FR-VM-11).
 
 **Pitfalls.**

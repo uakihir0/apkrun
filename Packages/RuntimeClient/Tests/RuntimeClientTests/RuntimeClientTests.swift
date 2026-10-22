@@ -34,6 +34,7 @@ import Testing
     #expect(try await client.connect() == hello)
     #expect(try await client.runtimeStatus() == status)
     #expect(try await client.startRuntime() == status)
+    #expect(try await client.startRuntime(hold: true) == status)
     #expect(try await client.stopRuntime() == status)
     #expect(try await client.resetRuntime() == status)
 
@@ -57,9 +58,17 @@ import Testing
     #expect(endpointRequest.claimedIdentity == "io.apkrun.cli.dev")
 
     #expect(snapshot.statusRequests.count == 2)
-    #expect(snapshot.startRequests.count == 1)
+    #expect(snapshot.startRequests.count == 2)
     #expect(snapshot.stopRequests.count == 1)
     #expect(snapshot.resetRequests.count == 1)
+    let defaultStartRequest = try JSONDecoder().decode(StartRuntimeRequest.self, from: snapshot.startRequests[0])
+    #expect(defaultStartRequest.header.apiVersion == APIVersion.current)
+    #expect(defaultStartRequest.header.clientKind == RuntimeClientKind.cli)
+    #expect(defaultStartRequest.hold == nil)
+    let heldStartRequest = try JSONDecoder().decode(StartRuntimeRequest.self, from: snapshot.startRequests[1])
+    #expect(heldStartRequest.header.apiVersion == APIVersion.current)
+    #expect(heldStartRequest.header.clientKind == RuntimeClientKind.cli)
+    #expect(heldStartRequest.hold == true)
     let resetRequest = try JSONDecoder().decode(
         RuntimeResetControlRequest.self,
         from: snapshot.resetRequests[0]

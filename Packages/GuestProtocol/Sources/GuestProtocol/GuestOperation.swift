@@ -63,6 +63,45 @@ public struct GuestPing: GuestOperation {
     }
 }
 
+/// `SyncTime`: align the Android wall clock with the host (guest-protocol.md §7.1 #48).
+public struct GuestSyncTime: GuestOperation {
+    /// The decoded result of the operation.
+    public typealias Result = GPEmpty
+    /// The operation number of guest-protocol.md §7.1.
+    public static let number = 48
+    /// Host wall-clock time as Unix milliseconds.
+    public let unixTimeMilliseconds: Int64
+    /// Most recent host-to-agent Ping round trip in milliseconds.
+    public let rttMilliseconds: UInt32
+
+    /// Creates the operation.
+    public init(unixTimeMilliseconds: Int64, rttMilliseconds: UInt32) {
+        self.unixTimeMilliseconds = unixTimeMilliseconds
+        self.rttMilliseconds = rttMilliseconds
+    }
+
+    /// The name that errors report for the operation.
+    public var operationName: String { "SyncTime" }
+    /// The capability that the operation needs.
+    public var capability: GuestCapability { .locale }
+    /// The time the agent has to answer.
+    public var timeout: Duration { .seconds(5) }
+
+    /// The request that carries the operation.
+    public func request() -> GPRequest.OneOf_Op {
+        var time = GPSyncTime()
+        time.unixTimeMs = unixTimeMilliseconds
+        time.rttMs = rttMilliseconds
+        return .syncTime(time)
+    }
+
+    /// Decodes the agent's answer.
+    public static func decode(_ result: GPResponse.OneOf_Result) -> GPEmpty? {
+        if case .syncTime(let empty) = result { return empty }
+        return nil
+    }
+}
+
 /// `GetSnapshot`: the state that the host reads after every handshake (guest-protocol.md §7.2 #11).
 public struct GuestGetSnapshot: GuestOperation {
     /// The decoded result of the operation.

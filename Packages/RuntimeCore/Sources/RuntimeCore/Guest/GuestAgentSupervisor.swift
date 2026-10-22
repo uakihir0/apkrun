@@ -115,6 +115,8 @@ public actor GuestAgentSupervisor {
         case ready
         /// Reconnecting after a lost connection.
         case reconnecting
+        /// The VM is paused, so keepalives and request deadlines must not run.
+        case paused
         /// Three pings went unanswered.
         case unresponsive
         /// The guest speaks an incompatible protocol version.
@@ -311,6 +313,39 @@ public actor GuestAgentSupervisor {
         androidRestartContinuation.finish()
     }
 
+    /// Pauses agent supervision while the VM is paused.
+    ///
+    /// Closing the connection ends outstanding requests immediately, so their deadlines do not expire while Android
+    /// is stopped. Call ``start(connectTimeout:)`` after the VM resumes to establish a fresh handshake and snapshot.
+    public func pause() async {
+        guard state != .stopped, state != .paused else {
+            return
+        }
+        generation += 1
+        maintenance?.cancel()
+        maintenance = nil
+        recovery?.cancel()
+        recovery = nil
+        consumer?.cancel()
+        consumer = nil
+        let closing = connection
+        connection = nil
+        session = nil
+        awaitingSnapshot = false
+        buffered = []
+        hasConnected = false
+        updateState(.paused)
+        await closing?.close()
+    }
+
+    /// Sends one Guest Agent ping and returns the measured round-trip time.
+    public func ping(timeout: Duration = .seconds(2)) async throws(GuestProtocolFailure) -> Duration {
+        pingNonce &+= 1
+        let started = ContinuousClock.now
+        _ = try await send(GuestPing(nonce: pingNonce), timeout: timeout)
+        return started.duration(to: .now)
+    }
+
     /// Reads the connection state and negotiated version together as one status snapshot.
     public func statusSnapshot() -> StatusSnapshot {
         StatusSnapshot(state: state, protocolVersion: protocolVersion)
@@ -408,7 +443,7 @@ public actor GuestAgentSupervisor {
         switch state {
         case .ready, .reconnecting, .unresponsive:
             return true
-        case .stopped, .connecting, .incompatible, .unavailable:
+        case .stopped, .connecting, .paused, .incompatible, .unavailable:
             return false
         }
     }

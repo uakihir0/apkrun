@@ -292,6 +292,41 @@ func startResyncsWithGetSnapshotBeforeAnythingElse() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func pausingTheGuestAgentClosesItsConnectionUntilAResync() async throws {
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello()
+        agent.answer = { request in
+            isGetSnapshot(request)
+                ? .getSnapshot(snapshot(displays: [0]))
+                : pongResult(for: request)
+        }
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: transport,
+        keepaliveInterval: .seconds(60),
+        restartAgent: { _ in false }
+    )
+    try await supervisor.start(connectTimeout: .seconds(2))
+
+    let initialAgent = try #require(transport.agents.first)
+    let pingTime = try await supervisor.ping(timeout: .seconds(2))
+    #expect(pingTime >= .zero)
+    let requestCountWhenPaused = initialAgent.requests.count
+
+    await supervisor.pause()
+
+    #expect(await supervisor.state == .paused)
+    #expect(initialAgent.requests.count == requestCountWhenPaused)
+
+    try await supervisor.start(connectTimeout: .seconds(2))
+
+    #expect(await supervisor.state == .ready)
+    #expect(transport.agents.count == 2)
+    #expect(transport.agents[1].requests.first.map(isGetSnapshot) == true)
+    await supervisor.stop()
+}
+
+@Test(.timeLimit(.minutes(1)))
 func eventsSentBeforeTheSnapshotAnswerAreAppliedAfterIt() async throws {
     let transport = InMemoryTransport { _, agent, _ in
         agent.sendHello()

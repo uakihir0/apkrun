@@ -80,7 +80,28 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 
 **Goal.** After the guest agent restarts, pointer input works again in the same window without ending the boot. Today the bound channel stays after the loss, so input stays dead until the boot ends. This is a follow-up of #25.
 
-**Result.** `DevInputBinding` releases the old input channel when its Guest Agent session ends and rebinds display 0 when a new session is ready. A shared route gate closes synchronously on loss, generation checks prevent stale activation, and route focus is reconciled before input resumes. A closed window retires its route so Guest Agent recovery cannot re-register that display. Ending a disconnected stream skips redundant guest cancellation. `GuestAgentSupervisorTests` covers loss, rebind, and `input.dropped.channel`; `AndroidInputTests.testWindowInputRebindsAfterGuestAgentRestartWithoutRebooting` verifies on a VM that a click reaches HelloText after `apkrun_guestd` restarts without changing Android's boot ID.
+**Out of scope.**
+- Changing the Guest Agent restart policy beyond what route recovery needs.
+- Keyboard routing.
+
+**Steps.**
+1. **Close the old route on loss.** Close the shared route gate and release the old input channel when the Guest Agent session becomes unavailable. **Check:** host tests show that stale events cannot reach the dead channel and are counted as `input.dropped.channel`.
+2. **Rebind after readiness.** Wait for a ready session token, register the route, reconcile focus, and activate it only after checking that the token and channel are still current. **Check:** host tests show input resumes through the new channel and an older binding cannot reopen the route.
+3. **Retire routes on close.** Remove routes when a native window closes, including terminal close paths, and skip guest cancellation when its channel is disconnected. **Check:** close-path tests pass without registering the retired display or sending redundant `cancelAll`.
+4. **Verify recovery on a device.** Force-stop `apkrun_guestd`, wait for the agent to restart, and click HelloText in the same window. **Check:** the click reaches the app and the Android boot ID is unchanged.
+
+**Tests.**
+- T0: `GuestAgentSupervisorTests`, `DevInputBindingTests`, `DevInputRouteTests`, and `EmbeddedRuntimeServiceTests`.
+- T2: `AndroidInputTests.testWindowInputRebindsAfterGuestAgentRestartWithoutRebooting`. Needs a Mac with a VM.
+- T3: none.
+
+**Done when.**
+- The T0 tests pass, including accounting events on the unavailable channel as `input.dropped.channel`.
+- The T2 recovery test passes after a forced Guest Agent restart without rebooting Android.
+
+**Pitfalls.**
+- Do not expose a replacement route before the Guest Agent session is ready and focus is reconciled.
+- Do not infer that app input recovered from a healthy stream alone; verify a click reaches HelloText.
 
 ---
 

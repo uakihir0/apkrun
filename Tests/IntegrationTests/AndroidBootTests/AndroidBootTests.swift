@@ -291,7 +291,7 @@ final class AndroidBootTests: XCTestCase {
         let collector = Task {
             for await event in supervisor.events {
                 if case .state(let state) = event {
-                    states.append(state)
+                    states.append(state.state)
                 }
             }
         }

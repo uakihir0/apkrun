@@ -95,6 +95,18 @@ enum ResourceTableFailure: Error, Equatable, Sendable {
             .outOfMemory
         }
     }
+
+    /// A fixed label that identifies the failed validation without exposing guest data.
+    var diagnosticReason: String {
+        switch self {
+        case .invalidResourceID:
+            "resource_table.resource_id"
+        case .invalidParameter(let field):
+            "resource_table.\(field)"
+        case .outOfMemory(let limit):
+            "resource_table.\(limit)"
+        }
+    }
 }
 
 /// The resource table: IDs, format and size limits, and backing validation.
@@ -347,8 +359,9 @@ struct ResourceTable: Sendable {
     /// Validates and records guest backing for `id`. Nothing changes when validation fails.
     ///
     /// Each entry must be non-empty, must not wrap the 64-bit address space, and
-    /// must lie in guest memory as `isInGuestMemory` reports. The total length must cover the
-    /// resource's bytes. Attaching backing to a resource that already has backing fails.
+    /// must lie in guest memory as `isInGuestMemory` reports. Host-only resources require backing
+    /// for their full estimate; VirGL resources may attach transfer pages smaller than that
+    /// estimate. Attaching backing to a resource that already has backing fails.
     mutating func attachBacking(
         id: UInt32,
         entries: [VirtioGPUMemoryEntry],
@@ -376,8 +389,8 @@ struct ResourceTable: Sendable {
             }
             totalLength += UInt64(entry.length)
         }
-        guard totalLength >= resource.byteEstimate else {
-            throw .invalidParameter(field: "entry.length")
+        if resource.kind == .host2D, totalLength < resource.byteEstimate {
+            throw .invalidParameter(field: "backing.too_small")
         }
         resources[id]?.backing = entries
     }

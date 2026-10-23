@@ -34,6 +34,29 @@ private enum RendererOperationLogLabel: String {
     }
 }
 
+/// Safe identifiers that join one control-queue request to its renderer work.
+///
+/// The ordinal is monotonic for the lifetime of a virtio-gpu device, including
+/// guest resets. It deliberately excludes guest addresses and command bytes.
+struct VirGLCommandDiagnostic: Sendable {
+    let ordinal: UInt64
+    let command: UInt32
+    let contextID: UInt32
+    let resourceID: UInt32?
+
+    var logFields: String {
+        let resourceField: String
+        if let resourceID {
+            resourceField = " resource_id=\(resourceID)"
+        } else if command == VirtioGPUCommand.submit3D.rawValue {
+            resourceField = " resource_id=unattributed"
+        } else {
+            resourceField = ""
+        }
+        return "control_ordinal=\(ordinal) command=\(command) context_id=\(contextID)\(resourceField)"
+    }
+}
+
 /// A capset that the device answers from its cache (graphics.md §4.2).
 struct VirGLCapset: Equatable, Sendable {
     let id: UInt32
@@ -56,17 +79,18 @@ final class RendererFailureLog: @unchecked Sendable {
         lock.withLock { count }
     }
 
-    func record(_ failure: GraphicsFailure) {
+    func record(_ failure: GraphicsFailure, diagnostic: VirGLCommandDiagnostic? = nil) {
         lock.withLock { count += 1 }
         let operationField: String
         if case .rendererOperationFailed(let operation, _) = failure {
-            // Only known fixed renderer API names are safe to include in public diagnostics.
+            // Only known fixed renderer API names and guest-selected numeric identifiers are safe to include.
             operationField = RendererOperationLogLabel.field(for: operation)
         } else {
             operationField = ""
         }
+        let diagnosticFields = diagnostic.map { " \($0.logFields)" } ?? ""
         logger.error(
-            "virtio-gpu renderer operation failed: \(failure.code, .public)\(operationField, .public)",
+            "virtio-gpu renderer operation failed: \(failure.code, .public)\(operationField, .public)\(diagnosticFields, .public)",
             errorCode: failure.qualifiedCode
         )
     }
@@ -94,7 +118,7 @@ final class VirGLBackend: @unchecked Sendable {
     private let completions: ControlCompletionQueue<PendingElementCompletionToken>
     private let capsetsByID: [UInt32: VirGLCapset]
     /// Shared with the render-thread closures, which must not capture the backend itself.
-    private let failures = RendererFailureLog()
+    private let failures: RendererFailureLog
     private let stateLock = NSLock()
     private var isShutDown = false
 
@@ -112,12 +136,14 @@ final class VirGLBackend: @unchecked Sendable {
         renderThread: RenderThread,
         engineBox: EngineBox,
         completions: ControlCompletionQueue<PendingElementCompletionToken>,
-        capsetsByID: [UInt32: VirGLCapset]
+        capsetsByID: [UInt32: VirGLCapset],
+        failures: RendererFailureLog
     ) {
         self.renderThread = renderThread
         self.engineBox = engineBox
         self.completions = completions
         self.capsetsByID = capsetsByID
+        self.failures = failures
     }
 
     deinit {
@@ -130,6 +156,7 @@ final class VirGLBackend: @unchecked Sendable {
     ///   callback that the engine calls for each fence it completes.
     static func make(
         name: String,
+        logger: APKLogger = APKLogger(category: GraphicsLogCategory.device),
         makeEngine:
             @escaping @Sendable (@escaping @Sendable (UInt32) -> Void) throws(GraphicsFailure) -> any VirGLEngine
     ) throws(GraphicsFailure) -> VirGLBackend {
@@ -190,7 +217,8 @@ final class VirGLBackend: @unchecked Sendable {
                 renderThread: renderThread,
                 engineBox: engineBox,
                 completions: completions,
-                capsetsByID: capsets
+                capsetsByID: capsets,
+                failures: RendererFailureLog(logger: logger)
             )
         }
     }
@@ -225,6 +253,7 @@ final class VirGLBackend: @unchecked Sendable {
         token: PendingElementCompletionToken,
         fence: UInt32?,
         context: UInt32,
+        diagnostic: VirGLCommandDiagnostic?,
         operation: @escaping @Sendable (any VirGLEngine) -> GraphicsFailure?
     ) {
         let ticket = completions.append(token, executed: false)
@@ -235,14 +264,28 @@ final class VirGLBackend: @unchecked Sendable {
         renderThread.submit {
             var fenceForQueue = fence
             if let engine = engineBox.engine {
-                if let failure = operation(engine) {
-                    failures.record(failure)
+                let failure = Self.withCommandDiagnostic(diagnostic, engine: engine, operation: operation)
+                if let failure {
+                    failures.record(failure, diagnostic: diagnostic)
                 }
                 if let fence {
                     do throws(GraphicsFailure) {
-                        try engine.createFence(id: fence, context: context)
+                        if let failure = Self.withCommandDiagnostic(
+                            diagnostic,
+                            engine: engine,
+                            operation: { engine in
+                                do throws(GraphicsFailure) {
+                                    try engine.createFence(id: fence, context: context)
+                                    return nil
+                                } catch {
+                                    return error
+                                }
+                            }
+                        ) {
+                            throw failure
+                        }
                     } catch {
-                        failures.record(error)
+                        failures.record(error, diagnostic: diagnostic)
                         fenceForQueue = nil
                     }
                 }
@@ -254,6 +297,20 @@ final class VirGLBackend: @unchecked Sendable {
             for token in ready {
                 token.complete()
             }
+        }
+    }
+
+    /// Runs renderer work with its guest request metadata available to synchronous callbacks.
+    private static func withCommandDiagnostic(
+        _ diagnostic: VirGLCommandDiagnostic?,
+        engine: any VirGLEngine,
+        operation: @Sendable (any VirGLEngine) -> GraphicsFailure?
+    ) -> GraphicsFailure? {
+        guard let diagnosticScope = engine as? any VirGLCommandDiagnosticScope else {
+            return operation(engine)
+        }
+        return diagnosticScope.withCommandDiagnostic(diagnostic) {
+            operation(engine)
         }
     }
 

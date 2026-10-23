@@ -102,19 +102,68 @@ final class AndroidInputTests: XCTestCase {
             let sampler = ShellInputSampler()
             sampler.start()
             _ = try await run.adb.shell("logcat -c")
+            try await run.prepareForDirectViewPointerDispatch()
             let pointer = try run.pointer()
-            for _ in 0..<100 {
+            var focusSamples: [String] = []
+            var focusLostBeforeClick: Int?
+            for index in 0..<100 {
+                guard run.hasNativeWindowFocus() else {
+                    focusLostBeforeClick = index + 1
+                    focusSamples.append("before click \(index + 1): \(try run.focusDiagnostic())")
+                    break
+                }
                 try await pointer.click(at: target)
                 try await Task.sleep(for: .milliseconds(100))
+                if (index + 1).isMultiple(of: 10) {
+                    focusSamples.append("after click \(index + 1): \(try run.focusDiagnostic())")
+                }
             }
             let shellInput = await sampler.stop()
             XCTAssertEqual(shellInput, [], "adb shell input processes ran during the sequence")
+            if let focusLostBeforeClick {
+                let counters = try await run.inputCounters()
+                let focusSummary = try run.focusDiagnostic()
+                let evidence = """
+                    focus_lost_before_click=\(focusLostBeforeClick)
+                    counters=\(counters)
+                    \(focusSummary)
+                    samples:
+                    \(focusSamples.joined(separator: "\n"))
+                    """
+                XCTContext.runActivity(named: "Input focus interruption evidence") { activity in
+                    let attachment = XCTAttachment(
+                        data: Data(evidence.utf8), uniformTypeIdentifier: "public.utf8-plain-text")
+                    attachment.name = "input-focus-interruption.txt"
+                    attachment.lifetime = .keepAlways
+                    activity.add(attachment)
+                }
+                XCTFail("Test host lost key-window focus before click \(focusLostBeforeClick); \(focusSummary)")
+                return
+            }
             let lines = try await run.fixtureLog { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 }
             let clickNumbers = AndroidInputRun.numbers(in: lines, after: Self.clickPrefix)
             let touchPhaseDelta = try await run.inputWireTouchPhaseCounts().delta(since: touchPhasesBefore)
             let countersAfter = try await run.inputCounters()
             guard let finalCount = try await Self.persistedClickCount(run) else {
                 throw AndroidInputRunFailure.timedOut("the fixture's final persisted click counter")
+            }
+            let focusSummary = try run.focusDiagnostic()
+            let droppedNotFocused = countersAfter.droppedNotFocused - countersBefore.droppedNotFocused
+            if droppedNotFocused > 0 {
+                let evidence = """
+                    counters_before=\(countersBefore)
+                    counters_after=\(countersAfter)
+                    \(focusSummary)
+                    samples:
+                    \(focusSamples.joined(separator: "\n"))
+                    """
+                XCTContext.runActivity(named: "Input focus failure evidence") { activity in
+                    let attachment = XCTAttachment(
+                        data: Data(evidence.utf8), uniformTypeIdentifier: "public.utf8-plain-text")
+                    attachment.name = "input-focus-failure.txt"
+                    attachment.lifetime = .keepAlways
+                    activity.add(attachment)
+                }
             }
             XCTAssertEqual(clickNumbers, Array(1...100))
             XCTAssertEqual(finalCount - initialCount, 100, "the fixture must persist every click callback")
@@ -125,6 +174,7 @@ final class AndroidInputTests: XCTestCase {
             XCTAssertEqual(countersAfter.droppedRate - countersBefore.droppedRate, 0, "\(countersAfter)")
             XCTAssertEqual(countersAfter.droppedNotRunning - countersBefore.droppedNotRunning, 0, "\(countersAfter)")
             XCTAssertEqual(countersAfter.droppedChannel - countersBefore.droppedChannel, 0, "\(countersAfter)")
+            XCTAssertEqual(droppedNotFocused, 0, "\(countersAfter); \(focusSummary)")
             XCTAssertEqual(countersAfter.coalesced - countersBefore.coalesced, 0, "\(countersAfter)")
         }
     }
@@ -148,6 +198,7 @@ final class AndroidInputTests: XCTestCase {
             XCTAssertEqual(initialCount, 0)
 
             let captureStart = try await run.startTouchEventCapture()
+            try await run.prepareForDirectViewPointerDispatch()
             try await pointer.drag(from: target, toViewPoint: leftEdge, steps: 4)
             let afterLeftDragCapture = try await run.touchEventCaptureSnapshot()
             guard let leftDragThrough = afterLeftDragCapture.sentEvents.records.last?.batchSequence else {
@@ -165,6 +216,7 @@ final class AndroidInputTests: XCTestCase {
             let afterLeftDrag = try await Self.waitForStablePersistedClickCount(run, exactly: 0)
             XCTAssertEqual(afterLeftDrag, 0, "the drag outside the left edge must not click the button")
 
+            try await run.prepareForDirectViewPointerDispatch()
             try await pointer.click(at: target)
             let leftRecoveryAcknowledgement = try await run.acknowledgeLatestInput(with: pointer, at: target)
             XCTAssertEqual(
@@ -176,6 +228,7 @@ final class AndroidInputTests: XCTestCase {
             XCTAssertEqual(afterLeftRecovery, 1, "the left-edge release must leave the guest ready for a new touch")
 
             let topDragStartSequence = try await run.inputCounters().batchesSent
+            try await run.prepareForDirectViewPointerDispatch()
             try await pointer.drag(from: target, toViewPoint: topEdge, steps: 4)
             let afterTopDragCapture = try await run.touchEventCaptureSnapshot()
             guard let topDragThrough = afterTopDragCapture.sentEvents.records.last?.batchSequence else {
@@ -193,6 +246,7 @@ final class AndroidInputTests: XCTestCase {
             let afterTopDrag = try await Self.waitForStablePersistedClickCount(run, exactly: 1)
             XCTAssertEqual(afterTopDrag, 1, "the drag outside the top edge must not click the button")
 
+            try await run.prepareForDirectViewPointerDispatch()
             try await pointer.click(at: target)
             let topRecoveryAcknowledgement = try await run.acknowledgeLatestInput(with: pointer, at: target)
             XCTAssertEqual(
@@ -317,6 +371,11 @@ final class AndroidInputTests: XCTestCase {
                     var touchPhaseDelta: InputWireTouchPhaseCounts?
                     do {
                         _ = try await run.adb.shell("logcat -c")
+                        if pointerDelivery == .windowServer {
+                            try await run.prepareForWindowServerPointerDispatch()
+                        } else {
+                            try await run.prepareForDirectViewPointerDispatch()
+                        }
                         let pointer = try run.pointer()
                         for _ in 0..<clickDelta {
                             try await pointer.click(at: target, interClickGap: .milliseconds(50))
@@ -463,6 +522,11 @@ final class AndroidInputTests: XCTestCase {
             }
             XCTAssertEqual(initial, 0, "a new guest should start with an empty HelloText counter")
             if warmupClickCount > 0 {
+                if pointerDelivery == .windowServer {
+                    try await run.prepareForWindowServerPointerDispatch()
+                } else {
+                    try await run.prepareForDirectViewPointerDispatch()
+                }
                 let pointer = try run.pointer()
                 for _ in 0..<warmupClickCount {
                     try await pointer.click(at: target, interClickGap: .milliseconds(50))
@@ -483,6 +547,11 @@ final class AndroidInputTests: XCTestCase {
             _ = try await run.adb.shell(
                 "am broadcast -n \(Self.helloText)/.DebugCounterReceiver -a \(Self.touchTraceStartAction)")
 
+            if pointerDelivery == .windowServer {
+                try await run.prepareForWindowServerPointerDispatch()
+            } else {
+                try await run.prepareForDirectViewPointerDispatch()
+            }
             var clickFailure: String?
             do {
                 let pointer = try run.pointer()
@@ -654,15 +723,18 @@ final class AndroidInputTests: XCTestCase {
             try await run.waitForText("Row 0")
             let pointer = try run.pointer()
             // The list fills the display below the text field, so these points lie inside it.
+            try await run.prepareForDirectViewPointerDispatch()
             try await pointer.drag(from: (x: 512, y: 600), to: (x: 512, y: 250), steps: 20)
             let dragged = try await Self.lastRow(run, above: 0)
             if dragged == 0 {
                 XCTFail("the drag did not scroll the list: \(try await Self.diagnosis(run))")
                 return
             }
+            try await run.prepareForDirectViewPointerDispatch()
             pointer.scroll(at: (x: 512, y: 400), deltaY: -120, precise: true)
             let trackpad = try await Self.lastRow(run, above: dragged)
             XCTAssertGreaterThan(trackpad, dragged, "the trackpad scroll did not move the list")
+            try await run.prepareForDirectViewPointerDispatch()
             pointer.scroll(at: (x: 512, y: 400), deltaY: -3, precise: false)
             let wheel = try await Self.lastRow(run, above: trackpad)
             XCTAssertGreaterThan(wheel, trackpad, "the wheel scroll did not move the list")
@@ -676,6 +748,7 @@ final class AndroidInputTests: XCTestCase {
         try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
             let target = try await run.centre(of: Self.contextTargetID)
             _ = try await run.adb.shell("logcat -c")
+            try await run.prepareForDirectViewPointerDispatch()
             try await run.pointer().rightClick(at: target)
             let lines = try await run.fixtureLog { lines in
                 lines.contains { $0.contains("APKRUN-FIXTURE: contextmenu") }
@@ -711,6 +784,7 @@ final class AndroidInputTests: XCTestCase {
                 try await keys.tap(.delete)
                 var text = try await Self.fieldText(run)
                 XCTAssertEqual(text, "ab", "Backspace did not remove the last character")
+                try await run.prepareForDirectViewPointerDispatch()
                 try await keys.type("cd")
                 try await keys.tap(.leftArrow)
                 try await keys.tap(.leftArrow)
@@ -718,6 +792,7 @@ final class AndroidInputTests: XCTestCase {
                 text = try await Self.fieldText(run)
                 XCTAssertEqual(text, "abXcd", "the left arrow did not move the cursor")
                 _ = try await run.adb.shell("logcat -c")
+                try await run.prepareForDirectViewPointerDispatch()
                 try await keys.tap(.returnKey)
                 let lines = try await run.fixtureLog { lines in
                     lines.contains { $0.contains(Self.editorActionLine) }
@@ -737,12 +812,14 @@ final class AndroidInputTests: XCTestCase {
                 let keys = try run.keyboard()
                 try await Self.openDetails(run)
                 _ = try await run.adb.shell("logcat -c")
+                try await run.prepareForDirectViewPointerDispatch()
                 try await keys.tap(.escape)
                 let back = try await run.fixtureLog { lines in lines.contains { $0.contains(Self.mainScreenLine) } }
                 XCTAssertTrue(
                     back.contains { $0.contains(Self.mainScreenLine) }, "Esc did not return to the main screen")
                 try await Self.openDetails(run)
                 _ = try await run.adb.shell("logcat -c")
+                try await run.prepareForDirectViewPointerDispatch()
                 try await keys.commandShortcut(.leftBracket)
                 let commandBack = try await run.fixtureLog { lines in
                     lines.contains { $0.contains(Self.mainScreenLine) }
@@ -768,13 +845,16 @@ final class AndroidInputTests: XCTestCase {
                 try await keys.commandShortcut(.v)
                 var text = try await Self.fieldText(run)
                 XCTAssertEqual(text, "HelloHello", "⌘C and ⌘V did not copy and paste the selection")
+                try await run.prepareForDirectViewPointerDispatch()
                 try await keys.commandShortcut(.a)
                 try await keys.commandShortcut(.x)
                 text = try await Self.fieldText(run)
                 XCTAssertEqual(text, "", "⌘X did not cut the selection")
+                try await run.prepareForDirectViewPointerDispatch()
                 try await keys.commandShortcut(.v)
                 text = try await Self.fieldText(run)
                 XCTAssertEqual(text, "HelloHello", "⌘V did not paste the cut text")
+                try await run.prepareForDirectViewPointerDispatch()
                 try await keys.commandShortcut(.z)
                 text = try await Self.fieldText(run)
                 XCTAssertEqual(text, "", "⌘Z did not undo the paste")
@@ -1430,19 +1510,42 @@ final class AndroidInputTests: XCTestCase {
     /// that fails is retried without a Tab, so a Tab never moves the focus twice.
     private static func focusField(_ run: AndroidInputRun) async throws {
         let keys = try run.keyboard()
+        var lastPackages = "unavailable"
+        var lastFocus = "unavailable"
         for _ in 0..<6 {
             let xml = try await run.uiDump()
-            switch AndroidInputRun.isFocused(fieldID, in: xml) {
+            lastPackages = AndroidInputRun.packages(in: xml)
+            let focus = AndroidInputRun.isFocused(fieldID, in: xml)
+            lastFocus = focus.map { String(describing: $0) } ?? "field not found in dump"
+            switch focus {
             case true?:
+                try await run.prepareForDirectViewPointerDispatch()
                 return
             case false?:
+                try await run.prepareForDirectViewPointerDispatch()
                 try await keys.tap(.tab)
                 try await Task.sleep(for: .milliseconds(400))
             case nil:
                 try await Task.sleep(for: .seconds(1))
             }
         }
-        throw AndroidInputRunFailure.viewNotFound("the focus of \(fieldID)")
+        let counters = try? await run.inputCounters()
+        let evidence = """
+            field=\(fieldID)
+            focus_state=\(lastFocus)
+            visible_packages=\(lastPackages)
+            host_input_counters=\(counters.map { String(describing: $0) } ?? "unavailable")
+            """
+        XCTContext.runActivity(named: "Input field focus failure evidence") { activity in
+            let attachment = XCTAttachment(data: Data(evidence.utf8), uniformTypeIdentifier: "public.utf8-plain-text")
+            attachment.name = "input-field-focus-failure.txt"
+            attachment.lifetime = .keepAlways
+            activity.add(attachment)
+        }
+        throw AndroidInputRunFailure.viewNotFound(
+            "the focus of \(fieldID); last focus state: \(lastFocus); input counters: "
+                + "\(counters.map { String(describing: $0) } ?? "unavailable")"
+        )
     }
 
     /// The text of HelloText's field, from the fixture's `text` line after the debug `TEXT` broadcast (a query, not input).
@@ -1461,10 +1564,38 @@ final class AndroidInputTests: XCTestCase {
     /// Opens the Details screen with a pointer click on its button, and waits for its `screen details` line.
     private static func openDetails(_ run: AndroidInputRun) async throws {
         let target = try await run.centre(of: detailsID)
+        let touchPhasesBefore = try await run.inputWireTouchPhaseCounts()
         _ = try await run.adb.shell("logcat -c")
+        // UI lookup and the ADB log reset are asynchronous; bind the input route to the actual key window immediately
+        // before dispatch so an unrelated focus change cannot silently drop this test's click.
+        try await run.prepareForDirectViewPointerDispatch()
         try await run.pointer().click(at: target)
         let lines = try await run.fixtureLog { lines in lines.contains { $0.contains(detailsScreenLine) } }
-        XCTAssertTrue(lines.contains { $0.contains(detailsScreenLine) }, "the Details screen did not open")
+        guard lines.contains(where: { $0.contains(detailsScreenLine) }) else {
+            let dump = (try? await run.uiDump()).map(AndroidInputRun.packages(in:)) ?? "unavailable"
+            let focus = (try? run.focusDiagnostic()) ?? "unavailable"
+            let counters = (try? await run.inputCounters()).map(String.init(describing:)) ?? "unavailable"
+            let touchPhases =
+                (try? await run.inputWireTouchPhaseCounts().delta(since: touchPhasesBefore))
+                .map(String.init(describing:)) ?? "unavailable"
+            let evidence = """
+                expected_screen=\(detailsScreenLine)
+                visible_packages=\(dump)
+                input_counters=\(counters)
+                touch_phases=\(touchPhases)
+                \(focus)
+                fixture_log:
+                \(lines.suffix(12).joined(separator: "\n"))
+                """
+            XCTContext.runActivity(named: "Details screen input failure evidence") { activity in
+                let attachment = XCTAttachment(
+                    data: Data(evidence.utf8), uniformTypeIdentifier: "public.utf8-plain-text")
+                attachment.name = "details-screen-input-failure.txt"
+                attachment.lifetime = .keepAlways
+                activity.add(attachment)
+            }
+            throw AndroidInputRunFailure.viewNotFound("the Details screen did not open; \(focus); \(counters)")
+        }
     }
 
     /// What the screen and the fixture log showed when a scroll had no effect (IR-1288): the packages of the dump, and the

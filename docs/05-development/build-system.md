@@ -675,7 +675,7 @@ Jobs marked *(planned)* do not exist yet.
 | `ci.yml` | every pull request; push to `main` | `lint` | — | `xcode-27` | `scripts/bootstrap`; `scripts/ci/run-checks.sh` (`tests/run.sh`, `check-module-deps.sh`, `check-logging.sh`, `check-todos.sh`, `check-format.sh`, `check-lock.sh`, `check-protos.sh`) |
 | | | `codegen` | — | `xcode-27` | `scripts/ci/codegen.sh` (§4) |
 | | | `third-party` | — | `xcode-27` | cache key from `build-third-party.sh --print-cache-key virgl-runtime`; restore; `build-third-party.sh virgl-runtime`; `generate-notices.py --check` |
-| | | `build` | — | `xcode-27` | needs `third-party`; `swift build -j 2`; `swift build -j 2 --traits EmbeddedRuntime`; `xcodebuild` Debug and Release (unsigned); `check-release-build.sh` |
+| | | `build` | — | `xcode-27` | needs `third-party`; `scripts/build-guest.sh`; `swift build -j 2`; `swift build -j 2 --traits EmbeddedRuntime`; `xcodebuild` Debug and Release (unsigned); `check-release-build.sh` |
 | | | `test-swift` | T0 | `xcode-27` | needs `third-party`; `swift test --skip 'SystemTests'`, parallel width 2 |
 | | | `test-vsockd` | T0, T1 when supported | `ubuntu-latest` | pinned Rust 1.88.0; `cargo test`, feature-test compile and clippy, conditional `vsock_loopback`, Android-target `cargo clippy`, and `cargo fmt --check` |
 | | | `test-graphics` | T1 | `xcode-27` | needs `third-party`; Metal device required; `GraphicsCoreSystemTests` plain, with Address and Undefined Behavior Sanitizers |

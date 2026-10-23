@@ -122,6 +122,8 @@ jobs:
         run: scripts/build-third-party.sh virgl-runtime
       - name: Check build environment
         run: scripts/bootstrap --check
+      - name: Build Guest Agent
+        run: scripts/build-guest.sh
       - name: Generate Xcode project
         run: scripts/generate-project.sh
       - name: Build Swift package

@@ -44,7 +44,7 @@ final class FakePresentFence: PresentFence, @unchecked Sendable {
 ///
 /// The engine runs on the render thread, so its calls are recorded under a lock. Tests read
 /// the record from their own thread.
-final class FakeVirGLEngine: VirGLEngine, @unchecked Sendable {
+final class FakeVirGLEngine: VirGLEngine, VirGLCommandDiagnosticScope, @unchecked Sendable {
     enum Call: Equatable {
         case capset(UInt32)
         case createContext(UInt32, String)
@@ -72,6 +72,8 @@ final class FakeVirGLEngine: VirGLEngine, @unchecked Sendable {
     private var recorded: [Call] = []
     private var pendingFences: [UInt32] = []
     private var failing: Set<String> = []
+    private var activeCommandDiagnostic: VirGLCommandDiagnostic?
+    private var recordedFailureCommandDiagnostics: [VirGLCommandDiagnostic] = []
     /// The byte that `transferRead` writes into every byte of the box.
     private var readFill: UInt8 = 0x5A
 
@@ -82,6 +84,23 @@ final class FakeVirGLEngine: VirGLEngine, @unchecked Sendable {
     /// The calls so far, in order.
     var calls: [Call] {
         lock.withLock { recorded }
+    }
+
+    /// Guest request metadata active when an injected failure was raised.
+    var failedCommandDiagnostics: [VirGLCommandDiagnostic] {
+        lock.withLock { recordedFailureCommandDiagnostics }
+    }
+
+    func withCommandDiagnostic<T>(_ diagnostic: VirGLCommandDiagnostic?, perform: () -> T) -> T {
+        let previous = lock.withLock { () -> VirGLCommandDiagnostic? in
+            let previous = activeCommandDiagnostic
+            activeCommandDiagnostic = diagnostic
+            return previous
+        }
+        defer {
+            lock.withLock { activeCommandDiagnostic = previous }
+        }
+        return perform()
     }
 
     /// Makes the named operation fail with a renderer error. Operations are named by the case, for example `submit`.
@@ -109,7 +128,11 @@ final class FakeVirGLEngine: VirGLEngine, @unchecked Sendable {
     private func record(_ call: Call, operation: String) throws(GraphicsFailure) {
         let shouldFail = lock.withLock { () -> Bool in
             recorded.append(call)
-            return failing.contains(operation)
+            let shouldFail = failing.contains(operation)
+            if shouldFail, let activeCommandDiagnostic {
+                recordedFailureCommandDiagnostics.append(activeCommandDiagnostic)
+            }
+            return shouldFail
         }
         if shouldFail {
             throw GraphicsFailure.rendererOperationFailed(operation: operation, detail: "injected failure")

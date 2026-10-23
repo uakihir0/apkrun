@@ -193,7 +193,7 @@ public final class VirGLRenderer {
 }
 
 // UNCHECKED-SENDABLE: the renderer is confined to its render thread. The engine protocol carries the calls.
-extension VirGLRenderer: VirGLEngine, @unchecked Sendable {
+extension VirGLRenderer: VirGLEngine, VirGLCommandDiagnosticScope, @unchecked Sendable {
     func createResource(_ arguments: VirGLResourceArguments) throws(GraphicsFailure) {
         let renderer = try live(operation: "resourceCreate")
         var args = arguments.bridgeArguments

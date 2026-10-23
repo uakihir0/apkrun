@@ -979,6 +979,44 @@ private func sessionResponses(recorder: VirGLRecorder?) async throws -> (
     #expect(recorder.recording.operations.count == 5)
 }
 
+@Test func aRecorderPreservesRendererCommandDiagnosticScope() async throws {
+    let harness = try VirGLHarness(recorder: VirGLRecorder())
+    let engine = harness.engineRef.engine
+    engine.fail("submit")
+
+    let control = harness.send([
+        gpuRequest(.ctxCreate, body: .ctxCreate(contextInit: 0, debugName: Array("gl".utf8)), contextID: 1),
+        gpuRequest(.submit3D, body: .submit3D(commandStream: [1, 0, 0, 0]), contextID: 1),
+    ])
+    try await eventually { control.completionCounts == [1, 1] }
+
+    let diagnostic = try #require(engine.failedCommandDiagnostics.first)
+    #expect(engine.failedCommandDiagnostics.count == 1)
+    #expect(diagnostic.ordinal == 2)
+    #expect(diagnostic.command == VirtioGPUCommand.submit3D.rawValue)
+    #expect(diagnostic.contextID == 1)
+    #expect(diagnostic.resourceID == nil)
+}
+
+@Test func aRecorderPreservesRendererCommandDiagnosticScopeDuringFenceCreation() async throws {
+    let harness = try VirGLHarness(recorder: VirGLRecorder())
+    let engine = harness.engineRef.engine
+    engine.fail("fenceCreate")
+
+    let control = harness.send([
+        gpuRequest(.ctxCreate, body: .ctxCreate(contextInit: 0, debugName: Array("gl".utf8)), contextID: 1),
+        gpuRequest(.submit3D, body: .submit3D(commandStream: [1, 0, 0, 0]), fence: 7, contextID: 1),
+    ])
+    try await eventually { control.completionCounts == [1, 1] }
+
+    let diagnostic = try #require(engine.failedCommandDiagnostics.first)
+    #expect(engine.failedCommandDiagnostics.count == 1)
+    #expect(diagnostic.ordinal == 2)
+    #expect(diagnostic.command == VirtioGPUCommand.submit3D.rawValue)
+    #expect(diagnostic.contextID == 1)
+    #expect(diagnostic.resourceID == nil)
+}
+
 @Test func aWrittenRecordingIsTheReplayFormat() throws {
     let fake = FakeVirGLEngine(onFence: { _ in })
     let recorder = VirGLRecorder()

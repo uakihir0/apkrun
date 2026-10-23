@@ -1531,10 +1531,35 @@ final class AndroidInputTests: XCTestCase {
     /// Opens the Details screen with a pointer click on its button, and waits for its `screen details` line.
     private static func openDetails(_ run: AndroidInputRun) async throws {
         let target = try await run.centre(of: detailsID)
+        let touchPhasesBefore = try await run.inputWireTouchPhaseCounts()
         _ = try await run.adb.shell("logcat -c")
         try await run.pointer().click(at: target)
         let lines = try await run.fixtureLog { lines in lines.contains { $0.contains(detailsScreenLine) } }
-        XCTAssertTrue(lines.contains { $0.contains(detailsScreenLine) }, "the Details screen did not open")
+        guard lines.contains(where: { $0.contains(detailsScreenLine) }) else {
+            let dump = (try? await run.uiDump()).map(AndroidInputRun.packages(in:)) ?? "unavailable"
+            let focus = (try? run.focusDiagnostic()) ?? "unavailable"
+            let counters = (try? await run.inputCounters()).map(String.init(describing:)) ?? "unavailable"
+            let touchPhases =
+                (try? await run.inputWireTouchPhaseCounts().delta(since: touchPhasesBefore))
+                .map(String.init(describing:)) ?? "unavailable"
+            let evidence = """
+                expected_screen=\(detailsScreenLine)
+                visible_packages=\(dump)
+                input_counters=\(counters)
+                touch_phases=\(touchPhases)
+                \(focus)
+                fixture_log:
+                \(lines.suffix(12).joined(separator: "\n"))
+                """
+            XCTContext.runActivity(named: "Details screen input failure evidence") { activity in
+                let attachment = XCTAttachment(
+                    data: Data(evidence.utf8), uniformTypeIdentifier: "public.utf8-plain-text")
+                attachment.name = "details-screen-input-failure.txt"
+                attachment.lifetime = .keepAlways
+                activity.add(attachment)
+            }
+            throw AndroidInputRunFailure.viewNotFound("the Details screen did not open; \(focus); \(counters)")
+        }
     }
 
     /// What the screen and the fixture log showed when a scroll had no effect (IR-1288): the packages of the dump, and the

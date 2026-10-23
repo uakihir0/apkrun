@@ -366,9 +366,9 @@ Unknown fields are rejected at every level (§11).
 | `revisions.guest` | string or null | yes | same pattern. Null for `stock` | git revision of `Guest/` |
 | `pinnedManifestSHA256` | string or null | yes | 64 lowercase hex. Null for `stock` and composed images; required for builder images | SHA-256 of `Guest/product/manifest/pinned.xml` for a builder image ([android-image.md](../02-design/android-image.md) §11.6) |
 | `builderImageDigest` | string or null | yes | `sha256:` + 64 lowercase hex. Null for `stock` and composed images; required for builder images | digest of the builder container image |
-| `composition` | object | no | Required for composed CI images. `{schemaVersion: 1, sourceManifest: {path, sha256}, productInputs: [{path, sha256}], apkrunRevision}`. Paths are repository-relative; product inputs are sorted by path and unique | the stock Android manifest and APKRun product inputs used to compose the image |
+| `composition` | object | no | Required for composed CI images. `{schemaVersion: 1, sourceManifest: {path, sha256}, productInputs: [{path, sha256}], testOverlayInputs?: [{path, sha256}], apkrunRevision}`. Paths are repository-relative; both input lists are sorted by path and unique | the stock Android manifest and APKRun product inputs used to compose the image; the optional test list records the fixed AndroidCustom fixture overlay |
 
-`composition.productInputs` contains 1 to 256 entries. Each `path` is a safe repository-relative path and each `sha256` is 64 lowercase hex digits. `composition.apkrunRevision` is a 40-digit lowercase git revision, optionally followed by `-dirty`. A composed image keeps the stock CI build in `source` and records the product code revision in both `revisions.guest` and `composition.apkrunRevision`.
+`composition.productInputs` contains 1 to 256 entries. `composition.testOverlayInputs`, when present, contains 1 to 256 entries and every path starts with `Tests/Fixtures/AndroidImageProduct/`. Both lists contain safe repository-relative paths with 64 lowercase hex SHA-256 digests, sorted by path and unique. The test overlay is opt-in and is omitted from product compositions. `composition.apkrunRevision` is a 40-digit lowercase git revision, optionally followed by `-dirty`. A composed image keeps the stock CI build in `source` and records the product code revision in both `revisions.guest` and `composition.apkrunRevision`.
 
 The bundle has no timestamps, so it is deterministic ([android-image.md](../02-design/android-image.md) §10.2).
 
@@ -452,7 +452,7 @@ How ImageCore uses them ([android-image.md](../02-design/android-image.md) §9.2
 | `minimumRuntimeVersion` | string | yes | `MAJOR.MINOR.PATCH`, no leading zeros | the oldest APKRun that may boot this image (release rule R3) |
 | `guestProtocol.min` | integer | yes | 1 to 65535 | lowest guest protocol major the image's agents speak |
 | `guestProtocol.max` | integer | yes | `min` to 65535 | highest major |
-| `agents` | array | yes | 0 to 16 entries. Empty for `stock`. For `apkrun`, contains `io.apkrun.guest`; earlier product images may omit `io.apkrun.store` until #37 integrates it | agents built into the image |
+| `agents` | array | yes | 0 to 16 entries. Empty for `stock`. For composed `apkrun` images, contains `io.apkrun.guest` at the version from hash-pinned `Guest/product/prebuilt/ApkRunGuest.json`; earlier product images may omit `io.apkrun.store` until #37 integrates it | agents built into the image |
 | `agents[].package` | string | yes | an Android package name ([package-metadata-json.md](package-metadata-json.md) §2). Unique | agent package |
 | `agents[].versionCode` | integer | yes | 1 to 9223372036854775807 | its `longVersionCode` |
 
@@ -593,6 +593,24 @@ This schema is copied byte for byte into `Images/tools/schemas/runtime-image-man
               "minItems": 1,
               "maxItems": 256,
               "items": { "$ref": "#/$defs/repositoryFile" }
+            },
+            "testOverlayInputs": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": {
+                "allOf": [
+                  { "$ref": "#/$defs/repositoryFile" },
+                  {
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "pattern": "^Tests/Fixtures/AndroidImageProduct/"
+                      }
+                    }
+                  }
+                ]
+              }
             },
             "apkrunRevision": { "$ref": "#/$defs/treeRevision" }
           }

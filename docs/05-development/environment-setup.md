@@ -60,10 +60,11 @@ python3.12 -m venv Images/tools/.venv
 source Images/tools/.venv/bin/activate
 pip install -e 'Images/tools[test]'
 python3 -m apkrun_image --help
+scripts/build-fec-tool.sh
 pytest Images/tools/tests
 ```
 
-`Images/tools/.venv/` is git-ignored and created by `scripts/bootstrap`. Other Python scripts (`scripts/release/*.py`, `scripts/dev/update-server.py`) use the same venv.
+`scripts/build-fec-tool.sh` builds the pinned ARM64 host utility required by AVB/FEC composition tests. `Images/tools/.venv/` is git-ignored and created by `scripts/bootstrap`. Other Python scripts (`scripts/release/*.py`, `scripts/dev/update-server.py`) use the same venv.
 
 ### 2.5 JDK, Gradle, and the Android SDK
 
@@ -251,6 +252,25 @@ xcodebuild test -scheme IntegrationTests \
 - To keep the renderer operations for the replay test, add `TEST_RUNNER_APKRUN_TEST_VIRGL_RECORDING=/tmp/<name>.json` to the `xcodebuild test` line. Then `APKRUN_TEST_KMSCUBE_RECORDING=/tmp/<name>.json swift test --traits TestReadback --filter theKmscubeSessionReplaysOnTheDeviceWithoutHostReadbacks` replays it. The path must be under `/tmp`.
 - VM tests need `com.apple.security.virtualization`, so they run in the signed `APKRunTestHost` ([build-system.md](build-system.md) §12.4).
 - For the Android suites, pass `-derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd"` and an `APKRUN_ANDROID_HOME` outside `~/Documents` that holds `platform-tools`: `mkdir -p "${TMPDIR:-/tmp}/apkrun-test-sdk" && cp -R "$ANDROID_HOME/platform-tools" "${TMPDIR:-/tmp}/apkrun-test-sdk/"`. The copy is the same `adb` binary.
+- To run #36's AndroidCustom checks, select the classes explicitly. An Xcode test-plan configuration sets environment values; it does not filter the target's tests. The plan points to the composed bundle at `/tmp/apkrun-test-linux/android-custom-bundle` and HelloProbe at `/tmp/apkrun-test-fixtures/HelloProbe.apk`:
+
+```bash
+xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+  -configuration Debug -only-test-configuration AndroidCustom \
+  -only-testing:IntegrationTests/AndroidTestEnvironmentTests \
+  -only-testing:IntegrationTests/CustomImageBootTests \
+  -only-testing:IntegrationTests/SystemServicesTest \
+  -only-testing:IntegrationTests/DeveloperModeAdbTests \
+  -only-testing:IntegrationTests/VsockAgentTests \
+  -only-testing:IntegrationTests/AgentSocketIsolationTests \
+  -only-testing:IntegrationTests/SelinuxDenialTests \
+  -derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd" \
+  APKRUN_ANDROID_HOME="$APKRUN_ANDROID_HOME" APKRUN_CI=1 \
+  DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY"
+```
+
+- `APKRUN_ANDROID_HOME` is a build setting read from the hosted test app's Info.plist; exporting only `ANDROID_HOME` does not make `adb` available to the test host. With `APKRUN_CI=1`, a missing `adb` fails the check instead of skipping it.
 - The Guest Agent, package, and input suites read `APKRUN_GUEST_DIR` (`scripts/build-guest.sh --out /tmp/apkrun-test-guest`) and `APKRUN_FIXTURE_APK` (HelloText). The AndroidPackage suite uses RuntimeAPI for import, install, list, details, and uninstall; its headless activity and force-stop checks still use ADB.
 - `AndroidInputTests` also reads `APKRUN_FIXTURE_COMPOSE_APK` (`scripts/build-fixtures.sh --app HelloCompose`, copied to `/tmp`). It needs the debug HelloText, whose `TEXT` and `DETAILS` broadcasts exist only in the debug manifest: `Tests/Fixtures/AndroidApps/gradlew -p Tests/Fixtures/AndroidApps :HelloText:assembleDebug`, then copy `HelloText/build/outputs/apk/debug/HelloText-debug.apk` to `APKRUN_FIXTURE_APK`. The input configuration also reads the staged `virgl-runtime/`, because a host built outside the checkout cannot find the VirGL libraries from its executable.
 

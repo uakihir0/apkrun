@@ -268,7 +268,7 @@ The layout file is the source of truth. Image-layer values come from the Cuttlef
 | `androidboot.lcd_density` | 160 × backing scale of display 0 ([display-and-windowing.md](display-and-windowing.md)) | 4 | |
 | `androidboot.ddr_size` | VM memory as `<MiB>MB`, for example `4096MB` | 4 | |
 | `androidboot.apkrun.instance`, `androidboot.apkrun.devmode`, `androidboot.apkrun.image` | instance UUID; `0` or `1` (custom image only, §11.3); `imageVersion` | 4 | |
-| `androidboot.apkrun.test.*` | test bundles only, never in release bundles (CI checks the release manifest): `marker=<value>` (§12.4), `fail_health=1`, `fail_boot=1` (init stops `zygote` before `sys.boot_completed`) | 2 | [diagnostics.md](diagnostics.md) §12 |
+| `androidboot.apkrun.test.*` | test bundles only, never in release bundles (CI checks the release manifest): `marker=<value>` (§12.4), `fail_health=1`, `fail_boot=1` (init stops `zygote` before `sys.boot_completed`), `secret=1` (the fixed test overlay emits the fixture secret) | 2 | [diagnostics.md](diagnostics.md) §12 |
 
 AVB metadata follows the top-level vbmeta chain in stored order. The digest covers each AVB0 header, authentication block, and auxiliary block, and excludes padding and footers. Chained partitions with their own footer are read through the vbmeta their footer declares. `hash_alg` follows the top-level algorithm (`NONE` uses SHA-256). `avb_version` follows the pinned AVB 1.4 toolchain. The hashtree policy is `restart_and_invalidate`, so `invalidate_on_error` is `yes`. `avb.py` rejects a top-level vbmeta with `VERIFICATION_DISABLED`.
 
@@ -450,7 +450,7 @@ Rules:
 
 ### 8.5 Gate G2 verification
 
-Gate G2 ([roadmap.md](../04-plan/roadmap.md) §2) requires five cold boots of the stock image on VZ, each reaching `sys.boot_completed=1` and staying up 10 minutes with no `system_server` restart, watchdog kill, or HAL crash loop. The reference diff of §8.4 after the last boot must have no unexplained difference. The gate test is `Tests/AcceptanceTests/G2AndroidBoot/`, which uses the `headless` profile (§9.1). The gate result is in [roadmap.md](../04-plan/roadmap.md) §2.
+Gate G2 ([roadmap.md](../04-plan/roadmap.md) §2) requires five cold boots of the selected stock baseline or composed development image on VZ, each reaching `sys.boot_completed=1` and staying up 10 minutes with no `system_server` restart, watchdog kill, or HAL crash loop. The reference diff of §8.4 after the last boot must have no unexplained difference. The gate test is `Tests/AcceptanceTests/G2AndroidBoot/`, which uses the `headless` profile (§9.1) and a complete target reference capture. `scripts/run-gate.sh G2` selects the stock baseline by default; an explicit composed bundle override must carry composition provenance. The gate result is in [roadmap.md](../04-plan/roadmap.md) §2.
 
 ---
 
@@ -608,7 +608,7 @@ The source is `Guest/product/`. The composer reads its placement list `compose.j
 | Adds an in-Android browser (AOSP `Browser2`) if the base has none | "Keep in Android" for links ([desktop-integration.md](desktop-integration.md) §7.1) |
 | Multi-display and freeform overlays | [display-and-windowing.md](display-and-windowing.md) |
 | Disables a HAL or service only with evidence from the §7 checks (#96) | "Do not aggressively remove services" (#36) |
-| Does **not** change the kernel, partition layout, or fstab | the stock image stays a valid development target |
+| Does **not** change the kernel, GPT, or fstab; may grow `system_ext_a` and `odm_a` within their existing super group | the stock image remains a valid development target |
 
 ### 11.3 Developer mode on custom images
 
@@ -629,11 +629,12 @@ Proposed for release: pass `orange` and unlocked, but keep dm-verity on through 
 
 `python3 -m apkrun_image compose` (#36) makes the development image from the pinned stock build, on the developer Mac ([ADR-0019](../01-architecture/decisions/0019-composed-development-image.md)).
 
+- **Workspace.** The output directory must be on a case-sensitive filesystem because EROFS permits case-distinct paths. On the usual case-insensitive macOS startup volume, compose to a mounted case-sensitive APFS scratch volume.
 - **Placement.** Every added file is listed in `Guest/product/compose.json` with its image path, mode, owner, and SELinux label. Added files go into `system_ext_a`. The composer exports the stock tree, adds the files, rebuilds the EROFS image (§4.6), and checks that every stock entry is unchanged.
-- **Growth.** `system_ext_a` has no free space. The composer grows it in the super metadata inside its group (`google_system_dynamic_partitions_a`), and refuses to exceed the group's maximum size. No other partition moves.
+- **Growth.** `system_ext_a` has no free space. The composer grows it in the super metadata inside its existing group, and refuses to exceed that group's maximum size. If the compiled prebuilt policy and hash sidecars do not fit in `odm_a`, the composer grows `odm_a` inside its existing group under the same limit. No other partition moves.
 - **Policy.** The CIL fragments are added to `system_ext_sepolicy.cil`, and the entries to `system_ext_seapp_contexts` and `system_ext_file_contexts`. A pinned `secilc` compiles `precompiled_sepolicy` from the same inputs as `init`, and the composer writes the matching SHA-256 files into `odm_a`. `secilc` enforces `neverallow`.
-- **Signing.** The agents are signed with the public AOSP test platform key (certificate SHA-256 `c8a2e9bc…2ab8`), which `seinfo=platform` of the stock build names. The hashtrees and FEC are rebuilt with the pinned avbtool, and `vbmeta_system_a` and `vbmeta_a` are re-signed with the AOSP AVB test key (§4.6).
-- **Bundle.** `kind: apkrun`, with the stock build and the composition inputs in `provenance` ([runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.3). A composed bundle contains the stock build, so it is never published ([legal-and-licensing.md](../05-development/legal-and-licensing.md) §2).
+- **Signing.** The agents are signed with the public AOSP test platform key (certificate SHA-256 `c8a2e9bc…2ab8`), which `seinfo=platform` of the stock build names. The `system_ext` and `odm` hashtrees and FEC are rebuilt with the pinned avbtool. The updated `system_ext` descriptor is signed in `vbmeta_system_a`, and the updated `odm` descriptor is signed in `vbmeta_a`, with the AOSP AVB test key (§4.6).
+- **Bundle.** `kind: apkrun`, with the stock build and the composition inputs in `provenance` ([runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.3). The Guest Agent package and version come from the hash-pinned `prebuilt/ApkRunGuest.json` product input and populate `requirements.agents`. A composed bundle contains the stock build, so it is never published ([legal-and-licensing.md](../05-development/legal-and-licensing.md) §2).
 - **Limits.** No `user` variant, no kernel or module change, and no release keys. Those need §11.6.
 - Acceptance (#36): the composed image reaches `boot_completed`, the agents start, and the reference diff has no unexplained differences beyond the documented product changes.
 
@@ -725,8 +726,11 @@ Each deviation has an ID with the prefix `CF-`. `Images/reference/<buildId>/expe
 | CF-17 | The kernel logs `KVM is not available. Ignoring kvm-arm.mode` | VZ does not expose pKVM | §6.6 |
 | CF-18 | `log_buf_len=2M` is added | the default buffer wraps before the serial shell answers | §6.4, §6.6 |
 | CF-19 | The reference cmdline has `earlycon`, `ramoops.*`, and a second `panic=-1`; none is passed on VZ | crosvm's UART and ramoops do not exist on VZ | §6.4, §6.6 |
+| CF-20 | APKRun product files are composed into `system_ext_a`; the composer grows its dynamic partition group and reseals the `system_ext` and `odm` AVB chain | the development image reuses the pinned stock build without rebuilding AOSP | §11.5 |
+| CF-21 | The Guest Agent and `apkrun_vsockd` are added as product components; their CIL is compiled into the precompiled policy, and only those two domains are permissive | development services need APKRun-specific access while all other domains remain enforcing | §11.1, §11.2 |
+| CF-22 | `adbd` listens on guest vsock 5555 only when developer mode is enabled; the host forwards it from loopback TCP 6520 | debugging remains opt-in and is not exposed on other host interfaces | §7.3, §11.3 |
 
-#36 adds the product changes of §11.2 that differ at runtime, such as the developer-mode gate of adbd (§11.3).
+#36 records the composed-product differences above. The system-service, policy, and developer-mode checks run in AndroidCustom (§15); the release image uses the same checks under #120 with its own approved build and signing inputs.
 
 ---
 
@@ -766,7 +770,7 @@ Subsystem `io.apkrun.image`, categories `store`, `install`, `verify`, `instance`
 | T0 Python | inventory classification; manifest schema and semantic checks; sparse decoder; GPT round trip; bootconfig golden vectors; kernel decompression | `Images/tools/tests/` |
 | T0 Swift | `ImageVersion` ordering; manifest decoding; bootconfig merge conflicts; GPT backup relocation; `VMDefinition` mapping (§9.2) | `Packages/ImageCore/Tests/ImageCoreTests/` |
 | T1 | Pipeline on synthetic fixtures, built twice with identical `SHA256SUMS`; install, hole punching, signature and extra-file rejection; provisioning and `clonefile`; recovery points | `Images/tools/tests/`; `Packages/ImageCore/Tests/ImageCoreTests/` |
-| T2 | Linux test guest disks and `/proc/bootconfig`; stock boot, init, `sys.boot_completed`, ADB; 20-port numbering; hvc roles; migration (§12.4) | `Tests/IntegrationTests/LinuxGuestTests/`, `…/AndroidBootTests/`, `…/AndroidADBTests/` |
+| T2 | Linux test guest disks and `/proc/bootconfig`; stock boot, init, `sys.boot_completed`, ADB; 20-port numbering; hvc roles; migration (§12.4); composed-image boot, privileged Guest Agent, vsock, developer-mode ADB, SELinux, and HelloProbe isolation | `Tests/IntegrationTests/LinuxGuestTests/`, `…/AndroidBootTests/`, `…/AndroidADBTests/`, `…/AndroidCustomTests/` |
 | T3 | Gate G2 (§8.5) | `Tests/AcceptanceTests/G2AndroidBoot/` |
 
 ---

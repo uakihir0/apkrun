@@ -291,6 +291,8 @@ scripts/build-third-party.sh virgl-runtime
 | libc, log, android_logger crates | cargo | image | `Guest/vsockd/Cargo.lock`; the product uses AOSP `external/rust/crates` |
 | Guest Mesa `mesa` 26.1.8, NDK r28c, Ninja, Bison, Flex, m4, Meson, mako, MarkupSafe, packaging, libdrm 2.4.123 | source or prebuilt, group `guest-mesa` | image (Mesa); tooling (rest) | built by `scripts/guest/build-mesa-android.sh` ([decisions/0018-guest-mesa-ndk-build.md](../01-architecture/decisions/0018-guest-mesa-ndk-build.md)) |
 | bundletool 1.18.3 (`bundletool-all`) | prebuilt, group `fixture-tooling` | tooling | App Bundle fixtures (§8.1) |
+| AOSP `system/extras/verity/fec` and `external/fec` | source, group `image-tooling` | tooling | `scripts/build-fec-tool.sh` builds the pinned macOS ARM64 `fec` host tool used to regenerate AVB FEC when composing `system_ext` (#36) |
+| SELinux `secilc` 3.11 at `2233a23a4d4f1bf29054037babec13f30d038e65`, Flex 2.6.4, m4 1.4.20 | source or prebuilt, group `image-tooling` | tooling | `scripts/build-selinux-tools.sh` builds CIL-enabled static `libsepol` and an arm64 host `secilc`; `--check` validates pins and host tools. The separate prebuilt `libsepol` 3.11 remains CIL-disabled |
 | libsepol 3.11, erofs-utils 1.9.4, `aosp-avbtool`, `aosp-mkbootimg` | prebuilt and vendored, group `image-tooling` | tooling | image tooling; §6.4 |
 
 The lock is the authority for versions and hashes.
@@ -300,6 +302,8 @@ The lock is the authority for versions and hashes.
 | Cache | Key | Where |
 |---|---|---|
 | `virgl-runtime` outputs | lock hash + environment hash | `ThirdParty/out/virgl-runtime/<lock hash>-<environment hash>/` |
+| FEC host tool | source-lock hash + build-script hash + macOS arm64 toolchain hash | `ThirdParty/out/fec/bin/fec` |
+| `secilc` host tool | SELinux/Flex/m4 lock inputs + builder sources + macOS arm64 toolchain hash | `ThirdParty/out/selinux-tools/<input hash>-<environment hash>/`; source at `ThirdParty/out/src/selinux-cil/<commit>`; pinned Flex/m4 archives and host tools under `ThirdParty/out/selinux-tools-work/cache/` |
 | third-party sources | commit | `ThirdParty/out/src/` |
 | patched sources | patch-set SHA-256 | `ThirdParty/out/patched-src/` |
 | pinned tools | version and hash | `build/tools/` |
@@ -341,7 +345,7 @@ ls Guest/build/out/               # apkrun-guest.apk  apkrun-guest.json
 - `Guest/settings.gradle.kts` includes `protocol`, `agentruntime`, and `guestd`. The Store Agent module `APKRunStore` (output `apkrun-store.apk`) is planned (#37; [guest-components.md](../02-design/guest-components.md) §2).
 - `minSdk` 34, `compileSdk` 37, `targetSdk` 37, Java and Kotlin JVM target 17. Dependencies: Kotlin stdlib, kotlinx-coroutines, and protobuf-javalite only. Release builds compile out debug logging through `BuildConfig.DEBUG`.
 - `versionCode = major × 1,000,000 + minor × 1,000 + patch` of `MARKETING_VERSION`; `versionName` is that plus the short Git revision. `scripts/build-guest.sh --version-code N --out DIR` builds another versionCode for the reinstall test. `apkrun-guest.json` is the record the host reads before install ([guest-components.md](../02-design/guest-components.md) §3.1).
-- Signing: the test key `Tests/Fixtures/signing/test-guest-dev.jks` (alias `apkrun-test-guest-dev`). The script fails unless the signer's certificate SHA-256 is `c58db702f39e9b809ad166d173f165478b4c7cb718d4d0cc89ebe8956438c900`. For the composed image, `--platform-test-key` signs with the public AOSP test platform key instead (planned, #36; [android-image.md](../02-design/android-image.md) §11.5). The release image re-signs with the APKRun platform key (#120).
+- Signing: the test key `Tests/Fixtures/signing/test-guest-dev.jks` (alias `apkrun-test-guest-dev`). The script fails unless the signer's certificate SHA-256 is `c58db702f39e9b809ad166d173f165478b4c7cb718d4d0cc89ebe8956438c900`. `--for-aosp` keeps that development signature and writes the persistent APK to `Guest/product/prebuilt/`. `--platform-test-key` re-signs only that prebuilt with `aosp-test-platform.pk8` and `aosp-test-platform.x509.pem`, then verifies the certificate SHA-256 `c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8` (#36; [android-image.md](../02-design/android-image.md) §11.5). The flag cannot be combined with `--out`. The release image uses the APKRun platform key (#120).
 - `scripts/build/embed-guest.sh` copies both files to `APKRun.app/Contents/Resources/guest/`, the development copy for stock images.
 
 ### 7.2 apkrun_vsockd (Rust)
@@ -373,7 +377,7 @@ The fixture catalog (apps, variants, keys, repositories, golden files) is [test-
 |---|---|---|
 | `Tests/Fixtures/AndroidApps/` | Gradle project of the fixture apps, with its own `gradlew` | `scripts/build-fixtures.sh` → `Tests/Fixtures/AndroidApps/out/` (git-ignored, reproducible) |
 | `Tests/Fixtures/apks/` (planned, #28) | committed APKs and derived packages that T0 tests read, so `swift test` needs no Gradle (NFR-DEV-02) | `scripts/build-fixtures.sh --refresh-committed` (planned) |
-| `Tests/Fixtures/signing/` | test-only keys: `test-fixture-a.jks`, `test-guest-dev.jks`, `test-image-ed25519` (and `.pub`), `test-release-check-ed25519.pub`, `aosp-avb-testkey-rsa4096.pem`, `test-apkrun-image-fixture-rsa.pem`, `test-apkrun-image-fixture.avbpubkey`. Planned: `test-fixture-b.jks`, `test-fdroid-repo.jks` (#52), `test-sparkle-ed25519` (and `.pub`) (#58) | committed ([security-model.md](../01-architecture/security-model.md) §7) |
+| `Tests/Fixtures/signing/` | test-only keys: `test-fixture-a.jks`, `test-guest-dev.jks`, `test-image-ed25519` (and `.pub`), `test-release-check-ed25519.pub`, `aosp-avb-testkey-rsa4096.pem`, `aosp-test-platform.pk8` and `.x509.pem` (local composed development image only), `test-apkrun-image-fixture-rsa.pem`, `test-apkrun-image-fixture.avbpubkey`. Planned: `test-fixture-b.jks`, `test-fdroid-repo.jks` (#52), `test-sparkle-ed25519` (and `.pub`) (#58) | committed ([security-model.md](../01-architecture/security-model.md) §7) |
 | `Tests/Fixtures/update-repos/` (planned, #38, #51) | Local, Direct, F-Droid, GitHub provider fixtures | `scripts/build-fixtures.sh --update-repos` (planned); F-Droid repository built with `fdroid update` and `test-fdroid-repo.jks` in CI |
 | `Tests/Fixtures/runtime-updates/` (planned, #58, #88) | appcast for `ReleaseUpdateTest` builds 9000 and 9001; image feeds (valid, tampered, replayed sequence, expired) | `maintenance` job writes the appcast with `generate_appcast`. T1 feeds are signed with `test-image-ed25519`. The T2 feed offering image B is written at run time and signed with the lab Mac's development image key (`image-feed.py --key`; [runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.1) |
 | `Tests/Fixtures/schemas/<file>/v<n>.json`, `v<n>.expected.json` (planned, #58) | migration golden files ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §5) | committed |
@@ -548,7 +552,7 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
 - Use `-derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd"` and an `APKRUN_ANDROID_HOME` that holds a copy of `platform-tools`. CI uses `$RUNNER_TEMP`. `scripts/run-gate.sh` builds under `build/gates/` in the checkout.
 - `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY` (the SHA-1 fingerprint of the certificate) come from the environment or from CI repository variables. The fingerprint is explicit, because the generic `Apple Development` name does not reliably select the lab certificate.
 - `APKRunTestHost` and the hosted test bundles disable hardened runtime; that exception is limited to test targets.
-- `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per test group: `LinuxGuest`, `AndroidADB`, `AndroidPackage`, `AndroidBoot`, `AndroidNetwork`, `AndroidGraphics`, `AndroidGuestAgent`, `AndroidGuestProtocolLaunch`, `AndroidInput`, and the four input configurations below. The T2 suites of [test-strategy.md](../04-plan/test-strategy.md) §2.4 are `LinuxGuest`, `AndroidStock`, `AndroidCustom`, and `Maintenance`; the last three are planned. T2 has one automatic retry ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
+- `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per test group: `LinuxGuest`, `AndroidADB`, `AndroidPackage`, `AndroidBoot`, `AndroidCustom`, `AndroidNetwork`, `AndroidGraphics`, `AndroidGuestAgent`, `AndroidGuestProtocolLaunch`, `AndroidInput`, and the four input configurations below. The AndroidCustom T2 suite is implemented and requires the composed bundle and HelloProbe fixture at the paths in that configuration; the AndroidStock and Maintenance suites and automated T2 CI jobs in §15 remain planned ([test-strategy.md](../04-plan/test-strategy.md) §2.4). T2 has one automatic retry ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
 
 Input tests run in their own configurations. Select the configuration and the method together:
 

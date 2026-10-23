@@ -41,7 +41,7 @@ Guest/
 | Dependencies | Kotlin stdlib, kotlinx-coroutines, protobuf-javalite. No AndroidX in the daemon code path, because `app_process` has no application context |
 | Build | `./gradlew -p Guest assembleRelease` (called by `scripts/build-guest.sh`). Output: `Guest/build/out/{apkrun-guest.apk, apkrun-store.apk}` |
 | Development signing | `Tests/Fixtures/signing/test-guest-dev.jks` (test-only, [modules.md](../01-architecture/modules.md) §1) |
-| Custom image signing | the product imports the APKs with `android_app_import { certificate: "platform", privileged: true, presigned: false }`, which re-signs them with the image's platform key ([android-image.md](android-image.md) §11.1) |
+| Custom image signing | the composed development image uses the pre-signed persistent APK from `scripts/build-guest.sh --platform-test-key`; source-built images use `android_app_import { certificate: "platform", privileged: true, presigned: false }` with the image's platform key ([android-image.md](android-image.md) §11.1, §11.5) |
 | Version | `versionCode = major × 1 000 000 + minor × 1 000 + patch` of the APKRun release that built them. `versionName` is the APKRun version plus the git revision |
 
 The host app bundle carries the development-mode APK at `APKRun.app/Contents/Resources/guest/apkrun-guest.apk`, with its version record `apkrun-guest.json`. The host finds the bundle in this order:
@@ -131,7 +131,7 @@ The application is `io.apkrun.guest`, with `android:persistent="true"` in the AO
 
 ### 4.2 SELinux
 
-- `seapp_contexts`: `user=_app isPrivApp=true seinfo=platform name=io.apkrun.guest domain=apkrun_guest_app type=app_data_file levelFrom=all`, and the same for `io.apkrun.store` with `apkrun_store_app`.
+- `seapp_contexts`: `user=_app isPrivApp=true seinfo=platform name=io.apkrun.guest domain=apkrun_guest_app type=app_data_file levelFrom=all`. #37 adds the corresponding `io.apkrun.store` / `apkrun_store_app` entry; the #36 image maps only the Guest Agent.
 - `apkrun_guest_app.te` (sketch; the final rules come from the audit of permissive-mode denials, §13):
 
 ```text
@@ -147,6 +147,8 @@ allow apkrun_vsockd apkrun_guest_app:unix_stream_socket connectto;
 ```
 
 - `apkrun_store_app` follows the same pattern, with `package_service`, `storagestats_service`, and the installer-related services.
+- The Guest Agent domain keeps only the `service_manager find` rules observed for `gpu_service`, `netstats_service`, and `content_capture_service`; it does not receive the full `app_api_service` attribute. It gets its own `[userfaultfd]` object type with only `create`, `ioctl`, and `read`, plus `memfd_file execute` for its own type, matching the Android app-domain behavior needed by ART.
+- `apkrun_vsockd` is an MLS trusted subject so it can connect to the agents' per-app MCS-labeled abstract sockets. This attribute bypasses MLS checks for every constrained class the daemon uses; it does not scope the exception to `connectto`. Android 17's inherited `domain` rules let the trusted bridge search/read generic `/proc` directories and read `/proc` symlinks across app MCS categories, exposing process metadata. The captured effective-policy audit found no allow to ordinary app-data types or arbitrary app IPC. Re-audit the daemon's full effective TE closure, including inherited `coredomain` rules, whenever the Android base policy changes. #36 grants `connectto` only to `apkrun_guest_app`; #37 adds `apkrun_store_app`. Keep the agents' `levelFrom=all` labels.
 - The new domains are developed in permissive mode only (`permissive apkrun_guest_app;` in userdebug development builds), and the denials become rules. Release builds have no permissive domains. CI checks that `permissive` does not appear in a `user` build's policy.
 
 ### 4.3 Privileged permissions
@@ -337,7 +339,7 @@ service apkrun_vsockd /system_ext/bin/apkrun_vsockd
     restart_period 1
 ```
 
-- `sepolicy/apkrun_vsockd.te` (sketch):
+- `sepolicy/apkrun_vsockd.te` (sketch; #36 allows the Guest Agent, and #37 adds the Store Agent):
 
 ```text
 type apkrun_vsockd, domain;

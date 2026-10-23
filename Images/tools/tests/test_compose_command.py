@@ -16,9 +16,11 @@ import pytest
 
 from apkrun_image import compose_command as command
 from apkrun_image.erofs import REGULAR_FILE, Entry, TarMember
+from apkrun_image.vendor_inject import MESA_LIBRARIES
 
 SYSTEM_EXT_SIZE = 8192
 ODM_SIZE = 8192
+VENDOR_SIZE = 8192
 SYSTEM_EXT_GROUP = "google_system_dynamic_partitions_a"
 ODM_GROUP = "google_vendor_dynamic_partitions_a"
 SYSTEM_EXT_DESCRIPTOR = {
@@ -39,6 +41,17 @@ ODM_DESCRIPTOR = {
     "salt": "odm-salt",
     "imageSize": 4096,
 }
+VENDOR_DESCRIPTOR = {
+    "partition": "vendor",
+    "dataBlockSize": 4096,
+    "hashBlockSize": 4096,
+    "fecRoots": 2,
+    "hashAlgorithm": "sha256",
+    "salt": "vendor-salt",
+    "imageSize": 4096,
+}
+SEALED_ODM_DESCRIPTOR = {**ODM_DESCRIPTOR, "rootDigest": "rebuilt-odm"}
+SEALED_VENDOR_DESCRIPTOR = {**VENDOR_DESCRIPTOR, "rootDigest": "rebuilt-vendor"}
 
 
 def _sha256(path: Path) -> str:
@@ -85,6 +98,7 @@ def _install_composer_fakes(
     *,
     fail_on_top_level_vbmeta: bool = False,
     mismatch_stock_system_ext_descriptor: bool = False,
+    mismatch_stock_vendor_descriptor: bool = False,
 ) -> tuple[Path, Path, Path, dict[str, object]]:
     repository = tmp_path / "repository"
     product_root = repository / "Guest/product"
@@ -104,6 +118,50 @@ def _install_composer_fakes(
     (product_root / "payload/apkrun.bin").write_bytes(b"apkrun fixture\n")
     (product_root / "prebuilt").mkdir()
     (product_root / command.GUEST_AGENT_APK).write_bytes(b"fixture APK")
+    mesa_directory = product_root / command.MESA_PRODUCT_RELATIVE_PATH
+    mesa_records: list[dict[str, object]] = []
+    for name in MESA_LIBRARIES:
+        header = bytearray(64)
+        header[0:4] = b"\x7fELF"
+        header[4] = 2
+        header[5] = 1
+        header[6] = 1
+        header[16:18] = (3).to_bytes(2, "little")
+        header[18:20] = (183).to_bytes(2, "little")
+        content = bytes(header) + b"\0" + name.encode("ascii") + b"\0"
+        library = mesa_directory / "vendor/lib64" / name
+        library.parent.mkdir(parents=True, exist_ok=True)
+        library.write_bytes(content)
+        mesa_records.append(
+            {
+                "path": f"vendor/lib64/{name}",
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "size": len(content),
+                "class": "ELF64",
+                "machine": "AArch64",
+                "soname": name,
+            }
+        )
+    real_load_component = command.load_component
+    pinned_mesa = real_load_component(command.MESA_COMPONENT)
+    pinned_ndk = real_load_component("ndk")
+    third_party_lock = command._repository_root() / "ThirdParty/ThirdParty.lock.json"
+    mesa_manifest = {
+        "schemaVersion": 1,
+        "component": "mesa-android",
+        "mesa": {"commit": pinned_mesa["commit"], "version": pinned_mesa["version"]},
+        "tools": {"ndk": pinned_ndk["version"]},
+        "buildFlags": pinned_mesa["buildFlags"],
+        "lock": {
+            "path": "ThirdParty/ThirdParty.lock.json",
+            "sha256": _sha256(third_party_lock),
+            "group": "guest-mesa",
+        },
+        "files": mesa_records,
+    }
+    (mesa_directory / "manifest.json").write_text(
+        json.dumps(mesa_manifest, indent=2) + "\n", encoding="utf-8"
+    )
     plan = {
         "schemaVersion": 1,
         "entries": [
@@ -179,6 +237,7 @@ def _install_composer_fakes(
         "logicalPartitions": [
             {"name": "system_ext_a", "size": SYSTEM_EXT_SIZE},
             {"name": "odm_a", "size": ODM_SIZE},
+            {"name": "vendor_a", "size": VENDOR_SIZE},
         ],
     }
     manifest_path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
@@ -198,7 +257,15 @@ def _install_composer_fakes(
     )
     monkeypatch.setattr(command, "_open_artifact", open_artifact)
     monkeypatch.setattr(command, "verify_tools", lambda _root: SimpleNamespace(version="fixture-1"))
-    monkeypatch.setattr(command, "load_component", lambda _component: Path("/fixture/avbtool.py"))
+    monkeypatch.setattr(
+        command,
+        "load_component",
+        lambda component: (
+            real_load_component(component)
+            if component == command.MESA_COMPONENT
+            else Path("/fixture/avbtool.py")
+        ),
+    )
     monkeypatch.setattr(command, "verify_avbtool", lambda *_args: Path("/fixture/avbtool.py"))
     monkeypatch.setattr(command, "_verify_pinned_fec_tool", lambda _repository, tool: tool)
 
@@ -216,7 +283,7 @@ def _install_composer_fakes(
             SimpleNamespace(name="odm_a", size=odm_size, group=ODM_GROUP),
             SimpleNamespace(name="system_a", size=16384, group=SYSTEM_EXT_GROUP),
             SimpleNamespace(name="product_a", size=8192, group=SYSTEM_EXT_GROUP),
-            SimpleNamespace(name="vendor_a", size=8192, group=ODM_GROUP),
+            SimpleNamespace(name="vendor_a", size=VENDOR_SIZE, group=ODM_GROUP),
         )
         return SimpleNamespace(logical_partitions=entries)
 
@@ -241,7 +308,18 @@ def _install_composer_fakes(
         return destination.stat().st_size
 
     monkeypatch.setattr(command, "_filesystem_prefix", filesystem_prefix)
-    monkeypatch.setattr(command, "export_tree", lambda _tools, _image, tree: tree.mkdir())
+
+    def export_tree(_tools: object, image: Path, tree: Path) -> None:
+        tree.mkdir()
+        if image.name == "system-stock.erofs":
+            contexts = tree / "system/etc/selinux/plat_file_contexts"
+            contexts.parent.mkdir(parents=True)
+            contexts.write_text(
+                "/vendor/lib64/egl/libEGL_mesa\\.so u:object_r:vendor_file:s0\n",
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(command, "export_tree", export_tree)
     monkeypatch.setattr(
         command,
         "_verify_product_labels",
@@ -278,11 +356,59 @@ def _install_composer_fakes(
     )
     monkeypatch.setattr(command, "_info", lambda _avbtool, image: {"image": image.name})
     monkeypatch.setattr(command, "_original_size", lambda _info, _partition: 4096)
-    monkeypatch.setattr(
-        command,
-        "_partition_tree",
-        lambda _info, _partition, _description: dict(ODM_DESCRIPTOR),
-    )
+
+    def partition_tree(info: object, partition: str, _description: str) -> dict[str, object]:
+        image_name = info["image"]  # type: ignore[index]
+        if image_name == "vbmeta-stock.img":
+            if partition == "vendor" and mismatch_stock_vendor_descriptor:
+                return {**VENDOR_DESCRIPTOR, "rootDigest": "different"}
+            return dict(ODM_DESCRIPTOR if partition == "odm" else VENDOR_DESCRIPTOR)
+        if image_name in {"vbmeta-after-odm.img", "vbmeta_a.img"}:
+            descriptors = (
+                {
+                    "odm": SEALED_ODM_DESCRIPTOR,
+                    "vendor": VENDOR_DESCRIPTOR,
+                }
+                if image_name == "vbmeta-after-odm.img"
+                else {
+                    "odm": SEALED_ODM_DESCRIPTOR,
+                    "vendor": SEALED_VENDOR_DESCRIPTOR,
+                }
+            )
+            return dict(descriptors[partition])
+        return dict(ODM_DESCRIPTOR if partition == "odm" else VENDOR_DESCRIPTOR)
+
+    monkeypatch.setattr(command, "_partition_tree", partition_tree)
+
+    def rebuild_vendor(
+        _tools: object,
+        _stock: Path,
+        scratch: Path,
+        libraries: object,
+        *,
+        plat_name: str,
+        plat_text: str,
+        image_uuid: str,
+    ) -> SimpleNamespace:
+        assert plat_name == "system_a:/system/etc/selinux/plat_file_contexts"
+        assert "plat_file_contexts" in plat_text or "vendor_file" in plat_text
+        assert len(libraries) == len(MESA_LIBRARIES)  # type: ignore[arg-type]
+        image = scratch / "vendor-mesa.erofs"
+        image.write_bytes(b"V" * 8192)
+        mesa_entries = {
+            library.target: SimpleNamespace(label="u:object_r:vendor_file:s0")
+            for library in libraries  # type: ignore[union-attr]
+        }
+        return SimpleNamespace(
+            image=image,
+            image_uuid=image_uuid,
+            reproduced=21,
+            stock_blocks=8,
+            fs_blocks=9,
+            mesa_entries=mesa_entries,
+        )
+
+    monkeypatch.setattr(command, "rebuild_vendor", rebuild_vendor)
 
     def rebuild_system_ext(
         _tools: object,
@@ -327,10 +453,20 @@ def _install_composer_fakes(
         "minimum_partition_size",
         lambda _avbtool, _filesystem, **kwargs: kwargs["current_size"] + 4096,
     )
+
+    def minimum_partition_size_for_descriptor(
+        _avbtool: object, _filesystem: Path, **kwargs: object
+    ) -> int:
+        if kwargs["partition_name"] == "vendor":
+            assert kwargs["current_size"] == VENDOR_SIZE
+            assert kwargs["maximum_size"] == VENDOR_SIZE
+            return VENDOR_SIZE
+        return int(kwargs["current_size"]) + 4096
+
     monkeypatch.setattr(
         command,
         "minimum_partition_size_for_descriptor",
-        lambda _avbtool, _filesystem, **kwargs: kwargs["current_size"] + 4096,
+        minimum_partition_size_for_descriptor,
     )
 
     def grow_partition(
@@ -352,7 +488,13 @@ def _install_composer_fakes(
     ) -> dict[str, object]:
         del filesystem, fec
         output.write_bytes(b"A" * partition_size)
-        return dict(stock_descriptor)
+        descriptor = dict(stock_descriptor)
+        output_partition = output.stem.removesuffix("-sealed")
+        if output_partition == "odm":
+            descriptor = dict(SEALED_ODM_DESCRIPTOR)
+        elif output_partition == "vendor":
+            descriptor = dict(SEALED_VENDOR_DESCRIPTOR)
+        return descriptor
 
     monkeypatch.setattr(command, "seal_system_ext", seal)
 
@@ -366,7 +508,9 @@ def _install_composer_fakes(
         stock_descriptor: dict[str, object],
         fec: Path,
     ) -> dict[str, object]:
-        assert partition_name == "odm"
+        assert partition_name in {"odm", "vendor"}
+        assert stock_descriptor["fecRoots"] == 2
+        assert fec.name == "fec"
         return seal(
             Path("/fixture/avbtool.py"),
             filesystem,
@@ -379,6 +523,8 @@ def _install_composer_fakes(
     monkeypatch.setattr(command, "seal_partition", seal_odm)
 
     def replace_partition(source: Path, name: str, image: Path, destination: Path) -> None:
+        if name == "vendor_a":
+            assert image.stat().st_size == VENDOR_SIZE
         destination.write_bytes(source.read_bytes() + f":{name}:".encode() + image.read_bytes())
 
     monkeypatch.setattr(command, "replace_partition", replace_partition)
@@ -399,18 +545,28 @@ def _install_composer_fakes(
 
     def refresh_top_level(
         _avbtool: Path,
-        _stock: Path,
-        _image: Path,
+        stock: Path,
+        image: Path,
         partition_name: str,
         _key: Path,
         output: Path,
         _work: Path,
     ) -> dict[str, object]:
-        assert partition_name == "odm"
-        if fail_on_top_level_vbmeta:
+        if partition_name == "odm":
+            assert stock.name == "vbmeta-stock.img"
+            assert image.name == "odm-sealed.img"
+            previous = ODM_DESCRIPTOR
+            descriptor = SEALED_ODM_DESCRIPTOR
+        else:
+            assert partition_name == "vendor"
+            assert stock.name == "vbmeta-after-odm.img"
+            assert image.name == "vendor-sealed.img"
+            previous = VENDOR_DESCRIPTOR
+            descriptor = SEALED_VENDOR_DESCRIPTOR
+        if fail_on_top_level_vbmeta and partition_name == "vendor":
             raise command.ImageCompositionError("injected final vbmeta failure")
-        output.write_bytes(b"refreshed top level vbmeta")
-        return {"updatedDescriptor": "odm"}
+        output.write_bytes(f"refreshed top level vbmeta: {partition_name}".encode())
+        return {"previousDescriptor": previous, "descriptor": descriptor}
 
     monkeypatch.setattr(command, "refresh_vbmeta_partition", refresh_top_level)
 
@@ -445,6 +601,11 @@ def test_compose_image_records_hashed_outputs_and_source_provenance(
         product / command.GUEST_AGENT_APK,
         *(product / relative for relative in command.PRODUCT_POLICY_INPUTS),
         *(product / relative for relative in command.PRODUCT_BUNDLE_INPUTS),
+        product / command.MESA_PRODUCT_RELATIVE_PATH / "manifest.json",
+        *(
+            product / command.MESA_PRODUCT_RELATIVE_PATH / "vendor/lib64" / name
+            for name in MESA_LIBRARIES
+        ),
     ]
     assert record["productInputs"] == [
         {
@@ -458,12 +619,32 @@ def test_compose_image_records_hashed_outputs_and_source_provenance(
     assert "testOverlayInputs" not in record
     assert record["apkrunRevision"] == "a" * 40
     assert record["policy"] == {"cilInputs": 7, "fixture": True}
+    assert record["vendor"]["stockEntriesReproduced"] == 21
+    assert (
+        record["vendor"]["mesa"]["commit"]
+        == command.load_component(command.MESA_COMPONENT)["commit"]
+    )
+    assert len(record["vendor"]["injectedLibraries"]) == len(MESA_LIBRARIES)
+    assert record["vendor"]["descriptor"] == SEALED_VENDOR_DESCRIPTOR
     assert record["vbmeta"] == {
         "systemExt": {
             "updatedDescriptor": "system_ext",
             "previousDescriptor": SYSTEM_EXT_DESCRIPTOR,
         },
-        "topLevel": {"updatedPartition": "odm", "updatedDescriptor": "odm"},
+        "topLevel": {
+            "updates": [
+                {
+                    "updatedPartition": "odm",
+                    "previousDescriptor": ODM_DESCRIPTOR,
+                    "descriptor": SEALED_ODM_DESCRIPTOR,
+                },
+                {
+                    "updatedPartition": "vendor",
+                    "previousDescriptor": VENDOR_DESCRIPTOR,
+                    "descriptor": SEALED_VENDOR_DESCRIPTOR,
+                },
+            ]
+        },
     }
     assert record["growth"]["grownBytes"] == SYSTEM_EXT_SIZE + 4096
     assert record["odmGrowth"]["grownBytes"] == ODM_SIZE + 4096
@@ -779,6 +960,36 @@ def test_compose_rejects_mismatched_stock_system_ext_descriptors(
         command.ImageCompositionError,
         match="stock system_ext_a footer and vbmeta_system_a descriptor disagree",
     ):
+        command.compose_image(manifest, output_directory=output, product_root=product)
+
+    assert not output.exists()
+
+
+def test_compose_rejects_mismatched_stock_vendor_descriptors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, product, output, _document = _install_composer_fakes(
+        monkeypatch,
+        tmp_path,
+        mismatch_stock_vendor_descriptor=True,
+    )
+
+    with pytest.raises(
+        command.ImageCompositionError,
+        match="stock vendor_a footer and vbmeta_a descriptor disagree",
+    ):
+        command.compose_image(manifest, output_directory=output, product_root=product)
+
+    assert not output.exists()
+
+
+def test_compose_rejects_missing_staged_mesa_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, product, output, _document = _install_composer_fakes(monkeypatch, tmp_path)
+    (product / command.MESA_PRODUCT_RELATIVE_PATH / "manifest.json").unlink()
+
+    with pytest.raises(command.ImageCompositionError, match="invalid staged Mesa product"):
         command.compose_image(manifest, output_directory=output, product_root=product)
 
     assert not output.exists()

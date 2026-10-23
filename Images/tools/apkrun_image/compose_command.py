@@ -83,8 +83,11 @@ from apkrun_image.selinux_labels import (
 )
 from apkrun_image.vendor_inject import (
     AVBTOOL_COMPONENT,
+    MESA_COMPONENT,
+    load_mesa_output,
     verify_avbtool,
 )
+from apkrun_image.vendor_inject import rebuild_partition as rebuild_vendor
 from apkrun_image.vendor_reseal import (
     _info,
     _original_size,
@@ -97,6 +100,8 @@ COPY_CHUNK = 8 * 1024 * 1024
 SYSTEM_EXT = "system_ext_a"
 SYSTEM_PARTITION = "system_a"
 ODM_PARTITION = "odm_a"
+VENDOR_PARTITION = "vendor_a"
+MESA_PRODUCT_RELATIVE_PATH = "mesa/prebuilt"
 OUTPUT_FILES = ("super.img", "vbmeta_system_a.img", "vbmeta_a.img", "composition.json")
 PRODUCT_POLICY_INPUTS = (
     "sepolicy/apkrun_guest.cil",
@@ -896,9 +901,11 @@ def _composition_provenance(
     test_overlay_inputs: Sequence[Mapping[str, str]] | None = None,
     repository: Path,
     stock_system_ext_sha256: str,
+    vendor: Mapping[str, Any],
     rebuild: Mapping[str, Any],
     system_ext_descriptor: Mapping[str, Any],
     odm_descriptor: Mapping[str, Any],
+    vendor_descriptor: Mapping[str, Any],
     odm: Mapping[str, Any],
     policy: Mapping[str, Any],
     growth: Mapping[str, Any],
@@ -944,6 +951,7 @@ def _composition_provenance(
         "imageToolsVersion": "0.1.0",
         "erofsUtilsVersion": tool_version,
         "stockSystemExtSHA256": stock_system_ext_sha256,
+        "vendor": dict(vendor),
         "systemExt": {
             "uuid": rebuild["image_uuid"],
             "filesystemBytes": rebuild["filesystem_bytes"],
@@ -963,6 +971,11 @@ def _composition_provenance(
                 "partition": odm_descriptor["partition"],
                 "fecRoots": odm_descriptor["fecRoots"],
                 "hashAlgorithm": odm_descriptor["hashAlgorithm"],
+            },
+            "vendor": {
+                "partition": vendor_descriptor["partition"],
+                "fecRoots": vendor_descriptor["fecRoots"],
+                "hashAlgorithm": vendor_descriptor["hashAlgorithm"],
             },
             "signer": "aosp-avb-testkey-rsa4096",
         },
@@ -1019,6 +1032,20 @@ def compose_image(
         raise ImageCompositionError("output directory must be outside Guest/product.")
 
     source_placements = load_placements(product_root / "compose.json", product_root)
+    mesa_directory = product_root / MESA_PRODUCT_RELATIVE_PATH
+    if (
+        _path_has_symlink_component(mesa_directory, root=product_root)
+        or not mesa_directory.is_dir()
+    ):
+        raise ImageCompositionError(
+            f"{mesa_directory}: the staged Mesa product must be a real directory."
+        )
+    try:
+        source_mesa_libraries, _source_mesa_record = load_mesa_output(
+            mesa_directory, load_component(MESA_COMPONENT)
+        )
+    except (ErofsError, ValueError, OSError) as error:
+        raise ImageCompositionError(f"invalid staged Mesa product: {error}") from None
     test_overlay_inputs = _test_overlay_inputs(repository) if test_overlay else None
     if test_overlay:
         test_overlay_root = repository / TEST_OVERLAY_RELATIVE_ROOT
@@ -1043,7 +1070,11 @@ def compose_image(
         product_root,
         source_placements,
         additional=tuple(
-            product_root / path for path in (*PRODUCT_POLICY_INPUTS, *PRODUCT_BUNDLE_INPUTS)
+            [
+                *(product_root / path for path in (*PRODUCT_POLICY_INPUTS, *PRODUCT_BUNDLE_INPUTS)),
+                mesa_directory / "manifest.json",
+                *(library.source for library in source_mesa_libraries),
+            ]
         ),
     )
     super_artifact = _artifact_id(document, "super")
@@ -1063,10 +1094,20 @@ def compose_image(
         ),
         None,
     )
+    vendor_manifest_size = next(
+        (
+            item.get("size")
+            for item in document.get("logicalPartitions", [])
+            if isinstance(item, dict) and item.get("name") == VENDOR_PARTITION
+        ),
+        None,
+    )
     if not isinstance(system_ext_manifest_size, int) or system_ext_manifest_size <= 0:
         raise ImageCompositionError("manifest has no valid system_ext_a size.")
     if not isinstance(odm_manifest_size, int) or odm_manifest_size <= 0:
         raise ImageCompositionError("manifest has no valid odm_a size.")
+    if not isinstance(vendor_manifest_size, int) or vendor_manifest_size <= 0:
+        raise ImageCompositionError("manifest has no valid vendor_a size.")
 
     erofs_tools_root = erofs_tools_root or repository / "ThirdParty/out/erofs-utils"
     selinux_tools_root = selinux_tools_root or repository / "ThirdParty/out/selinux-tools"
@@ -1093,6 +1134,15 @@ def compose_image(
             test_overlay_inputs=test_overlay_inputs or (),
             repository=repository,
         )
+        try:
+            mesa_libraries, mesa_record = load_mesa_output(
+                snapshot_product / MESA_PRODUCT_RELATIVE_PATH,
+                load_component(MESA_COMPONENT),
+            )
+        except (ErofsError, ValueError, OSError) as error:
+            raise ImageCompositionError(
+                f"staged Mesa product changed or is invalid in the input snapshot: {error}"
+            ) from None
         if test_overlay_inputs is not None:
             overlay_snapshot_root = snapshot_product / TEST_OVERLAY_RELATIVE_ROOT
             overlay_document = _load_json(
@@ -1150,6 +1200,9 @@ def compose_image(
         odm_partition = next(
             (item for item in metadata.logical_partitions if item.name == ODM_PARTITION), None
         )
+        stock_vendor_partition = next(
+            (item for item in metadata.logical_partitions if item.name == VENDOR_PARTITION), None
+        )
         if (
             system_ext_partition is None
             or system_ext_partition.size != system_ext_manifest_size
@@ -1157,9 +1210,13 @@ def compose_image(
             or odm_partition is None
             or odm_partition.size != odm_manifest_size
             or odm_partition.group != "google_vendor_dynamic_partitions_a"
+            or stock_vendor_partition is None
+            or stock_vendor_partition.size != vendor_manifest_size
+            or stock_vendor_partition.group != "google_vendor_dynamic_partitions_a"
         ):
             raise ImageCompositionError(
-                "system_ext_a or odm_a does not match the pinned manifest and super groups."
+                "system_ext_a, odm_a, or vendor_a does not match the pinned manifest "
+                "and super groups."
             )
 
         stock_vbmeta_system = work / "vbmeta-system-stock.img"
@@ -1197,7 +1254,7 @@ def compose_image(
         stock_vendor = work / "vendor-stock.img"
         stock_odm = work / "odm-stock.img"
         _copy_logical_partition(stock_super, "product_a", stock_product)
-        _copy_logical_partition(stock_super, "vendor_a", stock_vendor)
+        _copy_logical_partition(stock_super, VENDOR_PARTITION, stock_vendor)
         _copy_logical_partition(stock_super, ODM_PARTITION, stock_odm)
         product_fs = work / "product-stock.erofs"
         vendor_fs = work / "vendor-stock.erofs"
@@ -1205,6 +1262,16 @@ def compose_image(
         _filesystem_prefix(avbtool, stock_product, "product", product_fs)
         _filesystem_prefix(avbtool, stock_vendor, "vendor", vendor_fs)
         _filesystem_prefix(avbtool, stock_odm, "odm", odm_fs)
+        stock_vendor_descriptor = _partition_tree(
+            _info(avbtool, stock_vendor), "vendor", "the stock vendor_a"
+        )
+        top_vendor_descriptor = _partition_tree(
+            _info(avbtool, stock_vbmeta), "vendor", "the stock vbmeta_a"
+        )
+        if top_vendor_descriptor != stock_vendor_descriptor:
+            raise ImageCompositionError(
+                "the stock vendor_a footer and vbmeta_a descriptor disagree."
+            )
         for name, image in (("product", product_fs), ("vendor", vendor_fs), ("odm", odm_fs)):
             tree = work / f"{name}-tree"
             export_tree(tools, image, tree)
@@ -1217,6 +1284,48 @@ def compose_image(
             snapshot_product,
             partition_trees["system"],
             partition_trees["system_ext"],
+        )
+
+        vendor_work = work / "vendor-rebuild"
+        vendor_work.mkdir()
+        vendor_uuid = deterministic_filesystem_uuid(
+            "vendor", sha256_file(vendor_fs), product_inputs
+        )
+        platform_contexts = read_contexts_text(
+            _partition_mount_root(partition_trees["system"], "system")
+            / "etc/selinux/plat_file_contexts"
+        )
+        rebuilt_vendor = rebuild_vendor(
+            tools,
+            vendor_fs,
+            vendor_work,
+            mesa_libraries,
+            plat_name="system_a:/system/etc/selinux/plat_file_contexts",
+            plat_text=platform_contexts,
+            image_uuid=vendor_uuid,
+        )
+        required_vendor_size = minimum_partition_size_for_descriptor(
+            avbtool,
+            rebuilt_vendor.image,
+            partition_name="vendor",
+            current_size=stock_vendor_partition.size,
+            maximum_size=stock_vendor_partition.size,
+            descriptor=stock_vendor_descriptor,
+            fec=fec_tool,
+        )
+        if required_vendor_size != stock_vendor_partition.size:
+            raise ImageCompositionError(
+                "the Mesa libraries require changing the vendor_a partition size."
+            )
+        sealed_vendor = work / "vendor-sealed.img"
+        sealed_vendor_descriptor = seal_partition(
+            avbtool,
+            rebuilt_vendor.image,
+            sealed_vendor,
+            partition_name="vendor",
+            partition_size=stock_vendor_partition.size,
+            stock_descriptor=stock_vendor_descriptor,
+            fec=fec_tool,
         )
 
         policy_replacements, odm_tree, policy_record = _policy_replacements(
@@ -1366,8 +1475,10 @@ def compose_image(
             stock_descriptor=stock_odm_descriptor,
             fec=fec_tool,
         )
+        after_odm = work / "super-odm-composed.img"
+        replace_partition(after_odm_growth, ODM_PARTITION, sealed_odm, after_odm)
         composed_super = stage / "super.img"
-        replace_partition(after_odm_growth, ODM_PARTITION, sealed_odm, composed_super)
+        replace_partition(after_odm, VENDOR_PARTITION, sealed_vendor, composed_super)
 
         composed_vbmeta_system = stage / "vbmeta_system_a.img"
         vbmeta_system_record = refresh_system_ext_vbmeta(
@@ -1381,18 +1492,70 @@ def compose_image(
             raise ImageCompositionError(
                 "the stock system_ext_a footer and vbmeta_system_a descriptor disagree."
             )
-        composed_vbmeta = stage / "vbmeta_a.img"
-        vbmeta_record = refresh_vbmeta_partition(
+        vbmeta_after_odm = work / "vbmeta-after-odm.img"
+        odm_vbmeta_record = refresh_vbmeta_partition(
             avbtool,
             stock_vbmeta,
             sealed_odm,
             "odm",
             avb_signing_key,
+            vbmeta_after_odm,
+            work,
+        )
+        if odm_vbmeta_record.get("previousDescriptor") != stock_odm_descriptor:
+            raise ImageCompositionError("the stock odm_a footer and vbmeta_a descriptor disagree.")
+        if odm_vbmeta_record.get("descriptor") != sealed_odm_descriptor:
+            raise ImageCompositionError("the refreshed vbmeta_a odm descriptor is incorrect.")
+        composed_vbmeta = stage / "vbmeta_a.img"
+        vendor_vbmeta_record = refresh_vbmeta_partition(
+            avbtool,
+            vbmeta_after_odm,
+            sealed_vendor,
+            "vendor",
+            avb_signing_key,
             composed_vbmeta,
             work,
         )
+        if vendor_vbmeta_record.get("previousDescriptor") != stock_vendor_descriptor:
+            raise ImageCompositionError(
+                "the stock vendor_a footer and vbmeta_a descriptor disagree."
+            )
+        if vendor_vbmeta_record.get("descriptor") != sealed_vendor_descriptor:
+            raise ImageCompositionError("the refreshed vbmeta_a vendor descriptor is incorrect.")
+        if (
+            _partition_tree(_info(avbtool, composed_vbmeta), "odm", "the composed vbmeta_a")
+            != sealed_odm_descriptor
+            or _partition_tree(_info(avbtool, composed_vbmeta), "vendor", "the composed vbmeta_a")
+            != sealed_vendor_descriptor
+        ):
+            raise ImageCompositionError(
+                "the composed vbmeta_a does not carry both updated partition descriptors."
+            )
         growth_record["grownBytes"] = grown_system_ext.size
         odm_growth_record["grownBytes"] = final_odm.size
+        vendor_record = {
+            "stockFilesystemSHA256": sha256_file(vendor_fs),
+            "imageUUID": vendor_uuid,
+            "filesystemBytes": rebuilt_vendor.image.stat().st_size,
+            "stockEntriesReproduced": rebuilt_vendor.reproduced,
+            "stockBlocks": rebuilt_vendor.stock_blocks,
+            "filesystemBlocks": rebuilt_vendor.fs_blocks,
+            "mesa": mesa_record,
+            "injectedLibraries": [
+                {
+                    "name": library.name,
+                    "source": (
+                        f"Guest/product/{MESA_PRODUCT_RELATIVE_PATH}/vendor/lib64/{library.name}"
+                    ),
+                    "target": library.target,
+                    "sha256": library.sha256,
+                    "size": library.size,
+                    "selinuxLabel": rebuilt_vendor.mesa_entries[library.target].label,
+                }
+                for library in mesa_libraries
+            ],
+            "descriptor": sealed_vendor_descriptor,
+        }
         record = _composition_provenance(
             document,
             manifest_path,
@@ -1400,6 +1563,7 @@ def compose_image(
             test_overlay_inputs=test_overlay_inputs,
             repository=repository,
             stock_system_ext_sha256=sha256_file(stock_fs),
+            vendor=vendor_record,
             rebuild={
                 "image_uuid": rebuilt.image_uuid,
                 "filesystem_bytes": rebuilt.image.stat().st_size,
@@ -1408,6 +1572,7 @@ def compose_image(
             },
             system_ext_descriptor=sealed_descriptor,
             odm_descriptor=sealed_odm_descriptor,
+            vendor_descriptor=sealed_vendor_descriptor,
             odm={
                 **odm_rebuild_record,
                 "stockFilesystemSHA256": sha256_file(odm_fs),
@@ -1418,7 +1583,12 @@ def compose_image(
         )
         record["vbmeta"] = {
             "systemExt": vbmeta_system_record,
-            "topLevel": {"updatedPartition": "odm", **vbmeta_record},
+            "topLevel": {
+                "updates": [
+                    {"updatedPartition": "odm", **odm_vbmeta_record},
+                    {"updatedPartition": "vendor", **vendor_vbmeta_record},
+                ]
+            },
         }
         record["odmGrowth"] = odm_growth_record
         record["outputHashes"] = {

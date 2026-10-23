@@ -1,6 +1,6 @@
 # M5 Custom Android runtime image
 
-APKRun gets its own Android image: the stock Cuttlefish arm64 phone build with the APKRun product files composed into it on the Mac (ADR-0019). The Guest Agent runs in it as a persistent, platform-signed priv-app. `apkrun_vsockd` bridges vsock to the agents' local sockets, and SELinux confines all of it. The host talks to the agents over vsock with ADB off, and the Store Agent installs apps without `adb install`. From M5 on, this image is the product test image. The milestone closes no gate; the G2–G6 checks run again on it ([test-strategy.md](../test-strategy.md) §5). The release image is built from source on Linux by #120 ([build-system.md](../../05-development/build-system.md) §9).
+APKRun gets its own Android image: the stock Cuttlefish arm64 phone build with the APKRun product files composed into it on the Mac (ADR-0019, extended by ADR-0020). The Guest Agent runs in it as a persistent, platform-signed priv-app. `apkrun_vsockd` bridges vsock to the agents' local sockets, and SELinux confines all of it. The host talks to the agents over vsock with ADB off, and the Store Agent installs apps without `adb install`. From M5 on, this image is the product test image. The milestone closes no gate; the G2–G6 checks run again on it ([test-strategy.md](../test-strategy.md) §5). The release image is built from source on Linux by #120 ([build-system.md](../../05-development/build-system.md) §9).
 
 ---
 
@@ -10,7 +10,7 @@ APKRun gets its own Android image: the stock Cuttlefish arm64 phone build with t
 |---|---|
 | Milestone | M5 (v0.3) |
 | Depends on | #35 |
-| Design | [ADR-0019](../../01-architecture/decisions/0019-composed-development-image.md); [android-image.md](../../02-design/android-image.md) §11, §13; [guest-components.md](../../02-design/guest-components.md) §4, §5, §10 |
+| Design | [ADR-0019](../../01-architecture/decisions/0019-composed-development-image.md), [ADR-0020](../../01-architecture/decisions/0020-composed-development-image-mesa.md); [android-image.md](../../02-design/android-image.md) §11, §13; [guest-components.md](../../02-design/guest-components.md) §4, §5, §10 |
 | Code | `Images/tools/apkrun_image/`; `Guest/product/`; `Guest/vsockd/`; `Guest/agentruntime/`; `Packages/ImageCore/`; `Tests/Fixtures/signing/`; `Tests/Fixtures/AndroidApps/` (HelloProbe, SystemServicesTest); `Tests/IntegrationTests/` |
 
 **Goal.** `apkrun_image compose` turns the pinned stock build into a `kind: apkrun` development image on the Mac. It boots under the APKRun VM with the Guest Agent as a platform-signed priv-app, reached over vsock with ADB off.

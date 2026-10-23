@@ -14,10 +14,13 @@ from apkrun_image.compose_avb import (
     HASH_ALGORITHM,
     PARTITION_NAME,
     ComposeAvbError,
+    _descriptor,
     _publish_new_file,
     minimum_partition_size,
+    minimum_partition_size_for_descriptor,
     refresh_system_ext_vbmeta,
     resign_top_vbmeta,
+    seal_partition,
     seal_system_ext,
     stock_system_ext_descriptor,
 )
@@ -57,7 +60,12 @@ def _content(name: str, size: int) -> bytes:
 
 
 def _make_fec_partition(
-    avbtool: Path, filesystem: Path, output: Path, fec: Path, partition_size: int
+    avbtool: Path,
+    filesystem: Path,
+    output: Path,
+    fec: Path,
+    partition_size: int,
+    partition_name: str = PARTITION_NAME,
 ) -> None:
     run_image_avbtool(
         avbtool,
@@ -68,7 +76,7 @@ def _make_fec_partition(
             "--partition_size",
             str(partition_size),
             "--partition_name",
-            PARTITION_NAME,
+            partition_name,
             "--salt",
             SALT,
             "--hash_algorithm",
@@ -150,6 +158,67 @@ def test_composed_footer_keeps_stock_hash_and_fec_parameters(
     assert descriptor["fecSize"] > 0
     assert descriptor["fecOffset"] + descriptor["fecSize"] <= PARTITION_SIZE
     assert output.stat().st_size == PARTITION_SIZE
+
+
+def test_vendor_footer_keeps_stock_fec_and_rejects_an_oversized_filesystem(
+    avbtool: Path, fec_tool: Path, tmp_path: Path
+) -> None:
+    stock_filesystem = tmp_path / "stock-vendor-erofs.img"
+    stock_filesystem.write_bytes(_content("stock-vendor", BLOCK_SIZE * 24))
+    stock = tmp_path / "stock-vendor.img"
+    _make_fec_partition(
+        avbtool,
+        stock_filesystem,
+        stock,
+        fec_tool,
+        PARTITION_SIZE,
+        partition_name="vendor",
+    )
+    template = _descriptor(avbtool, stock, "vendor")
+
+    filesystem = tmp_path / "composed-vendor-erofs.img"
+    filesystem.write_bytes(_content("composed-vendor", BLOCK_SIZE * 28))
+    partition_size = minimum_partition_size_for_descriptor(
+        avbtool,
+        filesystem,
+        partition_name="vendor",
+        current_size=PARTITION_SIZE // 8,
+        maximum_size=PARTITION_SIZE,
+        descriptor=template,
+        fec=fec_tool,
+    )
+    output = tmp_path / "sealed-vendor.img"
+    descriptor = seal_partition(
+        avbtool,
+        filesystem,
+        output,
+        partition_name="vendor",
+        partition_size=partition_size,
+        stock_descriptor=template,
+        fec=fec_tool,
+    )
+
+    assert descriptor["partition"] == "vendor"
+    assert descriptor["fecRoots"] == FEC_ROOTS
+    assert descriptor["hashAlgorithm"] == HASH_ALGORITHM
+    assert descriptor["salt"] == SALT
+    assert descriptor["imageSize"] == filesystem.stat().st_size
+    assert descriptor["fecSize"] > 0
+    assert descriptor["fecOffset"] + descriptor["fecSize"] <= partition_size
+    assert output.stat().st_size == partition_size
+
+    oversized = tmp_path / "oversized-vendor-erofs.img"
+    oversized.write_bytes(_content("oversized-vendor", PARTITION_SIZE))
+    with pytest.raises(ComposeAvbError, match="avbtool|cannot fit"):
+        minimum_partition_size_for_descriptor(
+            avbtool,
+            oversized,
+            partition_name="vendor",
+            current_size=BLOCK_SIZE,
+            maximum_size=PARTITION_SIZE,
+            descriptor=template,
+            fec=fec_tool,
+        )
 
 
 def test_refreshed_vbmeta_system_replaces_only_the_system_ext_descriptor(

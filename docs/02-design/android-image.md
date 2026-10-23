@@ -628,7 +628,7 @@ Proposed for release: pass `orange` and unlocked, but keep dm-verity on through 
 
 ### 11.5 Composition (development images)
 
-`python3 -m apkrun_image compose` (#36) makes the development image from the pinned stock build, on the developer Mac ([ADR-0019](../01-architecture/decisions/0019-composed-development-image.md)).
+`python3 -m apkrun_image compose` (#36) makes the development image from the pinned stock build, on the developer Mac ([ADR-0019](../01-architecture/decisions/0019-composed-development-image.md), as extended by [ADR-0020](../01-architecture/decisions/0020-composed-development-image-mesa.md)).
 
 - **Workspace.** The output directory must be on a case-sensitive filesystem because EROFS permits case-distinct paths. On the usual case-insensitive macOS startup volume, compose to a mounted case-sensitive APFS scratch volume.
 - **Inputs.** Before composing, build and stage the pinned guest Mesa output with `scripts/guest/build-mesa-android.sh` and `scripts/guest/stage-mesa-product.sh`. The composer verifies its lock identity, ELF architecture, SONAMEs, file hashes, and labels, then records the manifest and all four libraries in `composition.json` and `provenance.composition.productInputs`.

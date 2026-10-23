@@ -18,12 +18,18 @@
     <string>$(APKRUN_CI)</string>
     <key>APKRUN_TEST_LINUX_DIR</key>
     <string>$(APKRUN_TEST_LINUX_DIR)</string>
+    <key>APKRUN_TEST_ANDROID_BUNDLE</key>
+    <string>$(APKRUN_TEST_ANDROID_BUNDLE)</string>
+    <key>APKRUN_TEST_REQUIRE_COMPOSED</key>
+    <string>$(APKRUN_TEST_REQUIRE_COMPOSED)</string>
     <key>APKRUN_ANDROID_HOME</key>
     <string>$(APKRUN_ANDROID_HOME)</string>
     <key>APKRUN_G3_CLI</key>
     <string>$(APKRUN_G3_CLI)</string>
     <key>APKRUN_G3_BUNDLE</key>
     <string>$(APKRUN_G3_BUNDLE)</string>
+    <key>APKRUN_G3_REQUIRE_COMPOSED</key>
+    <string>$(APKRUN_G3_REQUIRE_COMPOSED)</string>
     <key>APKRUN_G3_APK</key>
     <string>$(APKRUN_G3_APK)</string>
     <key>APKRUN_G3_GUEST_DIR</key>

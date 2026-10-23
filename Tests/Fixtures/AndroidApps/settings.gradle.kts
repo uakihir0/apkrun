@@ -19,6 +19,7 @@ dependencyResolutionManagement {
 rootProject.name = "apkrun-fixtures"
 
 include(":HelloText")
+include(":HelloProbe")
 include(":HelloGL")
 include(":HelloCompose")
 include(":HelloWebView")

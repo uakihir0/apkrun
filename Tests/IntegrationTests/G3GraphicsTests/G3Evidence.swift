@@ -80,6 +80,10 @@ struct G3Measurements {
     var rendererEvent: String?
     /// The GLES lines of `dumpsys SurfaceFlinger`.
     var surfaceFlingerGLES: String = ""
+    /// The SELinux context of the running HelloGL process.
+    var helloGLSELinuxDomain: String?
+    /// The guest's SELinux enforcement mode.
+    var selinuxMode: String?
     /// Whether the window of display 0 was found and its capture shows the display.
     var windowFound = false
     /// The number of distinct colours sampled from the first window capture.
@@ -136,6 +140,15 @@ enum G3Evidence {
         if !(measurements.rendererEvent ?? "").contains("virgl") {
             failures.append("2 HelloGL's renderer event is not virgl (\(measurements.rendererEvent ?? "none"))")
         }
+        if !isUntrustedAppContext(measurements.helloGLSELinuxDomain ?? "") {
+            failures.append(
+                "2 HelloGL does not run in the untrusted_app SELinux domain "
+                    + "(\(measurements.helloGLSELinuxDomain ?? "none"))")
+        }
+        if !isEnforcingMode(measurements.selinuxMode ?? "") {
+            failures.append(
+                "2 SELinux is not enforcing (\(measurements.selinuxMode ?? "none"))")
+        }
         let readbacks = measurements.statisticsDuringRun.filter {
             $0.hostReadbacks != 0 || $0.cpuPixelCopies != 0
         }
@@ -182,6 +195,16 @@ enum G3Evidence {
             failures.append("5 the boot did not end within 60 s of SIGINT (\(measurements.bootStop.rawValue))")
         }
         return failures
+    }
+
+    /// Whether a process context names Android's untrusted application domain.
+    static func isUntrustedAppContext(_ context: String) -> Bool {
+        context.split(separator: ":").prefix(3).joined(separator: ":") == "u:r:untrusted_app"
+    }
+
+    /// Whether `getenforce` reports the mode required by the composed-image gate.
+    static func isEnforcingMode(_ mode: String) -> Bool {
+        mode.trimmingCharacters(in: .whitespacesAndNewlines) == "Enforcing"
     }
 
     /// Whether `text` is one process id: ASCII digits only. An adb error text is not a pid.

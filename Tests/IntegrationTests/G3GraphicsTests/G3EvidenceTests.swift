@@ -77,6 +77,8 @@ final class G3EvidenceTests: XCTestCase {
         var measurements = G3Measurements()
         measurements.rendererEvent = "APKRUN-FIXTURE: renderer virgl"
         measurements.surfaceFlingerGLES = "GLES: Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8"
+        measurements.helloGLSELinuxDomain = "u:r:untrusted_app:s0:c123,c456"
+        measurements.selinuxMode = "Enforcing"
         measurements.windowFound = true
         measurements.distinctColoursInWindow = 200
         measurements.statisticsDuringRun = Array(
@@ -106,6 +108,24 @@ final class G3EvidenceTests: XCTestCase {
             framesSampled: nil, redFrames: nil, blueFrames: nil, mixedFrames: nil)
         XCTAssertEqual(G3Evidence.failures(measurements).count, 1)
         XCTAssertTrue(G3Evidence.failures(measurements)[0].hasPrefix("3 "))
+    }
+
+    func testHelloGLMustRunInTheUntrustedAppDomain() {
+        var measurements = passingMeasurements()
+        measurements.helloGLSELinuxDomain = "u:r:system_app:s0"
+        XCTAssertTrue(
+            G3Evidence.failures(measurements).contains {
+                $0.contains("HelloGL does not run in the untrusted_app SELinux domain")
+            })
+    }
+
+    func testSelinuxMustBeEnforcing() {
+        var measurements = passingMeasurements()
+        measurements.selinuxMode = "Permissive"
+        XCTAssertTrue(
+            G3Evidence.failures(measurements).contains {
+                $0 == "2 SELinux is not enforcing (Permissive)"
+            })
     }
 
     func testAnAverageBelowFiftyFiveFailsCondition4() {

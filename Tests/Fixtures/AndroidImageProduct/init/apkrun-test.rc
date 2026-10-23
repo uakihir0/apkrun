@@ -1,0 +1,6 @@
+on property:ro.boot.apkrun.test.fail_boot=1 && property:init.svc.zygote=running
+    stop zygote
+
+on property:ro.boot.apkrun.test.secret=1
+    write /dev/kmsg APKRUN-FIXTURE-SECRET-36
+    setprop persist.apkrun.test.secret APKRUN-FIXTURE-SECRET-36

@@ -79,6 +79,12 @@ final class G3GraphicsTests: XCTestCase {
         ])
         try session.writeArtifact("gl-props.txt", gles.output)
         measurements.surfaceFlingerGLES = gles.output
+        let selinux = try session.adb(["shell", "getenforce"])
+        try session.writeArtifact("selinux-mode.txt", selinux.output)
+        guard selinux.status == 0 else {
+            throw G3Failure.commandFailed("getenforce", selinux.status, selinux.output)
+        }
+        measurements.selinuxMode = selinux.output.trimmingCharacters(in: .whitespacesAndNewlines)
         try session.adb(["shell", "input keyevent 82"])
         try session.adb(["shell", "wm dismiss-keyguard"])
         try await Task.sleep(for: .seconds(3))
@@ -108,9 +114,17 @@ final class G3GraphicsTests: XCTestCase {
             inPNG: session.inputs.artifacts.appendingPathComponent("screenshots/normal-1.png"))
         let launchedPID = try session.helloGLPID()
         session.note("HelloGL pid after launch: \(launchedPID ?? "none")")
-        guard launchedPID != nil else {
+        guard let launchedPID else {
             throw G3Failure.commandFailed("pidof HelloGL", 1, "HelloGL is not running after the launch")
         }
+        let domain = try session.adb(["shell", "cat /proc/\(launchedPID)/attr/current"])
+        try session.writeArtifact("hellogl-selinux-domain.txt", domain.output)
+        guard domain.status == 0 else {
+            throw G3Failure.commandFailed(
+                "read HelloGL SELinux domain", domain.status, domain.output)
+        }
+        measurements.helloGLSELinuxDomain = domain.output.trimmingCharacters(
+            in: .whitespacesAndNewlines)
 
         let sixtyMark = session.lineMark
         try await Task.sleep(for: .seconds(30))
@@ -200,6 +214,8 @@ final class G3GraphicsTests: XCTestCase {
             "window found: \(measurements.windowFound), distinct colours in the first capture: "
                 + "\(measurements.distinctColoursInWindow)",
             "renderer event: \(measurements.rendererEvent ?? "none")",
+            "HelloGL SELinux domain: \(measurements.helloGLSELinuxDomain ?? "none")",
+            "SELinux mode: \(measurements.selinuxMode ?? "none")",
             "GLES lines: \(measurements.surfaceFlingerGLES.replacingOccurrences(of: "\n", with: " | "))",
             "statistics during the run: \(measurements.statisticsDuringRun.count) lines, "
                 + "hostReadbacks max \(measurements.statisticsDuringRun.map(\.hostReadbacks).max() ?? 0), "

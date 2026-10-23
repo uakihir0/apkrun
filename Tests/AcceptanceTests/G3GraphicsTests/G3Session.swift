@@ -20,26 +20,47 @@ struct G3Inputs {
     let androidHome: URL
     /// The directory the artifacts are written to. The gate copies it under build/gates/G3.
     let artifacts: URL
+    /// The standard gate runs against the composed product; false preserves the stock-image baseline.
+    let requiresComposedImage: Bool
 
-    /// The inputs from the process environment, and then from the test host's Info.plist, where the gate's build
-    /// settings land (scripts/run-gate.sh G3, as APKRUN_TEST_LINUX_DIR does).
+    /// The inputs from the test host's Info.plist, where the gate's build settings land
+    /// (scripts/run-gate.sh G3), with environment values as a fallback for direct local runs.
     static func fromEnvironment() throws -> G3Inputs {
         let environment = ProcessInfo.processInfo.environment
         func path(_ key: String) throws -> URL {
             let fromInfo = Bundle.main.object(forInfoDictionaryKey: key) as? String
-            guard let value = environment[key] ?? fromInfo, !value.isEmpty, value.hasPrefix("/") else {
+            let value = fromInfo.flatMap { $0.isEmpty || $0.hasPrefix("$(") ? nil : $0 } ?? environment[key]
+            guard let value, !value.isEmpty, value.hasPrefix("/") else {
                 throw G3Failure.missingInput(key)
             }
             return URL(fileURLWithPath: value)
         }
+        let bundle = try path("APKRUN_G3_BUNDLE")
+        let manifestURL = bundle.appendingPathComponent("manifest.json")
+        let manifest = (try? Data(contentsOf: manifestURL))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let provenance = manifest?["provenance"] as? [String: Any]
+        let composed =
+            manifest?["kind"] as? String == "apkrun"
+            && provenance?["composition"] is [String: Any]
+        let fromInfo = Bundle.main.object(forInfoDictionaryKey: "APKRUN_G3_REQUIRE_COMPOSED") as? String
+        let requireComposedValue =
+            fromInfo.flatMap { $0.isEmpty || $0.hasPrefix("$(") ? nil : $0 }
+            ?? environment["APKRUN_G3_REQUIRE_COMPOSED"]
+        let requiresComposedImage = try G3BundleSelection.requiresComposed(requireComposedValue)
+        let stockBaseline = !requiresComposedImage && manifest?["kind"] as? String == "stock"
+        guard composed || stockBaseline else {
+            throw G3Failure.invalidBundle(bundle.path)
+        }
         return G3Inputs(
             cli: try path("APKRUN_G3_CLI"),
-            bundle: try path("APKRUN_G3_BUNDLE"),
+            bundle: bundle,
             helloGL: try path("APKRUN_G3_APK"),
             guestDirectory: try path("APKRUN_G3_GUEST_DIR"),
             virglRuntime: try path("APKRUN_G3_VIRGL_RUNTIME"),
             androidHome: try path("APKRUN_G3_ANDROID_HOME"),
-            artifacts: try path("APKRUN_G3_ARTIFACTS")
+            artifacts: try path("APKRUN_G3_ARTIFACTS"),
+            requiresComposedImage: requiresComposedImage
         )
     }
 }
@@ -49,6 +70,8 @@ enum G3Failure: Error, CustomStringConvertible {
     /// The G3 configuration selected the check but the suite marker is not set.
     case notSelected
     case missingInput(String)
+    case invalidBundle(String)
+    case invalidRequirement(String)
     case commandFailed(String, Int32, String)
     case commandTimedOut(String)
     case bootEnded(String)
@@ -65,6 +88,10 @@ enum G3Failure: Error, CustomStringConvertible {
             "The G3 configuration did not set APKRUN_ACCEPTANCE_SUITE=g3, so the G3 check did not run."
         case .missingInput(let key):
             "\(key) is not set to an absolute path. scripts/run-gate.sh G3 sets it."
+        case .invalidBundle(let path):
+            "The G3 image bundle is not an allowed stock baseline or composed APKRun image: \(path)"
+        case .invalidRequirement(let value):
+            "APKRUN_G3_REQUIRE_COMPOSED must be 0 or 1 (got \(value.debugDescription))."
         case .commandFailed(let command, let status, let output):
             "\(command) exited with \(status): \(output.suffix(400))"
         case .commandTimedOut(let command):
@@ -80,6 +107,15 @@ enum G3Failure: Error, CustomStringConvertible {
                 + "Add APKRunTestHost by hand under System Settings, Privacy & Security, Screen Recording, "
                 + "then rerun scripts/run-gate.sh G3. The test does not request the access."
         }
+    }
+}
+
+enum G3BundleSelection {
+    static func requiresComposed(_ value: String?) throws -> Bool {
+        guard value == nil || value == "0" || value == "1" else {
+            throw G3Failure.invalidRequirement(value ?? "")
+        }
+        return value != "0"
     }
 }
 

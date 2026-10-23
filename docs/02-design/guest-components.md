@@ -44,7 +44,7 @@ Guest/
 | Custom image signing | the composed development image uses the pre-signed persistent APK from `scripts/build-guest.sh --platform-test-key`; source-built images use `android_app_import { certificate: "platform", privileged: true, presigned: false }` with the image's platform key ([android-image.md](android-image.md) §11.1, §11.5) |
 | Version | `versionCode = major × 1 000 000 + minor × 1 000 + patch` of the APKRun release that built them. `versionName` is the APKRun version plus the git revision |
 
-The host app bundle carries the development-mode APK at `APKRun.app/Contents/Resources/guest/apkrun-guest.apk`, with its version record `apkrun-guest.json`. The host finds the bundle in this order:
+Debug host app bundles carry the development-mode APK at `APKRun.app/Contents/Resources/guest/apkrun-guest.apk`, with its version record `apkrun-guest.json`. Release bundles omit this development APK; the release image is planned to carry the platform-signed Guest Agent (#120). A Debug host finds its bundle in this order:
 
 1. the `--guest-dir` flag,
 2. the `APKRUN_GUEST_DIR` environment variable,

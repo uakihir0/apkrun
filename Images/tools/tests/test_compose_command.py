@@ -475,6 +475,46 @@ def test_compose_image_records_hashed_outputs_and_source_provenance(
     assert persisted == record
 
 
+def test_repeated_compose_command_outputs_are_byte_identical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, product, first_output, _document = _install_composer_fakes(monkeypatch, tmp_path)
+    _write_test_overlay(product.parents[1])
+    second_output = first_output.with_name("composed-repeat")
+
+    # The composer requires a case-sensitive output filesystem. This test exercises its command
+    # path with synthetic filesystem outputs, so keep the host filesystem check out of scope.
+    monkeypatch.setattr(command, "_filesystem_is_case_sensitive", lambda _directory: True)
+    arguments = [
+        "--manifest",
+        str(manifest),
+        "--product",
+        str(product),
+        "--test-overlay",
+    ]
+    assert command.main([*arguments, "--out", str(first_output)]) == 0
+    assert command.main([*arguments, "--out", str(second_output)]) == 0
+
+    def output_bytes(directory: Path) -> dict[str, bytes]:
+        return {
+            path.relative_to(directory).as_posix(): path.read_bytes()
+            for path in directory.rglob("*")
+            if path.is_file()
+        }
+
+    first = output_bytes(first_output)
+    second = output_bytes(second_output)
+    assert set(first) == set(second) == set(command.OUTPUT_FILES)
+    assert first == second
+    composition = json.loads(first["composition.json"])
+    assert composition["testOverlayInputs"]
+    assert set(composition["outputHashes"]) == {
+        "super.img",
+        "vbmeta_system_a.img",
+        "vbmeta_a.img",
+    }
+
+
 def test_test_overlay_is_opt_in_and_hashes_only_fixed_fixture_inputs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

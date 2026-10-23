@@ -102,6 +102,7 @@ final class AndroidInputTests: XCTestCase {
             let sampler = ShellInputSampler()
             sampler.start()
             _ = try await run.adb.shell("logcat -c")
+            try await run.prepareForDirectViewPointerDispatch()
             let pointer = try run.pointer()
             var focusSamples: [String] = []
             var focusLostBeforeClick: Int?
@@ -197,6 +198,7 @@ final class AndroidInputTests: XCTestCase {
             XCTAssertEqual(initialCount, 0)
 
             let captureStart = try await run.startTouchEventCapture()
+            try await run.prepareForDirectViewPointerDispatch()
             try await pointer.drag(from: target, toViewPoint: leftEdge, steps: 4)
             let afterLeftDragCapture = try await run.touchEventCaptureSnapshot()
             guard let leftDragThrough = afterLeftDragCapture.sentEvents.records.last?.batchSequence else {
@@ -214,6 +216,7 @@ final class AndroidInputTests: XCTestCase {
             let afterLeftDrag = try await Self.waitForStablePersistedClickCount(run, exactly: 0)
             XCTAssertEqual(afterLeftDrag, 0, "the drag outside the left edge must not click the button")
 
+            try await run.prepareForDirectViewPointerDispatch()
             try await pointer.click(at: target)
             let leftRecoveryAcknowledgement = try await run.acknowledgeLatestInput(with: pointer, at: target)
             XCTAssertEqual(
@@ -225,6 +228,7 @@ final class AndroidInputTests: XCTestCase {
             XCTAssertEqual(afterLeftRecovery, 1, "the left-edge release must leave the guest ready for a new touch")
 
             let topDragStartSequence = try await run.inputCounters().batchesSent
+            try await run.prepareForDirectViewPointerDispatch()
             try await pointer.drag(from: target, toViewPoint: topEdge, steps: 4)
             let afterTopDragCapture = try await run.touchEventCaptureSnapshot()
             guard let topDragThrough = afterTopDragCapture.sentEvents.records.last?.batchSequence else {
@@ -242,6 +246,7 @@ final class AndroidInputTests: XCTestCase {
             let afterTopDrag = try await Self.waitForStablePersistedClickCount(run, exactly: 1)
             XCTAssertEqual(afterTopDrag, 1, "the drag outside the top edge must not click the button")
 
+            try await run.prepareForDirectViewPointerDispatch()
             try await pointer.click(at: target)
             let topRecoveryAcknowledgement = try await run.acknowledgeLatestInput(with: pointer, at: target)
             XCTAssertEqual(
@@ -366,6 +371,11 @@ final class AndroidInputTests: XCTestCase {
                     var touchPhaseDelta: InputWireTouchPhaseCounts?
                     do {
                         _ = try await run.adb.shell("logcat -c")
+                        if pointerDelivery == .windowServer {
+                            try await run.prepareForWindowServerPointerDispatch()
+                        } else {
+                            try await run.prepareForDirectViewPointerDispatch()
+                        }
                         let pointer = try run.pointer()
                         for _ in 0..<clickDelta {
                             try await pointer.click(at: target, interClickGap: .milliseconds(50))
@@ -512,6 +522,11 @@ final class AndroidInputTests: XCTestCase {
             }
             XCTAssertEqual(initial, 0, "a new guest should start with an empty HelloText counter")
             if warmupClickCount > 0 {
+                if pointerDelivery == .windowServer {
+                    try await run.prepareForWindowServerPointerDispatch()
+                } else {
+                    try await run.prepareForDirectViewPointerDispatch()
+                }
                 let pointer = try run.pointer()
                 for _ in 0..<warmupClickCount {
                     try await pointer.click(at: target, interClickGap: .milliseconds(50))
@@ -532,6 +547,11 @@ final class AndroidInputTests: XCTestCase {
             _ = try await run.adb.shell(
                 "am broadcast -n \(Self.helloText)/.DebugCounterReceiver -a \(Self.touchTraceStartAction)")
 
+            if pointerDelivery == .windowServer {
+                try await run.prepareForWindowServerPointerDispatch()
+            } else {
+                try await run.prepareForDirectViewPointerDispatch()
+            }
             var clickFailure: String?
             do {
                 let pointer = try run.pointer()
@@ -728,6 +748,7 @@ final class AndroidInputTests: XCTestCase {
         try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
             let target = try await run.centre(of: Self.contextTargetID)
             _ = try await run.adb.shell("logcat -c")
+            try await run.prepareForDirectViewPointerDispatch()
             try await run.pointer().rightClick(at: target)
             let lines = try await run.fixtureLog { lines in
                 lines.contains { $0.contains("APKRUN-FIXTURE: contextmenu") }

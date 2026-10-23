@@ -43,6 +43,29 @@ def openssl(*arguments, stdin=None):
     ).stdout
 
 
+def encrypted_pkcs1_rsa_pem(path):
+    arguments = [
+        "rsa",
+        "-in",
+        str(path),
+        "-aes256",
+        "-passout",
+        "pass:test-fixture",
+    ]
+    result = subprocess.run(
+        ["openssl", *arguments[:3], "-traditional", *arguments[3:]],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        result = subprocess.run(
+            ["openssl", *arguments], capture_output=True, check=True
+        )
+    if not result.stdout.startswith(b"-----BEGIN RSA PRIVATE KEY-----"):
+        raise AssertionError("OpenSSL did not produce an encrypted PKCS#1 RSA key")
+    return result.stdout
+
+
 def der_length(length):
     if length < 0x80:
         return bytes([length])
@@ -559,15 +582,7 @@ avb_private_pkcs8_encrypted_der = openssl(
     "-outform",
     "DER",
 )
-avb_private_pkcs1_encrypted_pem = openssl(
-    "rsa",
-    "-in",
-    str(avb_private_key_path),
-    "-traditional",
-    "-aes256",
-    "-passout",
-    "pass:test-fixture",
-)
+avb_private_pkcs1_encrypted_pem = encrypted_pkcs1_rsa_pem(avb_private_key_path)
 avb_private_pkcs8_base64 = base64.b64encode(avb_private_pkcs8_der)
 avb_public_der = openssl("pkey", "-in", str(avb_private_key_path), "-pubout", "-outform", "DER")
 avb_fixture = {"aosp-avb-testkey-rsa4096.pem": avb_private_key}

@@ -473,6 +473,7 @@ def add_key_tokens(path):
     else:
         raw_public_key = parse_ed25519_public_key(data)
         private_key = parse_pkcs8_private_key(data)
+        rsa_private_key = parse_pkcs1_rsa_private_key(data)
         if private_key is None and path.suffix.lower() == ".pk8":
             private_key_der = openssl_output(
                 ["pkey", "-inform", "DER", "-outform", "DER"],
@@ -485,7 +486,15 @@ def add_key_tokens(path):
                     + b"-----END PRIVATE KEY-----\n"
                 )
                 private_key = parse_pkcs8_private_key(private_key_pem)
-        rsa_private_key = parse_pkcs1_rsa_private_key(data)
+                if private_key is None:
+                    rsa_private_pem = (
+                        b"-----BEGIN RSA PRIVATE KEY-----\n"
+                        + base64.encodebytes(private_key_der)
+                        + b"-----END RSA PRIVATE KEY-----\n"
+                    )
+                    rsa_private_key = parse_pkcs1_rsa_private_key(rsa_private_pem)
+                    if rsa_private_key is not None:
+                        private_key = rsa_private_key[0]
         if private_key is None and rsa_private_key is not None:
             private_key = rsa_private_key[0]
         avb_public_key = parse_avb_public_key(data) if path.suffix.lower() == ".avbpubkey" else None

@@ -11,7 +11,7 @@ APKRun gets its own Android image: the stock Cuttlefish arm64 phone build with t
 | Milestone | M5 (v0.3) |
 | Depends on | #35 |
 | Design | [ADR-0019](../../01-architecture/decisions/0019-composed-development-image.md); [android-image.md](../../02-design/android-image.md) §11, §13; [guest-components.md](../../02-design/guest-components.md) §4, §5, §10 |
-| Code | `Images/tools/apkrun_image/`; `Guest/product/`; `Guest/vsockd/`; `Guest/agentruntime/`; `Packages/ImageCore/`; `Tests/Fixtures/signing/`; `Tests/Fixtures/AndroidApps/` (HelloProbe); `Tests/IntegrationTests/` |
+| Code | `Images/tools/apkrun_image/`; `Guest/product/`; `Guest/vsockd/`; `Guest/agentruntime/`; `Packages/ImageCore/`; `Tests/Fixtures/signing/`; `Tests/Fixtures/AndroidApps/` (HelloProbe, SystemServicesTest); `Tests/IntegrationTests/` |
 
 **Goal.** `apkrun_image compose` turns the pinned stock build into a `kind: apkrun` development image on the Mac. It boots under the APKRun VM with the Guest Agent as a platform-signed priv-app, reached over vsock with ADB off.
 

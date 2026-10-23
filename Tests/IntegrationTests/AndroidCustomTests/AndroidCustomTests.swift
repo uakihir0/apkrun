@@ -135,6 +135,7 @@ final class SystemServicesTest: AndroidCustomTestCase {
                 bridgeContext.contains("u:r:apkrun_vsockd:s0"),
                 "apkrun_vsockd did not receive its product domain: \(bridgeContext)"
             )
+            try await Self.verifySystemServiceInstrumentation(session: session)
         }
     }
 
@@ -187,6 +188,147 @@ final class SystemServicesTest: AndroidCustomTestCase {
             }
             await agent.stop()
         }
+    }
+
+    private struct SystemServiceOutcome {
+        var available = true
+        var servicePresent = true
+        var missingMethods = Set<String>()
+    }
+
+    private static func systemServicesTestAPK() throws -> URL {
+        let environment = AndroidTestEnvironment.current()
+        let configured =
+            environment["APKRUN_SYSTEM_SERVICES_TEST_APK"]
+            ?? Bundle.main.object(forInfoDictionaryKey: "APKRUN_SYSTEM_SERVICES_TEST_APK") as? String
+        guard let path = configured, !path.isEmpty, FileManager.default.isReadableFile(atPath: path) else {
+            throw AndroidShellConsole.CheckFailure(
+                command: "SystemServicesTest fixture",
+                detail:
+                    "build with scripts/build-fixtures.sh --app SystemServicesTest --platform-test-key "
+                    + "and stage APKRUN_SYSTEM_SERVICES_TEST_APK."
+            )
+        }
+        return URL(fileURLWithPath: path)
+    }
+
+    private static func verifySystemServiceInstrumentation(session: AndroidBootSession) async throws {
+        let apk = try systemServicesTestAPK()
+        let adb = try await Self.adb(session)
+        let instrumentationPackage = "io.apkrun.fixture.systemservicestest"
+        try await adb.install(apk: apk)
+
+        let instrumentation: AdbShellReply
+        do {
+            instrumentation = try await adb.shell(
+                "am instrument -w \(instrumentationPackage)/.SystemServicesInstrumentation",
+                timeout: .seconds(120)
+            )
+        } catch {
+            try? await adb.uninstall(packageName: instrumentationPackage)
+            throw error
+        }
+        do {
+            try await adb.uninstall(packageName: instrumentationPackage)
+        } catch {
+            XCTFail("could not remove the temporary system-services instrumentation APK: \(error)")
+        }
+
+        let output = instrumentation.output + "\n" + instrumentation.errorOutput
+        XCTAssertEqual(instrumentation.status, 0, "am instrument did not complete: \(output)")
+        XCTAssertTrue(output.contains("INSTRUMENTATION_CODE: -1"), "instrumentation failed: \(output)")
+        XCTAssertTrue(output.contains("APKRUN_SYSTEM_SERVICES_OK"), "instrumentation checks failed: \(output)")
+        XCTAssertFalse(output.contains("APKRUN_SYSTEM_SERVICES_FAILED"), output)
+
+        var outcomes: [String: SystemServiceOutcome] = [:]
+        for line in output.split(whereSeparator: \.isNewline) {
+            guard let marker = line.range(of: "APKRUN_SYSTEM_SERVICE|") else { continue }
+            let fields = line[marker.lowerBound...].split(separator: "|", omittingEmptySubsequences: false)
+            guard fields.count == 5 else {
+                XCTFail("malformed SystemServices instrumentation record: \(line)")
+                continue
+            }
+            let service = String(fields[1])
+            guard ["true", "false"].contains(String(fields[2])),
+                ["true", "false"].contains(String(fields[3]))
+            else {
+                XCTFail("malformed availability for \(service): \(fields[2])")
+                continue
+            }
+            var outcome = outcomes[service] ?? SystemServiceOutcome()
+            outcome.available = outcome.available && fields[2] == "true"
+            outcome.servicePresent = outcome.servicePresent && fields[3] == "true"
+            if !fields[4].isEmpty {
+                for method in fields[4].split(separator: ",") {
+                    outcome.missingMethods.insert(String(method))
+                }
+            }
+            outcomes[service] = outcome
+        }
+        let expectedServices: Set<String> = [
+            "activity",
+            "activity_task",
+            "display",
+            "input",
+            "lock_settings",
+            "power",
+            "window",
+        ]
+        XCTAssertEqual(Set(outcomes.keys), expectedServices, "incomplete wrapper report: \(output)")
+
+        let agent = try await VsockAgentTests.connectPersistentAgent(session)
+        let enabledCapabilities = await agent.session?.enabledCapabilities ?? []
+        let enabled = Set(enabledCapabilities)
+        func resolves(_ methods: [(service: String, method: String)]) -> Bool {
+            methods.allSatisfy { requirement in
+                guard let outcome = outcomes[requirement.service] else { return false }
+                return outcome.servicePresent && !outcome.missingMethods.contains(requirement.method)
+            }
+        }
+        let capabilityRequirements: [(String, [(service: String, method: String)])] = [
+            (
+                "display.v1",
+                [
+                    ("display", "getDisplayIds"),
+                    ("display", "getDisplayInfo"),
+                    ("display", "registerCallback"),
+                    ("window", "setForcedDisplayDensityForUser"),
+                    ("window", "setDisplayImePolicy"),
+                ]
+            ),
+            (
+                "launch.v1",
+                [
+                    ("activity_task", "getTasks"),
+                    ("activity_task", "registerTaskStackListener"),
+                    ("activity_task", "startActivityAsUser"),
+                    ("activity_task", "moveRootTaskToDisplay"),
+                    ("activity_task", "removeTask"),
+                    ("activity_task", "setFocusedTask"),
+                    ("activity", "forceStopPackage"),
+                ]
+            ),
+            (
+                "input.v1",
+                [
+                    ("activity_task", "getTasks"),
+                    ("activity_task", "setFocusedTask"),
+                    ("input", "injectInputEvent"),
+                ]
+            ),
+            ("system.v1", [("power", "shutdown")]),
+        ]
+        for (capability, requirements) in capabilityRequirements {
+            XCTAssertEqual(
+                enabled.contains(capability),
+                resolves(requirements),
+                "\(capability) handshake does not match the on-image SystemServices wrappers; "
+                    + "enabled=\(enabled), records=\(outcomes)"
+            )
+        }
+        let agentState = await agent.state
+        XCTAssertEqual(agentState, .ready)
+        await agent.stop()
     }
 
     private static func agentProcessID(using android: AndroidShellConsole) async throws -> Int? {

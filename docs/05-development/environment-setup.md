@@ -252,6 +252,7 @@ xcodebuild test -scheme IntegrationTests \
 - To keep the renderer operations for the replay test, add `TEST_RUNNER_APKRUN_TEST_VIRGL_RECORDING=/tmp/<name>.json` to the `xcodebuild test` line. Then `APKRUN_TEST_KMSCUBE_RECORDING=/tmp/<name>.json swift test --traits TestReadback --filter theKmscubeSessionReplaysOnTheDeviceWithoutHostReadbacks` replays it. The path must be under `/tmp`.
 - VM tests need `com.apple.security.virtualization`, so they run in the signed `APKRunTestHost` ([build-system.md](build-system.md) §12.4).
 - For the Android suites, pass `-derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd"` and an `APKRUN_ANDROID_HOME` outside `~/Documents` that holds `platform-tools`: `mkdir -p "${TMPDIR:-/tmp}/apkrun-test-sdk" && cp -R "$ANDROID_HOME/platform-tools" "${TMPDIR:-/tmp}/apkrun-test-sdk/"`. The copy is the same `adb` binary.
+- AndroidCustom also needs the platform-test-signed SystemServices instrumentation fixture. Build it with `scripts/build-fixtures.sh --app SystemServicesTest --platform-test-key`; this stages `SystemServicesTest.apk` beside HelloProbe. The fixture is installed only in developer mode on the composed image.
 - To run #36's AndroidCustom checks, select the classes explicitly. An Xcode test-plan configuration sets environment values; it does not filter the target's tests. The plan points to the composed bundle at `/tmp/apkrun-test-linux/android-custom-bundle` and HelloProbe at `/tmp/apkrun-test-fixtures/HelloProbe.apk`:
 
 ```bash

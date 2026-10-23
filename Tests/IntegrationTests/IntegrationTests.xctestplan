@@ -94,6 +94,11 @@
             "enabled" : true
           },
           {
+            "key" : "APKRUN_SYSTEM_SERVICES_TEST_APK",
+            "value" : "/tmp/apkrun-test-fixtures/SystemServicesTest.apk",
+            "enabled" : true
+          },
+          {
             "key" : "APKRUN_TEST_ADB_PORT",
             "value" : "6520",
             "enabled" : true

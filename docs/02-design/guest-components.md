@@ -363,7 +363,7 @@ The exact names of the attribute and the permission set are confirmed against th
 | T0 | `SystemServices` wrappers: a missing framework method fails only its capability | `Guest/agentruntime/src/test/` (`SystemServiceWrapperTest.kt`) |
 | T0 | Rust unit tests for the bridge's port table and connection limits (`cargo test`) | `Guest/vsockd/` |
 | T1 | `apkrun_vsockd` on Linux with the `vsock_loopback` kernel module | `Guest/vsockd/` |
-| T2 | Instrumented `SystemServicesTest` on each supported image (`am instrument`): every wrapper resolves, and a missing method fails only its capability | on the image |
+| T2 | `SystemServicesTest` instrumentation APK on each supported image (`am instrument`): it inspects the installed Guest Agent's actual wrappers, verifies each resolves, and checks that a synthetic missing method throws `ServiceMethodMissing` without disabling other methods or wrappers. The AndroidCustom host test compares the wrapper report with the Guest Agent handshake capabilities | `Tests/Fixtures/AndroidApps/SystemServicesTest/`; AndroidCustom installs the platform-test-signed fixture through ADB |
 | T2 | Development mode: install, start, kill, restart, and reinstall with a different version | `Tests/IntegrationTests/GuestAgentTests/` |
 | T2 | Custom image: persistent restart after `kill`. The HelloProbe fixture app (an ordinary `untrusted_app`) fails to connect to the agents' sockets. No denials for the agents in enforcing mode during the suite | `Tests/IntegrationTests/` |
 | T2 | Store Agent: install, update, uninstall, metadata | `Tests/IntegrationTests/AndroidPackageTests/` |

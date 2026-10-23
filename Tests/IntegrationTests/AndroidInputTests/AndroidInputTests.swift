@@ -103,18 +103,66 @@ final class AndroidInputTests: XCTestCase {
             sampler.start()
             _ = try await run.adb.shell("logcat -c")
             let pointer = try run.pointer()
-            for _ in 0..<100 {
+            var focusSamples: [String] = []
+            var focusLostBeforeClick: Int?
+            for index in 0..<100 {
+                guard run.hasNativeWindowFocus() else {
+                    focusLostBeforeClick = index + 1
+                    focusSamples.append("before click \(index + 1): \(try run.focusDiagnostic())")
+                    break
+                }
                 try await pointer.click(at: target)
                 try await Task.sleep(for: .milliseconds(100))
+                if (index + 1).isMultiple(of: 10) {
+                    focusSamples.append("after click \(index + 1): \(try run.focusDiagnostic())")
+                }
             }
             let shellInput = await sampler.stop()
             XCTAssertEqual(shellInput, [], "adb shell input processes ran during the sequence")
+            if let focusLostBeforeClick {
+                let counters = try await run.inputCounters()
+                let focusSummary = try run.focusDiagnostic()
+                let evidence = """
+                    focus_lost_before_click=\(focusLostBeforeClick)
+                    counters=\(counters)
+                    \(focusSummary)
+                    samples:
+                    \(focusSamples.joined(separator: "\n"))
+                    """
+                XCTContext.runActivity(named: "Input focus interruption evidence") { activity in
+                    let attachment = XCTAttachment(
+                        data: Data(evidence.utf8), uniformTypeIdentifier: "public.utf8-plain-text")
+                    attachment.name = "input-focus-interruption.txt"
+                    attachment.lifetime = .keepAlways
+                    activity.add(attachment)
+                }
+                XCTFail("Test host lost key-window focus before click \(focusLostBeforeClick); \(focusSummary)")
+                return
+            }
             let lines = try await run.fixtureLog { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 }
             let clickNumbers = AndroidInputRun.numbers(in: lines, after: Self.clickPrefix)
             let touchPhaseDelta = try await run.inputWireTouchPhaseCounts().delta(since: touchPhasesBefore)
             let countersAfter = try await run.inputCounters()
             guard let finalCount = try await Self.persistedClickCount(run) else {
                 throw AndroidInputRunFailure.timedOut("the fixture's final persisted click counter")
+            }
+            let focusSummary = try run.focusDiagnostic()
+            let droppedNotFocused = countersAfter.droppedNotFocused - countersBefore.droppedNotFocused
+            if droppedNotFocused > 0 {
+                let evidence = """
+                    counters_before=\(countersBefore)
+                    counters_after=\(countersAfter)
+                    \(focusSummary)
+                    samples:
+                    \(focusSamples.joined(separator: "\n"))
+                    """
+                XCTContext.runActivity(named: "Input focus failure evidence") { activity in
+                    let attachment = XCTAttachment(
+                        data: Data(evidence.utf8), uniformTypeIdentifier: "public.utf8-plain-text")
+                    attachment.name = "input-focus-failure.txt"
+                    attachment.lifetime = .keepAlways
+                    activity.add(attachment)
+                }
             }
             XCTAssertEqual(clickNumbers, Array(1...100))
             XCTAssertEqual(finalCount - initialCount, 100, "the fixture must persist every click callback")
@@ -125,6 +173,7 @@ final class AndroidInputTests: XCTestCase {
             XCTAssertEqual(countersAfter.droppedRate - countersBefore.droppedRate, 0, "\(countersAfter)")
             XCTAssertEqual(countersAfter.droppedNotRunning - countersBefore.droppedNotRunning, 0, "\(countersAfter)")
             XCTAssertEqual(countersAfter.droppedChannel - countersBefore.droppedChannel, 0, "\(countersAfter)")
+            XCTAssertEqual(droppedNotFocused, 0, "\(countersAfter); \(focusSummary)")
             XCTAssertEqual(countersAfter.coalesced - countersBefore.coalesced, 0, "\(countersAfter)")
         }
     }
@@ -1430,9 +1479,14 @@ final class AndroidInputTests: XCTestCase {
     /// that fails is retried without a Tab, so a Tab never moves the focus twice.
     private static func focusField(_ run: AndroidInputRun) async throws {
         let keys = try run.keyboard()
+        var lastPackages = "unavailable"
+        var lastFocus = "unavailable"
         for _ in 0..<6 {
             let xml = try await run.uiDump()
-            switch AndroidInputRun.isFocused(fieldID, in: xml) {
+            lastPackages = AndroidInputRun.packages(in: xml)
+            let focus = AndroidInputRun.isFocused(fieldID, in: xml)
+            lastFocus = focus.map { String(describing: $0) } ?? "field not found in dump"
+            switch focus {
             case true?:
                 return
             case false?:
@@ -1442,7 +1496,23 @@ final class AndroidInputTests: XCTestCase {
                 try await Task.sleep(for: .seconds(1))
             }
         }
-        throw AndroidInputRunFailure.viewNotFound("the focus of \(fieldID)")
+        let counters = try? await run.inputCounters()
+        let evidence = """
+            field=\(fieldID)
+            focus_state=\(lastFocus)
+            visible_packages=\(lastPackages)
+            host_input_counters=\(counters.map { String(describing: $0) } ?? "unavailable")
+            """
+        XCTContext.runActivity(named: "Input field focus failure evidence") { activity in
+            let attachment = XCTAttachment(data: Data(evidence.utf8), uniformTypeIdentifier: "public.utf8-plain-text")
+            attachment.name = "input-field-focus-failure.txt"
+            attachment.lifetime = .keepAlways
+            activity.add(attachment)
+        }
+        throw AndroidInputRunFailure.viewNotFound(
+            "the focus of \(fieldID); last focus state: \(lastFocus); input counters: "
+                + "\(counters.map { String(describing: $0) } ?? "unavailable")"
+        )
     }
 
     /// The text of HelloText's field, from the fixture's `text` line after the debug `TEXT` broadcast (a query, not input).

@@ -124,7 +124,7 @@ final class AndroidInputRun {
         self.pointerDelivery = pointerDelivery
     }
 
-    /// Runs `body` on a boot with the window and input, after `apk` is installed and `package` is started on display 0.
+    /// Runs `body` on a boot with the window and input, after `DevBoot` installs and starts `package` on display 0.
     static func with(
         apk: URL,
         package: String,
@@ -164,9 +164,13 @@ final class AndroidInputRun {
             adb: AdbClient(executable: adbExecutable),
             pointerDelivery: pointerDelivery
         )
-        run.startBoot(guestAgentDirectory: URL(fileURLWithPath: guest, isDirectory: true))
+        run.startBoot(
+            guestAgentDirectory: URL(fileURLWithPath: guest, isDirectory: true),
+            apk: apk,
+            package: package
+        )
         do {
-            try await run.prepare(apk: apk, package: package)
+            try await run.prepare(package: package)
             if pointerDelivery == .directView {
                 try await run.prepareForDirectViewPointerDispatch()
             }
@@ -196,6 +200,7 @@ final class AndroidInputRun {
             throw AndroidInputRunFailure.ambiguousDisplay
         }
         try await activateWindowForPointerDispatch()
+        try await waitForWindowFocusBeforeInput()
     }
 
     /// Activates the display window so its key-focus callback binds the input route before direct view events.
@@ -204,6 +209,25 @@ final class AndroidInputRun {
             throw AndroidInputRunFailure.windowNotActive("the test selected WindowServer delivery")
         }
         try await activateWindowForPointerDispatch()
+        try await waitForWindowFocusBeforeInput()
+    }
+
+    /// Waits for the native key-window callback before input. DevBoot's Guest Agent task event retries Android focus
+    /// after the fixture task appears.
+    private func waitForWindowFocusBeforeInput() async throws {
+        let (window, _) = try windowAndView()
+        guard NSApplication.shared.isActive, window.isKeyWindow else {
+            throw AndroidInputRunFailure.windowNotActive("the test window lost key focus before Android input")
+        }
+        do {
+            try await waitUntil(seconds: 5, "the key window to report focused state") {
+                self.inputSink?.latestWindowFocus == true
+            }
+        } catch AndroidInputRunFailure.timedOut(let detail) {
+            let focus = (try? focusDiagnostic()) ?? "window unavailable"
+            throw AndroidInputRunFailure.timedOut("\(detail); \(focus)")
+        }
+        try await drainInput()
     }
 
     private func activateWindowForPointerDispatch() async throws {
@@ -250,6 +274,21 @@ final class AndroidInputRun {
     func inputCounters() async throws -> InputCounters {
         try await drainInput()
         return await route.counters()
+    }
+
+    /// Native key-window state and the bounded focus callback history.
+    func focusDiagnostic() throws -> String {
+        let (window, _) = try windowAndView()
+        return "native[\(Self.activationState(application: NSApplication.shared, window: window))]; "
+            + "callbacks[\(inputSink?.focusDiagnostic ?? "unavailable")]"
+    }
+
+    /// Whether the test can still deliver input through its currently keyed native window.
+    func hasNativeWindowFocus() -> Bool {
+        guard let window = NSApplication.shared.windows.first(where: { $0.title == Self.windowTitle }) else {
+            return false
+        }
+        return NSApplication.shared.isActive && window.isKeyWindow
     }
 
     /// Wire-encoded touch phases after all previously received view events have been routed.
@@ -605,13 +644,20 @@ final class AndroidInputRun {
         inputTouchEventRecorder = nil
     }
 
-    private func startBoot(guestAgentDirectory: URL) {
-        var options = DevBootOptions(gpu: .virgl, stopWhenReady: false, guestAgentDirectory: guestAgentDirectory)
+    private func startBoot(guestAgentDirectory: URL, apk: URL, package: String) {
+        var options = DevBootOptions(
+            gpu: .virgl,
+            stopWhenReady: false,
+            guestAgentDirectory: guestAgentDirectory,
+            launchPackage: package,
+            launchAPKURL: apk
+        )
         options.developerDisplay = display
         options.inputRoute = route
         let bootLog = bootLog
         let stops = stop.stream
         let home = home
+        let adb = adb
         let report: @Sendable (DevBootEvent) -> Void = { event in
             if case .message(let text) = event { bootLog.append(text) }
             if case .warning(let text) = event { bootLog.append(text) }
@@ -622,7 +668,18 @@ final class AndroidInputRun {
         boot = Task.detached {
             do {
                 try await DevBoot().run(
-                    options: options, environment: ["APKRUN_HOME": home.path], stopRequests: stops, onEvent: report)
+                    options: options,
+                    environment: ["APKRUN_HOME": home.path],
+                    stopRequests: stops,
+                    onRuntimeReady: { _ in
+                        // Wake Android and dismiss the keyguard before DevBoot installs and launches the fixture.
+                        try await adb.connect(timeout: .seconds(30))
+                        _ = try await adb.shell("input keyevent 82")
+                        _ = try await adb.shell("wm dismiss-keyguard")
+                        return nil
+                    },
+                    onEvent: report
+                )
             } catch {
                 bootLog.append("failed: \(error)")
             }
@@ -657,11 +714,8 @@ final class AndroidInputRun {
         }
     }
 
-    /// Starts the launcher activity of `package` by its component name, as AndroidPackageTests does (#18), and waits until
-    /// its process runs. monkey starts nothing on this image (IR-1286). A launch that starts no process throws with the
-    /// resumed activity and the fatal lines of the guest log, so the first failure names the cause.
-    private func launch(_ package: String) async throws {
-        try await adb.startActivity(component: "\(package)/.MainActivity")
+    /// Waits until the app started by DevBoot has a process, with guest evidence when it does not.
+    private func waitForLaunch(_ package: String) async throws {
         for _ in 0..<30 {
             if try await adb.pidof(package) != nil {
                 return
@@ -675,21 +729,16 @@ final class AndroidInputRun {
                 + "fatal: \(fatal.trimmingCharacters(in: .whitespacesAndNewlines))")
     }
 
-    /// Waits until the input is bound and frames have arrived, then installs `apk` and starts `package`. The launch is
-    /// `monkey` with one event, which starts the launcher activity: the boot would start a named package before the
-    /// install could happen, so the suite starts it over adb.
-    private func prepare(apk: URL, package: String) async throws {
+    /// Waits for DevBoot to bind input, present frames, and launch the app through its embedded session.
+    private func prepare(package: String) async throws {
         try await waitUntil(seconds: 900, "input is bound to display 0") {
             self.bootLog.contains("input is bound to display [0]")
         }
         try await waitUntil(seconds: 120, "the first frames") { self.framesSeen >= 2 }
-        try await adb.connect(timeout: .seconds(30))
-        try await adb.install(apk: apk)
-        // The lock screen covers the app on this image: the dump of the first failing case showed only SystemUI (IR-1285). The
-        // G3 gate wakes the screen and dismisses the keyguard the same way (G3GraphicsTests). These run before the sequence.
-        _ = try await adb.shell("input keyevent 82")
-        _ = try await adb.shell("wm dismiss-keyguard")
-        try await launch(package)
+        try await waitUntil(seconds: 120, "DevBoot to launch \(package) on display 0") {
+            self.bootLog.containsMessage(startingWith: "launched \(package) on display 0")
+        }
+        try await waitForLaunch(package)
     }
 
     /// Polls `condition` every 200 ms until it holds. It throws when `seconds` have passed.
@@ -1076,6 +1125,8 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
     private let queue: AsyncStream<Command>.Continuation
     private let focusLock = NSLock()
     private var focusGeneration: UInt64 = 0
+    private var lastWindowFocus: Bool?
+    private var focusHistory: [String] = []
     // `IOSurfaceLayerView` calls `deliver` on the main thread, and the test changes this only on MainActor before input.
     private var traceRecorder: InputTraceRecorder?
     private var touchEventRecorder: InputTouchEventRecorder?
@@ -1114,9 +1165,24 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
     func focusChanged(_ focused: Bool) {
         let generation = focusLock.withLock {
             focusGeneration &+= 1
+            lastWindowFocus = focused
+            let uptime = ProcessInfo.processInfo.systemUptime
+            let timestamp = String(format: "%.3f", uptime)
+            focusHistory.append("t=\(timestamp) generation=\(focusGeneration) focused=\(focused)")
+            if focusHistory.count > 16 {
+                focusHistory.removeFirst(focusHistory.count - 16)
+            }
             return focusGeneration
         }
         queue.yield(.focusChanged(focused, generation: generation))
+    }
+
+    var latestWindowFocus: Bool? {
+        focusLock.withLock { lastWindowFocus }
+    }
+
+    var focusDiagnostic: String {
+        focusLock.withLock { focusHistory.joined(separator: ", ") }
     }
 
     func setTraceRecorder(_ recorder: InputTraceRecorder?) {
@@ -1219,6 +1285,10 @@ private final class BootLog: @unchecked Sendable {
 
     func contains(_ line: String) -> Bool {
         lock.withLock { lines.contains(line) }
+    }
+
+    func containsMessage(startingWith prefix: String) -> Bool {
+        lock.withLock { lines.contains { $0.hasPrefix(prefix) } }
     }
 
     /// Records that the boot task has returned, whether it stopped or failed.

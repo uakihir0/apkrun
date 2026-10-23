@@ -1,0 +1,22 @@
+(type apkrun_vsockd)
+(typeattributeset domain (apkrun_vsockd))
+(typeattributeset coredomain (apkrun_vsockd))
+(typeattributeset unconstrained_vsock_violators (apkrun_vsockd))
+(typeattributeset mlstrustedsubject (apkrun_vsockd))
+
+(type apkrun_vsockd_exec)
+(typeattributeset exec_type (apkrun_vsockd_exec))
+(typeattributeset file_type (apkrun_vsockd_exec))
+(typeattributeset system_file_type (apkrun_vsockd_exec))
+
+(typetransition init apkrun_vsockd_exec process apkrun_vsockd)
+(allow init apkrun_vsockd (process (transition)))
+(allow init apkrun_vsockd_exec (file (getattr open read execute map)))
+(allow apkrun_vsockd apkrun_vsockd_exec (file (entrypoint getattr open read execute map)))
+
+(allow apkrun_vsockd self
+    (vsock_socket (create bind listen accept read write getattr getopt setopt shutdown)))
+(allow apkrun_vsockd self
+    (unix_stream_socket (create connect read write getattr shutdown)))
+(allow apkrun_vsockd apkrun_guest_app
+    (unix_stream_socket (connectto)))

@@ -89,6 +89,16 @@ def apkrun_composed_variant(stock: Document) -> Document:
             {"path": "compose.json", "sha256": "5" * 64},
             {"path": "init/apkrun.rc", "sha256": "6" * 64},
         ],
+        "testOverlayInputs": [
+            {
+                "path": "Tests/Fixtures/AndroidImageProduct/compose.json",
+                "sha256": "8" * 64,
+            },
+            {
+                "path": "Tests/Fixtures/AndroidImageProduct/init/apkrun-test.rc",
+                "sha256": "9" * 64,
+            },
+        ],
         "apkrunRevision": "7" * 40,
     }
     document["requirements"] = {
@@ -245,6 +255,21 @@ def _composed_unsorted_product_inputs(d: Document) -> None:
     d.update(product)
 
 
+def _composed_unsorted_test_overlay_inputs(d: Document) -> None:
+    product = apkrun_composed_variant(d)
+    product["provenance"]["composition"]["testOverlayInputs"].reverse()
+    d.clear()
+    d.update(product)
+
+
+def _composed_duplicate_test_overlay_input(d: Document) -> None:
+    product = apkrun_composed_variant(d)
+    inputs = product["provenance"]["composition"]["testOverlayInputs"]
+    inputs.append(copy.deepcopy(inputs[0]))
+    d.clear()
+    d.update(product)
+
+
 def _null_composition(d: Document) -> None:
     d["provenance"]["composition"] = None
 
@@ -311,6 +336,8 @@ INVALID_CASES: tuple[tuple[str, str, Callable[[Document], None]], ...] = (
     ("s13-stock-with-guest-revision", "S13", _stock_guest_revision),
     ("s13-composed-with-builder-pin", "S13", _composed_with_builder_pin),
     ("s13-composed-unsorted-product-inputs", "S13", _composed_unsorted_product_inputs),
+    ("s13-composed-unsorted-test-overlay-inputs", "S13", _composed_unsorted_test_overlay_inputs),
+    ("s13-composed-duplicate-test-overlay-input", "S13", _composed_duplicate_test_overlay_input),
     ("s14-sdk-mismatch", "S14", _sdk_mismatch),
     ("s14-target-sdk-floor", "S14", _sdk_floor),
     ("schema-trailing-line-break", "schema", _trailing_line_break),

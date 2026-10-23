@@ -18,7 +18,7 @@ from typing import Literal
 POLICY_VERSION = 30
 _VERSION = re.compile(r"^[0-9]+(?:\.[0-9]+)?$")
 _GENFS_VERSION = re.compile(r"^[0-9]{6}$")
-_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_CACHE_KEY = re.compile(r"^[0-9a-f]{64}-[0-9a-f]{64}$")
 _SEAPP_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 _SEAPP_OUTPUT_KEYS = frozenset({"domain", "type", "levelFrom", "level"})
 _SEAPP_MATCH_KEYS = frozenset(
@@ -685,7 +685,7 @@ def verify_pinned_secilc(tool_directory: Path, third_party_lock: Path) -> Path:
         or manifest.get("sourceLock") != component
         or manifest.get("toolArchives") != expected_archives
         or not isinstance(cache_key, str)
-        or not _SHA256.fullmatch(cache_key)
+        or not _CACHE_KEY.fullmatch(cache_key)
         or not isinstance(outputs, dict)
         or outputs != {"secilc": actual_sha256}
     ):

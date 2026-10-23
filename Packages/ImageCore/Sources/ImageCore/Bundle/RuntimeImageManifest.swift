@@ -255,11 +255,13 @@ public struct RuntimeImageManifest: Codable, Equatable, Sendable {
             public var sourceManifest: FileReference
             /// Product files and policy inputs, sorted by path.
             public var productInputs: [FileReference]
+            /// Fixed, opt-in test fixture inputs, sorted by path; omitted from product images.
+            public var testOverlayInputs: [FileReference]?
             /// The APKRun source revision used for the product inputs.
             public var apkrunRevision: String
 
             enum CodingKeys: String, CodingKey, CaseIterable {
-                case schemaVersion, sourceManifest, productInputs, apkrunRevision
+                case schemaVersion, sourceManifest, productInputs, testOverlayInputs, apkrunRevision
             }
         }
 
@@ -612,12 +614,32 @@ extension RuntimeImageManifest.Provenance.Composition {
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let testOverlayInputs: [RuntimeImageManifest.Provenance.FileReference]?
+        if c.contains(.testOverlayInputs) {
+            testOverlayInputs = try c.decode(
+                [RuntimeImageManifest.Provenance.FileReference].self,
+                forKey: .testOverlayInputs
+            )
+        } else {
+            testOverlayInputs = nil
+        }
         self.init(
             schemaVersion: try c.decode(Int.self, forKey: .schemaVersion),
             sourceManifest: try c.decode(RuntimeImageManifest.Provenance.FileReference.self, forKey: .sourceManifest),
             productInputs: try c.decode([RuntimeImageManifest.Provenance.FileReference].self, forKey: .productInputs),
+            testOverlayInputs: testOverlayInputs,
             apkrunRevision: try c.decode(String.self, forKey: .apkrunRevision)
         )
+    }
+
+    /// Encodes test provenance only when the fixed test overlay was composed.
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(schemaVersion, forKey: .schemaVersion)
+        try c.encode(sourceManifest, forKey: .sourceManifest)
+        try c.encode(productInputs, forKey: .productInputs)
+        try c.encodeIfPresent(testOverlayInputs, forKey: .testOverlayInputs)
+        try c.encode(apkrunRevision, forKey: .apkrunRevision)
     }
 }
 

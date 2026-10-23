@@ -294,7 +294,17 @@
       "sourceManifest": {
         "path": "Images/manifests/16373615/android-image.json",
         "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
-      }
+      },
+      "testOverlayInputs": [
+        {
+          "path": "Tests/Fixtures/AndroidImageProduct/compose.json",
+          "sha256": "8888888888888888888888888888888888888888888888888888888888888888"
+        },
+        {
+          "path": "Tests/Fixtures/AndroidImageProduct/init/apkrun-test.rc",
+          "sha256": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      ]
     },
     "deviceFamily": "cuttlefish-phone-arm64",
     "layout": {

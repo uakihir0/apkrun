@@ -138,6 +138,31 @@ def test_partitions_start_on_1_mib_and_sizes_equal_image_sizes(tmp_path: Path) -
         assert super_size == read_header(stream).logical_size
 
 
+def test_composition_overrides_replace_selected_artifacts_in_the_disk(tmp_path: Path) -> None:
+    replacement = tmp_path / "boot-composed.img"
+    replacement.write_bytes(b"composed boot partition".ljust(SECTOR_SIZE, b"\0"))
+    output = tmp_path / "disks"
+    metadata = build_disks(
+        _manifest(),
+        layout_path=_layout(tmp_path / "layout.json"),
+        output_directory=output,
+        image_version="2026.10.0-test",
+        source=FIXTURE_ARCHIVE,
+        inventory_path=FIXTURE_INVENTORY,
+        artifact_overrides={"boot": replacement},
+    )
+    os_disk = output / "os.img"
+    with os_disk.open("rb") as stream:
+        table = read_gpt(stream, os_disk.stat().st_size)
+    boot = table.partitions[0]
+    with os_disk.open("rb") as stream:
+        stream.seek(boot.first_lba * SECTOR_SIZE)
+        assert stream.read(boot.size) == replacement.read_bytes()
+    record = metadata["disks"][0]["partitions"][0]  # type: ignore[index]
+    assert record["size"] == len(replacement.read_bytes())
+    assert record["sha256"] == hashlib.sha256(replacement.read_bytes()).hexdigest()
+
+
 def test_two_runs_give_identical_bytes(tmp_path: Path) -> None:
     _build(tmp_path, tmp_path / "first")
     _build(tmp_path, tmp_path / "second")

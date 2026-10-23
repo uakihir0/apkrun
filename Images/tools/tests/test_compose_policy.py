@@ -282,7 +282,7 @@ def _fake_pinned_secilc(tool_directory: Path, lock_path: Path) -> Path:
                 "sourceCommit": source_commit,
                 "sourceLock": component,
                 "toolArchives": {"flex": "2" * 64, "m4": "3" * 64},
-                "cacheKey": "4" * 64,
+                "cacheKey": "4" * 64 + "-" + "5" * 64,
                 "outputs": {"secilc": hashlib.sha256(binary.read_bytes()).hexdigest()},
             }
         ),

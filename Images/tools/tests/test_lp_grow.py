@@ -28,6 +28,7 @@ from apkrun_image.lp_grow import (
     GroupSizeExceededError,
     LpGrowError,
     grow_partition,
+    partition_growth_limit,
 )
 
 
@@ -145,6 +146,35 @@ def test_group_maximum_is_enforced_before_output_is_created(tmp_path: Path) -> N
 
     assert not destination.exists()
     assert not list(tmp_path.glob(".capped-grown.img.partial"))
+
+
+def test_growth_limit_accounts_for_group_capacity_and_free_extents(tmp_path: Path) -> None:
+    """The composer can bound AVB sizing without guessing from the super's total size."""
+    _original, logical = make_super(tmp_path)
+    logical = bytearray(logical)
+    _set_group_maximum(logical, "google_system_dynamic_partitions_a", 3 * MIB)
+    source = _write_sparse(tmp_path, "growth-limit.img", logical)
+
+    assert partition_growth_limit(source, "system_a") == 11 * MIB // 4
+
+    logical = bytearray(logical)
+    _set_group_maximum(logical, "google_system_dynamic_partitions_a", 0)
+    _set_block_device_size(logical, 5 * MIB)
+    source = _write_sparse(tmp_path, "device-growth-limit.img", logical)
+    # The declared device ends at 5 MiB, but liblp extents and 1 MiB alignment leave
+    # only 512 KiB allocatable after system_a's existing 1 MiB extent.
+    assert partition_growth_limit(source, "system_a") == 3 * MIB // 2
+
+
+def test_growth_limit_rejects_missing_and_non_sparse_partitions(tmp_path: Path) -> None:
+    source, _logical = make_super(tmp_path)
+    with pytest.raises(LpGrowError, match="no such logical partition"):
+        partition_growth_limit(source, "missing_a")
+
+    raw = tmp_path / "raw.img"
+    raw.write_bytes(bytes(4096))
+    with pytest.raises(LpGrowError, match="sparse super"):
+        partition_growth_limit(raw, "system_a")
 
 
 def test_block_device_size_bounds_extent_allocation(tmp_path: Path) -> None:

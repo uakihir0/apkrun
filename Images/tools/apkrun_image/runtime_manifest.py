@@ -209,6 +209,17 @@ def semantic_violations(document: Mapping[str, Any]) -> list[Violation]:
                 "/provenance/composition/productInputs",
                 "composition product inputs must be sorted by path with no duplicates",
             )
+        test_overlay_inputs = composition.get("testOverlayInputs")
+        if test_overlay_inputs is not None:
+            test_input_paths = [entry["path"] for entry in test_overlay_inputs]
+            if test_input_paths != sorted(
+                test_input_paths, key=lambda text: text.encode("utf-8")
+            ) or len(set(test_input_paths)) != len(test_input_paths):
+                fail(
+                    "S13",
+                    "/provenance/composition/testOverlayInputs",
+                    "test overlay inputs must be sorted by path with no duplicates",
+                )
     if document["kind"] == "apkrun" and composition is not None:
         if guest_revision is None or any(value is not None for value in pins):
             fail(

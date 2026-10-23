@@ -68,6 +68,8 @@ COMPOSITION_OUTPUTS = {
     "vbmeta_system": "vbmeta_system_a.img",
     "vbmeta": "vbmeta_a.img",
 }
+GUEST_AGENT_METADATA = "Guest/product/prebuilt/ApkRunGuest.json"
+TEST_OVERLAY_INPUT_PREFIX = "Tests/Fixtures/AndroidImageProduct/"
 
 
 def _sha256(path: Path) -> str:
@@ -136,6 +138,38 @@ def _repository_relative(path: Path) -> str:
     return resolved.relative_to(root).as_posix()
 
 
+def _verify_composition_sources(inputs: Sequence[Mapping[str, Any]], *, input_kind: str) -> None:
+    """Verify composition provenance against safe repository-relative source files."""
+    repository = _repository_root().resolve()
+    for item in inputs:
+        relative = item["path"]
+        components = relative.split("/")
+        if len(relative) > 255 or any(
+            component in ("", ".", "..") or fullmatch(r"[A-Za-z0-9._-]+", component) is None
+            for component in components
+        ):
+            raise BundleError(
+                f"{relative}: {input_kind} input must be a safe repository-relative path."
+            )
+        path = repository.joinpath(*components)
+        current = repository
+        for component in components:
+            current /= component
+            if current.is_symlink():
+                raise BundleError(f"{path}: {input_kind} input must not use symlinks.")
+        try:
+            resolved = path.resolve(strict=True)
+            resolved.relative_to(repository)
+        except (OSError, ValueError):
+            raise BundleError(
+                f"{path}: composition {input_kind} provenance source is missing or unsafe."
+            ) from None
+        if not resolved.is_file():
+            raise BundleError(f"{path}: composition {input_kind} provenance source is not a file.")
+        if _sha256(resolved) != item["sha256"]:
+            raise BundleError(f"{path}: SHA-256 differs from composition {input_kind} inputs.")
+
+
 def _bootconfig_text(vendor: Mapping[str, str], image: Mapping[str, str]) -> str:
     def section(values: Mapping[str, str]) -> str:
         return serialize_bootconfig(values).decode("ascii")
@@ -172,7 +206,7 @@ def _composition_inputs(
     directory: Path,
     document: Mapping[str, Any],
     manifest_path: Path | None,
-) -> tuple[dict[str, Any], dict[str, Path]]:
+) -> tuple[dict[str, Any], dict[str, Path], list[dict[str, object]]]:
     """Validate one composer output directory and return its runtime provenance and overlays."""
     root = directory.expanduser()
     if root.is_symlink() or not root.is_dir():
@@ -213,6 +247,7 @@ def _composition_inputs(
         )
 
     product_inputs = record.get("productInputs")
+    test_overlay_inputs = record.get("testOverlayInputs")
     revision = record.get("apkrunRevision")
     output_hashes = record.get("outputHashes")
     if (
@@ -247,6 +282,28 @@ def _composition_inputs(
         paths
     ):
         raise BundleError(f"{record_path}: product inputs must be sorted and unique.")
+    _verify_composition_sources(product_inputs, input_kind="product")
+    if "testOverlayInputs" in record:
+        if not isinstance(test_overlay_inputs, list) or not 1 <= len(test_overlay_inputs) <= 256:
+            raise BundleError(f"{record_path}: test overlay inputs must contain 1 to 256 entries.")
+        test_paths: list[str] = []
+        for item in test_overlay_inputs:
+            if (
+                not isinstance(item, Mapping)
+                or set(item) != {"path", "sha256"}
+                or not isinstance(item.get("path"), str)
+                or not item["path"].startswith(TEST_OVERLAY_INPUT_PREFIX)
+                or not isinstance(item.get("sha256"), str)
+                or fullmatch(r"[0-9a-f]{64}", item["sha256"]) is None
+            ):
+                raise BundleError(f"{record_path}: a test overlay input entry is invalid.")
+            test_paths.append(item["path"])
+        if test_paths != sorted(test_paths, key=lambda item: item.encode("utf-8")) or len(
+            set(test_paths)
+        ) != len(test_paths):
+            raise BundleError(f"{record_path}: test overlay inputs must be sorted and unique.")
+        _verify_composition_sources(test_overlay_inputs, input_kind="test overlay")
+    agent_requirements = _composition_agent_requirements(product_inputs)
 
     artifacts = document.get("artifacts")
     if not isinstance(artifacts, list):
@@ -274,7 +331,49 @@ def _composition_inputs(
         "productInputs": [dict(item) for item in product_inputs],
         "apkrunRevision": revision,
     }
-    return composition, overrides
+    if "testOverlayInputs" in record:
+        composition["testOverlayInputs"] = [dict(item) for item in test_overlay_inputs]
+    return composition, overrides, agent_requirements
+
+
+def _composition_agent_requirements(
+    product_inputs: Sequence[Mapping[str, Any]],
+) -> list[dict[str, object]]:
+    """Read the hash-pinned agent metadata used to compose the product image."""
+    metadata = next(
+        (item for item in product_inputs if item.get("path") == GUEST_AGENT_METADATA),
+        None,
+    )
+    if metadata is None:
+        raise BundleError(f"composition must record {GUEST_AGENT_METADATA} as a product input.")
+    repository = _repository_root()
+    metadata_path = repository / GUEST_AGENT_METADATA
+    path = repository
+    for component in GUEST_AGENT_METADATA.split("/"):
+        path /= component
+        if path.is_symlink():
+            raise BundleError(f"{metadata_path}: Guest Agent metadata must not use symlinks.")
+    if not metadata_path.is_file():
+        raise BundleError(f"{metadata_path}: Guest Agent metadata is missing.")
+    try:
+        digest = _sha256(metadata_path)
+        value = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BundleError(f"{metadata_path}: cannot read Guest Agent metadata: {error}") from None
+    if digest != metadata.get("sha256"):
+        raise BundleError(f"{metadata_path}: SHA-256 differs from composition product inputs.")
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != {"packageName", "versionCode", "versionName"}
+        or value.get("packageName") != "io.apkrun.guest"
+        or isinstance(value.get("versionCode"), bool)
+        or not isinstance(value.get("versionCode"), int)
+        or value["versionCode"] < 1
+        or not isinstance(value.get("versionName"), str)
+        or not value["versionName"]
+    ):
+        raise BundleError(f"{metadata_path}: Guest Agent metadata is invalid.")
+    return [{"package": value["packageName"], "versionCode": value["versionCode"]}]
 
 
 @contextlib.contextmanager
@@ -314,8 +413,9 @@ def build_bundle(
     full_version = f"{image_version}-cf{source_block['buildId']}-arm64"
     composition = None
     artifact_overrides: dict[str, Path] = {}
+    agent_requirements: list[dict[str, object]] = []
     if composition_directory is not None:
-        composition, artifact_overrides = _composition_inputs(
+        composition, artifact_overrides, agent_requirements = _composition_inputs(
             composition_directory,
             document,
             manifest_path,
@@ -474,7 +574,7 @@ def build_bundle(
             "requirements": {
                 "minimumRuntimeVersion": MINIMUM_RUNTIME_VERSION,
                 "guestProtocol": GUEST_PROTOCOL,
-                "agents": [],
+                "agents": agent_requirements,
             },
             "userdata": {
                 "schemaVersion": USERDATA_SCHEMA_VERSION,

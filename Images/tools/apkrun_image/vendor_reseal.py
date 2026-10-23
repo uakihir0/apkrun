@@ -470,8 +470,9 @@ def refresh_vbmeta_partition(
         raise ResealError("the signing key does not match the pinned AOSP AVB test key.")
 
     rollback = stock_top.get("Rollback Index")
-    if rollback is None:
-        raise ResealError("the stock vbmeta_a has no rollback index.")
+    rollback_location = stock_top.get("Rollback Index Location")
+    if rollback is None or rollback_location is None:
+        raise ResealError("the stock vbmeta_a has no rollback index metadata.")
     release_string = vbmeta_release_string(avbtool, stock_vbmeta)
     partition_size = stock_vbmeta.stat().st_size
 
@@ -536,6 +537,8 @@ def refresh_vbmeta_partition(
         str(signing_key),
         "--rollback_index",
         rollback.split()[0],
+        "--rollback_index_location",
+        rollback_location.split()[0],
         "--internal_release_string",
         release_string,
     ]

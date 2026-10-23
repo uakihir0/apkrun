@@ -229,6 +229,23 @@ enum RuntimeImageManifestRules {
                 try schema(isRepositoryPath(input.path), base + "/path", "path")
                 try schema(isSHA256(input.sha256), base + "/sha256", "not a SHA-256")
             }
+            if let testOverlayInputs = composition.testOverlayInputs {
+                try schema(
+                    (1...256).contains(testOverlayInputs.count),
+                    "/provenance/composition/testOverlayInputs",
+                    "1 to 256 test overlay inputs"
+                )
+                for (index, input) in testOverlayInputs.enumerated() {
+                    let base = "/provenance/composition/testOverlayInputs/\(index)"
+                    try schema(
+                        isRepositoryPath(input.path)
+                            && input.path.hasPrefix("Tests/Fixtures/AndroidImageProduct/"),
+                        base + "/path",
+                        "path must stay under the fixed AndroidImageProduct fixture root"
+                    )
+                    try schema(isSHA256(input.sha256), base + "/sha256", "not a SHA-256")
+                }
+            }
             try schema(
                 isTreeRevision(composition.apkrunRevision),
                 "/provenance/composition/apkrunRevision", "revision"
@@ -502,6 +519,14 @@ enum RuntimeImageManifestRules {
                 rule: "S13", path: "/provenance/composition/productInputs",
                 reason: "composition product inputs must be sorted by path with no duplicates"
             )
+            if let testOverlayInputs = composition.testOverlayInputs {
+                let testInputPaths = testOverlayInputs.map(\.path)
+                try expect(
+                    testInputPaths == testInputPaths.sorted() && isUnique(testInputPaths),
+                    rule: "S13", path: "/provenance/composition/testOverlayInputs",
+                    reason: "test overlay inputs must be sorted by path with no duplicates"
+                )
+            }
             try expect(
                 guestRevision != nil && pins.allSatisfy { $0 == nil },
                 rule: "S13", path: "/provenance",

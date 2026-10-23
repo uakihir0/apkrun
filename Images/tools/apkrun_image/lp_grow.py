@@ -349,6 +349,80 @@ def _read_slots(stream: BinaryIO, logical_size: int) -> tuple[lp.Geometry, list[
     return parsed_a, slots
 
 
+def partition_growth_limit(source: Path, partition_name: str) -> int:
+    """Return an upper bound for a logical partition's aligned size after safe growth.
+
+    The bound accounts for its group maximum and the total free, aligned ranges on the backing
+    device. `grow_partition` still performs the authoritative allocation and verifies every
+    metadata copy before publishing output.
+    """
+    try:
+        with source.open("rb") as stream:
+            stream.seek(0)
+            if stream.read(4) != struct.pack("<I", SPARSE_MAGIC):
+                raise LpGrowError("only Android sparse super images can be inspected for growth")
+            header = read_header(stream)
+            geometry, slots = _read_slots(stream, header.logical_size)
+    except OSError as error:
+        raise LpGrowError(f"{source}: could not inspect the sparse super: {error}") from None
+
+    base = slots[0]
+    partition = next((item for item in base.partitions if item.name == partition_name), None)
+    if partition is None:
+        raise LpGrowError(f"{partition_name}: the super image has no such logical partition")
+    if partition.group_index >= len(base.groups):
+        raise lp.LpMetadataError(f"{partition_name}: its liblp group index is invalid")
+    if not partition.extents or any(
+        extent.target_type != LINEAR_TARGET or extent.target_source != 0
+        for extent in partition.extents
+    ):
+        raise LpGrowError(f"{partition_name}: existing extents cannot be safely grown")
+
+    group = base.groups[partition.group_index]
+    group_usage = sum(
+        item.parsed_size
+        for item in base.partitions
+        if base.groups[item.group_index].name == group.name
+    )
+    if group.maximum_size and group_usage > group.maximum_size:
+        raise lp.LpMetadataError(f"liblp group {group.name!r} exceeds its maximum size")
+    group_limit = (
+        partition.parsed_size + group.maximum_size - group_usage
+        if group.maximum_size
+        else base.block_devices[0].size
+    )
+
+    device = base.block_devices[0]
+    metadata_end = lp.METADATA_START + 2 * geometry.metadata_slot_count * geometry.metadata_max_size
+    lower_bound = max(metadata_end, device.first_logical_sector * SECTOR_SIZE)
+    occupied = _physical_intervals(slots, device.size, metadata_end)
+    alignment, residue = _combined_alignment(
+        device.alignment,
+        device.alignment_offset,
+        header.block_size,
+    )
+    quantum = math.lcm(header.block_size, geometry.logical_block_size)
+    free_capacity = 0
+    cursor = lower_bound
+    for start, end in occupied:
+        if end <= lower_bound:
+            continue
+        if start > cursor:
+            aligned = _alignment(cursor, alignment, residue)
+            if aligned < start:
+                free_capacity += ((start - aligned) // quantum) * quantum
+        cursor = max(cursor, end)
+        if cursor >= device.size:
+            break
+    if cursor < device.size:
+        aligned = _alignment(cursor, alignment, residue)
+        if aligned < device.size:
+            free_capacity += ((device.size - aligned) // quantum) * quantum
+
+    device_limit = partition.parsed_size + free_capacity
+    return min(group_limit, device_limit) // quantum * quantum
+
+
 def _physical_intervals(
     slots: list[_Slot], block_device_size: int, metadata_end: int
 ) -> list[tuple[int, int]]:

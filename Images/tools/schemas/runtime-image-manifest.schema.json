@@ -96,6 +96,24 @@
               "maxItems": 256,
               "items": { "$ref": "#/$defs/repositoryFile" }
             },
+            "testOverlayInputs": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": {
+                "allOf": [
+                  { "$ref": "#/$defs/repositoryFile" },
+                  {
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "pattern": "^Tests/Fixtures/AndroidImageProduct/"
+                      }
+                    }
+                  }
+                ]
+              }
+            },
             "apkrunRevision": { "$ref": "#/$defs/treeRevision" }
           }
         }

@@ -497,15 +497,23 @@ final class AgentSocketIsolationTests: AndroidCustomTestCase {
                 let android = try await Self.android(session)
                 let adb = try await Self.adb(session)
                 try await adb.install(apk: apk)
-                let launch = try await adb.shell("am start -n \(Self.package)/.MainActivity")
-                XCTAssertEqual(launch.status, 0, launch.errorOutput)
+                try await adb.startActivity(component: "\(Self.package)/.MainActivity")
 
                 let deadline = ContinuousClock.now + .seconds(30)
                 var output = ""
+                var processID: Int?
                 while ContinuousClock.now < deadline {
-                    output = try await adb.shell("logcat -d -t 200 -s HelloProbe:I").output
-                    if output.contains("probe-complete") {
-                        break
+                    if processID == nil {
+                        processID = try await adb.pidof(Self.package)
+                    }
+                    if let processID {
+                        // Filter before applying the tail so ADB and system logs cannot evict the probe marker.
+                        output = try await adb.shell(
+                            "logcat -d --pid \(processID) -t 200 -s HelloProbe:I"
+                        ).output
+                        if output.contains("probe-complete") {
+                            break
+                        }
                     }
                     try await Task.sleep(for: .milliseconds(200))
                 }
@@ -520,11 +528,13 @@ final class AgentSocketIsolationTests: AndroidCustomTestCase {
                         "ps -A -Z | grep \(Self.package) || true"
                     ).output
                     let relevantLogs = try await adb.shell(
-                        "logcat -b all -d -t 500 | grep -E 'HelloProbe|helloprobe|AndroidRuntime|ActivityTaskManager|FATAL EXCEPTION|avc:' || true"
+                        "logcat -b all -d | grep -E 'HelloProbe|helloprobe|AndroidRuntime|ActivityTaskManager|FATAL EXCEPTION|avc:' || true"
                     ).output
                     output = """
                         filtered HelloProbe logcat:
                         \(output)
+                        process ID:
+                        \(String(describing: processID))
                         package state:
                         \(packageState)
                         activity state:
@@ -533,10 +543,6 @@ final class AgentSocketIsolationTests: AndroidCustomTestCase {
                         \(appProcesses)
                         relevant system logs:
                         \(relevantLogs)
-                        launch output:
-                        \(launch.output)
-                        launch error:
-                        \(launch.errorOutput)
                         """
                 }
                 XCTAssertTrue(output.contains("unix-control=denied"), output)

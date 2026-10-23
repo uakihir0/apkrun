@@ -16,4 +16,25 @@ final class AndroidTestEnvironmentTests: XCTestCase {
             }
         }
     }
+
+    func testAndroidCustomRequiresCompositionProvenance() {
+        XCTAssertTrue(
+            AndroidTestBundleLocator.isComposedManifest([
+                "kind": "apkrun",
+                "provenance": ["composition": ["schemaVersion": 1]],
+            ])
+        )
+        XCTAssertFalse(
+            AndroidTestBundleLocator.isComposedManifest([
+                "kind": "apkrun",
+                "provenance": [:],
+            ])
+        )
+        XCTAssertFalse(
+            AndroidTestBundleLocator.isComposedManifest([
+                "kind": "stock",
+                "provenance": ["composition": ["schemaVersion": 1]],
+            ])
+        )
+    }
 }

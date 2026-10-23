@@ -60,7 +60,7 @@ enum AndroidTestBundleLocator {
         case composedBundleMissing(path: String)
         case invalidManifest(path: String)
         case testImageKeyMissing
-        case unexpectedImageKind(path: String, kind: String)
+        case notComposedImage(path: String, kind: String)
 
         var description: String {
             switch self {
@@ -70,8 +70,8 @@ enum AndroidTestBundleLocator {
                 "The selected Android bundle has no readable manifest at \(path)."
             case .testImageKeyMissing:
                 "The AndroidCustom test image public key is missing or invalid in the test bundle."
-            case .unexpectedImageKind(let path, let kind):
-                "AndroidCustom selected a \(kind) image at \(path); it requires kind=apkrun."
+            case .notComposedImage(let path, let kind):
+                "AndroidCustom selected a \(kind) image at \(path); it requires an apkrun image with provenance.composition."
             }
         }
     }
@@ -123,11 +123,21 @@ enum AndroidTestBundleLocator {
             else {
                 throw Failure.invalidManifest(path: manifestURL.path)
             }
-            guard kind == "apkrun" else {
-                throw Failure.unexpectedImageKind(path: bundle.path, kind: kind)
+            guard Self.isComposedManifest(manifest) else {
+                throw Failure.notComposedImage(path: bundle.path, kind: kind)
             }
         }
         return bundle
+    }
+
+    static func isComposedManifest(_ manifest: [String: Any]) -> Bool {
+        guard manifest["kind"] as? String == "apkrun",
+            let provenance = manifest["provenance"] as? [String: Any],
+            provenance["composition"] is [String: Any]
+        else {
+            return false
+        }
+        return true
     }
 
     /// Adds the fixture signer only to the AndroidCustom test process trust list.

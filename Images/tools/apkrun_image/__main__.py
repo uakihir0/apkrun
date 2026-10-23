@@ -21,7 +21,7 @@ COMMANDS = {
     "keygen": "Create the Ed25519 key pair that signs runtime image bundles.",
     "manifest": "Generate or validate an Android image manifest.",
     "vendor-reseal": "Reseal the injected vendor_a and refresh its descriptor in vbmeta_a (#99).",
-    "test-bundles": "Build the opt-in Android test bundle variants A, B, B-prime, F, P, and S (#36).",
+    "test-bundles": "Build opt-in Android test bundles (A, B, B-prime, F, P, S) (#36).",
 }
 
 # Command names that are not valid module names map to their module.

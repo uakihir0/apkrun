@@ -48,4 +48,5 @@ An ADR records one significant decision: its context, the decision, the alternat
 | [0016](0016-sparkle-host-updates.md) | Sparkle 2 for APKRun updates, coordinated with apkrund | Accepted |
 | [0017](0017-zipfoundation-zip-reading.md) | ZIPFoundation for reading ZIP archives | Accepted |
 | [0018](0018-guest-mesa-ndk-build.md) | Guest Mesa (EGL, GLES, gallium virgl) built with the NDK as a standalone APKRun cross-build | Accepted |
-| [0019](0019-composed-development-image.md) | Development custom image composed from the stock Cuttlefish build | Accepted |
+| [0019](0019-composed-development-image.md) | Development custom image composed from the stock Cuttlefish build | Superseded by 0020 |
+| [0020](0020-composed-development-image-mesa.md) | Compose guest Mesa into the development image | Accepted |

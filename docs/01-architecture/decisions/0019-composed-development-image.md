@@ -1,6 +1,6 @@
 # 0019. Development custom image composed from the stock Cuttlefish build
 
-- Status: Accepted
+- Status: Superseded by 0020
 - Date: 2026-10-23
 - Approval: the project owner approved this route in the session of 2026-10-23, instead of an AOSP product build for development images.
 - Related: #36, #37, #120, ADR-0003, ADR-0008, ADR-0011, ADR-0018, R-13, R-14, OQ-36, [../../02-design/android-image.md](../../02-design/android-image.md) §4.6, §11

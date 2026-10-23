@@ -41,17 +41,34 @@ class AndroidCustomTestCase: XCTestCase {
 /// Boots the selected composed image and verifies its init marker and SELinux mode.
 final class CustomImageBootTests: AndroidCustomTestCase {
     func testProductImageBootsWithEnforcingPolicy() async throws {
-        try await AndroidBootSession.withBoot(developerMode: true) { session in
+        try await AndroidBootSession.withBoot(developerMode: true, gpuProfile: .drmVirgl) { session in
             let android = try await Self.android(session)
             let state = await session.supervisor.state
             XCTAssertEqual(state, .ready)
             let bootCompleted = try await android.value("getprop sys.boot_completed")
             let productMarker = try await android.value("getprop ro.apkrun.product")
             let enforcing = try await android.value("getenforce")
-            let privilegedPermissionMode = try await android.value("getprop ro.control_privapp_permissions")
+            let egl = try await android.value("getprop ro.hardware.egl")
+            let privilegedPermissionMode = try await android.value(
+                "getprop ro.control_privapp_permissions"
+            )
             XCTAssertEqual(Self.trimmed(bootCompleted), "1")
             XCTAssertEqual(Self.trimmed(privilegedPermissionMode), "enforce")
             XCTAssertEqual(Self.trimmed(enforcing), "Enforcing")
+            XCTAssertEqual(Self.trimmed(egl), "mesa")
+            let mesaLibraries = [
+                "libEGL_mesa.so",
+                "libGLESv2_mesa.so",
+                "libGLESv1_CM_mesa.so",
+                "libgallium_dri.so",
+            ]
+            let mesaLibraryPaths =
+                mesaLibraries
+                .map { "/vendor/lib64/egl/\($0)" }
+                .joined(separator: " ")
+            _ = try await android.output(
+                "for path in \(mesaLibraryPaths); do test -f \"$path\" || exit 1; done"
+            )
             if Self.trimmed(productMarker) != "1" {
                 let productProperties = try await android.run("getprop | grep apkrun").output
                 let initFile = try await android.run("ls -lZ /system_ext/etc/init/apkrun.rc").output

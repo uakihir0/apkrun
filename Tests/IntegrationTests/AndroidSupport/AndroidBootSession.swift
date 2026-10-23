@@ -246,8 +246,11 @@ final class AndroidBootSession: @unchecked Sendable {
     }
 
     /// Starts a boot whose supervisor installs and starts `guestAgentBundle` in developer mode (#73). Nil boots without the agent.
-    static func start(developerMode: Bool, guestAgentBundle: GuestAgentBundle? = nil) async throws -> AndroidBootSession
-    {
+    static func start(
+        developerMode: Bool,
+        guestAgentBundle: GuestAgentBundle? = nil,
+        gpuProfile: GPUProfileID = .headless
+    ) async throws -> AndroidBootSession {
         let bundle = try bundleDirectory()
         // The run's own home and developer ADB port (test-strategy §3.10).
         let run = try VMRunResources.new(environment: ProcessInfo.processInfo.environment)
@@ -264,7 +267,7 @@ final class AndroidBootSession: @unchecked Sendable {
             image: image,
             instanceStore: store,
             options: BootOptions(
-                gpuProfile: .headless,
+                gpuProfile: gpuProfile,
                 developerMode: developerMode,
                 captureLogcat: false,
                 adbHostPort: run.adbHostPort
@@ -301,11 +304,16 @@ final class AndroidBootSession: @unchecked Sendable {
     static func withBoot(
         developerMode: Bool,
         guestAgentBundle: GuestAgentBundle? = nil,
+        gpuProfile: GPUProfileID = .headless,
         _ body: (AndroidBootSession) async throws -> Void
     ) async throws {
         let session: AndroidBootSession
         do {
-            session = try await start(developerMode: developerMode, guestAgentBundle: guestAgentBundle)
+            session = try await start(
+                developerMode: developerMode,
+                guestAgentBundle: guestAgentBundle,
+                gpuProfile: gpuProfile
+            )
         } catch {
             reportImageFailure(error)
             throw error

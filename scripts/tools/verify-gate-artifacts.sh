@@ -2,19 +2,25 @@
 # Checks that the test artifact directory holds what the gate's test plans read: the Linux kernel and
 # initramfs, the Android disks of the layout test, and for G2 the Android bundle.
 #
-#   scripts/tools/verify-gate-artifacts.sh DIRECTORY G1|G2|G3
+#   scripts/tools/verify-gate-artifacts.sh DIRECTORY G1|G2|G3 [--android-bundle BUNDLE]
 #
 # run-gate.sh runs this after it builds the artifacts and before it runs any test, so a missing file stops the
 # gate with the file's name instead of as a failed test (IR-376). G3 reads its Android bundle by path, which
 # run-gate.sh checks itself (IR-1209), so only the shared artifacts are listed here.
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-    printf 'usage: scripts/tools/verify-gate-artifacts.sh DIRECTORY G1|G2|G3\n' >&2
+if [[ $# -lt 2 || $# -gt 4 ]]; then
+    printf 'usage: scripts/tools/verify-gate-artifacts.sh DIRECTORY G1|G2|G3 [--android-bundle BUNDLE]\n' >&2
     exit 64
 fi
 directory="$1"
 gate="$2"
+shift 2
+android_bundle=""
+if [[ $# -gt 0 ]]; then
+    [[ $# -eq 2 && "$1" == --android-bundle && -n "$2" ]] || exit 64
+    android_bundle="$2"
+fi
 if [[ "$gate" != G1 && "$gate" != G2 && "$gate" != G3 ]]; then
     printf 'verify-gate-artifacts: unsupported gate: %s\n' "$gate" >&2
     exit 64
@@ -49,7 +55,12 @@ for disk in json.load(open(sys.argv[1], encoding="utf-8"))["disks"]:
     done <<< "$disk_files"
 fi
 if [[ "$gate" == G2 ]]; then
-    require android-bundle/manifest.json
+    if [[ -z "$android_bundle" ]]; then
+        android_bundle="$directory/android-bundle"
+    fi
+    if [[ ! -f "$android_bundle/manifest.json" ]]; then
+        missing+=("$android_bundle/manifest.json")
+    fi
 fi
 
 if (( ${#missing[@]} > 0 )); then

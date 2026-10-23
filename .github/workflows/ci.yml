@@ -239,6 +239,10 @@ jobs:
         run: |
           python3.12 -m venv Images/tools/.venv
           Images/tools/.venv/bin/python -m pip install -e 'Images/tools[test]'
+      - name: Build the pinned FEC host tool
+        run: scripts/build-fec-tool.sh
+      - name: Verify the pinned FEC host tool
+        run: python3.12 scripts/tests/test_fec_tooling_build.py
       - name: Check committed Android image manifests
         run: |
           for manifest in Images/manifests/*/android-image.json; do

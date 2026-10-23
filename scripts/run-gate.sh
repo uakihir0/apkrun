@@ -24,6 +24,7 @@ signing_arguments=(
 )
 # The G3 inputs, set once the G3 artifacts are staged. Empty for G1 and G2.
 g3_build_settings=()
+g2_build_settings=()
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
@@ -50,17 +51,29 @@ APKRUN_TEST_LINUX_DIR="$(
 export APKRUN_TEST_LINUX_DIR
 
 if [[ "$gate" == G3 ]]; then
-    # G3 is meant to run on build 16373615 with the ODM overlay, because the stock image without the overlay fails the
-    # EGL DRM check (IR-760 to IR-764, IR-940 to IR-961). The overlay bundle is built outside the production tree
-    # (IR-1112), so the gate takes it by path (IR-1209). The gate checks SHA256SUMS against the bundle's files and
-    # records the manifest's imageVersion. It does not verify manifest.sig or the overlay itself.
+    # G3 accepts a composed image by default. Set APKRUN_G3_REQUIRE_COMPOSED=0 to run the stock-image baseline.
+    # The selected bundle is external to the production tree (IR-1112); ImageStore verifies its signature and files.
     g3_bundle="${APKRUN_G3_ANDROID_BUNDLE:-}"
+    g3_require_composed="${APKRUN_G3_REQUIRE_COMPOSED:-1}"
+    if [[ "$g3_require_composed" != 0 && "$g3_require_composed" != 1 ]]; then
+        printf 'run-gate: APKRUN_G3_REQUIRE_COMPOSED must be 0 or 1\n' >&2
+        exit 64
+    fi
     if [[ "$g3_bundle" != /* || ! -f "$g3_bundle/manifest.json" || ! -f "$g3_bundle/SHA256SUMS" ]]; then
-        printf 'run-gate: G3 needs APKRUN_G3_ANDROID_BUNDLE, the absolute path of the Android bundle with the ODM overlay (IR-1209)\n' >&2
+        printf 'run-gate: G3 needs APKRUN_G3_ANDROID_BUNDLE, the absolute path of an Android bundle\n' >&2
         exit 78
     fi
     if ! (cd "$g3_bundle" && shasum -a 256 -c SHA256SUMS > /dev/null); then
         printf 'run-gate: the checksums of %s do not match SHA256SUMS\n' "$g3_bundle" >&2
+        exit 1
+    fi
+    bundle_options=()
+    if [[ "$g3_require_composed" == 0 ]]; then
+        bundle_options=(--allow-stock)
+    fi
+    if ! python3 -I "$script_dir/tools/verify-composed-image-bundle.py" \
+        "${bundle_options[@]}" "$g3_bundle"; then
+        printf 'run-gate: the selected G3 image bundle does not meet its image requirement\n' >&2
         exit 1
     fi
     g3_android_home="${ANDROID_HOME:-$repo_root/build/android-sdk}"
@@ -75,12 +88,42 @@ if [[ "$gate" == G3 ]]; then
     fi
     rm -rf "$gate_dir/artifacts" "$gate_dir/products" "$gate_dir/screen-recording.mov" "$gate_dir/screen-recording.mp4"
 fi
+if [[ "$gate" == G2 ]]; then
+    g2_bundle="${APKRUN_G2_ANDROID_BUNDLE:-}"
+    if [[ -z "$g2_bundle" ]]; then
+        # The default G2 run remains the stock-image check.
+        scripts/build-test-android-bundle.sh
+        g2_bundle="$APKRUN_TEST_LINUX_DIR/android-bundle"
+        g2_require_composed=0
+    else
+        if [[ "$g2_bundle" != /* || ! -f "$g2_bundle/manifest.json" || ! -f "$g2_bundle/SHA256SUMS" ]]; then
+            printf 'run-gate: APKRUN_G2_ANDROID_BUNDLE must name an absolute, complete image bundle\n' >&2
+            exit 78
+        fi
+        if ! (cd "$g2_bundle" && shasum -a 256 -c SHA256SUMS > /dev/null); then
+            printf 'run-gate: the checksums of %s do not match SHA256SUMS\n' "$g2_bundle" >&2
+            exit 1
+        fi
+        if ! python3 -I "$script_dir/tools/verify-composed-image-bundle.py" "$g2_bundle"; then
+            printf 'run-gate: the G2 override must be a composed APKRun image bundle\n' >&2
+            exit 1
+        fi
+        g2_require_composed=1
+    fi
+    g2_build_settings=(
+        "APKRUN_TEST_ANDROID_BUNDLE=$g2_bundle"
+        "APKRUN_TEST_REQUIRE_COMPOSED=$g2_require_composed"
+    )
+fi
 
 mkdir -p "$gate_dir"
 rm -rf "$gate_dir/DerivedData" "$gate_dir/LinuxGuest.xcresult" "$gate_dir/$gate.xcresult"
 # The gate runs the spec's values. A dwell override in the environment would change the evidence, so both
 # variables are removed before any test runs. G2 holds each boot for the default 600 s (gate G2, roadmap.md §2).
 unset APKRUN_G2_DWELL_SECONDS TEST_RUNNER_APKRUN_G2_DWELL_SECONDS
+# The test harness reads bundle paths from the built Info.plist. An inherited process variable must not
+# override the bundle whose path and hashes this gate records.
+unset APKRUN_TEST_ANDROID_BUNDLE APKRUN_G3_BUNDLE APKRUN_G3_REQUIRE_COMPOSED
 gate_dwell_seconds=600
 report="$gate_dir/report.txt"
 started_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -97,13 +140,17 @@ macos_build="$(sw_vers -buildVersion)"
     printf 'artifact_directory: %s\n' "$APKRUN_TEST_LINUX_DIR"
     if [[ "$gate" == G2 ]]; then
         printf 'dwell_seconds: %s\n' "$gate_dwell_seconds"
+        printf 'bundle: %s\n' "$g2_bundle"
+        printf 'bundle_manifest_sha256: %s\n' "$(shasum -a 256 "$g2_bundle/manifest.json" | awk '{ print $1 }')"
+        printf 'bundle_sha256sums_sha256: %s\n' "$(shasum -a 256 "$g2_bundle/SHA256SUMS" | awk '{ print $1 }')"
     fi
     if [[ "$gate" == G3 ]]; then
         printf 'bundle: %s\n' "$g3_bundle"
         printf 'bundle_manifest_sha256: %s\n' "$(shasum -a 256 "$g3_bundle/manifest.json" | awk '{ print $1 }')"
         printf 'bundle_sha256sums_sha256: %s\n' "$(shasum -a 256 "$g3_bundle/SHA256SUMS" | awk '{ print $1 }')"
-        printf 'bundle_checksums: SHA256SUMS matches the bundle files; manifest.sig is not checked by this gate\n'
-        printf 'bundle_image_version: %s (manifest.json; the overlay itself is not checked by this gate)\n' \
+        printf 'bundle_validation: SHA256SUMS and selected image requirement verified; ImageStore verifies signature and files on install\n'
+        printf 'requires_composed_image: %s\n' "$g3_require_composed"
+        printf 'bundle_image_version: %s (manifest.json)\n' \
             "$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["imageVersion"])' "$g3_bundle/manifest.json")"
         printf 'cli_traits: EmbeddedRuntime,TestReadback\n'
     fi
@@ -123,10 +170,6 @@ gate_report_install "$report"
 
 scripts/generate-project.sh
 scripts/build-test-initramfs.sh
-if [[ "$gate" == G2 ]]; then
-    # G2 boots the stock image from a signed bundle outside ~/Documents (#15, #66).
-    scripts/build-test-android-bundle.sh
-fi
 # Both gates run the LinuxGuest suite, whose layout test reads the Android disks. Every gate rebuilds them, so no
 # run depends on disks left by an earlier build.
 scripts/build-test-android-disks.sh
@@ -158,6 +201,7 @@ if [[ "$gate" == G3 ]]; then
     g3_build_settings=(
         "APKRUN_G3_CLI=$staging/cli/apkrun"
         "APKRUN_G3_BUNDLE=$g3_bundle"
+        "APKRUN_G3_REQUIRE_COMPOSED=$g3_require_composed"
         "APKRUN_G3_APK=$staging/HelloGL.apk"
         "APKRUN_G3_GUEST_DIR=$staging/guest"
         "APKRUN_G3_VIRGL_RUNTIME=$staging/virgl-runtime"
@@ -173,7 +217,11 @@ if [[ "$gate" == G3 ]]; then
         printf 'android_sdk: %s\n' "$g3_android_home"
     } >> "$report"
 fi
-scripts/tools/verify-gate-artifacts.sh "$APKRUN_TEST_LINUX_DIR" "$gate"
+artifact_options=()
+if [[ "$gate" == G2 ]]; then
+    artifact_options=(--android-bundle "$g2_bundle")
+fi
+scripts/tools/verify-gate-artifacts.sh "$APKRUN_TEST_LINUX_DIR" "$gate" "${artifact_options[@]}"
 # Build the test host before any test runs, then check the directory it will read (IR-376).
 xcodebuild build-for-testing \
     -project APKRun.xcodeproj \
@@ -185,9 +233,21 @@ xcodebuild build-for-testing \
     "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
     "APKRUN_CI=1" \
     "${signing_arguments[@]}" \
+    ${g2_build_settings[@]+"${g2_build_settings[@]}"} \
     ${g3_build_settings[@]+"${g3_build_settings[@]}"}
-scripts/tools/verify-test-host-directory.sh \
-    "$gate_dir/DerivedData/Build/Products/Debug/APKRunTestHost.app" "$APKRUN_TEST_LINUX_DIR"
+if [[ "$gate" == G2 ]]; then
+    scripts/tools/verify-test-host-directory.sh \
+        "$gate_dir/DerivedData/Build/Products/Debug/APKRunTestHost.app" \
+        "$APKRUN_TEST_LINUX_DIR" \
+        --android-bundle "$g2_bundle" \
+        --require-composed "$g2_require_composed"
+elif [[ "$gate" == G3 ]]; then
+    scripts/tools/verify-test-host-directory.sh \
+        "$gate_dir/DerivedData/Build/Products/Debug/APKRunTestHost.app" \
+        "$APKRUN_TEST_LINUX_DIR" \
+        --g3-bundle "$g3_bundle" \
+        --g3-require-composed "$g3_require_composed"
+fi
 xcodebuild test \
     -project APKRun.xcodeproj \
     -scheme IntegrationTests \
@@ -199,12 +259,29 @@ xcodebuild test \
     -resultBundlePath "$gate_dir/LinuxGuest.xcresult" \
     "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
     "APKRUN_CI=1" \
-    "${signing_arguments[@]}"
+    "${signing_arguments[@]}" \
+    ${g2_build_settings[@]+"${g2_build_settings[@]}"}
 if [[ "$gate" == G3 ]]; then
     # The G3 check runs one boot in the G3 configuration (graphics.md §14). It is serialised with the other VM runs
     # by lockf (test-strategy §3.6). The artifacts stay outside ~/Documents until the run ends, and the gate copies them.
     artifacts="$APKRUN_TEST_LINUX_DIR/g3-artifacts"
     rm -rf "$artifacts"
+    xcodebuild build-for-testing \
+        -project APKRun.xcodeproj \
+        -scheme AcceptanceTests \
+        -testPlan AcceptanceTests \
+        -configuration Debug \
+        -jobs 1 \
+        -derivedDataPath "$gate_dir/DerivedData" \
+        "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
+        "APKRUN_CI=1" \
+        "${signing_arguments[@]}" \
+        ${g3_build_settings[@]+"${g3_build_settings[@]}"}
+    scripts/tools/verify-test-host-directory.sh \
+        "$gate_dir/DerivedData/Build/Products/Debug/APKRunTestHost.app" \
+        "$APKRUN_TEST_LINUX_DIR" \
+        --g3-bundle "$g3_bundle" \
+        --g3-require-composed "$g3_require_composed"
     recording="$gate_dir/screen-recording.mov"
     # screencapture writes its file only when its own -V timer ends. A background job of this non-interactive shell
     # ignores SIGINT, and a signal that does reach it ends it without the file. So the recording runs for 30 minutes,
@@ -273,4 +350,5 @@ xcodebuild test \
     -resultBundlePath "$gate_dir/$gate.xcresult" \
     "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
     "APKRUN_CI=1" \
-    "${signing_arguments[@]}"
+    "${signing_arguments[@]}" \
+    ${g2_build_settings[@]+"${g2_build_settings[@]}"}

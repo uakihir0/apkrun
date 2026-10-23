@@ -75,7 +75,7 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 |---|---|
 | Milestone | M3 (v0.1) |
 | Depends on | #25 |
-| Design | [input.md](../../02-design/input.md) §3, §7.1; [guest-components.md](../../02-design/guest-components.md) §3.3 |
+| Design | [input.md](../../02-design/input.md) §3, §4.2, §7.1, §7.3, §11; [guest-components.md](../../02-design/guest-components.md) §3.3 |
 | Code | `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevBoot.swift`, `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevInputBinding.swift`, `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevInputRoute.swift`, `Packages/RuntimeHost/Sources/RuntimeHost/EmbeddedRuntimeService.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Input/InputRouter.swift`, `Packages/RuntimeHost/Tests/RuntimeHostTests/DevInputBindingTests.swift`, `Packages/RuntimeHost/Tests/RuntimeHostTests/DevInputRouteTests.swift`, `Packages/RuntimeHost/Tests/RuntimeHostTests/EmbeddedRuntimeServiceTests.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Guest/DevelopmentGuestAgent.swift`, `Packages/RuntimeCore/Sources/RuntimeCore/Guest/GuestAgentSupervisor.swift`, `Packages/RuntimeCore/Tests/RuntimeCoreTests/GuestAgentSupervisorTests.swift`, `Tests/IntegrationTests/AndroidInputTests/` |
 
 **Goal.** After the guest agent restarts, pointer input works again in the same window without ending the boot. Today the bound channel stays after the loss, so input stays dead until the boot ends. This is a follow-up of #25.
@@ -85,7 +85,7 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 - Keyboard routing.
 
 **Steps.**
-1. **Close the old route on loss.** Close the shared route gate and release the old input channel when the Guest Agent session becomes unavailable. **Check:** host tests show that stale events cannot reach the dead channel and are counted as `input.dropped.channel`.
+1. **Close the old route on loss.** Close the shared route gate and release the old input channel when the Guest Agent session becomes unavailable. **Check:** host tests show that gated events count as `input.dropped.notRunning`, while an in-flight send rejected by the dead channel counts as `input.dropped.channel`.
 2. **Rebind after readiness.** Wait for a ready session token, register the route, reconcile focus, and activate it only after checking that the token and channel are still current. **Check:** host tests show input resumes through the new channel and an older binding cannot reopen the route.
 3. **Retire routes on close.** Remove routes when a native window closes, including terminal close paths, and skip guest cancellation when its channel is disconnected. **Check:** close-path tests pass without registering the retired display or sending redundant `cancelAll`.
 4. **Verify recovery on a device.** Force-stop `apkrun_guestd`, wait for the agent to restart, and click HelloText in the same window. **Check:** the click reaches the app and the Android boot ID is unchanged.
@@ -96,7 +96,7 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 - T3: none.
 
 **Done when.**
-- The T0 tests pass, including accounting events on the unavailable channel as `input.dropped.channel`.
+- The T0 tests pass, including the separate `input.dropped.notRunning` and `input.dropped.channel` cases.
 - The T2 recovery test passes after a forced Guest Agent restart without rebooting Android.
 
 **Pitfalls.**

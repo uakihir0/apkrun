@@ -37,6 +37,7 @@ class HealthService(
     private val registerLowMemoryCallback: ((() -> Unit) -> Unit) = {},
     private val postCallback: ((() -> Unit) -> Unit) = { work -> work() },
     private val missingMethods: () -> List<String> = { emptyList() },
+    private val forcedFailure: () -> Boolean = { false },
 ) {
     private val startedAtUptimeMillis = uptimeMillis().coerceAtLeast(0L)
     private val lastError = AtomicReference<GuestError?>()
@@ -72,7 +73,15 @@ class HealthService(
                 .setInput(inputCounters())
                 .setOpenSessions(openSessions().coerceAtLeast(0))
         val missing = missingMethods().distinct().sorted()
-        val recordedError = lastError.get()
+        val recordedError =
+            if (forcedFailure()) {
+                GuestError.newBuilder()
+                    .setCode(GuestErrorCode.GUEST_ERROR_CODE_INTERNAL)
+                    .setMessage("test image requested a health failure")
+                    .build()
+            } else {
+                lastError.get()
+            }
         if (recordedError != null || missing.isNotEmpty()) {
             val error =
                 recordedError?.toBuilder()

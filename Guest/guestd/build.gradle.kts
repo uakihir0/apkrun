@@ -13,6 +13,15 @@ plugins {
 val guestVersionCode = (findProperty("apkrunGuestVersionCode") as String?)?.toInt() ?: 1000
 val guestVersionName = (findProperty("apkrunGuestVersionName") as String?) ?: "0.1.0-dev"
 val persistentAgent = providers.gradleProperty("apkrunPersistentAgent").orElse("false").get()
+val imageHealthFailureProperty =
+    providers.gradleProperty("apkrunTestHealthFailureProperty").orElse("").get()
+
+require(
+    imageHealthFailureProperty == "" ||
+        imageHealthFailureProperty == "ro.boot.apkrun.test.fail_health"
+) {
+    "apkrunTestHealthFailureProperty must be empty or the fixed AndroidCustom test property"
+}
 
 android {
     namespace = "io.apkrun.guest"
@@ -30,6 +39,11 @@ android {
         versionCode = guestVersionCode
         versionName = guestVersionName
         manifestPlaceholders["apkrunPersistentAgent"] = persistentAgent
+        buildConfigField(
+            "String",
+            "IMAGE_HEALTH_FAILURE_PROPERTY",
+            "\"$imageHealthFailureProperty\"",
+        )
     }
 
     buildFeatures {

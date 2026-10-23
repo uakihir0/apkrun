@@ -104,6 +104,7 @@ class Daemon(
             registerLowMemoryCallback = ::registerLowMemoryCallback,
             postCallback = post,
             missingMethods = { operations.missingSystemMethods() },
+            forcedFailure = GuestTestHooks::healthFailureRequested,
         )
     private val system = SystemOperations()
     private val appProcessMonitor = ActivityControllerMonitor(events, postCallback = post)

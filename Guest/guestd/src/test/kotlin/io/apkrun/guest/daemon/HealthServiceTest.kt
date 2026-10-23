@@ -106,6 +106,25 @@ class HealthServiceTest {
         )
     }
 
+    @Test
+    fun healthSnapshotReportsConfiguredTestImageFailure() {
+        val health =
+            healthService(
+                    memory = {
+                        GuestMemorySnapshot(totalKb = 1024, availableKb = 512, lowMemory = false)
+                    },
+                    forcedFailure = { true },
+                )
+                .getHealth()
+
+        assertTrue(health.hasLastError())
+        assertEquals(
+            GuestErrorCode.GUEST_ERROR_CODE_INTERNAL,
+            health.lastError.code,
+        )
+        assertEquals("test image requested a health failure", health.lastError.message)
+    }
+
     private fun healthService(
         events: EventBus = EventBus(),
         uptimeMillis: () -> Long = { 100L },
@@ -113,6 +132,7 @@ class HealthServiceTest {
         registerLowMemoryCallback: ((() -> Unit) -> Unit) = {},
         postCallback: ((() -> Unit) -> Unit) = { work -> work() },
         missingMethods: () -> List<String> = { emptyList() },
+        forcedFailure: () -> Boolean = { false },
     ) =
         HealthService(
             events = events,
@@ -130,6 +150,7 @@ class HealthServiceTest {
             registerLowMemoryCallback = registerLowMemoryCallback,
             postCallback = postCallback,
             missingMethods = missingMethods,
+            forcedFailure = forcedFailure,
         )
 
     private fun readEvents(output: ByteArrayOutputStream): List<Event> {

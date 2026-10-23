@@ -4,6 +4,7 @@
 # Tests/Fixtures/signing/test-fixture-a.jks.
 #
 #   scripts/build-fixtures.sh                     build out/HelloText.apk and check its signer
+#   scripts/build-fixtures.sh --app HelloProbe    build out/HelloProbe.apk (#36 SELinux isolation)
 #   scripts/build-fixtures.sh --app HelloGL       build out/HelloGL.apk instead (the G3 gate, #24)
 #   scripts/build-fixtures.sh --app HelloCompose  build out/HelloCompose.apk instead (the list of #25, G5 of #31)
 #   scripts/build-fixtures.sh --app HelloWebView  build out/HelloWebView.apk instead (#30)
@@ -27,7 +28,7 @@ bundletool_url="https://github.com/google/bundletool/releases/download/$bundleto
 expected_signer_sha256="a2f3893391ae70e6faee50a05c0d0c4b94505781f7af0d547c1625399e05f8b4"
 
 usage() {
-    printf 'usage: scripts/build-fixtures.sh [--app HelloText|HelloGL|HelloCompose|HelloWebView|HelloSplit] [--check-reproducible]\n' >&2
+    printf 'usage: scripts/build-fixtures.sh [--app HelloText|HelloProbe|HelloGL|HelloCompose|HelloWebView|HelloSplit] [--check-reproducible]\n' >&2
     exit 64
 }
 
@@ -45,7 +46,7 @@ while (($# > 0)); do
     shift
 done
 case "$app" in
-    HelloText | HelloGL | HelloCompose | HelloWebView | HelloSplit) ;;
+    HelloText | HelloProbe | HelloGL | HelloCompose | HelloWebView | HelloSplit) ;;
     *) usage ;;
 esac
 output_apk="$fixtures/out/$app.apk"
@@ -168,6 +169,12 @@ if [[ "$mode" == "build" ]]; then
     mkdir -p "$(dirname "$output_apk")"
     cp "$gradle_apk" "$output_apk"
     printf 'build-fixtures: wrote %s\n' "$output_apk"
+    if [[ "$app" == "HelloProbe" ]]; then
+        fixture_directory="${APKRUN_TEST_FIXTURES_DIR:-/tmp/apkrun-test-fixtures}"
+        mkdir -p "$fixture_directory"
+        cp "$output_apk" "$fixture_directory/HelloProbe.apk"
+        printf 'build-fixtures: staged %s\n' "$fixture_directory/HelloProbe.apk"
+    fi
     exit 0
 fi
 

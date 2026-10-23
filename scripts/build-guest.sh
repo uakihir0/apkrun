@@ -4,6 +4,8 @@
 #   scripts/build-guest.sh                       build Guest/build/out/apkrun-guest.apk and its version record
 #   scripts/build-guest.sh --for-aosp            build Guest/product/prebuilt/ApkRunGuest.apk
 #   scripts/build-guest.sh --platform-test-key    build persistent, platform-signed prebuilt APK
+#   scripts/build-guest.sh --platform-test-key --test-image-hooks
+#                                                opt in to AndroidCustom's health-failure fixture
 #   scripts/build-guest.sh --version-code N --out DIR
 #                                                build with another versionCode into DIR (the reinstall test)
 #
@@ -33,10 +35,11 @@ out_dir="$guest_dir/build/out"
 version_code_override=""
 for_aosp=0
 platform_test_key_enabled=0
+test_image_hooks_enabled=0
 out_dir_explicit=0
 
 usage() {
-    printf 'usage: scripts/build-guest.sh [--version-code N] [--out DIR] [--for-aosp] [--platform-test-key]\n' >&2
+    printf 'usage: scripts/build-guest.sh [--version-code N] [--out DIR] [--for-aosp] [--platform-test-key [--test-image-hooks]]\n' >&2
     exit 64
 }
 
@@ -64,9 +67,19 @@ while (($# > 0)); do
             for_aosp=1
             shift
             ;;
+        --test-image-hooks)
+            ((test_image_hooks_enabled == 0)) || usage
+            test_image_hooks_enabled=1
+            shift
+            ;;
         *) usage ;;
     esac
 done
+
+if ((test_image_hooks_enabled && !platform_test_key_enabled)); then
+    printf 'build-guest: --test-image-hooks requires --platform-test-key\n' >&2
+    exit 64
+fi
 
 if ((for_aosp)); then
     ((out_dir_explicit == 0)) || {
@@ -124,6 +137,9 @@ gradle_args=(
 )
 if ((for_aosp)); then
     gradle_args+=("-PapkrunPersistentAgent=true")
+fi
+if ((test_image_hooks_enabled)); then
+    gradle_args+=("-PapkrunTestHealthFailureProperty=ro.boot.apkrun.test.fail_health")
 fi
 "$repo_root/gradlew" "${gradle_args[@]}" :guestd:assembleRelease
 

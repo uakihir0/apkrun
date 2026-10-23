@@ -128,6 +128,10 @@ class BuildGuestSigningTests(unittest.TestCase):
             "-PapkrunPersistentAgent=true",
             (self.root / "gradle-arguments.txt").read_text(),
         )
+        self.assertNotIn(
+            "-PapkrunTestHealthFailureProperty=",
+            (self.root / "gradle-arguments.txt").read_text(),
+        )
         self.assertIn(
             '"versionCode": 1002003',
             (self.root / "Guest/build/out/apkrun-guest.json").read_text(),
@@ -173,6 +177,27 @@ class BuildGuestSigningTests(unittest.TestCase):
                 path.name.endswith(".idsig")
                 for path in (self.root / "Guest/product/prebuilt").iterdir()
             )
+        )
+
+    def test_health_failure_hook_requires_platform_test_signing(self):
+        result = self.invoke("--test-image-hooks")
+
+        self.assertEqual(result.returncode, 64)
+        self.assertIn("--test-image-hooks requires --platform-test-key", result.stderr)
+        self.assertFalse((self.root / "gradle-arguments.txt").exists())
+
+    def test_health_failure_hook_is_explicit_and_platform_signed(self):
+        result = self.invoke("--platform-test-key", "--test-image-hooks")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        arguments = (self.root / "gradle-arguments.txt").read_text()
+        self.assertIn(
+            "-PapkrunTestHealthFailureProperty=ro.boot.apkrun.test.fail_health",
+            arguments,
+        )
+        self.assertEqual(
+            (self.root / "Guest/product/prebuilt/ApkRunGuest.apk").read_bytes(),
+            b"development-signed APK\nPLATFORM-SIGNED",
         )
 
     def test_platform_test_key_rejects_custom_output_path_before_building(self):

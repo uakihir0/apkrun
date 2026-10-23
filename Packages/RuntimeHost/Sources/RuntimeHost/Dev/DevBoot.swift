@@ -192,7 +192,7 @@ actor DevBootMultiWindowCoordinator {
                 stopFailed = true
             }
         } else {
-            await launch.inputRoute.unbind()
+            await launch.inputRoute.retire()
         }
         launch.display.finish()
         if stopFailed {
@@ -210,7 +210,7 @@ actor DevBootMultiWindowCoordinator {
             return
         }
         await launch.windowState.close()
-        await launch.inputRoute.unbind()
+        await launch.inputRoute.retire()
         if let service = services[packageID] {
             _ = try? await service.runtimeStopped()
         }
@@ -225,7 +225,7 @@ actor DevBootMultiWindowCoordinator {
             return
         }
         await launch.windowState.close()
-        await launch.inputRoute.unbind()
+        await launch.inputRoute.retire()
         if let service = services[packageID] {
             _ = try? await service.runtimeStopped()
         }
@@ -256,7 +256,7 @@ actor DevBootMultiWindowCoordinator {
             if let service = services[packageID] {
                 await service.closeForRuntimeStop()
             } else {
-                await launch.inputRoute.unbind()
+                await launch.inputRoute.retire()
             }
             launch.display.finish()
         }

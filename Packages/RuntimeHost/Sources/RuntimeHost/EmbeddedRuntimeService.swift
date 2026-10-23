@@ -74,6 +74,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         await acquireSessionOperation()
         defer { releaseSessionOperation() }
 
+        await inputRoute?.retire()
         guard let packageID,
             let sessionID,
             let current = await registry.session(sessionID),
@@ -81,7 +82,6 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         else {
             return
         }
-        await inputRoute?.unbind()
         guard !current.taskIDs.isEmpty else {
             _ = try? await registry.transition(sessionID, to: .ended(.runtimeStopped))
             return
@@ -119,7 +119,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
 
     /// Unbinds input and releases this window's lease as the shared VM is stopping.
     func closeForRuntimeStop() async {
-        await inputRoute?.unbind()
+        await inputRoute?.retire()
         _ = try? await runtimeStopped()
     }
 
@@ -586,7 +586,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         if result.session.state.isEnded {
             pendingLaunchFrameCount = nil
             frameReconciliationSessionID = nil
-            let inputCleanupTask = await inputRoute?.detachForGuestReconciliation()
+            let inputCleanupTask = await inputRoute?.detachForGuestReconciliation(cancelGuestState: false)
             scheduleTerminalSessionReconciliation(result.session, inputCleanupTask: inputCleanupTask)
         }
 

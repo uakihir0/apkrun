@@ -69,6 +69,69 @@ actor AcknowledgingInputChannel: InputChannel {
     }
 }
 
+private actor InputBindingScenario {
+    private var token = Data([1])
+    private var isReady: Bool
+    private var opens = 0
+    private var sessionPolls = 0
+    private var firstSessionPoll: CheckedContinuation<Void, Never>?
+    private let changesTokenDuringFocus: Bool
+    private let stale = CollectingInputChannel()
+    private let intermediate = CollectingInputChannel()
+    private let current = CollectingInputChannel()
+
+    init(isReady: Bool = true, changesTokenDuringFocus: Bool = false) {
+        self.isReady = isReady
+        self.changesTokenDuringFocus = changesTokenDuringFocus
+    }
+
+    func sessionToken() async -> Data? {
+        sessionPolls += 1
+        let available = isReady ? token : nil
+        if let firstSessionPoll {
+            self.firstSessionPoll = nil
+            firstSessionPoll.resume()
+        }
+        return available
+    }
+
+    func waitForSessionPoll() async {
+        guard sessionPolls == 0 else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            firstSessionPoll = continuation
+        }
+    }
+
+    func makeReady() {
+        isReady = true
+    }
+
+    func openInputChannel() -> any InputChannel {
+        opens += 1
+        if opens == 1 {
+            token = Data([2])
+            return stale
+        }
+        return opens == 2 && changesTokenDuringFocus ? intermediate : current
+    }
+
+    func focusDisplay(_ displayID: Int32) {
+        if changesTokenDuringFocus, opens == 2 {
+            token = Data([3])
+        }
+    }
+
+    func openCount() -> Int {
+        opens
+    }
+
+    func batchCounts() async -> (stale: Int, intermediate: Int, current: Int) {
+        (await stale.batches.count, await intermediate.batches.count, await current.batches.count)
+    }
+}
+
 private let wireTime = RuntimeAPI.InputTimestamp(hostNanos: 77)
 private let wirePoint = RuntimeAPI.DisplayPoint(x: 12.5, y: 3)
 private let corePoint = InputCore.DisplayPoint(x: 12.5, y: 3)
@@ -181,6 +244,7 @@ func anUnboundRouteDropsItsEventsAsNotRunning() async {
 func aBoundRouteSendsItsEventsOnDisplayZero() async {
     let channel = CollectingInputChannel()
     let route = DevInputRoute()
+    await route.focusChanged(true, generation: 1)
     await route.bind(router: InputRouter(channel: channel))
     await route.send(
         RuntimeAPI.InputBatch(events: [
@@ -198,6 +262,7 @@ func aBoundRouteSendsItsEventsOnDisplayZero() async {
 func aBoundRouteUsesItsSelectedLeasedDisplay() async {
     let channel = CollectingInputChannel()
     let route = DevInputRoute()
+    await route.focusChanged(true, generation: 1)
     await route.setDisplayID(7)
     await route.bind(router: InputRouter(channel: channel))
     await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
@@ -209,6 +274,7 @@ func aBoundRouteUsesItsSelectedLeasedDisplay() async {
 func aBoundRouteExposesTheAcknowledgementCoverageItReceives() async throws {
     let channel = AcknowledgingInputChannel()
     let route = DevInputRoute()
+    await route.focusChanged(true, generation: 1)
     await route.bind(router: InputRouter(channel: channel))
     await route.send(
         RuntimeAPI.InputBatch(events: [
@@ -265,6 +331,7 @@ func aBoundRouteReportsWhetherGuestAckEventTimesWereNegotiated() async {
 func anOptInPerEventCaptureUsesSingleEventBatches() async {
     let channel = CollectingInputChannel()
     let route = DevInputRoute()
+    await route.focusChanged(true, generation: 1)
     await route.bind(router: InputRouter(channel: channel))
     let baseline = await route.startAcknowledgementHistoryCapture(
         everyBatch: true, captureSentEventHistory: true)
@@ -292,6 +359,7 @@ func anOptInPerEventCaptureUsesSingleEventBatches() async {
 func aBatchOfMoreThan512EventsIsCutAt512() async {
     let channel = CollectingInputChannel()
     let route = DevInputRoute()
+    await route.focusChanged(true, generation: 1)
     await route.bind(router: InputRouter(channel: channel))
     let events = (0..<600).map { index in
         RuntimeAPI.WireInputEvent.touch(
@@ -313,6 +381,7 @@ func aBatchOfMoreThan512EventsIsCutAt512() async {
 func unbindingEndsTheSessionAndLaterEventsAreDropped() async {
     let channel = CollectingInputChannel()
     let route = DevInputRoute()
+    await route.focusChanged(true, generation: 1)
     await route.bind(router: InputRouter(channel: channel))
     await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
     await route.unbind()
@@ -330,6 +399,7 @@ func aRebindMovesTheSessionToTheNewChannelAndCancelsTheOld() async {
     let oldChannel = CollectingInputChannel()
     let newChannel = CollectingInputChannel()
     let route = DevInputRoute()
+    await route.focusChanged(true, generation: 1)
     await route.bind(router: InputRouter(channel: oldChannel))
     await route.bind(router: InputRouter(channel: newChannel))
     await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
@@ -346,6 +416,7 @@ func aRebindKeepsTheCountsOfTheRouterItReplaces() async {
     let oldChannel = CollectingInputChannel()
     let newChannel = CollectingInputChannel()
     let route = DevInputRoute()
+    await route.focusChanged(true, generation: 1)
     await route.bind(router: InputRouter(channel: oldChannel))
     await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
     await route.bind(router: InputRouter(channel: newChannel))
@@ -361,9 +432,10 @@ func aTerminalRouteCannotRebindAfterGuestReconciliation() async {
     let oldChannel = CollectingInputChannel()
     let newChannel = CollectingInputChannel()
     let route = DevInputRoute()
-    await route.bind(router: InputRouter(channel: oldChannel))
     await route.focusChanged(true, generation: 1)
-    let cleanupTask = await route.detachForGuestReconciliation()
+    await route.bind(router: InputRouter(channel: oldChannel))
+    await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
+    let cleanupTask = await route.detachForGuestReconciliation(cancelGuestState: false)
 
     #expect(!(await route.canBind()))
     #expect(await route.bind(router: InputRouter(channel: newChannel), session: .app(UUID())) == nil)
@@ -372,6 +444,174 @@ func aTerminalRouteCannotRebindAfterGuestReconciliation() async {
 
     #expect(await oldChannel.batches.count == 1)
     #expect(await newChannel.batches.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func guestReconciliationDetachesWithoutSendingCancellationOnTheOldChannel() async {
+    let channel = CollectingInputChannel()
+    let route = DevInputRoute()
+    await route.bind(router: InputRouter(channel: channel))
+    await route.focusChanged(true, generation: 1)
+    await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
+
+    let cleanupTask = await route.detachForGuestReconciliation(cancelGuestState: false)
+    await cleanupTask?.value
+
+    #expect(await channel.batches.count == 1)
+    #expect(await route.counters().droppedChannel == 0)
+    #expect(!(await route.canBind()))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func unbindingAfterTheInputStreamDisconnectsDoesNotSendAnotherCancel() async {
+    let channel = CollectingInputChannel()
+    let router = InputRouter(channel: channel)
+    let route = DevInputRoute()
+    await route.bind(router: router)
+    await route.focusChanged(true, generation: 1)
+    await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
+    let sentBeforeUnbind = await channel.batches.count
+
+    await route.unbind(cancelGuestState: false)
+
+    #expect(sentBeforeUnbind == 1)
+    #expect(await channel.batches.count == sentBeforeUnbind)
+    #expect(await route.counters().droppedChannel == 0)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func inputBindingRetriesWhenTheControlSessionChangesWhileOpening() async {
+    let scenario = InputBindingScenario()
+    let route = DevInputRoute()
+    let binding = DevInputBinding(
+        routes: [route],
+        sessionToken: { await scenario.sessionToken() },
+        openInputChannel: {
+            () async throws(GuestAgentFailure) -> DevBoundInputChannel in
+            DevBoundInputChannel(
+                input: await scenario.openInputChannel(),
+                isUsable: { true }
+            )
+        },
+        focusDisplay: { displayID in await scenario.focusDisplay(displayID) },
+        adbShellInvocationCount: { 0 },
+        logSink: nil,
+        pollInterval: .milliseconds(1)
+    )
+    let (events, continuation) = AsyncStream.makeStream(of: DevBootEvent.self)
+    let task = Task {
+        await binding.run { continuation.yield($0) }
+        continuation.finish()
+    }
+    defer {
+        task.cancel()
+        continuation.finish()
+    }
+
+    for await event in events {
+        if case .message(let message) = event,
+            message.hasPrefix("input is bound to display"),
+            message.contains("[0]")
+        {
+            break
+        }
+    }
+    await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
+    let counts = await scenario.batchCounts()
+    #expect(await scenario.openCount() == 2)
+    #expect(counts.stale == 0)
+    #expect(counts.intermediate == 0)
+    #expect(counts.current == 1)
+    task.cancel()
+    await task.value
+}
+
+@Test(.timeLimit(.minutes(1)))
+func inputBindingWaitsForTheControlSessionToBecomeReady() async {
+    let scenario = InputBindingScenario(isReady: false)
+    let route = DevInputRoute()
+    let binding = DevInputBinding(
+        routes: [route],
+        sessionToken: { await scenario.sessionToken() },
+        openInputChannel: {
+            () async throws(GuestAgentFailure) -> DevBoundInputChannel in
+            DevBoundInputChannel(
+                input: await scenario.openInputChannel(),
+                isUsable: { true }
+            )
+        },
+        focusDisplay: { displayID in await scenario.focusDisplay(displayID) },
+        adbShellInvocationCount: { 0 },
+        logSink: nil,
+        pollInterval: .milliseconds(1)
+    )
+    let (events, continuation) = AsyncStream.makeStream(of: DevBootEvent.self)
+    let task = Task {
+        await binding.run { continuation.yield($0) }
+        continuation.finish()
+    }
+    defer {
+        task.cancel()
+        continuation.finish()
+    }
+
+    await scenario.waitForSessionPoll()
+    #expect(await scenario.openCount() == 0)
+    await scenario.makeReady()
+    for await event in events {
+        if case .message(let message) = event, message.hasPrefix("input is bound to display") {
+            break
+        }
+    }
+    #expect(await scenario.openCount() == 2)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func inputBindingRetriesWhenTheSessionChangesDuringRouteRegistration() async {
+    let scenario = InputBindingScenario(changesTokenDuringFocus: true)
+    let route = DevInputRoute()
+    await route.focusChanged(true, generation: 1)
+    let binding = DevInputBinding(
+        routes: [route],
+        sessionToken: { await scenario.sessionToken() },
+        openInputChannel: {
+            () async throws(GuestAgentFailure) -> DevBoundInputChannel in
+            DevBoundInputChannel(
+                input: await scenario.openInputChannel(),
+                isUsable: { true }
+            )
+        },
+        focusDisplay: { displayID in await scenario.focusDisplay(displayID) },
+        adbShellInvocationCount: { 0 },
+        logSink: nil,
+        pollInterval: .milliseconds(1)
+    )
+    let (events, continuation) = AsyncStream.makeStream(of: DevBootEvent.self)
+    let task = Task {
+        await binding.run { continuation.yield($0) }
+        continuation.finish()
+    }
+    defer {
+        task.cancel()
+        continuation.finish()
+    }
+
+    for await event in events {
+        if case .message(let message) = event,
+            message.hasPrefix("input is bound to display"),
+            message.contains("[0]")
+        {
+            break
+        }
+    }
+    await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
+    let counts = await scenario.batchCounts()
+    #expect(await scenario.openCount() == 3)
+    #expect(counts.stale == 0)
+    #expect(counts.intermediate == 0)
+    #expect(counts.current == 2)
+    task.cancel()
+    await task.value
 }
 
 // MARK: - The warning of an unbound route

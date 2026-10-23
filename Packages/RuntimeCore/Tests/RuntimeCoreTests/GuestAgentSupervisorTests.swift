@@ -1,5 +1,6 @@
 import Foundation
 import GuestProtocol
+import InputCore
 import Testing
 
 @testable import RuntimeCore
@@ -414,6 +415,8 @@ func queuedSendsWaitForSnapshotReconciliationAndEventsStayOrdered() async throws
     await gate.waitUntilPaused()
     #expect(await supervisor.state == .reconnecting)
     #expect(await gate.snapshots.map { $0.displays.keys.sorted() } == [[0], [3]])
+    #expect(await supervisor.session?.sessionToken != nil)
+    #expect(await supervisor.readySessionToken() == nil)
 
     let queuedSend = Task {
         try await supervisor.send(GuestPing(nonce: 123), timeout: .seconds(1))
@@ -435,6 +438,7 @@ func queuedSendsWaitForSnapshotReconciliationAndEventsStayOrdered() async throws
         let hasReplayedEvent = await supervisor.snapshot.displays[9] != nil
         return state == .ready && hasReplayedEvent
     }
+    #expect(await supervisor.readySessionToken() == supervisor.session?.sessionToken)
     #expect(transport.agents[1].requests.filter(isPing).count == 1)
     await supervisor.stop()
 }
@@ -766,6 +770,98 @@ func fiveProtocolViolationsStopTheReconnection() async throws {
 }
 
 // MARK: - The restart budget, the snapshot state, and the bundle
+
+/// A secondary input connection belongs to the control session that opened it. The route drops an event on that
+/// released connection, then carries input again over a connection presenting the next session's token (#101).
+@Test(.timeLimit(.minutes(1)))
+func aLostControlSessionReleasesItsInputConnectionAndTheRouteRebinds() async throws {
+    let losses = LossLog()
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello()
+        agent.answer = { request in
+            isGetSnapshot(request) ? .getSnapshot(snapshot(displays: [0])) : pongResult(for: request)
+        }
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: transport,
+        keepaliveInterval: .seconds(60),
+        backoffMinimum: .milliseconds(10),
+        backoffMaximum: .milliseconds(20),
+        restartAgent: { loss in
+            losses.record(loss)
+            return true
+        }
+    )
+    try await supervisor.start(connectTimeout: .seconds(2))
+    let firstToken = try #require(await supervisor.session?.sessionToken)
+    let input = GuestConnection(endpoint: .guestInput, transport: transport, presentedToken: firstToken)
+    _ = try await input.open()
+    #expect(await supervisor.attachSecondary(input, presenting: Data([9])) == false)
+    #expect(await supervisor.attachSecondary(input, presenting: firstToken))
+    let session = SessionID.app(UUID())
+    let route = InputRouter(channel: GuestInputChannel(connection: input))
+    await route.register(session: session, displayID: 0, state: .running)
+    await route.focusChanged(session, focused: true, generation: 1)
+    await route.route([.cancelAll(InputTimestamp(hostNanos: 1))], from: session)
+    #expect(await route.counters.batchesSent == 1)
+
+    transport.agents[0].hangUp()
+    try await eventually { await supervisor.state == .ready && transport.agents.count >= 3 }
+    #expect(losses.all == [.disconnected])
+    #expect(await input.isUsable == false)
+
+    await route.route([.cancelAll(InputTimestamp(hostNanos: 2))], from: session)
+    #expect(await route.counters.droppedChannel == 1)
+    #expect(await route.counters.batchesSent == 1)
+
+    let nextToken = try #require(await supervisor.session?.sessionToken)
+    #expect(nextToken != firstToken)
+    let rebound = GuestConnection(endpoint: .guestInput, transport: transport, presentedToken: nextToken)
+    _ = try await rebound.open()
+    #expect(await supervisor.attachSecondary(rebound, presenting: nextToken))
+    let reboundRoute = InputRouter(channel: GuestInputChannel(connection: rebound))
+    await reboundRoute.register(session: session, displayID: 0, state: .running)
+    await reboundRoute.focusChanged(session, focused: true, generation: 1)
+    await reboundRoute.route([.cancelAll(InputTimestamp(hostNanos: 3))], from: session)
+    #expect(await reboundRoute.counters.batchesSent == 1)
+    try await eventually {
+        transport.agents[3].envelopes.contains { envelope in
+            if case .inputBatch? = envelope.body { return true }
+            return false
+        }
+    }
+    await supervisor.stop()
+    #expect(await rebound.isUsable == false)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aReplacementSecondaryClosesThePreviousConnectionForItsEndpoint() async throws {
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello()
+        agent.answer = { request in
+            isGetSnapshot(request) ? .getSnapshot(snapshot(displays: [0])) : pongResult(for: request)
+        }
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: transport,
+        keepaliveInterval: .seconds(60),
+        restartAgent: { _ in false }
+    )
+    try await supervisor.start(connectTimeout: .seconds(2))
+    let token = try #require(await supervisor.readySessionToken())
+
+    let first = GuestConnection(endpoint: .guestInput, transport: transport, presentedToken: token)
+    _ = try await first.open()
+    #expect(await supervisor.attachSecondary(first, presenting: token))
+    let replacement = GuestConnection(endpoint: .guestInput, transport: transport, presentedToken: token)
+    _ = try await replacement.open()
+    #expect(await supervisor.attachSecondary(replacement, presenting: token))
+    #expect(await first.isUsable == false)
+    #expect(await replacement.isUsable)
+
+    await supervisor.stop()
+    #expect(await replacement.isUsable == false)
+}
 
 @Test func theFourthDeathWithinAMinuteIsNotRestarted() {
     var budget = GuestAgentRestartBudget()

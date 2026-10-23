@@ -302,14 +302,49 @@ func embeddedRuntimeServiceRestoresSessionWhenGuestCannotStopTasks() async throw
 @Test(.timeLimit(.minutes(1)))
 func embeddedRuntimeServiceClosesAnUnlaunchedWindowWithoutStoppingItsPackage() async throws {
     let guest = FakeEmbeddedSessionGuestAgent()
-    let service = EmbeddedRuntimeService()
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let route = DevInputRoute()
+    let service = EmbeddedRuntimeService(
+        developerDisplay: display,
+        stopSignal: DevBootStopSignal(),
+        inputRoute: route
+    )
+    defer { display.finish() }
     await service.attachGuestAgent(guest)
     _ = try await service.requestSession(packageID: "io.apkrun.fixture.hellotext")
 
     try await service.closeForWindow()
 
+    #expect(!(await route.canBind()))
     #expect(await service.currentSession()?.state == .ended(.runtimeStopped))
     #expect(await guest.stoppedPackages.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func embeddedRuntimeServiceRetiresRouteWhenClosingAfterAppExit() async throws {
+    let route = DevInputRoute()
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let service = EmbeddedRuntimeService(
+        developerDisplay: display,
+        stopSignal: DevBootStopSignal(),
+        inputRoute: route
+    )
+    let packageID = "io.apkrun.fixture.hellotext"
+    defer { display.finish() }
+
+    _ = try await service.requestSession(packageID: packageID)
+    _ = try await service.displayReady()
+    _ = try await service.beginLaunch()
+    _ = try await service.launched(taskID: 23)
+    _ = try await service.firstFramePresented()
+
+    let ended = await service.taskEvent(.vanished(packageID: packageID, taskID: 23))
+    #expect(ended?.state == .ended(.appExited))
+    #expect(await route.canBind())
+
+    try await service.closeForWindow()
+
+    #expect(!(await route.canBind()))
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -339,6 +374,50 @@ func embeddedRuntimeServiceReconcilesTerminalGuestSnapshotThroughMultiWindowCall
     #expect(results.first?.state == .ended(.appExited))
     #expect(await service.currentSession()?.state == .ended(.appExited))
     #expect(await stopSignal.current() == nil)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func terminalReconciliationAfterReconnectDoesNotSendOnTheClosedInputChannel() async throws {
+    let guest = FakeEmbeddedSessionGuestAgent()
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let stopSignal = DevBootStopSignal()
+    let route = DevInputRoute()
+    let channel = ReconciliationInputChannel()
+    let (reconciled, continuation) = AsyncStream.makeStream(of: AppSessionSnapshot.self)
+    let service = EmbeddedRuntimeService(
+        developerDisplay: display,
+        stopSignal: stopSignal,
+        inputRoute: route,
+        onTerminalSessionReconciled: { snapshot in continuation.yield(snapshot) }
+    )
+    defer {
+        display.finish()
+        continuation.finish()
+    }
+
+    _ = try await service.requestSession(packageID: "io.apkrun.fixture.hellotext")
+    _ = try await service.displayReady()
+    _ = try await service.beginLaunch()
+    _ = try await service.launched(taskID: 23)
+    _ = try await service.firstFramePresented()
+    await service.attachGuestAgent(guest)
+
+    await route.bind(router: InputRouter(channel: channel))
+    await route.focusChanged(true, generation: 1)
+    await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(RuntimeAPI.InputTimestamp(hostNanos: 1))]))
+    #expect(await channel.batches.count == 1)
+    await channel.disconnect()
+
+    await guest.resynchronize(with: guestSnapshot(displays: [0]))
+    for await snapshot in reconciled {
+        if snapshot.state == .ended(.appExited) {
+            break
+        }
+    }
+
+    #expect(await route.counters().droppedChannel == 0)
+    #expect(await channel.batches.count == 1)
+    #expect(!(await route.canBind()))
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -625,12 +704,13 @@ func devBootMultiWindowCoordinatorStopsOnlyAfterEveryWindowCloses() async throws
     let (secondCloseRequests, secondCloseContinuation) = AsyncStream.makeStream(of: Void.self)
     let firstPackage = "io.apkrun.fixture.hellotext"
     let secondPackage = "io.apkrun.fixture.hellocompose"
+    let firstRoute = DevInputRoute()
     let first = DevBootAppLaunch(
         packageID: firstPackage,
         apkURL: nil,
         display: firstDisplay,
         displayMode: .primaryDisplayCompatibility,
-        inputRoute: DevInputRoute(),
+        inputRoute: firstRoute,
         closeRequests: firstCloseRequests
     )
     let second = DevBootAppLaunch(
@@ -656,6 +736,7 @@ func devBootMultiWindowCoordinatorStopsOnlyAfterEveryWindowCloses() async throws
 
     await coordinator.closeWindow(for: firstPackage)
     #expect(await first.windowState.isClosed())
+    #expect(!(await firstRoute.canBind()))
     #expect(!(await second.windowState.isClosed()))
     #expect(await signal.current() == nil)
 
@@ -719,12 +800,13 @@ func devBootClosesWindowWhenReconnectSnapshotLosesItsDisplay() async throws {
     let package = "io.apkrun.fixture.hellotext"
     let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
     let (closeRequests, closeContinuation) = AsyncStream.makeStream(of: Void.self)
+    let route = DevInputRoute()
     let launch = DevBootAppLaunch(
         packageID: package,
         apkURL: nil,
         display: display,
         displayMode: .primaryDisplayCompatibility,
-        inputRoute: DevInputRoute(),
+        inputRoute: route,
         closeRequests: closeRequests
     )
     let (events, eventContinuation) = AsyncStream.makeStream(of: DevBootEvent.self)
@@ -755,6 +837,7 @@ func devBootClosesWindowWhenReconnectSnapshotLosesItsDisplay() async throws {
     }
 
     #expect(await launch.windowState.isClosed())
+    #expect(!(await route.canBind()))
     #expect(
         reportedEvents.contains {
             if case .appWindowExited(packageID: package) = $0 { true } else { false }
@@ -765,6 +848,36 @@ func devBootClosesWindowWhenReconnectSnapshotLosesItsDisplay() async throws {
             if case .warning = $0 { true } else { false }
         }
     )
+}
+
+@Test(.timeLimit(.minutes(1)))
+func devBootRetiresRouteAfterNaturalAppExit() async throws {
+    let package = "io.apkrun.fixture.hellotext"
+    let display = DeveloperDisplay(pixelWidth: 640, pixelHeight: 480)
+    let (closeRequests, closeContinuation) = AsyncStream.makeStream(of: Void.self)
+    let route = DevInputRoute()
+    let launch = DevBootAppLaunch(
+        packageID: package,
+        apkURL: nil,
+        display: display,
+        displayMode: .primaryDisplayCompatibility,
+        inputRoute: route,
+        closeRequests: closeRequests
+    )
+    let coordinator = DevBootMultiWindowCoordinator(
+        launches: [launch],
+        stopSignal: DevBootStopSignal(),
+        report: { _ in }
+    )
+    defer {
+        closeContinuation.finish()
+        display.finish()
+    }
+
+    await coordinator.appExited(packageID: package)
+
+    #expect(await launch.windowState.isClosed())
+    #expect(!(await route.canBind()))
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -877,6 +990,33 @@ private actor FakeEmbeddedSessionGuestAgent: EmbeddedSessionGuestAgent {
 
     func resynchronize(with snapshot: GuestSnapshotState) async {
         await resynchronizationHandler?(snapshot)
+    }
+}
+
+private actor ReconciliationInputChannel: InputChannel {
+    nonisolated let acks: AsyncStream<GPInputAck>
+    private(set) var batches: [GPInputBatch] = []
+    private var disconnected = false
+
+    init() {
+        let stream = AsyncStream.makeStream(of: GPInputAck.self)
+        stream.continuation.finish()
+        acks = stream.stream
+    }
+
+    func send(_ batch: GPInputBatch) async throws {
+        batches.append(batch)
+        if disconnected {
+            throw GuestProtocolFailure.disconnected
+        }
+    }
+
+    var pendingBytes: Int {
+        0
+    }
+
+    func disconnect() {
+        disconnected = true
     }
 }
 

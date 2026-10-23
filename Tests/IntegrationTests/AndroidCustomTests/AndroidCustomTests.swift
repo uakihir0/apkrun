@@ -137,6 +137,68 @@ final class SystemServicesTest: AndroidCustomTestCase {
             )
         }
     }
+
+    func testPersistentAgentRestartsAfterProcessKill() async throws {
+        try await AndroidBootSession.withBoot(developerMode: true) { session in
+            let android = try await Self.android(session)
+            guard let originalPID = try await Self.agentProcessID(using: android) else {
+                return XCTFail("the persistent Guest Agent process is not running before the kill")
+            }
+            try await android.output("kill -9 \(originalPID)", root: true)
+
+            let deadline = ContinuousClock.now + .seconds(60)
+            var restartedPID: Int?
+            while ContinuousClock.now < deadline {
+                if let currentPID = try await Self.agentProcessID(using: android),
+                    currentPID != originalPID
+                {
+                    restartedPID = currentPID
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(200))
+            }
+
+            guard let restartedPID else {
+                let processState = try await android.run(
+                    "ps -A -Z | grep \(Self.package) || true"
+                ).output
+                let activityState = try await android.run(
+                    "dumpsys activity processes | grep -A 3 -B 2 \(Self.package) || true"
+                ).output
+                XCTFail(
+                    """
+                    ActivityManager did not restart the persistent Guest Agent with a new PID \
+                    within 60 seconds (original PID: \(originalPID)).
+                    Processes: \(processState)
+                    ActivityManager state: \(activityState)
+                    """
+                )
+                return
+            }
+            XCTAssertNotEqual(restartedPID, originalPID)
+
+            let agent = try await VsockAgentTests.connectPersistentAgent(session)
+            do {
+                let pong = try await agent.send(GuestPing(nonce: 36))
+                XCTAssertEqual(pong.nonce, 36)
+            } catch {
+                await agent.stop()
+                throw error
+            }
+            await agent.stop()
+        }
+    }
+
+    private static func agentProcessID(using android: AndroidShellConsole) async throws -> Int? {
+        let output = try await android.value("pidof \(package) || echo 0")
+        guard let token = output.split(whereSeparator: \.isWhitespace).first,
+            let processID = Int(token),
+            processID > 0
+        else {
+            return nil
+        }
+        return processID
+    }
 }
 
 /// ADB is reachable only while the runtime has developer mode enabled.

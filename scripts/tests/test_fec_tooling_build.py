@@ -63,6 +63,16 @@ def make_sparse_image(path: pathlib.Path) -> bytes:
 
 
 class FecBuildDefinitionTests(unittest.TestCase):
+    def test_notice_comparison_normalizes_whitespace_and_page_breaks(self) -> None:
+        self.assertEqual(
+            builder.normalized_notice(b"Copyright 2026  \r\n\f\n"),
+            builder.normalized_notice(b"Copyright 2026\n"),
+        )
+        self.assertNotEqual(
+            builder.normalized_notice(b"Copyright 2026\n"),
+            builder.normalized_notice(b"Copyright 2025\n"),
+        )
+
     def test_compiler_environment_removes_inherited_flags_and_paths(self) -> None:
         environment = {
             "PATH": "/usr/bin",

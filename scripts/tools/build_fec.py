@@ -353,6 +353,13 @@ def checked_source_file(source: pathlib.Path, relative: str) -> pathlib.Path:
     return path
 
 
+def normalized_notice(contents: bytes) -> bytes:
+    """Normalize line endings, page breaks, and insignificant trailing whitespace."""
+    normalized = contents.replace(b"\x0c", b"")
+    lines = normalized.splitlines()
+    return b"\n".join(line.rstrip(b" \t") for line in lines).rstrip(b"\n")
+
+
 def hash_inputs(
     root: pathlib.Path,
     sources: Mapping[str, pathlib.Path],
@@ -378,9 +385,11 @@ def hash_inputs(
                     raise BuildFailure(
                         f"missing or unsafe third-party notice copy: {copied}"
                     )
-                if copied.read_bytes() != contents:
+                if normalized_notice(copied.read_bytes()) != normalized_notice(
+                    contents
+                ):
                     raise BuildFailure(
-                        f"third-party notice differs from pinned source: {copied}"
+                        f"third-party notice text differs from pinned source: {copied}"
                     )
     for name, component in components.items():
         records.append((f"{name}/repository", component["repository"].encode("utf-8")))

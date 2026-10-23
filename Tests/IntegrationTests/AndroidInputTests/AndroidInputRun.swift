@@ -366,6 +366,7 @@ final class AndroidInputRun {
                 throw AndroidInputRunFailure.timedOut(
                     "normal periodic input ACK \(acknowledgementSequence); latest sent sequence \(latestSentSequence)")
             }
+            try await prepareForDirectViewPointerDispatch()
             try await pointer.advancePeriodicAcknowledgement(at: pixel)
             snapshot = try await touchEventCaptureSnapshot()
             guard snapshot.sentEvents.discardedRecords == 0 else {

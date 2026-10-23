@@ -156,6 +156,17 @@ final class DeveloperModeAdbTests: AndroidCustomTestCase {
         try await AndroidBootSession.withBoot(developerMode: false) { session in
             let state = await session.supervisor.state
             XCTAssertEqual(state, .ready)
+            let adbdStopped = await session.capture.wait(
+                for: "APKRUN-TEST-ADBD-STOPPED",
+                within: .seconds(5)
+            )
+            XCTAssertTrue(
+                adbdStopped,
+                """
+                init did not report adbd stopped at boot completion with developer mode off:
+                \(session.capture.console().suffix(500))
+                """
+            )
             let hostPort = await session.supervisor.developmentADBHostPort
             XCTAssertNil(hostPort)
             let serialShell = await session.supervisor.shell

@@ -4,3 +4,6 @@ on property:ro.boot.apkrun.test.fail_boot=1 && property:init.svc.zygote=running
 on property:ro.boot.apkrun.test.secret=1
     write /dev/kmsg APKRUN-FIXTURE-SECRET-36
     setprop persist.apkrun.test.secret APKRUN-FIXTURE-SECRET-36
+
+on property:sys.boot_completed=1 && property:init.svc.adbd=stopped && property:ro.boot.apkrun.devmode=0
+    write /dev/kmsg APKRUN-TEST-ADBD-STOPPED

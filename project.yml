@@ -270,6 +270,10 @@ targets:
           - VMRunResourcesTests.swift
       - path: Tests/Fixtures/signing/test-image-ed25519.pub
         buildPhase: resources
+      - path: Tests/Fixtures/AndroidImageProduct/compose.json
+        buildPhase: resources
+      - path: Tests/Fixtures/AndroidImageProduct/init/apkrun-test.rc
+        buildPhase: resources
       - path: Tests/Fixtures/linux/make-test-disks.sh
         buildPhase: resources
     settings:

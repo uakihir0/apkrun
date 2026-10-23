@@ -1,3 +1,4 @@
+import CryptoKit
 import DiagnosticsCore
 import Foundation
 import ImageCore
@@ -60,7 +61,8 @@ enum AndroidTestBundleLocator {
         case composedBundleMissing(path: String)
         case invalidManifest(path: String)
         case testImageKeyMissing
-        case notComposedImage(path: String, kind: String)
+        case testOverlayFixtureMissing(path: String)
+        case notComposedTestImage(path: String, kind: String)
 
         var description: String {
             switch self {
@@ -70,11 +72,18 @@ enum AndroidTestBundleLocator {
                 "The selected Android bundle has no readable manifest at \(path)."
             case .testImageKeyMissing:
                 "The AndroidCustom test image public key is missing or invalid in the test bundle."
-            case .notComposedImage(let path, let kind):
-                "AndroidCustom selected a \(kind) image at \(path); it requires an apkrun image with provenance.composition."
+            case .testOverlayFixtureMissing(let path):
+                "The AndroidCustom test overlay fixture is missing from the test bundle: \(path)."
+            case .notComposedTestImage(let path, let kind):
+                "AndroidCustom selected a \(kind) image at \(path); it requires kind: apkrun, composition provenance, and the fixed AndroidImageProduct test overlay."
             }
         }
     }
+
+    private static let testOverlayFixtures: [(path: String, resource: String, fileExtension: String)] = [
+        ("Tests/Fixtures/AndroidImageProduct/compose.json", "compose", "json"),
+        ("Tests/Fixtures/AndroidImageProduct/init/apkrun-test.rc", "apkrun-test", "rc"),
+    ]
 
     static func bundleDirectory() throws -> URL {
         let environment = ProcessInfo.processInfo.environment
@@ -123,21 +132,57 @@ enum AndroidTestBundleLocator {
             else {
                 throw Failure.invalidManifest(path: manifestURL.path)
             }
-            guard Self.isComposedManifest(manifest) else {
-                throw Failure.notComposedImage(path: bundle.path, kind: kind)
+            let testOverlayHashes = try Self.expectedTestOverlayHashes()
+            guard Self.isComposedTestManifest(manifest, testOverlayHashes: testOverlayHashes) else {
+                throw Failure.notComposedTestImage(path: bundle.path, kind: kind)
             }
         }
         return bundle
     }
 
-    static func isComposedManifest(_ manifest: [String: Any]) -> Bool {
+    static func expectedTestOverlayHashes() throws -> [String: String] {
+        let bundle = Bundle(for: IntegrationTestsBundleMarker.self)
+        var hashes: [String: String] = [:]
+        for fixture in testOverlayFixtures {
+            guard
+                let url = bundle.url(
+                    forResource: fixture.resource,
+                    withExtension: fixture.fileExtension
+                ),
+                let data = try? Data(contentsOf: url)
+            else {
+                throw Failure.testOverlayFixtureMissing(path: fixture.path)
+            }
+            hashes[fixture.path] = SHA256.hash(data: data)
+                .map { String(format: "%02x", $0) }
+                .joined()
+        }
+        return hashes
+    }
+
+    static func isComposedTestManifest(
+        _ manifest: [String: Any],
+        testOverlayHashes: [String: String]
+    ) -> Bool {
         guard manifest["kind"] as? String == "apkrun",
             let provenance = manifest["provenance"] as? [String: Any],
-            provenance["composition"] is [String: Any]
+            let composition = provenance["composition"] as? [String: Any],
+            let inputs = composition["testOverlayInputs"] as? [[String: Any]],
+            testOverlayHashes.count == testOverlayFixtures.count,
+            Set(testOverlayHashes.keys) == Set(testOverlayFixtures.map(\.path))
         else {
             return false
         }
-        return true
+        var observedHashes: [String: String] = [:]
+        for input in inputs {
+            guard let path = input["path"] as? String,
+                let hash = input["sha256"] as? String,
+                observedHashes.updateValue(hash, forKey: path) == nil
+            else {
+                return false
+            }
+        }
+        return observedHashes == testOverlayHashes
     }
 
     /// Adds the fixture signer only to the AndroidCustom test process trust list.
@@ -316,5 +361,18 @@ final class ConsoleCapture: @unchecked Sendable {
 
     func console() -> String {
         lock.withLock { String(decoding: bytes, as: UTF8.self) }
+    }
+
+    func wait(for marker: String, within budget: Duration) async -> Bool {
+        let deadline = ContinuousClock.now + budget
+        while true {
+            if console().contains(marker) {
+                return true
+            }
+            if ContinuousClock.now >= deadline {
+                return false
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
     }
 }

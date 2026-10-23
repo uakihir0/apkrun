@@ -1,6 +1,14 @@
 import GraphicsBridge
 import IOSurface
 
+/// Makes the active guest request available to synchronous renderer callbacks.
+protocol VirGLCommandDiagnosticScope: AnyObject {
+    func withCommandDiagnostic<T>(
+        _ diagnostic: VirGLCommandDiagnostic?,
+        perform: () -> T
+    ) -> T
+}
+
 /// A present target: the Metal texture of one IOSurface, imported into GL (graphics.md §6.2, #24).
 ///
 /// Only the render thread creates, uses, and destroys a target.

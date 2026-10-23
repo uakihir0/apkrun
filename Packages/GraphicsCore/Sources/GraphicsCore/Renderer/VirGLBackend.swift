@@ -270,7 +270,20 @@ final class VirGLBackend: @unchecked Sendable {
                 }
                 if let fence {
                     do throws(GraphicsFailure) {
-                        try engine.createFence(id: fence, context: context)
+                        if let failure = Self.withCommandDiagnostic(
+                            diagnostic,
+                            engine: engine,
+                            operation: { engine in
+                                do throws(GraphicsFailure) {
+                                    try engine.createFence(id: fence, context: context)
+                                    return nil
+                                } catch {
+                                    return error
+                                }
+                            }
+                        ) {
+                            throw failure
+                        }
                     } catch {
                         failures.record(error, diagnostic: diagnostic)
                         fenceForQueue = nil
@@ -293,10 +306,10 @@ final class VirGLBackend: @unchecked Sendable {
         engine: any VirGLEngine,
         operation: @Sendable (any VirGLEngine) -> GraphicsFailure?
     ) -> GraphicsFailure? {
-        guard let renderer = engine as? VirGLRenderer else {
+        guard let diagnosticScope = engine as? any VirGLCommandDiagnosticScope else {
             return operation(engine)
         }
-        return renderer.withCommandDiagnostic(diagnostic) {
+        return diagnosticScope.withCommandDiagnostic(diagnostic) {
             operation(engine)
         }
     }

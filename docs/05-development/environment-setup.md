@@ -33,7 +33,7 @@ macOS cannot build AOSP ([0003-cuttlefish-base-image.md](../01-architecture/deci
 
 | Tool | Pin | Install |
 |---|---|---|
-| Xcode | 27.0, in `.xcode-version` | Mac App Store or developer.apple.com |
+| Xcode | 27.1, in `.xcode-version` | Mac App Store or developer.apple.com |
 | Command line tools | those inside the pinned Xcode | `sudo xcode-select -s /Applications/Xcode.app` |
 | Metal toolchain | the component of the pinned Xcode | `xcodebuild -downloadComponent MetalToolchain` |
 

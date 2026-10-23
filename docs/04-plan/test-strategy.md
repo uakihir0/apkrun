@@ -78,7 +78,7 @@ The CI jobs that run each tier are in [../05-development/build-system.md](../05-
 |---|---|---|---|
 | LinuxGuest | Linux test guest: devices, disks, bootconfig, `net`, `rng`, `gpu`, `virgl` | `linux-guest` | ≤ 15 min |
 | AndroidStock | stock Cuttlefish image: boot, ADB, install and launch, graphics, input, windows, development-mode agent | `android-stock` | ≤ 60 min |
-| AndroidCustom | composed custom image (#36), and the release image (#120): Store Agent, updates, rollback, wrappers, desktop integration, diagnostics, SELinux, image migration | `android-custom` | ≤ 90 min |
+| AndroidCustom | composed custom image (#36): boot, privileged Guest Agent, vsock, developer-mode ADB, SELinux, and HelloProbe isolation; reused for release-image checks under #120 | `android-custom` | ≤ 90 min |
 | Maintenance | APKRun N → N+1 and its variants (`ReleaseUpdateTest`), feed-driven image update | `maintenance` | ≤ 120 min |
 
 - **Triggers.** The jobs are in `integration.yml` ([../05-development/build-system.md](../05-development/build-system.md) §15.1). `linux-guest` runs only on manual dispatch from `main` until an `apkrun-lab` runner exists. Pull-request T2 runs are off until a disposable runner exists. Until then, the reviewed commit runs on the reference Mac, and the result is linked before the task-closing pull request merges. A label never authorizes unreviewed code on a persistent self-hosted runner. The nightly `t2-all` job runs all four suites on `main`.
@@ -184,6 +184,7 @@ All hooks are compiled into Debug builds only, unless the Builds column says oth
 | `APKRUN_RUNTIME_FAULT=rejectAgent:guest` | apkrund rejects the Guest Agent handshake | Debug | [../02-design/diagnostics.md](../02-design/diagnostics.md) §12 T2-4 (d) |
 | `APKRUN_LAUNCHER_TEST_NO_RUNTIME=1` | the launcher runs without a runtime (screen R) | Debug | #45 |
 | `APKRUN_TEST_HEADLESS_LAUNCH=1` | `launch` opens a session owned by apkrund that discards its frames. #69 removes it. | Debug | #33, the G6 stages |
+| `APKRUN_TEST_ANDROID_BUNDLE=<path>` | selects the signed Android image bundle for an integration or G2 acceptance run; AndroidCustom uses the composed `kind: apkrun` bundle | T2/G2 test host | #36 |
 | `APKRUN_TEST_MARKER_TIMEOUT=<n>s` | shortens the maintenance marker timeout | Debug, `ReleaseUpdateTest` | [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §14 variant (c) |
 | `APKRUN_HOME` | relocates the data root. CLI commands other than `apkrun dev` ignore it ([../02-design/cli.md](../02-design/cli.md) §3.6), so their tests run in a separate macOS test user account ([../02-design/diagnostics.md](../02-design/diagnostics.md) §12 T2-1). | Debug (`apkrun dev`, debug apkrund, test hosts) | isolation (§3.9) |
 | `apkrun dev power sleep\|wake` | injects host sleep and wake messages | Debug | #70 |
@@ -195,8 +196,10 @@ All hooks are compiled into Debug builds only, unless the Builds column says oth
 | Sparkle test user driver | accepts every prompt. `APKRUN_TEST_INSTALL_CHOICE=closeApps\|whenClosed` answers the install dialog; the launch argument `--test-check-for-updates` starts a user-initiated check | `ReleaseUpdateTest` only | [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §14 |
 | settings as switches | `runtime.idleSuspendMinutes = 1`, `runtime.idleStopMinutes = 2` | all (ordinary settings) | #70, #71 |
 | hand-built wrapper with `runtime.minimumVersion = 99.0` | `scripts/dev/make-wrapper.sh --minimum-version 99.0`. The value is normally the launcher's build constant ([../03-reference/configuration.md](../03-reference/configuration.md) §4). | Debug (the script) | wrapper screen V, #45 |
-| `androidboot.apkrun.test.*` | `marker=<value>`, `fail_health=1`, `fail_boot=1` | test image bundles only ([../02-design/android-image.md](../02-design/android-image.md) §6.2) | §3.5 |
+| `androidboot.apkrun.test.*` | `marker=<value>`, `fail_health=1`, `fail_boot=1`, `secret=1` | test image bundles only ([../02-design/android-image.md](../02-design/android-image.md) §6.2) | §3.5 |
 | `androidboot.apkrun.devmode=1` | adbd on vsock 5555 on the custom image | custom image, user-controlled | §3.5, #36 |
+
+The AndroidCustom run sets `APKRUN_TEST_ANDROID_BUNDLE` to the composed bundle directory. It adds the committed `test-image-ed25519.pub` fixture to the integration test process trust store only; the app's standard trust store is unchanged. G2 adds that key to its local `ImageStore` trust only when the selected bundle is composed; its stock baseline uses the standard trust store. G3 launches the embedded Debug CLI as a child process, so a composed G3 bundle is signed with the runner's development image key, which that CLI already trusts. When a custom integration bundle is absent, the test host uses `$APKRUN_TEST_LINUX_DIR/android-bundle`; a required-runner invocation sets `APKRUN_CI=1` so a missing bundle fails instead of skipping.
 
 Release checks (`scripts/release/check-release-build.sh`, run by the `build` job on every Release build and again in the release jobs, [../05-development/build-system.md](../05-development/build-system.md) §3.1):
 
@@ -228,7 +231,7 @@ Defined in [../02-design/vm.md](../02-design/vm.md) §12.
 | Current and previous stable images | the published image feed | release smoke matrix (§9.2) |
 | Reference captures (`default`, `target`, `swiftshader`) | `Images/tools/reference/capture.sh` → `Images/reference/<buildId>/` | the G2 reference diff ([../02-design/android-image.md](../02-design/android-image.md) §8.4), `BootPhaseDetector` golden tests |
 
-Test bundles are built from the custom `userdebug` image, because the handlers of the `androidboot.apkrun.test.*` keys, the Guest Agent health report that `fail_health` changes, and the script of bundle S are in the custom product (#36). Bundle P is the exception: it only changes the kernel command line, so it may be built from the stock image. Test bundles are never published. An Android T2 suite skips when `Images/work/16373615/` holds no test bundle. Under `APKRUN_CI=1` it fails instead of skipping.
+Test bundles are built from the custom `userdebug` image. The fixed `Tests/Fixtures/AndroidImageProduct/` overlay is added only with `apkrun_image compose --test-overlay`; its hashes are recorded separately as `provenance.composition.testOverlayInputs` and it is omitted from product compositions. `--platform-test-key --test-image-hooks` builds the Guest Agent with the health-failure property enabled; ordinary builds keep that hook disabled. Bundle P is the exception: it only changes the kernel command line, so it may be built from the stock image. Test bundles are never published. An Android T2 suite skips when `Images/work/16373615/` holds no test bundle. Under `APKRUN_CI=1` it fails instead of skipping.
 
 | Bundle | Difference from its base | Used by |
 |---|---|---|
@@ -239,7 +242,7 @@ Test bundles are built from the custom `userdebug` image, because the handlers o
 | P | a kernel command line that names a missing init (`init=/apkrun-test-missing`), so the kernel panics | boot-loop guard ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §14) |
 | S | a test-only init script that writes a fixture secret to `/dev/kmsg` and sets `persist.apkrun.test.secret` | secret fixture test ([../02-design/diagnostics.md](../02-design/diagnostics.md) §12 T2-6) |
 
-Signing: each `apkrun-lab` machine creates its own development key with `python3 -m apkrun_image keygen` ([../02-design/android-image.md](../02-design/android-image.md) §10.1). The runner signs test bundles with it, and Debug builds trust it. The committed key `test-image-ed25519` (§4.4) serves only T0 and T1 signature vectors, with an injected trust store.
+Signing: each `apkrun-lab` machine creates its own development key with `python3 -m apkrun_image keygen` ([../02-design/android-image.md](../02-design/android-image.md) §10.1). The runner signs stock test bundles and composed G3 gate bundles with it, and Debug builds trust it. The committed key `test-image-ed25519` (§4.4) signs T0 and T1 signature vectors and the composed AndroidCustom test image; only AndroidCustom integration tests and composed G2 acceptance runs add its public key to their local test trust stores.
 
 ### 3.6 Lab Macs and the reference Mac
 
@@ -329,7 +332,7 @@ This table is the only specification of the fixture apps. Each row gives the pac
 | OtherInstaller | `io.apkrun.fixture.otherinstaller` | Declares `REQUEST_INSTALL_PACKAGES` and tries to update another fixture. See the details below. | `session <status>` | #40 |
 | IconLegacy | `io.apkrun.fixture.iconlegacy` | A legacy PNG launcher icon with transparency. | none | #56 |
 | OddName | `io.apkrun.fixture.odd_name` | A label with `/`, `:`, and an emoji ZWJ sequence. | none | #46 name sanitizing and the `_` → `-` mapping ([../02-design/wrapper.md](../02-design/wrapper.md) §4), #79 |
-| HelloProbe | `io.apkrun.fixture.helloprobe` | An ordinary `untrusted_app` that tries to connect to the agents' abstract sockets and to open `AF_VSOCK`. | `probe <target> <result>` | #36 SELinux negative test ([../02-design/guest-components.md](../02-design/guest-components.md) §12) |
+| HelloProbe | `io.apkrun.fixture.helloprobe` | An ordinary `untrusted_app` that tries to connect to the agents' three abstract sockets and to open an `AF_VSOCK` socket. | `unix-control=denied`, `unix-input=denied`, `unix-bulk=denied`, `vsock=denied`, `probe-complete` | #36 SELinux negative test ([../02-design/guest-components.md](../02-design/guest-components.md) §12) |
 
 Post-v1 tracks add a Vulkan fixture (#97) and a stand-in installer (#98) to `Tests/Fixtures/AndroidApps/`, signed like the others.
 
@@ -374,7 +377,7 @@ All test keys are in `Tests/Fixtures/signing/`, named `test-*` ([../01-architect
 | `test-fixture-b.jks` | the "other signer" and the rotation target |
 | `test-fdroid-repo.jks` | signs the F-Droid test repository index (#52) |
 | `test-sparkle-ed25519` and `.pub` | signs the local appcast for `ReleaseUpdateTest` ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.2) |
-| `test-image-ed25519` and `.pub` | T0 and T1 signature vectors for image manifests and feeds, with an injected trust store |
+| `test-image-ed25519` and `.pub` | T0 and T1 signature vectors and the composed AndroidCustom test image, with an injected test-only trust store |
 | `test-guest-dev.jks` | development signing of the Guest Agent and Store Agent APKs on the stock image ([../02-design/guest-components.md](../02-design/guest-components.md) §2) |
 
 Developer ID, notarization credentials, the release Sparkle key, and the release image key are CI secrets ([../05-development/workflow.md](../05-development/workflow.md) §9.2). Only the `signing` and `release` environments can read them. The Developer ID and the notarization credentials are read by the release job, the `maintenance` T2 job (which signs the `ReleaseUpdateTest` bundles, #58), and the nightly notarization check (#89). The release Sparkle key and the release image key are only in `release`.
@@ -448,11 +451,11 @@ The gates, their pass conditions, and their closing tasks are in [roadmap.md](ro
 | Gate | Check | Fixtures and image |
 |---|---|---|
 | G1 ARM64 Linux boots | `Tests/AcceptanceTests/G1LinuxBoot` | Linux test guest |
-| G2 boot_completed | `G2AndroidBoot` | stock image |
-| G3 SurfaceFlinger → virtio-gpu → Metal | `G3Graphics` | stock image, HelloGL |
-| G4 Hello APK in a native window | `G4NativeWindow` | stock image, HelloText |
-| G5 Two APKs in two windows | `G5TwoWindows` | stock image, HelloText and HelloCompose (#31) |
-| G6 Warm under apkrund | `G6WarmRuntime` | stock image (custom image after #36), HelloText |
+| G2 boot_completed | `G2AndroidBoot` | stock baseline or composed image selected for the run; composed after #36 |
+| G3 SurfaceFlinger → virtio-gpu → Metal | `G3Graphics` | composed image by default; explicit stock baseline and HelloGL |
+| G4 Hello APK in a native window | `G4NativeWindow` | custom image after #36, HelloText |
+| G5 Two APKs in two windows | `G5TwoWindows` | custom image after #36, HelloText and HelloCompose (#31) |
+| G6 Warm under apkrund | `G6WarmRuntime` | custom image after #36, HelloText |
 | G7 v1 → v2 automatically | `G7GentleUpdate` | custom image, HelloUpdate V1 and V2, local provider |
 | G8 APK wrapped as .app | `G8Wrapper` | custom image, HelloText |
 | G9 Wrapper unchanged during updates | `G9WrapperIntegrity` | custom image, HelloUpdate V1 and V2 |
@@ -465,6 +468,8 @@ Rules:
 - After a gate passes, its check runs nightly. From #36 on, the G2–G6 regressions run on the custom image. G2 also runs on the stock image while the stock image is used for development.
 - A red gate regression opens an issue, blocks release candidates, and stops new tasks that depend on the gate ([roadmap.md](roadmap.md) §2).
 - The checks that [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §14 adds to G6 (the warm-launch KPI, a real `pmset sleepnow`, onboarding on a fresh user account) join the nightly G6 run once #67, #70, and #71 are done. Until then they are on the v0.2 checklist (§8.3).
+
+`scripts/run-gate.sh G2` builds the stock bundle by default. To run G2 against the composed image, pass `APKRUN_G2_ANDROID_BUNDLE=<absolute path>`; the runner requires `kind: apkrun` with composition provenance, verifies `SHA256SUMS`, records the selected bundle hashes, and passes that exact directory and requirement to the acceptance test host. The composed G2 test process adds the committed fixture image key to its local trust store; the stock baseline uses the standard trust store. G3 requires the composed bundle shape by default through `APKRUN_G3_ANDROID_BUNDLE`; `APKRUN_G3_REQUIRE_COMPOSED=0` explicitly selects the stock baseline. A composed G3 bundle must be signed with the runner's development image key because the embedded CLI uses the standard Debug trust store in a separate process. Both gates verify that the built test host records the selected bundle and image requirement, and ImageStore verifies the signed manifest and all files when the acceptance test installs the image. G3 records SELinux mode and HelloGL's process domain, requiring `Enforcing` and `u:r:untrusted_app`.
 
 ---
 

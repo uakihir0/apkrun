@@ -3,6 +3,7 @@ package io.apkrun.fixture.systemservicestest;
 import android.app.Activity;
 import android.app.Instrumentation;
 import android.os.Bundle;
+import android.util.Log;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
@@ -15,20 +16,31 @@ import java.util.List;
 
 /** T2 probe of the Guest Agent's actual SystemServices wrappers on the composed image (#36). */
 public final class SystemServicesInstrumentation extends Instrumentation {
+    private static final String TAG = "APKRunSystemServices";
     private static final String WRAPPER_CLASS = "io.apkrun.guest.runtime.SystemServiceWrapper";
     private static final String REQUIREMENT_CLASS = "io.apkrun.guest.runtime.MethodRequirement";
     private static final String MISSING_METHOD_CLASS = "io.apkrun.guest.runtime.ServiceMethodMissing";
     private static final String SYSTEM_SERVICES_CLASS = "io.apkrun.guest.runtime.SystemServices";
 
     @Override
+    public void onCreate(Bundle arguments) {
+        super.onCreate(arguments);
+        start();
+    }
+
+    @Override
     public void onStart() {
         Bundle result = new Bundle();
         int resultCode = Activity.RESULT_OK;
         try {
+            Log.i(TAG, "started");
             List<String> services = inspectImageWrappers();
+            Log.i(TAG, "verified system-service wrappers");
             verifyMissingMethodIsolation();
+            Log.i(TAG, "verified missing-method isolation");
             result.putString("stream", "APKRUN_SYSTEM_SERVICES_OK\n" + String.join("\n", services));
         } catch (Throwable error) {
+            Log.e(TAG, "instrumentation failed", error);
             resultCode = Activity.RESULT_CANCELED;
             result.putString(
                 "stream",
@@ -39,6 +51,7 @@ public final class SystemServicesInstrumentation extends Instrumentation {
     }
 
     private List<String> inspectImageWrappers() throws Exception {
+        Log.i(TAG, "loading SystemServices.all");
         ClassLoader targetLoader = getTargetContext().getClassLoader();
         Class<?> servicesClass = Class.forName(SYSTEM_SERVICES_CLASS, true, targetLoader);
         Object services = servicesClass.getField("INSTANCE").get(null);
@@ -53,6 +66,7 @@ public final class SystemServicesInstrumentation extends Instrumentation {
         for (Object wrapper : wrappers) {
             Class<?> wrapperClass = wrapper.getClass();
             String service = (String) wrapperClass.getMethod("getServiceName").invoke(wrapper);
+            Log.i(TAG, "inspecting " + service);
             boolean available = (Boolean) wrapperClass.getMethod("getAvailable").invoke(wrapper);
             boolean servicePresent = wrapperClass.getMethod("getService").invoke(wrapper) != null;
             @SuppressWarnings("unchecked")
@@ -65,11 +79,6 @@ public final class SystemServicesInstrumentation extends Instrumentation {
                 failures.add(service + " missing=" + String.join(",", missing));
             }
         }
-        for (String line : report) {
-            Bundle status = new Bundle();
-            status.putString("stream", line);
-            sendStatus(1, status);
-        }
         if (!failures.isEmpty()) {
             throw new AssertionError("system service wrappers did not resolve: " + String.join("; ", failures));
         }
@@ -77,6 +86,7 @@ public final class SystemServicesInstrumentation extends Instrumentation {
     }
 
     private void verifyMissingMethodIsolation() throws Exception {
+        Log.i(TAG, "checking missing-method isolation");
         ClassLoader targetLoader = getTargetContext().getClassLoader();
         Class<?> wrapperClass = Class.forName(WRAPPER_CLASS, true, targetLoader);
         Class<?> requirementClass = Class.forName(REQUIREMENT_CLASS, true, targetLoader);
@@ -140,6 +150,7 @@ public final class SystemServicesInstrumentation extends Instrumentation {
                 throw new AssertionError("missing method did not fail with ServiceMethodMissing", error.getCause());
             }
         }
+        Log.i(TAG, "missing-method isolation passed");
     }
 
     private Object requirement(Class<?> requirementClass, String name) throws Exception {

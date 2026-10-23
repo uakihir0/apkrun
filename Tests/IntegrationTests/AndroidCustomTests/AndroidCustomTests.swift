@@ -221,12 +221,40 @@ final class SystemServicesTest: AndroidCustomTestCase {
         let instrumentation: AdbShellReply
         do {
             instrumentation = try await adb.shell(
-                "am instrument -w \(instrumentationPackage)/.SystemServicesInstrumentation",
-                timeout: .seconds(120)
+                "am instrument --no-restart -w \(instrumentationPackage)/.SystemServicesInstrumentation",
+                timeout: .seconds(45)
             )
         } catch {
+            let logcat = try? await adb.shell(
+                "logcat -d -t 200 -s APKRunSystemServices AndroidRuntime ActivityManager",
+                timeout: .seconds(5)
+            )
+            let registeredInstrumentation = try? await adb.shell(
+                "pm list instrumentation",
+                timeout: .seconds(5)
+            )
+            let instrumentationPackageState = try? await adb.shell(
+                "dumpsys package \(instrumentationPackage)",
+                timeout: .seconds(5)
+            )
+            let instrumentationProcesses = try? await adb.shell(
+                "ps -A | grep -E 'io.apkrun.guest|systemservicestest' || true",
+                timeout: .seconds(5)
+            )
             try? await adb.uninstall(packageName: instrumentationPackage)
-            throw error
+            let diagnostics = [
+                logcat?.output,
+                registeredInstrumentation?.output,
+                instrumentationPackageState?.output,
+                instrumentationProcesses?.output,
+            ]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+            throw AndroidShellConsole.CheckFailure(
+                command: "am instrument",
+                detail: "did not complete: \(error)\nGuest diagnostics:\n\(diagnostics)"
+            )
         }
         do {
             try await adb.uninstall(packageName: instrumentationPackage)
@@ -236,7 +264,6 @@ final class SystemServicesTest: AndroidCustomTestCase {
 
         let output = instrumentation.output + "\n" + instrumentation.errorOutput
         XCTAssertEqual(instrumentation.status, 0, "am instrument did not complete: \(output)")
-        XCTAssertTrue(output.contains("INSTRUMENTATION_CODE: -1"), "instrumentation failed: \(output)")
         XCTAssertTrue(output.contains("APKRUN_SYSTEM_SERVICES_OK"), "instrumentation checks failed: \(output)")
         XCTAssertFalse(output.contains("APKRUN_SYSTEM_SERVICES_FAILED"), output)
 
@@ -326,6 +353,19 @@ final class SystemServicesTest: AndroidCustomTestCase {
                     + "enabled=\(enabled), records=\(outcomes)"
             )
         }
+        let activityControllerResolved = ["activity", "activity_task"].contains { service in
+            guard let outcome = outcomes[service] else { return false }
+            return outcome.servicePresent && !outcome.missingMethods.contains("setActivityController")
+        }
+        XCTAssertTrue(
+            activityControllerResolved,
+            "the selected activity-controller wrapper did not resolve; records=\(outcomes)"
+        )
+        XCTAssertTrue(
+            enabled.contains("health.v1"),
+            "the agent did not enable health.v1 after registering the activity controller; "
+                + "enabled=\(enabled), records=\(outcomes)"
+        )
         let agentState = await agent.state
         XCTAssertEqual(agentState, .ready)
         await agent.stop()

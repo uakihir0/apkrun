@@ -145,7 +145,7 @@ final class SystemServicesTest: AndroidCustomTestCase {
             guard let originalPID = try await Self.agentProcessID(using: android) else {
                 return XCTFail("the persistent Guest Agent process is not running before the kill")
             }
-            try await android.output("kill -9 \(originalPID)", root: true)
+            _ = try await android.output("kill -9 \(originalPID)", root: true)
 
             let deadline = ContinuousClock.now + .seconds(60)
             var restartedPID: Int?

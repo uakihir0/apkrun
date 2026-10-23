@@ -786,12 +786,14 @@ final class AndroidInputTests: XCTestCase {
                 let keys = try run.keyboard()
                 try await Self.openDetails(run)
                 _ = try await run.adb.shell("logcat -c")
+                try await run.prepareForDirectViewPointerDispatch()
                 try await keys.tap(.escape)
                 let back = try await run.fixtureLog { lines in lines.contains { $0.contains(Self.mainScreenLine) } }
                 XCTAssertTrue(
                     back.contains { $0.contains(Self.mainScreenLine) }, "Esc did not return to the main screen")
                 try await Self.openDetails(run)
                 _ = try await run.adb.shell("logcat -c")
+                try await run.prepareForDirectViewPointerDispatch()
                 try await keys.commandShortcut(.leftBracket)
                 let commandBack = try await run.fixtureLog { lines in
                     lines.contains { $0.contains(Self.mainScreenLine) }
@@ -1533,6 +1535,9 @@ final class AndroidInputTests: XCTestCase {
         let target = try await run.centre(of: detailsID)
         let touchPhasesBefore = try await run.inputWireTouchPhaseCounts()
         _ = try await run.adb.shell("logcat -c")
+        // UI lookup and the ADB log reset are asynchronous; bind the input route to the actual key window immediately
+        // before dispatch so an unrelated focus change cannot silently drop this test's click.
+        try await run.prepareForDirectViewPointerDispatch()
         try await run.pointer().click(at: target)
         let lines = try await run.fixtureLog { lines in lines.contains { $0.contains(detailsScreenLine) } }
         guard lines.contains(where: { $0.contains(detailsScreenLine) }) else {

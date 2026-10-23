@@ -703,15 +703,18 @@ final class AndroidInputTests: XCTestCase {
             try await run.waitForText("Row 0")
             let pointer = try run.pointer()
             // The list fills the display below the text field, so these points lie inside it.
+            try await run.prepareForDirectViewPointerDispatch()
             try await pointer.drag(from: (x: 512, y: 600), to: (x: 512, y: 250), steps: 20)
             let dragged = try await Self.lastRow(run, above: 0)
             if dragged == 0 {
                 XCTFail("the drag did not scroll the list: \(try await Self.diagnosis(run))")
                 return
             }
+            try await run.prepareForDirectViewPointerDispatch()
             pointer.scroll(at: (x: 512, y: 400), deltaY: -120, precise: true)
             let trackpad = try await Self.lastRow(run, above: dragged)
             XCTAssertGreaterThan(trackpad, dragged, "the trackpad scroll did not move the list")
+            try await run.prepareForDirectViewPointerDispatch()
             pointer.scroll(at: (x: 512, y: 400), deltaY: -3, precise: false)
             let wheel = try await Self.lastRow(run, above: trackpad)
             XCTAssertGreaterThan(wheel, trackpad, "the wheel scroll did not move the list")

@@ -760,6 +760,7 @@ final class AndroidInputTests: XCTestCase {
                 try await keys.tap(.delete)
                 var text = try await Self.fieldText(run)
                 XCTAssertEqual(text, "ab", "Backspace did not remove the last character")
+                try await run.prepareForDirectViewPointerDispatch()
                 try await keys.type("cd")
                 try await keys.tap(.leftArrow)
                 try await keys.tap(.leftArrow)
@@ -767,6 +768,7 @@ final class AndroidInputTests: XCTestCase {
                 text = try await Self.fieldText(run)
                 XCTAssertEqual(text, "abXcd", "the left arrow did not move the cursor")
                 _ = try await run.adb.shell("logcat -c")
+                try await run.prepareForDirectViewPointerDispatch()
                 try await keys.tap(.returnKey)
                 let lines = try await run.fixtureLog { lines in
                     lines.contains { $0.contains(Self.editorActionLine) }
@@ -819,13 +821,16 @@ final class AndroidInputTests: XCTestCase {
                 try await keys.commandShortcut(.v)
                 var text = try await Self.fieldText(run)
                 XCTAssertEqual(text, "HelloHello", "⌘C and ⌘V did not copy and paste the selection")
+                try await run.prepareForDirectViewPointerDispatch()
                 try await keys.commandShortcut(.a)
                 try await keys.commandShortcut(.x)
                 text = try await Self.fieldText(run)
                 XCTAssertEqual(text, "", "⌘X did not cut the selection")
+                try await run.prepareForDirectViewPointerDispatch()
                 try await keys.commandShortcut(.v)
                 text = try await Self.fieldText(run)
                 XCTAssertEqual(text, "HelloHello", "⌘V did not paste the cut text")
+                try await run.prepareForDirectViewPointerDispatch()
                 try await keys.commandShortcut(.z)
                 text = try await Self.fieldText(run)
                 XCTAssertEqual(text, "", "⌘Z did not undo the paste")
@@ -1490,8 +1495,10 @@ final class AndroidInputTests: XCTestCase {
             lastFocus = focus.map { String(describing: $0) } ?? "field not found in dump"
             switch focus {
             case true?:
+                try await run.prepareForDirectViewPointerDispatch()
                 return
             case false?:
+                try await run.prepareForDirectViewPointerDispatch()
                 try await keys.tap(.tab)
                 try await Task.sleep(for: .milliseconds(400))
             case nil:

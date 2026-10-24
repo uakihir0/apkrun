@@ -101,7 +101,7 @@ func daemonSessionResizeReplacesTheLeaseAndRelaysTheNewGeneration() async throws
     #expect(resized.surfaces.count == SurfaceSet.requiredSurfaceCount)
 
     let lease = await fixture.registry.displayLease(.app(opened.descriptor.sessionID))
-    #expect(lease?.pool.generation == UInt64(resized.descriptor.surfaces.generation))
+    #expect(lease?.sessionPool.generation == UInt64(resized.descriptor.surfaces.generation))
     #expect(lease?.mode.pixelSize.width == 520)
     #expect(lease?.mode.pixelSize.height == 880)
 

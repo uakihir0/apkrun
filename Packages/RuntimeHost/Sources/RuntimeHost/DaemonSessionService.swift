@@ -1,8 +1,6 @@
 import CoreGraphics
 import DiagnosticsCore
 import Foundation
-import GraphicsCore
-import GuestProtocol
 import IOSurface
 import RuntimeAPI
 import RuntimeCore
@@ -364,8 +362,8 @@ public actor DaemonSessionService: RuntimeSessionService, PackageMutationSession
         }
 
         guard let lease = await registry.displayLease(snapshot.id),
-            let generation = UInt32(exactly: lease.pool.generation),
-            lease.pool.surfaces.count == SurfaceSet.requiredSurfaceCount
+            let generation = UInt32(exactly: lease.sessionPool.generation),
+            lease.sessionPool.surfaces.count == SurfaceSet.requiredSurfaceCount
         else {
             throw .runtime(
                 "internal",
@@ -403,7 +401,7 @@ public actor DaemonSessionService: RuntimeSessionService, PackageMutationSession
             state: snapshot.state == .launching ? .launching : .running,
             surfaces: surfaceSet
         )
-        return DaemonOpenedSession(descriptor: descriptor, surfaces: lease.pool.surfaces)
+        return DaemonOpenedSession(descriptor: descriptor, surfaces: lease.sessionPool.surfaces)
     }
 
     func resizeSession(
@@ -450,8 +448,8 @@ public actor DaemonSessionService: RuntimeSessionService, PackageMutationSession
             throw Self.wireError(for: .displayPool(error))
         }
         guard await registry.replaceDisplayLease(replacement, for: sessionID),
-            replacement.pool.surfaces.count == SurfaceSet.requiredSurfaceCount,
-            let generation = UInt32(exactly: replacement.pool.generation),
+            replacement.sessionPool.surfaces.count == SurfaceSet.requiredSurfaceCount,
+            let generation = UInt32(exactly: replacement.sessionPool.generation),
             case .app(let sessionUUID) = sessionID
         else {
             throw .runtime("internal", message: "APKRun could not install the resized app display.")
@@ -473,21 +471,21 @@ public actor DaemonSessionService: RuntimeSessionService, PackageMutationSession
                 densityDpi: replacement.mode.densityDpi
             )
         )
-        return .applied(DaemonOpenedSession(descriptor: descriptor, surfaces: replacement.pool.surfaces))
+        return .applied(DaemonOpenedSession(descriptor: descriptor, surfaces: replacement.sessionPool.surfaces))
     }
 
     func frameDisplayed(_ message: FrameDisplayed, from connectionID: ObjectIdentifier) async {
         guard let sessionID = sessionByConnection[connectionID],
             connectionBySession[sessionID] == connectionID,
             let lease = await registry.displayLease(sessionID),
-            let generation = UInt32(exactly: lease.pool.generation),
+            let generation = UInt32(exactly: lease.sessionPool.generation),
             message.generation == generation,
             sessionByConnection[connectionID] == sessionID,
             connectionBySession[sessionID] == connectionID
         else {
             return
         }
-        lease.pool.frameDisplayed(sequence: message.frameSeq)
+        lease.sessionPool.frameDisplayed(sequence: message.frameSeq)
     }
 
     func visibilityChanged(_ visible: Bool, from connectionID: ObjectIdentifier) async {
@@ -518,9 +516,9 @@ public actor DaemonSessionService: RuntimeSessionService, PackageMutationSession
         guard frameRelays[lease.session] == nil else {
             return
         }
-        let pool = lease.pool
+        let pool = lease.sessionPool
         frameRelays[lease.session] = Task.detached { [weak self] in
-            for await frame in pool.frames {
+            for await frame in pool.makeFrameStream() {
                 guard !Task.isCancelled else {
                     return
                 }
@@ -529,22 +527,21 @@ public actor DaemonSessionService: RuntimeSessionService, PackageMutationSession
         }
     }
 
-    private func deliverFrame(_ frame: ScanoutFrame, from pool: ScanoutPoolHandle, session: SessionID) {
+    private func deliverFrame(_ frame: DisplaySessionFrame, from pool: DisplaySessionPool, session: SessionID) {
         guard connectionBySession[session] != nil,
             let frameReady = frameReadyBySession[session],
-            case .frameReady(let generation, let bufferIndex, let sequence, let presentationTime) = frame,
-            generation == pool.generation,
-            let wireGeneration = UInt32(exactly: generation),
-            pool.surfaces.indices.contains(bufferIndex)
+            frame.generation == pool.generation,
+            let wireGeneration = UInt32(exactly: frame.generation),
+            pool.surfaces.indices.contains(frame.bufferIndex)
         else {
             return
         }
         frameReady(
             FrameReady(
                 generation: wireGeneration,
-                surfaceIndex: bufferIndex,
-                frameSeq: sequence,
-                presentationTime: presentationTime
+                surfaceIndex: frame.bufferIndex,
+                frameSeq: frame.sequence,
+                presentationTime: frame.presentationTime
             )
         )
     }

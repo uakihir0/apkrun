@@ -45,6 +45,8 @@ xcodebuild -downloadComponent MetalToolchain
 xcrun swift --version        # Swift 6.2 or later
 ```
 
+Workflow jobs run `scripts/ci/select-pinned-xcode.sh` before `scripts/bootstrap`. It selects an installed Xcode that matches `.xcode-version`, because the `xcode-27` runner label can advance its default minor version while keeping the pinned bundle installed.
+
 ### 2.3 Homebrew
 
 Run `brew bundle --file scripts/Brewfile` after installing Homebrew. The Brewfile lists `meson`, `ninja`, `pkg-config`, `python@3.12`, and `ripgrep`.

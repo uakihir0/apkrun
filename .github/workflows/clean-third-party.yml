@@ -19,6 +19,8 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Select pinned Xcode
+        run: scripts/ci/select-pinned-xcode.sh
       - name: Install pinned repository tools
         run: scripts/bootstrap
       - name: Remove third-party outputs

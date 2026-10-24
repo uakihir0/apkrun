@@ -61,7 +61,7 @@
       "name": "alpine-linux-virt",
       "group": "test-linux",
       "kind": "prebuilt",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/linux-virt-6.18.54-r0.apk",
+      "url": "https://mirrors.huaweicloud.com/alpine/v3.24/main/aarch64/linux-virt-6.18.54-r0.apk",
       "version": "6.18.54-r0",
       "sha256": "9a4a6fa042b60b70f453dded99762810516b35793c64d776d75986b0b110b6e0",
       "license": "GPL-2.0-only",

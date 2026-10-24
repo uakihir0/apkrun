@@ -480,6 +480,20 @@ public actor SessionRegistry {
         entries[id]?.displayLease
     }
 
+    /// Replaces the current generation and mode for an active session's display lease.
+    @discardableResult
+    public func replaceDisplayLease(_ lease: DisplayLease, for id: SessionID) -> Bool {
+        guard lease.session == id, var entry = entries[id], !entry.state.isEnded,
+            entry.displayLease?.leaseID == lease.leaseID
+        else {
+            return false
+        }
+        entry.displayID = lease.androidDisplayID
+        entry.displayLease = lease
+        entries[id] = entry
+        return true
+    }
+
     /// Returns the live session for a package, if any.
     public func session(packageID: String) -> AppSessionSnapshot? {
         entries.values.first(where: { $0.packageID == packageID && !$0.state.isEnded })?.snapshot

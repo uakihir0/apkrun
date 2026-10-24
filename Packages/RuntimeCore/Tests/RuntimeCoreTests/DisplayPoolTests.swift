@@ -38,6 +38,30 @@ func displayPoolAllocatesCorrelatedDisplayAndReleasesItAfterRemoval() async thro
 }
 
 @Test
+func displayPoolForwardsVisibilityOnlyForTheCurrentLease() async throws {
+    let guest = FakeDisplayControlChannel()
+    let scanouts = FakeScanoutController(guest: guest)
+    let pool = DisplayPool(scanouts: scanouts, guest: guest)
+    let lease = try await pool.acquire(
+        for: .app(UUID()),
+        configuration: DisplayConfiguration(
+            geometry: DisplayGeometry(pointSize: CGSize(width: 480, height: 850), backingScale: 1)
+        )
+    )
+
+    await pool.visibilityChanged(true, for: lease)
+    await pool.visibilityChanged(false, for: lease)
+    #expect(
+        scanouts.visibilityChanges
+            == [VisibilityCall(scanout: 1, visible: true), VisibilityCall(scanout: 1, visible: false)]
+    )
+
+    #expect(await pool.release(lease) == .released)
+    await pool.visibilityChanged(true, for: lease)
+    #expect(scanouts.visibilityChanges.count == 2)
+}
+
+@Test
 func displayPoolEnforcesTheSoftAppSessionLimit() async throws {
     let guest = FakeDisplayControlChannel()
     let scanouts = FakeScanoutController(guest: guest)
@@ -467,6 +491,11 @@ private struct DetachCall: Equatable, Sendable {
     let generation: UInt64?
 }
 
+private struct VisibilityCall: Equatable, Sendable {
+    let scanout: Int
+    let visible: Bool
+}
+
 final class FakeScanoutController: ScanoutController, @unchecked Sendable {
     private let lock = NSLock()
     private let guest: FakeDisplayControlChannel
@@ -482,6 +511,7 @@ final class FakeScanoutController: ScanoutController, @unchecked Sendable {
     private var configured: [Int] = []
     private var disabled: [Int] = []
     private var detached: [DetachCall] = []
+    private var visibility: [VisibilityCall] = []
     private var configurationAttemptCount = 0
 
     init(
@@ -508,6 +538,10 @@ final class FakeScanoutController: ScanoutController, @unchecked Sendable {
 
     var disabledScanouts: [Int] {
         lock.withLock { disabled }
+    }
+
+    fileprivate var visibilityChanges: [VisibilityCall] {
+        lock.withLock { visibility }
     }
 
     fileprivate var detachedGenerations: [DetachCall] {
@@ -589,6 +623,12 @@ final class FakeScanoutController: ScanoutController, @unchecked Sendable {
 
     func detachPool(_ scanout: ScanoutID, generation: UInt64?) {
         lock.withLock { detached.append(DetachCall(scanout: scanout.rawValue, generation: generation)) }
+    }
+
+    func visibilityChanged(_ scanout: ScanoutID, visible: Bool) {
+        lock.withLock {
+            visibility.append(VisibilityCall(scanout: scanout.rawValue, visible: visible))
+        }
     }
 
     private func makePool(_ scanout: ScanoutID) -> ScanoutPoolHandle {

@@ -635,7 +635,7 @@ final class AndroidInputRun {
             inputSink = sink
         case .surfacesReplaced(let surfaceSet):
             frames?.replace(surfaceSet)
-        case .frameReady(let generation, let bufferIndex, let sequence):
+        case .frameReady(let generation, let bufferIndex, let sequence, _):
             framesSeen += 1
             frames?.ingest(generation: generation, bufferIndex: bufferIndex, sequence: sequence)
         }

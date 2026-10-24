@@ -611,6 +611,14 @@ public actor DisplayPool {
         )
     }
 
+    /// Forwards session window visibility only while the lease still owns its generation.
+    public func visibilityChanged(_ visible: Bool, for lease: DisplayLease) {
+        guard slotIndex(for: lease) != nil else {
+            return
+        }
+        scanouts.visibilityChanged(lease.scanout, visible: visible)
+    }
+
     /// Releases a lease. Failures are retained as a slot fault and never escape to close callers.
     @discardableResult
     public func release(_ lease: DisplayLease) async -> DisplayReleaseResult {

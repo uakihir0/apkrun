@@ -38,7 +38,7 @@ public enum DeveloperDisplayEvent: @unchecked Sendable {
     /// A new scanout pool replaced the previous generation.
     case surfacesReplaced(surfaceSet: DeveloperSurfaceSet)
     /// Buffer `bufferIndex` of `generation` is ready to show as frame `sequence`.
-    case frameReady(generation: UInt64, bufferIndex: Int, sequence: UInt64)
+    case frameReady(generation: UInt64, bufferIndex: Int, sequence: UInt64, presentationTime: UInt64 = 0)
 }
 
 /// A geometry request the embedded display could not apply.
@@ -136,9 +136,14 @@ public final class DeveloperDisplay: @unchecked Sendable {
                     continuation.yield(.attached(surfaceSet: DeveloperSurfaceSet(surfaceSet)))
                 case .surfacesReplaced(let surfaceSet):
                     continuation.yield(.surfacesReplaced(surfaceSet: DeveloperSurfaceSet(surfaceSet)))
-                case .frameReady(let generation, let bufferIndex, let sequence):
+                case .frameReady(let generation, let bufferIndex, let sequence, let presentationTime):
                     continuation.yield(
-                        .frameReady(generation: generation, bufferIndex: bufferIndex, sequence: sequence)
+                        .frameReady(
+                            generation: generation,
+                            bufferIndex: bufferIndex,
+                            sequence: sequence,
+                            presentationTime: presentationTime
+                        )
                     )
                 }
             }

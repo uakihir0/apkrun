@@ -114,7 +114,7 @@ openSession(OpenSessionRequest{ packageID, geometry: DisplayGeometry{ pointSize,
 | Failure | Client behavior |
 |---|---|
 | apkrund not registered | RuntimeClient opens APKRun.app (`NSWorkspace.open(bundleID)`) with `--register-runtime`. The wrapper shows "APKRun needs to finish setup". |
-| apkrund crashed mid-session | The connection is invalidated. The wrapper shows "APKRun restarted — reopening…" and retries `openSession` with backoff (1 s, 2 s, 4 s; max 3). The VM is gone, so the launch is cold. |
+| apkrund crashed mid-session | The connection is invalidated. The wrapper shows "APKRun restarted — reopening…" and retries `openSession` with backoff (1 s, 2 s, 4 s, then every 5 s). After 15 s it shows a reconnecting error while retries continue until the window closes or the session recovers. The VM is gone, so the launch is cold. |
 | Control listener at its eight-connection limit | RuntimeClient probes each new endpoint with the idempotent `runtimeStatus`, and retries rejected connections with bounded backoff before a side-effecting request. |
 | API major mismatch | Actionable error dialog. The wrapper never continues. |
 | APKRun or Android updating (`HelloReply.hostState == updating`, `RuntimeFailure.hostUpdating`, or `ended(.runtimeUpdating)`) | The wrapper shows screen U and retries `openSession` every 2 s for up to 10 minutes ([wrapper.md](../02-design/wrapper.md) §5.4). The menu bar relaunches when `hello` reports another build ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.7). |

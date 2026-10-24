@@ -1,4 +1,5 @@
 import Foundation
+import IOSurface
 import RuntimeAPI
 import Testing
 
@@ -405,6 +406,115 @@ import Testing
         #expect(header.apiVersion == APIVersion.current)
         #expect(header.clientKind == RuntimeClientKind.cli)
     }
+}
+
+@Test func openedSessionResizeInstallsReplacementSurfacesBeforeReturningApplied() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .launcher,
+        claimedIdentity: "io.apkrun.APKRunLauncher.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let sessionID = UUID(uuidString: "8C064F7D-1EB1-415C-B2A2-292BA5DB56E5")!
+    let initialDescriptor = SessionDescriptor(
+        sessionID: sessionID,
+        displayID: 3,
+        windowPrefs: WindowPrefs(zoom: 1),
+        inputPrefs: InputPrefs(),
+        windowMode: .secondaryDisplay,
+        state: .running,
+        surfaces: SurfaceSet(
+            generation: 1,
+            pixelSize: PixelSize(width: 960, height: 1_700),
+            densityDpi: 320
+        )
+    )
+    let resizedDescriptor = SessionDescriptor(
+        sessionID: sessionID,
+        displayID: 3,
+        windowPrefs: WindowPrefs(zoom: 1.25),
+        inputPrefs: InputPrefs(),
+        windowMode: .secondaryDisplay,
+        state: .running,
+        surfaces: SurfaceSet(
+            generation: 2,
+            pixelSize: PixelSize(width: 1_200, height: 2_000),
+            densityDpi: 400
+        )
+    )
+    let initialSurfaces = try clientSessionTestSurfaces(width: 960, height: 1_700)
+    let resizedSurfaces = try clientSessionTestSurfaces(width: 1_200, height: 2_000)
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        openSessionReply: OpenSessionControlReply(result: initialDescriptor),
+        openSessionSurfaces: initialSurfaces,
+        resizeSessionReply: ResizeSessionControlReply(outcome: .applied, result: resizedDescriptor),
+        resizeSessionSurfaces: resizedSurfaces
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let openRequest = OpenSessionRequest(
+        header: APIRequestHeader(clientKind: .launcher),
+        packageID: packageID,
+        geometry: DisplayGeometry(
+            pointSize: DisplayPointSize(width: 480, height: 850),
+            backingScale: 2,
+            zoom: 1
+        ),
+        screenSize: DisplayPointSize(width: 1_440, height: 900)
+    )
+    let session = try await client.openSession(openRequest)
+    var messages = session.messages.makeAsyncIterator()
+    let geometry = DisplayGeometry(
+        pointSize: DisplayPointSize(width: 600, height: 1_000),
+        backingScale: 2,
+        zoom: 1.25
+    )
+
+    #expect(try await session.resize(geometry) == .applied)
+    #expect(session.descriptor.windowPrefs == resizedDescriptor.windowPrefs)
+    #expect(session.descriptor.surfaces.generation == resizedDescriptor.surfaces.generation)
+    guard case .surfacesReplaced(let replacement, let surfaces, let windowPrefs)? = await messages.next() else {
+        Issue.record("An applied resize should install and publish its replacement pool before returning.")
+        return
+    }
+    #expect(replacement.surfaceSet == resizedDescriptor.surfaces)
+    #expect(surfaces.count == SurfaceSet.requiredSurfaceCount)
+    #expect(windowPrefs == resizedDescriptor.windowPrefs)
+
+    let requests = transport.snapshot().resizeSessionRequests
+    #expect(requests.count == 1)
+    let request = try JSONDecoder().decode(ResizeSessionRequest.self, from: requests[0])
+    #expect(request.geometry == geometry)
+    #expect(request.header.apiVersion == APIVersion.current)
+    #expect(request.header.clientKind == .launcher)
+}
+
+private func clientSessionTestSurfaces(width: Int, height: Int) throws(RuntimeControlClientError) -> [IOSurface] {
+    var surfaces: [IOSurface] = []
+    surfaces.reserveCapacity(SurfaceSet.requiredSurfaceCount)
+    for _ in 0..<SurfaceSet.requiredSurfaceCount {
+        guard
+            let surface = IOSurface(
+                properties: [
+                    .width: width,
+                    .height: height,
+                    .bytesPerElement: 4,
+                    .bytesPerRow: ((width * 4 + 63) / 64) * 64,
+                ]
+            )
+        else {
+            throw .malformedReply
+        }
+        surfaces.append(surface)
+    }
+    return surfaces
 }
 
 @Test func controlClientListsPackagesAndReadsDetailsWithVersionedRequests() async throws {
@@ -1325,6 +1435,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private let cancelOperationData: Data
     private let launchData: Data
     private let terminateData: Data
+    private let openSessionData: Data
+    private let openSessionSurfaces: [IOSurface]
+    private let resizeSessionData: Data
+    private let resizeSessionSurfaces: [IOSurface]
     private let lock = NSLock()
     private var serviceNameValue: String?
     private var brokerRequirementValue: String?
@@ -1349,6 +1463,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var unsubscribeRequestsValue: [Data] = []
     private var launchRequestsValue: [Data] = []
     private var terminateRequestsValue: [Data] = []
+    private var openSessionRequestsValue: [Data] = []
+    private var resizeSessionRequestsValue: [Data] = []
     private var resetRequestsValue: [Data] = []
     private var brokerConnectionsValue = 0
     private var controlConnectionsValue = 0
@@ -1384,7 +1500,11 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         cancelOperationReply: RuntimeCancelOperationControlReply? = nil,
         beginInstallImportedReplyData: Data? = nil,
         launchReply: RuntimeLaunchControlReply? = nil,
-        terminateReply: RuntimeTerminateControlReply? = nil
+        terminateReply: RuntimeTerminateControlReply? = nil,
+        openSessionReply: OpenSessionControlReply? = nil,
+        openSessionSurfaces: [IOSurface] = [],
+        resizeSessionReply: ResizeSessionControlReply? = nil,
+        resizeSessionSurfaces: [IOSurface] = []
     ) throws {
         if let helloFailure {
             helloData = try JSONEncoder().encode(BrokerErrorEnvelope(error: helloFailure))
@@ -1474,6 +1594,20 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         )
         launchData = try JSONEncoder().encode(launchReply ?? defaultLaunchReply)
         terminateData = try JSONEncoder().encode(terminateReply ?? defaultTerminateReply)
+        openSessionData = try JSONEncoder().encode(
+            openSessionReply
+                ?? OpenSessionControlReply(
+                    error: .runtime("runtime.test", message: "No app session is configured for this test.")
+                )
+        )
+        self.openSessionSurfaces = openSessionSurfaces
+        resizeSessionData = try JSONEncoder().encode(
+            resizeSessionReply
+                ?? ResizeSessionControlReply(
+                    error: .runtime("runtime.test", message: "No resize outcome is configured for this test.")
+                )
+        )
+        self.resizeSessionSurfaces = resizeSessionSurfaces
     }
 
     func makeBroker(
@@ -1719,6 +1853,16 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return terminateData
     }
 
+    func openSession(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeSessionXPCReply {
+        lock.withLock { openSessionRequestsValue.append(request) }
+        return RuntimeSessionXPCReply(data: openSessionData, surfaces: openSessionSurfaces)
+    }
+
+    func resizeSession(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeSessionXPCReply {
+        lock.withLock { resizeSessionRequestsValue.append(request) }
+        return RuntimeSessionXPCReply(data: resizeSessionData, surfaces: resizeSessionSurfaces)
+    }
+
     func snapshot() -> Snapshot {
         lock.withLock {
             Snapshot(
@@ -1745,6 +1889,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 unsubscribeRequests: unsubscribeRequestsValue,
                 launchRequests: launchRequestsValue,
                 terminateRequests: terminateRequestsValue,
+                openSessionRequests: openSessionRequestsValue,
+                resizeSessionRequests: resizeSessionRequestsValue,
                 resetRequests: resetRequestsValue,
                 brokerConnections: brokerConnectionsValue,
                 controlConnections: controlConnectionsValue,
@@ -1828,6 +1974,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let unsubscribeRequests: [Data]
         let launchRequests: [Data]
         let terminateRequests: [Data]
+        let openSessionRequests: [Data]
+        let resizeSessionRequests: [Data]
         let resetRequests: [Data]
         let brokerConnections: Int
         let controlConnections: Int

@@ -112,6 +112,8 @@ jobs:
           -configuration Release -jobs 2 -derivedDataPath build/ReleaseDerivedData
           -resultBundlePath build/ci/APKRun-Release.xcresult
           CODE_SIGNING_ALLOWED=NO build
+      - name: Check launcher binary
+        run: scripts/check-launcher.sh build/ReleaseDerivedData/Build/Products/Release/APKRun.app/Contents/Helpers/APKRunLauncher.app
       - name: Check Release bundle
         run: scripts/release/check-release-build.sh build/ReleaseDerivedData/Build/Products/Release/APKRun.app
       - name: Upload build results on failure

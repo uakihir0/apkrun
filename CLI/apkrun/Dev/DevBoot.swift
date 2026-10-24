@@ -50,6 +50,9 @@
             help: "The Guest Agent bundle directory (default: APKRUN_GUEST_DIR, then the app's Resources/guest).")
         var guestDir: String?
 
+        @Flag(name: .long, help: "Boot Android without installing or starting a development Guest Agent.")
+        var noGuestAgent = false
+
         @Option(
             name: .long,
             help: "Guest Agent transport: `adb` (the default) or `vsock`."
@@ -84,11 +87,13 @@
                 userdataBytes: UInt64(userdataGib) * gibibyte,
                 resetInstance: reset,
                 stopWhenReady: stopWhenReady,
-                guestAgentDirectory: DevGuestAgentLocation.directory(
-                    guestDir: guestDir,
-                    environment: ProcessInfo.processInfo.environment,
-                    executable: Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
-                ),
+                guestAgentDirectory: noGuestAgent
+                    ? nil
+                    : DevGuestAgentLocation.directory(
+                        guestDir: guestDir,
+                        environment: ProcessInfo.processInfo.environment,
+                        executable: Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
+                    ),
                 guestTransport: guestTransport
             )
 

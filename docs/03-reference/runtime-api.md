@@ -84,11 +84,11 @@ apkrund sets a requirement on each listener with `setConnectionCodeSigningRequir
 
 ### 2.1 Constants
 
-`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 11}`. Ordering compares `major`, then `minor`.
+`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 13}`. Ordering compares `major`, then `minor`.
 
 ```swift
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
-    public static let current = APIVersion(major: 1, minor: 11)
+    public static let current = APIVersion(major: 1, minor: 13)
     public let major: Int
     public let minor: Int
 }
@@ -110,6 +110,8 @@ Target constants (not in code): `wrapperMajors = [1]` (served on the wrapper end
 | 1.9 | `subscribe`, `unsubscribe`; event-sink handshake; sequenced batches |
 | 1.10 | `packages.installed` and `packages.updated` events |
 | 1.11 | `beginUninstallPackage`; `PackageChange.removed`; `OperationSnapshot.requestFingerprint` |
+| 1.12 | `SessionDescriptor`, frame/session channel callbacks, and IOSurface transfer for `openSession` and `surfacesReplaced` |
+| 1.13 | `resizeSession`; authenticated session geometry changes and replacement IOSurface transfer |
 
 ### 2.2 Rules per endpoint
 
@@ -278,11 +280,12 @@ func runtimeStatus(_ request: Data, reply: @escaping (Data) -> Void)
 func importPackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
 // target: IOSurfaces come back next to the JSON
 func openSession(_ request: Data, reply: @escaping (Data, [IOSurface]?) -> Void)
+func resizeSession(_ request: Data, reply: @escaping (Data, [IOSurface]?) -> Void)
 // target: one-way messages
 func sendInput(_ batch: Data)
 ```
 
-- A built control request is a struct with `header: APIRequestHeader` and its own fields. A built reply is a struct with `result` and `error`, of which exactly one is set.
+- A built control request is a struct with `header: APIRequestHeader` and its own fields. Most built replies carry `result` and `error`, of which exactly one is set. `ResizeSessionControlReply` carries an outcome; only `.applied` includes a result.
 - `APIRequestHeader`: `apiVersion` (`APIVersion`), `operationID` (`UUID`, for log correlation), `clientKind` (`RuntimeClientKind`).
 - Built `RuntimeEventSink` (client-exported): `handshake(reply:)` confirms the peer exported the sink; `deliver(_:reply:)` receives a JSON array of `EventEnvelope`, and the reply acknowledges it (§16.2). Target: `sessionEvent`, `frameReady`, `surfacesReplaced`, `streamEvent`.
 - One-way messages carry no header. The `@objc` method names equal the operation names.
@@ -467,7 +470,7 @@ API 1.10 publishes `packages.installed` and `packages.updated` after a successfu
 |---|---|---|
 | `FileHandle` | client → apkrund | every user-chosen file: imports, update files, image archives, icons, drops, Save to Mac, diagnostics output. The client opens it. Read handles are read with `pread` from offset 0 and the caller's offset is unchanged. Write handles must be empty regular files ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.3) |
 | bookmark `Data` | client → apkrund | folders apkrund must reach later: shared folders, wrapper destinations |
-| `IOSurface` (target) | apkrund → launcher | three per `SurfaceSet`, only in `openSession` and `surfacesReplaced` ([display-and-windowing.md](../02-design/display-and-windowing.md) §5) |
+| `IOSurface` (target) | apkrund → launcher | three per `SurfaceSet`, in `openSession`, applied `resizeSession`, and `surfacesReplaced` ([display-and-windowing.md](../02-design/display-and-windowing.md) §5) |
 | `NSXPCListenerEndpoint` | broker → client | `requestEndpoint` reply |
 
 - File handles travel in a `files:` array; the JSON refers to them by `fileIndex`. An index that does not match returns `runtime.malformedRequest`.
@@ -587,9 +590,10 @@ Target `RuntimeStatus` replaces `RuntimeHostStatus` for `runtimeStatus`. Fields:
 | `launch` (built) | `RuntimeLaunchControlRequest` (`packageID`) → `RuntimeLaunchControlReply` (`result`: `RuntimeLaunchResult`) | C | W | `sessions.*` (target) | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.2 |
 | `terminate` (built) | `RuntimeTerminateControlRequest` (`packageID`) → `RuntimeTerminateControlReply` (`result`: `RuntimeTerminateResult`) | C | U | `sessions.ended` (target) | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.2 |
 | `openSession` (target) | `OpenSessionRequest` → `SessionDescriptor` + `[IOSurface]` | W, L | W | session channel, `sessions.opened` | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.1 |
+| `resizeSession` (target) | `ResizeSessionRequest` → `ResizeSessionControlReply` + `[IOSurface]` when applied | W, L | W | session channel | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.1 |
 | `listSessions` (target) | — → `[SessionSummary]` | C | Q | — | [runtime-daemon.md](../02-design/runtime-daemon.md) §8.6 |
 
-APKRun.app and the CLI never open app sessions. They call `launch`, and the launched process opens the session (ADR-0006). Debug builds can use `APKRUN_TEST_HEADLESS_LAUNCH=1` for a daemon-owned headless session until #69 removes it ([configuration.md](configuration.md) §5.1).
+APKRun.app and the CLI never open app sessions. They call `launch`, and the launched process opens the session (ADR-0006).
 
 - `RuntimeLaunchResult`: `sessionID` (UUID), `packageID`, `state` (`RuntimeSessionPhase`).
 - `RuntimeSessionPhase` (built): `starting`, `booting`, `waitingForPackage`, `launching`, `running`, `ended`, `unknown`.
@@ -602,6 +606,8 @@ APKRun.app and the CLI never open app sessions. They call `launch`, and the laun
 `OpenSessionRequest`: `packageID`, `geometry` (`DisplayGeometry`: `pointSize` (CGSize), `backingScale` (1.0 or 2.0), `zoom` (0.75…2.0)), `screenSize` (CGSize, points), `launchTiming` (`processStart`, `requestSent`: UInt64 nanoseconds, optional).
 
 `SessionDescriptor`: `sessionID`, `displayID`, `windowPrefs` (`resizable`, `alwaysOnTop`, `zoom`), `inputPrefs` (§14.2), `windowMode` (`secondaryDisplay` or `primaryDisplayCompatibility`), `state` (`SessionPhase`), `surfaces` (`SurfaceSet`: `generation` UInt32, `surfaceCount` 3, `pixelSize`, `densityDpi`).
+
+`SessionResizeOutcome`: `.applied` includes the updated descriptor and exactly three replacement IOSurfaces; `.unchanged`, `.rejected`, and `.stateUncertain` include neither. A catalog-backed rejection may instead be returned through `error`.
 
 Server steps ([runtime-daemon.md](../02-design/runtime-daemon.md) §7.1):
 
@@ -632,7 +638,7 @@ Client → apkrund:
 | `focusChanged` | `(Bool)` | 1 | key window; `false` also sends `cancelAll` ([input.md](../02-design/input.md) §7.2) |
 | `sendInput` | `InputBatch` | 1 | §7 |
 | `sendText` | `WireImeTextEvent` | 1 | §7 |
-| `resize` | `DisplayGeometry` → `RuntimeEmpty` | U | after live resize, backing-scale or zoom change; new surfaces via `surfacesReplaced` |
+| `resizeSession` | `ResizeSessionRequest` → outcome; `.applied` returns the updated descriptor and three replacement `IOSurface`s | W | after live resize, backing-scale, or zoom change |
 | `closeSession` | `CloseSessionRequest` (`policy`: `stop`, `keepRunning`, or nil for `window.closeBehavior`) → `RuntimeEmpty` | U | window closed; session goes to `ended(userClosed)` |
 | `pushClipboard` | `ClipItem` → `ClipAck` | U (500 ms) | §11.2 |
 | `clipboardWritten` | `ClipboardWritten` | 1 | §11.2 |
@@ -662,7 +668,7 @@ apkrund → client (`RuntimeEventSink`): `frameReady(generation, surfaceIndex, f
 | `openSession` (target) | `runtime.packageNotInstalled`, `store.operationInProgress`, `runtime.bootLoop`, `runtime.notProvisioned`, `runtime.displayPoolExhausted`, `runtime.displayAttachFailed`, `runtime.primaryDisplayBusy`, `runtime.launchTimedOut`, `runtime.launchFailed`, `runtime.guestAgentUnavailable`, and the boot errors of §5.5. Later failures arrive as `ended(error(…))` |
 | `launch` | `runtime.packageNotInstalled`, `runtime.launchTimedOut` (for example a damaged wrapper, screen D), `runtime.launchFailed`, `wrapper.launcherTemplateInvalid` |
 | `terminate` | `runtime.packageNotInstalled` |
-| `resize` (target) | `runtime.displayReconfigureFailed`, `runtime.displayLost` |
+| `resizeSession` (target) | `runtime.displayReconfigureFailed`, `runtime.displayLost`; an uncertain rollback returns `.stateUncertain` |
 | `restartApp` (target) | `runtime.launchFailed`, `runtime.launchTimedOut`, `runtime.guestAgentUnavailable` |
 | `frameStatistics` (target) | `runtime.developerModeRequired` |
 

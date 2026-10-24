@@ -1,4 +1,5 @@
 @preconcurrency import Foundation
+import IOSurface
 
 /// The major and minor version used by RuntimeAPI compatibility checks.
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
@@ -7,8 +8,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.4 adds package queries; 1.5 adds runtime reset; 1.6 adds one-request runtime restart;
     /// 1.7 adds daemon-backed package import and install; 1.8 adds asynchronous install handles
     /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
-    /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints.
-    public static let current = APIVersion(major: 1, minor: 11)
+    /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
+    /// 1.12 adds the IOSurface app-session channel; 1.13 adds session geometry changes.
+    public static let current = APIVersion(major: 1, minor: 13)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -603,6 +605,14 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func launch(_ request: Data, reply: @escaping (Data) -> Void)
     /// Terminates an installed package session.
     func terminate(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Opens the caller's single app session and returns its descriptor plus the three initial IOSurfaces.
+    @objc optional func openSession(_ request: Data, reply: @escaping (Data, [IOSurface]?) -> Void)
+    /// Changes display geometry for the session bound to this connection and returns replacement IOSurfaces.
+    @objc optional func resizeSession(_ request: Data, reply: @escaping (Data, [IOSurface]?) -> Void)
+    /// Reports that a frame was committed by Core Animation.
+    @objc optional func frameDisplayed(_ generation: UInt32, frameSeq: UInt64)
+    /// Reports whether the app window is visible.
+    @objc optional func visibilityChanged(_ visible: Bool)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.
@@ -611,6 +621,17 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func handshake(reply: @escaping (Bool) -> Void)
     /// Delivers a JSON array of event envelopes. The client replies after decoding the batch.
     func deliver(_ batch: Data, reply: @escaping () -> Void)
+    /// Delivers a frame that is ready for presentation in the caller's app session.
+    @objc optional func frameReady(
+        _ generation: UInt32,
+        surfaceIndex: Int,
+        frameSeq: UInt64,
+        presentationTime: UInt64
+    )
+    /// Asks the launcher to close its current window before another client takes ownership.
+    @objc optional func sessionCloseRequested(reply: @escaping () -> Void)
+    /// Replaces the session's surface pool; the IOSurfaces are carried directly in the XPC argument.
+    @objc optional func surfacesReplaced(_ message: Data, surfaces: [IOSurface], reply: @escaping () -> Void)
 }
 
 /// Runtime package operations. Package identity is resolved by the runtime before launch.

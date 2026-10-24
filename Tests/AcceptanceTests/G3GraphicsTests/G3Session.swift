@@ -12,8 +12,6 @@ struct G3Inputs {
     let bundle: URL
     /// HelloGL's release APK, signed with the pinned fixture key.
     let helloGL: URL
-    /// The Guest Agent bundle directory (APKRUN_GUEST_DIR of the CLI).
-    let guestDirectory: URL
     /// The virgl runtime directory (APKRUN_VIRGL_RUNTIME_PATH of the CLI).
     let virglRuntime: URL
     /// The Android SDK that holds adb (ANDROID_HOME of the CLI).
@@ -56,7 +54,6 @@ struct G3Inputs {
             cli: try path("APKRUN_G3_CLI"),
             bundle: bundle,
             helloGL: try path("APKRUN_G3_APK"),
-            guestDirectory: try path("APKRUN_G3_GUEST_DIR"),
             virglRuntime: try path("APKRUN_G3_VIRGL_RUNTIME"),
             androidHome: try path("APKRUN_G3_ANDROID_HOME"),
             artifacts: try path("APKRUN_G3_ARTIFACTS"),
@@ -185,7 +182,6 @@ final class G3Session: @unchecked Sendable {
         }
         environment["HOME"] = inherited["HOME"]
         environment["APKRUN_HOME"] = home.path
-        environment["APKRUN_GUEST_DIR"] = inputs.guestDirectory.path
         environment["APKRUN_VIRGL_RUNTIME_PATH"] = inputs.virglRuntime.path
         environment["ANDROID_HOME"] = inputs.androidHome.path
         return environment
@@ -205,8 +201,9 @@ final class G3Session: @unchecked Sendable {
         }
     }
 
-    /// Starts `apkrun dev boot --gpu virgl --window --stats --console`. Its standard output goes to `boot.out`, and
-    /// its standard error is collected and written to `boot.err`.
+    /// Starts `apkrun dev boot --gpu virgl --window --stats --console --no-guest-agent`. The composed image already
+    /// owns its persistent Guest Agent; this graphics check uses developer ADB. Its standard output goes to
+    /// `boot.out`, and its standard error is collected and written to `boot.err`.
     func startBoot() throws {
         let outURL = inputs.artifacts.appendingPathComponent("boot.out")
         let errURL = inputs.artifacts.appendingPathComponent("boot.err")
@@ -216,7 +213,9 @@ final class G3Session: @unchecked Sendable {
         let collector = G3LineCollector(file: errFile)
         let process = Process()
         process.executableURL = inputs.cli
-        process.arguments = ["dev", "boot", "--gpu", "virgl", "--window", "--stats", "--console"]
+        process.arguments = [
+            "dev", "boot", "--gpu", "virgl", "--window", "--stats", "--console", "--no-guest-agent",
+        ]
         process.environment = childEnvironment
         process.standardOutput = try FileHandle(forWritingTo: outURL)
         let errorPipe = Pipe()

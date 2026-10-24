@@ -9,6 +9,8 @@ verify_artifacts="$repo_root/scripts/tools/verify-gate-artifacts.sh"
 verify_host="$repo_root/scripts/tools/verify-test-host-directory.sh"
 verify_composed_bundle="$repo_root/scripts/tools/verify-composed-image-bundle.py"
 gate_script="$repo_root/scripts/run-gate.sh"
+g3_session="$repo_root/Tests/AcceptanceTests/G3GraphicsTests/G3Session.swift"
+test_host_plist="$repo_root/Tests/IntegrationTests/Host/Info.plist"
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/apkrun-gate-artifacts.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
@@ -163,6 +165,15 @@ if ! grep -qxF 'unset APKRUN_TEST_ANDROID_BUNDLE APKRUN_G3_BUNDLE APKRUN_G3_REQU
     fail "run-gate.sh does not clear inherited bundle overrides before building test hosts"
 fi
 printf 'PASS run-gate.sh clears inherited bundle overrides before building test hosts\n'
+if ! grep -Fq '"--no-guest-agent"' "$g3_session"; then
+    fail "the G3 graphics run does not preserve the composed image's Guest Agent"
+fi
+if grep -Fq 'scripts/build-guest.sh' "$gate_script" \
+    || grep -Fq 'APKRUN_G3_GUEST_DIR' "$gate_script" "$g3_session" "$test_host_plist"
+then
+    fail "the G3 graphics run still stages a development Guest Agent"
+fi
+printf 'PASS G3 disables development Guest Agent staging\n'
 
 line_of() {
     grep -n "$1" "$gate_script" | head -1 | cut -d: -f1

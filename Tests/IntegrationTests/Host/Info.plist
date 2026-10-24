@@ -32,8 +32,6 @@
     <string>$(APKRUN_G3_REQUIRE_COMPOSED)</string>
     <key>APKRUN_G3_APK</key>
     <string>$(APKRUN_G3_APK)</string>
-    <key>APKRUN_G3_GUEST_DIR</key>
-    <string>$(APKRUN_G3_GUEST_DIR)</string>
     <key>APKRUN_G3_VIRGL_RUNTIME</key>
     <string>$(APKRUN_G3_VIRGL_RUNTIME)</string>
     <key>APKRUN_G3_ANDROID_HOME</key>

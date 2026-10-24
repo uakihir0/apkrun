@@ -174,11 +174,11 @@ scripts/build-test-initramfs.sh
 # run depends on disks left by an earlier build.
 scripts/build-test-android-disks.sh
 if [[ "$gate" == G3 ]]; then
-    # The Guest Agent bundle, HelloGL, and the Debug CLI with the TestReadback trait (graphics.md §7).
-    # Each is built from this clean checkout. The files the test host reads are copied under the shared test directory,
-    # outside ~/Documents, so the test host can read them without a file-access prompt (as G2 does for its bundle).
+    # HelloGL and the Debug CLI with the TestReadback trait (graphics.md §7).
+    # The composed image owns its persistent Guest Agent; G3 boots without staging or installing a second agent.
+    # The files the test host reads are copied under the shared test directory, outside ~/Documents, so the test host
+    # can read them without a file-access prompt (as G2 does for its bundle).
     export ANDROID_HOME="$g3_android_home"
-    scripts/build-guest.sh
     scripts/build-fixtures.sh --app HelloGL
     SRCROOT="$repo_root" scripts/build/stamp-commit.sh
     SRCROOT="$repo_root" \
@@ -191,9 +191,8 @@ if [[ "$gate" == G3 ]]; then
         scripts/build/embed-cli.sh
     staging="$APKRUN_TEST_LINUX_DIR/g3-staging"
     rm -rf "$staging"
-    mkdir -p "$staging/cli" "$staging/guest" "$staging/android-sdk"
+    mkdir -p "$staging/cli" "$staging/android-sdk"
     cp "$gate_dir/products/Resources/bin/apkrun" "$staging/cli/apkrun"
-    cp Guest/build/out/apkrun-guest.apk Guest/build/out/apkrun-guest.json "$staging/guest/"
     cp -RL "$g3_virgl" "$staging/virgl-runtime"
     cp -R "$g3_android_home/platform-tools" "$staging/android-sdk/platform-tools"
     cp Tests/Fixtures/AndroidApps/out/HelloGL.apk "$staging/HelloGL.apk"
@@ -203,7 +202,6 @@ if [[ "$gate" == G3 ]]; then
         "APKRUN_G3_BUNDLE=$g3_bundle"
         "APKRUN_G3_REQUIRE_COMPOSED=$g3_require_composed"
         "APKRUN_G3_APK=$staging/HelloGL.apk"
-        "APKRUN_G3_GUEST_DIR=$staging/guest"
         "APKRUN_G3_VIRGL_RUNTIME=$staging/virgl-runtime"
         "APKRUN_G3_ANDROID_HOME=$staging/android-sdk"
         "APKRUN_G3_ARTIFACTS=$APKRUN_TEST_LINUX_DIR/g3-artifacts"
@@ -212,7 +210,7 @@ if [[ "$gate" == G3 ]]; then
         printf 'cli_sha256: %s\n' "$(shasum -a 256 "$staging/cli/apkrun" | awk '{ print $1 }')"
         printf 'cli_commit: %s\n' "$(sed -n 's/^#define APKRUN_GIT_COMMIT \(.*\)$/\1/p' "$repo_root/build/generated/BuildStamp.h")"
         printf 'hellogl_apk_sha256: %s\n' "$(shasum -a 256 "$staging/HelloGL.apk" | awk '{ print $1 }')"
-        printf 'guest_apk_sha256: %s\n' "$(shasum -a 256 "$staging/guest/apkrun-guest.apk" | awk '{ print $1 }')"
+        printf 'guest_agent: image-managed; CLI provisioning disabled\n'
         printf 'virgl_runtime: %s\n' "$g3_virgl"
         printf 'android_sdk: %s\n' "$g3_android_home"
     } >> "$report"

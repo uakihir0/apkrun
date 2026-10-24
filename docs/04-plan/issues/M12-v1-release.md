@@ -260,12 +260,42 @@ Several tasks share files: `errors.json`, the String Catalogs, `Daemon/apkrund/`
 
 ---
 
+## #120 Release APKRun image
+
+| Field | Value |
+|---|---|
+| Milestone | M12 (v1.0) |
+| Depends on | #36 |
+| Design | [ADR-0019](../../01-architecture/decisions/0019-composed-development-image.md); [android-image.md](../../02-design/android-image.md) §11.4, §11.6; [build-system.md](../../05-development/build-system.md) §9 |
+| Code | `scripts/aosp/`; `Guest/product/`; `Images/tools/apkrun_image/`; `scripts/check-sepolicy.sh` |
+
+**Goal.** A `user` APKRun image is built from source and signed with APKRun's own platform and release keys. It contains no prebuilt stock build, and it passes the suites that the composed image passes.
+
+**Out of scope.** Publishing and the feed (#88). Image migration (#59).
+
+**Steps.**
+1. **Route.** Choose between the AOSP product build ([android-image.md](../../02-design/android-image.md) §11.6) and re-signing the CI target files with `sign_target_files_apks`. Record the choice in an ADR. **Check:** the ADR is accepted.
+2. **Builder.** Script the chosen route on its Linux machine (`scripts/aosp/`), with pinned inputs (R-14). **Check:** a `userdebug` build without APKRun files yields an image zip.
+3. **Product.** Carry `Guest/product/`, including the CIL policy, into the build. `scripts/check-sepolicy.sh` rejects `permissive` in `user` builds. **Check:** the `userdebug` build matches the composed image in the reference diff.
+4. **Release signing.** Sign with the APKRun keys, and settle OQ-36. **Check:** a `user` image boots with the chosen AVB state.
+
+**Tests.**
+- T2: AndroidCustom on the `userdebug` and `user` images.
+- T3: G2–G6 on the `user` image; the release-candidate boot.
+
+**Done when.**
+- The image is built reproducibly from the pinned inputs, and `provenance` records them (FR-IMG-05).
+- No AOSP test key signs any part of the `user` image.
+- AndroidCustom and G2–G6 pass on it, and OQ-36 is closed.
+
+---
+
 ## #94 Legal and licensing compliance
 
 | Field | Value |
 |---|---|
 | Milestone | M12 (v1.0) |
-| Depends on | #21, #36 |
+| Depends on | #21, #120 |
 | Design | [legal-and-licensing.md](../../05-development/legal-and-licensing.md); [build-system.md](../../05-development/build-system.md) §6.1–§6.3, §6.8, §11; [android-image.md](../../02-design/android-image.md) §2.3, §10, §11; [runtime-image-manifest.md](../../03-reference/runtime-image-manifest.md) §4.2 |
 | Code | `ThirdParty/ThirdParty.lock.json`, `scripts/release/generate-notices.py`, `scripts/check-licenses.sh`, `scripts/release/check-release-build.sh` (notices row), `Apps/APKRun/` (Help menu item), `Guest/product/` (image notices), `Images/tools/` (bundle notice file), `docs/05-development/legal-and-licensing.md` |
 

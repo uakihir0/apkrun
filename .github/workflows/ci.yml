@@ -30,6 +30,36 @@ jobs:
       - name: Run repository checks
         run: scripts/ci/run-checks.sh
 
+  test-vsockd:
+    name: test-vsockd
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal --component clippy --component rustfmt --target aarch64-linux-android
+      - name: Run Rust tests and checks
+        working-directory: Guest/vsockd
+        run: |
+          cargo test --locked
+          cargo test --locked --features vsock-loopback --no-run
+          cargo clippy --locked --all-targets -- -D warnings -D clippy::undocumented_unsafe_blocks -D clippy::unwrap_used
+          cargo clippy --locked --features vsock-loopback --all-targets -- -D warnings -D clippy::undocumented_unsafe_blocks -D clippy::unwrap_used
+          cargo clippy --locked --target aarch64-linux-android --all-targets -- -D warnings -D clippy::undocumented_unsafe_blocks -D clippy::unwrap_used
+          cargo fmt --all --check
+      - name: Run AF_VSOCK loopback test when supported
+        working-directory: Guest/vsockd
+        shell: bash
+        run: |
+          if [[ -d /sys/module/vsock_loopback ]] || sudo modprobe vsock_loopback; then
+            cargo test --locked --features vsock-loopback -- --ignored vsock_loopback
+          else
+            echo "::notice::The runner kernel does not provide vsock_loopback; run the documented T1 command on a Linux host with AF_VSOCK loopback support."
+          fi
+
   codegen:
     name: codegen
     runs-on: xcode-27
@@ -92,6 +122,8 @@ jobs:
         run: scripts/build-third-party.sh virgl-runtime
       - name: Check build environment
         run: scripts/bootstrap --check
+      - name: Build Guest Agent
+        run: scripts/build-guest.sh
       - name: Generate Xcode project
         run: scripts/generate-project.sh
       - name: Build Swift package
@@ -209,6 +241,10 @@ jobs:
         run: |
           python3.12 -m venv Images/tools/.venv
           Images/tools/.venv/bin/python -m pip install -e 'Images/tools[test]'
+      - name: Build the pinned FEC host tool
+        run: scripts/build-fec-tool.sh
+      - name: Verify the pinned FEC host tool
+        run: python3.12 scripts/tests/test_fec_tooling_build.py
       - name: Check committed Android image manifests
         run: |
           for manifest in Images/manifests/*/android-image.json; do

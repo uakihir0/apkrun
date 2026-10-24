@@ -224,7 +224,10 @@ public actor RuntimeHost {
                 executable: executableURL
             )
             do {
-                let guestAgent = try GuestAgentBundle.load(directory: guestDirectory)
+                let guestAgent = try Self.loadGuestAgentBundle(
+                    configuration: buildInfo.configuration,
+                    directory: guestDirectory
+                )
                 let runtimeSupervisor = RuntimeSupervisor(
                     image: image,
                     instanceStore: instanceStore,
@@ -251,6 +254,18 @@ public actor RuntimeHost {
         hostState = startupFailure == nil ? "running" : "degraded"
         logger.notice("Daemon startup completed with host state \(hostState, .public)")
         completeStartup()
+    }
+
+    /// Development builds install their bundled agent into stock images. Release images are
+    /// expected to contain the platform-signed Guest Agent, so release hosts must not load a test-signed APK.
+    static func loadGuestAgentBundle(
+        configuration: BuildConfiguration,
+        directory: URL
+    ) throws(GuestAgentFailure) -> GuestAgentBundle? {
+        guard configuration == .debug else {
+            return nil
+        }
+        return try GuestAgentBundle.load(directory: directory)
     }
 
     /// Boots Android on demand. An explicit start is allowed after the crash-loop guard activates.

@@ -1,0 +1,2 @@
+(typepermissive apkrun_guest_app)
+(typepermissive apkrun_vsockd)

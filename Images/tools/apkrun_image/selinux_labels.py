@@ -104,39 +104,81 @@ def _candidates(rules: Sequence[ContextRule], path: str, kind: str) -> list[Cont
     return matches
 
 
+def partition_path(erofs_path: str, mount: str = VENDOR_MOUNT) -> str:
+    """Return the device path for one partition-local EROFS path."""
+    if not mount.startswith("/") or mount == "/" or mount.endswith("/"):
+        raise ContextsError(f"{mount!r}: partition mount must be a normalized absolute path.")
+    if not erofs_path.startswith("/") or "\\" in erofs_path or "\0" in erofs_path:
+        raise ContextsError(f"{erofs_path!r}: EROFS path must be absolute.")
+    if erofs_path == "/":
+        return mount
+    return mount + erofs_path
+
+
 def vendor_path(erofs_path: str) -> str:
     """Return the path a file has on the device, for an EROFS path of the vendor partition."""
-    return VENDOR_MOUNT if erofs_path == "/" else VENDOR_MOUNT + erofs_path
+    return partition_path(erofs_path)
 
 
-def label_for(rules: Sequence[ContextRule], erofs_path: str, kind: str) -> str | None:
-    """Return the label that the contexts give a vendor file, or None when no rule matches."""
-    matches = _candidates(rules, vendor_path(erofs_path), kind)
+def label_for_partition(
+    rules: Sequence[ContextRule],
+    erofs_path: str,
+    kind: str,
+    *,
+    mount: str,
+) -> str | None:
+    """Return the winning file-context label for a partition-local EROFS path."""
+    path = partition_path(erofs_path, mount)
+    matches = _candidates(rules, path, kind)
     if not matches:
-        raise ContextsError(f"{vendor_path(erofs_path)}: no file context matches this file.")
+        raise ContextsError(f"{path}: no file context matches this file.")
     winner = max(matches, key=lambda rule: (rule.stem, rule.order))
     return winner.context
 
 
-def last_rule_label(rules: Sequence[ContextRule], erofs_path: str, kind: str) -> str | None:
-    """Return the label of the last matching rule, which must agree with `label_for`."""
-    matches = _candidates(rules, vendor_path(erofs_path), kind)
+def last_rule_label_for_partition(
+    rules: Sequence[ContextRule],
+    erofs_path: str,
+    kind: str,
+    *,
+    mount: str,
+) -> str | None:
+    """Return the label from the last matching rule for one partition-local path."""
+    path = partition_path(erofs_path, mount)
+    matches = _candidates(rules, path, kind)
     if not matches:
-        raise ContextsError(f"{vendor_path(erofs_path)}: no file context matches this file.")
+        raise ContextsError(f"{path}: no file context matches this file.")
     return matches[-1].context
 
 
-def check_reproduces(rules: Sequence[ContextRule], entries: Mapping[str, Entry]) -> int:
+def label_for(rules: Sequence[ContextRule], erofs_path: str, kind: str) -> str | None:
+    """Return the label that the contexts give a vendor file, or None when no rule matches."""
+    return label_for_partition(rules, erofs_path, kind, mount=VENDOR_MOUNT)
+
+
+def last_rule_label(rules: Sequence[ContextRule], erofs_path: str, kind: str) -> str | None:
+    """Return the label of the last matching rule, which must agree with `label_for`."""
+    return last_rule_label_for_partition(rules, erofs_path, kind, mount=VENDOR_MOUNT)
+
+
+def check_reproduces(
+    rules: Sequence[ContextRule],
+    entries: Mapping[str, Entry],
+    *,
+    mount: str = VENDOR_MOUNT,
+) -> int:
     """Check that the contexts give every stock entry its label; return how many were checked."""
     mismatches: list[str] = []
     checked = 0
     for path in sorted(entries):
         entry = entries[path]
         expected = entry.label
-        actual = label_for(rules, path, entry.kind)
+        actual = label_for_partition(rules, path, entry.kind, mount=mount)
         checked += 1
         if actual != expected:
-            mismatches.append(f"{vendor_path(path)}: stock {expected!r}, contexts {actual!r}")
+            mismatches.append(
+                f"{partition_path(path, mount)}: stock {expected!r}, contexts {actual!r}"
+            )
     if mismatches:
         raise ContextsError(
             f"the file contexts give {len(mismatches)} stock labels a different value; "

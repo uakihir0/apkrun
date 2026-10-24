@@ -115,13 +115,13 @@ Each check is a script that runs without arguments. `scripts/ci/run-checks.sh`, 
 | `scripts/check-logging.sh` | `scripts/tools/check_logging.py`: no `os.Logger`, `Logger(`, `print(`, `NSLog`, `os_log` outside DiagnosticsCore; every `APKLogger` interpolation has a privacy argument and no `Sensitive` value | #62 | yes |
 | `scripts/check-compile-fail.sh` | sources in `Tests/Fixtures/compile-fail/` must fail to compile. Needs Apple silicon | #62 | no |
 | `scripts/check-todos.sh` | `scripts/tools/check_todos.py`: each `TODO` or `FIXME` in a tracked source file is followed directly by `(#NNN)` (NFR-DEV-04) | #63 | yes |
-| `scripts/check-format.sh` | `swift-format lint --strict` (`.swift-format`, `.swift-format-tests`); `ktfmtCheck`; `cargo fmt --check` for `Guest/vsockd` (planned, #35); `ruff format --check` for `Images/tools`. `--fix` formats ([coding-conventions.md](coding-conventions.md) §2) | #63 | yes |
+| `scripts/check-format.sh` | `swift-format lint --strict` (`.swift-format`, `.swift-format-tests`); `ktfmtCheck`; `cargo fmt --check` for `Guest/vsockd`; `ruff format --check` for `Images/tools`. `--fix` formats ([coding-conventions.md](coding-conventions.md) §2) | #63 | yes |
 | `scripts/check-lock.sh` | `ThirdParty/ThirdParty.lock.json` and patches; Swift pins against `Package.resolved` and `project.yml` (§6.1). `--apply` applies patches (§6.2) | #63; `--apply` #21 | yes |
 | `scripts/check-protos.sh` | `buf lint` on `Packages/GuestProtocol` | #34 | yes |
 | `scripts/tests/run.sh` | self-tests of `scripts/` | #63 | yes |
 | `scripts/check-raw-adb.sh` | no `adb shell` or `pm ` outside the allowlist: `ADBStoreAgentChannel.swift`, `AdbClient.swift`, tests, `scripts/dev/`, `Tests/Compatibility/`, `Experiments/`, `Images/tools/reference/`, generated protobuf ([test-strategy.md](../04-plan/test-strategy.md) §3.3) | #28 | no |
 | `scripts/check-launcher.sh` | built APKRunLauncher: `otool -L` lists only `/System/Library` and `/usr/lib`; `lipo -archs` is `arm64`; minimum OS 27.0 | #69 (planned) | no |
-| `scripts/check-sepolicy.sh` | release (`user`) product sources declare no permissive domain (R-13) | #36 (planned) | no |
+| `scripts/check-sepolicy.sh` | release (`user`) product sources declare no permissive domain (R-13) | #120 (planned) | no |
 | `scripts/check-fixtures.sh` | APKs in `Tests/Fixtures/apks/` are newer than their sources; no committed fixture over 10 MiB (§8) | #42 (planned) | no |
 | `scripts/check-compatibility-db.sh` | `compatibility.json` against `compatibility.schema.json` ([diagnostics.md](../02-design/diagnostics.md) §10) | #91 (planned) | no |
 | `scripts/check-licenses.sh` | SPDX license and committed `licenseFiles` for every lock entry, `Package.resolved`, and the Gradle and Cargo locks; allowed licenses per `ships` ([legal-and-licensing.md](legal-and-licensing.md) §4); the `Derived from RiftVM` marker names the pin ([legal-and-licensing.md](legal-and-licensing.md) §3.1) | #94 (planned) | no |
@@ -222,7 +222,7 @@ The lock has `"schemaVersion": 1` and a `components` array (76 entries). The `vi
 |---|---|
 | `name` | unique; also the directory under `ThirdParty/patches/` |
 | `group` | build unit: `virgl-runtime`, `guest-mesa`, `test-linux`, `image-tooling`, `swift-runtime`, `fixture-tooling`; `graphics-reference` is reference only and not a build unit |
-| `kind` | `source` (VCS commit), `prebuilt` (downloaded archive), `vendored` (files copied into the tree), `swiftpm`, `gradle`, `cargo` (pinned by their own lock files; listed for licenses; none yet) |
+| `kind` | `source` (VCS commit), `prebuilt` (downloaded archive), `vendored` (files copied into the tree), `swiftpm`, `gradle`, `cargo` (pinned by their own lock files; listed for licenses) |
 | `repository`, `commit` | upstream URL and full commit hash, for `source` and `vendored` entries |
 | `url`, `sha256` | download URL and hash of `prebuilt`. A mismatch fails the build |
 | `files` | `vendored`: each repository-relative `path` with `sha256` (§6.4) |
@@ -288,9 +288,11 @@ scripts/build-third-party.sh virgl-runtime
 | swift-protobuf, swift-argument-parser, ZIPFoundation | swiftpm | app | exact versions in `Package.swift` (ZIPFoundation: ADR-0017) |
 | Sparkle 2 | swiftpm (planned, #58) | app | exact version in `project.yml` ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.2) |
 | Kotlin stdlib, kotlinx-coroutines, protobuf-javalite | gradle (planned) | image and app (`Resources/guest/`) | versions in `Guest/gradle/libs.versions.toml`; resolved in `Guest/<module>/gradle.lockfile` (`./gradlew -p Guest dependencies --write-locks`) |
-| libc, log, android_logger crates | cargo (planned, #35) | image | `Guest/vsockd/Cargo.lock`; the product uses AOSP `external/rust/crates` |
+| libc, log, android_logger crates | cargo | image | `Guest/vsockd/Cargo.lock`; the product uses AOSP `external/rust/crates` |
 | Guest Mesa `mesa` 26.1.8, NDK r28c, Ninja, Bison, Flex, m4, Meson, mako, MarkupSafe, packaging, libdrm 2.4.123 | source or prebuilt, group `guest-mesa` | image (Mesa); tooling (rest) | built by `scripts/guest/build-mesa-android.sh` ([decisions/0018-guest-mesa-ndk-build.md](../01-architecture/decisions/0018-guest-mesa-ndk-build.md)) |
 | bundletool 1.18.3 (`bundletool-all`) | prebuilt, group `fixture-tooling` | tooling | App Bundle fixtures (§8.1) |
+| AOSP `system/extras/verity/fec` and `external/fec` | source, group `image-tooling` | tooling | `scripts/build-fec-tool.sh` builds the pinned macOS ARM64 `fec` host tool used to regenerate AVB FEC when composing `system_ext` (#36) |
+| SELinux `secilc` 3.11 at `2233a23a4d4f1bf29054037babec13f30d038e65`, Flex 2.6.4, m4 1.4.20 | source or prebuilt, group `image-tooling` | tooling | `scripts/build-selinux-tools.sh` builds CIL-enabled static `libsepol` and an arm64 host `secilc`; `--check` validates pins and host tools. The separate prebuilt `libsepol` 3.11 remains CIL-disabled |
 | libsepol 3.11, erofs-utils 1.9.4, `aosp-avbtool`, `aosp-mkbootimg` | prebuilt and vendored, group `image-tooling` | tooling | image tooling; §6.4 |
 
 The lock is the authority for versions and hashes.
@@ -300,6 +302,8 @@ The lock is the authority for versions and hashes.
 | Cache | Key | Where |
 |---|---|---|
 | `virgl-runtime` outputs | lock hash + environment hash | `ThirdParty/out/virgl-runtime/<lock hash>-<environment hash>/` |
+| FEC host tool | source-lock hash + build-script hash + macOS arm64 toolchain hash | `ThirdParty/out/fec/bin/fec` |
+| `secilc` host tool | SELinux/Flex/m4 lock inputs + builder sources + macOS arm64 toolchain hash | `ThirdParty/out/selinux-tools/<input hash>-<environment hash>/`; source at `ThirdParty/out/src/selinux-cil/<commit>`; pinned Flex/m4 archives and host tools under `ThirdParty/out/selinux-tools-work/cache/` |
 | third-party sources | commit | `ThirdParty/out/src/` |
 | patched sources | patch-set SHA-256 | `ThirdParty/out/patched-src/` |
 | pinned tools | version and hash | `build/tools/` |
@@ -341,23 +345,27 @@ ls Guest/build/out/               # apkrun-guest.apk  apkrun-guest.json
 - `Guest/settings.gradle.kts` includes `protocol`, `agentruntime`, and `guestd`. The Store Agent module `APKRunStore` (output `apkrun-store.apk`) is planned (#37; [guest-components.md](../02-design/guest-components.md) §2).
 - `minSdk` 34, `compileSdk` 37, `targetSdk` 37, Java and Kotlin JVM target 17. Dependencies: Kotlin stdlib, kotlinx-coroutines, and protobuf-javalite only. Release builds compile out debug logging through `BuildConfig.DEBUG`.
 - `versionCode = major × 1,000,000 + minor × 1,000 + patch` of `MARKETING_VERSION`; `versionName` is that plus the short Git revision. `scripts/build-guest.sh --version-code N --out DIR` builds another versionCode for the reinstall test. `apkrun-guest.json` is the record the host reads before install ([guest-components.md](../02-design/guest-components.md) §3.1).
-- Signing: the test key `Tests/Fixtures/signing/test-guest-dev.jks` (alias `apkrun-test-guest-dev`). The script fails unless the signer's certificate SHA-256 is `c58db702f39e9b809ad166d173f165478b4c7cb718d4d0cc89ebe8956438c900`. On the custom image the product re-signs with the platform key (planned, #36).
-- `scripts/build/embed-guest.sh` copies both files to `APKRun.app/Contents/Resources/guest/`, the development copy for stock images.
+- Signing: the test key `Tests/Fixtures/signing/test-guest-dev.jks` (alias `apkrun-test-guest-dev`). The script fails unless the signer's certificate SHA-256 is `c58db702f39e9b809ad166d173f165478b4c7cb718d4d0cc89ebe8956438c900`. `--for-aosp` keeps that development signature and writes the persistent APK to `Guest/product/prebuilt/`. `--platform-test-key` re-signs only that prebuilt with `aosp-test-platform.pk8` and `aosp-test-platform.x509.pem`, then verifies the certificate SHA-256 `c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8` (#36; [android-image.md](../02-design/android-image.md) §11.5). The flag cannot be combined with `--out`. The release image uses the APKRun platform key (#120).
+- `scripts/build/embed-guest.sh` copies both files to Debug app bundles at `APKRun.app/Contents/Resources/guest/`, the development copy for stock images. Release app bundles omit the test-signed APK; once #120 provides the release image, the release host will use its platform-signed agent.
 
-### 7.2 apkrun_vsockd (Rust, planned)
+### 7.2 apkrun_vsockd (Rust)
 
-The crate `Guest/vsockd` is planned (#35):
+The crate `Guest/vsockd` contains the host-testable port table and bridge implementation:
 
 ```bash
 cd Guest/vsockd
 cargo ndk -t arm64-v8a build --release     # target/aarch64-linux-android/release/apkrun_vsockd
-cargo test                                 # T0 on the host
-cargo clippy --all-targets -- -D warnings
+cargo test --locked                        # T0 on the host
+cargo test --locked --features vsock-loopback --no-run # compile the T1 harness
+cargo clippy --locked --all-targets -- -D warnings -D clippy::undocumented_unsafe_blocks -D clippy::unwrap_used
+cargo clippy --locked --target aarch64-linux-android --all-targets -- -D warnings -D clippy::undocumented_unsafe_blocks -D clippy::unwrap_used
+cargo fmt --all --check
 ```
 
 - Development builds use cargo-ndk with the pinned NDK ([environment-setup.md](environment-setup.md) §2.6); they serve the #35 validation, pushing the binary with `adb` to a userdebug image.
+- `scripts/build-vsockd.sh` checks the crate's Rust, cargo-ndk, and NDK pins, builds with `--locked`, and stages the executable at `Guest/product/prebuilt/apkrun_vsockd` for the composed image. `--check` validates the pins without building.
 - The product compiles the same sources with Soong (§9). The crate uses only `std`, `libc`, `log`, and `android_logger`, all in AOSP `external/rust/crates`.
-- The `vsock_loopback` test is T1, in the planned `test-linux` job on `ubuntu-latest` ([test-strategy.md](../04-plan/test-strategy.md) §2.3): `sudo modprobe vsock_loopback && cargo test --features vsock-loopback -- --ignored vsock_loopback`. If the hosted kernel lacks the module, the test moves to the `apkrun-aosp` runner (#36).
+- The ignored `vsock_loopback` test is T1 and exercises production peer dispatch and bidirectional copying over AF_VSOCK to an abstract agent socket. Run it on Linux with the kernel module loaded: `sudo modprobe vsock_loopback && cargo test --locked --features vsock-loopback -- --ignored vsock_loopback`. The `test-vsockd` job compiles this feature test and runs it when its Ubuntu kernel supports `vsock_loopback`; if unavailable, it emits a notice and a Linux host with the module is required to claim T1 passed. T0 tests and host/Android target lint also run in that job.
 
 ---
 
@@ -368,8 +376,9 @@ The fixture catalog (apps, variants, keys, repositories, golden files) is [test-
 | Path | Content | Built by |
 |---|---|---|
 | `Tests/Fixtures/AndroidApps/` | Gradle project of the fixture apps, with its own `gradlew` | `scripts/build-fixtures.sh` → `Tests/Fixtures/AndroidApps/out/` (git-ignored, reproducible) |
+| `Tests/Fixtures/AndroidApps/SystemServicesTest/` | Instrumentation APK that loads the installed Guest Agent's wrappers and checks missing-method isolation on a composed image | `scripts/build-fixtures.sh --app SystemServicesTest --platform-test-key`; staged to `/tmp/apkrun-test-fixtures/SystemServicesTest.apk` for AndroidCustom |
 | `Tests/Fixtures/apks/` (planned, #28) | committed APKs and derived packages that T0 tests read, so `swift test` needs no Gradle (NFR-DEV-02) | `scripts/build-fixtures.sh --refresh-committed` (planned) |
-| `Tests/Fixtures/signing/` | test-only keys: `test-fixture-a.jks`, `test-guest-dev.jks`, `test-image-ed25519` (and `.pub`), `test-release-check-ed25519.pub`, `aosp-avb-testkey-rsa4096.pem`, `test-apkrun-image-fixture-rsa.pem`, `test-apkrun-image-fixture.avbpubkey`. Planned: `test-fixture-b.jks`, `test-fdroid-repo.jks` (#52), `test-sparkle-ed25519` (and `.pub`) (#58) | committed ([security-model.md](../01-architecture/security-model.md) §7) |
+| `Tests/Fixtures/signing/` | test-only keys: `test-fixture-a.jks`, `test-guest-dev.jks`, `test-image-ed25519` (and `.pub`), `test-release-check-ed25519.pub`, `aosp-avb-testkey-rsa4096.pem`, `aosp-test-platform.pk8` and `.x509.pem` (local composed development image only), `test-apkrun-image-fixture-rsa.pem`, `test-apkrun-image-fixture.avbpubkey`. Planned: `test-fixture-b.jks`, `test-fdroid-repo.jks` (#52), `test-sparkle-ed25519` (and `.pub`) (#58) | committed ([security-model.md](../01-architecture/security-model.md) §7) |
 | `Tests/Fixtures/update-repos/` (planned, #38, #51) | Local, Direct, F-Droid, GitHub provider fixtures | `scripts/build-fixtures.sh --update-repos` (planned); F-Droid repository built with `fdroid update` and `test-fdroid-repo.jks` in CI |
 | `Tests/Fixtures/runtime-updates/` (planned, #58, #88) | appcast for `ReleaseUpdateTest` builds 9000 and 9001; image feeds (valid, tampered, replayed sequence, expired) | `maintenance` job writes the appcast with `generate_appcast`. T1 feeds are signed with `test-image-ed25519`. The T2 feed offering image B is written at run time and signed with the lab Mac's development image key (`image-feed.py --key`; [runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.1) |
 | `Tests/Fixtures/schemas/<file>/v<n>.json`, `v<n>.expected.json` (planned, #58) | migration golden files ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §5) | committed |
@@ -399,7 +408,7 @@ The build is reproducible: the same sources and pinned tools give the same APK b
 
 ## 9. AOSP product build (planned)
 
-The APKRun product (`Guest/product/`, [android-image.md](../02-design/android-image.md) §11) builds on the Linux builder of [environment-setup.md](environment-setup.md) §5.
+The release image (#120) builds the APKRun product (`Guest/product/`, [android-image.md](../02-design/android-image.md) §11.6) on the Linux builder of [environment-setup.md](environment-setup.md) §5. This section is the AOSP product route; #120 may re-sign the CI target files instead. Development images are composed on the Mac, not built ([android-image.md](../02-design/android-image.md) §11.5).
 
 `scripts/aosp/build-product.sh --revision <commit> --variant userdebug|user` runs in the builder container:
 
@@ -407,7 +416,7 @@ The APKRun product (`Guest/product/`, [android-image.md](../02-design/android-im
 2. Writes `.repo/local_manifests/apkrun.xml`: this repository at `<commit>`, `Guest/product/` mapped to `device/apkrun/apkrun_arm64/`. The Rust crate has its own `Android.bp` in `Guest/vsockd/`, because Soong does not accept `..` in `srcs`. Kati and Soong must each see every product file exactly once. If a `repo` `<linkfile>` cannot do this, the script copies the directories.
 3. Runs `scripts/build-guest.sh` and copies the agent APKs to `Guest/product/prebuilt/` (git-ignored); `android_app_import` reads them with `certificate: "platform"`, `privileged: true`, `presigned: false`.
 4. Runs `lunch apkrun_arm64-trunk_staging-<variant>`, `m`, and `m dist`, with `BUILD_NUMBER=ar<counter>`.
-5. For `user` builds, signs the target files with the release keys and rebuilds the zip (flow fixed by #36; OQ-36).
+5. For `user` builds, signs the target files with the release keys and rebuilds the zip (flow fixed by #120; OQ-36).
 6. Writes `build-info.json`: pinned manifest SHA-256, container digest, APKRun revision, APK SHA-256s, `BUILD_NUMBER`.
 
 The result, `apkrun_arm64-img-ar<counter>.zip`, enters the stock pipeline (§10). For `user` builds, `scripts/check-sepolicy.sh` runs before step 4 (R-13).
@@ -544,7 +553,7 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
 - Use `-derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd"` and an `APKRUN_ANDROID_HOME` that holds a copy of `platform-tools`. CI uses `$RUNNER_TEMP`. `scripts/run-gate.sh` builds under `build/gates/` in the checkout.
 - `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY` (the SHA-1 fingerprint of the certificate) come from the environment or from CI repository variables. The fingerprint is explicit, because the generic `Apple Development` name does not reliably select the lab certificate.
 - `APKRunTestHost` and the hosted test bundles disable hardened runtime; that exception is limited to test targets.
-- `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per test group: `LinuxGuest`, `AndroidADB`, `AndroidPackage`, `AndroidBoot`, `AndroidNetwork`, `AndroidGraphics`, `AndroidGuestAgent`, `AndroidInput`, and the four input configurations below. The T2 suites of [test-strategy.md](../04-plan/test-strategy.md) §2.4 are `LinuxGuest`, `AndroidStock`, `AndroidCustom`, and `Maintenance`; the last three are planned. T2 has one automatic retry ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
+- `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per test group: `LinuxGuest`, `AndroidADB`, `AndroidPackage`, `AndroidBoot`, `AndroidCustom`, `AndroidNetwork`, `AndroidGraphics`, `AndroidGuestAgent`, `AndroidGuestProtocolLaunch`, `AndroidInput`, and the four input configurations below. The AndroidCustom T2 suite is implemented and requires the composed bundle and HelloProbe fixture at the paths in that configuration; the AndroidStock and Maintenance suites and automated T2 CI jobs in §15 remain planned ([test-strategy.md](../04-plan/test-strategy.md) §2.4). T2 has one automatic retry ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
 
 Input tests run in their own configurations. Select the configuration and the method together:
 
@@ -666,12 +675,13 @@ Jobs marked *(planned)* do not exist yet.
 | `ci.yml` | every pull request; push to `main` | `lint` | — | `xcode-27` | `scripts/bootstrap`; `scripts/ci/run-checks.sh` (`tests/run.sh`, `check-module-deps.sh`, `check-logging.sh`, `check-todos.sh`, `check-format.sh`, `check-lock.sh`, `check-protos.sh`) |
 | | | `codegen` | — | `xcode-27` | `scripts/ci/codegen.sh` (§4) |
 | | | `third-party` | — | `xcode-27` | cache key from `build-third-party.sh --print-cache-key virgl-runtime`; restore; `build-third-party.sh virgl-runtime`; `generate-notices.py --check` |
-| | | `build` | — | `xcode-27` | needs `third-party`; `swift build -j 2`; `swift build -j 2 --traits EmbeddedRuntime`; `xcodebuild` Debug and Release (unsigned); `check-release-build.sh` |
+| | | `build` | — | `xcode-27` | needs `third-party`; `scripts/build-guest.sh`; `swift build -j 2`; `swift build -j 2 --traits EmbeddedRuntime`; `xcodebuild` Debug and Release (unsigned); `check-release-build.sh` |
 | | | `test-swift` | T0 | `xcode-27` | needs `third-party`; `swift test --skip 'SystemTests'`, parallel width 2 |
+| | | `test-vsockd` | T0, T1 when supported | `ubuntu-latest` | pinned Rust 1.88.0; `cargo test`, feature-test compile and clippy, conditional `vsock_loopback`, Android-target `cargo clippy`, and `cargo fmt --check` |
 | | | `test-graphics` | T1 | `xcode-27` | needs `third-party`; Metal device required; `GraphicsCoreSystemTests` plain, with Address and Undefined Behavior Sanitizers |
 | | | `test-images` | T0 (T1 planned) | `xcode-27` | `Images/tools/.venv` (Python 3.12); manifest check; `pytest Images/tools/tests`; `ruff check`; `ruff format --check` |
 | | | `test-guest` (planned) | T0, T1 | `xcode-27` (T0); disposable T1 runner for PRs; `apkrun-ci` on `main` | `build-guest.sh`; Gradle `test` per Guest module; golden frames; `build-fixtures.sh` |
-| | | `test-linux` (planned) | T0, T1 | `ubuntu-latest` | `cargo test`, `cargo clippy`, `vsock_loopback` (§7.2), `ruff check`, JSON Schema checks, F-Droid test repository (`fdroid update`) |
+| | | `test-linux` (planned) | T1 | `ubuntu-latest` | `vsock_loopback` (§7.2), `ruff check`, JSON Schema checks, F-Droid test repository (`fdroid update`) |
 | | | `fuzz-short` (planned) | T1 | disposable runner for PRs; `apkrun-ci` on `main` | 60 s per fuzz target whose code changed (§15.2) |
 | `integration.yml` | manual dispatch from `main` only | `linux-guest` | T2 | `apkrun-lab` (self-hosted macOS); trusted `main` only | `build-test-initramfs.sh`; `generate-project.sh`; `xcodebuild test`, `LinuxGuest`; ≤ 15 min; artifacts 30 days |
 | | label `t2-android` or `run-t2` (planned) | `android-stock` | T2 | disposable `apkrun-lab` for PRs; `apkrun-lab` on `main` | suite AndroidStock, ≤ 60 min |

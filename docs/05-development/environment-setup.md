@@ -10,7 +10,7 @@ This guide lists the machines and tools needed to build and test APKRun, and how
 |---|---|---|---|
 | Developer Mac | host code, Guest Gradle and Rust builds, image tooling, T0–T2 tests | Apple silicon (M1 or later), macOS 27, 16 GB RAM, 150 GiB free | §2 |
 | Developer Mac, M3 or later | the Cuttlefish reference host as a nested-virtualization VM (#65) | M3 or later, 24 GB RAM recommended | §3.3 |
-| Linux x86_64 AOSP builder | the APKRun AOSP product (#36); CI runner `apkrun-aosp` | ≥ 64 GB RAM, ≥ 400 GB disk | §5 |
+| Linux x86_64 AOSP builder | the release image (#120); CI runner `apkrun-aosp` | ≥ 64 GB RAM, ≥ 400 GB disk | §5 |
 | Image build machine | `user` release images, signed with the offline AOSP release keys; never a CI runner | as the AOSP builder | §5.6 |
 | GitHub-hosted `xcode-27` | static checks, builds, and Swift T0 tests for pull requests and `main` pushes | Apple silicon, 3 cores, 7 GB RAM, 14 GB SSD; one fresh VM per job | §6.1 |
 | `apkrun-ci` | self-hosted runner for trusted default-branch jobs | bare-metal Apple silicon, macOS 27 | §6 |
@@ -33,7 +33,7 @@ macOS cannot build AOSP ([0003-cuttlefish-base-image.md](../01-architecture/deci
 
 | Tool | Pin | Install |
 |---|---|---|
-| Xcode | 27.0, in `.xcode-version` | Mac App Store or developer.apple.com |
+| Xcode | 27.1, in `.xcode-version` | Mac App Store or developer.apple.com |
 | Command line tools | those inside the pinned Xcode | `sudo xcode-select -s /Applications/Xcode.app` |
 | Metal toolchain | the component of the pinned Xcode | `xcodebuild -downloadComponent MetalToolchain` |
 
@@ -60,10 +60,11 @@ python3.12 -m venv Images/tools/.venv
 source Images/tools/.venv/bin/activate
 pip install -e 'Images/tools[test]'
 python3 -m apkrun_image --help
+scripts/build-fec-tool.sh
 pytest Images/tools/tests
 ```
 
-`Images/tools/.venv/` is git-ignored and created by `scripts/bootstrap`. Other Python scripts (`scripts/release/*.py`, `scripts/dev/update-server.py`) use the same venv.
+`scripts/build-fec-tool.sh` builds the pinned ARM64 host utility required by AVB/FEC composition tests. `Images/tools/.venv/` is git-ignored and created by `scripts/bootstrap`. Other Python scripts (`scripts/release/*.py`, `scripts/dev/update-server.py`) use the same venv.
 
 ### 2.5 JDK, Gradle, and the Android SDK
 
@@ -85,17 +86,19 @@ export PATH="$ANDROID_HOME/platform-tools:$PATH"
 
 `Guest/local.properties` and `Tests/Fixtures/AndroidApps/local.properties` (git-ignored) hold `sdk.dir=$ANDROID_HOME`. `scripts/bootstrap` writes them once the check is added (planned, #16).
 
-### 2.6 Rust and cargo-ndk (planned)
+### 2.6 Rust and cargo-ndk
 
 | Tool | Pin | Where |
 |---|---|---|
 | Rust | 1.88.0, with `rustfmt`, `clippy`, target `aarch64-linux-android` | `Guest/vsockd/rust-toolchain.toml` |
-| cargo-ndk | 3.5.4 | `CARGO_NDK_VERSION` in `scripts/tool-versions.env` (planned) |
+| cargo-ndk | 3.5.4 | `CARGO_NDK_VERSION` in `scripts/tool-versions.env` |
 
 ```bash
-rustup show                     # inside Guest/vsockd: installs the pinned toolchain and target
-cargo install cargo-ndk --version 3.5.4 --locked
-cd Guest/vsockd && cargo ndk -t arm64-v8a build --release
+source scripts/tool-versions.env
+cargo install --locked --version "$CARGO_NDK_VERSION" cargo-ndk
+cd Guest/vsockd
+rustup show                     # installs the pinned toolchain and Android target
+cargo ndk -t arm64-v8a build --release
 ```
 
 The product build uses the Rust prebuilt of the pinned AOSP tree (`prebuilts/rust/`; [build-system.md](build-system.md) §9). The host Rust pin must not be newer than that prebuilt, so code that builds with cargo also builds with Soong. #35 records the prebuilt version and sets the pin to match.
@@ -123,7 +126,7 @@ The product build uses the Rust prebuilt of the pinned AOSP tree (`prebuilts/rus
 | `APKRUN_ANDROID_HOME` | SDK root outside `~/Documents` holding `platform-tools` (§4) | T2 Android suites |
 | `APKRUN_TEST_DEVELOPMENT_TEAM` | Apple Development team ID of the lab test host | signed T2 and G1 tests |
 | `APKRUN_TEST_CODE_SIGN_IDENTITY` | SHA-1 fingerprint of that team's Apple Development certificate | signed T2 and G1 tests |
-| `APKRUN_AOSP_BUILDER` | `user@host` of the Linux builder (planned, #36) | `scripts/aosp/remote-build.sh` (§5.5) |
+| `APKRUN_AOSP_BUILDER` | `user@host` of the Linux builder (planned, #120) | `scripts/aosp/remote-build.sh` (§5.5) |
 | `APKRUN_CI` | `1` on CI runners only; turns "skip with a message" into a failure | all tests and scripts |
 
 Put the exports in `~/.zprofile`. Nothing in this table is committed.
@@ -134,15 +137,15 @@ Put the exports in `~/.zprofile`. Nothing in this table is committed.
 |---|---|
 | Xcode | `.xcode-version` |
 | Swift packages | `Package.swift` (exact) and `Package.resolved`; Sparkle (planned) in `project.yml` |
-| protoc, buf, XcodeGen, and hashes; cargo-ndk (planned) | `scripts/tool-versions.env` |
+| protoc, buf, XcodeGen, and hashes; cargo-ndk | `scripts/tool-versions.env` |
 | Gradle | `gradle/wrapper/gradle-wrapper.properties` |
 | AGP, Kotlin, Android libraries | `Guest/gradle/libs.versions.toml` |
 | Android SDK, build tools, NDK | §2.5 and `scripts/bootstrap` |
-| Rust | `Guest/vsockd/rust-toolchain.toml`, `Guest/vsockd/Cargo.lock` (planned, #35) |
+| Rust | `Guest/vsockd/rust-toolchain.toml`, `Guest/vsockd/Cargo.lock` |
 | Python packages | `Images/tools/pyproject.toml` |
 | Third-party native code, test Linux kernel and rootfs, vendored mkbootimg and avbtool | `ThirdParty/ThirdParty.lock.json` ([build-system.md](build-system.md) §6) |
 | Cuttlefish build | `Images/manifests/<buildId>/android-image.json` |
-| AOSP source | `Guest/product/manifest/pinned.xml` (planned, #36) |
+| AOSP source | `Guest/product/manifest/pinned.xml` (planned, #120) |
 
 ---
 
@@ -249,6 +252,26 @@ xcodebuild test -scheme IntegrationTests \
 - To keep the renderer operations for the replay test, add `TEST_RUNNER_APKRUN_TEST_VIRGL_RECORDING=/tmp/<name>.json` to the `xcodebuild test` line. Then `APKRUN_TEST_KMSCUBE_RECORDING=/tmp/<name>.json swift test --traits TestReadback --filter theKmscubeSessionReplaysOnTheDeviceWithoutHostReadbacks` replays it. The path must be under `/tmp`.
 - VM tests need `com.apple.security.virtualization`, so they run in the signed `APKRunTestHost` ([build-system.md](build-system.md) §12.4).
 - For the Android suites, pass `-derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd"` and an `APKRUN_ANDROID_HOME` outside `~/Documents` that holds `platform-tools`: `mkdir -p "${TMPDIR:-/tmp}/apkrun-test-sdk" && cp -R "$ANDROID_HOME/platform-tools" "${TMPDIR:-/tmp}/apkrun-test-sdk/"`. The copy is the same `adb` binary.
+- AndroidCustom also needs the platform-test-signed SystemServices instrumentation fixture. Build it with `scripts/build-fixtures.sh --app SystemServicesTest --platform-test-key`; this stages `SystemServicesTest.apk` beside HelloProbe. The fixture is installed only in developer mode on the composed image.
+- To run #36's AndroidCustom checks, select the classes explicitly. An Xcode test-plan configuration sets environment values; it does not filter the target's tests. The plan points to the composed bundle at `/tmp/apkrun-test-linux/android-custom-bundle` and HelloProbe at `/tmp/apkrun-test-fixtures/HelloProbe.apk`:
+
+```bash
+xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+  -configuration Debug -only-test-configuration AndroidCustom \
+  -only-testing:IntegrationTests/AndroidTestEnvironmentTests \
+  -only-testing:IntegrationTests/CustomImageBootTests \
+  -only-testing:IntegrationTests/SystemServicesTest \
+  -only-testing:IntegrationTests/DeveloperModeAdbTests \
+  -only-testing:IntegrationTests/VsockAgentTests \
+  -only-testing:IntegrationTests/AgentSocketIsolationTests \
+  -only-testing:IntegrationTests/SelinuxDenialTests \
+  -derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd" \
+  APKRUN_ANDROID_HOME="$APKRUN_ANDROID_HOME" APKRUN_CI=1 \
+  DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY"
+```
+
+- `APKRUN_ANDROID_HOME` is a build setting read from the hosted test app's Info.plist; exporting only `ANDROID_HOME` does not make `adb` available to the test host. With `APKRUN_CI=1`, a missing `adb` fails the check instead of skipping it.
 - The Guest Agent, package, and input suites read `APKRUN_GUEST_DIR` (`scripts/build-guest.sh --out /tmp/apkrun-test-guest`) and `APKRUN_FIXTURE_APK` (HelloText). The AndroidPackage suite uses RuntimeAPI for import, install, list, details, and uninstall; its headless activity and force-stop checks still use ADB.
 - `AndroidInputTests` also reads `APKRUN_FIXTURE_COMPOSE_APK` (`scripts/build-fixtures.sh --app HelloCompose`, copied to `/tmp`). It needs the debug HelloText, whose `TEXT` and `DETAILS` broadcasts exist only in the debug manifest: `Tests/Fixtures/AndroidApps/gradlew -p Tests/Fixtures/AndroidApps :HelloText:assembleDebug`, then copy `HelloText/build/outputs/apk/debug/HelloText-debug.apk` to `APKRUN_FIXTURE_APK`. The input configuration also reads the staged `virgl-runtime/`, because a host built outside the checkout cannot find the VirGL libraries from its executable.
 
@@ -256,7 +279,7 @@ xcodebuild test -scheme IntegrationTests \
 
 ## 5. Linux x86_64 AOSP builder (planned)
 
-The APKRun AOSP product and every release image are built on a Linux x86_64 machine, because macOS cannot build AOSP. Set the builder up before #36 starts ([roadmap.md](../04-plan/roadmap.md) §1.3; R-14).
+Release images are built on a Linux x86_64 machine, because macOS cannot build AOSP. Development images are composed on the Mac and need no builder ([android-image.md](../02-design/android-image.md) §11.5). Set the builder up before #120 starts (R-14). This section describes the AOSP product build route; #120 may choose to re-sign the CI target files instead.
 
 ### 5.1 Hardware
 
@@ -272,8 +295,8 @@ A cloud VM is fine for development builds. Release builds need the AOSP release 
 ### 5.2 OS and container
 
 - The host can be any 64-bit Linux that runs Docker or Podman. The build runs in a container.
-- `scripts/aosp/builder.Dockerfile` (planned, #36) is based on `ubuntu:22.04`. It includes the AOSP packages (`git-core gnupg flex bison build-essential zip curl zlib1g-dev libc6-dev-i386 x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3`), the `repo` launcher, JDK 17, and the Android SDK packages of §2.5.
-- Build the image once per Dockerfile change, and reference it by digest in the bundle `provenance` ([android-image.md](../02-design/android-image.md) §11.5).
+- `scripts/aosp/builder.Dockerfile` (planned, #120) is based on `ubuntu:22.04`. It includes the AOSP packages (`git-core gnupg flex bison build-essential zip curl zlib1g-dev libc6-dev-i386 x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3`), the `repo` launcher, JDK 17, and the Android SDK packages of §2.5.
+- Build the image once per Dockerfile change, and reference it by digest in the bundle `provenance` ([android-image.md](../02-design/android-image.md) §11.6).
 
 ```bash
 docker build -t apkrun-aosp-builder -f scripts/aosp/builder.Dockerfile scripts/aosp
@@ -314,17 +337,17 @@ The zip goes through the same pipeline as the stock image, starting with invento
 
 ```bash
 export APKRUN_AOSP_BUILDER=builder@aosp-builder.example
-git push origin task/36-apkrun-aosp-product      # the builder fetches this commit
+git push origin task/120-release-apkrun-image      # the builder fetches this commit
 scripts/aosp/remote-build.sh --revision "$(git rev-parse HEAD)" --variant userdebug
 ```
 
-`scripts/aosp/remote-build.sh` (planned, #36): checks that the revision exists on `origin` (the builder never receives uncommitted work); runs `build-product.sh` inside the container; copies `out/dist/apkrun_arm64-img-<n>.zip` and `build-info.json` to `Images/work/ar<n>/download/`; and prints the next commands (`scripts/inventory-cuttlefish.py`, `apkrun_image bundle`). The log stays on the builder under `~/aosp/logs/<BUILD_NUMBER>.log`.
+`scripts/aosp/remote-build.sh` (planned, #120): checks that the revision exists on `origin` (the builder never receives uncommitted work); runs `build-product.sh` inside the container; copies `out/dist/apkrun_arm64-img-<n>.zip` and `build-info.json` to `Images/work/ar<n>/download/`; and prints the next commands (`scripts/inventory-cuttlefish.py`, `apkrun_image bundle`). The log stays on the builder under `~/aosp/logs/<BUILD_NUMBER>.log`.
 
 ### 5.6 Keys on the builder
 
 - `userdebug` builds use the AOSP test keys of the tree. They are for development and CI only.
 - `user` builds use the APKRun platform and release keys. The keys are offline and live only on the image build machine ([security-model.md](../01-architecture/security-model.md) §7). They are permanent: changing them breaks updates of the platform-signed agents.
-- The release signing flow is fixed by #36 (OQ-36; [android-image.md](../02-design/android-image.md) §11.4).
+- The release signing flow is fixed by #120 (OQ-36; [android-image.md](../02-design/android-image.md) §11.4).
 
 ### 5.7 Build numbers and provenance
 
@@ -345,9 +368,9 @@ scripts/aosp/remote-build.sh --revision "$(git rev-parse HEAD)" --variant userde
 | `apkrun-seed` | the seed lab Mac | full T2 set and closed gate checks on each macOS build (`macos-seed.yml`) |
 | `apkrun-aosp` | the AOSP builder of §5 (not the image build machine) | nightly `userdebug` product builds |
 
-GitHub-hosted `ubuntu-latest` runners take the Linux-only jobs (`cargo test` with `vsock_loopback`, `ruff`, JSON Schema checks, the F-Droid test repository, the upstream security check, weekly feed re-signing). `user` release images are built on the image build machine (§5.6), never on a runner. A lab Mac has one runner slot, so it runs one job, and one VM, at a time.
+GitHub-hosted `ubuntu-latest` runners take the Linux-only jobs (`cargo test`, the `vsock_loopback` T1 test when the runner kernel supports it, `ruff`, JSON Schema checks, the F-Droid test repository, the upstream security check, weekly feed re-signing). The `test-vsockd` job compiles the feature test on every run; if the loopback kernel module is unavailable it emits a notice, and T1 must be run locally on Linux with that module before claiming it passed. `user` release images are built on the image build machine (§5.6), never on a runner. A lab Mac has one runner slot, so it runs one job, and one VM, at a time.
 
-`ci.yml` uses the unprivileged `pull_request` event. Each job runs on a fresh GitHub-hosted macOS 27 VM, checks out the exact PR head SHA with persisted credentials disabled, has `contents: read` only, and references no secrets and no self-hosted runners. Never switch these jobs to `pull_request_target`.
+`ci.yml` uses the unprivileged `pull_request` event. Each job runs on a fresh GitHub-hosted macOS 27 or Ubuntu VM, checks out the exact PR head SHA with persisted credentials disabled, has `contents: read` only, and references no secrets and no self-hosted runners. Never switch these jobs to `pull_request_target`.
 
 `ci-policy.yml` is the only workflow with `pull_request_target`, for pull requests to `main`. It checks out only `refs/heads/main`, reads PR metadata, changed paths, and reviews through the read-only API, and never executes pull request code. A change to a protected path passes only after a non-author human approves the current head and that reviewer applies `ci-policy-approved`. Protected paths: workflows; Xcode build-phase scripts; the Gradle wrapper; build scripts and `buildSrc` or `build-logic`; code generation and test scripts; dependency and tool pins; formatter configurations; every `Package.swift` and `project.yml`; every `Tests/` and `UITests/` tree; and the module graph. The policy compares the event's head and base with the current PR, reads the revision again after fetching, and fails closed on any change. A new commit, reopen, label event, or PR edit resets the check; removing the label revokes it. Branch protection separately requires an active PR approval and the `workflow-policy` job. Public repositories must allow the `pull_request_target` event in Actions policy first.
 
@@ -389,7 +412,7 @@ The harness checks `AXIsProcessTrusted()` at start and fails with a message that
 
 ## 7. Verification checklist
 
-`scripts/bootstrap` installs what it can (pinned tools, the Python venv, Homebrew packages) and then checks the environment. `scripts/bootstrap --check` only checks. Checks for tools that a later task adds print `skip` until it lands (JDK and Android SDK: #16; Rust and cargo-ndk: #35; Android Build API key: #9). A machine is ready when every applicable check reports `ok` and none reports `FAIL`. Warnings are informational.
+`scripts/bootstrap` installs what it can (pinned tools, the Python venv, Homebrew packages) and then checks the environment. `scripts/bootstrap --check` only checks. Checks for tools that a later task adds print `skip` until it lands (JDK and Android SDK: #16; Android Build API key: #9). A machine is ready when every applicable check reports `ok` and none reports `FAIL`. Warnings are informational.
 
 | Check | Command it runs | Expected |
 |---|---|---|
@@ -401,7 +424,7 @@ The harness checks `AXIsProcessTrusted()` at start and fails with a message that
 | Python venv | `Images/tools/.venv/bin/python -m apkrun_image --help` | exit 0 |
 | JDK | `java -version` | 17 (planned, #16) |
 | Android SDK | `sdkmanager --list_installed` | platform 37, build-tools 37.0.0, NDK 28.2.13676358, platform-tools (planned, #16) |
-| Rust, cargo-ndk | `rustup target list --installed` in `Guest/vsockd`; `cargo ndk --version` | `aarch64-linux-android`; 3.5.4 (planned, #35) |
+| Rust, cargo-ndk | `rustup target list --installed` in `Guest/vsockd`; `cargo ndk --version` | `aarch64-linux-android`; 3.5.4 |
 | protoc, buf, XcodeGen | `build/tools/*/bin/* --version` | versions of `scripts/tool-versions.env` |
 | protoc-gen-swift | `build/tools/protoc-gen-swift/bin/protoc-gen-swift --version` | the swift-protobuf version in `Package.resolved` |
 | API key | `APKRUN_ANDROID_BUILD_API_KEY` set | set (warning only) |

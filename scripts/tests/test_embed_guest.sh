@@ -20,9 +20,11 @@ run_embed() {
     SRCROOT="$fixture_root" \
         TARGET_BUILD_DIR="$build_root" \
         WRAPPER_NAME="APKRun.app" \
+        CONFIGURATION="${configuration:-Debug}" \
         bash "$fixture_root/scripts/build/embed-guest.sh"
 }
 
+configuration=Debug
 mkdir -p "$guest_destination"
 printf 'stale\n' > "$guest_destination/stale.apk"
 run_embed
@@ -52,3 +54,35 @@ fi
 [[ "$output" == *"Refusing symlinked Guest Agent destination"* ]]
 [[ "$(cat "$external_destination/marker")" == "preserve" ]]
 printf 'PASS symlinked Guest Agent destination protection\n'
+
+rm -f "$guest_destination"
+resources_destination="$build_root/APKRun.app/Contents/Resources"
+rm -rf "$resources_destination"
+mkdir -p "$external_destination/guest"
+printf 'preserve parent target\n' > "$external_destination/guest/marker"
+ln -s "$external_destination" "$resources_destination"
+configuration=Release
+if output="$(run_embed 2>&1)"; then
+    printf 'FAIL symlinked Guest Agent parent should fail\n' >&2
+    exit 1
+fi
+[[ "$output" == *"Refusing symlinked Guest Agent destination"* ]]
+[[ "$(cat "$external_destination/guest/marker")" == "preserve parent target" ]]
+printf 'PASS symlinked Guest Agent parent protection\n'
+
+rm -f "$resources_destination"
+mkdir -p "$resources_destination"
+rm -rf "$guest_destination"
+mkdir -p "$guest_destination"
+printf 'stale development APK\n' > "$guest_destination/apkrun-guest.apk"
+run_embed
+[[ ! -e "$guest_destination" ]]
+printf 'PASS release build omits development Guest Agent bundle\n'
+
+configuration=Profile
+if output="$(run_embed 2>&1)"; then
+    printf 'FAIL unsupported build configuration should fail\n' >&2
+    exit 1
+fi
+[[ "$output" == *"Unsupported build configuration"* ]]
+printf 'PASS unsupported build configuration diagnostic\n'

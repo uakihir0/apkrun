@@ -5,7 +5,7 @@ import RuntimeCore
 import RuntimeHost
 import XCTest
 
-/// Gate G2 (roadmap.md §2): the stock image reaches `sys.boot_completed=1` on VZ with
+/// Gate G2 (roadmap.md §2): the selected Android image reaches `sys.boot_completed=1` on VZ with
 /// direct kernel boot, logs `BOOT_COMPLETED`, stays up for 10 minutes without a
 /// `system_server` restart, Watchdog kill, or HAL crash loop, and does so for five cold
 /// boots in a row after an instance reset.
@@ -33,13 +33,25 @@ final class G2AndroidBootTests: XCTestCase {
 
     func testFiveColdBootsReachBootCompletedAndStayStable() async throws {
         let bundle = try Self.bundleDirectory()
+        let reference = Self.targetReferenceDirectory()
+        guard FileManager.default.fileExists(atPath: reference.path),
+            !FileManager.default.fileExists(atPath: reference.appendingPathComponent("MISSING.txt").path)
+        else {
+            let message = "The complete target reference capture is missing at \(reference.path)."
+            XCTFail(message)
+            throw G2Failure.referenceMissing(reference.path)
+        }
         // The run's own home and developer ADB port (test-strategy §3.10). Its console socket paths fit sockaddr_un.
         let run = try VMRunResources.new(environment: ProcessInfo.processInfo.environment)
         let home = run.home
         defer { Self.removeHome(home) }
         let paths = run.paths
         // The signed bundle goes through the install path of `apkrun dev image install`.
-        let images = ImageStore(paths: paths, trust: .standard(), diagnostics: .live(paths: paths))
+        let images = ImageStore(
+            paths: paths,
+            trust: try G2TestImageTrustStore.make(for: bundle),
+            diagnostics: .live(paths: paths)
+        )
         let image = try await images.install(from: .directory(bundle))
         let store = InstanceStore(paths: paths, diagnostics: .live(paths: paths))
         _ = try await store.resetAndroid(image: image, sizing: .default)
@@ -140,16 +152,12 @@ final class G2AndroidBootTests: XCTestCase {
         add(records)
     }
 
-    /// Runs `compare_boot.py capture-vz` on the hvc1 socket, then compares the capture with the launcher's
-    /// reference boot. Returns the comparison's exit status and its text report.
+    /// Runs `compare_boot.py capture-vz` on hvc1, then compares against the complete target-profile reference.
     static func compareWithReference(socket: URL, output: URL) throws -> (status: Int32, report: String) {
-        let root = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent()
+        let root = repositoryRoot()
         let python = root.appendingPathComponent("Images/tools/.venv/bin/python")
         let tool = root.appendingPathComponent("Images/tools/reference/compare_boot.py")
-        let reference = root.appendingPathComponent(
-            "Images/reference/16373615/incomplete/default-20261001T120904-49816")
+        let reference = targetReferenceDirectory()
         let commands = root.appendingPathComponent("Images/tools/reference/guest-capture-compare.txt")
         let capture = try run(
             python,
@@ -163,9 +171,23 @@ final class G2AndroidBootTests: XCTestCase {
         // The explanations live beside the reference's `incomplete/` directory, not in it, so pass them explicitly.
         let expected = root.appendingPathComponent("Images/reference/16373615/expected-differences.yaml")
         let comparison = try run(
-            python, [tool.path, reference.path, output.path, "--expected", expected.path])
+            python,
+            [
+                tool.path, "--require-complete-reference", reference.path, output.path,
+                "--expected", expected.path,
+            ])
         let report = (try? String(contentsOf: output.appendingPathComponent("report.txt"), encoding: .utf8)) ?? ""
         return (comparison.status, comparison.output + report)
+    }
+
+    private static func repositoryRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+    }
+
+    private static func targetReferenceDirectory() -> URL {
+        repositoryRoot().appendingPathComponent("Images/reference/16373615/target")
     }
 
     private static func run(_ executable: URL, _ arguments: [String]) throws -> (status: Int32, output: String) {
@@ -207,6 +229,40 @@ final class G2AndroidBootTests: XCTestCase {
     }
 
     static func bundleDirectory() throws -> URL {
+        let configuredBundleValue = configuredValue("APKRUN_TEST_ANDROID_BUNDLE")
+        let configuredBundle = configuredBundleValue.flatMap { $0.hasPrefix("/") ? $0 : nil }
+        if configuredBundleValue != nil && configuredBundle == nil {
+            throw G2Failure.bundleInvalid("APKRUN_TEST_ANDROID_BUNDLE must be an absolute path")
+        }
+        let requireComposed = try G2BundleSelection.requiresComposed(
+            configuredValue: configuredValue("APKRUN_TEST_REQUIRE_COMPOSED"),
+            hasExplicitBundle: configuredBundle != nil
+        )
+        if let configuredBundle,
+            !configuredBundle.isEmpty
+        {
+            let bundle = URL(fileURLWithPath: configuredBundle, isDirectory: true)
+            guard FileManager.default.fileExists(atPath: bundle.appendingPathComponent("manifest.json").path) else {
+                let message = "The selected Android bundle is missing at \(bundle.path)."
+                XCTFail(message)
+                throw G2Failure.bundleMissing(bundle.path)
+            }
+            let manifestURL = bundle.appendingPathComponent("manifest.json")
+            let metadata = (try? Data(contentsOf: manifestURL))
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let provenance = metadata?["provenance"] as? [String: Any]
+            let isComposed =
+                metadata?["kind"] as? String == "apkrun"
+                && provenance?["composition"] is [String: Any]
+            let isStockBaseline = !requireComposed && metadata?["kind"] as? String == "stock"
+            guard isComposed || isStockBaseline else {
+                let message = "The selected Android bundle does not meet the configured image requirement."
+                XCTFail(message)
+                throw G2Failure.bundleInvalid(bundle.path)
+            }
+            return bundle
+        }
+
         let configured =
             ProcessInfo.processInfo.environment["APKRUN_TEST_LINUX_DIR"]
             ?? Bundle.main.object(forInfoDictionaryKey: "APKRUN_TEST_LINUX_DIR") as? String
@@ -224,15 +280,51 @@ final class G2AndroidBootTests: XCTestCase {
         }
         return bundle
     }
+
+    private static func configuredValue(_ key: String) -> String? {
+        let fromInfo = Bundle.main.object(forInfoDictionaryKey: key) as? String
+        if let fromInfo, !fromInfo.isEmpty, !fromInfo.hasPrefix("$(") {
+            return fromInfo
+        }
+        let fromEnvironment = ProcessInfo.processInfo.environment[key]
+        return fromEnvironment.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    private static func configuredPath(_ key: String) -> String? {
+        configuredValue(key).flatMap { $0.hasPrefix("/") ? $0 : nil }
+    }
+}
+
+enum G2BundleSelection {
+    static func requiresComposed(
+        configuredValue: String?,
+        hasExplicitBundle: Bool
+    ) throws -> Bool {
+        if let configuredValue, configuredValue != "0", configuredValue != "1" {
+            throw G2Failure.bundleInvalid("APKRUN_TEST_REQUIRE_COMPOSED must be 0 or 1")
+        }
+        guard configuredValue != "1" || hasExplicitBundle else {
+            throw G2Failure.bundleInvalid(
+                "APKRUN_TEST_REQUIRE_COMPOSED=1 requires APKRUN_TEST_ANDROID_BUNDLE"
+            )
+        }
+        return configuredValue == "1" || (hasExplicitBundle && configuredValue != "0")
+    }
 }
 
 /// A G2 step that could not produce its evidence.
 enum G2Failure: Error, CustomStringConvertible {
     case captureFailed(String)
+    case referenceMissing(String)
+    case bundleMissing(String)
+    case bundleInvalid(String)
 
     var description: String {
         switch self {
         case .captureFailed(let output): "the VZ capture failed: \(output)"
+        case .referenceMissing(let path): "the complete target reference capture is missing at \(path)"
+        case .bundleMissing(let path): "the selected Android bundle is missing at \(path)"
+        case .bundleInvalid(let path): "the selected Android bundle is not a composed APKRun image at \(path)"
         }
     }
 }

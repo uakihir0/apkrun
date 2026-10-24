@@ -23,7 +23,7 @@ private func fixtureFiles(_ directory: String, suffix: String) throws -> [URL] {
 @Test
 func everyValidFixtureLoadsAndRoundTrips() throws {
     let files = try fixtureFiles("valid", suffix: ".json")
-    #expect(files.count == 4)
+    #expect(files.count == 6)
     for url in files {
         let data = try Data(contentsOf: url)
         let manifest = try RuntimeImageManifest.load(data)
@@ -35,7 +35,7 @@ func everyValidFixtureLoadsAndRoundTrips() throws {
 @Test
 func everyInvalidFixtureFailsWithTheRuleItNames() throws {
     let files = try fixtureFiles("invalid", suffix: ".json")
-    #expect(files.count == 35)
+    #expect(files.count == 41)
     for url in files {
         let name = url.deletingPathExtension().lastPathComponent
         let expected = try String(
@@ -62,6 +62,47 @@ func aStockManifestEncodesItsRequiredNullsAsNull() throws {
     #expect(text.contains("\"builderImageDigest\":null"))
     #expect(text.contains("\"guest\":null"))
     #expect(!text.contains("\"legal\""))
+    #expect(!text.contains("\"composition\""))
+}
+
+@Test
+func aComposedManifestKeepsCompositionProvenance() throws {
+    let url = manifestFixtures.appendingPathComponent("valid/apkrun-composed-cf16373615.json")
+    let manifest = try RuntimeImageManifest.load(try Data(contentsOf: url))
+    #expect(manifest.kind == .apkrun)
+    #expect(manifest.provenance.source.origin == "ci.android.com")
+    #expect(manifest.provenance.composition?.sourceManifest.path == "Images/manifests/16373615/android-image.json")
+    #expect(manifest.provenance.composition?.productInputs.map(\.path) == ["compose.json", "init/apkrun.rc"])
+    #expect(
+        manifest.provenance.composition?.testOverlayInputs?.map(\.path) == [
+            "Tests/Fixtures/AndroidImageProduct/compose.json",
+            "Tests/Fixtures/AndroidImageProduct/init/apkrun-test.rc",
+        ])
+    #expect(manifest.provenance.builderImageDigest == nil)
+    let encoded = String(decoding: try JSONEncoder().encode(manifest), as: UTF8.self)
+    #expect(encoded.contains("\"composition\""))
+}
+
+@Test
+func aCompositionRejectsTestOverlayOutsideTheFixedFixtureRoot() throws {
+    let url = manifestFixtures.appendingPathComponent("valid/apkrun-composed-cf16373615.json")
+    var document = try #require(
+        try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+    )
+    var provenance = try #require(document["provenance"] as? [String: Any])
+    var composition = try #require(provenance["composition"] as? [String: Any])
+    composition["testOverlayInputs"] = [
+        ["path": "Guest/product/init/apkrun.rc", "sha256": String(repeating: "a", count: 64)]
+    ]
+    provenance["composition"] = composition
+    document["provenance"] = provenance
+    do {
+        _ = try RuntimeImageManifest.load(try JSONSerialization.data(withJSONObject: document))
+        Issue.record("test overlay provenance must stay under the fixed fixture root")
+    } catch ImageFailure.manifestInvalid(let path, let reason) {
+        #expect(path == "/provenance/composition/testOverlayInputs/0/path")
+        #expect(reason.contains("AndroidImageProduct"))
+    }
 }
 
 @Test

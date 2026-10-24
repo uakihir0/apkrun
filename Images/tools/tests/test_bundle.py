@@ -150,6 +150,261 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _composition_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, dict[str, Any], Path, Path]:
+    directory = tmp_path / "composition"
+    directory.mkdir()
+    repository = tmp_path / "repository"
+    manifest_path = repository / FIXTURE_MANIFEST.relative_to(REPOSITORY_ROOT)
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_bytes(FIXTURE_MANIFEST.read_bytes())
+    compose_path = repository / "Guest/product/compose.json"
+    compose_path.parent.mkdir(parents=True, exist_ok=True)
+    compose_path.write_bytes(b'{"product":"test"}\n')
+    metadata_path = repository / bundle_module.GUEST_AGENT_METADATA
+    metadata_path.parent.mkdir(parents=True)
+    metadata_path.write_text(
+        '{"packageName":"io.apkrun.guest","versionCode":1000,"versionName":"0.1.0"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bundle_module, "_repository_root", lambda: repository)
+    document = json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))
+    document["artifacts"].append({"partition": "vbmeta_system", "size": 7})
+    contents = {
+        "super.img": b"composed super",
+        "vbmeta_system_a.img": b"system!",
+        "vbmeta_a.img": b"v" * 1536,
+    }
+    for filename, data in contents.items():
+        (directory / filename).write_bytes(data)
+    record = {
+        "schemaVersion": 1,
+        "sourceManifest": {
+            "path": manifest_path.relative_to(repository).as_posix(),
+            "sha256": _sha256(manifest_path),
+        },
+        "productInputs": [
+            {"path": "Guest/product/compose.json", "sha256": _sha256(compose_path)},
+            {
+                "path": bundle_module.GUEST_AGENT_METADATA,
+                "sha256": _sha256(metadata_path),
+            },
+        ],
+        "apkrunRevision": "b" * 40,
+        "outputHashes": {
+            filename: hashlib.sha256(data).hexdigest() for filename, data in contents.items()
+        },
+    }
+    (directory / "composition.json").write_text(json.dumps(record), encoding="utf-8")
+    return directory, document, manifest_path, metadata_path
+
+
+def _write_test_overlay_sources() -> list[dict[str, str]]:
+    repository = bundle_module._repository_root()
+    sources = {
+        "Tests/Fixtures/AndroidImageProduct/compose.json": b'{"layers":[]}\n',
+        "Tests/Fixtures/AndroidImageProduct/init/apkrun-test.rc": b"on init\n",
+    }
+    inputs: list[dict[str, str]] = []
+    for relative, contents in sources.items():
+        path = repository / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
+        inputs.append({"path": relative, "sha256": _sha256(path)})
+    return inputs
+
+
+def test_composition_outputs_match_the_recorded_hashes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory, document, manifest_path, _metadata_path = _composition_fixture(tmp_path, monkeypatch)
+
+    composition, overrides, agents = bundle_module._composition_inputs(
+        directory, document, manifest_path
+    )
+
+    assert set(overrides) == {"super", "vbmeta_system", "vbmeta"}
+    assert (
+        composition["sourceManifest"]["path"]
+        == manifest_path.relative_to(bundle_module._repository_root()).as_posix()
+    )
+    assert agents == [{"package": "io.apkrun.guest", "versionCode": 1000}]
+
+
+def test_composition_keeps_opt_in_test_overlay_provenance_separate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory, document, manifest_path, _metadata_path = _composition_fixture(tmp_path, monkeypatch)
+    record_path = directory / "composition.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["testOverlayInputs"] = _write_test_overlay_sources()
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    composition, _overrides, _agents = bundle_module._composition_inputs(
+        directory, document, manifest_path
+    )
+
+    assert composition["testOverlayInputs"] == record["testOverlayInputs"]
+    assert all(item["path"].startswith("Guest/product/") for item in composition["productInputs"])
+
+
+@pytest.mark.parametrize(
+    "test_inputs",
+    [
+        [{"path": "Guest/product/compose.json", "sha256": "c" * 64}],
+        [],
+        [
+            {
+                "path": "Tests/Fixtures/AndroidImageProduct/init/apkrun-test.rc",
+                "sha256": "d" * 64,
+            },
+            {
+                "path": "Tests/Fixtures/AndroidImageProduct/compose.json",
+                "sha256": "c" * 64,
+            },
+        ],
+        [
+            {
+                "path": "Tests/Fixtures/AndroidImageProduct/compose.json",
+                "sha256": "c" * 64,
+            },
+            {
+                "path": "Tests/Fixtures/AndroidImageProduct/compose.json",
+                "sha256": "c" * 64,
+            },
+        ],
+    ],
+)
+def test_composition_rejects_unsafe_or_unsorted_test_overlay_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, test_inputs: list[dict[str, str]]
+) -> None:
+    directory, document, manifest_path, _metadata_path = _composition_fixture(tmp_path, monkeypatch)
+    record_path = directory / "composition.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["testOverlayInputs"] = test_inputs
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    with pytest.raises(BundleError, match="test overlay input"):
+        bundle_module._composition_inputs(directory, document, manifest_path)
+
+
+@pytest.mark.parametrize(
+    ("source_change", "message"),
+    [
+        ("tampered", "SHA-256 differs from composition test overlay inputs"),
+        ("missing", "test overlay provenance source is missing or unsafe"),
+    ],
+)
+def test_composition_rejects_tampered_or_missing_test_overlay_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_change: str,
+    message: str,
+) -> None:
+    directory, document, manifest_path, _metadata_path = _composition_fixture(tmp_path, monkeypatch)
+    inputs = _write_test_overlay_sources()
+    record_path = directory / "composition.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["testOverlayInputs"] = inputs
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    source = bundle_module._repository_root() / inputs[0]["path"]
+    if source_change == "tampered":
+        source.write_bytes(b'{"layers":["changed"]}\n')
+    else:
+        source.unlink()
+
+    with pytest.raises(BundleError, match=message):
+        bundle_module._composition_inputs(directory, document, manifest_path)
+
+
+@pytest.mark.parametrize(
+    ("source_change", "message"),
+    [
+        ("tampered", "SHA-256 differs from composition product inputs"),
+        ("missing", "composition product provenance source is missing or unsafe"),
+        ("symlink", "product input must not use symlinks"),
+    ],
+)
+def test_composition_rejects_tampered_missing_or_symlinked_product_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_change: str,
+    message: str,
+) -> None:
+    directory, document, manifest_path, _metadata_path = _composition_fixture(tmp_path, monkeypatch)
+    source = bundle_module._repository_root() / "Guest/product/compose.json"
+    if source_change == "tampered":
+        source.write_bytes(b'{"product":"changed"}\n')
+    elif source_change == "missing":
+        source.unlink()
+    else:
+        outside = tmp_path / "outside-compose.json"
+        outside.write_bytes(b'{"product":"test"}\n')
+        source.unlink()
+        source.symlink_to(outside)
+
+    with pytest.raises(BundleError, match=message):
+        bundle_module._composition_inputs(directory, document, manifest_path)
+
+
+@pytest.mark.parametrize("filename", ["super.img", "vbmeta_system_a.img", "vbmeta_a.img"])
+def test_composition_rejects_an_output_changed_after_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filename: str
+) -> None:
+    directory, document, manifest_path, _metadata_path = _composition_fixture(tmp_path, monkeypatch)
+    output = directory / filename
+    data = output.read_bytes()
+    output.write_bytes(bytes([data[0] ^ 1]) + data[1:])
+
+    with pytest.raises(BundleError, match="SHA-256 differs from the composition record"):
+        bundle_module._composition_inputs(directory, document, manifest_path)
+
+
+def test_composition_requires_hashes_for_exactly_its_output_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory, document, manifest_path, _metadata_path = _composition_fixture(tmp_path, monkeypatch)
+    record_path = directory / "composition.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["outputHashes"].pop("vbmeta_a.img")
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    with pytest.raises(BundleError, match="output hashes"):
+        bundle_module._composition_inputs(directory, document, manifest_path)
+
+
+def test_composition_rejects_guest_agent_metadata_changed_after_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory, document, manifest_path, metadata_path = _composition_fixture(tmp_path, monkeypatch)
+    metadata_path.write_text(
+        '{"packageName":"io.apkrun.guest","versionCode":1001,"versionName":"changed"}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(BundleError, match="SHA-256 differs from composition product inputs"):
+        bundle_module._composition_inputs(directory, document, manifest_path)
+
+
+def test_composition_requires_guest_agent_metadata_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory, document, manifest_path, _metadata_path = _composition_fixture(tmp_path, monkeypatch)
+    record_path = directory / "composition.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["productInputs"] = [
+        item
+        for item in record["productInputs"]
+        if item["path"] != bundle_module.GUEST_AGENT_METADATA
+    ]
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    with pytest.raises(BundleError, match="must record .* as a product input"):
+        bundle_module._composition_inputs(directory, document, manifest_path)
+
+
 def test_signed_bundle_has_the_documented_tree_and_manifest(tmp_path: Path) -> None:
     output = tmp_path / "bundle"
     manifest = _build(tmp_path, output)

@@ -259,6 +259,7 @@ targets:
       - path: Tests/IntegrationTests/AndroidPackageTests
       - path: Tests/IntegrationTests/AndroidSupport
       - path: Tests/IntegrationTests/AndroidBootTests
+      - path: Tests/IntegrationTests/AndroidCustomTests
       - path: Tests/IntegrationTests/AndroidGraphicsTests
       - path: Tests/IntegrationTests/G3GraphicsTests
       - path: Tests/IntegrationTests/GuestAgentTests
@@ -267,6 +268,12 @@ targets:
       - path: Tests/IntegrationTests/RunResources
         excludes:
           - VMRunResourcesTests.swift
+      - path: Tests/Fixtures/signing/test-image-ed25519.pub
+        buildPhase: resources
+      - path: Tests/Fixtures/AndroidImageProduct/compose.json
+        buildPhase: resources
+      - path: Tests/Fixtures/AndroidImageProduct/init/apkrun-test.rc
+        buildPhase: resources
       - path: Tests/Fixtures/linux/make-test-disks.sh
         buildPhase: resources
     settings:
@@ -317,6 +324,8 @@ targets:
       - path: Tests/IntegrationTests/RunResources
         excludes:
           - VMRunResourcesTests.swift
+      - path: Tests/Fixtures/signing/test-image-ed25519.pub
+        buildPhase: resources
     settings:
       base:
         PRODUCT_NAME: AcceptanceTests

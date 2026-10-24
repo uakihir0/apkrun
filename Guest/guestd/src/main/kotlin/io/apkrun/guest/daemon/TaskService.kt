@@ -1,9 +1,11 @@
 package io.apkrun.guest.daemon
 
 import android.content.ComponentName
+import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.v1.ClearDisplay
 import io.apkrun.guest.protocol.v1.ClearPolicy
 import io.apkrun.guest.protocol.v1.DisplayEmpty
+import io.apkrun.guest.protocol.v1.FocusedDisplayChanged
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.TaskInfo
 import io.apkrun.guest.protocol.v1.TaskVanished
@@ -51,6 +53,7 @@ class TaskService(
     private val waitMillis: suspend (Long) -> Unit = { delay(it) },
 ) {
     private val known = LinkedHashMap<Int, TaskInfo>()
+    private var knownFocusedDisplayId: Int? = null
     private val removalLock = Mutex()
     private val displayClearLocks = ConcurrentHashMap<Int, Mutex>()
     private val clearingDisplays = ConcurrentHashMap.newKeySet<Int>()
@@ -86,7 +89,17 @@ class TaskService(
     }
 
     /** The tasks that Android reports now, most recent first. */
-    fun list(): List<TaskInfo> = readCurrentTasks()
+    fun list(displayId: Int? = null): List<TaskInfo> {
+        if (displayId != null && displayId < 0) {
+            throw GuestFailure(
+                GuestErrorCode.GUEST_ERROR_CODE_INVALID_ARGUMENT,
+                "the display ID is not valid",
+                mapOf("display_id" to displayId.toString()),
+            )
+        }
+        val current = readCurrentTasks()
+        return if (displayId == null) current else current.filter { it.getDisplayId() == displayId }
+    }
 
     /** The display of the most recent visible task, or display 0 when no task is visible. */
     fun focusedDisplayId(): Int = list().firstOrNull { it.getVisible() }?.getDisplayId() ?: 0
@@ -110,9 +123,52 @@ class TaskService(
         focusTaskById(task.getTaskId())
     }
 
-    /** Moves a root task to [displayId] (`moveRootTaskToDisplay`). */
-    fun moveToDisplay(taskId: Int, displayId: Int) {
-        SystemServices.activityTask.call("moveRootTaskToDisplay", taskId, displayId)
+    /** Moves a root task to [displayId], optionally returning the old foreground task to front. */
+    fun moveToDisplay(taskId: Int, displayId: Int) =
+        moveToDisplay(taskId, displayId, toBack = false)
+
+    /**
+     * Moves a root task to [displayId] (`moveRootTaskToDisplay`). Android's system API always
+     * places the moved root on top, so `toBack` restores the target display's previously visible
+     * task to the foreground immediately afterwards.
+     */
+    fun moveToDisplay(taskId: Int, displayId: Int, toBack: Boolean) {
+        if (taskId < 0 || displayId < 0) {
+            throw GuestFailure(
+                GuestErrorCode.GUEST_ERROR_CODE_INVALID_ARGUMENT,
+                "the task or display ID is not valid",
+                mapOf(
+                    "task_id" to taskId.toString(),
+                    "display_id" to displayId.toString(),
+                ),
+            )
+        }
+        val before = list()
+        val task =
+            before.firstOrNull { it.getTaskId() == taskId }
+                ?: throw GuestFailure(
+                    GuestErrorCode.GUEST_ERROR_CODE_NOT_FOUND,
+                    "the task is not known",
+                    mapOf("task_id" to taskId.toString()),
+                )
+        val previousTop =
+            if (toBack) {
+                before.firstOrNull {
+                    it.getDisplayId() == displayId && it.getTaskId() != taskId && it.getVisible()
+                }
+                    ?: throw GuestFailure(
+                        GuestErrorCode.GUEST_ERROR_CODE_FAILED_PRECONDITION,
+                        "no visible task can remain in front on the target display",
+                        mapOf("display_id" to displayId.toString()),
+                    )
+            } else {
+                null
+            }
+        if (task.getDisplayId() != displayId) {
+            moveTaskById(taskId, displayId)
+        }
+        previousTop?.let { focusTaskById(it.getTaskId()) }
+        refresh()
     }
 
     /**
@@ -137,7 +193,8 @@ class TaskService(
 
     /**
      * Waits until Android no longer reports [packageName], publishing `TaskVanished` before return.
-     * Used after `IActivityManager.forceStopPackage`, which removes tasks without calling `removeTask`.
+     * Used after `IActivityManager.forceStopPackage`, which removes tasks without calling
+     * `removeTask`.
      */
     suspend fun awaitPackageTasksDisappear(packageName: String) {
         removalLock.withLock {
@@ -218,7 +275,7 @@ class TaskService(
                             synchronized(this) {
                                 val current = refresh().filter { it.getDisplayId() == displayId }
                                 if (current.isEmpty()) {
-                                    events.publish {
+                                    events.publish(GuestCapability.DISPLAY) {
                                         it.setTasksCleared(
                                             TasksCleared.newBuilder()
                                                 .setDisplayId(displayId)
@@ -292,14 +349,14 @@ class TaskService(
         for ((id, task) in current) {
             val before = known[id]
             if (before == null) {
-                events.publish { it.setTaskAppeared(task) }
+                events.publish(GuestCapability.LAUNCH) { it.setTaskAppeared(task) }
             } else if (before != task) {
-                events.publish { it.setTaskChanged(task) }
+                events.publish(GuestCapability.LAUNCH) { it.setTaskChanged(task) }
             }
         }
         for ((id, task) in known) {
             if (id !in current) {
-                events.publish {
+                events.publish(GuestCapability.LAUNCH) {
                     it.setTaskVanished(
                         TaskVanished.newBuilder()
                             .setTaskId(id)
@@ -313,11 +370,21 @@ class TaskService(
         val displaysNow = current.values.map { it.getDisplayId() }.toSet()
         for (displayId in displaysBefore - displaysNow) {
             if (displayId != 0 && displayId !in clearingDisplays) {
-                events.publish {
+                events.publish(GuestCapability.LAUNCH) {
                     it.setDisplayEmpty(DisplayEmpty.newBuilder().setDisplayId(displayId))
                 }
             }
         }
+        val currentFocusedDisplayId =
+            current.values.firstOrNull { it.getVisible() }?.getDisplayId() ?: 0
+        if (knownFocusedDisplayId != null && knownFocusedDisplayId != currentFocusedDisplayId) {
+            events.publish(GuestCapability.INPUT) {
+                it.setFocusedDisplayChanged(
+                    FocusedDisplayChanged.newBuilder().setDisplayId(currentFocusedDisplayId)
+                )
+            }
+        }
+        knownFocusedDisplayId = currentFocusedDisplayId
         known.clear()
         known.putAll(current)
         return current.values.toList()

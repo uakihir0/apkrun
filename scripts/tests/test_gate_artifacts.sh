@@ -7,7 +7,10 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 verify_artifacts="$repo_root/scripts/tools/verify-gate-artifacts.sh"
 verify_host="$repo_root/scripts/tools/verify-test-host-directory.sh"
+verify_composed_bundle="$repo_root/scripts/tools/verify-composed-image-bundle.py"
 gate_script="$repo_root/scripts/run-gate.sh"
+g3_session="$repo_root/Tests/AcceptanceTests/G3GraphicsTests/G3Session.swift"
+test_host_plist="$repo_root/Tests/IntegrationTests/Host/Info.plist"
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/apkrun-gate-artifacts.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
@@ -73,6 +76,11 @@ rm -r "$no_bundle/android-bundle"
 expect_pass "G1 does not need the Android bundle" "$verify_artifacts" "$no_bundle" G1
 expect_fail "G2 needs the Android bundle" "android-bundle/manifest.json" \
     "$verify_artifacts" "$no_bundle" G2
+selected_bundle="$work/selected-bundle"
+mkdir -p "$selected_bundle"
+: > "$selected_bundle/manifest.json"
+expect_pass "G2 accepts the selected external bundle in a clean artifact directory" \
+    "$verify_artifacts" "$no_bundle" G2 --android-bundle "$selected_bundle"
 
 no_runtime="$work/no-runtime"
 cp -R "$directory" "$no_runtime"
@@ -96,16 +104,76 @@ host_app="$work/host.app"
 mkdir -p "$host_app/Contents"
 plutil -create xml1 "$host_app/Contents/Info.plist"
 plutil -insert APKRUN_TEST_LINUX_DIR -string "$directory" "$host_app/Contents/Info.plist"
+bundle="$directory/android-bundle"
+plutil -insert APKRUN_TEST_ANDROID_BUNDLE -string "$bundle" "$host_app/Contents/Info.plist"
+plutil -insert APKRUN_TEST_REQUIRE_COMPOSED -string 0 "$host_app/Contents/Info.plist"
+plutil -insert APKRUN_G3_BUNDLE -string "$bundle" "$host_app/Contents/Info.plist"
+plutil -insert APKRUN_G3_REQUIRE_COMPOSED -string 1 "$host_app/Contents/Info.plist"
 expect_pass "a host that reads the gate's directory passes" "$verify_host" "$host_app" "$directory"
 expect_fail "a host that reads another directory fails" "reads" \
     "$verify_host" "$host_app" "$work/other"
+expect_pass "a host that reads the selected Android bundle passes" \
+    "$verify_host" "$host_app" "$directory" --android-bundle "$bundle"
+expect_fail "a host that reads another Android bundle fails" "reads bundle" \
+    "$verify_host" "$host_app" "$directory" --android-bundle "$work/other-bundle"
+expect_pass "a host that preserves the stock G2 baseline passes" \
+    "$verify_host" "$host_app" "$directory" --android-bundle "$bundle" --require-composed 0
+expect_fail "a host with the wrong G2 image requirement fails" "requires composed image" \
+    "$verify_host" "$host_app" "$directory" --android-bundle "$bundle" --require-composed 1
+expect_pass "a host that reads the selected G3 bundle passes" \
+    "$verify_host" "$host_app" "$directory" --g3-bundle "$bundle" --g3-require-composed 1
+plutil -replace APKRUN_G3_REQUIRE_COMPOSED -string 0 "$host_app/Contents/Info.plist"
+expect_pass "a host that preserves the G3 stock baseline passes" \
+    "$verify_host" "$host_app" "$directory" --g3-bundle "$bundle" --g3-require-composed 0
+plutil -replace APKRUN_G3_REQUIRE_COMPOSED -string 1 "$host_app/Contents/Info.plist"
+expect_fail "a host with the wrong G3 image requirement fails" "requires composed G3 image" \
+    "$verify_host" "$host_app" "$directory" --g3-bundle "$bundle" --g3-require-composed 0
 expect_fail "a missing host fails" "build it first" "$verify_host" "$work/missing.app" "$directory"
+
+composed_bundle="$work/composed-bundle"
+mkdir -p "$composed_bundle"
+cp "$repo_root/Images/tools/tests/fixtures/runtime-manifests/valid/apkrun-composed-cf16373615.json" \
+    "$composed_bundle/manifest.json"
+expect_pass "a composed APKRun bundle passes G2/G3 selection" \
+    python3 -I "$verify_composed_bundle" "$composed_bundle"
+python3 - "$composed_bundle/manifest.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+manifest = json.loads(path.read_text())
+manifest["provenance"].pop("composition")
+path.write_text(json.dumps(manifest))
+PY
+expect_fail "an APKRun bundle without composition provenance is rejected" \
+    "expected kind=apkrun with composition provenance" \
+    python3 -I "$verify_composed_bundle" "$composed_bundle"
+printf '{"kind":"stock"}\n' > "$composed_bundle/manifest.json"
+expect_fail "a stock image is not accepted for the default G2/G3 image selection" \
+    "expected kind=apkrun with composition provenance" \
+    python3 -I "$verify_composed_bundle" "$composed_bundle"
+expect_pass "a stock image remains available for an explicit baseline run" \
+    python3 -I "$verify_composed_bundle" --allow-stock "$composed_bundle"
 
 default_line='APKRUN_TEST_LINUX_DIR="${APKRUN_TEST_LINUX_DIR:-/tmp/apkrun-test-linux}"'
 if ! grep -qxF "$default_line" "$gate_script"; then
     fail "run-gate.sh does not default to the directory the producers and the harness use"
 fi
 printf 'PASS run-gate.sh uses the shared test directory by default\n'
+if ! grep -qxF 'unset APKRUN_TEST_ANDROID_BUNDLE APKRUN_G3_BUNDLE APKRUN_G3_REQUIRE_COMPOSED' "$gate_script"; then
+    fail "run-gate.sh does not clear inherited bundle overrides before building test hosts"
+fi
+printf 'PASS run-gate.sh clears inherited bundle overrides before building test hosts\n'
+if ! grep -Fq '"--no-guest-agent"' "$g3_session"; then
+    fail "the G3 graphics run does not preserve the composed image's Guest Agent"
+fi
+if grep -Fq 'scripts/build-guest.sh' "$gate_script" \
+    || grep -Fq 'APKRUN_G3_GUEST_DIR' "$gate_script" "$g3_session" "$test_host_plist"
+then
+    fail "the G3 graphics run still stages a development Guest Agent"
+fi
+printf 'PASS G3 disables development Guest Agent staging\n'
 
 line_of() {
     grep -n "$1" "$gate_script" | head -1 | cut -d: -f1
@@ -113,7 +181,7 @@ line_of() {
 disks_line="$(line_of '^scripts/build-test-android-disks.sh$')"
 verify_line="$(line_of '^scripts/tools/verify-gate-artifacts.sh ')"
 host_build_line="$(line_of '^xcodebuild build-for-testing')"
-host_check_line="$(line_of '^scripts/tools/verify-test-host-directory.sh')"
+host_check_line="$(line_of '^[[:space:]]*scripts/tools/verify-test-host-directory.sh')"
 first_test_line="$(line_of '^xcodebuild test')"
 for entry in "$disks_line" "$verify_line" "$host_build_line" "$host_check_line" "$first_test_line"; do
     [[ -n "$entry" ]] || fail "run-gate.sh lacks one of the artifact steps"

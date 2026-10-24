@@ -10,6 +10,7 @@ from collections.abc import Sequence
 COMMANDS = {
     "bundle": "Build and sign a runtime image bundle.",
     "bundle-variant": "Build a development bundle whose super carries a replaced partition (#99).",
+    "compose": "Compose the APKRun development product into a pinned stock Android image (#36).",
     "disks": "Build the raw GPT disks of a device layout.",
     "erofs-tools": "Fetch and verify the pinned erofs-utils tools.",
     "extract": "Extract verified Android boot artifacts.",
@@ -20,12 +21,15 @@ COMMANDS = {
     "keygen": "Create the Ed25519 key pair that signs runtime image bundles.",
     "manifest": "Generate or validate an Android image manifest.",
     "vendor-reseal": "Reseal the injected vendor_a and refresh its descriptor in vbmeta_a (#99).",
+    "test-bundles": "Build opt-in Android test bundles (A, B, B-prime, F, P, S) (#36).",
 }
 
 # Command names that are not valid module names map to their module.
 MODULES = {
     "bundle-variant": "bundle_variant",
+    "compose": "compose_command",
     "erofs-tools": "erofs",
+    "test-bundles": "test_bundles",
     "inject-vendor": "vendor_inject",
     "vendor-reseal": "vendor_reseal",
 }

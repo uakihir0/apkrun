@@ -946,11 +946,8 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
     }
 }
 
-protocol EmbeddedSessionGuestAgent: Sendable {
-    func isInstalled(_ package: String) async throws(GuestAgentFailure) -> Bool
+protocol EmbeddedSessionGuestAgent: AndroidControlChannel {
     func launch(package: String, displayID: Int32) async throws(GuestAgentFailure) -> GuestLaunchReport
-    func stopApplication(package: String) async throws(GuestAgentFailure) -> Bool
-    func forceStopApplication(package: String) async throws(GuestAgentFailure) -> Bool
     func addResynchronizationHandler(
         _ handler: @escaping @Sendable (GuestSnapshotState) async -> Void
     ) async -> UUID
@@ -968,10 +965,6 @@ extension EmbeddedSessionGuestAgent {
 }
 
 extension DevelopmentGuestAgent: EmbeddedSessionGuestAgent {
-    func isInstalled(_ package: String) async throws(GuestAgentFailure) -> Bool {
-        try await queryPackage(package) != nil
-    }
-
     func addResynchronizationHandler(
         _ handler: @escaping @Sendable (GuestSnapshotState) async -> Void
     ) async -> UUID {

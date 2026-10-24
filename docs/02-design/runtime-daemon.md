@@ -234,16 +234,20 @@ stop(reason, force)
      (reasons .hostUpdate and .migration end them with .runtimeUpdating instead: the wrapper shows screen U
      and reopens, runtime-maintenance.md §3.5, §4.7)
   3. suspended? → VMController.resume() first (Android can only shut down while running)
-  4. Guest Agent Shutdown (20 s, guest-protocol.md §7.1) → Android runs its shutdown sequence
-  5. wait for guestDidStop (20 s total from step 4)
-  6. fallback: VMController.requestStop() (power button, vm.md §9.3), then after 20 s VMController.stop()
+  4. Guest Agent Shutdown (20 s request timeout, guest-protocol.md §7.1)
+     → in developer mode, fall back to ADB and then serial only when the Guest Agent explicitly rejects
+       the request or is unavailable before it can be sent
+  5. after the request or fallback returns, wait up to 20 s for guestDidStop
+     (an ambiguous Guest Agent result is never resent; no available production channel skips this wait)
+  6. if the VM is still running, VMController.stop() (forced stop, vm.md §9.3)
   7. GraphicsCore WillStop; close agent connections; stop the ADB bridge
   8. state: → stopped
 ```
 
-- With `reason == .hostShutdown` the whole sequence has a 40 s deadline (§2.4). Step 6 then goes straight to `stop()` when the deadline is near.
-- Without a Guest Agent, step 4 is skipped.
-- Every stop logs the path it took (`graceful`, `powerButton`, `forced`) and its duration. `apkrun doctor` warns when the last 3 stops were forced.
+- With `reason == .hostShutdown` the whole sequence has a 40 s deadline (§2.4), which can cap the Guest Agent request and post-request wait. The VM is force-stopped at that deadline.
+- Without a Guest Agent, the Guest Protocol request is skipped; developer mode may still use its ADB and serial
+  fallbacks. Production has no fallback channel, so it force-stops the VM immediately.
+- Every stop logs the path it took (`graceful` or `forced`) and its duration with an operation ID. `apkrun doctor` warns when the last 3 stops were forced.
 - While a package install is active, RuntimeHost rejects user stop, restart, and reset with `runtime.invalidTransition`. Daemon shutdown drains the install before it stops Android. This reservation lasts until the tracked install reaches a terminal result.
 
 ### 3.6 Failure handling and automatic restart

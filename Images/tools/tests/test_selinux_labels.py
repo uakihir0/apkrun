@@ -16,6 +16,7 @@ from apkrun_image.selinux_labels import (
     ContextsError,
     check_reproduces,
     label_for,
+    label_for_partition,
     last_rule_label,
     literal_stem,
     load_contexts,
@@ -73,6 +74,24 @@ def test_the_new_mesa_libraries_get_the_egl_label() -> None:
         path = f"/lib64/egl/{name}"
         assert label_for(rules, path, REGULAR_FILE) == "u:object_r:same_process_hal_file:s0"
         assert last_rule_label(rules, path, REGULAR_FILE) == "u:object_r:same_process_hal_file:s0"
+
+
+def test_partition_mount_selects_system_ext_contexts() -> None:
+    rules = load_contexts(
+        [
+            ("plat", r"^/system_ext/etc/.* u:object_r:system_file:s0"),
+            ("system_ext", r"^/system_ext/etc/apkrun(/.*)? u:object_r:apkrun_file:s0"),
+        ]
+    )
+    assert (
+        label_for_partition(
+            rules,
+            "/etc/apkrun/rc",
+            REGULAR_FILE,
+            mount="/system_ext",
+        )
+        == "u:object_r:apkrun_file:s0"
+    )
 
 
 def test_the_longest_stem_beats_a_later_rule_with_a_shorter_stem() -> None:

@@ -141,6 +141,13 @@ def _mesa_directory(
         "mesa": {"commit": commit, "version": "26.1.8"},
         "tools": {"ndk": "28.2.13676358 (r28c)"},
         "buildFlags": ["--buildtype=release", "-Dplatforms=android"],
+        "lock": {
+            "path": "ThirdParty/ThirdParty.lock.json",
+            "sha256": hashlib.sha256(
+                (_repository_root() / "ThirdParty/ThirdParty.lock.json").read_bytes()
+            ).hexdigest(),
+            "group": "guest-mesa",
+        },
         "files": records,
     }
     (output / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -179,6 +186,28 @@ def test_the_flags_must_match_the_lock(tmp_path: Path) -> None:
     lock = dict(LOCK_MESA, buildFlags=["--buildtype=debug"])
     with pytest.raises(InjectError, match="other Meson flags"):
         load_mesa_output(_mesa_directory(tmp_path), lock)
+
+
+def test_the_output_must_record_the_current_third_party_lock(tmp_path: Path) -> None:
+    output = _mesa_directory(tmp_path)
+    manifest_path = output / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["lock"]["sha256"] = "0" * 64
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(InjectError, match="current pinned ThirdParty lock"):
+        load_mesa_output(output, LOCK_MESA)
+
+
+def test_the_output_must_record_the_pinned_ndk(tmp_path: Path) -> None:
+    output = _mesa_directory(tmp_path)
+    manifest_path = output / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["tools"]["ndk"] = "unpinned NDK"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(InjectError, match="pinned NDK"):
+        load_mesa_output(output, LOCK_MESA)
 
 
 def test_the_hashtree_parser_reads_only_hashtree_descriptors() -> None:

@@ -5,10 +5,12 @@ import XCTest
 /// Metal, and the Android display is shown in a macOS window.
 ///
 /// One boot runs the whole check, as the manual HelloGL run of #24 did (IR-1200 to IR-1208):
-/// `apkrun dev boot --gpu virgl --window --stats --console` on the Android bundle that scripts/run-gate.sh names, in a
-/// new APKRUN_HOME. Then, in this order: the display is in a window; HelloGL's `renderer` event and the GLES line of
-/// SurfaceFlinger name virgl; 60 s of statistics show no readback and no CPU copy; the alternating-colour phase shows no
-/// frame with both colours, by the test-only readback sampler of the CLI (graphics.md §7); HelloGL
+/// `apkrun dev boot --gpu virgl --window --stats --console --no-guest-agent` on the Android bundle that
+/// scripts/run-gate.sh names, in a new APKRUN_HOME. The composed image owns its persistent Guest Agent; this graphics
+/// check uses developer ADB without provisioning another one. Then, in this order: the display is in a window;
+/// HelloGL's `renderer` event and the GLES line of SurfaceFlinger name virgl; 60 s of statistics show no readback and
+/// no CPU copy; the alternating-colour phase shows no frame with both colours, by the test-only readback sampler of
+/// the CLI (graphics.md §7); HelloGL
 /// averages at least 55 fps and runs 10 minutes with the same pid and no renderer crash. The run stops with SIGINT.
 ///
 /// It runs in the `G3` configuration of AcceptanceTests.xctestplan, with the inputs that scripts/run-gate.sh sets. The
@@ -79,6 +81,12 @@ final class G3GraphicsTests: XCTestCase {
         ])
         try session.writeArtifact("gl-props.txt", gles.output)
         measurements.surfaceFlingerGLES = gles.output
+        let selinux = try session.adb(["shell", "getenforce"])
+        try session.writeArtifact("selinux-mode.txt", selinux.output)
+        guard selinux.status == 0 else {
+            throw G3Failure.commandFailed("getenforce", selinux.status, selinux.output)
+        }
+        measurements.selinuxMode = selinux.output.trimmingCharacters(in: .whitespacesAndNewlines)
         try session.adb(["shell", "input keyevent 82"])
         try session.adb(["shell", "wm dismiss-keyguard"])
         try await Task.sleep(for: .seconds(3))
@@ -108,9 +116,17 @@ final class G3GraphicsTests: XCTestCase {
             inPNG: session.inputs.artifacts.appendingPathComponent("screenshots/normal-1.png"))
         let launchedPID = try session.helloGLPID()
         session.note("HelloGL pid after launch: \(launchedPID ?? "none")")
-        guard launchedPID != nil else {
+        guard let launchedPID else {
             throw G3Failure.commandFailed("pidof HelloGL", 1, "HelloGL is not running after the launch")
         }
+        let domain = try session.adb(["shell", "cat /proc/\(launchedPID)/attr/current"])
+        try session.writeArtifact("hellogl-selinux-domain.txt", domain.output)
+        guard domain.status == 0 else {
+            throw G3Failure.commandFailed(
+                "read HelloGL SELinux domain", domain.status, domain.output)
+        }
+        measurements.helloGLSELinuxDomain = domain.output.trimmingCharacters(
+            in: .whitespacesAndNewlines)
 
         let sixtyMark = session.lineMark
         try await Task.sleep(for: .seconds(30))
@@ -200,6 +216,8 @@ final class G3GraphicsTests: XCTestCase {
             "window found: \(measurements.windowFound), distinct colours in the first capture: "
                 + "\(measurements.distinctColoursInWindow)",
             "renderer event: \(measurements.rendererEvent ?? "none")",
+            "HelloGL SELinux domain: \(measurements.helloGLSELinuxDomain ?? "none")",
+            "SELinux mode: \(measurements.selinuxMode ?? "none")",
             "GLES lines: \(measurements.surfaceFlingerGLES.replacingOccurrences(of: "\n", with: " | "))",
             "statistics during the run: \(measurements.statisticsDuringRun.count) lines, "
                 + "hostReadbacks max \(measurements.statisticsDuringRun.map(\.hostReadbacks).max() ?? 0), "

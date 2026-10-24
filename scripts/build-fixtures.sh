@@ -4,10 +4,13 @@
 # Tests/Fixtures/signing/test-fixture-a.jks.
 #
 #   scripts/build-fixtures.sh                     build out/HelloText.apk and check its signer
+#   scripts/build-fixtures.sh --app HelloProbe    build out/HelloProbe.apk (#36 SELinux isolation)
 #   scripts/build-fixtures.sh --app HelloGL       build out/HelloGL.apk instead (the G3 gate, #24)
 #   scripts/build-fixtures.sh --app HelloCompose  build out/HelloCompose.apk instead (the list of #25, G5 of #31)
 #   scripts/build-fixtures.sh --app HelloWebView  build out/HelloWebView.apk instead (#30)
 #   scripts/build-fixtures.sh --app HelloSplit   build the xhdpi/ja/arm64 split set as out/HelloSplit.apks
+#   scripts/build-fixtures.sh --app SystemServicesTest --platform-test-key
+#                                                 build the composed-image instrumentation fixture (#36)
 #   scripts/build-fixtures.sh --check-reproducible
 #                                                 build twice from clean, and compare the badging, the dex
 #                                                 hashes, and the archive listing (build-system.md §14)
@@ -25,13 +28,17 @@ bundletool_sha256="a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028
 bundletool_url="https://github.com/google/bundletool/releases/download/$bundletool_version/bundletool-all-$bundletool_version.jar"
 # The SHA-256 of the test-only certificate of test-fixture-a.jks (IR-328). A signature from any other key fails.
 expected_signer_sha256="a2f3893391ae70e6faee50a05c0d0c4b94505781f7af0d547c1625399e05f8b4"
+expected_platform_signer_sha256="c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8"
+platform_test_key="$repo_root/Tests/Fixtures/signing/aosp-test-platform.pk8"
+platform_test_certificate="$repo_root/Tests/Fixtures/signing/aosp-test-platform.x509.pem"
 
 usage() {
-    printf 'usage: scripts/build-fixtures.sh [--app HelloText|HelloGL|HelloCompose|HelloWebView|HelloSplit] [--check-reproducible]\n' >&2
+    printf 'usage: scripts/build-fixtures.sh [--app HelloText|HelloProbe|HelloGL|HelloCompose|HelloWebView|HelloSplit|SystemServicesTest] [--platform-test-key] [--check-reproducible]\n' >&2
     exit 64
 }
 
 mode="build"
+platform_test_key_enabled=0
 while (($# > 0)); do
     case "$1" in
         --check-reproducible) mode="check" ;;
@@ -40,14 +47,42 @@ while (($# > 0)); do
             app="$2"
             shift
             ;;
+        --platform-test-key)
+            ((platform_test_key_enabled == 0)) || usage
+            platform_test_key_enabled=1
+            ;;
         *) usage ;;
     esac
     shift
 done
 case "$app" in
-    HelloText | HelloGL | HelloCompose | HelloWebView | HelloSplit) ;;
+    HelloText | HelloProbe | HelloGL | HelloCompose | HelloWebView | HelloSplit | SystemServicesTest) ;;
     *) usage ;;
 esac
+if ((platform_test_key_enabled)) && [[ "$app" != "SystemServicesTest" ]]; then
+    printf 'build-fixtures: --platform-test-key is reserved for the composed-image SystemServicesTest fixture\n' >&2
+    exit 64
+fi
+if [[ "$mode" == "build" && "$app" == "SystemServicesTest" ]] && ((platform_test_key_enabled == 0)); then
+    printf 'build-fixtures: SystemServicesTest must be signed for the composed image; pass --platform-test-key\n' >&2
+    exit 64
+fi
+if [[ "$mode" == "check" ]] && ((platform_test_key_enabled)); then
+    printf 'build-fixtures: --platform-test-key cannot be used with --check-reproducible\n' >&2
+    exit 64
+fi
+if ((platform_test_key_enabled)); then
+    [[ -f "$platform_test_key" && ! -L "$platform_test_key" ]] || {
+        printf 'build-fixtures: the AOSP platform test key is missing or symlinked: %s\n' \
+            "$platform_test_key" >&2
+        exit 78
+    }
+    [[ -f "$platform_test_certificate" && ! -L "$platform_test_certificate" ]] || {
+        printf 'build-fixtures: the AOSP platform test certificate is missing or symlinked: %s\n' \
+            "$platform_test_certificate" >&2
+        exit 78
+    }
+fi
 output_apk="$fixtures/out/$app.apk"
 gradle_apk="$fixtures/$app/build/outputs/apk/release/$app-release.apk"
 gradle_bundle="$fixtures/$app/build/outputs/bundle/release/$app-release.aab"
@@ -73,9 +108,10 @@ gradle_build() {
 # Fails unless the APK is signed only by the pinned test certificate.
 verify_signer() {
     local apk="$1"
+    local expected="${2:-$expected_signer_sha256}"
     local signers
     signers="$("$apksigner" verify --print-certs "$apk" | awk '/certificate SHA-256 digest/ { print $NF }' | sort -u)"
-    if [[ -z "$signers" || "$signers" != "$expected_signer_sha256" ]]; then
+    if [[ -z "$signers" || "$signers" != "$expected" ]]; then
         printf 'build-fixtures: %s is not signed by the test fixture key (signer %s)\n' "$apk" "$signers" >&2
         exit 1
     fi
@@ -164,10 +200,32 @@ if [[ "$mode" == "build" ]]; then
         exit 0
     fi
     gradle_build ":$app:assembleRelease"
-    verify_signer "$gradle_apk"
     mkdir -p "$(dirname "$output_apk")"
-    cp "$gradle_apk" "$output_apk"
+    if ((platform_test_key_enabled)); then
+        rm -f "$output_apk"
+        "$apksigner" sign \
+            --key "$platform_test_key" \
+            --cert "$platform_test_certificate" \
+            --out "$output_apk" \
+            "$gradle_apk"
+        verify_signer "$output_apk" "$expected_platform_signer_sha256"
+    else
+        verify_signer "$gradle_apk"
+        cp "$gradle_apk" "$output_apk"
+    fi
     printf 'build-fixtures: wrote %s\n' "$output_apk"
+    if [[ "$app" == "HelloProbe" ]]; then
+        fixture_directory="${APKRUN_TEST_FIXTURES_DIR:-/tmp/apkrun-test-fixtures}"
+        mkdir -p "$fixture_directory"
+        cp "$output_apk" "$fixture_directory/HelloProbe.apk"
+        printf 'build-fixtures: staged %s\n' "$fixture_directory/HelloProbe.apk"
+    fi
+    if [[ "$app" == "SystemServicesTest" ]]; then
+        fixture_directory="${APKRUN_TEST_FIXTURES_DIR:-/tmp/apkrun-test-fixtures}"
+        mkdir -p "$fixture_directory"
+        cp "$output_apk" "$fixture_directory/SystemServicesTest.apk"
+        printf 'build-fixtures: staged %s\n' "$fixture_directory/SystemServicesTest.apk"
+    fi
     exit 0
 fi
 

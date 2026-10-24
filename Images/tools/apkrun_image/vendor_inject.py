@@ -84,6 +84,7 @@ MESA_LIBRARIES = (
 )
 MESA_FILE_MODE = 0o644
 MESA_COMPONENT = "mesa"
+MESA_LOCK_GROUP = "guest-mesa"
 AVBTOOL_COMPONENT = "aosp-avbtool"
 AVBTOOL_PATH = "Images/tools/vendor/avb/avbtool.py"
 VERITY_PARTITION = "vendor"
@@ -172,6 +173,26 @@ def load_mesa_output(
         raise InjectError(
             "the Mesa output was built with other Meson flags than the lock pins; rebuild it."
         )
+    lock_record = document.get("lock")
+    lock_path = _repository_root() / "ThirdParty/ThirdParty.lock.json"
+    if (
+        lock_path.is_symlink()
+        or not lock_path.is_file()
+        or not isinstance(lock_record, dict)
+        or lock_record.get("path") != "ThirdParty/ThirdParty.lock.json"
+        or lock_record.get("group") != MESA_LOCK_GROUP
+        or lock_record.get("sha256") != sha256_file(lock_path)
+    ):
+        raise InjectError(
+            f"{manifest_path}: the Mesa output was not built from the current pinned "
+            "ThirdParty lock; rebuild and stage it."
+        )
+    tools = document.get("tools")
+    ndk = load_component("ndk")
+    if not isinstance(tools, dict) or tools.get("ndk") != ndk.get("version"):
+        raise InjectError(
+            f"{manifest_path}: the Mesa output was not built with the pinned NDK; rebuild it."
+        )
     records = document.get("files")
     if not isinstance(records, list) or len(records) != len(MESA_LIBRARIES):
         raise InjectError(f"{manifest_path}: expected exactly {len(MESA_LIBRARIES)} shipped files.")
@@ -197,9 +218,10 @@ def load_mesa_output(
         libraries.append(MesaLibrary(name=name, source=source, sha256=digest, size=size))
     provenance = {
         "manifestSha256": sha256_file(manifest_path),
+        "lockSHA256": lock_record["sha256"],
         "commit": mesa["commit"],
         "version": mesa["version"],
-        "ndk": (document.get("tools") or {}).get("ndk"),
+        "ndk": tools["ndk"],
         "buildFlags": document.get("buildFlags"),
     }
     return libraries, provenance

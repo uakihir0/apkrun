@@ -361,7 +361,7 @@ Implementation notes:
 ### 5.3 What the guest gets
 
 - GLES 3.0 through Mesa virgl (`ro.opengles.version=196608`). The guest has no Vulkan (`ro.cpuvulkan.version=0`). The bootconfig keys are in [android-image.md](android-image.md) §6.2.
-- The guest userspace (EGL, GLES, and the `virgl` gallium driver) is Mesa 26.1.8, built with NDK r28c outside the AOSP tree by `scripts/guest/build-mesa-android.sh` ([ADR-0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md)). `python3 -m apkrun_image inject-vendor` adds the Mesa libraries to `vendor_a` offline ([android-image.md](android-image.md) §1.2). The inject step does not re-sign the top-level vbmeta that covers `vendor_a`.
+- The guest userspace (EGL, GLES, and the `virgl` gallium driver) is Mesa 26.1.8, built with NDK r28c outside the AOSP tree by `scripts/guest/build-mesa-android.sh` and staged by `scripts/guest/stage-mesa-product.sh` ([ADR-0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md)). The #36 composer verifies the staged output, adds the libraries to `vendor_a`, and signs the updated vendor descriptor in the same `vbmeta_a` as the composed ODM policy ([android-image.md](android-image.md) §11.5). The standalone `inject-vendor` command remains an offline intermediate and does not by itself produce a bootable image.
 - The GL renderer string seen by apps contains `virgl`.
 - ANGLE-imposed limits show up as GLES 3.0 capability limits. Apps that require GLES 3.1 or Vulkan run at a lower compatibility level ([scope.md](../00-product/scope.md) §4).
 

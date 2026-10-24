@@ -1,4 +1,6 @@
 import AppKit
+import CoreFoundation
+import IOSurface
 import InputCore
 import Testing
 
@@ -23,6 +25,34 @@ private func pointerEvent(_ type: NSEvent.EventType) -> NSEvent {
     NSEvent.mouseEvent(
         with: type, location: CGPoint(x: 50, y: 50), modifierFlags: [], timestamp: 1.5,
         windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+}
+
+@MainActor
+@Test func framePresentationUsesTheIOSurfaceAsLayerContents() async throws {
+    let surface = try #require(
+        IOSurfaceCreate(
+            [
+                kIOSurfaceWidth as String: 4,
+                kIOSurfaceHeight as String: 4,
+                kIOSurfaceBytesPerElement as String: 4,
+                kIOSurfaceBytesPerRow as String: 16,
+                kIOSurfaceAllocSize as String: 64,
+                kIOSurfacePixelFormat as String: UInt32(0x4247_5241),
+            ] as CFDictionary)
+    )
+    let view = IOSurfaceLayerView(
+        frame: NSRect(x: 0, y: 0, width: 4, height: 4),
+        contentSize: CGSize(width: 4, height: 4),
+        contentScale: 1
+    )
+    let contentLayer = try #require(view.layer?.sublayers?.first)
+
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        view.show(surface, displayed: { continuation.resume() })
+    }
+
+    let displayedSurface = try #require(contentLayer.contents as? IOSurface)
+    #expect(IOSurfaceGetID(displayedSurface) == IOSurfaceGetID(surface))
 }
 
 @MainActor

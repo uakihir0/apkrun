@@ -26,10 +26,10 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     private let onGeometryChanged:
         ((CGSize, CGFloat, Double, @escaping @MainActor (DisplayResizeOutcome) -> Void) -> Void)?
     private var geometryDebounce: Task<Void, Never>?
-    private var geometryUpdatePending = false
-    private var pendingSurfaceGeneration: UInt64?
-    private var generationHasCommittedFrame = false
+    private var geometryRequests = SessionWindowGeometryRequests()
+    private var generationCommits = SessionWindowGenerationCommits()
     private var isShown = false
+    private var isVisible = false
 
     /// Creates the window for `source`, titled `title`, at the points of the source's pixel size divided by `backingScale`.
     /// The pointer events of the window go to `inputSink` (#25). Without a sink the window shows the frames only.
@@ -96,6 +96,18 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         window.delegate = self
         window.collectionBehavior = [.fullScreenPrimary]
         window.tabbingMode = .disallowed
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationDidHide(_:)),
+            name: NSApplication.didHideNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationDidUnhide(_:)),
+            name: NSApplication.didUnhideNotification,
+            object: nil
+        )
         // Pointer moves without a button are hover events, so the window needs them (input.md §4.1).
         window.acceptsMouseMovedEvents = true
         window.setContentSize(size)
@@ -114,6 +126,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         isShown = true
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(layerView)
+        updateVisibility()
         consumer = Task { [source] in
             for await event in source.frames {
                 self.apply(event)
@@ -143,7 +156,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         presentationState.markFailed()
         geometryDebounce?.cancel()
         geometryDebounce = nil
-        geometryUpdatePending = false
+        geometryRequests.discardPending()
         window.styleMask.remove(.resizable)
         layerView.setInputEnabled(false)
         placeholderView?.removeFromSuperview()
@@ -178,6 +191,31 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         onFocusChanged?(false)
     }
 
+    /// The window's occlusion changed, so the guest can pause presentations while it is hidden.
+    public func windowDidChangeOcclusionState(_ notification: Notification) {
+        updateVisibility()
+    }
+
+    /// The app was hidden, so its session should stop presenting frames.
+    @objc private func applicationDidHide(_ notification: Notification) {
+        updateVisibility()
+    }
+
+    /// The app became visible again, so its session can present the latest frame.
+    @objc private func applicationDidUnhide(_ notification: Notification) {
+        updateVisibility()
+    }
+
+    /// A minimized window is hidden even if its last recorded occlusion state was visible.
+    public func windowDidMiniaturize(_ notification: Notification) {
+        updateVisibility()
+    }
+
+    /// The restored window resumes presentation when its content is visible.
+    public func windowDidDeminiaturize(_ notification: Notification) {
+        updateVisibility()
+    }
+
     /// The window became key, so Android must focus the task on this window's display.
     public func windowDidBecomeKey(_ notification: Notification) {
         onFocusChanged?(true)
@@ -200,13 +238,25 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
 
     /// Ends the input, then stops the frames, and tells the owner that the user closed the window.
     public func windowWillClose(_ notification: Notification) {
+        updateVisibility(forceHidden: true)
         // The session route sends cancelAll before its display lease is released.
         layerView.focusLost(sendCancellation: false)
         geometryDebounce?.cancel()
         geometryDebounce = nil
+        isShown = false
+        geometryRequests.discardPending()
         consumer?.cancel()
         consumer = nil
         onClose?()
+    }
+
+    private func updateVisibility(forceHidden: Bool = false) {
+        let visible =
+            !forceHidden && isShown && !NSApp.isHidden && !window.isMiniaturized
+            && window.occlusionState.contains(.visible)
+        guard visible != isVisible else { return }
+        isVisible = visible
+        source.visibilityChanged(visible)
     }
 
     private func apply(_ event: FrameSourceEvent) {
@@ -214,10 +264,9 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         case .surfacesReplaced(let generation):
             guard generation > gate.generation else { return }
             gate.announce(generation: generation)
-            pendingSurfaceGeneration = max(pendingSurfaceGeneration ?? generation, generation)
-            generationHasCommittedFrame = false
+            generationCommits.require(generation)
             layerView.setInputEnabled(false)
-        case .frameReady(let generation, let bufferIndex, let sequence):
+        case .frameReady(let generation, let bufferIndex, let sequence, _):
             guard let surfaceSet = source.surfaceSet(generation: generation) else {
                 return
             }
@@ -228,10 +277,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
                 guard gate.generation == generation else {
                     return
                 }
-                if let pendingSurfaceGeneration, pendingSurfaceGeneration <= generation {
-                    self.pendingSurfaceGeneration = nil
-                }
-                generationHasCommittedFrame = false
+                generationCommits.require(generation)
                 layerView.setInputEnabled(false)
             }
             guard gate.accept(generation: generation, sequence: sequence),
@@ -255,9 +301,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
                     layerView.commitGeometry(generation: generation)
                 }
                 presentationState.markGeometrySynchronized(generation: generation)
-                if pendingSurfaceGeneration.map({ $0 <= generation }) ?? true {
-                    generationHasCommittedFrame = true
-                }
+                generationCommits.commit(generation)
                 presentationState.markFramePresented()
                 guard !presentationState.showsPlaceholder else {
                     updateInputAvailability()
@@ -274,7 +318,6 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         guard allowsResize, isShown, !presentationState.hasFailed else {
             return
         }
-        geometryUpdatePending = true
         layerView.setInputEnabled(false)
         geometryDebounce?.cancel()
         let requestedZoom = zoom ?? layerView.currentZoom
@@ -285,36 +328,77 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
             }
             geometryDebounce = nil
             guard let contentSize = window.contentView?.bounds.size else {
+                updateInputAvailability()
                 return
             }
-            guard let onGeometryChanged else {
-                geometryUpdateDidFinish(outcome: .rejected)
-                return
+            let request = geometryRequests.enqueue(
+                SessionWindowGeometry(
+                    width: contentSize.width,
+                    height: contentSize.height,
+                    backingScale: window.backingScaleFactor,
+                    zoom: requestedZoom
+                )
+            )
+            if let request {
+                dispatchGeometryRequest(request)
             }
-            onGeometryChanged(contentSize, window.backingScaleFactor, requestedZoom) { [weak self] outcome in
-                self?.geometryUpdateDidFinish(outcome: outcome)
-            }
+            updateInputAvailability()
         }
     }
 
-    private func geometryUpdateDidFinish(outcome: DisplayResizeOutcome) {
-        geometryUpdatePending = false
+    private func dispatchGeometryRequest(_ request: SessionWindowGeometryRequest) {
+        let startingGeneration = max(
+            max(gate.newestAnnouncedGeneration, source.currentSurfaceSet.generation),
+            generationCommits.requiredGeneration ?? 0
+        )
+        guard let onGeometryChanged else {
+            geometryUpdateDidFinish(
+                requestID: request.id,
+                startingGeneration: startingGeneration,
+                outcome: .rejected
+            )
+            return
+        }
+        onGeometryChanged(
+            CGSize(width: request.geometry.width, height: request.geometry.height),
+            CGFloat(request.geometry.backingScale),
+            request.geometry.zoom
+        ) { [weak self] outcome in
+            self?.geometryUpdateDidFinish(
+                requestID: request.id,
+                startingGeneration: startingGeneration,
+                outcome: outcome
+            )
+        }
+    }
+
+    private func geometryUpdateDidFinish(
+        requestID: UInt64,
+        startingGeneration: UInt64,
+        outcome: DisplayResizeOutcome
+    ) {
+        guard let completion = geometryRequests.complete(requestID) else {
+            // A duplicate or stale reply must not release a newer request or erase its pending geometry.
+            return
+        }
         switch outcome {
         case .applied:
-            let newestGeneration = source.currentSurfaceSet.generation
-            if newestGeneration > gate.generation {
-                gate.announce(generation: newestGeneration)
-                pendingSurfaceGeneration = max(pendingSurfaceGeneration ?? newestGeneration, newestGeneration)
-                generationHasCommittedFrame = false
-            }
+            let observedGeneration = max(source.currentSurfaceSet.generation, gate.newestAnnouncedGeneration)
+            let replacementGeneration =
+                observedGeneration > startingGeneration ? observedGeneration : startingGeneration &+ 1
+            gate.announce(generation: replacementGeneration)
+            generationCommits.require(replacementGeneration)
         case .rejected:
-            if pendingSurfaceGeneration == nil {
-                generationHasCommittedFrame = generationHasCommittedFrame || presentationState.hasPresentedFrame
-            }
+            break
         case .unchanged:
             break
         case .stateUncertain:
-            presentationState.markGeometryUncertain(after: source.currentSurfaceSet.generation)
+            presentationState.markGeometryUncertain(
+                after: max(source.currentSurfaceSet.generation, startingGeneration)
+            )
+        }
+        if let next = completion.next, isShown, !presentationState.hasFailed {
+            dispatchGeometryRequest(next)
         }
         updateInputAvailability()
     }
@@ -323,10 +407,96 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         layerView.inputSink = inputSink
         layerView.setInputEnabled(
             presentationState.acceptsInput
-                && generationHasCommittedFrame
-                && pendingSurfaceGeneration == nil
-                && !geometryUpdatePending
+                && generationCommits.hasCommitted(gate.generation)
+                && !generationCommits.isAwaitingCommit
+                && geometryDebounce == nil
+                && !geometryRequests.hasRequests
         )
+    }
+}
+
+/// Window size and scale captured after the resize debounce has settled.
+struct SessionWindowGeometry: Equatable, Sendable {
+    let width: CGFloat
+    let height: CGFloat
+    let backingScale: CGFloat
+    let zoom: Double
+}
+
+/// One resize RPC, identified so duplicate or delayed completions cannot release a newer request.
+struct SessionWindowGeometryRequest: Equatable, Sendable {
+    let id: UInt64
+    let geometry: SessionWindowGeometry
+}
+
+/// Serializes resize RPCs and keeps only the most recently debounced geometry behind an active request.
+struct SessionWindowGeometryRequests: Equatable, Sendable {
+    private(set) var inFlight: SessionWindowGeometryRequest?
+    private(set) var pending: SessionWindowGeometryRequest?
+    private var nextID: UInt64 = 1
+
+    var hasRequests: Bool {
+        inFlight != nil || pending != nil
+    }
+
+    /// Starts the request when idle, otherwise replaces the single pending snapshot.
+    mutating func enqueue(_ geometry: SessionWindowGeometry) -> SessionWindowGeometryRequest? {
+        let request = SessionWindowGeometryRequest(id: nextID, geometry: geometry)
+        nextID &+= 1
+        guard inFlight == nil else {
+            pending = request
+            return nil
+        }
+        inFlight = request
+        return request
+    }
+
+    /// Completes only the active request, then promotes the newest pending geometry.
+    mutating func complete(_ id: UInt64) -> (
+        completed: SessionWindowGeometryRequest,
+        next: SessionWindowGeometryRequest?
+    )? {
+        guard let completed = inFlight, completed.id == id else {
+            return nil
+        }
+        let next = pending
+        inFlight = next
+        pending = nil
+        return (completed, next)
+    }
+
+    mutating func discardPending() {
+        pending = nil
+    }
+}
+
+/// Tracks which IOSurface generation has reached Core Animation before input is re-enabled.
+struct SessionWindowGenerationCommits: Equatable, Sendable {
+    private(set) var committedGeneration: UInt64?
+    private(set) var requiredGeneration: UInt64?
+
+    var isAwaitingCommit: Bool {
+        requiredGeneration != nil
+    }
+
+    func hasCommitted(_ generation: UInt64) -> Bool {
+        committedGeneration.map { $0 >= generation } ?? false
+    }
+
+    mutating func require(_ generation: UInt64) {
+        let required = max(requiredGeneration ?? generation, generation)
+        if hasCommitted(required) {
+            requiredGeneration = nil
+        } else {
+            requiredGeneration = required
+        }
+    }
+
+    mutating func commit(_ generation: UInt64) {
+        committedGeneration = max(committedGeneration ?? generation, generation)
+        if let requiredGeneration, hasCommitted(requiredGeneration) {
+            self.requiredGeneration = nil
+        }
     }
 }
 

@@ -69,6 +69,21 @@ extension RuntimeControlClientError: LocalizedError {
     }
 }
 
+extension RuntimeControlClientError {
+    /// Whether a failed session resize may have changed Android's display despite losing a usable reply.
+    public var sessionResizeResultIsUncertain: Bool {
+        switch self {
+        case .malformedReply, .transportFailure, .requestTimedOut, .operationResultUnknown:
+            true
+        case .remoteFailure(let code, _):
+            code == "runtime.internal"
+        case .invalidClientIdentity, .apiVersionMismatch, .endpointRejected, .endpointMissing, .invalidXPCInterface,
+            .invalidRemoteProxy, .requestCancelled, .encodingFailure:
+            false
+        }
+    }
+}
+
 /// The first RuntimeAPI control client. It authenticates the daemon, obtains an anonymous control
 /// endpoint through the broker, then reuses that endpoint for status, start, and stop requests.
 public actor RuntimeControlClient {

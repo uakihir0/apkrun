@@ -264,6 +264,29 @@ private func sessionTestSurfaceSet(generation: UInt32) -> SurfaceSet {
     #expect(gate.waitingCount == 0)
 }
 
+@Test func sessionResizeErrorsPreserveWhetherTheResultIsUncertain() {
+    #expect(
+        RuntimeControlClientError.transportFailure(domain: "NSCocoaErrorDomain", code: 4097)
+            .sessionResizeResultIsUncertain)
+    #expect(RuntimeControlClientError.requestTimedOut(operation: "sessionResize").sessionResizeResultIsUncertain)
+    #expect(RuntimeControlClientError.operationResultUnknown(operation: "sessionResize").sessionResizeResultIsUncertain)
+    #expect(RuntimeControlClientError.malformedReply.sessionResizeResultIsUncertain)
+    #expect(!RuntimeControlClientError.requestCancelled(operation: "sessionResize").sessionResizeResultIsUncertain)
+    #expect(!RuntimeControlClientError.invalidRemoteProxy.sessionResizeResultIsUncertain)
+    #expect(
+        RuntimeControlClientError.remoteFailure(code: "runtime.internal", message: "Internal error")
+            .sessionResizeResultIsUncertain
+    )
+    #expect(
+        !RuntimeControlClientError.remoteFailure(
+            code: "runtime.displayReconfigureFailed",
+            message: "The previous display mode was restored."
+        )
+        .sessionResizeResultIsUncertain
+    )
+    #expect(!RuntimeControlClientError.encodingFailure.sessionResizeResultIsUncertain)
+}
+
 @Test func invalidatedSessionStreamsCanRouteTheExistingEventSinkToAReopenedSession() async throws {
     let previousHub = RuntimeSessionEventStreamHub()
     let reopenedHub = RuntimeSessionEventStreamHub()

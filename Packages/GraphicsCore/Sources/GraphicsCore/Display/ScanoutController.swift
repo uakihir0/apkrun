@@ -76,6 +76,20 @@ public protocol ScanoutController: Sendable {
 
     /// Detaches one pool. A generation mismatch leaves a newer lease untouched.
     func detachPool(_ scanout: ScanoutID, generation: UInt64?)
+
+    /// Stops presenting while a scanout is hidden. Becoming visible requests a fresh present of its bound resource.
+    func visibilityChanged(_ scanout: ScanoutID, visible: Bool)
+
+    /// Re-presents the resource currently bound to a scanout without waiting for another guest flush.
+    func requestPresent(_ scanout: ScanoutID)
+}
+
+extension ScanoutController {
+    /// Compatibility default for controllers that do not own a live presenter.
+    public func visibilityChanged(_ scanout: ScanoutID, visible: Bool) {}
+
+    /// Compatibility default for controllers that do not own a live presenter.
+    public func requestPresent(_ scanout: ScanoutID) {}
 }
 
 /// Production scanout operations backed by one running or booting virtio-gpu device.
@@ -122,5 +136,15 @@ public final class VirtioGPUScanoutController: ScanoutController, Sendable {
     /// Detaches the pool only when its generation still owns the scanout.
     public func detachPool(_ scanout: ScanoutID, generation: UInt64?) {
         _ = device.detachPresenter(scanout, generation: generation)
+    }
+
+    /// Pauses hidden scanouts and immediately refreshes the bound resource when visibility returns.
+    public func visibilityChanged(_ scanout: ScanoutID, visible: Bool) {
+        device.visibilityChanged(scanout, visible: visible)
+    }
+
+    /// Re-presents the resource currently bound to the selected scanout.
+    public func requestPresent(_ scanout: ScanoutID) {
+        device.requestPresent(scanout)
     }
 }

@@ -37,7 +37,7 @@ public enum DevelopmentDisplayEvent: @unchecked Sendable {
     /// A reconfigured pool replaced the previous generation.
     case surfacesReplaced(surfaceSet: DevelopmentSurfaceSet)
     /// Buffer `bufferIndex` of `generation` is ready to show as frame `sequence`.
-    case frameReady(generation: UInt64, bufferIndex: Int, sequence: UInt64)
+    case frameReady(generation: UInt64, bufferIndex: Int, sequence: UInt64, presentationTime: UInt64 = 0)
 }
 
 /// The counters of a development display, for the window's statistics (graphics.md §7).
@@ -384,9 +384,14 @@ public final class DevelopmentDisplay: @unchecked Sendable {
         let continuation = continuation
         Task {
             for await frame in presenter.frames {
-                if case .frameReady(let generation, let bufferIndex, let sequence) = frame {
+                if case .frameReady(let generation, let bufferIndex, let sequence, let presentationTime) = frame {
                     continuation.yield(
-                        .frameReady(generation: generation, bufferIndex: bufferIndex, sequence: sequence)
+                        .frameReady(
+                            generation: generation,
+                            bufferIndex: bufferIndex,
+                            sequence: sequence,
+                            presentationTime: presentationTime
+                        )
                     )
                 }
             }
@@ -397,9 +402,14 @@ public final class DevelopmentDisplay: @unchecked Sendable {
         let continuation = continuation
         Task {
             for await frame in pool.frames {
-                if case .frameReady(let generation, let bufferIndex, let sequence) = frame {
+                if case .frameReady(let generation, let bufferIndex, let sequence, let presentationTime) = frame {
                     continuation.yield(
-                        .frameReady(generation: generation, bufferIndex: bufferIndex, sequence: sequence)
+                        .frameReady(
+                            generation: generation,
+                            bufferIndex: bufferIndex,
+                            sequence: sequence,
+                            presentationTime: presentationTime
+                        )
                     )
                 }
             }

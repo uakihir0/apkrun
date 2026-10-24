@@ -74,6 +74,7 @@ final class FakeVirGLEngine: VirGLEngine, @unchecked Sendable {
     private var failing: Set<String> = []
     /// The byte that `transferRead` writes into every byte of the box.
     private var readFill: UInt8 = 0x5A
+    private var nextPresentTargetCreationHook: (@Sendable () -> Void)?
 
     init(onFence: @escaping @Sendable (UInt32) -> Void) {
         self.onFence = onFence
@@ -92,6 +93,11 @@ final class FakeVirGLEngine: VirGLEngine, @unchecked Sendable {
     /// Sets the byte that a readback writes.
     func setReadFill(_ value: UInt8) {
         lock.withLock { readFill = value }
+    }
+
+    /// Runs once while the next present target is being created.
+    func interceptNextPresentTargetCreation(_ hook: @escaping @Sendable () -> Void) {
+        lock.withLock { nextPresentTargetCreationHook = hook }
     }
 
     /// Completes every fence created so far, as virglrenderer does once the GPU has finished.
@@ -132,6 +138,11 @@ final class FakeVirGLEngine: VirGLEngine, @unchecked Sendable {
     func createPresentTarget(surface: IOSurface, width: UInt32, height: UInt32) throws(GraphicsFailure)
         -> any PresentTarget
     {
+        let hook = lock.withLock { () -> (@Sendable () -> Void)? in
+            defer { nextPresentTargetCreationHook = nil }
+            return nextPresentTargetCreationHook
+        }
+        hook?()
         try record(.presentTargetCreate(width: width, height: height), operation: "presentTargetCreate")
         let id = lock.withLock { () -> Int in
             let id = nextPresentTargetID

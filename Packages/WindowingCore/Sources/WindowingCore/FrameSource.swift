@@ -42,7 +42,7 @@ public struct FrameSurfaceSet: @unchecked Sendable {
 public enum FrameSourceEvent: Equatable, Sendable {
     /// The source installed this pool generation. It may be recovered from a following frame if this event is dropped.
     case surfacesReplaced(generation: UInt64)
-    case frameReady(generation: UInt64, bufferIndex: Int, sequence: UInt64)
+    case frameReady(generation: UInt64, bufferIndex: Int, sequence: UInt64, presentationTime: UInt64 = 0)
 }
 
 /// Where a display window gets its frames (display-and-windowing.md §5.3).
@@ -67,4 +67,11 @@ public protocol FrameSource: Sendable {
     var frames: AsyncStream<FrameSourceEvent> { get }
     /// The window has displayed frame `sequence`.
     func frameDisplayed(generation: UInt64, sequence: UInt64)
+    /// The window became visible or hidden, so the presenter may pause or resume scanout work.
+    func visibilityChanged(_ visible: Bool)
+}
+
+extension FrameSource {
+    /// Sources without a remote session can ignore visibility changes.
+    public func visibilityChanged(_ visible: Bool) {}
 }

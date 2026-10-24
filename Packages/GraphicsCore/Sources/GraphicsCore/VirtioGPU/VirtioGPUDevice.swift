@@ -438,28 +438,33 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
         )
 
         var failure: GraphicsFailure?
-        let replaced = sessionLock.withLock { () -> ScanoutPresenter? in
-            guard !lock.withLock({ isShuttingDown }) else {
-                failure = .configUpdateFailed(detail: "The graphics device is shutting down.")
-                return nil
+        // Visibility updates take this lock before `sessionLock`. Taking it here keeps the
+        // current presenter's visibility stable while the candidate inherits it and is swapped in.
+        let replaced = presenterLifecycleLock.withLock {
+            sessionLock.withLock { () -> ScanoutPresenter? in
+                guard !lock.withLock({ isShuttingDown }) else {
+                    failure = .configUpdateFailed(detail: "The graphics device is shutting down.")
+                    return nil
+                }
+                guard current.quiesceForReplacement() else {
+                    failure = .configUpdateFailed(
+                        detail:
+                            "The current scanout blit did not finish within \(ScanoutPresenter.replacementWaitSeconds) seconds; the existing display mode was kept."
+                    )
+                    return nil
+                }
+                do throws(GraphicsFailure) {
+                    try enableScanout(scanout, mode: mode)
+                } catch {
+                    current.resumeAfterFailedReplacement()
+                    failure = error
+                    return nil
+                }
+                candidate.setVisible(current.visibilityForReplacement)
+                let old = session.replacePresenter(candidate)
+                old?.close()
+                return old
             }
-            guard current.quiesceForReplacement() else {
-                failure = .configUpdateFailed(
-                    detail:
-                        "The current scanout blit did not finish within \(ScanoutPresenter.replacementWaitSeconds) seconds; the existing display mode was kept."
-                )
-                return nil
-            }
-            do throws(GraphicsFailure) {
-                try enableScanout(scanout, mode: mode)
-            } catch {
-                current.resumeAfterFailedReplacement()
-                failure = error
-                return nil
-            }
-            let old = session.replacePresenter(candidate)
-            old?.close()
-            return old
         }
         guard replaced === current else {
             candidate.close()
@@ -484,6 +489,32 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
             return current?.generation == generation ? current : nil
         }
         presenter?.frameDisplayed(upTo: sequence)
+    }
+
+    /// Pauses presents while a scanout is hidden and re-presents its current binding when it becomes visible.
+    public func visibilityChanged(_ scanout: ScanoutID, visible: Bool) {
+        presenterLifecycleLock.lock()
+        defer { presenterLifecycleLock.unlock() }
+        guard !lock.withLock({ isShuttingDown }) else { return }
+        let work = sessionLock.withLock {
+            session.visibilityChanged(scanout: scanout, visible: visible)
+        }
+        if let work {
+            backend?.submitRenderWork(work)
+        }
+    }
+
+    /// Re-presents the resource currently bound to `scanout` without waiting for another guest flush.
+    public func requestPresent(_ scanout: ScanoutID) {
+        presenterLifecycleLock.lock()
+        defer { presenterLifecycleLock.unlock() }
+        guard !lock.withLock({ isShuttingDown }) else { return }
+        let work = sessionLock.withLock {
+            session.requestPresent(scanout)
+        }
+        if let work {
+            backend?.submitRenderWork(work)
+        }
     }
 
     /// Enables `scanout` with `mode` and tells the guest about the change.

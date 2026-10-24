@@ -1,3 +1,4 @@
+import Darwin
 import DiagnosticsCore
 import Dispatch
 import Foundation
@@ -20,7 +21,7 @@ public struct PresentStatistics: Equatable, Sendable {
 
 /// A frame whose blit has finished, so the consumer may show buffer `bufferIndex` of `generation`.
 public enum ScanoutFrame: Equatable, Sendable {
-    case frameReady(generation: UInt64, bufferIndex: Int, sequence: UInt64)
+    case frameReady(generation: UInt64, bufferIndex: Int, sequence: UInt64, presentationTime: UInt64 = 0)
 }
 
 /// A sequence shared by successive pools of one scanout, so late frame acknowledgements remain unambiguous.
@@ -75,6 +76,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
     private var statisticsValue = PresentStatistics()
     private var isClosed = false
     private var isReconfiguring = false
+    private var isVisible = true
     private let waiter = DispatchQueue(label: "io.apkrun.graphics.present-waiter")
     private let waits = DispatchGroup()
     private let logger = APKLogger(category: GraphicsLogCategory.present)
@@ -152,6 +154,11 @@ public final class ScanoutPresenter: @unchecked Sendable {
         lock.withLock { statisticsValue }
     }
 
+    /// The visibility to transfer when replacing this presenter's pool.
+    var visibilityForReplacement: Bool {
+        lock.withLock { isVisible }
+    }
+
     /// The device queue asks for a present of `resource` through `source`, the scanout rectangle of SET_SCANOUT.
     ///
     /// Returns the render work that runs the blit, or `nil` when the frame is held. A held frame is replaced by a newer
@@ -161,13 +168,49 @@ public final class ScanoutPresenter: @unchecked Sendable {
         lock.withLock {
             guard !isClosed, !isReconfiguring else { return nil }
             let request = PresentRequest(resource: resource, source: source)
+            guard isVisible else {
+                scheduler.hold(request)
+                statisticsValue.droppedFrames = scheduler.droppedFrames
+                return nil
+            }
             guard let runnable = scheduler.submit(request) else {
+                statisticsValue.droppedFrames = scheduler.droppedFrames
                 return nil
             }
             if let work = startBlitLocked(runnable) {
                 return work
             }
             scheduler.hold(runnable)
+            statisticsValue.droppedFrames = scheduler.droppedFrames
+            return nil
+        }
+    }
+
+    /// Stops new blits while hidden. The latest pending guest request remains queued for the next visible present.
+    func setVisible(_ visible: Bool) {
+        lock.withLock {
+            guard !isClosed, !isReconfiguring else { return }
+            isVisible = visible
+        }
+    }
+
+    /// Re-presents the scanout's currently bound resource without waiting for another guest flush.
+    ///
+    /// A fresh request supersedes any older hidden request, so the content shown after resume is the current guest
+    /// resource. The caller supplies the binding from GuestGPUSession, which owns that state.
+    func requestPresent(resource: UInt32, source: VirtioGPURect) -> VirGLRenderWork? {
+        lock.withLock {
+            guard !isClosed, !isReconfiguring, isVisible else { return nil }
+            let request = PresentRequest(resource: resource, source: source)
+            guard let runnable = scheduler.submit(request) else {
+                statisticsValue.droppedFrames = scheduler.droppedFrames
+                return nil
+            }
+            if let work = startBlitLocked(runnable) {
+                return work
+            }
+            scheduler.hold(runnable)
+            statisticsValue.droppedFrames = scheduler.droppedFrames
             return nil
         }
     }
@@ -178,7 +221,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
         lock.withLock {
             pool.consumerDisplayed(upTo: sequence)
             // Submitted under the lock, so a close that follows queues its target release after this blit.
-            if !isReconfiguring, let work = startPendingLocked() {
+            if isVisible, !isReconfiguring, let work = startPendingLocked() {
                 backend.submitRenderWork(work)
             }
         }
@@ -273,7 +316,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
 
     /// Starts the held flush, if one is waiting and a buffer is free. The caller holds the lock.
     private func startPendingLocked() -> VirGLRenderWork? {
-        guard !isClosed, !isReconfiguring, let request = scheduler.takePending() else {
+        guard !isClosed, !isReconfiguring, isVisible, let request = scheduler.takePending() else {
             return nil
         }
         if let work = startBlitLocked(request) {
@@ -331,7 +374,14 @@ public final class ScanoutPresenter: @unchecked Sendable {
             scheduler.endBlit()
             statisticsValue.framesPresented &+= 1
             statisticsValue.droppedFrames = scheduler.droppedFrames
-            continuation.yield(.frameReady(generation: pool.generation, bufferIndex: index, sequence: sequence))
+            continuation.yield(
+                .frameReady(
+                    generation: pool.generation,
+                    bufferIndex: index,
+                    sequence: sequence,
+                    presentationTime: mach_absolute_time()
+                )
+            )
             if let work = startPendingLocked() {
                 backend.submitRenderWork(work)
             }

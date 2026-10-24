@@ -36,7 +36,7 @@ import Testing
     #expect(!state.acceptsInput)
 }
 
-@Test func failedModeRestorationKeepsInputDisabledUntilANewerGenerationCommits() {
+@Test func uncertainResizeOutcomeKeepsInputDisabledUntilANewerGenerationCommits() {
     var state = SessionWindowPresentationState()
     state.markFramePresented()
     state.markGeometryUncertain(after: 2)

@@ -118,7 +118,7 @@ private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
                             }
                         completion(outcome)
                     } catch {
-                        completion(.rejected)
+                        completion(error.sessionResizeResultIsUncertain ? .stateUncertain : .rejected)
                     }
                 }
             }

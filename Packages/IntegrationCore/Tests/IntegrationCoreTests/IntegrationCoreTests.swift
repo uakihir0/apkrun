@@ -34,7 +34,6 @@ import Testing
     let totalBytes = try FileTransferLimits.validate(files)
 
     #expect(totalBytes == FileTransferLimits.maximumTotalBytes)
-    #expect(try FileTransferLimits.validate([]) == 0)
     #expect(
         try FileTransferLimits.validate(
             (0..<FileTransferLimits.maximumFileCount).map {
@@ -42,6 +41,15 @@ import Testing
             }
         ) == 0
     )
+}
+
+@Test func fileTransferLimitsRejectEmptyBatches() {
+    do {
+        _ = try FileTransferLimits.validate([])
+        Issue.record("Expected an empty-batch failure.")
+    } catch {
+        #expect(error == .emptyFileSet)
+    }
 }
 
 @Test func fileTransferLimitsRejectTooManyFiles() {

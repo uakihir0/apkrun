@@ -378,6 +378,7 @@ A subfolder of the home folder, such as `~/Documents` or `~/Downloads`, can be a
 3. only regular files and directories. Hidden files (a leading `.`) and packages (`.app`, `.photoslibrary`) are not listed and cannot be opened;
 4. limits: 4096 entries per listing page, 1 MiB per read or write, 64 open handles per package, and handles closed when the runtime stops.
 
+- `com.android.documentsui` may list root and child metadata for roots granted to at least one package. This picker context exposes names and basic metadata only. Content operations use the package that owns the granted document URI, and the host checks that package against its own settings again for each open, read, and write.
 - Files created or written by Android get `com.apple.quarantine` (§6.1).
 - Folders inside Desktop, Documents, Downloads, iCloud Drive, or on network or removable volumes are protected by macOS privacy controls. apkrund asks for access on first use, and macOS attributes the prompt to APKRun. If access is denied, the root is shown as unavailable in the picker and in Settings, with the steps to allow it. R-22.
 - The root list and each root's access are stored in the app configuration with bookmarks (`sharedFolders.roots`), so renamed or moved folders are followed.
@@ -528,13 +529,22 @@ public enum IntegrationFailure: APKRunError {
     case guestUnavailable                          // agent not connected; the operation is not queued
     case clipboardTooLarge(bytes: Int, limit: Int)
     case linkRejected(LinkRejection)               // .scheme, .tooLong, .notFocused, .rateLimited
+    case emptyFileSet
+    case filesDisabled
+    case invalidFileHandle
+    case invalidMetadata
     case tooManyFiles(count: Int, limit: Int)
-    case fileTooLarge(name: String, bytes: Int64)
-    case transferFailed(String)                    // bulk abort, hash mismatch
-    case folderUnavailable(FolderProblem)          // .missing, .privacyDenied, .offline
+    case fileTooLarge(name: String, bytes: UInt64)
+    case transferFailed                            // bulk abort, hash mismatch, or file-system failure
+    case folderUnavailable(FolderProblem, name: String) // .missing, .privacyDenied, .offline
     case pathRejected(PathProblem)                 // .outsideRoot, .hidden, .notRegularFile
     case folderRefused(FolderRefusal)              // addSharedFolder: .volumeRoot, .homeFolder, .insideLibrary, .hidden, .limitReached (§6.4)
+    case packageAccessDenied
     case readOnly
+    case resourceExhausted
+    case itemNotFound
+    case invalidRequest
+    case invalidRootConfiguration
     case notificationPermissionDenied
     case microphonePermissionDenied
     case microphoneNeedsRestart

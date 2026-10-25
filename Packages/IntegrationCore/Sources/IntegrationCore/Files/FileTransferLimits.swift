@@ -26,6 +26,9 @@ public enum FileTransferLimits {
 
     /// Validates item count, individual sizes, and the combined size using overflow-safe arithmetic.
     public static func validate(_ files: [FileTransferItem]) throws(IntegrationFailure) -> UInt64 {
+        guard !files.isEmpty else {
+            throw .emptyFileSet
+        }
         guard files.count <= maximumFileCount else {
             throw .tooManyFiles(count: files.count, limit: maximumFileCount)
         }

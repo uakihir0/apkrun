@@ -2692,6 +2692,324 @@
         "raisedBy": "DropTarget, FileTransferService",
         "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.2"
       }
+    },
+    {
+      "code": "integration.emptyFileSet",
+      "parameters": [],
+      "message": {
+        "en": "Select at least one file to share.",
+        "ja": "共有するファイルを 1 つ以上選択してください。"
+      },
+      "remediation": {
+        "en": "Choose one or more files, then try again.",
+        "ja": "ファイルを 1 つ以上選択して、もう一度お試しください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "emptyFileSet",
+        "when": "a file import operation contains no files",
+        "raisedBy": "FileTransferLimits",
+        "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.2"
+      }
+    },
+    {
+      "code": "integration.filesDisabled",
+      "parameters": [],
+      "message": {
+        "en": "File sharing is turned off for this Android app.",
+        "ja": "この Android アプリではファイル共有がオフになっています。"
+      },
+      "remediation": {
+        "en": "Turn on Files in the app's settings in APKRun.",
+        "ja": "APKRun のアプリ設定で「ファイル」をオンにしてください。"
+      },
+      "action": "none",
+      "cliExit": 5,
+      "doc": {
+        "case": "filesDisabled",
+        "when": "the package's integrations.files setting is false",
+        "raisedBy": "FileTransferService",
+        "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §2.1, §6.2"
+      }
+    },
+    {
+      "code": "integration.invalidFileHandle",
+      "parameters": [],
+      "message": {
+        "en": "APKRun couldn't read the file selected for sharing.",
+        "ja": "共有するファイルを読み取れませんでした。"
+      },
+      "remediation": {
+        "en": "Choose the file again and try again.",
+        "ja": "ファイルを選び直して、もう一度お試しください。"
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "invalidFileHandle",
+        "when": "a file transfer uses an invalid handle or the handle does not reference a regular file",
+        "raisedBy": "FileTransferService",
+        "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.2"
+      }
+    },
+    {
+      "code": "integration.invalidMetadata",
+      "parameters": [],
+      "message": {
+        "en": "APKRun couldn't verify the file selected for sharing.",
+        "ja": "共有するファイルを確認できませんでした。"
+      },
+      "remediation": {
+        "en": "Choose the file again and try again.",
+        "ja": "ファイルを選び直して、もう一度お試しください。"
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "invalidMetadata",
+        "when": "the file size or metadata differs from the open file",
+        "raisedBy": "FileTransferService",
+        "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.2"
+      }
+    },
+    {
+      "code": "integration.transferFailed",
+      "parameters": [],
+      "message": {
+        "en": "The file transfer didn't finish.",
+        "ja": "ファイルの転送を完了できませんでした。"
+      },
+      "remediation": {
+        "en": "Try again.",
+        "ja": "もう一度お試しください。"
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "transferFailed",
+        "when": "a file system operation fails or a transferred file fails integrity validation",
+        "raisedBy": "FileTransferService, SharedFolderService",
+        "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.2–§6.4"
+      }
+    },
+    {
+      "code": "integration.folderUnavailable",
+      "parameters": [
+        "file",
+        "reason"
+      ],
+      "message": {
+        "en": "APKRun can't access the shared folder {file}.",
+        "ja": "APKRun は共有フォルダ {file} にアクセスできません。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "variants": {
+        "missing": {
+          "message": {
+            "en": "The shared folder {file} doesn't exist any more.",
+            "ja": "共有フォルダ {file} が見つかりません。"
+          },
+          "remediation": {
+            "en": "Put the folder back, or remove it in Settings → Files.",
+            "ja": "フォルダを元に戻すか、設定 → ファイルから削除してください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "a configured root no longer exists",
+            "raisedBy": "SharedFolderService",
+            "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        },
+        "offline": {
+          "message": {
+            "en": "The shared folder {file} isn't available right now.",
+            "ja": "共有フォルダ {file} は現在利用できません。"
+          },
+          "remediation": {
+            "en": "Connect the drive or network volume that contains it.",
+            "ja": "フォルダがあるドライブまたはネットワークボリュームに接続してください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "a configured root's volume is offline",
+            "raisedBy": "SharedFolderService",
+            "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        },
+        "privacyDenied": {
+          "message": {
+            "en": "macOS doesn't allow APKRun to access the shared folder {file}.",
+            "ja": "macOS は APKRun に共有フォルダ {file} へのアクセスを許可していません。"
+          },
+          "remediation": {
+            "en": "Allow APKRun in System Settings → Privacy & Security → Files and Folders.",
+            "ja": "システム設定 → プライバシーとセキュリティ → ファイルとフォルダで APKRun を許可してください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "macOS privacy controls deny access to a configured root",
+            "raisedBy": "SharedFolderService",
+            "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        }
+      },
+      "doc": {
+        "case": "folderUnavailable(FolderProblem, name:)",
+        "when": "a configured shared-folder root cannot be accessed",
+        "raisedBy": "SharedFolderService",
+        "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+      }
+    },
+    {
+      "code": "integration.pathRejected",
+      "parameters": [
+        "reason"
+      ],
+      "message": {
+        "en": "Android asked for a file that APKRun doesn't share.",
+        "ja": "Android から APKRun が共有していないファイルへの要求がありました。"
+      },
+      "action": "none",
+      "cliExit": 5,
+      "variants": {
+        "hidden": {
+          "doc": {
+            "when": "a path contains a hidden item or package bundle",
+            "raisedBy": "SharedFolderService",
+            "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.4 rule 3"
+          }
+        },
+        "notRegularFile": {
+          "doc": {
+            "when": "a requested path resolves to something other than a regular file or directory",
+            "raisedBy": "SharedFolderService",
+            "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.4 rule 3"
+          }
+        },
+        "outsideRoot": {
+          "doc": {
+            "when": "a path is absolute, traverses above the root, or crosses a symlink",
+            "raisedBy": "SharedFolderService",
+            "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.4 rule 2"
+          }
+        }
+      },
+      "doc": {
+        "case": "pathRejected(PathProblem)",
+        "when": "an Android request names a hidden item, an item outside its root, or a non-file system object",
+        "raisedBy": "SharedFolderService",
+        "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.4 rules 2–3"
+      }
+    },
+    {
+      "code": "integration.packageAccessDenied",
+      "parameters": [],
+      "message": {
+        "en": "This Android app doesn't have access to the shared folder.",
+        "ja": "この Android アプリは共有フォルダにアクセスできません。"
+      },
+      "action": "none",
+      "cliExit": 5,
+      "doc": {
+        "case": "packageAccessDenied",
+        "when": "a request uses an unknown root, a handle owned by another package, or a package without effective root access",
+        "raisedBy": "SharedFolderService",
+        "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §2.1, §6.4"
+      }
+    },
+    {
+      "code": "integration.readOnly",
+      "parameters": [],
+      "message": {
+        "en": "This shared folder is read only.",
+        "ja": "この共有フォルダは読み取り専用です。"
+      },
+      "remediation": {
+        "en": "Allow Read and write in the app's shared-folder settings and for this folder in Settings → Files.",
+        "ja": "アプリの共有フォルダ設定と、設定 → ファイルにあるこのフォルダのアクセスを「読み書き」にしてください。"
+      },
+      "action": "none",
+      "cliExit": 5,
+      "doc": {
+        "case": "readOnly",
+        "when": "a write, create, delete, or rename is requested without effective read/write access",
+        "raisedBy": "SharedFolderService",
+        "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §2.1, §6.4"
+      }
+    },
+    {
+      "code": "integration.resourceExhausted",
+      "parameters": [],
+      "message": {
+        "en": "Too many shared-folder operations are open at once.",
+        "ja": "共有フォルダの操作が同時に多すぎます。"
+      },
+      "remediation": {
+        "en": "Close open files and try again.",
+        "ja": "開いているファイルを閉じて、もう一度お試しください。"
+      },
+      "action": "retry",
+      "cliExit": 75,
+      "doc": {
+        "case": "resourceExhausted",
+        "when": "a package exceeds 64 open handles or the service has 16 requests in flight",
+        "raisedBy": "SharedFolderService",
+        "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+      }
+    },
+    {
+      "code": "integration.itemNotFound",
+      "parameters": [],
+      "message": {
+        "en": "The requested shared-folder item doesn't exist.",
+        "ja": "要求された共有フォルダ内の項目が見つかりません。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "itemNotFound",
+        "when": "a requested child, file, or directory no longer exists",
+        "raisedBy": "SharedFolderService",
+        "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+      }
+    },
+    {
+      "code": "integration.invalidRequest",
+      "parameters": [],
+      "message": {
+        "en": "Android sent an invalid shared-folder request.",
+        "ja": "Android から不正な共有フォルダ要求がありました。"
+      },
+      "action": "none",
+      "cliExit": 70,
+      "doc": {
+        "case": "invalidRequest",
+        "when": "a host request has an invalid range, page token, or filename",
+        "raisedBy": "SharedFolderService",
+        "ref": "[guest-protocol.md](../02-design/guest-protocol.md) §7.5"
+      }
+    },
+    {
+      "code": "integration.invalidRootConfiguration",
+      "parameters": [],
+      "message": {
+        "en": "APKRun's shared-folder settings need repair.",
+        "ja": "APKRun の共有フォルダ設定を修復する必要があります。"
+      },
+      "remediation": {
+        "en": "Remove and add the affected folder again in Settings → Files.",
+        "ja": "設定 → ファイルで対象のフォルダを削除し、もう一度追加してください。"
+      },
+      "action": "openPrivacySettings",
+      "cliExit": 1,
+      "doc": {
+        "case": "invalidRootConfiguration",
+        "when": "a configured root has an invalid or duplicate root identifier",
+        "raisedBy": "SharedFolderService",
+        "ref": "[configuration.md](../03-reference/configuration.md) §1.4"
+      }
     }
   ]
 }

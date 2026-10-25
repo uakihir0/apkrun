@@ -182,6 +182,7 @@ let package = Package(
                 "UpdateCore",
                 "WrapperCore",
                 "IntegrationCore",
+                "GuestProtocol",
                 "ImageCore",
                 "InputCore",
                 "RuntimeAPI",

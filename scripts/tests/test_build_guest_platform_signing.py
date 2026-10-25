@@ -2,6 +2,7 @@
 """Checks Guest APK signing modes and the composed-image privileged-permission allowlist."""
 
 import hashlib
+import json
 import os
 import pathlib
 import shutil
@@ -19,6 +20,11 @@ PRIVILEGED_PERMISSIONS = {
     "android.permission.FORCE_STOP_PACKAGES",
     "android.permission.WRITE_SECURE_SETTINGS",
     "android.permission.REBOOT",
+}
+STORE_PRIVILEGED_PERMISSIONS = {
+    "android.permission.DELETE_PACKAGES",
+    "android.permission.INSTALL_PACKAGES",
+    "android.permission.TEST_MANAGE_ROLLBACKS",
 }
 REQUESTED_PERMISSIONS = {
     "android.permission.FORCE_STOP_PACKAGES",
@@ -47,6 +53,7 @@ class BuildGuestSigningTests(unittest.TestCase):
             encoding="utf-8",
         )
         (self.root / "Guest/guestd/build/outputs/apk/release").mkdir(parents=True)
+        (self.root / "Guest/APKRunStore/build/outputs/apk/release").mkdir(parents=True)
         (self.root / "Guest/product/prebuilt").mkdir(parents=True)
         (self.root / "Tests/Fixtures/signing").mkdir(parents=True)
         for fixture in (
@@ -65,7 +72,9 @@ class BuildGuestSigningTests(unittest.TestCase):
             'repo_dir="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"\n'
             'printf "%s\\n" "$@" > "$repo_dir/gradle-arguments.txt"\n'
             'printf "development-signed APK\\n" > '
-            '"$repo_dir/Guest/guestd/build/outputs/apk/release/guestd-release.apk"\n',
+            '"$repo_dir/Guest/guestd/build/outputs/apk/release/guestd-release.apk"\n'
+            'printf "development-signed Store APK\\n" > '
+            '"$repo_dir/Guest/APKRunStore/build/outputs/apk/release/store-release.apk"\n',
             encoding="utf-8",
         )
         gradlew.chmod(0o755)
@@ -121,6 +130,10 @@ class BuildGuestSigningTests(unittest.TestCase):
             (self.root / "Guest/build/out/apkrun-guest.apk").read_bytes(),
             b"development-signed APK\n",
         )
+        self.assertEqual(
+            (self.root / "Guest/build/out/apkrun-store.apk").read_bytes(),
+            b"development-signed Store APK\n",
+        )
         self.assertFalse(
             (self.root / "Guest/product/prebuilt/ApkRunGuest.apk").exists()
         )
@@ -136,18 +149,17 @@ class BuildGuestSigningTests(unittest.TestCase):
             '"versionCode": 1002003',
             (self.root / "Guest/build/out/apkrun-guest.json").read_text(),
         )
+        store_metadata = json.loads(
+            (self.root / "Guest/build/out/apkrun-store.json").read_text()
+        )
+        self.assertEqual(store_metadata["packageName"], "io.apkrun.store")
+        self.assertEqual(store_metadata["versionCode"], 1002003)
 
-    def test_for_aosp_without_platform_flag_remains_development_signed(self):
+    def test_for_aosp_requires_platform_test_key_before_building(self):
         result = self.invoke("--for-aosp")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(
-            (self.root / "Guest/product/prebuilt/ApkRunGuest.apk").read_bytes(),
-            b"development-signed APK\n",
-        )
-        self.assertIn(
-            "-PapkrunPersistentAgent=true",
-            (self.root / "gradle-arguments.txt").read_text(),
-        )
+        self.assertEqual(result.returncode, 64)
+        self.assertIn("--for-aosp requires --platform-test-key", result.stderr)
+        self.assertFalse((self.root / "gradle-arguments.txt").exists())
 
     def test_platform_test_key_signs_only_the_aosp_prebuilt_and_checks_the_pinned_cert(
         self,
@@ -158,9 +170,18 @@ class BuildGuestSigningTests(unittest.TestCase):
             (self.root / "Guest/product/prebuilt/ApkRunGuest.apk").read_bytes(),
             b"development-signed APK\nPLATFORM-SIGNED",
         )
+        self.assertEqual(
+            (self.root / "Guest/product/prebuilt/ApkRunStore.apk").read_bytes(),
+            b"development-signed Store APK\nPLATFORM-SIGNED",
+        )
         self.assertTrue(
             (self.root / "Guest/product/prebuilt/ApkRunGuest.json").is_file()
         )
+        store_metadata = json.loads(
+            (self.root / "Guest/product/prebuilt/ApkRunStore.json").read_text()
+        )
+        self.assertEqual(store_metadata["packageName"], "io.apkrun.store")
+        self.assertEqual(store_metadata["versionCode"], 1002003)
         self.assertIn(
             "-PapkrunPersistentAgent=true",
             (self.root / "gradle-arguments.txt").read_text(),
@@ -170,7 +191,12 @@ class BuildGuestSigningTests(unittest.TestCase):
             sorted(
                 path.name for path in (self.root / "Guest/product/prebuilt").iterdir()
             ),
-            ["ApkRunGuest.apk", "ApkRunGuest.json"],
+            [
+                "ApkRunGuest.apk",
+                "ApkRunGuest.json",
+                "ApkRunStore.apk",
+                "ApkRunStore.json",
+            ],
         )
         self.assertFalse(
             any(
@@ -199,6 +225,10 @@ class BuildGuestSigningTests(unittest.TestCase):
             (self.root / "Guest/product/prebuilt/ApkRunGuest.apk").read_bytes(),
             b"development-signed APK\nPLATFORM-SIGNED",
         )
+        self.assertEqual(
+            (self.root / "Guest/product/prebuilt/ApkRunStore.apk").read_bytes(),
+            b"development-signed Store APK\nPLATFORM-SIGNED",
+        )
 
     def test_platform_test_key_rejects_custom_output_path_before_building(self):
         result = self.invoke(
@@ -213,8 +243,12 @@ class BuildGuestSigningTests(unittest.TestCase):
     ):
         apk = self.root / "Guest/product/prebuilt/ApkRunGuest.apk"
         metadata = self.root / "Guest/product/prebuilt/ApkRunGuest.json"
+        store_apk = self.root / "Guest/product/prebuilt/ApkRunStore.apk"
+        store_metadata = self.root / "Guest/product/prebuilt/ApkRunStore.json"
         apk.write_bytes(b"previous APK")
         metadata.write_bytes(b"previous metadata")
+        store_apk.write_bytes(b"previous Store APK")
+        store_metadata.write_bytes(b"previous Store metadata")
 
         result = self.invoke("--platform-test-key", platform_digest="0" * 64)
 
@@ -222,11 +256,18 @@ class BuildGuestSigningTests(unittest.TestCase):
         self.assertIn("not signed by the pinned AOSP test platform key", result.stderr)
         self.assertEqual(apk.read_bytes(), b"previous APK")
         self.assertEqual(metadata.read_bytes(), b"previous metadata")
+        self.assertEqual(store_apk.read_bytes(), b"previous Store APK")
+        self.assertEqual(store_metadata.read_bytes(), b"previous Store metadata")
         self.assertEqual(
             sorted(
                 path.name for path in (self.root / "Guest/product/prebuilt").iterdir()
             ),
-            ["ApkRunGuest.apk", "ApkRunGuest.json"],
+            [
+                "ApkRunGuest.apk",
+                "ApkRunGuest.json",
+                "ApkRunStore.apk",
+                "ApkRunStore.json",
+            ],
         )
         self.assertFalse(
             any(
@@ -238,28 +279,43 @@ class BuildGuestSigningTests(unittest.TestCase):
 
 class GuestProductPermissionTests(unittest.TestCase):
     def test_privapp_allowlist_contains_exactly_manifest_permissions_that_need_it(self):
-        manifest = ET.parse(
+        guest_manifest = ET.parse(
             REPOSITORY / "Guest/guestd/src/main/AndroidManifest.xml"
         ).getroot()
-        requested = {
+        guest_requested = {
             permission.attrib[f"{ANDROID_NAMESPACE}name"]
-            for permission in manifest.findall("uses-permission")
+            for permission in guest_manifest.findall("uses-permission")
         }
-        self.assertEqual(requested, REQUESTED_PERMISSIONS)
-        self.assertTrue(PRIVILEGED_PERMISSIONS <= requested)
+        self.assertEqual(guest_requested, REQUESTED_PERMISSIONS)
+        self.assertTrue(PRIVILEGED_PERMISSIONS <= guest_requested)
+        store_manifest = ET.parse(
+            REPOSITORY / "Guest/APKRunStore/src/main/AndroidManifest.xml"
+        ).getroot()
+        store_requested = {
+            permission.attrib[f"{ANDROID_NAMESPACE}name"]
+            for permission in store_manifest.findall("uses-permission")
+        }
+        self.assertTrue(STORE_PRIVILEGED_PERMISSIONS <= store_requested)
 
         allowlist_path = (
             REPOSITORY / "Guest/product/permissions/privapp-permissions-apkrun.xml"
         )
         allowlist = ET.parse(allowlist_path).getroot()
-        entries = allowlist.findall("privapp-permissions")
-        self.assertEqual(len(entries), 1)
-        self.assertEqual(entries[0].attrib["package"], "io.apkrun.guest")
-        granted = {
-            permission.attrib["name"] for permission in entries[0].findall("permission")
+        entries = {
+            entry.attrib["package"]: {
+                permission.attrib["name"] for permission in entry.findall("permission")
+            }
+            for entry in allowlist.findall("privapp-permissions")
         }
-        self.assertEqual(granted, PRIVILEGED_PERMISSIONS)
-        self.assertTrue(granted <= requested)
+        self.assertEqual(
+            entries,
+            {
+                "io.apkrun.guest": PRIVILEGED_PERMISSIONS,
+                "io.apkrun.store": STORE_PRIVILEGED_PERMISSIONS,
+            },
+        )
+        self.assertTrue(entries["io.apkrun.guest"] <= guest_requested)
+        self.assertTrue(entries["io.apkrun.store"] <= store_requested)
 
     def test_platform_certificate_matches_the_pinned_full_sha256(self):
         certificate = REPOSITORY / "Tests/Fixtures/signing/aosp-test-platform.x509.pem"

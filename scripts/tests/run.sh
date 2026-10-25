@@ -1167,9 +1167,12 @@ def workflow_errors(workflow, trigger_key)
   unless triggers.dig("push", "branches") == ["main"]
     errors << "push checks must run only for main"
   end
+  expected_runners = { "test-vsockd" => "ubuntu-latest" }
   workflow.fetch("jobs").each do |job_name, job|
-    unless job["runs-on"] == "xcode-27"
-      errors << "#{job_name} must use a fresh GitHub-hosted macOS 27 runner"
+    expected_runner = expected_runners.fetch(job_name, "xcode-27")
+    unless job["runs-on"] == expected_runner
+      runner_label = expected_runner == "ubuntu-latest" ? "Ubuntu" : "macOS 27"
+      errors << "#{job_name} must use a fresh GitHub-hosted #{runner_label} runner"
     end
     checkout = job.fetch("steps").find do |step|
       step["uses"]&.start_with?("actions/checkout@")
@@ -1243,7 +1246,7 @@ def workflow_errors(workflow, trigger_key)
   unless workflow.fetch("permissions") == { "contents" => "read" }
     errors << "workflow permissions must remain contents: read"
   end
-  expected_jobs = %w[lint codegen third-party build test-swift test-graphics test-images]
+  expected_jobs = %w[lint test-vsockd codegen third-party build test-swift test-graphics test-images]
   unless workflow.fetch("jobs").keys.sort == expected_jobs.sort
     errors << "CI jobs must match the required job set"
   end
@@ -1287,6 +1290,15 @@ unless workflow_errors(unsafe_workflow, trigger_key).any? { |error| error.includ
   abort("FAIL workflow security fixture: accepted a persistent self-hosted runner")
 end
 puts("PASS workflow security fixture rejects a persistent self-hosted runner")
+
+unsafe_workflow = Marshal.load(Marshal.dump(workflow))
+unsafe_workflow.fetch("jobs").fetch("test-vsockd")["runs-on"] = "xcode-27"
+unless workflow_errors(unsafe_workflow, trigger_key).any? do |error|
+  error.include?("test-vsockd must use a fresh GitHub-hosted Ubuntu runner")
+end
+  abort("FAIL workflow security fixture: accepted the vsock test on the wrong runner")
+end
+puts("PASS workflow security fixture pins the vsock job to Ubuntu")
 
 unsafe_workflow = Marshal.load(Marshal.dump(workflow))
 unsafe_triggers = unsafe_workflow.fetch(trigger_key)

@@ -242,6 +242,7 @@ private enum EnvelopeSchema {
     #expect(GuestAbandonInstall.decode(.abandonInstall(GPEmpty())) != nil)
 
     let uninstall = GuestUninstallPackage(package: "io.apkrun.fixture.hellotext", keepData: true)
+    #expect(uninstall.timeout == .seconds(120))
     if case .uninstall(let request) = uninstall.request() {
         #expect(request.package == "io.apkrun.fixture.hellotext")
         #expect(request.keepData)

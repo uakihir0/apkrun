@@ -768,6 +768,12 @@ public nonisolated struct GPStorePackageInfo: @unchecked Sendable {
     set {_uniqueStorage()._requestedPermissionsCount = newValue}
   }
 
+  /// Android's enabled launcher component, empty when this package has no launcher activity.
+  public var launchableComponent: String {
+    get {_storage._launchableComponent}
+    set {_uniqueStorage()._launchableComponent = newValue}
+  }
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -1556,7 +1562,7 @@ nonisolated extension GPSigningInfo: SwiftProtobuf.Message, SwiftProtobuf._Messa
 
 nonisolated extension GPStorePackageInfo: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".StorePackageInfo"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}package\0\u{3}version_code\0\u{3}version_name\0\u{1}label\0\u{3}installer_of_record\0\u{3}update_owner\0\u{3}initiating_package\0\u{3}first_install_time_ms\0\u{3}last_update_time_ms\0\u{3}min_sdk\0\u{3}target_sdk\0\u{1}splits\0\u{3}native_abis\0\u{1}signing\0\u{1}enabled\0\u{1}suspended\0\u{3}requested_permissions_count\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}package\0\u{3}version_code\0\u{3}version_name\0\u{1}label\0\u{3}installer_of_record\0\u{3}update_owner\0\u{3}initiating_package\0\u{3}first_install_time_ms\0\u{3}last_update_time_ms\0\u{3}min_sdk\0\u{3}target_sdk\0\u{1}splits\0\u{3}native_abis\0\u{1}signing\0\u{1}enabled\0\u{1}suspended\0\u{3}requested_permissions_count\0\u{3}launchable_component\0")
 
   fileprivate class _StorageClass {
     var _package: String = String()
@@ -1576,6 +1582,7 @@ nonisolated extension GPStorePackageInfo: SwiftProtobuf.Message, SwiftProtobuf._
     var _enabled: Bool = false
     var _suspended: Bool = false
     var _requestedPermissionsCount: Int32 = 0
+    var _launchableComponent: String = String()
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -1603,6 +1610,7 @@ nonisolated extension GPStorePackageInfo: SwiftProtobuf.Message, SwiftProtobuf._
       _enabled = source._enabled
       _suspended = source._suspended
       _requestedPermissionsCount = source._requestedPermissionsCount
+      _launchableComponent = source._launchableComponent
     }
   }
 
@@ -1638,6 +1646,7 @@ nonisolated extension GPStorePackageInfo: SwiftProtobuf.Message, SwiftProtobuf._
         case 15: try { try decoder.decodeSingularBoolField(value: &_storage._enabled) }()
         case 16: try { try decoder.decodeSingularBoolField(value: &_storage._suspended) }()
         case 17: try { try decoder.decodeSingularInt32Field(value: &_storage._requestedPermissionsCount) }()
+        case 18: try { try decoder.decodeSingularStringField(value: &_storage._launchableComponent) }()
         default: break
         }
       }
@@ -1701,6 +1710,9 @@ nonisolated extension GPStorePackageInfo: SwiftProtobuf.Message, SwiftProtobuf._
       if _storage._requestedPermissionsCount != 0 {
         try visitor.visitSingularInt32Field(value: _storage._requestedPermissionsCount, fieldNumber: 17)
       }
+      if !_storage._launchableComponent.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._launchableComponent, fieldNumber: 18)
+      }
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -1727,6 +1739,7 @@ nonisolated extension GPStorePackageInfo: SwiftProtobuf.Message, SwiftProtobuf._
         if _storage._enabled != rhs_storage._enabled {return false}
         if _storage._suspended != rhs_storage._suspended {return false}
         if _storage._requestedPermissionsCount != rhs_storage._requestedPermissionsCount {return false}
+        if _storage._launchableComponent != rhs_storage._launchableComponent {return false}
         return true
       }
       if !storagesAreEqual {return false}

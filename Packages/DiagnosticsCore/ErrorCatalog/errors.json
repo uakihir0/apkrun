@@ -2646,6 +2646,140 @@
         "raisedBy": "RuntimeHost, `apkrun dev boot --window`, `apkrun dev launch`",
         "ref": "[../02-design/input.md](../02-design/input.md) §7.1, §11"
       }
+    },
+    {
+      "code": "store.guestInstallFailed",
+      "parameters": [
+        "app"
+      ],
+      "message": {
+        "en": "Android couldn't install {app}.",
+        "ja": "Android は {app} をインストールできませんでした。"
+      },
+      "remediation": {
+        "en": "Try again. If it fails again, create a diagnostics report.",
+        "ja": "もう一度お試しください。再発する場合は診断レポートを作成してください。"
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "guestInstallFailed(InstallFailureKind, androidStatus:legacyStatus:message:)",
+        "when": "`FAILURE` (`.other`), and the base of the variants",
+        "raisedBy": "PackageStore",
+        "ref": "package-store.md §6.4"
+      },
+      "variants": {
+        "conflict": {
+          "message": {
+            "en": "Android refused {app} because it conflicts with an installed app.",
+            "ja": "インストール済みアプリと競合するため、Android は {app} を拒否しました。"
+          },
+          "remediation": {
+            "en": "Uninstall the conflicting app, then try again.",
+            "ja": "競合するアプリをアンインストールしてから、もう一度お試しください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "`CONFLICT`"
+          }
+        },
+        "incompatible": {
+          "message": {
+            "en": "{app} is not compatible with this version of Android.",
+            "ja": "{app} はこの Android バージョンに対応していません。"
+          },
+          "remediation": {
+            "en": "Report the problem, so that APKRun can detect this before the install.",
+            "ja": "APKRun がインストール前に検出できるよう、問題を報告してください。"
+          },
+          "action": "reportProblem",
+          "doc": {
+            "when": "`INCOMPATIBLE`. Also logs `store.hostCheckMissed` (§17.10)"
+          }
+        },
+        "invalid": {
+          "message": {
+            "en": "The app file is damaged or isn't what was expected.",
+            "ja": "アプリファイルが破損しているか、想定した内容と異なります。"
+          },
+          "remediation": {
+            "en": "Download the app again, then try again.",
+            "ja": "アプリを再ダウンロードしてから、もう一度お試しください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "`INVALID`, or the Store Agent's pre-commit check found another package, version, or signer"
+          }
+        },
+        "blocked": {
+          "message": {
+            "en": "Android does not allow installing {app}.",
+            "ja": "Android では {app} をインストールできません。"
+          },
+          "remediation": {
+            "en": "If you think this is wrong, report the problem.",
+            "ja": "これが誤りだと思われる場合は、問題を報告してください。"
+          },
+          "action": "reportProblem",
+          "doc": {
+            "when": "`BLOCKED`: policy or system package"
+          }
+        },
+        "aborted": {
+          "message": {
+            "en": "Installation was interrupted.",
+            "ja": "インストールが中断されました。"
+          },
+          "remediation": {
+            "en": "Try again.",
+            "ja": "もう一度お試しください。"
+          },
+          "action": "retry",
+          "doc": {
+            "when": "`ABORTED`, or `BulkAck{HASH_MISMATCH}` during the transfer (§8.2)"
+          }
+        }
+      }
+    },
+    {
+      "code": "store.guestStorageFull",
+      "parameters": [],
+      "message": {
+        "en": "Android is out of storage.",
+        "ja": "Android のストレージ容量が不足しています。"
+      },
+      "remediation": {
+        "en": "Increase Android storage in Settings → Runtime.",
+        "ja": "「設定」→「ランタイム」で Android のストレージ容量を増やしてください。"
+      },
+      "action": "openRuntimeSettings",
+      "cliExit": 1,
+      "doc": {
+        "case": "guestStorageFull",
+        "when": "`STORAGE`",
+        "raisedBy": "PackageStore",
+        "ref": "package-store.md §3.4, §6.4"
+      }
+    },
+    {
+      "code": "store.userActionRequired",
+      "parameters": [],
+      "message": {
+        "en": "Android asked for confirmation, which APKRun does not support.",
+        "ja": "Android から確認を求められましたが、APKRun はこの確認に対応していません。"
+      },
+      "remediation": {
+        "en": "Report the problem.",
+        "ja": "問題を報告してください。"
+      },
+      "action": "reportProblem",
+      "cliExit": 1,
+      "doc": {
+        "case": "userActionRequired",
+        "when": "`USER_ACTION_REQUIRED`. Not expected for a privileged installer. Logged as a bug",
+        "raisedBy": "PackageStore",
+        "ref": "package-store.md §6.4"
+      }
     }
   ]
 }

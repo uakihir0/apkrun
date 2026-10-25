@@ -656,16 +656,18 @@ Owner: APKStoreCore. Design: [package-store.md](../02-design/package-store.md) �
 
 `InstallFinished.status` maps to these entries ([package-store.md](../02-design/package-store.md) §6.4). `androidStatus`, `legacyStatus`, and `message` are logged and shown under Details, never in the message.
 
+<!-- errorgen:begin store -->
 | Case | Code | When raised | Raised by | Message | Remediation · action | Exit | Ref |
 |---|---|---|---|---|---|---|---|
 | `guestInstallFailed(InstallFailureKind, androidStatus:legacyStatus:message:)` | `store.guestInstallFailed` | `FAILURE` (`.other`), and the base of the variants | PackageStore | "Android couldn't install {app}." | "Try again. If it fails again, create a diagnostics report." `retry` | 1 | package-store.md §6.4 |
+| — | `store.guestInstallFailed / aborted` | `ABORTED`, or `BulkAck{HASH_MISMATCH}` during the transfer (§8.2) | PackageStore | "Installation was interrupted." | "Try again." `retry` | 1 | package-store.md §6.4 |
+| — | `store.guestInstallFailed / blocked` | `BLOCKED`: policy or system package | PackageStore | "Android does not allow installing {app}." | "If you think this is wrong, report the problem." `reportProblem` | 1 | package-store.md §6.4 |
 | — | `store.guestInstallFailed / conflict` | `CONFLICT` | PackageStore | "Android refused {app} because it conflicts with an installed app." | "Uninstall the conflicting app, then try again." `none` | 1 | package-store.md §6.4 |
 | — | `store.guestInstallFailed / incompatible` | `INCOMPATIBLE`. Also logs `store.hostCheckMissed` (§17.10) | PackageStore | "{app} is not compatible with this version of Android." | "Report the problem, so that APKRun can detect this before the install." `reportProblem` | 1 | package-store.md §6.4 |
 | — | `store.guestInstallFailed / invalid` | `INVALID`, or the Store Agent's pre-commit check found another package, version, or signer | PackageStore | "The app file is damaged or isn't what was expected." | "Download the app again, then try again." `none` | 1 | package-store.md §6.4 |
-| — | `store.guestInstallFailed / blocked` | `BLOCKED`: policy or system package | PackageStore | "Android does not allow installing {app}." | "If you think this is wrong, report the problem." `reportProblem` | 1 | package-store.md §6.4 |
-| — | `store.guestInstallFailed / aborted` | `ABORTED`, or `BulkAck{HASH_MISMATCH}` during the transfer (§8.2) | PackageStore | "Installation was interrupted." | "Try again." `retry` | 1 | package-store.md §6.4 |
 | `guestStorageFull` | `store.guestStorageFull` | `STORAGE` | PackageStore | "Android is out of storage." | "Increase Android storage in Settings → Runtime." `openRuntimeSettings` | 1 | package-store.md §3.4, §6.4 |
 | `userActionRequired` | `store.userActionRequired` | `USER_ACTION_REQUIRED`. Not expected for a privileged installer. Logged as a bug | PackageStore | "Android asked for confirmation, which APKRun does not support." | "Report the problem." `reportProblem` | 1 | package-store.md §6.4 |
+<!-- errorgen:end store -->
 
 ### 10.4 Operations
 

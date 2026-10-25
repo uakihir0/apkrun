@@ -583,6 +583,46 @@ import Testing
     }
 }
 
+@Test func controlClientReadsIntegrationStatusForPackage() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .app,
+        claimedIdentity: "io.apkrun.APKRun",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let packageID = try #require(RuntimePackageID(rawValue: "com.example.app"))
+    let status = IntegrationStatus(
+        packageID: packageID,
+        items: [
+            IntegrationItemStatus(
+                kind: .sharedFolders,
+                value: .string("readOnly"),
+                source: .user,
+                decision: .allow,
+                support: .supported
+            )
+        ]
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        integrationStatusReply: RuntimeIntegrationStatusControlReply(result: status)
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    #expect(try await client.integrationStatus(packageID: packageID) == status)
+    let request = try #require(transport.snapshot().integrationStatusRequests.first)
+    let decoded = try JSONDecoder().decode(RuntimeIntegrationStatusControlRequest.self, from: request)
+    #expect(decoded.packageID == packageID)
+    #expect(decoded.header.apiVersion == APIVersion.current)
+    #expect(decoded.header.clientKind == .app)
+}
+
 @Test func controlClientPreservesSharedFolderErrors() async throws {
     let configuration = try RuntimeControlClientConfiguration(
         clientKind: .app,
@@ -1485,6 +1525,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private let statusData: Data
     private let packageListData: Data
     private let packageInfoData: Data
+    private let integrationStatusData: Data
     private let sharedFoldersData: Data
     private let addSharedFolderData: Data
     private let removeSharedFolderData: Data
@@ -1510,6 +1551,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var restartRequestsValue: [Data] = []
     private var packageListRequestsValue: [Data] = []
     private var packageInfoRequestsValue: [Data] = []
+    private var integrationStatusRequestsValue: [Data] = []
     private var sharedFoldersRequestsValue: [Data] = []
     private var addSharedFolderRequestsValue: [Data] = []
     private var removeSharedFolderRequestsValue: [Data] = []
@@ -1552,6 +1594,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         helloFailure: RuntimeControlError? = nil,
         packageListReply: RuntimeListPackagesControlReply? = nil,
         packageInfoReply: RuntimePackageInfoControlReply? = nil,
+        integrationStatusReply: RuntimeIntegrationStatusControlReply? = nil,
         sharedFoldersReply: RuntimeSharedFoldersControlReply? = nil,
         addSharedFolderReply: RuntimeAddSharedFolderControlReply? = nil,
         removeSharedFolderReply: RuntimeRemoveSharedFolderControlReply? = nil,
@@ -1599,6 +1642,9 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         )
         let defaultPackageInfoReply = RuntimePackageInfoControlReply(
             result: RuntimePackageDetails(summary: defaultSummary, files: [], artifactBytes: 0)
+        )
+        let defaultIntegrationStatusReply = RuntimeIntegrationStatusControlReply(
+            result: IntegrationStatus(packageID: packageID, items: [])
         )
         let defaultSharedFolder = SharedFolder(
             id: "shared",
@@ -1651,6 +1697,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         )
         packageListData = try JSONEncoder().encode(packageListReply ?? defaultListReply)
         packageInfoData = try JSONEncoder().encode(packageInfoReply ?? defaultPackageInfoReply)
+        integrationStatusData = try JSONEncoder().encode(integrationStatusReply ?? defaultIntegrationStatusReply)
         importPackageData = try JSONEncoder().encode(importReply ?? defaultImportReply)
         installImportedData = try JSONEncoder().encode(installImportedReply ?? defaultInstallImportedReply)
         beginInstallImportedData =
@@ -1792,6 +1839,11 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     func packageInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         lock.withLock { packageInfoRequestsValue.append(request) }
         return packageInfoData
+    }
+
+    func integrationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { integrationStatusRequestsValue.append(request) }
+        return integrationStatusData
     }
 
     func sharedFolders(_ request: Data) async throws(RuntimeControlClientError) -> Data {
@@ -1954,6 +2006,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 restartRequests: restartRequestsValue,
                 packageListRequests: packageListRequestsValue,
                 packageInfoRequests: packageInfoRequestsValue,
+                integrationStatusRequests: integrationStatusRequestsValue,
                 sharedFoldersRequests: sharedFoldersRequestsValue,
                 addSharedFolderRequests: addSharedFolderRequestsValue,
                 removeSharedFolderRequests: removeSharedFolderRequestsValue,
@@ -2041,6 +2094,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let restartRequests: [Data]
         let packageListRequests: [Data]
         let packageInfoRequests: [Data]
+        let integrationStatusRequests: [Data]
         let sharedFoldersRequests: [Data]
         let addSharedFolderRequests: [Data]
         let removeSharedFolderRequests: [Data]

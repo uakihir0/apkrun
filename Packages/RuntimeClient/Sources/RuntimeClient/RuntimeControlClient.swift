@@ -276,6 +276,25 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Returns configured settings and effective policy for each integration of a package.
+    public func integrationStatus(
+        packageID: RuntimePackageID
+    ) async throws(RuntimeControlClientError) -> IntegrationStatus {
+        let opened = try await ensureControl()
+        do {
+            let request = RuntimeIntegrationStatusControlRequest(
+                header: makeHeader(),
+                packageID: packageID
+            )
+            let data = try Self.encode(request)
+            let response = try await opened.channel.integrationStatus(data)
+            return try Self.decodeIntegrationStatusReply(from: response)
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
     /// Lists the configured shared-folder roots.
     public func sharedFolders() async throws(RuntimeControlClientError) -> [SharedFolder] {
         let opened = try await ensureControl()
@@ -1205,6 +1224,22 @@ public actor RuntimeControlClient {
         return result
     }
 
+    private static func decodeIntegrationStatusReply(from data: Data) throws(RuntimeControlClientError)
+        -> IntegrationStatus
+    {
+        let reply = try Self.decode(RuntimeIntegrationStatusControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
     private static func decodeSharedFoldersReply(from data: Data) throws(RuntimeControlClientError) -> [SharedFolder] {
         let reply = try Self.decode(RuntimeSharedFoldersControlReply.self, from: data)
         guard (reply.result != nil) != (reply.error != nil) else {
@@ -1466,6 +1501,7 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func resetRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func listPackages(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func packageInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func integrationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func sharedFolders(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func addSharedFolder(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func removeSharedFolder(_ request: Data) async throws(RuntimeControlClientError) -> Data
@@ -1738,6 +1774,20 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.packageInfo(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func integrationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.integrationStatus(request) { response in finish(.success(response)) }
         }
     }
 

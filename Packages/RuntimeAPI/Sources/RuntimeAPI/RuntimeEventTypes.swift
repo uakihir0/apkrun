@@ -214,6 +214,76 @@ public enum PackageChange: Codable, Equatable, Sendable {
     }
 }
 
+/// A change published on the `integrations` event topic.
+public enum IntegrationChange: Codable, Equatable, Sendable {
+    /// A package's integration settings or effective status changed.
+    case statusChanged(RuntimePackageID)
+    /// The packages currently recording microphone input changed.
+    case recordingChanged([RuntimePackageID])
+    /// Shared-folder roots or their maximum access changed.
+    case sharedFoldersChanged
+    /// The daemon reported an integration event added by a newer API version.
+    case unknown
+
+    private enum AssociatedKey: String, CodingKey {
+        case first = "_0"
+    }
+
+    /// Decodes a known integration change or preserves a future change as ``unknown``.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: RuntimeEventCodingKey.self)
+        guard container.allKeys.count == 1, let key = container.allKeys.first else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "Expected one integration change case.")
+            )
+        }
+        switch key.stringValue {
+        case "statusChanged":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .statusChanged(try payload.decode(RuntimePackageID.self, forKey: .first))
+        case "recordingChanged":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .recordingChanged(try payload.decode([RuntimePackageID].self, forKey: .first))
+        case "sharedFoldersChanged":
+            self = .sharedFoldersChanged
+        default:
+            self = .unknown
+        }
+    }
+
+    /// Encodes a known integration change.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: RuntimeEventCodingKey.self)
+        switch self {
+        case .statusChanged(let packageID):
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self,
+                forKey: RuntimeEventCodingKey("statusChanged")
+            )
+            try payload.encode(packageID, forKey: .first)
+        case .recordingChanged(let packageIDs):
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self,
+                forKey: RuntimeEventCodingKey("recordingChanged")
+            )
+            try payload.encode(packageIDs, forKey: .first)
+        case .sharedFoldersChanged:
+            _ = container.nestedContainer(
+                keyedBy: AssociatedKey.self,
+                forKey: RuntimeEventCodingKey("sharedFoldersChanged")
+            )
+        case .unknown:
+            throw EncodingError.invalidValue(
+                self,
+                .init(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "Unknown integration changes cannot be encoded."
+                )
+            )
+        }
+    }
+}
+
 /// The payload carried by an event envelope.
 ///
 /// Payloads added by a newer API version decode as ``unknown`` so an older client can keep
@@ -223,6 +293,8 @@ public enum EventPayload: Codable, Equatable, Sendable {
     case runtime(RuntimeChange)
     /// Package install and store changes.
     case packages(PackageChange)
+    /// Desktop integration status and configuration changes.
+    case integrations(IntegrationChange)
     /// An operation started, progressed, or finished.
     case operations(OperationEvent)
     /// Events for the topic were dropped; fetch a fresh snapshot.
@@ -233,6 +305,7 @@ public enum EventPayload: Codable, Equatable, Sendable {
     private enum CaseKey: String, CodingKey {
         case runtime
         case packages
+        case integrations
         case operations
         case resyncRequired
     }
@@ -256,6 +329,9 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case "packages":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .packages(try payload.decode(PackageChange.self, forKey: .first))
+        case "integrations":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .integrations(try payload.decode(IntegrationChange.self, forKey: .first))
         case "operations":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .operations(try payload.decode(OperationEvent.self, forKey: .first))
@@ -276,6 +352,9 @@ public enum EventPayload: Codable, Equatable, Sendable {
             try payload.encode(event, forKey: .first)
         case .packages(let change):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .packages)
+            try payload.encode(change, forKey: .first)
+        case .integrations(let change):
+            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .integrations)
             try payload.encode(change, forKey: .first)
         case .operations(let event):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .operations)

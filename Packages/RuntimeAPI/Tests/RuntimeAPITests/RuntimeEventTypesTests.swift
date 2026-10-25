@@ -16,7 +16,7 @@ private func eventRoundTrip<Value: Codable & Equatable>(_ value: Value) throws -
     let subscribe = RuntimeSubscribeControlRequest(header: header, topics: [.operations, .packages])
     let unsubscribe = RuntimeUnsubscribeControlRequest(header: header, topics: [.operations])
 
-    #expect(APIVersion.current == APIVersion(major: 1, minor: 13))
+    #expect(APIVersion.current == APIVersion(major: 1, minor: 14))
     #expect(try topics.map(eventRoundTrip) == topics)
     #expect(try eventRoundTrip(subscribe) == subscribe)
     #expect(try eventRoundTrip(unsubscribe) == unsubscribe)
@@ -95,6 +95,17 @@ private func eventRoundTrip<Value: Codable & Equatable>(_ value: Value) throws -
     #expect(try operationEvents.map(eventRoundTrip) == operationEvents)
     #expect(try envelopes.map(eventRoundTrip) == envelopes)
     #expect(try eventRoundTrip(envelopes) == envelopes)
+}
+
+@Test func integrationChangesRoundTripAsIntegrationPayloads() throws {
+    let packageID = try #require(RuntimePackageID(rawValue: "com.example.app"))
+    let payloads: [EventPayload] = [
+        .integrations(.statusChanged(packageID)),
+        .integrations(.recordingChanged([packageID])),
+        .integrations(.sharedFoldersChanged),
+    ]
+
+    #expect(try payloads.map(eventRoundTrip) == payloads)
 }
 
 @Test func packageChangesAndEnvelopesRoundTrip() throws {

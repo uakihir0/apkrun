@@ -84,11 +84,11 @@ apkrund sets a requirement on each listener with `setConnectionCodeSigningRequir
 
 ### 2.1 Constants
 
-`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 13}`. Ordering compares `major`, then `minor`.
+`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 14}`. Ordering compares `major`, then `minor`.
 
 ```swift
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
-    public static let current = APIVersion(major: 1, minor: 13)
+    public static let current = APIVersion(major: 1, minor: 14)
     public let major: Int
     public let minor: Int
 }
@@ -112,6 +112,7 @@ Target constants (not in code): `wrapperMajors = [1]` (served on the wrapper end
 | 1.11 | `beginUninstallPackage`; `PackageChange.removed`; `OperationSnapshot.requestFingerprint` |
 | 1.12 | package-scoped file transfer |
 | 1.13 | shared-folder root listing, add, remove, and maximum-access control |
+| 1.14 | integration status queries |
 
 ### 2.2 Rules per endpoint
 
@@ -1029,7 +1030,7 @@ Server steps ([wrapper.md](../02-design/wrapper.md) §10.2):
 
 ## 11. Integrations
 
-Semantics: [desktop-integration.md](../02-design/desktop-integration.md). Per-package integration settings change through `updatePackageSettings` (§14). Shared-folder root DTOs and client calls are implemented; server handling and the remaining operations in §11 are target.
+Semantics: [desktop-integration.md](../02-design/desktop-integration.md). Per-package integration settings change through `updatePackageSettings` (§14). Shared-folder root management and `integrationStatus` are implemented across the control API; remaining operations in §11 are target.
 
 ### 11.1 Operations
 

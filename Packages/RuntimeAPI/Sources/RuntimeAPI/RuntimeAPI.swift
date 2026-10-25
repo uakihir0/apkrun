@@ -8,8 +8,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.7 adds daemon-backed package import and install; 1.8 adds asynchronous install handles
     /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
     /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
-    /// 1.12 adds package-scoped file transfer; 1.13 adds shared-folder root management.
-    public static let current = APIVersion(major: 1, minor: 13)
+    /// 1.12 adds package-scoped file transfer; 1.13 adds shared-folder root management;
+    /// 1.14 adds integration status queries.
+    public static let current = APIVersion(major: 1, minor: 14)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -582,6 +583,8 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func listPackages(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns details for one package.
     func packageInfo(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns configured and effective integration status for one package.
+    func integrationStatus(_ request: Data, reply: @escaping (Data) -> Void)
     /// Lists shared-folder roots and their current availability.
     func sharedFolders(_ request: Data, reply: @escaping (Data) -> Void)
     /// Adds a shared-folder root from a security-scoped bookmark.
@@ -676,9 +679,9 @@ public protocol RuntimeSessionService: Sendable {
     ) async throws(RuntimeWireError) -> ImportResult
 }
 
-public extension RuntimeSessionService {
+extension RuntimeSessionService {
     /// Returns a typed error for runtimes that do not expose file transfers.
-    func importFiles(
+    public func importFiles(
         _ request: ImportFilesRequest,
         files: [FileHandle]
     ) async throws(RuntimeWireError) -> ImportResult {

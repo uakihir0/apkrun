@@ -1,3 +1,4 @@
+import CoreFoundation
 import CryptoKit
 import Darwin
 import Foundation
@@ -48,6 +49,7 @@ public enum PackageStoreFailure: Error, Equatable, Sendable {
     case unsupportedJournalVersion(Int)
     case journalUnreadable
     case metadataUnreadable(PackageID, detail: String)
+    case settingsUnreadable(PackageID)
     case androidInventoryUnreadable
     case unreadablePackageRecord
     case io
@@ -873,6 +875,36 @@ public actor PackageStore {
         try reloadRecordsPreservingImportDirectories()
         guard let detail = unreadableRecords[packageID] else { return nil }
         return PackageRecordIssue(packageID: packageID, detail: detail)
+    }
+
+    /// Returns the effective per-package file-integration setting.
+    ///
+    /// A missing setting uses the documented default (`true`). Settings are read on every call. Malformed, oversized,
+    /// non-regular, or symlinked files fail closed instead of granting file access.
+    public func filesIntegrationEnabled(for packageID: PackageID) async throws -> Bool {
+        try requireOpen()
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        let settingsURL =
+            packagesDirectory
+            .appendingPathComponent(directory, isDirectory: true)
+            .appendingPathComponent("settings.json")
+        var settingsMetadata = stat()
+        guard Darwin.lstat(settingsURL.path, &settingsMetadata) == 0 else {
+            if errno == ENOENT { return true }
+            throw PackageStoreFailure.settingsUnreadable(packageID)
+        }
+        guard settingsMetadata.st_mode & S_IFMT == S_IFREG else {
+            throw PackageStoreFailure.settingsUnreadable(packageID)
+        }
+        do {
+            return try Self.readFilesIntegrationEnabled(from: settingsURL, packageID: packageID)
+        } catch {
+            throw PackageStoreFailure.settingsUnreadable(packageID)
+        }
     }
 
     /// Returns the last Android package inventory observed by a live runtime.
@@ -2221,6 +2253,53 @@ public actor PackageStore {
             return "invalidMetadata"
         }
         return "unsupportedSchemaVersion"
+    }
+
+    private static func readFilesIntegrationEnabled(from url: URL, packageID: PackageID) throws -> Bool {
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else { throw PackageStoreFailure.settingsUnreadable(packageID) }
+        defer { _ = Darwin.close(descriptor) }
+
+        var metadata = stat()
+        guard Darwin.fstat(descriptor, &metadata) == 0,
+            metadata.st_mode & S_IFMT == S_IFREG,
+            metadata.st_size > 0,
+            metadata.st_size <= 16 * 1024
+        else {
+            throw PackageStoreFailure.settingsUnreadable(packageID)
+        }
+
+        var bytes = [UInt8](repeating: 0, count: Int(metadata.st_size))
+        var offset = 0
+        while offset < bytes.count {
+            let readCount = bytes.withUnsafeMutableBytes { buffer in
+                Darwin.read(
+                    descriptor,
+                    buffer.baseAddress?.advanced(by: offset),
+                    buffer.count - offset
+                )
+            }
+            if readCount < 0, errno == EINTR { continue }
+            guard readCount > 0 else { throw PackageStoreFailure.settingsUnreadable(packageID) }
+            offset += readCount
+        }
+
+        guard let object = try? JSONSerialization.jsonObject(with: Data(bytes)) as? [String: Any],
+            let schemaVersion = object["schemaVersion"] as? NSNumber,
+            CFGetTypeID(schemaVersion) != CFBooleanGetTypeID(),
+            schemaVersion.intValue == 1
+        else {
+            throw PackageStoreFailure.settingsUnreadable(packageID)
+        }
+        guard let rawIntegrations = object["integrations"] else { return true }
+        guard let integrations = rawIntegrations as? [String: Any] else {
+            throw PackageStoreFailure.settingsUnreadable(packageID)
+        }
+        guard let rawFiles = integrations["files"] else { return true }
+        guard let filesEnabled = rawFiles as? NSNumber, CFGetTypeID(filesEnabled) == CFBooleanGetTypeID() else {
+            throw PackageStoreFailure.settingsUnreadable(packageID)
+        }
+        return filesEnabled.boolValue
     }
 
     private static func hashFile(at url: URL) throws -> (Int64, SHA256Digest) {

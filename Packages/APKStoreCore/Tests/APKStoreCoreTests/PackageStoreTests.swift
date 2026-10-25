@@ -1594,3 +1594,39 @@ private func makeTemporaryDirectory() throws -> URL {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     return directory
 }
+
+@Test func packageStoreReadsFileIntegrationSettingAndFailsClosedOnCorruption() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let packages = temporary.appendingPathComponent("Packages", isDirectory: true)
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let store = PackageStore(packagesDirectory: packages, inspector: { _ in facts() })
+    try await store.open()
+
+    #expect(try await store.filesIntegrationEnabled(for: packageID))
+
+    let packageDirectory = packages.appendingPathComponent(packageID.rawValue, isDirectory: true)
+    try FileManager.default.createDirectory(at: packageDirectory, withIntermediateDirectories: true)
+    let settings = packageDirectory.appendingPathComponent("settings.json")
+    try Data(#"{"schemaVersion":1,"integrations":{"files":false}}"#.utf8).write(to: settings)
+    #expect(!(try await store.filesIntegrationEnabled(for: packageID)))
+
+    try Data(#"{"schemaVersion":1,"integrations":{"files":"false"}}"#.utf8).write(to: settings)
+    do {
+        _ = try await store.filesIntegrationEnabled(for: packageID)
+        Issue.record("Malformed file integration settings must not grant access.")
+    } catch let failure as PackageStoreFailure {
+        #expect(failure == .settingsUnreadable(packageID))
+    }
+
+    try FileManager.default.removeItem(at: settings)
+    let target = temporary.appendingPathComponent("external-settings.json")
+    try Data(#"{"schemaVersion":1,"integrations":{"files":false}}"#.utf8).write(to: target)
+    try FileManager.default.createSymbolicLink(at: settings, withDestinationURL: target)
+    do {
+        _ = try await store.filesIntegrationEnabled(for: packageID)
+        Issue.record("Symlinked package settings must not grant file access.")
+    } catch let failure as PackageStoreFailure {
+        #expect(failure == .settingsUnreadable(packageID))
+    }
+}

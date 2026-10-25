@@ -1,4 +1,5 @@
 import APKStoreCore
+import CoreFoundation
 import Darwin
 import DiagnosticsCore
 import Foundation
@@ -538,6 +539,76 @@ public actor EmbeddedPackageService: RuntimeService {
         }
     }
 
+    /// Reads the current file integration preference for one managed package.
+    func filesIntegrationEnabled(packageID: RuntimePackageID) async throws(RuntimeWireError) -> Bool {
+        do {
+            try await ensureOpen()
+            guard let package = PackageID(rawValue: packageID.rawValue) else {
+                throw EmbeddedPackageServiceFailure.invalidPackageID
+            }
+            guard try Self.readGlobalFilesIntegrationEnabled(at: paths.settingsFile, packageID: package) else {
+                return false
+            }
+            return try await store.filesIntegrationEnabled(for: package)
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
+    static func readGlobalFilesIntegrationEnabled(at url: URL, packageID: PackageID) throws -> Bool {
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            if errno == ENOENT { return true }
+            throw PackageStoreFailure.settingsUnreadable(packageID)
+        }
+        defer { _ = Darwin.close(descriptor) }
+
+        var metadata = stat()
+        guard Darwin.fstat(descriptor, &metadata) == 0,
+            metadata.st_mode & S_IFMT == S_IFREG,
+            metadata.st_size > 0,
+            metadata.st_size <= 1_048_576
+        else {
+            throw PackageStoreFailure.settingsUnreadable(packageID)
+        }
+
+        var bytes = [UInt8](repeating: 0, count: Int(metadata.st_size))
+        var offset = 0
+        while offset < bytes.count {
+            let readCount = bytes.withUnsafeMutableBytes { buffer in
+                Darwin.read(
+                    descriptor,
+                    buffer.baseAddress?.advanced(by: offset),
+                    buffer.count - offset
+                )
+            }
+            if readCount < 0, errno == EINTR { continue }
+            guard readCount > 0 else { throw PackageStoreFailure.settingsUnreadable(packageID) }
+            offset += readCount
+        }
+
+        guard let object = try? JSONSerialization.jsonObject(with: Data(bytes)) as? [String: Any],
+            let schemaVersion = object["schemaVersion"] as? NSNumber,
+            CFGetTypeID(schemaVersion) != CFBooleanGetTypeID(),
+            schemaVersion.intValue == 2
+        else {
+            throw PackageStoreFailure.settingsUnreadable(packageID)
+        }
+        guard let rawIntegrations = object["integrations"] else { return true }
+        guard let integrations = rawIntegrations as? [String: Any] else {
+            throw PackageStoreFailure.settingsUnreadable(packageID)
+        }
+        guard let rawEnabled = integrations["enabled"] else { return true }
+        guard let enabled = rawEnabled as? [String: Any] else {
+            throw PackageStoreFailure.settingsUnreadable(packageID)
+        }
+        guard let rawFiles = enabled["files"] else { return true }
+        guard let filesEnabled = rawFiles as? NSNumber, CFGetTypeID(filesEnabled) == CFBooleanGetTypeID() else {
+            throw PackageStoreFailure.settingsUnreadable(packageID)
+        }
+        return filesEnabled.boolValue
+    }
+
     private func ensureOpen() async throws {
         if isOpen {
             return
@@ -1017,6 +1088,14 @@ public actor EmbeddedPackageService: RuntimeService {
                     message: "APKRun can't read its records for \(packageID.rawValue).",
                     remediation:
                         "If a newer version of APKRun was used before, install that version again. Otherwise report the problem."
+                )
+            case .settingsUnreadable(let packageID):
+                let failure = IntegrationFailure.settingsUnreadable
+                return RuntimeWireError(
+                    domain: IntegrationFailure.domain.rawValue,
+                    code: failure.qualifiedCode,
+                    message: "APKRun can't read file-sharing settings for \(packageID.rawValue).",
+                    remediation: "Repair this package's settings and retry the file transfer."
                 )
             case .androidInventoryUnreadable:
                 return .store(

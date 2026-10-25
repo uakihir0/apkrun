@@ -65,6 +65,49 @@ import Testing
 }
 
 @Test(.timeLimit(.minutes(1)))
+func embeddedPackageServiceAppliesTheGlobalFilesSwitchBeforePackageSettings() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-global-files-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": root.path])
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let service = EmbeddedPackageService(paths: paths)
+    try await service.open()
+
+    #expect(try await service.filesIntegrationEnabled(packageID: packageID))
+
+    try Data(#"{"schemaVersion":2,"integrations":{"enabled":{"files":false}}}"#.utf8)
+        .write(to: paths.settingsFile)
+    #expect(try await service.filesIntegrationEnabled(packageID: packageID) == false)
+
+    try Data(#"{"schemaVersion":2,"integrations":{"enabled":{"files":true}}}"#.utf8)
+        .write(to: paths.settingsFile)
+    #expect(try await service.filesIntegrationEnabled(packageID: packageID))
+}
+
+@Test func globalFilesSettingsRejectSymlinks() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-global-files-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let target = root.appendingPathComponent("target.json")
+    let settings = root.appendingPathComponent("settings.json")
+    try Data(#"{"schemaVersion":2,"integrations":{"enabled":{"files":false}}}"#.utf8).write(to: target)
+    try FileManager.default.createSymbolicLink(at: settings, withDestinationURL: target)
+
+    do {
+        _ = try EmbeddedPackageService.readGlobalFilesIntegrationEnabled(at: settings, packageID: packageID)
+        Issue.record("A symlinked global settings file must not control file-sharing access.")
+    } catch {
+        #expect(error as? PackageStoreFailure == .settingsUnreadable(packageID))
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
 func embeddedPackageServiceListsUnreadablePackagesAndReturnsTheirTypedError() async throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("apkrun-package-service-\(UUID().uuidString)", isDirectory: true)

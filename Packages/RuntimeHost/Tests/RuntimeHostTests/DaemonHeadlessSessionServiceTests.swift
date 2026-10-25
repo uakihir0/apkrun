@@ -1,12 +1,184 @@
 import CoreGraphics
+import CryptoKit
+import Darwin
+import DiagnosticsCore
 import Foundation
 import GraphicsCore
 import GuestProtocol
-import RuntimeAPI
+import IntegrationCore
+@_spi(APKRunSessionBinding) import RuntimeAPI
 import RuntimeCore
 import Testing
 
 @testable import RuntimeHost
+
+@Test func daemonFileDropRejectsOversizedSparseFilesBeforeHashing() throws {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-oversized-drop-\(UUID().uuidString)")
+    let descriptor = Darwin.open(url.path, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, mode_t(0o600))
+    #expect(descriptor >= 0)
+    guard descriptor >= 0 else { return }
+    defer {
+        _ = Darwin.close(descriptor)
+        try? FileManager.default.removeItem(at: url)
+    }
+    let oversized = Int64(FileTransferLimits.maximumFileBytes + 1)
+    #expect(Darwin.ftruncate(descriptor, oversized) == 0)
+
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    do {
+        _ = try DaemonHeadlessSessionService.validateFileDrop(
+            [handle],
+            metadata: [ImportFileInfo(fileIndex: 0, name: "large.bin", size: oversized, uti: "public.data")],
+            packageID: package
+        )
+        Issue.record("An oversized sparse file must be rejected before its bytes are hashed.")
+    } catch {
+        #expect(error.code == "integration.fileTooLarge")
+    }
+}
+
+@Test func daemonFileDropHashesBoundedFilesAndUsesEvenTransferIDs() throws {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-file-drop-\(UUID().uuidString)")
+    let bytes = Data("bounded file".utf8)
+    try bytes.write(to: url)
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let files = try DaemonHeadlessSessionService.validateFileDrop(
+        [handle],
+        metadata: [
+            ImportFileInfo(fileIndex: 0, name: "document.txt", size: Int64(bytes.count), uti: "public.plain-text")
+        ],
+        packageID: package
+    )
+
+    #expect(files.count == 1)
+    #expect(files[0].sha256 == Data(SHA256.hash(data: bytes)))
+    #expect(files[0].transferID > 0)
+    #expect(files[0].transferID.isMultiple(of: 2))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonFileDropTransfersOnlyToItsRunningSessionWhenEnabled() async throws {
+    let fixture = makeHeadlessServiceFixture(filesEnabled: true)
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let bytes = Data(repeating: 0x2a, count: 313)
+
+    let result = try await performFileDrop(
+        through: fixture.service,
+        packageID: package,
+        bytes: bytes
+    )
+
+    #expect(result.disposition == .shared)
+    #expect(result.contentURIs.count == 1)
+    #expect(await fixture.agent.transfers.count == 1)
+    #expect(await fixture.agent.transfers[0].sha256 == Data(SHA256.hash(data: bytes)))
+    #expect(await fixture.agent.importCalls == [HeadlessImportCall(packageID: package.rawValue, displayID: 1)])
+    #expect(
+        Perf.timeline.snapshot().contains {
+            $0.marker == .fileTransfer
+                && $0.attributes["bytes"] == .integer(Int64(bytes.count))
+                && $0.attributes["durationMs"] != nil
+        }
+    )
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonFileDropRefusesDisabledIntegrationBeforeTransferring() async throws {
+    let fixture = makeHeadlessServiceFixture()
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    do {
+        _ = try await performFileDrop(through: fixture.service, packageID: package)
+        Issue.record("A disabled file integration must refuse the drop.")
+    } catch let error as RuntimeWireError {
+        #expect(error.code == "integration.filesDisabled")
+    }
+
+    #expect(await fixture.agent.transfers.isEmpty)
+    #expect(await fixture.agent.importCalls.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonFileDropStopsBeforeImportWhenGuestTransferFails() async throws {
+    let fixture = makeHeadlessServiceFixture(filesEnabled: true, transferFailure: true)
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    do {
+        _ = try await performFileDrop(through: fixture.service, packageID: package)
+        Issue.record("A failed bulk transfer must refuse the drop.")
+    } catch let error as RuntimeWireError {
+        #expect(error.code == "runtime.guestAgentOperationFailed")
+    }
+
+    #expect(await fixture.agent.transfers.count == 1)
+    #expect(await fixture.agent.importCalls.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonFileDropRejectsMismatchedGuestResult() async throws {
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let cases: [(FakeImportDisposition, String, Int)] = [
+        (.unknown, "io.apkrun.guest.files", 0),
+        (.shared, "evil.example", 0),
+        (.shared, "io.apkrun.guest.files", -1),
+    ]
+
+    for (disposition, uriHost, uriCountDelta) in cases {
+        let fixture = makeHeadlessServiceFixture(
+            filesEnabled: true,
+            importDisposition: disposition,
+            importURIHost: uriHost,
+            importURICountDelta: uriCountDelta
+        )
+
+        do {
+            _ = try await performFileDrop(through: fixture.service, packageID: package)
+            Issue.record("An invalid guest import result must be rejected.")
+        } catch let error as RuntimeWireError {
+            #expect(error.code == "integration.transferFailed")
+        }
+    }
+}
+
+@Test func daemonFileDropValidatesGuestContentURIs() {
+    let sharedURI = "content://io.apkrun.guest.files/shared/\(UUID().uuidString)"
+    #expect(
+        DaemonHeadlessSessionService.isValidContentURI(
+            sharedURI,
+            authority: "io.apkrun.guest.files",
+            pathPrefix: "/shared/"
+        )
+    )
+    #expect(
+        !DaemonHeadlessSessionService.isValidContentURI(
+            "https://io.apkrun.guest.files/shared/\(UUID().uuidString)",
+            authority: "io.apkrun.guest.files",
+            pathPrefix: "/shared/"
+        )
+    )
+    #expect(
+        !DaemonHeadlessSessionService.isValidContentURI(
+            "content://evil.example/shared/\(UUID().uuidString)",
+            authority: "io.apkrun.guest.files",
+            pathPrefix: "/shared/"
+        )
+    )
+    #expect(
+        DaemonHeadlessSessionService.isValidContentURI(
+            "content://media/external/downloads/123456",
+            authority: "media",
+            pathPrefix: "/external/downloads/"
+        )
+    )
+}
 
 @Test(.timeLimit(.minutes(1)))
 func daemonHeadlessSessionUsesSecondaryDisplayDiscardsFramesAndReleasesLease() async throws {
@@ -202,7 +374,12 @@ private struct HeadlessServiceFixture {
 private func makeHeadlessServiceFixture(
     isInstalled: Bool = true,
     stopResults: [Bool] = [true],
-    snapshotOnRegistration: GuestSnapshotState? = nil
+    snapshotOnRegistration: GuestSnapshotState? = nil,
+    filesEnabled: Bool = false,
+    transferFailure: Bool = false,
+    importDisposition: FakeImportDisposition = .shared,
+    importURIHost: String = "io.apkrun.guest.files",
+    importURICountDelta: Int = 0
 ) -> HeadlessServiceFixture {
     let displayControl = FakeHeadlessDisplayControlChannel()
     let scanouts = FakeHeadlessScanoutController(guest: displayControl)
@@ -219,7 +396,11 @@ private func makeHeadlessServiceFixture(
     let agent = FakeDaemonHeadlessGuestAgent(
         isInstalled: isInstalled,
         stopResults: stopResults,
-        snapshotOnRegistration: snapshotOnRegistration
+        snapshotOnRegistration: snapshotOnRegistration,
+        transferFailure: transferFailure,
+        importDisposition: importDisposition,
+        importURIHost: importURIHost,
+        importURICountDelta: importURICountDelta
     )
     let service = DaemonHeadlessSessionService(
         guestAgent: agent,
@@ -230,7 +411,8 @@ private func makeHeadlessServiceFixture(
                 pointSize: CGSize(width: 480, height: 850),
                 backingScale: 1
             )
-        )
+        ),
+        fileIntegrationEnabled: { _ in filesEnabled }
     )
     return HeadlessServiceFixture(
         service: service,
@@ -241,7 +423,46 @@ private func makeHeadlessServiceFixture(
     )
 }
 
+private enum FakeImportDisposition {
+    case shared
+    case savedToDownloads
+    case unknown
+}
+
+private func performFileDrop(
+    through service: DaemonHeadlessSessionService,
+    packageID: RuntimePackageID,
+    bytes: Data = Data("file-drop".utf8)
+) async throws -> ImportResult {
+    let launched = try await service.launch(RuntimeLaunchRequest(packageID: packageID))
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-file-drop-session-\(UUID().uuidString)")
+    try bytes.write(to: url)
+    defer { try? FileManager.default.removeItem(at: url) }
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+    let request = ImportFilesRequest(
+        files: [ImportFileInfo(fileIndex: 0, name: "note.txt", size: Int64(bytes.count), uti: "public.plain-text")],
+        target: .shareToApp
+    ).bound(to: launched.sessionID)
+
+    return try await service.importFiles(request, files: [handle])
+}
+
 private struct HeadlessLaunchCall: Sendable, Equatable {
+    let packageID: String
+    let displayID: Int32
+}
+
+private struct HeadlessTransferCall: Equatable, Sendable {
+    let transferID: UInt64
+    let name: String
+    let mimeType: String
+    let size: UInt64
+    let sha256: Data
+}
+
+private struct HeadlessImportCall: Equatable, Sendable {
     let packageID: String
     let displayID: Int32
 }
@@ -250,7 +471,13 @@ private actor FakeDaemonHeadlessGuestAgent: DaemonHeadlessGuestAgent {
     private let installed: Bool
     private var stopResults: [Bool]
     private let snapshotOnRegistration: GuestSnapshotState?
+    private let transferFailure: Bool
+    private let importDisposition: FakeImportDisposition
+    private let importURIHost: String
+    private let importURICountDelta: Int
     private(set) var launchCalls: [HeadlessLaunchCall] = []
+    private(set) var transfers: [HeadlessTransferCall] = []
+    private(set) var importCalls: [HeadlessImportCall] = []
     private(set) var stoppedPackages: [String] = []
     private(set) var forceStoppedPackages: [String] = []
     private let taskEventContinuation: AsyncStream<DevelopmentGuestTaskEvent>.Continuation
@@ -258,10 +485,22 @@ private actor FakeDaemonHeadlessGuestAgent: DaemonHeadlessGuestAgent {
     private var resynchronizationHandler: (@Sendable (GuestSnapshotState) async -> Void)?
     private let taskEvents: AsyncStream<DevelopmentGuestTaskEvent>
 
-    init(isInstalled: Bool, stopResults: [Bool], snapshotOnRegistration: GuestSnapshotState?) {
+    init(
+        isInstalled: Bool,
+        stopResults: [Bool],
+        snapshotOnRegistration: GuestSnapshotState?,
+        transferFailure: Bool,
+        importDisposition: FakeImportDisposition,
+        importURIHost: String,
+        importURICountDelta: Int
+    ) {
         installed = isInstalled
         self.stopResults = stopResults
         self.snapshotOnRegistration = snapshotOnRegistration
+        self.transferFailure = transferFailure
+        self.importDisposition = importDisposition
+        self.importURIHost = importURIHost
+        self.importURICountDelta = importURICountDelta
         let (taskEvents, taskEventContinuation) = AsyncStream.makeStream(
             of: DevelopmentGuestTaskEvent.self,
             bufferingPolicy: .bufferingNewest(128)
@@ -281,6 +520,49 @@ private actor FakeDaemonHeadlessGuestAgent: DaemonHeadlessGuestAgent {
             component: "\(package)/.MainActivity",
             outcome: "started"
         )
+    }
+
+    func transferFile(
+        _ fileHandle: FileHandle,
+        transferID: UInt64,
+        name: String,
+        mimeType: String,
+        size: UInt64,
+        sha256: Data
+    ) async throws(GuestAgentFailure) {
+        transfers.append(
+            HeadlessTransferCall(
+                transferID: transferID,
+                name: name,
+                mimeType: mimeType,
+                size: size,
+                sha256: sha256
+            )
+        )
+        if transferFailure {
+            throw .operationFailed(reason: "transfer failed in test")
+        }
+    }
+
+    func importFiles(
+        package: String,
+        displayID: Int32,
+        files: [GPFileRef]
+    ) async throws(GuestAgentFailure) -> GPImportResult {
+        importCalls.append(HeadlessImportCall(packageID: package, displayID: displayID))
+        var result = GPImportResult()
+        result.contentUri = (0..<max(0, files.count + importURICountDelta)).map { _ in
+            "content://\(importURIHost)/shared/\(UUID().uuidString)"
+        }
+        switch importDisposition {
+        case .shared:
+            result.disposition = .shared
+        case .savedToDownloads:
+            result.disposition = .savedToDownloads
+        case .unknown:
+            result.disposition = .UNRECOGNIZED(999)
+        }
+        return result
     }
 
     func stopApplication(package: String) async throws(GuestAgentFailure) -> Bool {

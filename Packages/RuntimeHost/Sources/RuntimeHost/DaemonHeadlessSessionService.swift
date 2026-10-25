@@ -1,10 +1,30 @@
 import CoreGraphics
+import CryptoKit
+import Darwin
 import DiagnosticsCore
 import Foundation
 import GraphicsCore
 import GuestProtocol
+import IntegrationCore
 import RuntimeAPI
 import RuntimeCore
+import UniformTypeIdentifiers
+
+struct PreparedFileImport {
+    let handle: FileHandle
+    let transferID: UInt64
+    let name: String
+    let mimeType: String
+    let size: UInt64
+    let sha256: Data
+}
+
+private struct UnhashedFileImport {
+    let handle: FileHandle
+    let name: String
+    let mimeType: String
+    let size: UInt64
+}
 
 /// Launches CLI-owned sessions on secondary displays before the daemon has a window client (#33).
 ///
@@ -15,6 +35,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     private let displayPool: DisplayPool
     private let registry: SessionRegistry
     private let displayConfiguration: DisplayConfiguration
+    private let fileIntegrationEnabled: @Sendable (RuntimePackageID) async throws(RuntimeWireError) -> Bool
     private var sessionsByPackage: [String: SessionID] = [:]
     private var frameDrainers: [SessionID: Task<Void, Never>] = [:]
     private var taskEventMonitor: Task<Void, Never>?
@@ -33,10 +54,14 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     public init(
         guestAgent: DevelopmentGuestAgent,
         displayPool: DisplayPool,
+        fileIntegrationEnabled: @escaping @Sendable (RuntimePackageID) async throws(RuntimeWireError) -> Bool = { _ in
+            false
+        },
         logSink: (any LogSink)? = nil
     ) {
         self.guestAgent = guestAgent
         self.displayPool = displayPool
+        self.fileIntegrationEnabled = fileIntegrationEnabled
         registry = SessionRegistry(logSink: logSink)
         displayConfiguration = Self.defaultDisplayConfiguration
     }
@@ -45,12 +70,16 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         guestAgent: any DaemonHeadlessGuestAgent,
         displayPool: DisplayPool,
         registry: SessionRegistry,
-        displayConfiguration: DisplayConfiguration
+        displayConfiguration: DisplayConfiguration,
+        fileIntegrationEnabled: @escaping @Sendable (RuntimePackageID) async throws(RuntimeWireError) -> Bool = { _ in
+            false
+        }
     ) {
         self.guestAgent = guestAgent
         self.displayPool = displayPool
         self.registry = registry
         self.displayConfiguration = displayConfiguration
+        self.fileIntegrationEnabled = fileIntegrationEnabled
     }
 
     /// Stops background observers before Android is shut down by the daemon.
@@ -257,6 +286,116 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     /// Reports whether this package still owns a live app session.
     func hasActiveSession(packageID: RuntimePackageID) async -> Bool {
         await registry.session(packageID: packageID.rawValue) != nil
+    }
+
+    /// Transfers a file drop to the exact live session that owns the target window.
+    public func importFiles(
+        _ request: ImportFilesRequest,
+        files: [FileHandle]
+    ) async throws(RuntimeWireError) -> ImportResult {
+        guard await acquireOperation() else {
+            throw Self.shuttingDownError
+        }
+        defer { releaseOperation() }
+        guard !isShuttingDown else { throw Self.shuttingDownError }
+
+        let sessionID = SessionID.app(request.sessionID)
+        guard let session = await registry.session(sessionID),
+            session.state == .running || session.state == .backgrounded,
+            let packageID = RuntimePackageID(rawValue: session.packageID)
+        else {
+            throw .runtime(
+                "guestAgentUnavailable",
+                message: "The app session is no longer available for file sharing.",
+                remediation: "Open the app again, then retry the drop."
+            )
+        }
+
+        let isEnabled: Bool
+        do {
+            isEnabled = try await fileIntegrationEnabled(packageID)
+        } catch {
+            throw error
+        }
+        guard isEnabled else {
+            throw Self.integrationWireError(.filesDisabled)
+        }
+
+        let prepared = try Self.validateFileDrop(files, metadata: request.files, packageID: packageID)
+        let transferStartedAt = ContinuousClock().now
+        var transferredBytes: UInt64 = 0
+        defer {
+            let completedAt = ContinuousClock().now
+            let duration = transferStartedAt.duration(to: completedAt).components
+            let durationMilliseconds =
+                Double(duration.seconds) * 1_000
+                + Double(duration.attoseconds) / 1_000_000_000_000_000
+            Perf.mark(
+                .fileTransfer,
+                at: completedAt,
+                [
+                    "bytes": .integer(Int64(clamping: transferredBytes)),
+                    "durationMs": .double(durationMilliseconds),
+                ]
+            )
+        }
+        var guestFiles: [GPFileRef] = []
+        guestFiles.reserveCapacity(prepared.count)
+        for item in prepared {
+            do {
+                try await guestAgent.transferFile(
+                    item.handle,
+                    transferID: item.transferID,
+                    name: item.name,
+                    mimeType: item.mimeType,
+                    size: item.size,
+                    sha256: item.sha256
+                )
+            } catch {
+                throw Self.wireError(for: error)
+            }
+            transferredBytes += item.size
+            var guestFile = GPFileRef()
+            guestFile.transferID = item.transferID
+            guestFile.name = item.name
+            guestFile.mimeType = item.mimeType
+            guestFile.size = item.size
+            guestFiles.append(guestFile)
+        }
+
+        do {
+            let result = try await guestAgent.importFiles(
+                package: session.packageID,
+                displayID: session.displayID,
+                files: guestFiles
+            )
+            let disposition: ImportDisposition
+            let uriAuthority: String
+            let uriPathPrefix: String
+            switch result.disposition {
+            case .shared:
+                disposition = .shared
+                uriAuthority = "io.apkrun.guest.files"
+                uriPathPrefix = "/shared/"
+            case .savedToDownloads:
+                disposition = .savedToDownloads
+                uriAuthority = "media"
+                uriPathPrefix = "/external/downloads/"
+            default: throw Self.integrationWireError(.transferFailed)
+            }
+            guard result.contentUri.count == guestFiles.count,
+                result.contentUri.allSatisfy({
+                    Self.isValidContentURI($0, authority: uriAuthority, pathPrefix: uriPathPrefix)
+                })
+            else {
+                throw Self.integrationWireError(.transferFailed)
+            }
+            return ImportResult(contentURIs: result.contentUri, disposition: disposition)
+        } catch let error as RuntimeWireError {
+            throw error
+        } catch {
+            throw Self.wireError(for: error)
+        }
     }
 
     /// Closes an active session with the package-removal reason before the store uninstalls Android's package.
@@ -781,6 +920,188 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         }
     }
 
+    static func validateFileDrop(
+        _ handles: [FileHandle],
+        metadata: [ImportFileInfo],
+        packageID: RuntimePackageID
+    ) throws(RuntimeWireError) -> [PreparedFileImport] {
+        guard !handles.isEmpty else {
+            throw integrationWireError(.emptyFileSet)
+        }
+        guard handles.count == metadata.count,
+            metadata.enumerated().allSatisfy({ index, item in item.fileIndex == index })
+        else {
+            throw integrationWireError(.invalidMetadata)
+        }
+        guard handles.count <= FileTransferLimits.maximumFileCount else {
+            throw integrationWireError(
+                .tooManyFiles(count: handles.count, limit: FileTransferLimits.maximumFileCount)
+            )
+        }
+
+        var unhashed: [UnhashedFileImport] = []
+        var limitItems: [FileTransferItem] = []
+        unhashed.reserveCapacity(handles.count)
+        limitItems.reserveCapacity(handles.count)
+
+        for (index, item) in metadata.enumerated() {
+            guard item.size >= 0, !item.uti.isEmpty, item.uti.utf8.count <= 255,
+                !item.uti.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+            else {
+                throw integrationWireError(.invalidMetadata)
+            }
+            let handle = handles[index]
+            var status = stat()
+            guard Darwin.fstat(handle.fileDescriptor, &status) == 0,
+                status.st_mode & S_IFMT == S_IFREG,
+                status.st_size >= 0
+            else {
+                throw integrationWireError(.invalidFileHandle)
+            }
+            guard UInt64(item.size) == UInt64(status.st_size) else {
+                throw integrationWireError(.invalidMetadata)
+            }
+
+            let safeName = FileNameSanitizer.sanitize(item.name, packageID: packageID.rawValue)
+            let size = UInt64(status.st_size)
+            limitItems.append(FileTransferItem(name: safeName, sizeBytes: size))
+            let uti = UTType(item.uti)
+            let fileExtension = (safeName as NSString).pathExtension
+            let mimeType =
+                uti?.preferredMIMEType
+                ?? UTType(filenameExtension: fileExtension)?.preferredMIMEType
+                ?? "application/octet-stream"
+            unhashed.append(UnhashedFileImport(handle: handle, name: safeName, mimeType: mimeType, size: size))
+        }
+
+        do {
+            _ = try FileTransferLimits.validate(limitItems)
+        } catch {
+            throw integrationWireError(error)
+        }
+
+        var transferIDs = Set<UInt64>()
+        return try unhashed.map { item in
+            let digest = try hashFile(item.handle, expectedSize: item.size)
+            let transferID = makeTransferID(excluding: transferIDs)
+            transferIDs.insert(transferID)
+            return PreparedFileImport(
+                handle: item.handle,
+                transferID: transferID,
+                name: item.name,
+                mimeType: item.mimeType,
+                size: item.size,
+                sha256: digest
+            )
+        }
+    }
+
+    private static func hashFile(
+        _ handle: FileHandle,
+        expectedSize: UInt64
+    ) throws(RuntimeWireError) -> Data {
+        var hasher = SHA256()
+        var offset: UInt64 = 0
+        while offset < expectedSize {
+            let requested = Int(min(UInt64(1_048_576), expectedSize - offset))
+            var chunk = [UInt8](repeating: 0, count: requested)
+            let count = chunk.withUnsafeMutableBytes { buffer in
+                Darwin.pread(
+                    handle.fileDescriptor,
+                    buffer.baseAddress,
+                    requested,
+                    off_t(offset)
+                )
+            }
+            if count < 0, errno == EINTR {
+                continue
+            }
+            guard count > 0 else {
+                throw integrationWireError(.invalidFileHandle)
+            }
+            hasher.update(data: Data(chunk.prefix(count)))
+            offset += UInt64(count)
+        }
+
+        var currentStatus = stat()
+        guard Darwin.fstat(handle.fileDescriptor, &currentStatus) == 0,
+            currentStatus.st_mode & S_IFMT == S_IFREG,
+            currentStatus.st_size >= 0,
+            UInt64(currentStatus.st_size) == expectedSize
+        else {
+            throw integrationWireError(.invalidFileHandle)
+        }
+        return Data(hasher.finalize())
+    }
+
+    private static func makeTransferID(excluding existing: Set<UInt64>) -> UInt64 {
+        var candidate = UInt64.random(in: 1...(UInt64.max / 2)) << 1
+        while existing.contains(candidate) {
+            candidate = UInt64.random(in: 1...(UInt64.max / 2)) << 1
+        }
+        return candidate
+    }
+
+    static func isValidContentURI(_ value: String, authority: String, pathPrefix: String) -> Bool {
+        guard value.utf8.count <= 2_048,
+            !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+            let components = URLComponents(string: value),
+            components.scheme == "content",
+            components.host == authority,
+            components.user == nil,
+            components.password == nil,
+            components.port == nil,
+            components.query == nil,
+            components.fragment == nil,
+            components.percentEncodedPath.hasPrefix(pathPrefix)
+        else {
+            return false
+        }
+        let pathComponents = components.percentEncodedPath.split(separator: "/")
+        if pathPrefix == "/shared/" {
+            return pathComponents.count == 2
+                && pathComponents[0] == "shared"
+                && UUID(uuidString: String(pathComponents[1])) != nil
+        }
+        return pathComponents.count == 3
+            && pathComponents[0] == "external"
+            && pathComponents[1] == "downloads"
+            && !pathComponents[2].isEmpty
+            && pathComponents[2].allSatisfy(\.isNumber)
+    }
+
+    private static func integrationWireError(_ failure: IntegrationFailure) -> RuntimeWireError {
+        let message: String
+        let remediation: String?
+        switch failure {
+        case .emptyFileSet, .invalidMetadata, .invalidFileHandle:
+            message = "APKRun couldn't verify the dropped files."
+            remediation = "Choose the files again and retry the drop."
+        case .filesDisabled:
+            message = "File sharing is turned off for this app."
+            remediation = "Turn on Files in the app's APKRun settings, then retry."
+        case .tooManyFiles:
+            message = "The drop contains more files than APKRun can send at once."
+            remediation = "Choose up to 20 files, then retry."
+        case .fileTooLarge:
+            message = "A dropped file exceeds APKRun's transfer limit."
+            remediation = "Choose files smaller than 2 GiB each and 4 GiB total."
+        case .transferFailed:
+            message = "APKRun couldn't deliver the dropped files to Android."
+            remediation = "Check that Android is running, then retry the drop."
+        case .folderUnavailable, .pathRejected, .packageAccessDenied, .readOnly, .resourceExhausted, .itemNotFound,
+            .invalidRequest, .invalidRootConfiguration:
+            message = "The file integration request couldn't be completed."
+            remediation = "Check the file integration settings, then retry."
+        }
+        return RuntimeWireError(
+            domain: failure.domain.rawValue,
+            code: failure.qualifiedCode,
+            message: message,
+            remediation: remediation
+        )
+    }
+
     private static let defaultDisplayConfiguration = DisplayConfiguration(
         geometry: DisplayGeometry(
             pointSize: CGSize(width: 480, height: 850),
@@ -940,6 +1261,19 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
 
 protocol DaemonHeadlessGuestAgent: EmbeddedSessionGuestAgent {
     func taskEventStream() async -> AsyncStream<DevelopmentGuestTaskEvent>
+    func transferFile(
+        _ fileHandle: FileHandle,
+        transferID: UInt64,
+        name: String,
+        mimeType: String,
+        size: UInt64,
+        sha256: Data
+    ) async throws(GuestAgentFailure)
+    func importFiles(
+        package: String,
+        displayID: Int32,
+        files: [GPFileRef]
+    ) async throws(GuestAgentFailure) -> GPImportResult
 }
 
 extension DevelopmentGuestAgent: DaemonHeadlessGuestAgent {

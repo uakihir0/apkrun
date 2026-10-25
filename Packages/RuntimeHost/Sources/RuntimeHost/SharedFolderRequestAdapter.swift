@@ -196,12 +196,18 @@ public actor SharedFolderRequestAdapter {
         case .invalidMetadata, .transferFailed, .invalidRootConfiguration:
             code = .internal
             message = "The shared-folder operation failed."
+        case .settingsUnreadable:
+            code = .unavailable
+            message = "The shared-folder settings are unavailable."
         case .tooManyFiles, .fileTooLarge, .invalidRequest:
             code = .invalidArgument
             message = "The shared-folder request is invalid."
         case .folderUnavailable:
             code = .unavailable
             message = "The shared folder is unavailable."
+        case .folderRefused:
+            code = .permissionDenied
+            message = "The shared folder is not allowed."
         case .pathRejected, .packageAccessDenied, .readOnly:
             code = .permissionDenied
             message = "The shared-folder request is not authorized."

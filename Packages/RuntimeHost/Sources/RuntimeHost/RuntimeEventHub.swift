@@ -180,6 +180,17 @@ final class RuntimeEventHub: @unchecked Sendable {
         )
     }
 
+    func publishIntegrationChange(_ change: IntegrationChange) {
+        publish(
+            QueuedEvent(
+                topic: .integrations,
+                time: Date(),
+                operationID: nil,
+                payload: .integrations(change)
+            )
+        )
+    }
+
     private func publish(_ event: QueuedEvent) {
         queue.sync {
             for connectionID in Array(subscribers.keys) {

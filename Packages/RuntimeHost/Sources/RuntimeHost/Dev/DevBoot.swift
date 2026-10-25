@@ -1,6 +1,8 @@
 import DiagnosticsCore
 import Foundation
+import GuestProtocol
 import ImageCore
+import IntegrationCore
 import RuntimeAPI
 import RuntimeCore
 
@@ -506,6 +508,49 @@ public struct DevBoot: Sendable {
         }
 
         let guestAgentBundle = try options.guestAgentDirectory.map { try GuestAgentBundle.load(directory: $0) }
+        let sharedFolderControl: SharedFolderConfigurationService?
+        do {
+            sharedFolderControl = try await SharedFolderConfigurationService.open(paths: paths)
+        } catch {
+            sharedFolderControl = nil
+            onEvent(.warning("shared-folder integration is unavailable"))
+        }
+        defer {
+            if let sharedFolderControl {
+                Task { await sharedFolderControl.shutdown() }
+            }
+        }
+        let hostRequestSessionFactory: GuestHostRequestSessionFactory?
+        if let sharedFolderControl {
+            let fileService = sharedFolderControl.fileService
+            hostRequestSessionFactory = {
+                let adapter = SharedFolderRequestAdapter(service: fileService)
+                return GuestHostRequestSession(
+                    handle: adapter.makeHandler(),
+                    close: { await adapter.closeConnection() }
+                )
+            }
+        } else {
+            hostRequestSessionFactory = nil
+        }
+        let guestAgentResynchronizationHandler: GuestAgentResynchronizationHandler?
+        if let sharedFolderControl {
+            guestAgentResynchronizationHandler = { guestAgent, _, connection in
+                do {
+                    let policy = try await sharedFolderControl.guestPolicy()
+                    try await guestAgent.setSharedFolderAccess(
+                        roots: policy.roots,
+                        access: policy.access,
+                        on: connection
+                    )
+                } catch {
+                    let code = (error as? RuntimeWireError)?.code ?? error.qualifiedCode
+                    onEvent(.warning("guest shared-folder policy could not be synchronized before readiness (\(code))"))
+                }
+            }
+        } else {
+            guestAgentResynchronizationHandler = nil
+        }
         let supervisor = RuntimeSupervisor(
             image: image,
             instanceStore: store,
@@ -516,6 +561,8 @@ public struct DevBoot: Sendable {
             ),
             diagnostics: diagnostics,
             guestAgentBundle: guestAgentBundle,
+            hostRequestSessionFactory: hostRequestSessionFactory,
+            guestAgentResynchronizationHandler: guestAgentResynchronizationHandler,
             developmentDisplay: options.developerDisplay?.core,
             guestAgentTransportMode: options.guestTransport == .vsock ? .vsock : .adb
         )
@@ -588,6 +635,11 @@ public struct DevBoot: Sendable {
             }
             do {
                 try await supervisor.ensureReady(.cli)
+                await pushSharedFolderPolicy(
+                    sharedFolderControl,
+                    supervisor: supervisor,
+                    onEvent: onEvent
+                )
                 if await stopSignal.current() == nil {
                     onEvent(.message("Android is ready after \(ContinuousClock.now - started)"))
                     if windowDisplay != nil, options.launchPackage != nil {
@@ -720,6 +772,8 @@ public struct DevBoot: Sendable {
                 guard let requestedStop = await stopSignal.current() else {
                     await multiWindowCoordinator?.stopAllWindows()
                     await stopSignal.stopRuntime()
+                    await sharedFolderControl?.runtimeDidStop()
+                    await sharedFolderControl?.shutdown()
                     throw error
                 }
                 stopCause = requestedStop
@@ -921,6 +975,8 @@ public struct DevBoot: Sendable {
                 await endInput(inputBinding, routes: Self.inputRoutes(options))
                 await multiWindowCoordinator?.stopAllWindows()
                 await stopSignal.stopRuntime()
+                await sharedFolderControl?.runtimeDidStop()
+                await sharedFolderControl?.shutdown()
                 throw error
             }
             await endInput(inputBinding, routes: Self.inputRoutes(options))
@@ -954,7 +1010,27 @@ public struct DevBoot: Sendable {
         }
         _ = try? await embeddedSession?.runtimeStopped()
         await stopSignal.stopRuntime()
+        await sharedFolderControl?.runtimeDidStop()
+        await sharedFolderControl?.shutdown()
         returnedNormally = true
+    }
+
+    private func pushSharedFolderPolicy(
+        _ sharedFolderControl: SharedFolderConfigurationService?,
+        supervisor: RuntimeSupervisor,
+        onEvent: @escaping @Sendable (DevBootEvent) -> Void
+    ) async {
+        guard let sharedFolderControl, let guestAgent = await supervisor.developmentGuestAgent else {
+            return
+        }
+        do {
+            let policy = try await sharedFolderControl.guestPolicy()
+            try await guestAgent.setSharedFolderAccess(roots: policy.roots, access: policy.access)
+        } catch let error as RuntimeWireError {
+            onEvent(.warning("guest shared-folder policy could not be updated: \(error.code)"))
+        } catch {
+            onEvent(.warning("guest shared-folder policy could not be updated: \(error.qualifiedCode)"))
+        }
     }
 
     private static func displayConfiguration(for launch: DevBootAppLaunch) -> DisplayConfiguration {

@@ -1,6 +1,8 @@
 import DiagnosticsCore
 import Foundation
+import GuestProtocol
 import ImageCore
+import IntegrationCore
 import RuntimeAPI
 import RuntimeCore
 
@@ -62,6 +64,7 @@ public actor RuntimeHost {
     private var supervisor: RuntimeSupervisor?
     private var supervisorEventsTask: Task<Void, Never>?
     private var packageQueryService: EmbeddedPackageService?
+    private var sharedFolderControl: SharedFolderConfigurationService?
     private var headlessSessionService: (any RuntimeSessionService)?
     private var runtimeSessionGeneration: UInt64 = 0
     private var bootProgressEstimator: BootProgressEstimator?
@@ -204,6 +207,17 @@ public actor RuntimeHost {
 
         // Startup step 5: only the instance-lock owner may recover or mutate the image store.
         if instanceLock != nil {
+            do {
+                sharedFolderControl = try await SharedFolderConfigurationService.open(paths: paths)
+            } catch {
+                logger.warning(
+                    "Shared-folder integration is unavailable",
+                    errorCode: (error as? IntegrationFailure)?.qualifiedCode ?? "integration.settingsUnreadable"
+                )
+            }
+        }
+
+        if instanceLock != nil {
             let images = ImageStore(paths: paths, trust: .standard(), diagnostics: diagnostics)
             do {
                 try await images.removeOrphanedInstalls()
@@ -225,6 +239,39 @@ public actor RuntimeHost {
             )
             do {
                 let guestAgent = try GuestAgentBundle.load(directory: guestDirectory)
+                let hostRequestSessionFactory: GuestHostRequestSessionFactory?
+                if let sharedFolderControl {
+                    let fileService = sharedFolderControl.fileService
+                    hostRequestSessionFactory = {
+                        let adapter = SharedFolderRequestAdapter(service: fileService)
+                        return GuestHostRequestSession(
+                            handle: adapter.makeHandler(),
+                            close: { await adapter.closeConnection() }
+                        )
+                    }
+                } else {
+                    hostRequestSessionFactory = nil
+                }
+                let guestAgentResynchronizationHandler: GuestAgentResynchronizationHandler?
+                if let sharedFolderControl {
+                    guestAgentResynchronizationHandler = { guestAgent, _, connection in
+                        do {
+                            let policy = try await sharedFolderControl.guestPolicy()
+                            try await guestAgent.setSharedFolderAccess(
+                                roots: policy.roots,
+                                access: policy.access,
+                                on: connection
+                            )
+                        } catch {
+                            logger.warning(
+                                "Guest shared-folder policy could not be synchronized before readiness",
+                                errorCode: error.qualifiedCode
+                            )
+                        }
+                    }
+                } else {
+                    guestAgentResynchronizationHandler = nil
+                }
                 let runtimeSupervisor = RuntimeSupervisor(
                     image: image,
                     instanceStore: instanceStore,
@@ -235,6 +282,8 @@ public actor RuntimeHost {
                     ),
                     diagnostics: diagnostics,
                     guestAgentBundle: guestAgent,
+                    hostRequestSessionFactory: hostRequestSessionFactory,
+                    guestAgentResynchronizationHandler: guestAgentResynchronizationHandler,
                     guestAgentTimeout: .seconds(30)
                 )
                 supervisor = runtimeSupervisor
@@ -396,6 +445,7 @@ public actor RuntimeHost {
         }
         bootStartedAt = nil
         bootProgressEstimator = nil
+        await pushSharedFolderPolicyIfPossible()
         recordSuccessfulBootIfPresent()
     }
 
@@ -433,6 +483,7 @@ public actor RuntimeHost {
             await service.shutdown()
         }
         await supervisor?.stop(reason: reason)
+        await sharedFolderControl?.runtimeDidStop()
         await packageQueryService?.detachRuntime()
         headlessSessionService = nil
     }
@@ -1186,6 +1237,56 @@ public actor RuntimeHost {
         return try await service.packageInfo(request)
     }
 
+    /// Returns the current integration settings for an installed package.
+    public func integrationStatus(
+        _ request: RuntimePackageRequest
+    ) async throws(RuntimeWireError) -> IntegrationStatus {
+        _ = try await packageInfo(request)
+        guard let sharedFolderControl else {
+            throw Self.sharedFolderServiceUnavailableError
+        }
+        return try await sharedFolderControl.integrationStatus(packageID: request.packageID)
+    }
+
+    /// Lists built-in and user-selected shared-folder roots.
+    public func sharedFolders() async throws(RuntimeWireError) -> [SharedFolder] {
+        guard let sharedFolderControl else {
+            throw Self.sharedFolderServiceUnavailableError
+        }
+        return try await sharedFolderControl.listFolders()
+    }
+
+    /// Adds a user-selected folder and publishes the updated guest access policy.
+    public func addSharedFolder(_ request: AddSharedFolderRequest) async throws(RuntimeWireError) -> SharedFolder {
+        guard let sharedFolderControl else {
+            throw Self.sharedFolderServiceUnavailableError
+        }
+        let root = try await sharedFolderControl.add(request)
+        await publishSharedFolderChanges()
+        return root
+    }
+
+    /// Removes a user-selected root.
+    public func removeSharedFolder(_ request: SharedFolderRequest) async throws(RuntimeWireError) {
+        guard let sharedFolderControl else {
+            throw Self.sharedFolderServiceUnavailableError
+        }
+        try await sharedFolderControl.remove(request.id)
+        await publishSharedFolderChanges()
+    }
+
+    /// Changes a user-selected root's maximum access.
+    public func setSharedFolderAccess(
+        _ request: SetSharedFolderAccessRequest
+    ) async throws(RuntimeWireError) -> SharedFolder {
+        guard let sharedFolderControl else {
+            throw Self.sharedFolderServiceUnavailableError
+        }
+        let root = try await sharedFolderControl.setAccess(request)
+        await publishSharedFolderChanges()
+        return root
+    }
+
     /// Returns a point-in-time view for the control endpoint.
     public func status() async -> RuntimeHostStatus {
         if let snapshot = await supervisor?.stateSnapshot() {
@@ -1460,6 +1561,8 @@ public actor RuntimeHost {
                 )
             }
         }
+        await sharedFolderControl?.shutdown()
+        sharedFolderControl = nil
         instanceLock?.close()
         instanceLock = nil
         hostState = "stopped"
@@ -1721,6 +1824,40 @@ public actor RuntimeHost {
         packageQueryService = service
         return service
     }
+
+    private func publishSharedFolderChanges() {
+        eventHub.publishIntegrationChange(.sharedFoldersChanged)
+        eventHub.publishRuntimeChange(.configurationChanged(keys: ["sharedFolders.roots"]))
+        Task { await pushSharedFolderPolicyIfPossible() }
+    }
+
+    /// Applies the current file-provider allowlist when the Guest Agent is already connected.
+    private func pushSharedFolderPolicyIfPossible() async {
+        guard let sharedFolderControl, let supervisor,
+            await supervisor.state == .ready,
+            let guestAgent = await supervisor.developmentGuestAgent
+        else {
+            return
+        }
+        do {
+            let policy = try await sharedFolderControl.guestPolicy()
+            try await guestAgent.setSharedFolderAccess(roots: policy.roots, access: policy.access)
+        } catch let error as RuntimeWireError {
+            logger?.warning("Guest shared-folder policy could not be updated", errorCode: error.code)
+        } catch {
+            logger?.warning(
+                "Guest shared-folder policy could not be updated",
+                errorCode: error.qualifiedCode
+            )
+        }
+    }
+
+    private static let sharedFolderServiceUnavailableError = RuntimeWireError(
+        domain: "integration",
+        code: "integration.settingsUnreadable",
+        message: "APKRun couldn't read the shared-folder settings safely.",
+        remediation: "Restart APKRun. If the problem continues, contact support."
+    )
 
     private func attachPackageQueriesIfRuntimeIsReady(
         to service: EmbeddedPackageService

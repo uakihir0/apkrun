@@ -90,7 +90,7 @@ func bulkTransferStreamsBoundedChunksAndPreservesTheSharedFileOffset() async thr
     #expect(begin.mimeType == "application/octet-stream")
     #expect(begin.size == UInt64(data.count))
     #expect(begin.sha256 == digest)
-    #expect(end.sha256 == digest)
+    #expect(end.sha256.isEmpty)
     #expect(chunks.count == 3)
     #expect(chunks.allSatisfy { $0.count <= GuestBulkChannel.maximumChunkSize })
     #expect(chunks.reduce(into: Data()) { $0.append($1) } == data)
@@ -99,7 +99,7 @@ func bulkTransferStreamsBoundedChunksAndPreservesTheSharedFileOffset() async thr
 }
 
 @Test(.timeLimit(.minutes(1)))
-func bulkTransferReportsReceiverHashRejectionAndAbortsTheTransfer() async throws {
+func bulkTransferReportsReceiverHashRejectionWithoutAbortingAcknowledgedTransfer() async throws {
     let data = Data("file bytes".utf8)
     let (url, file) = try temporaryFile(containing: data)
     defer {
@@ -141,13 +141,12 @@ func bulkTransferReportsReceiverHashRejectionAndAbortsTheTransfer() async throws
     } catch let failure as GuestAgentFailure {
         #expect(failure == .operationFailed(reason: "bulkAck.hashMismatch"))
     }
-    try await eventually {
-        agent.envelopes.contains { envelope in
+    #expect(
+        !agent.envelopes.contains { envelope in
             guard case .bulk(let frame)? = envelope.body else { return false }
             if case .abort? = frame.kind { return frame.transferID == transferID }
             return false
-        }
-    }
+        })
 }
 
 @Test(.timeLimit(.minutes(1)))

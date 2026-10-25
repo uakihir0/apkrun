@@ -46,8 +46,8 @@ actor GuestBulkChannel {
 
     /// Sends a regular file to the guest and waits for the matching `BulkAck`.
     ///
-    /// The host allocates positive even transfer IDs. The supplied digest is sent in both `BulkBegin` and `BulkEnd`
-    /// so the receiver can verify the exact bytes it wrote.
+    /// The host allocates positive even transfer IDs. The supplied digest is carried by `BulkBegin`; `BulkEnd`
+    /// leaves its digest empty as required when the begin frame already supplied one.
     func transferFile(
         _ fileHandle: FileHandle,
         transferID: UInt64,
@@ -111,15 +111,14 @@ actor GuestBulkChannel {
             // Register the expected transfer before writing End so a fast receiver cannot race past the waiter.
             expectedAckTransferID = transferID
             var end = GPBulkEnd()
-            end.sha256 = sha256
             var endFrame = GPBulkFrame()
             endFrame.transferID = transferID
             endFrame.kind = .end(end)
             try await send(endFrame)
 
             let ack = try await waitForAck(transferID: transferID)
-            try Self.requireSuccess(ack.status)
             acknowledged = true
+            try Self.requireSuccess(ack.status)
             expectedAckTransferID = nil
             receivedAck = nil
         } catch let failure as GuestAgentFailure {

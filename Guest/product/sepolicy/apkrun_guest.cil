@@ -25,3 +25,27 @@
     apkrun_guest_app_userfaultfd (anon_inode (all)))
 
 (allow apkrun_guest_app apkrun_guest_app (memfd_file (execute)))
+
+(type apkrun_store_app)
+(typeattributeset domain (apkrun_store_app))
+(typeattributeset appdomain (apkrun_store_app))
+(typeattributeset coredomain (apkrun_store_app))
+
+(typeattribute apkrun_store_services)
+(typeattributeset apkrun_store_services
+    (activity_service package_service))
+(allow apkrun_store_app apkrun_store_services (service_manager (find)))
+
+(type apkrun_store_app_userfaultfd)
+(roletype object_r apkrun_store_app_userfaultfd)
+(typetransition apkrun_store_app apkrun_store_app anon_inode
+    "[userfaultfd]" apkrun_store_app_userfaultfd)
+(allow apkrun_store_app apkrun_store_app_userfaultfd
+    (anon_inode (create ioctl read)))
+(typeattribute apkrun_store_app_userfaultfd_other_domains)
+(typeattributeset apkrun_store_app_userfaultfd_other_domains
+    (and (domain) (not (apkrun_store_app))))
+(neverallow apkrun_store_app_userfaultfd_other_domains
+    apkrun_store_app_userfaultfd (anon_inode (all)))
+
+(allow apkrun_store_app apkrun_store_app (memfd_file (execute)))

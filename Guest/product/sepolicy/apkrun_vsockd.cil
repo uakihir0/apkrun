@@ -20,3 +20,5 @@
     (unix_stream_socket (create connect read write getattr shutdown)))
 (allow apkrun_vsockd apkrun_guest_app
     (unix_stream_socket (connectto)))
+(allow apkrun_vsockd apkrun_store_app
+    (unix_stream_socket (connectto)))

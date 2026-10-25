@@ -24,6 +24,28 @@
       "label": "u:object_r:system_file:s0"
     },
     {
+      "source": null,
+      "destination": "/system_ext/priv-app/ApkRunStore",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": {
+        "uid": 0,
+        "gid": 0
+      },
+      "label": "u:object_r:system_file:s0"
+    },
+    {
+      "source": "prebuilt/ApkRunStore.apk",
+      "destination": "/system_ext/priv-app/ApkRunStore/ApkRunStore.apk",
+      "kind": "regular file",
+      "mode": "0644",
+      "owner": {
+        "uid": 0,
+        "gid": 0
+      },
+      "label": "u:object_r:system_file:s0"
+    },
+    {
       "source": "permissions/privapp-permissions-apkrun.xml",
       "destination": "/system_ext/etc/permissions/privapp-permissions-apkrun.xml",
       "kind": "regular file",

@@ -18,11 +18,28 @@ class FrameWriter(private val output: OutputStream) {
     /** Sends one envelope. [replyTo] is the id of the request this envelope answers, or 0. */
     @Synchronized
     fun send(replyTo: Long = 0L, body: (Envelope.Builder) -> Unit) {
-        val envelope = Envelope.newBuilder().setId(nextId).setReplyTo(replyTo)
+        sendWithId(replyTo = replyTo, body = body)
+    }
+
+    /**
+     * Sends one envelope after [onAllocated] has registered its ID. The callback runs while the
+     * writer lock is held and before bytes are visible to the peer, so a fast response cannot race
+     * ahead of its pending-request slot.
+     */
+    @Synchronized
+    fun sendWithId(
+        replyTo: Long = 0L,
+        onAllocated: (Long) -> Unit = {},
+        body: (Envelope.Builder) -> Unit,
+    ): Long {
+        val id = nextId
         nextId += 1
+        onAllocated(id)
+        val envelope = Envelope.newBuilder().setId(id).setReplyTo(replyTo)
         body(envelope)
         output.write(FrameCodec.encode(envelope.build()))
         output.flush()
+        return id
     }
 }
 

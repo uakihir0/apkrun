@@ -3,6 +3,8 @@ package io.apkrun.guest.daemon
 import android.net.LocalSocket
 import android.os.Build
 import io.apkrun.guest.BuildConfig
+import io.apkrun.guest.daemon.files.MacFilesBulkHostClient
+import io.apkrun.guest.daemon.files.MacFilesProviderServices
 import io.apkrun.guest.protocol.AgentHandshake
 import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.GuestProtocolFailure
@@ -18,10 +20,19 @@ import io.apkrun.guest.protocol.v1.Envelope
 import io.apkrun.guest.protocol.v1.Hello
 import io.apkrun.guest.protocol.v1.InputAck
 import io.apkrun.guest.protocol.v1.ProtocolVersion as WireProtocolVersion
+import io.apkrun.guest.protocol.v1.Request
+import io.apkrun.guest.protocol.v1.Response
 import io.apkrun.guest.runtime.AgentLog
 import io.apkrun.guest.runtime.HiddenApi
 import java.io.EOFException
 import java.io.IOException
+import java.net.SocketTimeoutException
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlinx.coroutines.launch
 
 /** How long the agent waits for HelloAck after its Hello (guest-protocol.md §5.1). */
@@ -39,6 +50,20 @@ class Connection(
 ) {
     private val writer = FrameWriter(socket.outputStream)
     private val reader = FrameReader(socket.inputStream)
+    private val hostRequests = ConcurrentHashMap<Long, CompletableFuture<Response>>()
+    private val abandonedHostRequests = ConcurrentHashMap.newKeySet<Long>()
+    private val hostRequestSlots = Semaphore(MAXIMUM_HOST_REQUESTS)
+    private val hostRequestLifecycleLock = Any()
+    private var hostConnectionClosed = false
+    private val hostClient =
+        if (
+            channel == ChannelKind.CHANNEL_KIND_GUEST_BULK &&
+                daemon.mode == io.apkrun.guest.protocol.v1.AgentMode.AGENT_MODE_PRIVILEGED_APP
+        ) {
+            MacFilesBulkHostClient(this)
+        } else {
+            null
+        }
 
     /** Runs the connection until it closes. It never throws. */
     fun run() {
@@ -51,6 +76,11 @@ class Connection(
         } catch (error: IOException) {
             AgentLog.info("the ${channel.name} connection ended: ${error.javaClass.simpleName}")
         } finally {
+            hostClient?.let(MacFilesProviderServices::clearHostClient)
+            synchronized(hostRequestLifecycleLock) {
+                hostConnectionClosed = true
+                failPendingHostRequests(IOException("the bulk connection closed"))
+            }
             socket.close()
         }
     }
@@ -81,7 +111,7 @@ class Connection(
             }
             daemon.events.attach(writer, negotiated.enabled)
             try {
-                controlLoop(negotiated.enabled)
+                controlLoop(negotiated.enabled, negotiated.lastHostEnvelopeId)
             } finally {
                 daemon.events.detach(writer)
             }
@@ -100,7 +130,14 @@ class Connection(
         }
         daemon.sessions.track(socket)
         try {
-            secondaryLoop(negotiated.enabled)
+            if (
+                channel == ChannelKind.CHANNEL_KIND_GUEST_BULK &&
+                    GuestCapability.FILES_SHARED in negotiated.enabled &&
+                    hostClient != null
+            ) {
+                MacFilesProviderServices.installHostClient(hostClient)
+            }
+            secondaryLoop(negotiated.enabled, negotiated.lastHostEnvelopeId)
         } finally {
             daemon.sessions.untrack(socket)
             if (channel == ChannelKind.CHANNEL_KIND_GUEST_BULK) {
@@ -116,7 +153,11 @@ class Connection(
     /**
      * What the handshake established: the capabilities that both sides use, and the session token.
      */
-    private class Negotiated(val enabled: Set<GuestCapability>, val token: ByteArray)
+    private class Negotiated(
+        val enabled: Set<GuestCapability>,
+        val token: ByteArray,
+        val lastHostEnvelopeId: Long,
+    )
 
     /**
      * Sends the Hello, and reads the HelloAck that the host answers with (guest-protocol.md §5.1).
@@ -125,12 +166,15 @@ class Connection(
         writer.send { it.setHello(hello()) }
         socket.soTimeout = HANDSHAKE_TIMEOUT_MILLIS
         val ack = reader.next()
-        socket.soTimeout = 0
         if (ack.bodyCase != Envelope.BodyCase.HELLO_ACK) {
+            socket.soTimeout = 0
             throw GuestProtocolFailure.MalformedFrame(
-                "the first frame from the host is not HelloAck"
+                "the first frame from the host is not a valid HelloAck"
             )
         }
+        val hostEnvelopeSequence = EnvelopeIdSequence()
+        hostEnvelopeSequence.observe(ack.id)
+        socket.soTimeout = 0
         val accepted =
             AgentHandshake.evaluate(
                 ack.helloAck,
@@ -139,23 +183,20 @@ class Connection(
             )
         val enabled =
             GuestCapability.entries.filter { it.wireName in accepted.enabledCapabilities }.toSet()
-        return Negotiated(enabled, accepted.sessionToken)
+        return Negotiated(enabled, accepted.sessionToken, hostEnvelopeSequence.lastId)
     }
 
     /**
      * Requests of the control connection, answered in their own coroutines (guest-protocol.md §6).
      */
-    private fun controlLoop(enabled: Set<GuestCapability>) {
-        var lastRequestId = 0L
+    private fun controlLoop(enabled: Set<GuestCapability>, initialHostEnvelopeId: Long) {
+        val hostEnvelopeSequence = EnvelopeIdSequence(initialHostEnvelopeId)
         while (true) {
             val envelope = reader.next()
+            hostEnvelopeSequence.observe(envelope.id)
             daemon.sessions.recordControlActivity()
             when (envelope.bodyCase) {
                 Envelope.BodyCase.REQUEST -> {
-                    if (envelope.id <= lastRequestId) {
-                        throw GuestProtocolFailure.MalformedFrame("a request id did not increase")
-                    }
-                    lastRequestId = envelope.id
                     val id = envelope.id
                     val request = envelope.request
                     daemon.scope.launch {
@@ -187,9 +228,14 @@ class Connection(
      * Input and bulk connections. The input stream has no request and response pairs
      * (guest-protocol.md §9).
      */
-    private fun secondaryLoop(enabled: Set<GuestCapability>) {
+    private fun secondaryLoop(
+        enabled: Set<GuestCapability>,
+        initialHostEnvelopeId: Long,
+    ) {
+        val hostEnvelopeSequence = EnvelopeIdSequence(initialHostEnvelopeId)
         while (true) {
             val envelope = reader.next()
+            hostEnvelopeSequence.observe(envelope.id)
             when (channel) {
                 ChannelKind.CHANNEL_KIND_GUEST_INPUT ->
                     if (envelope.bodyCase == Envelope.BodyCase.INPUT_BATCH) {
@@ -213,23 +259,34 @@ class Connection(
                         )
                     }
                 ChannelKind.CHANNEL_KIND_GUEST_BULK -> {
-                    if (envelope.bodyCase != Envelope.BodyCase.BULK) {
-                        throw GuestProtocolFailure.MalformedFrame(
-                            "the body is not allowed on the bulk channel"
-                        )
+                    when (envelope.bodyCase) {
+                        Envelope.BodyCase.BULK -> {
+                            if (
+                                GuestCapability.FILES !in enabled ||
+                                    GuestCapability.BULK !in enabled ||
+                                    daemon.files == null
+                            ) {
+                                throw GuestProtocolFailure.MalformedFrame(
+                                    "a bulk transfer arrived without an enabled files capability"
+                                )
+                            }
+                            val frame = envelope.bulk
+                            val status = daemon.files.receive(frame, this)
+                            if (status != null) sendBulkAck(frame.transferId, status)
+                        }
+                        Envelope.BodyCase.RESPONSE -> {
+                            if (GuestCapability.FILES_SHARED !in enabled) {
+                                throw GuestProtocolFailure.MalformedFrame(
+                                    "a reverse file response arrived without files.shared.v1"
+                                )
+                            }
+                            receiveHostResponse(envelope)
+                        }
+                        else ->
+                            throw GuestProtocolFailure.MalformedFrame(
+                                "the body is not allowed on the bulk channel"
+                            )
                     }
-                    if (
-                        GuestCapability.FILES !in enabled ||
-                            GuestCapability.BULK !in enabled ||
-                            daemon.files == null
-                    ) {
-                        throw GuestProtocolFailure.MalformedFrame(
-                            "a bulk transfer arrived without an enabled files capability"
-                        )
-                    }
-                    val frame = envelope.bulk
-                    val status = daemon.files.receive(frame, this)
-                    if (status != null) sendBulkAck(frame.transferId, status)
                 }
                 else ->
                     throw GuestProtocolFailure.MalformedFrame(
@@ -268,6 +325,97 @@ class Connection(
         }
     }
 
+    /**
+     * Sends one agent-to-host shared-folder request and waits for its matching response.
+     *
+     * This is called on DocumentsProvider callback threads, never on the bulk reader thread.
+     */
+    internal fun requestHost(request: Request): Response {
+        if (channel != ChannelKind.CHANNEL_KIND_GUEST_BULK || hostClient == null) {
+            throw IOException("shared-folder access is unavailable")
+        }
+        if (!hostRequestSlots.tryAcquire()) {
+            throw IOException("too many shared-folder requests are in flight")
+        }
+
+        val completion = CompletableFuture<Response>()
+        var requestId: Long? = null
+        try {
+            synchronized(hostRequestLifecycleLock) {
+                if (hostConnectionClosed) throw IOException("the bulk connection is closed")
+                requestId =
+                    writer.sendWithId(
+                        onAllocated = { id ->
+                            if (hostRequests.putIfAbsent(id, completion) != null) {
+                                throw IOException("duplicate shared-folder request id")
+                            }
+                        }
+                    ) { envelope ->
+                        envelope.setRequest(request)
+                    }
+            }
+            return completion.get(HOST_REQUEST_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+        } catch (timeout: TimeoutException) {
+            requestId?.let { id ->
+                if (hostRequests.remove(id, completion)) abandonedHostRequests.add(id)
+            }
+            // The host has no reverse-request cancellation operation. Closing the bulk stream
+            // releases connection-scoped host handles, including a HostOpenFile result that
+            // finishes after this timeout.
+            try {
+                socket.close()
+            } catch (_: IOException) {
+                // The connection teardown in run() still owns pending-call cleanup.
+            }
+            throw SocketTimeoutException("the host did not answer the shared-folder request")
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            requestId?.let { id ->
+                if (hostRequests.remove(id, completion)) abandonedHostRequests.add(id)
+            }
+            // The host has no reverse-request cancellation operation. If an open completes later,
+            // disconnecting releases its connection-scoped descriptor instead of leaking it.
+            try {
+                socket.close()
+            } catch (_: IOException) {
+                // The connection teardown in run() still owns pending-call cleanup.
+            }
+            throw IOException("the shared-folder request was interrupted", interrupted)
+        } catch (wrapped: ExecutionException) {
+            throw (wrapped.cause as? IOException)
+                ?: IOException("the shared-folder request failed", wrapped.cause)
+        } catch (error: IOException) {
+            requestId?.let { id ->
+                if (hostRequests.remove(id, completion)) abandonedHostRequests.add(id)
+            }
+            throw error
+        } finally {
+            hostRequestSlots.release()
+        }
+    }
+
+    /** Delivers a response to one reverse request; timed-out responses are discarded. */
+    private fun receiveHostResponse(envelope: Envelope) {
+        if (envelope.replyTo == 0L || envelope.id == 0L) {
+            throw GuestProtocolFailure.MalformedFrame("a reverse file response has an invalid id")
+        }
+        val completion = hostRequests.remove(envelope.replyTo)
+        if (completion != null) {
+            completion.complete(envelope.response)
+        } else if (!abandonedHostRequests.remove(envelope.replyTo)) {
+            throw GuestProtocolFailure.MalformedFrame(
+                "the host answered a request that was not in flight"
+            )
+        }
+    }
+
+    private fun failPendingHostRequests(error: IOException) {
+        val pending = hostRequests.values
+        hostRequests.clear()
+        pending.forEach { it.completeExceptionally(error) }
+        abandonedHostRequests.clear()
+    }
+
     private fun hello(): Hello =
         Hello.newBuilder()
             .setProtocolVersion(
@@ -296,6 +444,9 @@ class Connection(
             .build()
 
     companion object {
+        private const val MAXIMUM_HOST_REQUESTS = 16
+        private const val HOST_REQUEST_TIMEOUT_MILLIS = 30_000L
+
         /** The capabilities that this build implements (guest-protocol.md §5.3). */
         val IMPLEMENTED: Set<GuestCapability> =
             setOf(

@@ -1,13 +1,17 @@
 package io.apkrun.guest.daemon.files
 
+import android.content.ContentResolver
 import android.content.pm.ProviderInfo
 import android.database.Cursor
+import android.os.Bundle
 import android.provider.DocumentsContract.Document
+import android.provider.DocumentsContract.Root
 import io.apkrun.guest.protocol.v1.AccessLevel
 import io.apkrun.guest.protocol.v1.PackageAccess
 import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
 import io.apkrun.guest.protocol.v1.SharedRoot
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
@@ -113,29 +117,88 @@ class MacFilesProviderTest {
     }
 
     @Test
-    fun pickerCannotCreateInAReadOnlyRoot() {
+    fun pickerCannotCreateWithoutTheInitiatingPackageIdentity() {
         MacFilesProviderServices.replaceAccess(
             SetSharedFolderAccess.newBuilder()
                 .addRoots(
                     SharedRoot.newBuilder()
                         .setRootId(ROOT_ID)
                         .setTitle("Shared")
-                        .setMaxAccess(AccessLevel.ACCESS_LEVEL_READ_ONLY)
+                        .setMaxAccess(AccessLevel.ACCESS_LEVEL_READ_WRITE)
                 )
                 .addAccess(
                     PackageAccess.newBuilder()
                         .setPackage(ALLOWED_PACKAGE)
                         .setAccess(AccessLevel.ACCESS_LEVEL_READ_WRITE)
                 )
+                .addAccess(
+                    PackageAccess.newBuilder()
+                        .setPackage("io.example.other")
+                        .setAccess(AccessLevel.ACCESS_LEVEL_READ_ONLY)
+                )
                 .build()
         )
         Shadows.shadowOf(provider).setCallingPackage(DOCUMENTS_UI_PACKAGE)
+
+        val roots = provider.queryRoots(null)
+        try {
+            assertTrue(roots.moveToFirst())
+            val flags = roots.getInt(roots.getColumnIndexOrThrow(Root.COLUMN_FLAGS))
+            assertEquals(0, flags and Root.FLAG_SUPPORTS_CREATE)
+        } finally {
+            roots.close()
+        }
+
+        val children =
+            provider.queryChildDocuments(
+                parentDocumentId = "$ROOT_ID:",
+                projection = null,
+                sortOrder = null,
+            )
+        try {
+            assertTrue(children.moveToFirst())
+            val childFlags = children.getInt(children.getColumnIndexOrThrow(Document.COLUMN_FLAGS))
+            val mutationFlags =
+                Document.FLAG_DIR_SUPPORTS_CREATE or
+                    Document.FLAG_SUPPORTS_WRITE or
+                    Document.FLAG_SUPPORTS_DELETE or
+                    Document.FLAG_SUPPORTS_RENAME
+            assertEquals(0, childFlags and mutationFlags)
+        } finally {
+            children.close()
+        }
 
         assertThrows(SecurityException::class.java) {
             provider.createDocument("$ROOT_ID:", "text/plain", "new.txt")
         }
 
         assertEquals(0, host.createCount)
+    }
+
+    @Test
+    fun bundleQueryArgsContinueAcrossHostPageTokens() {
+        host.childPages[""] = MacFilesPage(listOf(host.fileDocument("first.txt")), "second-page")
+        host.childPages["second-page"] = MacFilesPage(listOf(host.fileDocument("later.txt")), "")
+        Shadows.shadowOf(provider).setCallingPackage(DOCUMENTS_UI_PACKAGE)
+        val queryArgs =
+            Bundle().apply {
+                putInt(ContentResolver.QUERY_ARG_OFFSET, 1)
+                putInt(ContentResolver.QUERY_ARG_LIMIT, 1)
+            }
+
+        val cursor = provider.queryChildDocuments("$ROOT_ID:", null, queryArgs)
+        try {
+            assertEquals(1, cursor.count)
+            assertTrue(cursor.moveToFirst())
+            assertEquals("later.txt", cursor.string(Document.COLUMN_DISPLAY_NAME))
+            assertArrayEquals(
+                arrayOf(ContentResolver.QUERY_ARG_OFFSET, ContentResolver.QUERY_ARG_LIMIT),
+                cursor.extras.getStringArray(ContentResolver.EXTRA_HONORED_ARGS),
+            )
+        } finally {
+            cursor.close()
+        }
+        assertEquals(listOf("", "second-page"), host.requestedPageTokens)
     }
 
     @Test
@@ -170,6 +233,8 @@ class MacFilesProviderTest {
         var lastPackage: String? = null
         var openCount = 0
         var createCount = 0
+        val childPages = mutableMapOf<String, MacFilesPage>()
+        val requestedPageTokens = mutableListOf<String>()
 
         override fun listRoots(packageName: String): List<MacFilesRoot> {
             lastPackage = packageName
@@ -191,14 +256,16 @@ class MacFilesProviderTest {
             pageToken: String,
         ): MacFilesPage {
             lastPackage = packageName
-            return MacFilesPage(
-                listOf(
-                    fileDocument(),
-                    fileDocument(".hidden"),
-                    fileDocument("outside.txt").copy(path = "outside/outside.txt"),
-                ),
-                "",
-            )
+            requestedPageTokens += pageToken
+            return childPages[pageToken]
+                ?: MacFilesPage(
+                    listOf(
+                        fileDocument(),
+                        fileDocument(".hidden"),
+                        fileDocument("outside.txt").copy(path = "outside/outside.txt"),
+                    ),
+                    "",
+                )
         }
 
         override fun stat(packageName: String, rootId: String, path: String): MacFilesDocument {
@@ -245,7 +312,7 @@ class MacFilesProviderTest {
             newName: String,
         ): MacFilesDocument = fileDocument(newName)
 
-        private fun fileDocument(name: String = "notes.txt") =
+        fun fileDocument(name: String = "notes.txt") =
             MacFilesDocument(
                 path = name,
                 name = name,

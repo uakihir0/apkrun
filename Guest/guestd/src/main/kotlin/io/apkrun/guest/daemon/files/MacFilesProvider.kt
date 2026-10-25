@@ -1,5 +1,6 @@
 package io.apkrun.guest.daemon.files
 
+import android.content.ContentResolver
 import android.content.Context
 import android.database.Cursor
 import android.database.MatrixCursor
@@ -27,7 +28,8 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * This provider never opens a host path. Every operation is sent through [MacFilesHostClient], and
  * the host resolves the root and relative path again. The picker may enumerate names; app callers
- * must be present in the access snapshot before metadata or content is returned.
+ * must be present in the access snapshot before metadata or content is returned. DocumentsUI cannot
+ * perform writes because it does not carry the app identity that initiated a picker request.
  */
 class MacFilesProvider : DocumentsProvider() {
     private var callbackThread: HandlerThread? = null
@@ -71,14 +73,7 @@ class MacFilesProvider : DocumentsProvider() {
                 val remote = remoteRoots[configured.rootId]
                 if (remote != null && !validRoot(remote)) continue
                 val available = remote?.available == true
-                val flags =
-                    Root.FLAG_LOCAL_ONLY or
-                        Root.FLAG_SUPPORTS_IS_CHILD or
-                        if (access.hasWritablePackage(configured.rootId)) {
-                            Root.FLAG_SUPPORTS_CREATE
-                        } else {
-                            0
-                        }
+                val flags = Root.FLAG_LOCAL_ONLY or Root.FLAG_SUPPORTS_IS_CHILD
                 addRow(
                     columns
                         .map { column ->
@@ -131,39 +126,95 @@ class MacFilesProvider : DocumentsProvider() {
         parentDocumentId: String,
         projection: Array<out String>?,
         sortOrder: String?,
+    ): Cursor =
+        queryChildrenFromOffset(
+            parentDocumentId,
+            projection,
+            offset = 0,
+            limit = MAXIMUM_PAGE_ENTRIES,
+        )
+
+    override fun queryChildDocuments(
+        parentDocumentId: String,
+        projection: Array<out String>?,
+        queryArgs: Bundle?,
+    ): Cursor =
+        queryChildrenFromOffset(
+            parentDocumentId,
+            projection,
+            offset = queryArgs?.getInt(ContentResolver.QUERY_ARG_OFFSET, 0) ?: 0,
+            limit =
+                queryArgs?.getInt(ContentResolver.QUERY_ARG_LIMIT, MAXIMUM_PAGE_ENTRIES)
+                    ?: MAXIMUM_PAGE_ENTRIES,
+            honoredArgs =
+                queryArgs?.let { args ->
+                    arrayOf(ContentResolver.QUERY_ARG_OFFSET, ContentResolver.QUERY_ARG_LIMIT)
+                        .filter(args::containsKey)
+                        .toTypedArray()
+                } ?: emptyArray(),
+        )
+
+    private fun queryChildrenFromOffset(
+        parentDocumentId: String,
+        projection: Array<out String>?,
+        offset: Int,
+        limit: Int,
+        honoredArgs: Array<String> = emptyArray(),
     ): Cursor {
+        if (offset < 0 || limit < 0) {
+            throw IllegalArgumentException("the requested folder page is invalid")
+        }
+        val pageSize = minOf(limit, MAXIMUM_PAGE_ENTRIES)
         val parent = parseDocumentId(parentDocumentId)
         val caller = callingPackage()
         requireMetadataAccess(caller, parent)
-        val page = hostCall {
-            MacFilesProviderServices.hostClient()
-                .queryChildren(
-                    caller,
-                    parent.rootId,
-                    parent.path,
-                    "",
-                )
-        }
-        if (
-            page.entries.size > MAXIMUM_PAGE_ENTRIES ||
-                page.nextPageToken.length > MAXIMUM_PAGE_TOKEN_LENGTH
-        ) {
-            throw FileNotFoundException("the host returned an invalid folder listing")
-        }
         val columns = checkedProjection(projection, DOCUMENT_COLUMNS)
-        val rows =
-            page.entries.mapNotNull { child ->
-                if (!validDocument(child, parent.rootId)) return@mapNotNull null
-                if (parentPath(child.path) != parent.path) return@mapNotNull null
-                if (isHiddenOrPackage(child.name)) return@mapNotNull null
-                documentRow(columns, documentId(parent.rootId, child.path), child, caller)
+        val rows = ArrayList<Array<Any?>>(pageSize)
+        var pageToken = ""
+        var pagesRead = 0
+        var visibleEntries = 0
+        val seenPageTokens = mutableSetOf<String>()
+        while (rows.size < pageSize) {
+            if (pagesRead >= MAXIMUM_HOST_PAGES_PER_QUERY) {
+                throw FileNotFoundException("the requested folder page is too deep")
             }
+            pagesRead++
+            val page = hostCall {
+                MacFilesProviderServices.hostClient()
+                    .queryChildren(
+                        caller,
+                        parent.rootId,
+                        parent.path,
+                        pageToken,
+                    )
+            }
+            if (
+                page.entries.size > MAXIMUM_PAGE_ENTRIES ||
+                    page.nextPageToken.length > MAXIMUM_PAGE_TOKEN_LENGTH
+            ) {
+                throw FileNotFoundException("the host returned an invalid folder listing")
+            }
+            for (child in page.entries) {
+                if (!validDocument(child, parent.rootId)) continue
+                if (parentPath(child.path) != parent.path) continue
+                if (isHiddenOrPackage(child.name)) continue
+                if (visibleEntries++ < offset) continue
+                if (rows.size >= pageSize) break
+                rows += documentRow(columns, documentId(parent.rootId, child.path), child, caller)
+            }
+            val nextPageToken = page.nextPageToken
+            if (nextPageToken.isEmpty()) break
+            if (nextPageToken == pageToken || !seenPageTokens.add(nextPageToken)) {
+                throw FileNotFoundException("the host returned an invalid folder listing")
+            }
+            pageToken = nextPageToken
+        }
         return MatrixCursor(columns, rows.size).apply {
             rows.forEach(::addRow)
-            if (page.nextPageToken.isNotEmpty()) {
+            if (honoredArgs.isNotEmpty()) {
                 extras =
                     Bundle().apply {
-                        putString(EXTRA_NEXT_PAGE_TOKEN, page.nextPageToken)
+                        putStringArray(ContentResolver.EXTRA_HONORED_ARGS, honoredArgs)
                     }
             }
         }
@@ -318,18 +369,20 @@ class MacFilesProvider : DocumentsProvider() {
         document: MacFilesDocument,
         caller: String,
     ): Array<Any?> {
-        val writable =
-            caller != DOCUMENTS_UI_PACKAGE &&
-                MacFilesProviderServices.access()
-                    .canWrite(caller, parseDocumentId(encodedDocumentId).rootId)
+        val rootId = parseDocumentId(encodedDocumentId).rootId
+        val access = MacFilesProviderServices.access()
+        val callerCanWrite = caller != DOCUMENTS_UI_PACKAGE && access.canWrite(caller, rootId)
         val flags =
             when {
                 document.isDirectory ->
-                    (if (writable) Document.FLAG_DIR_SUPPORTS_CREATE else 0) or
-                        (if (writable)
-                            Document.FLAG_SUPPORTS_DELETE or Document.FLAG_SUPPORTS_RENAME
-                        else 0)
-                writable ->
+                    if (callerCanWrite) {
+                        Document.FLAG_DIR_SUPPORTS_CREATE or
+                            Document.FLAG_SUPPORTS_DELETE or
+                            Document.FLAG_SUPPORTS_RENAME
+                    } else {
+                        0
+                    }
+                callerCanWrite ->
                     Document.FLAG_SUPPORTS_WRITE or
                         Document.FLAG_SUPPORTS_DELETE or
                         Document.FLAG_SUPPORTS_RENAME
@@ -369,7 +422,7 @@ class MacFilesProvider : DocumentsProvider() {
         val access = MacFilesProviderServices.access()
         val allowed =
             if (caller == DOCUMENTS_UI_PACKAGE && writable) {
-                access.hasWritablePackage(rootId)
+                false
             } else if (writable) {
                 access.canWrite(caller, rootId)
             } else {
@@ -381,8 +434,8 @@ class MacFilesProvider : DocumentsProvider() {
     /**
      * Android's picker grants either an exact document URI or a prefix tree URI to the selected
      * app. Requiring one of those grants prevents an otherwise-authorized app from opening a
-     * document ID it learned from another URI. DocumentsUI is the fixed, privileged picker caller;
-     * it enumerates metadata and performs user-confirmed create operations.
+     * document ID it learned from another URI. DocumentsUI is the fixed, privileged picker caller
+     * and only enumerates metadata; writes must come from the app that owns the URI grant.
      */
     private fun requireUriGrant(
         caller: String,
@@ -622,7 +675,9 @@ class MacFilesProvider : DocumentsProvider() {
         }
 
         override fun onFsync() {
-            // Writes are synchronous; the host fsyncs when the descriptor is released.
+            if (writable) {
+                throw ErrnoException("MacFilesProvider.fsync", OsConstants.ENOSYS)
+            }
         }
 
         override fun onRelease() {
@@ -696,10 +751,9 @@ class MacFilesProvider : DocumentsProvider() {
         const val ALL_MIME_TYPES = "*/*"
         const val READ_ONLY_SUMMARY = "Read only"
         const val UNAVAILABLE_SUMMARY = "Unavailable"
-        const val EXTRA_NEXT_PAGE_TOKEN = "io.apkrun.guest.macfiles.NEXT_PAGE_TOKEN"
         const val MAXIMUM_PAGE_ENTRIES = 4096
         const val MAXIMUM_PAGE_TOKEN_LENGTH = 1024
-        const val MAXIMUM_RANGE_BYTES = 1024 * 1024
+        const val MAXIMUM_HOST_PAGES_PER_QUERY = 64
         const val MAXIMUM_TITLE_LENGTH = 255
         const val MAXIMUM_MIME_TYPE_LENGTH = 255
         const val MAXIMUM_ROOT_ID_LENGTH = 128

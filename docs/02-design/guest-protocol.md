@@ -222,7 +222,7 @@ A capability is a string `<area>.<feature>.v<n>`. The agent lists what it implem
 ## 6. Requests, events, and liveness
 
 - **Pipelining:** the host may have up to 64 requests in flight per control connection. Responses may arrive in any order. The agent processes requests concurrently unless an operation says otherwise. Operations on the same display (`SetDisplayPolicy`, `LaunchApplication`, `ClearDisplay`, `MoveTaskToDisplay`) are serialized per display inside the agent.
-- **Default timeouts** (host side, `Request.timeout_ms`): 5 s. `LaunchApplication` 15 s, `ClearDisplay` 5 s ([display-and-windowing.md](display-and-windowing.md) §3.4), `Shutdown` 20 s, `CollectDiagnostics` 60 s, `CommitInstall` 120 s. A host timeout produces `GuestProtocolFailure.timeout(operation)`. The connection stays open.
+- **Default timeouts** (host side, `Request.timeout_ms`): 5 s. `LaunchApplication` 15 s, `ClearDisplay` 5 s ([display-and-windowing.md](display-and-windowing.md) §3.4), `Shutdown` 20 s, `CollectDiagnostics` 60 s, `CommitInstall` and `Uninstall` 120 s. A host timeout produces `GuestProtocolFailure.timeout(operation)`. The connection stays open.
 - **Late answers:** an answer that arrives after its deadline is discarded, and the connection stays open. Only an answer whose id the host never sent is a protocol violation.
 - **Events** are delivered in order per connection. A response is sent only after all events caused by earlier requests. For example, after `SetDisplayPolicy` returns, the matching `DisplayChanged` (new density) has already been sent.
 - **Keepalive:** the host sends `Ping` every 5 s on each control connection. Three consecutive missed `Pong`s (15 s) mark the agent `unresponsive`. The host then closes the connection and reconnects with backoff (100 ms doubling to 2 s, [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3.1). Secondary connections have no pings. They follow the control connection.
@@ -539,7 +539,7 @@ The install and update flows that use these messages are in [package-store.md](p
 message InstallRequest {
   string expected_package = 1;
   int64 expected_version_code = 2;            // 0 = do not check
-  repeated bytes expected_signer_sha256 = 3;  // current signer certificate digests from the host's verification
+  repeated bytes expected_signer_sha256 = 3;  // host-verified signer digests; empty when verification is deferred to Android
   InstallMode mode = 4;                       // INSTALL_NEW, UPDATE, REINSTALL
   bool request_update_ownership = 5;          // SessionParams.setRequestUpdateOwnership (API 34)
   bool allow_downgrade = 6;                   // always false in v1; the field exists so the refusal is explicit
@@ -551,17 +551,17 @@ message InstallRequest {
 ```
 
 1. `BeginInstall` creates a `PackageInstaller` session (`MODE_FULL_INSTALL`) and returns `install_id`. `request_update_ownership` needs `store.ownership.v1`, and `enable_rollback` needs `store.rollback.v1`. The agent answers `INVALID_ARGUMENT` when a field is set without its capability, when `enable_rollback` is set with a mode other than `UPDATE`, or when `allow_downgrade` is `true`.
-2. The host streams each artifact on 6111 with `BulkBegin{kind: INSTALL_ARTIFACT, context: install_id, name, size, sha256}`. The agent writes the chunks into `session.openWrite(name, 0, size)` and hashes them as they arrive. A hash mismatch aborts the session and answers `BulkAck{HASH_MISMATCH}`.
-3. `CommitInstall`. Before committing, the agent checks the staged package with Android's own parser against `expected_package`, `expected_version_code`, and `expected_signer_sha256`. The host checked the same things before, so this is defense in depth. A mismatch finishes with `INVALID` and a message.
+2. The host streams each artifact on 6111 with `BulkBegin{kind: INSTALL_ARTIFACT, context: install_id, name, size, sha256}`. The agent writes the chunks to both `session.openWrite(name, 0, size)` and an app-private per-install verification copy, while hashing them as they arrive. A hash mismatch abandons the session and answers `BulkAck{HASH_MISMATCH}`.
+3. `CommitInstall`. Before committing, the agent checks the complete app-private copies with Android's own parser against `expected_package`, `expected_version_code`, and `expected_signer_sha256` when the host supplied signer digests. Android must report at least one signer. The copies contain the same bytes streamed into the PackageInstaller session. A mismatch finishes with `INVALID` and a message; a match commits the session, where Android verifies the APK signature. The copies are deleted after validation and any leftovers are removed when the Store Agent starts.
 4. `InstallFinished` reports the outcome from the session's status receiver. The Store Agent holds `INSTALL_PACKAGES` as a privileged app, so `STATUS_PENDING_USER_ACTION` is not expected. If it happens, the agent abandons the session and reports `USER_ACTION_REQUIRED`. It never shows UI on a display the user may not see.
 
 The agent abandons sessions that are not committed within 10 minutes, and sessions whose control connection closes.
 
 ### 11.4 StorePackageInfo
 
-`StorePackageInfo{ package, version_code, version_name, label, installer_of_record, update_owner, initiating_package, first_install_time_ms, last_update_time_ms, min_sdk, target_sdk, splits[], native_abis[], signing: {current_sha256[], past_sha256[] (lineage), scheme_version}, enabled, suspended, requested_permissions_count }`.
+`StorePackageInfo{ package, version_code, version_name, label, installer_of_record, update_owner, initiating_package, first_install_time_ms, last_update_time_ms, min_sdk, target_sdk, splits[], native_abis[], signing: {current_sha256[], past_sha256[] (lineage), scheme_version}, enabled, suspended, requested_permissions_count, launchable_component }`.
 
-`update_owner` comes from `InstallSourceInfo.getUpdateOwnerPackageName()` (API 34). APKStoreCore uses it to confirm that APKRun owns updates for the packages it manages ([update-system.md](update-system.md)).
+`update_owner` comes from `InstallSourceInfo.getUpdateOwnerPackageName()` (API 34). APKStoreCore uses it to confirm that APKRun owns updates for the packages it manages ([update-system.md](update-system.md)). `launchable_component` is Android's flattened launcher `ComponentName`, or empty when the package has no enabled launcher activity.
 
 ---
 

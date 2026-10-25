@@ -177,7 +177,7 @@ The digest proves that two host sets hold the same bytes under the same names. I
 |---|---|---|
 | Host free space before import | `beginImport` | free ≥ 2 × source size + 2 GiB. Otherwise `StoreFailure.insufficientHostSpace(needed, available)` |
 | Host free space before staging | `stage` | free ≥ set size + 2 GiB |
-| Guest free space | at install | Android decides. `STATUS_FAILURE_STORAGE` becomes `StoreFailure.guestStorageFull`. Remediation: Settings → Runtime (`runtime.userdataGiB`) ([error-catalog.md](../03-reference/error-catalog.md) §10) |
+| Guest free space | at install | Android decides. The Store Agent temporarily keeps one private verification copy alongside the `PackageInstaller` session, so the install set needs additional temporary guest space until pre-commit verification finishes. `STATUS_FAILURE_STORAGE` becomes `StoreFailure.guestStorageFull`. Remediation: Settings → Runtime (`runtime.userdataGiB`) ([error-catalog.md](../03-reference/error-catalog.md) §10) |
 | Store size | Settings → Storage | current + previous + staged + failed + icons. "Remove previous version" frees `previous/` and disables rollback until the next update |
 
 Import uses `clonefile(2)` when the source is on the same APFS volume. Otherwise it streams the copy and hashes it. After `beginImport` returns, nothing refers to the source file. The user may delete the original APK (#49).
@@ -466,7 +466,9 @@ public protocol StoreRuntimeAccess: Sendable {
 | Implementation | Image | Transport | Missing capabilities |
 |---|---|---|---|
 | `ADBStoreAgentChannel` | stock image, and custom images with `--guest-transport adb` for debugging | `adb install-multiple`, `pm uninstall`, Guest Agent `QueryPackage` and `ListPackages` ([guest-protocol.md](guest-protocol.md) §13.2) | `.updateOwnership`, `.icons`, `.rollback`, `.inspect`. It has `.downgradeReinstall` when `ro.debuggable=1` |
-| `StoreAgentSupervisor` | custom image | vsock 6110 and 6111, Store Agent protocol ([guest-protocol.md](guest-protocol.md) §11) | none, once the agent announces every capability. The store uses only what `Hello` announces ([guest-protocol.md](guest-protocol.md) §3). `.downgradeReinstall` is never offered (`allow_downgrade` is always false in v1) |
+| `StoreAgentSupervisor` | custom image | RuntimeCore's `GuestStoreAgentClient` owns the Store Agent wire protocol over vsock 6110 and 6111; RuntimeHost adapts it to `StoreAgentChannel` ([guest-protocol.md](guest-protocol.md) §11) | none, once the agent announces every capability. The store uses only what `Hello` announces ([guest-protocol.md](guest-protocol.md) §3). `.downgradeReinstall` is never offered (`allow_downgrade` is always false in v1) |
+
+RuntimeCore owns GuestProtocol framing and Store Agent connections. RuntimeHost's `StoreAgentSupervisor` adapts that client to APKStoreCore's `StoreAgentChannel`; APKStoreCore owns package records, reconciliation, and the rest of the store policy.
 
 - `.updateOwnership`, `.rollback`, and `.icons` arrive with #40, #44, and #56.
 - RuntimeHost provides `DevelopmentStoreRuntimeAccess` for the embedded runtime.
@@ -608,7 +610,7 @@ Android is canonical for package metadata (FR-PKG-02). The host record is canoni
 ### 9.1 When
 
 - After every Store Agent handshake (the Guest Agent on stock images): `ListManagedPackages(ALL_USER_INSTALLED)` or `ListPackages(USER_INSTALLED)`, after the post-boot tasks of §5.5.
-- On every `PackageChanged` event: `GetPackageMetadata` for that package.
+- On every `PackageChanged` event: `GetPackageMetadata` for that package, then refresh the full Android inventory so unmanaged installs and removals are reflected in `android-inventory.json`.
 - On `apkrun doctor` and on Repair.
 
 ### 9.2 Rules
@@ -617,7 +619,7 @@ Android is canonical for package metadata (FR-PKG-02). The host record is canoni
 
 | Host record | Android reports | Action |
 |---|---|---|
-| installed, same generation, same version | present | refresh `displayName`, `versionName`, `signingCertificates`, `updateOwner`, times, SDKs, ABIs |
+| installed, same generation, same version | present | refresh `displayName`, `versionName`, `signingCertificates`, `updateOwner`, times, SDKs, ABIs. If `lastUpdateTime` changed or is unavailable, set `artifacts.currentMatchesAndroid = false`; PackageManager metadata cannot prove the installed APK bytes equal `current/` |
 | installed, **different generation** | absent | state → `needsReinstall(.userdataReset)`, or `needsReinstall(.userdataRestored)` after a recovery point restore. A `reinstall` of `current/` runs after `ready` under a `storeOperation` assertion ([runtime-daemon.md](runtime-daemon.md) §9.5). App data is gone. Wrappers stay valid |
 | installed, different generation | present, lower version (restored recovery point) | reinstall `current/` as an `UPDATE` (data kept), then refresh |
 | installed, same generation | absent | removed inside Android. State → `broken(.removedInAndroid)`. Actions: **Reinstall** or **Remove from APKRun** |

@@ -49,6 +49,8 @@ public actor GuestConnection {
     /// The acks of the agent for the input batches that asked for one (input.md §8). Only the input endpoint has
     /// them. The stream finishes when the connection closes.
     public nonisolated let inputAcks: AsyncStream<GPInputAck>
+    /// The frames of the agent on the bulk endpoint. The stream contains acknowledgements for host transfers.
+    nonisolated let bulkFrames: AsyncStream<GPBulkFrame>
 
     /// The number of requests that may be in flight at once (guest-protocol.md §6).
     public static let maximumInFlight = 64
@@ -64,9 +66,11 @@ public actor GuestConnection {
     private let logger: APKLogger
     private let eventContinuation: AsyncStream<GPEvent>.Continuation
     private let inputAckContinuation: AsyncStream<GPInputAck>.Continuation
+    private let bulkFrameContinuation: AsyncStream<GPBulkFrame>.Continuation
     private var outbound: AsyncStream<Data>.Continuation?
     /// The bytes that the frames yielded to `outbound` hold, until the transport has written them.
     private var outboundBacklog = 0
+    private var outboundDrainWaiters: [CheckedContinuation<Void, Never>] = []
     private var decoder = FrameDecoder()
     private var nextEnvelopeID: UInt64 = 1
     private var lastAgentEnvelopeID: UInt64 = 0
@@ -111,6 +115,9 @@ public actor GuestConnection {
         let acks = AsyncStream.makeStream(of: GPInputAck.self, bufferingPolicy: .bufferingNewest(256))
         inputAcks = acks.stream
         inputAckContinuation = acks.continuation
+        let bulk = AsyncStream.makeStream(of: GPBulkFrame.self, bufferingPolicy: .bufferingNewest(16))
+        bulkFrames = bulk.stream
+        bulkFrameContinuation = bulk.continuation
     }
 
     /// Whether the connection can carry requests: the handshake completed and the connection is still open.
@@ -160,6 +167,7 @@ public actor GuestConnection {
                             try await opened.write(frame)
                             // The task runs on this actor, so the backlog is updated in isolation.
                             self.outboundBacklog -= frame.count
+                            self.resumeOutboundDrainWaitersIfNeeded()
                         } catch {
                             // A write that fails ends the connection, and the requests that wait on it get the reason.
                             self.logger.warning(
@@ -293,6 +301,25 @@ public actor GuestConnection {
         yieldFrame(frame)
     }
 
+    /// Writes one frame to the bulk endpoint and waits until the transport has accepted it. Waiting for the write
+    /// keeps bulk streaming bounded to one serialized frame at a time, instead of filling the outbound queue with an
+    /// entire file.
+    func sendBulkFrame(_ bulk: GPBulkFrame) async throws(GuestProtocolFailure) {
+        precondition(endpoint == .guestBulk, "Bulk frames go only to the guest bulk endpoint")
+        guard isUsable else {
+            throw failure ?? .disconnected
+        }
+        guard sessionInfo?.enabledCapabilities.contains("bulk.v1") == true else {
+            throw .capabilityMissing(capability: "bulk.v1")
+        }
+        var envelope = GPEnvelope()
+        envelope.id = allocateEnvelopeID()
+        envelope.body = .bulk(bulk)
+        let frame = try FrameCodec.encode(envelope)
+        yieldFrame(frame)
+        try await waitForOutboundDrain()
+    }
+
     // MARK: - Reading
 
     private func readLoop(_ opened: any GuestByteStream) async {
@@ -354,6 +381,11 @@ public actor GuestConnection {
                 throw .malformedFrame
             }
             inputAckContinuation.yield(ack)
+        case .bulk(let frame):
+            guard endpoint == .guestBulk, case .ack? = frame.kind else {
+                throw .malformedFrame
+            }
+            bulkFrameContinuation.yield(frame)
         default:
             throw .malformedFrame
         }
@@ -486,6 +518,29 @@ public actor GuestConnection {
         outboundBacklog += frame.count
     }
 
+    /// Waits for queued frames to reach the byte stream, or for the connection to fail.
+    private func waitForOutboundDrain() async throws(GuestProtocolFailure) {
+        while outboundBacklog > 0, failure == nil {
+            await withCheckedContinuation { continuation in
+                outboundDrainWaiters.append(continuation)
+            }
+        }
+        if let failure {
+            throw failure
+        }
+    }
+
+    private func resumeOutboundDrainWaitersIfNeeded() {
+        guard outboundBacklog == 0 else {
+            return
+        }
+        let waiters = outboundDrainWaiters
+        outboundDrainWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
     private func handshakeTimedOut() {
         if sessionInfo == nil {
             connectionLost(.handshakeTimedOut)
@@ -520,8 +575,14 @@ public actor GuestConnection {
             waiter.resume()
         }
         slotWaiters.removeAll()
+        let drainWaiters = outboundDrainWaiters
+        outboundDrainWaiters.removeAll()
+        for waiter in drainWaiters {
+            waiter.resume()
+        }
         eventContinuation.finish()
         inputAckContinuation.finish()
+        bulkFrameContinuation.finish()
         outbound?.finish()
     }
 

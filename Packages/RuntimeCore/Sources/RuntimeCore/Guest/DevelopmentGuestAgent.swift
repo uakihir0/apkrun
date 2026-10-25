@@ -78,6 +78,10 @@ public actor DevelopmentGuestAgent {
     /// The input connection, and the control session token that it presents (input.md §8, decision D11).
     private var inputConnection: GuestConnection?
     private var inputConnectionToken: Data?
+    /// The reusable bulk endpoint of the current control session.
+    private var bulkConnection: GuestConnection?
+    private var bulkConnectionToken: Data?
+    private var bulkChannel: GuestBulkChannel?
     private let taskEventContinuation: AsyncStream<DevelopmentGuestTaskEvent>.Continuation
     private let displayEventContinuation: AsyncStream<GuestDisplayEvent>.Continuation
     private var taskEventRelay: Task<Void, Never>?
@@ -248,6 +252,10 @@ public actor DevelopmentGuestAgent {
         await inputConnection?.close()
         inputConnection = nil
         inputConnectionToken = nil
+        await bulkConnection?.close()
+        bulkConnection = nil
+        bulkConnectionToken = nil
+        bulkChannel = nil
         try? await removeForwards()
     }
 
@@ -308,6 +316,95 @@ public actor DevelopmentGuestAgent {
             return nil
         }
         return connection
+    }
+
+    /// Streams a file over the bulk endpoint authenticated to this control session. A changed control token closes
+    /// the stale endpoint and opens a new one before any file data is sent.
+    public func transferFile(
+        _ fileHandle: FileHandle,
+        transferID: UInt64,
+        name: String,
+        mimeType: String,
+        size: UInt64,
+        sha256: Data
+    ) async throws(GuestAgentFailure) {
+        let channel = try await bulkTransferChannel()
+        try await channel.transferFile(
+            fileHandle,
+            transferID: transferID,
+            name: name,
+            mimeType: mimeType,
+            size: size,
+            sha256: sha256
+        )
+    }
+
+    /// The bulk channel for the current control session, opening or replacing it when necessary.
+    private func bulkTransferChannel() async throws(GuestAgentFailure) -> GuestBulkChannel {
+        let started = generation
+        try requireAvailable()
+        guard await supervisor.statusSnapshot().state == .ready else {
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
+        }
+        guard let token = await supervisor.session?.sessionToken else {
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
+        }
+        if let channel = await reusableBulkChannel(token: token) {
+            return channel
+        }
+        if let staleConnection = bulkConnection, bulkConnectionToken != token {
+            await staleConnection.close()
+            if bulkConnectionToken != token {
+                bulkConnection = nil
+                bulkConnectionToken = nil
+                bulkChannel = nil
+            }
+        }
+
+        let connection = GuestConnection(
+            endpoint: .guestBulk,
+            transport: transport,
+            presentedToken: token,
+            hostVersion: hostVersion,
+            logSink: logSink
+        )
+        let session: GuestSessionInfo
+        do throws(GuestProtocolFailure) {
+            session = try await connection.open()
+        } catch {
+            throw Self.inputFailure(error)
+        }
+        guard await supervisor.statusSnapshot().state == .ready,
+            await supervisor.session?.sessionToken == token
+        else {
+            await connection.close()
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
+        }
+        guard session.enabledCapabilities.contains("bulk.v1") else {
+            await connection.close()
+            throw .operation(.capabilityMissing(capability: "bulk.v1"))
+        }
+        try requireStarted(started)
+
+        if let kept = await reusableBulkChannel(token: token) {
+            await connection.close()
+            return kept
+        }
+        await bulkConnection?.close()
+        let channel = GuestBulkChannel(connection: connection)
+        bulkConnection = connection
+        bulkConnectionToken = token
+        bulkChannel = channel
+        return channel
+    }
+
+    private func reusableBulkChannel(token: Data) async -> GuestBulkChannel? {
+        guard let channel = bulkChannel, let connection = bulkConnection,
+            bulkConnectionToken == token, await connection.isUsable
+        else {
+            return nil
+        }
+        return channel
     }
 
     /// The agent failure of an input connection that did not open.

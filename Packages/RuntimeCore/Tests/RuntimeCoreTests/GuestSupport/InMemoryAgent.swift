@@ -86,6 +86,16 @@ final class InMemoryAgent: @unchecked Sendable {
         send(body: .inputAck(ack))
     }
 
+    /// Acknowledges a host bulk transfer or returns a selected receiver status.
+    func sendBulkAck(transferID: UInt64, status: GPBulkAckStatus = .ok) {
+        var ack = GPBulkAck()
+        ack.status = status
+        var frame = GPBulkFrame()
+        frame.transferID = transferID
+        frame.kind = .ack(ack)
+        send(body: .bulk(frame))
+    }
+
     /// Sends a response to the request with `id`.
     func respond(to id: UInt64, with result: GPResponse.OneOf_Result) {
         var response = GPResponse()

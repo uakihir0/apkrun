@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import struct
+import zlib
 from collections.abc import Callable
 from pathlib import Path
 
@@ -146,6 +147,24 @@ def test_group_maximum_is_enforced_before_output_is_created(tmp_path: Path) -> N
 
     assert not destination.exists()
     assert not list(tmp_path.glob(".capped-grown.img.partial"))
+
+
+def test_crc_chunk_refusal_cleans_partial_output(tmp_path: Path) -> None:
+    """A sparse CRC chunk rejected during rewrite leaves neither output path behind."""
+    source, logical = make_super(tmp_path)
+    encoded = bytearray(source.read_bytes())
+    chunk_count = struct.unpack_from("<I", encoded, 20)[0]
+    struct.pack_into("<I", encoded, 20, chunk_count + 1)
+    encoded.extend(struct.pack("<HHII", sparse.CHUNK_CRC32, 0, 0, 16))
+    encoded.extend(struct.pack("<I", zlib.crc32(logical)))
+    source.write_bytes(encoded)
+    destination = tmp_path / "crc-grown.img"
+
+    with pytest.raises(sparse.SparseImageError, match="CRC32 chunks"):
+        grow_partition(source, "system_a", 2 * MIB, destination)
+
+    assert not destination.exists()
+    assert not (tmp_path / ".crc-grown.img.partial").exists()
 
 
 def test_growth_limit_accounts_for_group_capacity_and_free_extents(tmp_path: Path) -> None:

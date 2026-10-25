@@ -117,7 +117,17 @@ def _install_composer_fakes(
     (product_root / "payload").mkdir()
     (product_root / "payload/apkrun.bin").write_bytes(b"apkrun fixture\n")
     (product_root / "prebuilt").mkdir()
-    (product_root / command.GUEST_AGENT_APK).write_bytes(b"fixture APK")
+    for (
+        _metadata,
+        _package,
+        apk_relative,
+        _image_path,
+        _agent_name,
+        _required,
+    ) in command.COMPOSITION_AGENTS:
+        apk = product_root / apk_relative
+        apk.parent.mkdir(parents=True, exist_ok=True)
+        apk.write_bytes(f"fixture APK: {apk.name}".encode())
     mesa_directory = product_root / command.MESA_PRODUCT_RELATIVE_PATH
     mesa_records: list[dict[str, object]] = []
     for name in MESA_LIBRARIES:
@@ -173,14 +183,24 @@ def _install_composer_fakes(
                 "owner": {"uid": 0, "gid": 0},
                 "label": "u:object_r:system_file:s0",
             },
-            {
-                "source": command.GUEST_AGENT_APK,
-                "destination": command.GUEST_AGENT_IMAGE_PATH,
-                "kind": "regular file",
-                "mode": "0644",
-                "owner": {"uid": 0, "gid": 0},
-                "label": "u:object_r:system_file:s0",
-            },
+            *[
+                {
+                    "source": apk_relative,
+                    "destination": image_path,
+                    "kind": "regular file",
+                    "mode": "0644",
+                    "owner": {"uid": 0, "gid": 0},
+                    "label": "u:object_r:system_file:s0",
+                }
+                for (
+                    _metadata,
+                    _package,
+                    apk_relative,
+                    image_path,
+                    _agent_name,
+                    _required,
+                ) in command.COMPOSITION_AGENTS
+            ],
         ],
     }
     (product_root / "compose.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
@@ -191,8 +211,14 @@ def _install_composer_fakes(
     for relative in command.PRODUCT_BUNDLE_INPUTS:
         path = product_root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
+        package_name = (
+            command.STORE_AGENT_PACKAGE
+            if relative.endswith("ApkRunStore.json")
+            else command.GUEST_AGENT_PACKAGE
+        )
         path.write_text(
-            '{"packageName":"io.apkrun.guest","versionCode":1,"versionName":"test"}\n',
+            json.dumps({"packageName": package_name, "versionCode": 1, "versionName": "test"})
+            + "\n",
             encoding="utf-8",
         )
     certificate = command._repository_root() / "Tests/Fixtures/signing/aosp-test-platform.x509.pem"
@@ -204,7 +230,10 @@ def _install_composer_fakes(
     build_tools.mkdir(parents=True)
     (build_tools / "aapt2").write_text(
         "#!/usr/bin/env python3\n"
-        "print(\"package: name='io.apkrun.guest' versionCode='1' versionName='test'\")\n",
+        "import pathlib, sys\n"
+        "package = 'io.apkrun.store' if pathlib.Path(sys.argv[-1]).name == "
+        "'ApkRunStore.apk' else 'io.apkrun.guest'\n"
+        "print(f\"package: name='{package}' versionCode='1' versionName='test'\")\n",
         encoding="utf-8",
     )
     (build_tools / "apksigner").write_text(
@@ -599,6 +628,7 @@ def test_compose_image_records_hashed_outputs_and_source_provenance(
         product / "compose.json",
         product / "payload/apkrun.bin",
         product / command.GUEST_AGENT_APK,
+        product / command.STORE_AGENT_APK,
         *(product / relative for relative in command.PRODUCT_POLICY_INPUTS),
         *(product / relative for relative in command.PRODUCT_BUNDLE_INPUTS),
         product / command.MESA_PRODUCT_RELATIVE_PATH / "manifest.json",
@@ -654,6 +684,28 @@ def test_compose_image_records_hashed_outputs_and_source_provenance(
     }
     persisted = json.loads((output / "composition.json").read_text(encoding="utf-8"))
     assert persisted == record
+
+
+def test_compose_image_preserves_guest_only_product_compatibility(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, product, output, _document = _install_composer_fakes(monkeypatch, tmp_path)
+    plan_path = product / "compose.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["entries"] = [
+        entry for entry in plan["entries"] if entry["destination"] != command.STORE_AGENT_IMAGE_PATH
+    ]
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    (product / command.STORE_AGENT_APK).unlink()
+    (product / command.PRODUCT_BUNDLE_INPUTS[1]).unlink()
+
+    record = command.compose_image(manifest, output_directory=output, product_root=product)
+
+    product_input_paths = {item["path"] for item in record["productInputs"]}
+    assert "Guest/product/prebuilt/ApkRunStore.apk" not in product_input_paths
+    assert "Guest/product/prebuilt/ApkRunStore.json" not in product_input_paths
+    assert "Guest/product/prebuilt/ApkRunGuest.apk" in product_input_paths
+    assert "Guest/product/prebuilt/ApkRunGuest.json" in product_input_paths
 
 
 def test_repeated_compose_command_outputs_are_byte_identical(
@@ -747,6 +799,7 @@ def test_test_overlay_is_opt_in_and_hashes_only_fixed_fixture_inputs(
     assert observed["destinations"] == {
         "/system_ext/bin/apkrun",
         command.GUEST_AGENT_IMAGE_PATH,
+        command.STORE_AGENT_IMAGE_PATH,
         "/system_ext/etc/init/apkrun_test.rc",
     }
     assert observed["overlay_snapshot"] == source_path.read_bytes()
@@ -914,6 +967,31 @@ def test_compose_rejects_guest_agent_with_an_unpinned_signer(
     assert not output.exists()
 
 
+def test_compose_rejects_store_agent_with_an_unpinned_signer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, product, output, _document = _install_composer_fakes(monkeypatch, tmp_path)
+    android_home = Path(os.environ["ANDROID_HOME"])
+    apksigner = android_home / "build-tools" / command.ANDROID_BUILD_TOOLS_VERSION / "apksigner"
+    apksigner.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "digest = '0' * 64 if pathlib.Path(sys.argv[-1]).name == 'ApkRunStore.apk' else "
+        "'c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8'\n"
+        "print(f'Signer: certificate SHA-256 digest: {digest}')\n",
+        encoding="utf-8",
+    )
+    apksigner.chmod(0o755)
+
+    with pytest.raises(
+        command.ImageCompositionError,
+        match="ApkRunStore.apk: Store Agent must have exactly one signature from the pinned",
+    ):
+        command.compose_image(manifest, output_directory=output, product_root=product)
+
+    assert not output.exists()
+
+
 def test_compose_rejects_agent_metadata_that_disagrees_with_the_apk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -928,6 +1006,113 @@ def test_compose_rejects_agent_metadata_that_disagrees_with_the_apk(
     aapt2.chmod(0o755)
 
     with pytest.raises(command.ImageCompositionError, match="package/version"):
+        command.compose_image(manifest, output_directory=output, product_root=product)
+
+    assert not output.exists()
+
+
+def test_compose_rejects_store_agent_metadata_that_disagrees_with_the_apk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, product, output, _document = _install_composer_fakes(monkeypatch, tmp_path)
+    android_home = Path(os.environ["ANDROID_HOME"])
+    aapt2 = android_home / "build-tools" / command.ANDROID_BUILD_TOOLS_VERSION / "aapt2"
+    aapt2.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "store = pathlib.Path(sys.argv[-1]).name == 'ApkRunStore.apk'\n"
+        "package = 'io.apkrun.store' if store else 'io.apkrun.guest'\n"
+        "version = '2' if store else '1'\n"
+        "print(f\"package: name='{package}' versionCode='{version}' versionName='test'\")\n",
+        encoding="utf-8",
+    )
+    aapt2.chmod(0o755)
+
+    with pytest.raises(
+        command.ImageCompositionError,
+        match="ApkRunStore.apk: Android manifest package/version",
+    ):
+        command.compose_image(manifest, output_directory=output, product_root=product)
+
+    assert not output.exists()
+
+
+def test_compose_rejects_store_agent_metadata_with_wrong_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, product, output, _document = _install_composer_fakes(monkeypatch, tmp_path)
+    (product / "prebuilt/ApkRunStore.json").write_text(
+        '{"packageName":"io.apkrun.guest","versionCode":1,"versionName":"test"}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(command.ImageCompositionError, match="Store Agent metadata is invalid"):
+        command.compose_image(manifest, output_directory=output, product_root=product)
+
+    assert not output.exists()
+
+
+def test_compose_requires_store_agent_at_its_exact_privileged_image_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, product, output, _document = _install_composer_fakes(monkeypatch, tmp_path)
+    plan_path = product / "compose.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    store_entry = next(
+        item for item in plan["entries"] if item["source"] == command.STORE_AGENT_APK
+    )
+    store_entry["destination"] = "/system_ext/app/ApkRunStore/ApkRunStore.apk"
+    plan_path.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
+
+    with pytest.raises(
+        command.ImageCompositionError,
+        match="compose.json must place the persistent Store Agent at "
+        "/system_ext/priv-app/ApkRunStore/ApkRunStore.apk",
+    ):
+        command.compose_image(manifest, output_directory=output, product_root=product)
+
+    assert not output.exists()
+
+
+def test_compose_rejects_store_agent_apk_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _manifest, product, _output, _document = _install_composer_fakes(monkeypatch, tmp_path)
+    store_apk = product / command.STORE_AGENT_APK
+    placements = command.load_placements(product / "compose.json", product)
+    external_apk = tmp_path / "external-store.apk"
+    external_apk.write_bytes(b"untrusted fixture")
+    store_apk.unlink()
+    store_apk.symlink_to(external_apk)
+
+    with pytest.raises(
+        command.ImageCompositionError,
+        match="ApkRunStore.apk: Store Agent APK must not use symlinks",
+    ):
+        command._verify_product_agents(product, placements)
+
+
+def test_compose_rejects_malformed_store_agent_apk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, product, output, _document = _install_composer_fakes(monkeypatch, tmp_path)
+    android_home = Path(os.environ["ANDROID_HOME"])
+    aapt2 = android_home / "build-tools" / command.ANDROID_BUILD_TOOLS_VERSION / "aapt2"
+    aapt2.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "if pathlib.Path(sys.argv[-1]).name == 'ApkRunStore.apk':\n"
+        "    print('error: malformed APK', file=sys.stderr)\n"
+        "    sys.exit(1)\n"
+        "print(\"package: name='io.apkrun.guest' versionCode='1' versionName='test'\")\n",
+        encoding="utf-8",
+    )
+    aapt2.chmod(0o755)
+
+    with pytest.raises(
+        command.ImageCompositionError,
+        match="ApkRunStore.apk: aapt2 could not read the Store Agent APK",
+    ):
         command.compose_image(manifest, output_directory=output, product_root=product)
 
     assert not output.exists()

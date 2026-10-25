@@ -282,11 +282,27 @@
       "apkrunRevision": "7777777777777777777777777777777777777777",
       "productInputs": [
         {
-          "path": "init/apkrun.rc",
+          "path": "Guest/product/prebuilt/ApkRunStore.json",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        {
+          "path": "Guest/product/prebuilt/ApkRunStore.apk",
+          "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        {
+          "path": "Guest/product/prebuilt/ApkRunGuest.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "path": "Guest/product/prebuilt/ApkRunGuest.apk",
+          "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        {
+          "path": "Guest/product/init/apkrun.rc",
           "sha256": "6666666666666666666666666666666666666666666666666666666666666666"
         },
         {
-          "path": "compose.json",
+          "path": "Guest/product/compose.json",
           "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
         }
       ],
@@ -340,6 +356,10 @@
     "agents": [
       {
         "package": "io.apkrun.guest",
+        "versionCode": 12
+      },
+      {
+        "package": "io.apkrun.store",
         "versionCode": 12
       }
     ],

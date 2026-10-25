@@ -495,6 +495,21 @@ enum RuntimeImageManifestRules {
                 path: "/requirements/agents", reason: "an apkrun image lists the guest agent"
             )
         }
+        if m.kind == .apkrun, m.provenance.composition != nil {
+            let storeInputs =
+                m.provenance.composition?.productInputs.map(\.path).filter {
+                    $0 == "Guest/product/prebuilt/ApkRunStore.apk"
+                        || $0 == "Guest/product/prebuilt/ApkRunStore.json"
+                } ?? []
+            let hasStoreAPK = storeInputs.contains("Guest/product/prebuilt/ApkRunStore.apk")
+            let hasStoreMetadata = storeInputs.contains("Guest/product/prebuilt/ApkRunStore.json")
+            let hasStoreAgent = agents.contains("io.apkrun.store")
+            try expect(
+                hasStoreAPK == hasStoreMetadata && hasStoreMetadata == hasStoreAgent, rule: "S10",
+                path: "/requirements/agents",
+                reason: "the Store Agent APK, metadata, and requirement match the composed product inputs"
+            )
+        }
         try expect(isUnique(agents), rule: "S10", path: "/requirements/agents", reason: "agent packages must be unique")
 
         let versions = m.userdata.upgradableFrom

@@ -66,6 +66,49 @@ def test_composed_apkrun_fixture_retains_the_stock_source_and_hashes_inputs() ->
     assert document["provenance"]["source"]["origin"] == "ci.android.com"
     assert document["provenance"]["composition"]["sourceManifest"]["sha256"] == "4" * 64
     assert [entry["path"] for entry in document["provenance"]["composition"]["productInputs"]] == [
-        "compose.json",
-        "init/apkrun.rc",
+        "Guest/product/compose.json",
+        "Guest/product/init/apkrun.rc",
+        "Guest/product/prebuilt/ApkRunGuest.apk",
+        "Guest/product/prebuilt/ApkRunGuest.json",
+        "Guest/product/prebuilt/ApkRunStore.apk",
+        "Guest/product/prebuilt/ApkRunStore.json",
     ]
+    assert document["requirements"]["agents"] == [
+        {"package": "io.apkrun.guest", "versionCode": 12},
+        {"package": "io.apkrun.store", "versionCode": 12},
+    ]
+
+
+def test_pre_store_composed_apkrun_manifest_remains_valid() -> None:
+    document = json.loads(
+        (FIXTURES / "valid/apkrun-composed-cf16373615.json").read_text(encoding="utf-8")
+    )
+    product_inputs = document["provenance"]["composition"]["productInputs"]
+    document["provenance"]["composition"]["productInputs"] = [
+        item
+        for item in product_inputs
+        if item["path"]
+        not in {
+            "Guest/product/prebuilt/ApkRunStore.apk",
+            "Guest/product/prebuilt/ApkRunStore.json",
+        }
+    ]
+    document["requirements"]["agents"] = [{"package": "io.apkrun.guest", "versionCode": 12}]
+
+    assert load_and_validate(json.dumps(document).encode("utf-8")) == []
+
+
+def test_composed_store_agent_requires_both_apk_and_metadata_inputs() -> None:
+    document = json.loads(
+        (FIXTURES / "valid/apkrun-composed-cf16373615.json").read_text(encoding="utf-8")
+    )
+    document["provenance"]["composition"]["productInputs"] = [
+        item
+        for item in document["provenance"]["composition"]["productInputs"]
+        if item["path"] != "Guest/product/prebuilt/ApkRunStore.apk"
+    ]
+
+    violations = load_and_validate(json.dumps(document).encode("utf-8"))
+
+    assert violations
+    assert violations[0].rule == "S10"

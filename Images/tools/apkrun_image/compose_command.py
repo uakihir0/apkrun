@@ -111,12 +111,33 @@ PRODUCT_POLICY_INPUTS = (
     "sepolicy/apkrun_file_contexts",
     "sepolicy/apkrun_seapp_contexts",
 )
-PRODUCT_BUNDLE_INPUTS = ("prebuilt/ApkRunGuest.json",)
+PRODUCT_BUNDLE_INPUTS = ("prebuilt/ApkRunGuest.json", "prebuilt/ApkRunStore.json")
 TEST_OVERLAY_RELATIVE_ROOT = "Tests/Fixtures/AndroidImageProduct"
 TEST_OVERLAY_INPUT_PREFIX = TEST_OVERLAY_RELATIVE_ROOT + "/"
 GUEST_AGENT_APK = "prebuilt/ApkRunGuest.apk"
 GUEST_AGENT_IMAGE_PATH = "/system_ext/priv-app/ApkRunGuest/ApkRunGuest.apk"
 GUEST_AGENT_PACKAGE = "io.apkrun.guest"
+STORE_AGENT_APK = "prebuilt/ApkRunStore.apk"
+STORE_AGENT_IMAGE_PATH = "/system_ext/priv-app/ApkRunStore/ApkRunStore.apk"
+STORE_AGENT_PACKAGE = "io.apkrun.store"
+COMPOSITION_AGENTS = (
+    (
+        PRODUCT_BUNDLE_INPUTS[0],
+        GUEST_AGENT_PACKAGE,
+        GUEST_AGENT_APK,
+        GUEST_AGENT_IMAGE_PATH,
+        "Guest Agent",
+        True,
+    ),
+    (
+        PRODUCT_BUNDLE_INPUTS[1],
+        STORE_AGENT_PACKAGE,
+        STORE_AGENT_APK,
+        STORE_AGENT_IMAGE_PATH,
+        "Store Agent",
+        False,
+    ),
+)
 ANDROID_BUILD_TOOLS_VERSION = "37.0.0"
 ODM_POLICY_FILES = (
     "/etc/selinux/precompiled_sepolicy",
@@ -340,44 +361,68 @@ def _snapshot_product_inputs(
             )
 
 
-def _verify_guest_agent(product_root: Path, placements: Sequence[Placement]) -> None:
-    """Verify the persistent Guest Agent APK identity and its pinned platform signer."""
-    metadata_path = product_root / PRODUCT_BUNDLE_INPUTS[0]
-    apk_path = product_root / GUEST_AGENT_APK
-    for path in (metadata_path, apk_path):
-        current = product_root
-        for component in path.relative_to(product_root).parts:
-            current /= component
-            if current.is_symlink():
-                raise ImageCompositionError(f"{current}: Guest Agent inputs must not use symlinks.")
-        if not path.is_file():
-            raise ImageCompositionError(f"{path}: Guest Agent input is missing.")
-    try:
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ImageCompositionError(
-            f"{metadata_path}: cannot read Guest Agent metadata: {error}"
-        ) from None
-    if (
-        not isinstance(metadata, Mapping)
-        or set(metadata) != {"packageName", "versionCode", "versionName"}
-        or metadata.get("packageName") != GUEST_AGENT_PACKAGE
-        or isinstance(metadata.get("versionCode"), bool)
-        or not isinstance(metadata.get("versionCode"), int)
-        or metadata["versionCode"] < 1
-        or not isinstance(metadata.get("versionName"), str)
-        or not metadata["versionName"]
-    ):
-        raise ImageCompositionError(f"{metadata_path}: Guest Agent metadata is invalid.")
-
-    apk_placements = [
-        placement for placement in placements if placement.source == apk_path.resolve()
-    ]
-    if len(apk_placements) != 1 or apk_placements[0].image_path != GUEST_AGENT_IMAGE_PATH:
-        raise ImageCompositionError(
-            f"{apk_path}: compose.json must place the persistent Guest Agent at "
-            f"{GUEST_AGENT_IMAGE_PATH}."
+def _verify_product_agents(product_root: Path, placements: Sequence[Placement]) -> None:
+    """Verify persistent agent APKs present in the product against metadata and platform signing."""
+    agents: list[tuple[Path, Path, Mapping[str, Any], str]] = []
+    for (
+        metadata_relative,
+        package_name,
+        apk_relative,
+        image_path,
+        agent_name,
+        required,
+    ) in COMPOSITION_AGENTS:
+        metadata_path = product_root / metadata_relative
+        apk_path = product_root / apk_relative
+        apk_source = apk_path.resolve()
+        present = (
+            metadata_path.exists()
+            or metadata_path.is_symlink()
+            or apk_path.exists()
+            or apk_path.is_symlink()
+            or any(
+                placement.image_path == image_path or placement.source == apk_source
+                for placement in placements
+            )
         )
+        if not required and not present:
+            continue
+        for path, description in (
+            (metadata_path, f"{agent_name} metadata"),
+            (apk_path, f"{agent_name} APK"),
+        ):
+            current = product_root
+            for component in path.relative_to(product_root).parts:
+                current /= component
+                if current.is_symlink():
+                    raise ImageCompositionError(f"{current}: {description} must not use symlinks.")
+            if not path.is_file():
+                raise ImageCompositionError(f"{path}: {description} is missing.")
+
+        apk_placements = [placement for placement in placements if placement.source == apk_source]
+        if len(apk_placements) != 1 or apk_placements[0].image_path != image_path:
+            raise ImageCompositionError(
+                f"{apk_path}: compose.json must place the persistent {agent_name} at {image_path}."
+            )
+
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ImageCompositionError(
+                f"{metadata_path}: cannot read {agent_name} metadata: {error}"
+            ) from None
+        if (
+            not isinstance(metadata, Mapping)
+            or set(metadata) != {"packageName", "versionCode", "versionName"}
+            or metadata.get("packageName") != package_name
+            or isinstance(metadata.get("versionCode"), bool)
+            or not isinstance(metadata.get("versionCode"), int)
+            or metadata["versionCode"] < 1
+            or not isinstance(metadata.get("versionName"), str)
+            or not metadata["versionName"]
+        ):
+            raise ImageCompositionError(f"{metadata_path}: {agent_name} metadata is invalid.")
+        agents.append((metadata_path, apk_path, metadata, agent_name))
 
     repository = _repository_root()
     android_home = Path(
@@ -395,57 +440,6 @@ def _verify_guest_agent(product_root: Path, placements: Sequence[Placement]) -> 
                 f"(environment-setup.md §2.5)."
             )
 
-    try:
-        badging = subprocess.run(
-            [str(aapt2), "dump", "badging", str(apk_path)],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        signature = subprocess.run(
-            [str(apksigner), "verify", "--print-certs", str(apk_path)],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    except OSError as error:
-        raise ImageCompositionError(f"could not verify Guest Agent APK: {error}") from None
-    if badging.returncode:
-        raise ImageCompositionError(
-            f"{apk_path}: aapt2 could not read the Guest Agent APK "
-            f"({badging.stderr.strip() or badging.returncode})."
-        )
-    package_line = next(
-        (line for line in badging.stdout.splitlines() if line.startswith("package: ")),
-        "",
-    )
-    package_match = re.search(
-        r"(?:^| )name='([^']*)'.* versionCode='([0-9]+)'(?: |$)", package_line
-    )
-    if (
-        package_match is None
-        or package_match.group(1) != metadata["packageName"]
-        or int(package_match.group(2)) != metadata["versionCode"]
-    ):
-        actual = (
-            f"{package_match.group(1)} versionCode={package_match.group(2)}"
-            if package_match is not None
-            else package_line or "no package entry"
-        )
-        raise ImageCompositionError(
-            f"{apk_path}: Android manifest package/version {actual} do not match "
-            f"{metadata_path} ({metadata['packageName']} versionCode={metadata['versionCode']})."
-        )
-    if signature.returncode:
-        raise ImageCompositionError(
-            f"{apk_path}: apksigner rejected the Guest Agent APK "
-            f"({signature.stderr.strip() or signature.returncode})."
-        )
-    signers = re.findall(
-        r"certificate SHA-256 digest:\s*([0-9a-fA-F]{64})",
-        signature.stdout,
-        flags=re.IGNORECASE,
-    )
     certificate_path = repository / "Tests/Fixtures/signing/aosp-test-platform.x509.pem"
     try:
         if certificate_path.is_symlink() or not certificate_path.is_file():
@@ -454,11 +448,68 @@ def _verify_guest_agent(product_root: Path, placements: Sequence[Placement]) -> 
     except (OSError, ValueError) as error:
         raise ImageCompositionError(f"{certificate_path}: {error}") from None
     expected_signer = certificate.fingerprint(hashes.SHA256()).hex()
-    if len(signers) != 1 or signers[0].lower() != expected_signer:
-        raise ImageCompositionError(
-            f"{apk_path}: Guest Agent must have exactly one signature from the pinned "
-            "AOSP test platform certificate."
+
+    for metadata_path, apk_path, metadata, agent_name in agents:
+        try:
+            badging = subprocess.run(
+                [str(aapt2), "dump", "badging", str(apk_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            signature = subprocess.run(
+                [str(apksigner), "verify", "--print-certs", str(apk_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError as error:
+            raise ImageCompositionError(f"could not verify {agent_name} APK: {error}") from None
+        if badging.returncode:
+            raise ImageCompositionError(
+                f"{apk_path}: aapt2 could not read the {agent_name} APK "
+                f"({badging.stderr.strip() or badging.returncode})."
+            )
+        package_line = next(
+            (line for line in badging.stdout.splitlines() if line.startswith("package: ")),
+            "",
         )
+        package_match = re.search(
+            r"(?:^| )name='([^']*)'.* versionCode='([0-9]+)' versionName='([^']*)'(?: |$)",
+            package_line,
+        )
+        if (
+            package_match is None
+            or package_match.group(1) != metadata["packageName"]
+            or int(package_match.group(2)) != metadata["versionCode"]
+            or package_match.group(3) != metadata["versionName"]
+        ):
+            actual = (
+                f"{package_match.group(1)} versionCode={package_match.group(2)} "
+                f"versionName={package_match.group(3)}"
+                if package_match is not None
+                else package_line or "no package entry"
+            )
+            raise ImageCompositionError(
+                f"{apk_path}: Android manifest package/version {actual} do not match "
+                f"{metadata_path} ({metadata['packageName']} versionCode={metadata['versionCode']} "
+                f"versionName={metadata['versionName']})."
+            )
+        if signature.returncode:
+            raise ImageCompositionError(
+                f"{apk_path}: apksigner rejected the {agent_name} APK "
+                f"({signature.stderr.strip() or signature.returncode})."
+            )
+        signers = re.findall(
+            r"certificate SHA-256 digest:\s*([0-9a-fA-F]{64})",
+            signature.stdout,
+            flags=re.IGNORECASE,
+        )
+        if len(signers) != 1 or signers[0].lower() != expected_signer:
+            raise ImageCompositionError(
+                f"{apk_path}: {agent_name} must have exactly one signature from the pinned "
+                "AOSP test platform certificate."
+            )
 
 
 def _policy_replacements(
@@ -1071,7 +1122,14 @@ def compose_image(
         source_placements,
         additional=tuple(
             [
-                *(product_root / path for path in (*PRODUCT_POLICY_INPUTS, *PRODUCT_BUNDLE_INPUTS)),
+                *(product_root / path for path in PRODUCT_POLICY_INPUTS),
+                product_root / PRODUCT_BUNDLE_INPUTS[0],
+                *(
+                    [product_root / PRODUCT_BUNDLE_INPUTS[1]]
+                    if (product_root / PRODUCT_BUNDLE_INPUTS[1]).exists()
+                    or (product_root / PRODUCT_BUNDLE_INPUTS[1]).is_symlink()
+                    else []
+                ),
                 mesa_directory / "manifest.json",
                 *(library.source for library in source_mesa_libraries),
             ]
@@ -1185,7 +1243,7 @@ def compose_image(
             placements = load_placements(snapshot_product / "compose.json", snapshot_product)
         except ComposeError as error:
             raise ImageCompositionError(f"invalid product composition plan: {error}") from None
-        _verify_guest_agent(snapshot_product, placements)
+        _verify_product_agents(snapshot_product, placements)
         stock_super = work / "super-stock.img"
         with _open_artifact(document, source_root, archive_paths, super_artifact) as stream:
             _copy_stream(stream, stock_super)

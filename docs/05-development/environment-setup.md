@@ -251,9 +251,9 @@ xcodebuild test -scheme IntegrationTests \
 - With artifacts missing, the tests skip with a message that names the scripts. With `APKRUN_CI=1` as a build setting, they fail.
 - To keep the renderer operations for the replay test, add `TEST_RUNNER_APKRUN_TEST_VIRGL_RECORDING=/tmp/<name>.json` to the `xcodebuild test` line. Then `APKRUN_TEST_KMSCUBE_RECORDING=/tmp/<name>.json swift test --traits TestReadback --filter theKmscubeSessionReplaysOnTheDeviceWithoutHostReadbacks` replays it. The path must be under `/tmp`.
 - VM tests need `com.apple.security.virtualization`, so they run in the signed `APKRunTestHost` ([build-system.md](build-system.md) §12.4).
-- For the Android suites, pass `-derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd"` and an `APKRUN_ANDROID_HOME` outside `~/Documents` that holds `platform-tools`: `mkdir -p "${TMPDIR:-/tmp}/apkrun-test-sdk" && cp -R "$ANDROID_HOME/platform-tools" "${TMPDIR:-/tmp}/apkrun-test-sdk/"`. The copy is the same `adb` binary.
-- AndroidCustom also needs the platform-test-signed SystemServices instrumentation fixture. Build it with `scripts/build-fixtures.sh --app SystemServicesTest --platform-test-key`; this stages `SystemServicesTest.apk` beside HelloProbe. The fixture is installed only in developer mode on the composed image.
-- To run #36's AndroidCustom checks, select the classes explicitly. An Xcode test-plan configuration sets environment values; it does not filter the target's tests. The plan points to the composed bundle at `/tmp/apkrun-test-linux/android-custom-bundle` and HelloProbe at `/tmp/apkrun-test-fixtures/HelloProbe.apk`:
+- For the Android suites, pass `-derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd"` and an `APKRUN_ANDROID_HOME` outside `~/Documents` that holds `platform-tools`: `mkdir -p "${TMPDIR:-/tmp}/apkrun-test-sdk" && cp -R "$ANDROID_HOME/platform-tools" "${TMPDIR:-/tmp}/apkrun-test-sdk/"`. The copy is the same `adb` binary. Store Agent T2 also resolves `aapt2` from `build-tools/`; copy the SDK's `build-tools` directory into this test SDK or point `APKRUN_ANDROID_HOME` at a complete SDK root.
+- AndroidCustom also needs HelloText v1 and v2 (`scripts/build-fixtures.sh` and `scripts/build-fixtures.sh --version-code 2`), HelloProbe, and the platform-test-signed SystemServices instrumentation fixture (`scripts/build-fixtures.sh --app SystemServicesTest --platform-test-key`). These stage under `/tmp/apkrun-test-fixtures/`; SystemServicesTest is installed only in developer mode on the composed image.
+- To run #36 and #37 AndroidCustom checks, select the classes explicitly. An Xcode test-plan configuration sets environment values; it does not filter the target's tests. The plan points to the composed bundle at `/tmp/apkrun-test-linux/android-custom-bundle`, HelloProbe at `/tmp/apkrun-test-fixtures/HelloProbe.apk`, and HelloText v1/v2 at `HelloText.apk` and `HelloText-v2.apk`:
 
 ```bash
 xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
@@ -261,6 +261,7 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
   -only-testing:IntegrationTests/AndroidTestEnvironmentTests \
   -only-testing:IntegrationTests/CustomImageBootTests \
   -only-testing:IntegrationTests/SystemServicesTest \
+  -only-testing:IntegrationTests/StoreAgentInstallTests \
   -only-testing:IntegrationTests/DeveloperModeAdbTests \
   -only-testing:IntegrationTests/VsockAgentTests \
   -only-testing:IntegrationTests/AgentSocketIsolationTests \
@@ -273,6 +274,7 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
 
 - `APKRUN_ANDROID_HOME` is a build setting read from the hosted test app's Info.plist; exporting only `ANDROID_HOME` does not make `adb` available to the test host. With `APKRUN_CI=1`, a missing `adb` fails the check instead of skipping it.
 - The Guest Agent, package, and input suites read `APKRUN_GUEST_DIR` (`scripts/build-guest.sh --out /tmp/apkrun-test-guest`) and `APKRUN_FIXTURE_APK` (HelloText). The AndroidPackage suite uses RuntimeAPI for import, install, list, details, and uninstall; its headless activity and force-stop checks still use ADB.
+- The Store Agent T2 test reads `APKRUN_FIXTURE_APK` and `APKRUN_FIXTURE_UPDATE_APK`. Build the latter with `scripts/build-fixtures.sh --version-code 2`; it has the same test signer and a higher versionCode than HelloText.apk.
 - `AndroidInputTests` also reads `APKRUN_FIXTURE_COMPOSE_APK` (`scripts/build-fixtures.sh --app HelloCompose`, copied to `/tmp`). It needs the debug HelloText, whose `TEXT` and `DETAILS` broadcasts exist only in the debug manifest: `Tests/Fixtures/AndroidApps/gradlew -p Tests/Fixtures/AndroidApps :HelloText:assembleDebug`, then copy `HelloText/build/outputs/apk/debug/HelloText-debug.apk` to `APKRUN_FIXTURE_APK`. The input configuration also reads the staged `virgl-runtime/`, because a host built outside the checkout cannot find the VirGL libraries from its executable.
 
 ---

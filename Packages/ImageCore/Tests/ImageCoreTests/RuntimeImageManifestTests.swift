@@ -23,7 +23,7 @@ private func fixtureFiles(_ directory: String, suffix: String) throws -> [URL] {
 @Test
 func everyValidFixtureLoadsAndRoundTrips() throws {
     let files = try fixtureFiles("valid", suffix: ".json")
-    #expect(files.count == 6)
+    #expect(files.count == 7)
     for url in files {
         let data = try Data(contentsOf: url)
         let manifest = try RuntimeImageManifest.load(data)
@@ -35,7 +35,7 @@ func everyValidFixtureLoadsAndRoundTrips() throws {
 @Test
 func everyInvalidFixtureFailsWithTheRuleItNames() throws {
     let files = try fixtureFiles("invalid", suffix: ".json")
-    #expect(files.count == 41)
+    #expect(files.count == 44)
     for url in files {
         let name = url.deletingPathExtension().lastPathComponent
         let expected = try String(
@@ -72,7 +72,16 @@ func aComposedManifestKeepsCompositionProvenance() throws {
     #expect(manifest.kind == .apkrun)
     #expect(manifest.provenance.source.origin == "ci.android.com")
     #expect(manifest.provenance.composition?.sourceManifest.path == "Images/manifests/16373615/android-image.json")
-    #expect(manifest.provenance.composition?.productInputs.map(\.path) == ["compose.json", "init/apkrun.rc"])
+    #expect(
+        manifest.provenance.composition?.productInputs.map(\.path) == [
+            "Guest/product/compose.json",
+            "Guest/product/init/apkrun.rc",
+            "Guest/product/prebuilt/ApkRunGuest.apk",
+            "Guest/product/prebuilt/ApkRunGuest.json",
+            "Guest/product/prebuilt/ApkRunStore.apk",
+            "Guest/product/prebuilt/ApkRunStore.json",
+        ])
+    #expect(manifest.requirements.agents.map(\.package) == ["io.apkrun.guest", "io.apkrun.store"])
     #expect(
         manifest.provenance.composition?.testOverlayInputs?.map(\.path) == [
             "Tests/Fixtures/AndroidImageProduct/compose.json",
@@ -81,6 +90,22 @@ func aComposedManifestKeepsCompositionProvenance() throws {
     #expect(manifest.provenance.builderImageDigest == nil)
     let encoded = String(decoding: try JSONEncoder().encode(manifest), as: UTF8.self)
     #expect(encoded.contains("\"composition\""))
+}
+
+@Test
+func aComposedGuestOnlyManifestRemainsCompatible() throws {
+    let url = manifestFixtures.appendingPathComponent(
+        "valid/apkrun-composed-guest-only-cf16373615.json"
+    )
+    let manifest = try RuntimeImageManifest.load(try Data(contentsOf: url))
+    let composition = try #require(manifest.provenance.composition)
+    #expect(manifest.kind == .apkrun)
+    #expect(manifest.requirements.agents.map(\.package) == ["io.apkrun.guest"])
+    #expect(
+        !composition.productInputs.contains {
+            $0.path == "Guest/product/prebuilt/ApkRunStore.apk"
+                || $0.path == "Guest/product/prebuilt/ApkRunStore.json"
+        })
 }
 
 @Test

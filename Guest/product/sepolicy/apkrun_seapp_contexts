@@ -1,1 +1,2 @@
 user=_app isPrivApp=true seinfo=platform name=io.apkrun.guest domain=apkrun_guest_app type=app_data_file levelFrom=all
+user=_app isPrivApp=true seinfo=platform name=io.apkrun.store domain=apkrun_store_app type=app_data_file levelFrom=all

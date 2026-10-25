@@ -86,8 +86,24 @@ def apkrun_composed_variant(stock: Document) -> Document:
             "sha256": "4" * 64,
         },
         "productInputs": [
-            {"path": "compose.json", "sha256": "5" * 64},
-            {"path": "init/apkrun.rc", "sha256": "6" * 64},
+            {"path": "Guest/product/compose.json", "sha256": "5" * 64},
+            {"path": "Guest/product/init/apkrun.rc", "sha256": "6" * 64},
+            {
+                "path": "Guest/product/prebuilt/ApkRunGuest.apk",
+                "sha256": "c" * 64,
+            },
+            {
+                "path": "Guest/product/prebuilt/ApkRunGuest.json",
+                "sha256": "a" * 64,
+            },
+            {
+                "path": "Guest/product/prebuilt/ApkRunStore.apk",
+                "sha256": "d" * 64,
+            },
+            {
+                "path": "Guest/product/prebuilt/ApkRunStore.json",
+                "sha256": "b" * 64,
+            },
         ],
         "testOverlayInputs": [
             {
@@ -104,8 +120,31 @@ def apkrun_composed_variant(stock: Document) -> Document:
     document["requirements"] = {
         "minimumRuntimeVersion": "1.1.0",
         "guestProtocol": {"min": 1, "max": 1},
-        "agents": [{"package": "io.apkrun.guest", "versionCode": 12}],
+        "agents": [
+            {"package": "io.apkrun.guest", "versionCode": 12},
+            {"package": "io.apkrun.store", "versionCode": 12},
+        ],
     }
+    return document
+
+
+def apkrun_composed_guest_only_variant(stock: Document) -> Document:
+    """A #36 development image composed before the Store Agent was added."""
+    document = apkrun_composed_variant(stock)
+    document["provenance"]["composition"]["productInputs"] = [
+        item
+        for item in document["provenance"]["composition"]["productInputs"]
+        if item["path"]
+        not in {
+            "Guest/product/prebuilt/ApkRunStore.apk",
+            "Guest/product/prebuilt/ApkRunStore.json",
+        }
+    ]
+    document["requirements"]["agents"] = [
+        agent
+        for agent in document["requirements"]["agents"]
+        if agent["package"] == "io.apkrun.guest"
+    ]
     return document
 
 
@@ -229,6 +268,35 @@ def _apkrun_missing_guest(d: Document) -> None:
     d["requirements"]["agents"] = [{"package": "io.apkrun.store", "versionCode": 12}]
 
 
+def _composed_missing_store_agent(d: Document) -> None:
+    product = apkrun_composed_variant(d)
+    d.clear()
+    d.update(product)
+    d["requirements"]["agents"] = [{"package": "io.apkrun.guest", "versionCode": 12}]
+
+
+def _composed_store_agent_missing_metadata(d: Document) -> None:
+    product = apkrun_composed_variant(d)
+    product["provenance"]["composition"]["productInputs"] = [
+        item
+        for item in product["provenance"]["composition"]["productInputs"]
+        if item["path"] != "Guest/product/prebuilt/ApkRunStore.json"
+    ]
+    d.clear()
+    d.update(product)
+
+
+def _composed_store_agent_missing_apk(d: Document) -> None:
+    product = apkrun_composed_variant(d)
+    product["provenance"]["composition"]["productInputs"] = [
+        item
+        for item in product["provenance"]["composition"]["productInputs"]
+        if item["path"] != "Guest/product/prebuilt/ApkRunStore.apk"
+    ]
+    d.clear()
+    d.update(product)
+
+
 def _userdata_not_contained(d: Document) -> None:
     d["userdata"] = {"schemaVersion": 2, "upgradableFrom": [1]}
 
@@ -331,6 +399,9 @@ INVALID_CASES: tuple[tuple[str, str, Callable[[Document], None]], ...] = (
     ("s9-protocol-range-reversed", "S9", _protocol_range),
     ("s10-stock-with-agent", "S10", _stock_agent),
     ("s10-apkrun-without-guest", "S10", _apkrun_missing_guest),
+    ("s10-composed-without-store", "S10", _composed_missing_store_agent),
+    ("s10-composed-store-apk-without-metadata", "S10", _composed_store_agent_missing_metadata),
+    ("s10-composed-store-metadata-without-apk", "S10", _composed_store_agent_missing_apk),
     ("s11-upgradable-without-schema", "S11", _userdata_not_contained),
     ("s12-minimum-above-image", "S12", _minimum_above_image),
     ("s13-stock-with-guest-revision", "S13", _stock_guest_revision),
@@ -363,6 +434,10 @@ def main() -> int:
     write_json(VALID / "apkrun-ar000123.json", apkrun_variant(stock))
     write_json(VALID / "apkrun-guest-only.json", apkrun_guest_only_variant(stock))
     write_json(VALID / "apkrun-composed-cf16373615.json", apkrun_composed_variant(stock))
+    write_json(
+        VALID / "apkrun-composed-guest-only-cf16373615.json",
+        apkrun_composed_guest_only_variant(stock),
+    )
     write_json(VALID / "userdata-at-int64-maximum.json", userdata_at_the_bound(stock))
     for name, rule, mutate in INVALID_CASES:
         document = copy.deepcopy(stock)
@@ -377,7 +452,7 @@ def main() -> int:
     (INVALID / "schema-repeated-key.expected.txt").write_text("schema\n", encoding="ascii")
     (INVALID / "schema-byte-order-mark.json").write_bytes(b"\xef\xbb\xbf" + text.encode("utf-8"))
     (INVALID / "schema-byte-order-mark.expected.txt").write_text("schema\n", encoding="ascii")
-    print(f"wrote {len(INVALID_CASES) + 2} invalid and 6 valid manifest fixtures")
+    print(f"wrote {len(INVALID_CASES) + 2} invalid and 7 valid manifest fixtures")
     return 0
 
 

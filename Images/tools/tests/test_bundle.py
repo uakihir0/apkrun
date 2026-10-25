@@ -168,6 +168,14 @@ def _composition_fixture(
         '{"packageName":"io.apkrun.guest","versionCode":1000,"versionName":"0.1.0"}\n',
         encoding="utf-8",
     )
+    store_metadata_path = repository / bundle_module.STORE_AGENT_METADATA
+    store_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    store_metadata_path.write_text(
+        '{"packageName":"io.apkrun.store","versionCode":1000,"versionName":"0.1.0"}\n',
+        encoding="utf-8",
+    )
+    store_apk_path = repository / bundle_module.STORE_AGENT_APK
+    store_apk_path.write_bytes(b"store APK fixture\n")
     monkeypatch.setattr(bundle_module, "_repository_root", lambda: repository)
     document = json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))
     document["artifacts"].append({"partition": "vbmeta_system", "size": 7})
@@ -189,6 +197,14 @@ def _composition_fixture(
             {
                 "path": bundle_module.GUEST_AGENT_METADATA,
                 "sha256": _sha256(metadata_path),
+            },
+            {
+                "path": bundle_module.STORE_AGENT_APK,
+                "sha256": _sha256(store_apk_path),
+            },
+            {
+                "path": bundle_module.STORE_AGENT_METADATA,
+                "sha256": _sha256(store_metadata_path),
             },
         ],
         "apkrunRevision": "b" * 40,
@@ -229,7 +245,10 @@ def test_composition_outputs_match_the_recorded_hashes(
         composition["sourceManifest"]["path"]
         == manifest_path.relative_to(bundle_module._repository_root()).as_posix()
     )
-    assert agents == [{"package": "io.apkrun.guest", "versionCode": 1000}]
+    assert agents == [
+        {"package": "io.apkrun.guest", "versionCode": 1000},
+        {"package": "io.apkrun.store", "versionCode": 1000},
+    ]
 
 
 def test_composition_keeps_opt_in_test_overlay_provenance_separate(
@@ -375,12 +394,24 @@ def test_composition_requires_hashes_for_exactly_its_output_files(
         bundle_module._composition_inputs(directory, document, manifest_path)
 
 
-def test_composition_rejects_guest_agent_metadata_changed_after_provenance(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("metadata_relative", "package_name"),
+    [
+        (bundle_module.GUEST_AGENT_METADATA, "io.apkrun.guest"),
+        (bundle_module.STORE_AGENT_METADATA, "io.apkrun.store"),
+    ],
+)
+def test_composition_rejects_agent_metadata_changed_after_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    metadata_relative: str,
+    package_name: str,
 ) -> None:
-    directory, document, manifest_path, metadata_path = _composition_fixture(tmp_path, monkeypatch)
+    directory, document, manifest_path, _metadata_path = _composition_fixture(tmp_path, monkeypatch)
+    metadata_path = bundle_module._repository_root() / metadata_relative
     metadata_path.write_text(
-        '{"packageName":"io.apkrun.guest","versionCode":1001,"versionName":"changed"}\n',
+        json.dumps({"packageName": package_name, "versionCode": 1001, "versionName": "changed"})
+        + "\n",
         encoding="utf-8",
     )
 
@@ -401,7 +432,79 @@ def test_composition_requires_guest_agent_metadata_input(
     ]
     record_path.write_text(json.dumps(record), encoding="utf-8")
 
-    with pytest.raises(BundleError, match="must record .* as a product input"):
+    with pytest.raises(
+        BundleError,
+        match=f"must record {bundle_module.GUEST_AGENT_METADATA} as a product input",
+    ):
+        bundle_module._composition_inputs(directory, document, manifest_path)
+
+
+def test_pre_store_composition_does_not_require_store_agent_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory, document, manifest_path, _metadata_path = _composition_fixture(tmp_path, monkeypatch)
+    record_path = directory / "composition.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["productInputs"] = [
+        item
+        for item in record["productInputs"]
+        if item["path"] not in (bundle_module.STORE_AGENT_METADATA, bundle_module.STORE_AGENT_APK)
+    ]
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    _composition, _overrides, requirements = bundle_module._composition_inputs(
+        directory, document, manifest_path
+    )
+
+    assert [agent["package"] for agent in requirements] == ["io.apkrun.guest"]
+
+
+def test_composition_rejects_store_apk_without_store_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory, document, manifest_path, _metadata_path = _composition_fixture(tmp_path, monkeypatch)
+    record_path = directory / "composition.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["productInputs"] = [
+        item
+        for item in record["productInputs"]
+        if item["path"] != bundle_module.STORE_AGENT_METADATA
+    ]
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    with pytest.raises(BundleError, match="both the Store Agent APK and metadata"):
+        bundle_module._composition_inputs(directory, document, manifest_path)
+
+
+@pytest.mark.parametrize(
+    ("metadata_relative", "wrong_package"),
+    [
+        (bundle_module.GUEST_AGENT_METADATA, "io.apkrun.store"),
+        (bundle_module.STORE_AGENT_METADATA, "io.apkrun.guest"),
+    ],
+)
+def test_composition_rejects_agent_metadata_for_another_package(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    metadata_relative: str,
+    wrong_package: str,
+) -> None:
+    directory, document, manifest_path, _metadata_path = _composition_fixture(tmp_path, monkeypatch)
+    metadata_path = bundle_module._repository_root() / metadata_relative
+    metadata_path.write_text(
+        json.dumps({"packageName": wrong_package, "versionCode": 1000, "versionName": "0.1.0"})
+        + "\n",
+        encoding="utf-8",
+    )
+    record_path = directory / "composition.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    matching_input = next(
+        item for item in record["productInputs"] if item["path"] == metadata_relative
+    )
+    matching_input["sha256"] = _sha256(metadata_path)
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    with pytest.raises(BundleError, match="Agent metadata is invalid"):
         bundle_module._composition_inputs(directory, document, manifest_path)
 
 

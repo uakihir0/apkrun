@@ -86,6 +86,11 @@ final class InMemoryAgent: @unchecked Sendable {
         send(body: .inputAck(ack))
     }
 
+    /// Sends one frame on the bulk or artifact endpoint.
+    func sendBulkFrame(_ bulk: GPBulkFrame) {
+        send(body: .bulk(bulk))
+    }
+
     /// Sends a response to the request with `id`.
     func respond(to id: UInt64, with result: GPResponse.OneOf_Result) {
         var response = GPResponse()

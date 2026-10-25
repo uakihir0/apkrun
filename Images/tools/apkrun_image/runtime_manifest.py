@@ -184,6 +184,29 @@ def semantic_violations(document: Mapping[str, Any]) -> list[Violation]:
         fail("S10", "/requirements/agents", "a stock image has no agents")
     if document["kind"] == "apkrun" and "io.apkrun.guest" not in agents:
         fail("S10", "/requirements/agents", "an apkrun image lists the guest agent")
+    if document["kind"] == "apkrun" and composition is not None:
+        product_inputs = (
+            composition.get("productInputs", []) if isinstance(composition, Mapping) else []
+        )
+        store_input_paths = {
+            item["path"]
+            for item in product_inputs
+            if isinstance(item, Mapping)
+            and item.get("path")
+            in {
+                "Guest/product/prebuilt/ApkRunStore.apk",
+                "Guest/product/prebuilt/ApkRunStore.json",
+            }
+        }
+        has_store_apk = "Guest/product/prebuilt/ApkRunStore.apk" in store_input_paths
+        has_store_metadata = "Guest/product/prebuilt/ApkRunStore.json" in store_input_paths
+        has_store_agent = "io.apkrun.store" in agents
+        if has_store_apk != has_store_metadata or has_store_metadata != has_store_agent:
+            fail(
+                "S10",
+                "/requirements/agents",
+                "the Store Agent APK, metadata, and requirement match the composed product inputs",
+            )
     if len(set(agents)) != len(agents):
         fail("S10", "/requirements/agents", "agent packages must be unique")
 

@@ -5,4 +5,9 @@
         <permission name="android.permission.WRITE_SECURE_SETTINGS" />
         <permission name="android.permission.REBOOT" />
     </privapp-permissions>
+    <privapp-permissions package="io.apkrun.store">
+        <permission name="android.permission.DELETE_PACKAGES" />
+        <permission name="android.permission.INSTALL_PACKAGES" />
+        <permission name="android.permission.TEST_MANAGE_ROLLBACKS" />
+    </privapp-permissions>
 </permissions>

@@ -69,6 +69,12 @@ COMPOSITION_OUTPUTS = {
     "vbmeta": "vbmeta_a.img",
 }
 GUEST_AGENT_METADATA = "Guest/product/prebuilt/ApkRunGuest.json"
+STORE_AGENT_METADATA = "Guest/product/prebuilt/ApkRunStore.json"
+STORE_AGENT_APK = "Guest/product/prebuilt/ApkRunStore.apk"
+COMPOSITION_AGENT_METADATA = (
+    (GUEST_AGENT_METADATA, "io.apkrun.guest", "Guest Agent", True),
+    (STORE_AGENT_METADATA, "io.apkrun.store", "Store Agent", False),
+)
 TEST_OVERLAY_INPUT_PREFIX = "Tests/Fixtures/AndroidImageProduct/"
 
 
@@ -339,41 +345,55 @@ def _composition_inputs(
 def _composition_agent_requirements(
     product_inputs: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, object]]:
-    """Read the hash-pinned agent metadata used to compose the product image."""
-    metadata = next(
-        (item for item in product_inputs if item.get("path") == GUEST_AGENT_METADATA),
-        None,
-    )
-    if metadata is None:
-        raise BundleError(f"composition must record {GUEST_AGENT_METADATA} as a product input.")
+    """Read both hash-pinned agent records used to compose the product image."""
     repository = _repository_root()
-    metadata_path = repository / GUEST_AGENT_METADATA
-    path = repository
-    for component in GUEST_AGENT_METADATA.split("/"):
-        path /= component
-        if path.is_symlink():
-            raise BundleError(f"{metadata_path}: Guest Agent metadata must not use symlinks.")
-    if not metadata_path.is_file():
-        raise BundleError(f"{metadata_path}: Guest Agent metadata is missing.")
-    try:
-        digest = _sha256(metadata_path)
-        value = json.loads(metadata_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise BundleError(f"{metadata_path}: cannot read Guest Agent metadata: {error}") from None
-    if digest != metadata.get("sha256"):
-        raise BundleError(f"{metadata_path}: SHA-256 differs from composition product inputs.")
-    if (
-        not isinstance(value, Mapping)
-        or set(value) != {"packageName", "versionCode", "versionName"}
-        or value.get("packageName") != "io.apkrun.guest"
-        or isinstance(value.get("versionCode"), bool)
-        or not isinstance(value.get("versionCode"), int)
-        or value["versionCode"] < 1
-        or not isinstance(value.get("versionName"), str)
-        or not value["versionName"]
-    ):
-        raise BundleError(f"{metadata_path}: Guest Agent metadata is invalid.")
-    return [{"package": value["packageName"], "versionCode": value["versionCode"]}]
+    input_paths = {item["path"] for item in product_inputs}
+    has_store_metadata = STORE_AGENT_METADATA in input_paths
+    has_store_apk = STORE_AGENT_APK in input_paths
+    if has_store_metadata != has_store_apk:
+        raise BundleError(
+            "composition must record both the Store Agent APK and metadata as product inputs."
+        )
+    requirements: list[dict[str, object]] = []
+    for relative, package_name, agent_name, required in COMPOSITION_AGENT_METADATA:
+        metadata = next(
+            (item for item in product_inputs if item.get("path") == relative),
+            None,
+        )
+        if metadata is None:
+            if required:
+                raise BundleError(f"composition must record {relative} as a product input.")
+            continue
+        metadata_path = repository / relative
+        path = repository
+        for component in relative.split("/"):
+            path /= component
+            if path.is_symlink():
+                raise BundleError(f"{metadata_path}: {agent_name} metadata must not use symlinks.")
+        if not metadata_path.is_file():
+            raise BundleError(f"{metadata_path}: {agent_name} metadata is missing.")
+        try:
+            digest = _sha256(metadata_path)
+            value = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise BundleError(
+                f"{metadata_path}: cannot read {agent_name} metadata: {error}"
+            ) from None
+        if digest != metadata.get("sha256"):
+            raise BundleError(f"{metadata_path}: SHA-256 differs from composition product inputs.")
+        if (
+            not isinstance(value, Mapping)
+            or set(value) != {"packageName", "versionCode", "versionName"}
+            or value.get("packageName") != package_name
+            or isinstance(value.get("versionCode"), bool)
+            or not isinstance(value.get("versionCode"), int)
+            or value["versionCode"] < 1
+            or not isinstance(value.get("versionName"), str)
+            or not value["versionName"]
+        ):
+            raise BundleError(f"{metadata_path}: {agent_name} metadata is invalid.")
+        requirements.append({"package": value["packageName"], "versionCode": value["versionCode"]})
+    return requirements
 
 
 @contextlib.contextmanager

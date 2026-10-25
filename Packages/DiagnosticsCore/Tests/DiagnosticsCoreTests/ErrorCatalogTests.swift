@@ -29,7 +29,7 @@ import Testing
             + [
                 "instanceLocked", "instanceLockFailed", "hostShuttingDown", "hostStartupFailed",
                 "serviceUnavailable", "apiVersionMismatch", "operationResultUnknown",
-                "requestTimedOut", "cancelled", "notAuthorized", "malformedRequest",
+                "operationNotFound", "requestTimedOut", "cancelled", "notAuthorized", "malformedRequest",
                 "internal", "devLinuxTimedOut",
                 "devLinuxInvalidOptions", "devLinuxArtifactDirectoryMustBeAbsolute",
                 "devLinuxCheckFailed", "devLinuxDidNotFinish",
@@ -58,6 +58,9 @@ import Testing
                 "untrustedKey", "signatureInvalid", "unexpectedFile", "downgradeRejected",
                 "imageNotInstalled", "noCurrentImage",
             ].map { "image.\($0)" }
+            + [
+                "guestInstallFailed", "guestStorageFull", "userActionRequired",
+            ].map { "store.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)
     #expect(
@@ -89,6 +92,7 @@ import Testing
                 || entry.code.hasPrefix("runtime.")
                 || entry.code.hasPrefix("graphics.")
                 || entry.code.hasPrefix("image.")
+                || entry.code.hasPrefix("store.")
         )
         for text in entry.message?.values ?? [String: String]().values {
             #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -109,6 +113,21 @@ import Testing
             }
         }
     }
+}
+
+@Test func packageInstallFailuresUseDocumentedCatalogVariants() throws {
+    let installFailure = try #require(ErrorCatalog.entry(for: "store.guestInstallFailed"))
+    #expect(Set(installFailure.variants.keys) == ["conflict", "incompatible", "invalid", "blocked", "aborted"])
+    #expect(installFailure.variants["conflict"]?.action == RemediationAction.none)
+    #expect(installFailure.variants["incompatible"]?.action == RemediationAction.reportProblem)
+    #expect(installFailure.variants["aborted"]?.action == RemediationAction.retry)
+
+    let storageFailure = try #require(ErrorCatalog.entry(for: "store.guestStorageFull"))
+    #expect(storageFailure.action == .openRuntimeSettings)
+    #expect(storageFailure.remediation?["en"] == "Increase Android storage in Settings → Runtime.")
+
+    let userActionFailure = try #require(ErrorCatalog.entry(for: "store.userActionRequired"))
+    #expect(userActionFailure.action == .reportProblem)
 }
 
 @Test func unconfiguredVsockErrorPointsToTheVMDefinition() throws {

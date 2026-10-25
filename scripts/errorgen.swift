@@ -109,9 +109,9 @@ func loadEntries(release: Bool) throws -> [CatalogEntry] {
         }
         guard
             code.hasPrefix("vm.") || code.hasPrefix("graphics.") || code.hasPrefix("runtime.")
-                || code.hasPrefix("image.") || code.hasPrefix("cli.")
+                || code.hasPrefix("image.") || code.hasPrefix("cli.") || code.hasPrefix("store.")
         else {
-            fail("\(code) is outside the vm/graphics/runtime/image/cli catalog scope")
+            fail("\(code) is outside the vm/graphics/runtime/image/cli/store catalog scope")
         }
         guard codes.insert(code).inserted else {
             fail("duplicate code \(code)")
@@ -503,7 +503,7 @@ func renderCLIMarkdown(_ entries: [CatalogEntry]) -> String {
 
 func renderMarkdown(_ entries: [CatalogEntry], source: String) -> String {
     var result = source
-    for domain in ["vm", "graphics", "runtime", "image", "cli"] {
+    for domain in ["vm", "graphics", "runtime", "image", "store", "cli"] {
         let begin = "<!-- errorgen:begin \(domain) -->"
         let end = "<!-- errorgen:end \(domain) -->"
         guard let beginRange = result.range(of: begin),

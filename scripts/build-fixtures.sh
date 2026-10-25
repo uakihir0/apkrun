@@ -4,6 +4,7 @@
 # Tests/Fixtures/signing/test-fixture-a.jks.
 #
 #   scripts/build-fixtures.sh                     build out/HelloText.apk and check its signer
+#   scripts/build-fixtures.sh --version-code 2    build and stage out/HelloText-v2.apk (#37)
 #   scripts/build-fixtures.sh --app HelloProbe    build out/HelloProbe.apk (#36 SELinux isolation)
 #   scripts/build-fixtures.sh --app HelloGL       build out/HelloGL.apk instead (the G3 gate, #24)
 #   scripts/build-fixtures.sh --app HelloCompose  build out/HelloCompose.apk instead (the list of #25, G5 of #31)
@@ -33,12 +34,14 @@ platform_test_key="$repo_root/Tests/Fixtures/signing/aosp-test-platform.pk8"
 platform_test_certificate="$repo_root/Tests/Fixtures/signing/aosp-test-platform.x509.pem"
 
 usage() {
-    printf 'usage: scripts/build-fixtures.sh [--app HelloText|HelloProbe|HelloGL|HelloCompose|HelloWebView|HelloSplit|SystemServicesTest] [--platform-test-key] [--check-reproducible]\n' >&2
+    printf 'usage: scripts/build-fixtures.sh [--app HelloText|HelloProbe|HelloGL|HelloCompose|HelloWebView|HelloSplit|SystemServicesTest] [--version-code N] [--platform-test-key] [--check-reproducible]\n' >&2
     exit 64
 }
 
 mode="build"
 platform_test_key_enabled=0
+version_code=1
+version_code_set=0
 while (($# > 0)); do
     case "$1" in
         --check-reproducible) mode="check" ;;
@@ -51,6 +54,12 @@ while (($# > 0)); do
             ((platform_test_key_enabled == 0)) || usage
             platform_test_key_enabled=1
             ;;
+        --version-code)
+            (($# >= 2)) && ((version_code_set == 0)) || usage
+            version_code_set=1
+            version_code="$2"
+            shift
+            ;;
         *) usage ;;
     esac
     shift
@@ -59,6 +68,18 @@ case "$app" in
     HelloText | HelloProbe | HelloGL | HelloCompose | HelloWebView | HelloSplit | SystemServicesTest) ;;
     *) usage ;;
 esac
+if [[ ! "$version_code" =~ ^[1-9][0-9]*$ ]] || ((${#version_code} > 10)); then
+    printf 'build-fixtures: version code must be between 1 and 2147483647\n' >&2
+    exit 64
+fi
+if ((${#version_code} == 10)) && ((10#$version_code > 2147483647)); then
+    printf 'build-fixtures: version code must be between 1 and 2147483647\n' >&2
+    exit 64
+fi
+if [[ "$app" != "HelloText" && "$version_code" != "1" ]]; then
+    printf 'build-fixtures: --version-code is only supported for HelloText\n' >&2
+    exit 64
+fi
 if ((platform_test_key_enabled)) && [[ "$app" != "SystemServicesTest" ]]; then
     printf 'build-fixtures: --platform-test-key is reserved for the composed-image SystemServicesTest fixture\n' >&2
     exit 64
@@ -83,7 +104,11 @@ if ((platform_test_key_enabled)); then
         exit 78
     }
 fi
-output_apk="$fixtures/out/$app.apk"
+output_name="$app"
+if [[ "$app" == "HelloText" && "$version_code" != "1" ]]; then
+    output_name="HelloText-v$version_code"
+fi
+output_apk="$fixtures/out/$output_name.apk"
 gradle_apk="$fixtures/$app/build/outputs/apk/release/$app-release.apk"
 gradle_bundle="$fixtures/$app/build/outputs/bundle/release/$app-release.aab"
 
@@ -102,7 +127,7 @@ for tool in "$apksigner" "$aapt2"; do
 done
 
 gradle_build() {
-    "$fixtures/gradlew" -p "$fixtures" --console=plain "$@"
+    "$fixtures/gradlew" -p "$fixtures" --console=plain "$@" "-PapkrunFixtureVersionCode=$version_code"
 }
 
 # Fails unless the APK is signed only by the pinned test certificate.
@@ -219,6 +244,12 @@ if [[ "$mode" == "build" ]]; then
         mkdir -p "$fixture_directory"
         cp "$output_apk" "$fixture_directory/HelloProbe.apk"
         printf 'build-fixtures: staged %s\n' "$fixture_directory/HelloProbe.apk"
+    fi
+    if [[ "$app" == "HelloText" ]]; then
+        fixture_directory="${APKRUN_TEST_FIXTURES_DIR:-/tmp/apkrun-test-fixtures}"
+        mkdir -p "$fixture_directory"
+        cp "$output_apk" "$fixture_directory/$output_name.apk"
+        printf 'build-fixtures: staged %s\n' "$fixture_directory/$output_name.apk"
     fi
     if [[ "$app" == "SystemServicesTest" ]]; then
         fixture_directory="${APKRUN_TEST_FIXTURES_DIR:-/tmp/apkrun-test-fixtures}"

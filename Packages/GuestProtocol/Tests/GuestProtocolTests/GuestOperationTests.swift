@@ -55,6 +55,13 @@ private enum EnvelopeSchema {
         ("list_packages", GuestListPackages.number),
         ("get_health", GuestGetHealth.number),
         ("shutdown", GuestShutdown.number),
+        ("inspect_archive", GuestInspectArchive.number),
+        ("begin_install", GuestBeginInstall.number),
+        ("commit_install", GuestCommitInstall.number),
+        ("abandon_install", GuestAbandonInstall.number),
+        ("uninstall", GuestUninstallPackage.number),
+        ("get_package_metadata", GuestGetStorePackageMetadata.number),
+        ("list_managed_packages", GuestListManagedPackages.number),
     ]
     for pair in pairs {
         #expect(requests[pair.name] == pair.number, "Request.\(pair.name) is not \(pair.number)")
@@ -186,4 +193,79 @@ private enum EnvelopeSchema {
     }
     #expect(GuestShutdown.decode(.shutdown(GPEmpty())) != nil)
     #expect(GuestShutdown.decode(.getHealth(GPHealth())) == nil)
+}
+
+@Test func storeOperationsUseTheirSchemaCasesAndCapabilities() {
+    var artifact = GPArtifactRef()
+    artifact.transferID = 12
+    artifact.name = "base"
+    let inspect = GuestInspectArchive(artifacts: [artifact])
+    #expect(inspect.capability == .storeMetadata)
+    #expect(inspect.timeout == .seconds(30))
+    if case .inspectArchive(let request) = inspect.request() {
+        #expect(request.artifacts == [artifact])
+    } else {
+        Issue.record("GuestInspectArchive does not build inspect_archive")
+    }
+    #expect(GuestInspectArchive.decode(.inspectArchive(GPArchiveInfo())) != nil)
+
+    var installRequest = GPInstallRequest()
+    installRequest.expectedPackage = "io.apkrun.fixture.hellotext"
+    installRequest.expectedVersionCode = 42
+    installRequest.mode = .installNew
+    let begin = GuestBeginInstall(installRequest)
+    #expect(begin.capability == .storeInstall)
+    #expect(begin.timeout == .seconds(30))
+    if case .beginInstall(let request) = begin.request() {
+        #expect(request.expectedPackage == installRequest.expectedPackage)
+        #expect(request.expectedVersionCode == 42)
+        #expect(request.mode == .installNew)
+    } else {
+        Issue.record("GuestBeginInstall does not build begin_install")
+    }
+    #expect(GuestBeginInstall.decode(.beginInstall(GPBeginInstallResult())) != nil)
+
+    let commit = GuestCommitInstall(installID: "install-1")
+    if case .commitInstall(let request) = commit.request() {
+        #expect(request.installID == "install-1")
+    } else {
+        Issue.record("GuestCommitInstall does not build commit_install")
+    }
+    #expect(GuestCommitInstall.decode(.commitInstall(GPEmpty())) != nil)
+
+    let abandon = GuestAbandonInstall(installID: "install-1")
+    if case .abandonInstall(let request) = abandon.request() {
+        #expect(request.installID == "install-1")
+    } else {
+        Issue.record("GuestAbandonInstall does not build abandon_install")
+    }
+    #expect(GuestAbandonInstall.decode(.abandonInstall(GPEmpty())) != nil)
+
+    let uninstall = GuestUninstallPackage(package: "io.apkrun.fixture.hellotext", keepData: true)
+    #expect(uninstall.timeout == .seconds(120))
+    if case .uninstall(let request) = uninstall.request() {
+        #expect(request.package == "io.apkrun.fixture.hellotext")
+        #expect(request.keepData)
+    } else {
+        Issue.record("GuestUninstallPackage does not build uninstall")
+    }
+    #expect(GuestUninstallPackage.decode(.uninstall(GPUninstallResult())) != nil)
+
+    let metadata = GuestGetStorePackageMetadata(package: "io.apkrun.fixture.hellotext")
+    #expect(metadata.capability == .storeMetadata)
+    #expect(metadata.timeout == .seconds(10))
+    if case .getPackageMetadata(let request) = metadata.request() {
+        #expect(request.package == "io.apkrun.fixture.hellotext")
+    } else {
+        Issue.record("GuestGetStorePackageMetadata does not build get_package_metadata")
+    }
+    #expect(GuestGetStorePackageMetadata.decode(.getPackageMetadata(GPStorePackageInfo())) != nil)
+
+    let list = GuestListManagedPackages(filter: .allUserInstalled)
+    if case .listManagedPackages(let request) = list.request() {
+        #expect(request.filter == .allUserInstalled)
+    } else {
+        Issue.record("GuestListManagedPackages does not build list_managed_packages")
+    }
+    #expect(GuestListManagedPackages.decode(.listManagedPackages(GPStorePackageList())) != nil)
 }

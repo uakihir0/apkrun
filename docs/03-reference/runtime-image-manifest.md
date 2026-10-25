@@ -368,7 +368,7 @@ Unknown fields are rejected at every level (§11).
 | `builderImageDigest` | string or null | yes | `sha256:` + 64 lowercase hex. Null for `stock` and composed images; required for builder images | digest of the builder container image |
 | `composition` | object | no | Required for composed CI images. `{schemaVersion: 1, sourceManifest: {path, sha256}, productInputs: [{path, sha256}], testOverlayInputs?: [{path, sha256}], apkrunRevision}`. Paths are repository-relative; both input lists are sorted by path and unique | the stock Android manifest and APKRun product inputs used to compose the image; the optional test list records the fixed AndroidCustom fixture overlay |
 
-`composition.productInputs` contains 1 to 256 entries. `composition.testOverlayInputs`, when present, contains 1 to 256 entries and every path starts with `Tests/Fixtures/AndroidImageProduct/`. Both lists contain safe repository-relative paths with 64 lowercase hex SHA-256 digests, sorted by path and unique. The test overlay is opt-in and is omitted from product compositions. `composition.apkrunRevision` is a 40-digit lowercase git revision, optionally followed by `-dirty`. A composed image keeps the stock CI build in `source` and records the product code revision in both `revisions.guest` and `composition.apkrunRevision`.
+`composition.productInputs` contains 1 to 256 entries. A composed APKRun image includes `Guest/product/prebuilt/ApkRunGuest.json`; it includes both `Guest/product/prebuilt/ApkRunStore.apk` and `Guest/product/prebuilt/ApkRunStore.json` when the Store Agent is part of that image. Every listed product input is hash-pinned. `composition.testOverlayInputs`, when present, contains 1 to 256 entries and every path starts with `Tests/Fixtures/AndroidImageProduct/`. Both lists contain safe repository-relative paths with 64 lowercase hex SHA-256 digests, sorted by path and unique. The test overlay is opt-in and is omitted from product compositions. `composition.apkrunRevision` is a 40-digit lowercase git revision, optionally followed by `-dirty`. A composed image keeps the stock CI build in `source` and records the product code revision in both `revisions.guest` and `composition.apkrunRevision`.
 
 The bundle has no timestamps, so it is deterministic ([android-image.md](../02-design/android-image.md) §10.2).
 
@@ -452,7 +452,7 @@ How ImageCore uses them ([android-image.md](../02-design/android-image.md) §9.2
 | `minimumRuntimeVersion` | string | yes | `MAJOR.MINOR.PATCH`, no leading zeros | the oldest APKRun that may boot this image (release rule R3) |
 | `guestProtocol.min` | integer | yes | 1 to 65535 | lowest guest protocol major the image's agents speak |
 | `guestProtocol.max` | integer | yes | `min` to 65535 | highest major |
-| `agents` | array | yes | 0 to 16 entries. Empty for `stock`. For composed `apkrun` images, contains `io.apkrun.guest` at the version from hash-pinned `Guest/product/prebuilt/ApkRunGuest.json`; earlier product images may omit `io.apkrun.store` until #37 integrates it | agents built into the image |
+| `agents` | array | yes | 0 to 16 entries. Empty for `stock`. Composed `apkrun` images contain `io.apkrun.guest`; they also list `io.apkrun.store` when both the Store Agent APK and metadata are in the composition inputs | agents built into the image |
 | `agents[].package` | string | yes | an Android package name ([package-metadata-json.md](package-metadata-json.md) §2). Unique | agent package |
 | `agents[].versionCode` | integer | yes | 1 to 9223372036854775807 | its `longVersionCode` |
 
@@ -945,7 +945,7 @@ The order is fixed: signature, then schema, then files ([android-image.md](../02
 | S7 | `consolePorts[i].index == i`. Exactly one `systemConsole`, at index 0. Names are unique |
 | S8 | Each GPU profile's `overrides` lists only keys that the profile's `bootconfig` also sets |
 | S9 | `guestProtocol.min ≤ guestProtocol.max` |
-| S10 | `kind: stock` has no `agents`. `kind: apkrun` lists `io.apkrun.guest`; `io.apkrun.store` is optional until #37. Agent packages are unique |
+| S10 | `kind: stock` has no `agents`. `kind: apkrun` lists `io.apkrun.guest`. For a composed image, `ApkRunStore.apk`, its metadata, and the `io.apkrun.store` entry are either all present or all absent from the composition inputs and requirements. Agent packages are unique |
 | S11 | `userdata.upgradableFrom` is ascending and contains `userdata.schemaVersion` |
 | S12 | `compatibility.upgradeFrom.minimumImageVersion` ≤ the triple of `imageVersion` |
 | S13 | A composed `kind: apkrun` image has non-null `revisions.guest` and `composition`, with null builder pins. A builder `kind: apkrun` image has non-null `revisions.guest`, `pinnedManifestSHA256`, and `builderImageDigest`, with no composition. A `kind: stock` image has null guest revision, builder pins, and composition |

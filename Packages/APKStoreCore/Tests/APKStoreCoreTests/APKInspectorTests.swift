@@ -8,7 +8,7 @@ import Testing
         """
         package: name='org.example.app' versionCode='42' versionCodeMajor='3' versionName='3.42' split=''
         application-label:'Example App'
-        sdkVersion:'23'
+        minSdkVersion:'23'
         targetSdkVersion:'35'
         native-code: 'arm64-v8a' 'armeabi-v7a'
         """
@@ -91,4 +91,22 @@ import Testing
     await #expect(throws: APKInspectionFailure.aapt2OutputTooLarge) {
         try await inspector.inspect(apk)
     }
+}
+
+@Test func apkInspectorClosesTheOutputPipeAfterTheReaderFinishes() async throws {
+    let pipe = Pipe()
+    let expected = Data(repeating: 0x41, count: 128)
+    try pipe.fileHandleForWriting.write(contentsOf: expected)
+    try pipe.fileHandleForWriting.close()
+    let reader = Task.detached {
+        try await Task.sleep(for: .milliseconds(25))
+        return try pipe.fileHandleForReading.readToEnd() ?? Data()
+    }
+
+    let output = try await APKInspector.finishCapturingOutput(
+        reader,
+        readingFrom: pipe.fileHandleForReading
+    )
+
+    #expect(output == expected)
 }

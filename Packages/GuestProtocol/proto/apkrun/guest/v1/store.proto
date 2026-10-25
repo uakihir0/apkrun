@@ -178,6 +178,8 @@ message StorePackageInfo {
   bool enabled = 15;
   bool suspended = 16;
   int32 requested_permissions_count = 17;
+  // Android's enabled launcher component, empty when this package has no launcher activity.
+  string launchable_component = 18;
 }
 
 enum ManagedPackageFilter {

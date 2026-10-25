@@ -1,6 +1,6 @@
 import APKStoreCore
 import Foundation
-import GuestProtocol
+import RuntimeAPI
 import RuntimeCore
 import Testing
 
@@ -30,7 +30,7 @@ func adbStoreChannelInstallsAndVerifiesPackageManagerFacts() async throws {
     #expect(result.versionCode == 7)
     #expect(result.displayName == "Hello Split")
     #expect(result.installerPackage == PackageID(rawValue: "io.apkrun.store"))
-    #expect(result.signingDigests == [SHA256Digest(data: Data(repeating: 0xAB, count: 32))])
+    #expect(result.signingDigests.map(\.hexValue) == [String(repeating: "ab", count: 32)])
     let installCall = await guest.installCalls.first
     #expect(installCall?.0 == files)
     #expect(installCall?.1 == true)
@@ -88,6 +88,63 @@ func adbStoreChannelUsesGuestAgentForPackageQueriesAndMapsFilters() async throws
     #expect(all.first?.launchable == true)
     #expect(await guest.queryPackages == [package.rawValue])
     #expect(await guest.listFilters == [.launchable, .userInstalled, .all])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbStoreChannelRelaysGuestAgentPackageEventsToItsConsumer() async throws {
+    let package = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let guest = FakeStoreGuestAgent()
+    let channel = ADBStoreAgentChannel(agent: guest, adb: FakeStoreADBClient(), capabilities: [.metadata])
+    var events = channel.packageEvents.makeAsyncIterator()
+
+    await guest.emit(
+        RuntimeStorePackageEvent(
+            packageID: try #require(RuntimePackageID(rawValue: package.rawValue)),
+            kind: .replaced,
+            versionCode: 12
+        )
+    )
+
+    let event = try #require(await events.next())
+    #expect(event == StorePackageEvent(packageID: package, kind: .replaced, versionCode: 12))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func closingADBStoreChannelStopsItsRelayAndAllowsANewChannelToReceiveEvents() async throws {
+    let package = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let guest = FakeStoreGuestAgent()
+    let oldChannel = ADBStoreAgentChannel(
+        agent: guest,
+        adb: FakeStoreADBClient(),
+        capabilities: [.metadata]
+    )
+    let firstEvent = StorePackageEvent(packageID: package, kind: .added, versionCode: 1)
+    await guest.emit(
+        RuntimeStorePackageEvent(
+            packageID: try #require(RuntimePackageID(rawValue: package.rawValue)),
+            kind: .added,
+            versionCode: 1
+        )
+    )
+    #expect(await nextPackageEvent(from: oldChannel.packageEvents) == .event(firstEvent))
+
+    await oldChannel.close()
+    #expect(await nextPackageEvent(from: oldChannel.packageEvents) == .ended)
+
+    let newChannel = ADBStoreAgentChannel(
+        agent: guest,
+        adb: FakeStoreADBClient(),
+        capabilities: [.metadata]
+    )
+    let secondEvent = StorePackageEvent(packageID: package, kind: .replaced, versionCode: 2)
+    await guest.emit(
+        RuntimeStorePackageEvent(
+            packageID: try #require(RuntimePackageID(rawValue: package.rawValue)),
+            kind: .replaced,
+            versionCode: 2
+        )
+    )
+    #expect(await nextPackageEvent(from: newChannel.packageEvents) == .event(secondEvent))
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -192,57 +249,133 @@ func adbStoreChannelDoesNotPassUnsupportedDowngradeRequestsToAndroid() async thr
     #expect(await guest.installCalls.isEmpty)
 }
 
-private func packageInfo(package: String, versionCode: Int64) -> GPPackageInfo {
-    var info = GPPackageInfo()
-    info.package = package
-    info.versionCode = versionCode
-    info.versionName = "1.2.3"
-    info.label = "Hello Split"
-    info.enabled = true
-    info.launchableComponent = "\(package)/.MainActivity"
-    info.installerPackage = "io.apkrun.store"
-    info.firstInstallTimeMs = 1_700_000_000_000
-    info.lastUpdateTimeMs = 1_700_000_001_000
-    info.targetSdk = 35
-    info.minSdk = 23
-    info.signingSha256 = [Data(repeating: 0xAB, count: 32)]
-    return info
+private func packageInfo(package: String, versionCode: Int64) -> GuestPackageMetadata {
+    GuestPackageMetadata(
+        package: package,
+        label: "Hello Split",
+        versionCode: versionCode,
+        versionName: "1.2.3",
+        enabled: true,
+        launchableComponent: "\(package)/.MainActivity",
+        installerPackage: "io.apkrun.store",
+        firstInstallTimeMs: 1_700_000_000_000,
+        lastUpdateTimeMs: 1_700_000_001_000,
+        targetSDK: 35,
+        minSDK: 23,
+        signingSHA256: [Data(repeating: 0xAB, count: 32)]
+    )
 }
 
-private func packageSummary(package: String, versionCode: Int64) -> GPPackageSummary {
-    var summary = GPPackageSummary()
-    summary.package = package
-    summary.label = "Hello Text"
-    summary.versionCode = versionCode
-    summary.launchable = true
-    summary.userInstalled = true
-    return summary
+private func packageSummary(package: String, versionCode: Int64) -> GuestPackageSummary {
+    GuestPackageSummary(
+        package: package,
+        label: "Hello Text",
+        versionCode: versionCode,
+        launchable: true,
+        userInstalled: true
+    )
+}
+
+private enum PackageEventWaitResult: Sendable, Equatable {
+    case event(StorePackageEvent)
+    case ended
+    case timedOut
+}
+
+private func nextPackageEvent(
+    from stream: AsyncStream<StorePackageEvent>,
+    timeout: Duration = .seconds(1)
+) async -> PackageEventWaitResult {
+    await withTaskGroup(of: PackageEventWaitResult.self) { group in
+        group.addTask {
+            var iterator = stream.makeAsyncIterator()
+            guard let event = await iterator.next() else {
+                return .ended
+            }
+            return .event(event)
+        }
+        group.addTask {
+            do {
+                try await Task.sleep(for: timeout)
+            } catch {
+                return .timedOut
+            }
+            return .timedOut
+        }
+
+        let result = await group.next() ?? .ended
+        group.cancelAll()
+        await group.waitForAll()
+        return result
+    }
 }
 
 private actor FakeStoreGuestAgent: ADBStoreGuestAgent {
-    private let info: GPPackageInfo?
-    private let summaries: [GPPackageSummary]
+    private nonisolated let packageEventHub = FakePackageEventHub()
+    private let info: GuestPackageMetadata?
+    private let summaries: [GuestPackageSummary]
     private(set) var installCalls: [([URL], Bool)] = []
     private(set) var queryPackages: [String] = []
-    private(set) var listFilters: [GPPackageFilter] = []
+    private(set) var listFilters: [GuestPackageFilter] = []
 
-    init(packageInfo: GPPackageInfo? = nil, summaries: [GPPackageSummary] = []) {
+    init(packageInfo: GuestPackageMetadata? = nil, summaries: [GuestPackageSummary] = []) {
         info = packageInfo
         self.summaries = summaries
+    }
+
+    nonisolated func makePackageEventStream() -> AsyncStream<RuntimeStorePackageEvent> {
+        packageEventHub.makeStream()
+    }
+
+    func emit(_ event: RuntimeStorePackageEvent) {
+        packageEventHub.yield(event)
     }
 
     func installMultiple(apks: [URL], allowDowngrade: Bool) async throws(AdbFailure) {
         installCalls.append((apks, allowDowngrade))
     }
 
-    func queryPackage(_ package: String) async throws(GuestAgentFailure) -> GPPackageInfo? {
+    func storePackageInfo(_ package: String) async throws(GuestAgentFailure) -> GuestPackageMetadata? {
         queryPackages.append(package)
         return info
     }
 
-    func listPackages(filter: GPPackageFilter) async throws(GuestAgentFailure) -> [GPPackageSummary] {
+    func listStorePackages(filter: GuestPackageFilter) async throws(GuestAgentFailure) -> [GuestPackageSummary] {
         listFilters.append(filter)
         return summaries
+    }
+}
+
+private final class FakePackageEventHub: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuations: [UUID: AsyncStream<RuntimeStorePackageEvent>.Continuation] = [:]
+
+    func makeStream() -> AsyncStream<RuntimeStorePackageEvent> {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream.makeStream(
+            of: RuntimeStorePackageEvent.self,
+            bufferingPolicy: .bufferingNewest(1_024)
+        )
+        lock.withLock {
+            continuations[id] = continuation
+        }
+        continuation.onTermination = { [weak self] _ in
+            self?.remove(id)
+        }
+        return stream
+    }
+
+    func yield(_ event: RuntimeStorePackageEvent) {
+        let subscribers = lock.withLock { Array(continuations.values) }
+        for subscriber in subscribers {
+            subscriber.yield(event)
+        }
+    }
+
+    private func remove(_ id: UUID) {
+        _ = lock.withLock {
+            continuations.removeValue(forKey: id)
+        }
     }
 }
 

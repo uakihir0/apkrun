@@ -6,13 +6,13 @@ import java.io.IOException
 import java.io.RandomAccessFile
 
 /**
- * The agent log (guest-components.md §9). Each line goes to logcat under the tag `ApkRunGuest`, and
- * to the agent's ring-buffer file when [install] is called. The file is at most
- * [MAXIMUM_FILE_BYTES] per file with [FILE_COUNT] files. The log never carries clipboard,
+ * The agent log (guest-components.md §9). Each line goes to logcat under the configured tag
+ * (defaulting to [TAG]), and to the agent's ring-buffer file when [install] is called. The file is
+ * at most [MAXIMUM_FILE_BYTES] per file with [FILE_COUNT] files. The log never carries clipboard,
  * notification, or typed text.
  */
 object AgentLog {
-    /** The logcat tag of every agent line (guest-components.md §9). */
+    /** The default logcat tag (guest-components.md §9). */
     const val TAG = "ApkRunGuest"
 
     /** The size limit of one log file: 1 MiB. */
@@ -22,9 +22,16 @@ object AgentLog {
     const val FILE_COUNT = 2
 
     @Volatile private var ring: RingFile? = null
+    @Volatile private var tag = TAG
 
-    /** Starts writing the agent log to [file] and its rotated sibling. */
-    fun install(file: File) {
+    /** The active logcat tag. */
+    internal val configuredTag: String
+        get() = tag
+
+    /** Starts writing the agent log to [file] and its rotated sibling under [tag]. */
+    fun install(file: File, tag: String = TAG) {
+        require(tag.isNotBlank()) { "the agent log tag must not be blank" }
+        this.tag = tag
         ring = RingFile(file)
     }
 
@@ -42,7 +49,7 @@ object AgentLog {
 
     private fun write(level: Int, message: String) {
         try {
-            Log.println(level, TAG, message)
+            Log.println(level, tag, message)
         } catch (error: RuntimeException) {
             // The logcat path is absent under plain JVM tests. The file below still records the
             // line.
@@ -57,7 +64,7 @@ object AgentLog {
             else -> "I"
         }
 
-    /** Two files, `agent.log` and `agent.log.1`. The newer one is always `agent.log`. */
+    /** Two files, the selected log name and its `.1` sibling. The newer one is always current. */
     private class RingFile(private val current: File) {
         private val previous = File(current.path + ".1")
         private var size = if (current.exists()) current.length() else 0L

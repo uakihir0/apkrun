@@ -7,6 +7,13 @@ import RuntimeCore
 
 typealias PackageMutationBoundary = @Sendable () async throws(RuntimeWireError) -> Void
 
+private enum PackageEventMonitorSignal: Sendable {
+    case packageStreamEnded
+    case disconnected
+    case disconnectionStreamEnded
+    case cancelled
+}
+
 struct RuntimePackageInstallResult: Sendable {
     let summary: RuntimePackageSummary
     let change: PackageChange
@@ -49,6 +56,7 @@ public actor EmbeddedPackageService: RuntimeService {
     private var isOpen = false
     private var openTask: Task<Void, Error>?
     private var runtimeAttached = false
+    private var packageEventTask: Task<Void, Never>?
     private var importPreviews: [UUID: RuntimeImportPreview] = [:]
     private var packageMutationsInProgress = Set<String>()
     private var packageStoreMutationsInProgress = Set<String>()
@@ -86,7 +94,7 @@ public actor EmbeddedPackageService: RuntimeService {
 
     /// Attaches a ready development runtime and recovers guest-dependent package transactions.
     ///
-    /// ADB is resolved here so CLI clients do not need to import RuntimeCore or locate tools.
+    /// The runtime selects Store Agent vsock for product images and ADB for stock images.
     public func attachRuntime(
         context: DevelopmentRuntimeContext,
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -96,7 +104,11 @@ public actor EmbeddedPackageService: RuntimeService {
     ) async throws(RuntimeWireError) {
         do {
             try await ensureOpen()
-            let adbExecutable = try AdbClient.resolveExecutable(environment: environment)
+            await detachRuntime()
+            let adbExecutable =
+                context.image.manifest.kind == .stock
+                ? try AdbClient.resolveExecutable(environment: environment)
+                : nil
             let access = DevelopmentStoreRuntimeAccess(
                 supervisor: context.supervisor,
                 adbExecutable: adbExecutable,
@@ -105,13 +117,12 @@ public actor EmbeddedPackageService: RuntimeService {
                 logSink: context.diagnostics.logSink,
                 startRuntimeIfNeeded: startRuntimeIfNeeded
             )
-            guard let guestAgent = await context.supervisor.developmentGuestAgent else {
-                throw DevelopmentStoreRuntimeAccessFailure.guestAgentUnavailable
-            }
-            if let windowSessionService = await context.makeSessionService() {
-                sessionService = windowSessionService
-            } else if let embeddedSessionService = sessionService as? EmbeddedRuntimeService {
-                await embeddedSessionService.attachGuestAgent(guestAgent)
+            if let guestAgent = await context.supervisor.developmentGuestAgent {
+                if let windowSessionService = await context.makeSessionService() {
+                    sessionService = windowSessionService
+                } else if let embeddedSessionService = sessionService as? EmbeddedRuntimeService {
+                    await embeddedSessionService.attachGuestAgent(guestAgent)
+                }
             }
             await runtimeAccess.attach(access)
             runtimeAttached = true
@@ -121,6 +132,7 @@ public actor EmbeddedPackageService: RuntimeService {
             if refreshInventoryAfterAttach {
                 try? await refreshAndroidInventory()
             }
+            startPackageEventMonitor()
         } catch {
             throw Self.wireError(for: error)
         }
@@ -128,6 +140,8 @@ public actor EmbeddedPackageService: RuntimeService {
 
     /// Detaches the live guest channel while preserving cached package inventory.
     public func detachRuntime() async {
+        packageEventTask?.cancel()
+        packageEventTask = nil
         await runtimeAccess.detach()
         runtimeAttached = false
     }
@@ -135,6 +149,12 @@ public actor EmbeddedPackageService: RuntimeService {
     /// Reuses the daemon's session owner when package operations run over XPC.
     func setSessionService(_ sessionService: any RuntimeSessionService) {
         self.sessionService = sessionService
+    }
+
+    func attachRuntimeAccessForTesting(_ access: any StoreRuntimeAccess) async {
+        await runtimeAccess.attach(access)
+        runtimeAttached = true
+        startPackageEventMonitor()
     }
 
     /// Launches an installed package in the embedded runtime through the Guest Agent.
@@ -816,8 +836,10 @@ public actor EmbeddedPackageService: RuntimeService {
                 child
                 .appendingPathComponent("current", isDirectory: true)
                 .appendingPathComponent("artifact.json")
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
             guard let data = try? Data(contentsOf: artifactURL),
-                let artifact = try? JSONDecoder().decode(ArtifactSet.self, from: data)
+                let artifact = try? decoder.decode(ArtifactSet.self, from: data)
             else {
                 continue
             }
@@ -877,10 +899,127 @@ public actor EmbeddedPackageService: RuntimeService {
 
     private func refreshAndroidInventory() async throws {
         guard runtimeAttached else { return }
-        let packages = try await runtimeAccess.withStoreAgent(UUID()) { channel in
-            try await channel.listPackages(.all)
+        let inventory = try await runtimeAccess.withStoreAgent(UUID()) { channel in
+            let packages = try await channel.listManagedPackages()
+            let summaries = try await channel.listPackages(.all)
+            return (packages, summaries)
         }
-        _ = try await store.saveLastKnownAndroidInventory(packages)
+        _ = try await store.reconcileAndroidPackages(
+            inventory.0,
+            userdataGeneration: await runtimeAccess.userdataGeneration()
+        )
+        _ = try await store.saveLastKnownAndroidInventory(inventory.1)
+    }
+
+    private func startPackageEventMonitor() {
+        guard runtimeAttached, packageEventTask == nil else { return }
+        packageEventTask = Task { [weak self] in
+            await self?.monitorPackageEvents()
+        }
+    }
+
+    private func monitorPackageEvents() async {
+        var retryAttempt = 0
+        // Reconcile through the session observed by this monitor too. The attach-time
+        // inventory may have used a session that disconnected before this task subscribed.
+        var needsInventoryReconciliation = true
+        while runtimeAttached, !Task.isCancelled {
+            let channel: (any StoreAgentChannel)?
+            do {
+                channel = try await runtimeAccess.withStoreAgent(UUID()) { $0 }
+                if needsInventoryReconciliation {
+                    try await refreshAndroidInventory()
+                    needsInventoryReconciliation = false
+                }
+            } catch {
+                guard await waitForPackageEventRetry(attempt: retryAttempt) else { return }
+                retryAttempt = min(retryAttempt + 1, 5)
+                continue
+            }
+            guard let channel else { return }
+            retryAttempt = 0
+
+            guard runtimeAttached, !Task.isCancelled else { return }
+            switch await waitForPackageEventMonitorSignal(on: channel) {
+            case .cancelled:
+                return
+            case .packageStreamEnded, .disconnectionStreamEnded:
+                guard !channel.isConnected else { return }
+                needsInventoryReconciliation = true
+            case .disconnected:
+                needsInventoryReconciliation = true
+            }
+        }
+    }
+
+    private func waitForPackageEventMonitorSignal(
+        on channel: any StoreAgentChannel
+    ) async -> PackageEventMonitorSignal {
+        await withTaskGroup(of: PackageEventMonitorSignal.self) { group in
+            group.addTask {
+                await self.consumePackageEvents(from: channel)
+            }
+            if let source = channel as? any StoreAgentDisconnectionEventSource {
+                group.addTask {
+                    for await _ in source.disconnectionEvents {
+                        return .disconnected
+                    }
+                    return .disconnectionStreamEnded
+                }
+            }
+            let signal = await group.next() ?? .cancelled
+            group.cancelAll()
+            await group.waitForAll()
+            return signal
+        }
+    }
+
+    private func consumePackageEvents(
+        from channel: any StoreAgentChannel
+    ) async -> PackageEventMonitorSignal {
+        for await event in channel.packageEvents {
+            guard runtimeAttached, !Task.isCancelled else { return .cancelled }
+            await reconcilePackageEvent(event)
+        }
+        return .packageStreamEnded
+    }
+
+    private func waitForPackageEventRetry(attempt: Int) async -> Bool {
+        do {
+            try await Task.sleep(for: Self.packageEventRetryDelay(for: attempt))
+            return !Task.isCancelled
+        } catch {
+            return false
+        }
+    }
+
+    static func packageEventRetryDelay(for attempt: Int) -> Duration {
+        let exponent = min(max(attempt, 0), 5)
+        return .milliseconds(min(100 * (1 << exponent), 2_000))
+    }
+
+    private func reconcilePackageEvent(_ event: StorePackageEvent) async {
+        do {
+            let info = try await runtimeAccess.withStoreAgent(UUID()) { channel in
+                try await channel.packageInfo(event.packageID)
+            }
+            try await store.reconcileAndroidPackage(
+                packageID: event.packageID,
+                info: info,
+                userdataGeneration: await runtimeAccess.userdataGeneration()
+            )
+        } catch {
+            // A later PackageChanged event or runtime handshake will retry reconciliation.
+        }
+
+        // The event stream is also the signal that the installed-package snapshot may have
+        // changed. Refresh the full inventory so unmanaged installs and removals survive a
+        // runtime stop instead of leaving the persisted snapshot stale.
+        do {
+            try await refreshAndroidInventory()
+        } catch {
+            // A later PackageChanged event or runtime handshake will retry reconciliation.
+        }
     }
 
     private static func summary(from record: PackageRecord) throws -> RuntimePackageSummary {
@@ -1037,6 +1176,11 @@ public actor EmbeddedPackageService: RuntimeService {
                     remediation: "Check disk space and permissions, then retry.")
             }
         }
+        if let failure = error as? RuntimeStoreAgentFailure,
+            case .installFailed(let status, _, _) = failure
+        {
+            return Self.installFailureWireError(status: status)
+        }
         if let failure = error as? APKInspectionFailure {
             switch failure {
             case .inputNotReadable:
@@ -1077,6 +1221,10 @@ public actor EmbeddedPackageService: RuntimeService {
                 return .runtime(
                     "adbUnavailable", message: "The Android ADB forwarder is unavailable.",
                     remediation: "Check the development runtime and ADB setup, then retry.")
+            case .adbExecutableUnavailable:
+                return .runtime(
+                    "adbUnavailable", message: "APKRun could not find the ADB executable.",
+                    remediation: "Install Android Platform Tools or use an APKRun development build with ADB.")
             }
         }
         if error is AdbFailure {
@@ -1139,6 +1287,59 @@ public actor EmbeddedPackageService: RuntimeService {
         )
     }
 
+    private static func installFailureWireError(status: Int32) -> RuntimeWireError {
+        switch StoreAgentInstallStatus(rawValue: status) {
+        case .conflict:
+            .store(
+                "guestInstallFailed",
+                message: "Android refused this app because it conflicts with an installed app.",
+                remediation: "Uninstall the conflicting app, then try again."
+            )
+        case .incompatible:
+            .store(
+                "guestInstallFailed",
+                message: "This app is not compatible with this version of Android.",
+                remediation: "Report the problem, so that APKRun can detect this before the install."
+            )
+        case .invalid:
+            .store(
+                "guestInstallFailed",
+                message: "The app file is damaged or isn't what was expected.",
+                remediation: "Download the app again, then try again."
+            )
+        case .blocked:
+            .store(
+                "guestInstallFailed",
+                message: "Android does not allow installing this app.",
+                remediation: "If you think this is wrong, report the problem."
+            )
+        case .aborted:
+            .store(
+                "guestInstallFailed",
+                message: "Installation was interrupted.",
+                remediation: "Try again."
+            )
+        case .storage:
+            .store(
+                "guestStorageFull",
+                message: "Android is out of storage.",
+                remediation: "Increase Android storage in Settings → Runtime."
+            )
+        case .userActionRequired:
+            .store(
+                "userActionRequired",
+                message: "Android asked for confirmation, which APKRun does not support.",
+                remediation: "Report the problem."
+            )
+        case .unspecified, .success, .failure, .none:
+            .store(
+                "guestInstallFailed",
+                message: "Android couldn't install this app.",
+                remediation: "Try again. If it fails again, create a diagnostics report."
+            )
+        }
+    }
+
     private static let maximumAPKCount = 256
     private static let maximumAPKFileSize: Int64 = 2 * 1_024 * 1_024 * 1_024
     private static let maximumImportSetSize: Int64 = 8 * 1_024 * 1_024 * 1_024
@@ -1160,6 +1361,23 @@ public actor EmbeddedPackageService: RuntimeService {
         }
         return available.int64Value
     }
+}
+
+/// Numeric values mirror `GPInstallStatus` in GuestProtocol's `store.proto`.
+///
+/// RuntimeHost keeps protobuf status details behind RuntimeCore, so this local view maps only
+/// the stable status values needed for user-facing errors.
+private enum StoreAgentInstallStatus: Int32 {
+    case unspecified = 0
+    case success = 1
+    case failure = 2
+    case aborted = 3
+    case incompatible = 4
+    case conflict = 5
+    case storage = 6
+    case invalid = 7
+    case blocked = 8
+    case userActionRequired = 9
 }
 
 private struct StagedImport {
@@ -1190,8 +1408,10 @@ private actor AttachedStoreRuntimeAccess: StoreRuntimeAccess {
         self.access = access
     }
 
-    func detach() {
+    func detach() async {
+        let previousAccess = access
         access = nil
+        await previousAccess?.close()
     }
 
     func withStoreAgent<T: Sendable>(

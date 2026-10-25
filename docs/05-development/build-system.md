@@ -9,7 +9,7 @@ This document describes how APKRun builds its artifacts: the host app and helper
 ```bash
 scripts/bootstrap                                  # pinned tools and Python venv (environment-setup.md §7)
 scripts/build-third-party.sh virgl-runtime         # once; later runs use the cache (§6.6)
-scripts/build-guest.sh                             # guest agent APK and version record (§7.1)
+scripts/build-guest.sh                             # guest and store APKs and version records (§7.1)
 scripts/generate-project.sh                        # APKRun.xcodeproj from project.yml (§2.2)
 swift build && swift test                          # SwiftPM packages and the CLI, tiers T0 and T1
 xcodebuild -project APKRun.xcodeproj -scheme APKRun -configuration Debug -derivedDataPath build build
@@ -338,15 +338,15 @@ The issue is triaged within one week. A fix to the virglrenderer command decoder
 ### 7.1 Kotlin agents (Gradle)
 
 ```bash
-scripts/build-guest.sh            # ./gradlew -p Guest :guestd:assembleRelease, then copies to Guest/build/out/
-ls Guest/build/out/               # apkrun-guest.apk  apkrun-guest.json
+scripts/build-guest.sh            # ./gradlew -p Guest :guestd:assembleRelease :APKRunStore:assembleRelease
+ls Guest/build/out/               # apkrun-guest.apk/json and apkrun-store.apk/json
 ```
 
-- `Guest/settings.gradle.kts` includes `protocol`, `agentruntime`, and `guestd`. The Store Agent module `APKRunStore` (output `apkrun-store.apk`) is planned (#37; [guest-components.md](../02-design/guest-components.md) §2).
+- `Guest/settings.gradle.kts` includes `protocol`, `agentruntime`, `guestd`, and `APKRunStore` ([guest-components.md](../02-design/guest-components.md) §2).
 - `minSdk` 34, `compileSdk` 37, `targetSdk` 37, Java and Kotlin JVM target 17. Dependencies: Kotlin stdlib, kotlinx-coroutines, and protobuf-javalite only. Release builds compile out debug logging through `BuildConfig.DEBUG`.
-- `versionCode = major × 1,000,000 + minor × 1,000 + patch` of `MARKETING_VERSION`; `versionName` is that plus the short Git revision. `scripts/build-guest.sh --version-code N --out DIR` builds another versionCode for the reinstall test. `apkrun-guest.json` is the record the host reads before install ([guest-components.md](../02-design/guest-components.md) §3.1).
-- Signing: the test key `Tests/Fixtures/signing/test-guest-dev.jks` (alias `apkrun-test-guest-dev`). The script fails unless the signer's certificate SHA-256 is `c58db702f39e9b809ad166d173f165478b4c7cb718d4d0cc89ebe8956438c900`. `--for-aosp` keeps that development signature and writes the persistent APK to `Guest/product/prebuilt/`. `--platform-test-key` re-signs only that prebuilt with `aosp-test-platform.pk8` and `aosp-test-platform.x509.pem`, then verifies the certificate SHA-256 `c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8` (#36; [android-image.md](../02-design/android-image.md) §11.5). The flag cannot be combined with `--out`. The release image uses the APKRun platform key (#120).
-- `scripts/build/embed-guest.sh` copies both files to Debug app bundles at `APKRun.app/Contents/Resources/guest/`, the development copy for stock images. Release app bundles omit the test-signed APK; once #120 provides the release image, the release host will use its platform-signed agent.
+- `versionCode = major × 1,000,000 + minor × 1,000 + patch` of `MARKETING_VERSION`; `versionName` is that plus the short Git revision. The script writes matching package-specific metadata sidecars (`apkrun-guest.json` and `apkrun-store.json`, or `ApkRunGuest.json` and `ApkRunStore.json` for the platform-signed product). `scripts/build-guest.sh --version-code N --out DIR` builds another versionCode for the reinstall test. `apkrun-guest.json` is the record the host reads before installing the Guest Agent ([guest-components.md](../02-design/guest-components.md) §3.1).
+- Signing: the test key `Tests/Fixtures/signing/test-guest-dev.jks` (alias `apkrun-test-guest-dev`). The script fails unless the build signer's certificate SHA-256 is `c58db702f39e9b809ad166d173f165478b4c7cb718d4d0cc89ebe8956438c900`. A persistent AOSP build requires `--for-aosp --platform-test-key`; it re-signs both APKs with `aosp-test-platform.pk8` and `aosp-test-platform.x509.pem`, then verifies the certificate SHA-256 `c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8` (#36; [android-image.md](../02-design/android-image.md) §11.5). `--platform-test-key` writes the verified persistent APKs to `Guest/product/prebuilt/` and cannot be combined with `--out`. The release image uses the APKRun platform key (#120).
+- `scripts/build/embed-guest.sh` copies the Guest APK and its metadata sidecar to Debug app bundles at `APKRun.app/Contents/Resources/guest/`, the development copy for stock images. Release app bundles omit the test-signed APK; once #120 provides the release image, the release host will use its platform-signed agent.
 
 ### 7.2 apkrun_vsockd (Rust)
 
@@ -376,6 +376,7 @@ The fixture catalog (apps, variants, keys, repositories, golden files) is [test-
 | Path | Content | Built by |
 |---|---|---|
 | `Tests/Fixtures/AndroidApps/` | Gradle project of the fixture apps, with its own `gradlew` | `scripts/build-fixtures.sh` → `Tests/Fixtures/AndroidApps/out/` (git-ignored, reproducible) |
+| `Tests/Fixtures/AndroidApps/HelloText/` | Same-signer v1 and v2 HelloText APKs for Store Agent install/update checks | `scripts/build-fixtures.sh` and `scripts/build-fixtures.sh --version-code 2`; staged to `/tmp/apkrun-test-fixtures/HelloText.apk` and `HelloText-v2.apk` |
 | `Tests/Fixtures/AndroidApps/SystemServicesTest/` | Instrumentation APK that loads the installed Guest Agent's wrappers and checks missing-method isolation on a composed image | `scripts/build-fixtures.sh --app SystemServicesTest --platform-test-key`; staged to `/tmp/apkrun-test-fixtures/SystemServicesTest.apk` for AndroidCustom |
 | `Tests/Fixtures/apks/` (planned, #28) | committed APKs and derived packages that T0 tests read, so `swift test` needs no Gradle (NFR-DEV-02) | `scripts/build-fixtures.sh --refresh-committed` (planned) |
 | `Tests/Fixtures/signing/` | test-only keys: `test-fixture-a.jks`, `test-guest-dev.jks`, `test-image-ed25519` (and `.pub`), `test-release-check-ed25519.pub`, `aosp-avb-testkey-rsa4096.pem`, `aosp-test-platform.pk8` and `.x509.pem` (local composed development image only), `test-apkrun-image-fixture-rsa.pem`, `test-apkrun-image-fixture.avbpubkey`. Planned: `test-fixture-b.jks`, `test-fdroid-repo.jks` (#52), `test-sparkle-ed25519` (and `.pub`) (#58) | committed ([security-model.md](../01-architecture/security-model.md) §7) |

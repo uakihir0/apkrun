@@ -54,6 +54,7 @@ private enum EnvelopeSchema {
         ("query_package", GuestQueryPackage.number),
         ("list_packages", GuestListPackages.number),
         ("import_files", GuestImportFilesOperation.number),
+        ("resolve_export", GuestResolveExportOperation.number),
         ("set_shared_folder_access", GuestSetSharedFolderAccessOperation.number),
         ("get_health", GuestGetHealth.number),
         ("shutdown", GuestShutdown.number),
@@ -188,6 +189,20 @@ private enum EnvelopeSchema {
     }
     #expect(GuestImportFilesOperation.decode(.importFiles(GPImportResult())) != nil)
     #expect(GuestImportFilesOperation.decode(.getHealth(GPHealth())) == nil)
+
+    let exportOperation = GuestResolveExportOperation(offerID: 17, decision: .accept)
+    let exportRequest: GPRequest.OneOf_Op? = exportOperation.request()
+    #expect(exportOperation.timeout == .seconds(30))
+    #expect(exportOperation.capability == .files)
+    #expect(exportOperation.operationName == "ResolveExport")
+    if case .resolveExport(let resolution)? = exportRequest {
+        #expect(resolution.offerID == 17)
+        #expect(resolution.decision == .accept)
+    } else {
+        Issue.record("GuestResolveExportOperation does not build the resolve-export request")
+    }
+    #expect(GuestResolveExportOperation.decode(.resolveExport(GPExportStart())) != nil)
+    #expect(GuestResolveExportOperation.decode(.getHealth(GPHealth())) == nil)
 
     let healthOperation = GuestGetHealth()
     let healthRequest: GPRequest.OneOf_Op? = healthOperation.request()

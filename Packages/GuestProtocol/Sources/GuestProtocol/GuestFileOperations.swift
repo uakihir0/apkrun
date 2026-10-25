@@ -44,6 +44,46 @@ public struct GuestImportFilesOperation: GuestOperation {
     }
 }
 
+/// `ResolveExport`: decides whether a guest file offer may leave Android (guest-protocol.md §7.1 #51).
+public struct GuestResolveExportOperation: GuestOperation {
+    /// The decoded result.
+    public typealias Result = GPExportStart
+    /// The operation number in guest-protocol.md §7.1.
+    public static let number = 51
+
+    /// The guest-generated ID of the offered file.
+    public let offerID: UInt64
+    /// Whether the host accepted the offer.
+    public let decision: GPExportDecision
+
+    /// Creates a response to one guest file offer.
+    public init(offerID: UInt64, decision: GPExportDecision) {
+        self.offerID = offerID
+        self.decision = decision
+    }
+
+    /// The operation's protocol name.
+    public var operationName: String { "ResolveExport" }
+    /// The capability required by this operation.
+    public var capability: GuestCapability { .files }
+    /// The guest reserves an accepted transfer before returning its stream ID.
+    public var timeout: Duration { .seconds(30) }
+
+    /// Builds the protocol request.
+    public func request() -> GPRequest.OneOf_Op {
+        var request = GPResolveExport()
+        request.offerID = offerID
+        request.decision = decision
+        return .resolveExport(request)
+    }
+
+    /// Decodes the matching result.
+    public static func decode(_ result: GPResponse.OneOf_Result) -> GPExportStart? {
+        if case .resolveExport(let start) = result { return start }
+        return nil
+    }
+}
+
 /// `SetSharedFolderAccess`: replaces the package grants used by MacFilesProvider (guest-protocol.md §7.1 #52).
 public struct GuestSetSharedFolderAccessOperation: GuestOperation {
     /// The decoded result.

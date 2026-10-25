@@ -53,6 +53,8 @@ private enum EnvelopeSchema {
         ("focus_display", GuestFocusDisplay.number),
         ("query_package", GuestQueryPackage.number),
         ("list_packages", GuestListPackages.number),
+        ("import_files", GuestImportFilesOperation.number),
+        ("set_shared_folder_access", GuestSetSharedFolderAccessOperation.number),
         ("get_health", GuestGetHealth.number),
         ("shutdown", GuestShutdown.number),
     ]
@@ -161,6 +163,31 @@ private enum EnvelopeSchema {
     }
     #expect(GuestListTasks.decode(.listTasks(GPTaskList())) != nil)
     #expect(GuestListTasks.decode(.getHealth(GPHealth())) == nil)
+
+    var file = GPFileRef()
+    file.transferID = 2
+    file.name = "hello.txt"
+    file.mimeType = "text/plain"
+    file.size = 5
+    let importOperation = GuestImportFilesOperation(
+        package: "io.apkrun.fixture.hellofiles",
+        displayID: 3,
+        files: [file]
+    )
+    let importRequest: GPRequest.OneOf_Op? = importOperation.request()
+    #expect(importOperation.timeout == .seconds(600))
+    #expect(importOperation.capability == .files)
+    #expect(importOperation.operationName == "ImportFiles")
+    if case .importFiles(let imported)? = importRequest {
+        #expect(imported.target == .shareToPackage)
+        #expect(imported.package == "io.apkrun.fixture.hellofiles")
+        #expect(imported.displayID == 3)
+        #expect(imported.files == [file])
+    } else {
+        Issue.record("GuestImportFilesOperation does not build the import-files request")
+    }
+    #expect(GuestImportFilesOperation.decode(.importFiles(GPImportResult())) != nil)
+    #expect(GuestImportFilesOperation.decode(.getHealth(GPHealth())) == nil)
 
     let healthOperation = GuestGetHealth()
     let healthRequest: GPRequest.OneOf_Op? = healthOperation.request()

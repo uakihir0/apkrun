@@ -42,6 +42,113 @@ import Testing
     #expect((runtimeInfo as? PackageInfoCommand)?.runtime == true)
 }
 
+@Test func sharedFoldersCommandsParseListAddAndRemove() async throws {
+    let list = try await APKRunCommand.asyncParseAsRoot(["shared-folders", "list", "--json"])
+    #expect((list as? SharedFoldersListCommand)?.json == true)
+
+    let add = try await APKRunCommand.asyncParseAsRoot([
+        "shared-folders", "add", "~/Documents/Notes", "--read-write",
+    ])
+    #expect((add as? SharedFoldersAddCommand)?.path == "~/Documents/Notes")
+    #expect((add as? SharedFoldersAddCommand)?.readWrite == true)
+
+    let remove = try await APKRunCommand.asyncParseAsRoot([
+        "shared-folders", "remove", "folder-id",
+    ])
+    #expect((remove as? SharedFoldersRemoveCommand)?.target == "folder-id")
+}
+
+@Test func sharedFolderRemovalResolvesIDAndDisplayedPath() throws {
+    let folder = sharedFolderFixture(
+        id: "56e4c834-c8a2-41a0-8bb2-5aa5d8d48eb1",
+        name: "Documents",
+        path: "/Users/example/Documents",
+        access: .readWrite,
+        builtIn: false,
+        availability: .available
+    )
+
+    #expect(try SharedFolderCommandSupport.folder(matching: folder.id, in: [folder]).id == folder.id)
+    #expect(
+        try SharedFolderCommandSupport.folder(
+            matching: "/Users/example/Documents/../Documents",
+            in: [folder]
+        ).id == folder.id
+    )
+}
+
+@Test func sharedFolderRemovalRejectsUnknownAndAmbiguousTargets() {
+    let first = sharedFolderFixture(
+        id: "first",
+        name: "Documents",
+        path: "/Users/example/Documents",
+        access: .readOnly,
+        builtIn: false,
+        availability: .available
+    )
+    let second = sharedFolderFixture(
+        id: "second",
+        name: "Documents",
+        path: "/Users/another/Documents",
+        access: .readOnly,
+        builtIn: false,
+        availability: .available
+    )
+
+    #expect(throws: CLIFailure.self) {
+        try SharedFolderCommandSupport.folder(matching: "missing", in: [first, second])
+    }
+    #expect(throws: CLIFailure.self) {
+        try SharedFolderCommandSupport.folder(matching: "/Users/example/Documents", in: [first, first])
+    }
+}
+
+@Test func sharedFolderStatusOutputDoesNotRevealFullPaths() throws {
+    let folderPath = "/Users/example/Private Folder"
+    let folder = sharedFolderFixture(
+        id: "folder-id",
+        name: "Private Folder",
+        path: folderPath,
+        access: .readOnly,
+        builtIn: false,
+        availability: .privacyDenied
+    )
+
+    let human = SharedFolderCommandOutput.human([folder])
+    let json = try SharedFolderCommandOutput.json([folder])
+
+    #expect(human.contains("Private Folder"))
+    #expect(human.contains("privacy denied"))
+    #expect(!human.contains(folderPath))
+    #expect(json.contains("Private Folder"))
+    #expect(json.contains("privacy denied"))
+    #expect(!json.contains(folderPath))
+}
+
+@Test func sharedFolderBookmarkIsSecurityScopedAndUsesExpandedPath() throws {
+    let folderPath = FileManager.default.temporaryDirectory
+        .appendingPathComponent("APKRun Shared Folder \(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: folderPath, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folderPath) }
+
+    let bookmark = try SharedFolderCommandSupport.securityScopedBookmark(
+        for: folderPath.path
+    )
+
+    #expect(!bookmark.isEmpty)
+    #if os(macOS)
+        var isStale = false
+        let resolved = try URL(
+            resolvingBookmarkData: bookmark,
+            options: [.withSecurityScope],
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        )
+        #expect(resolved.standardizedFileURL.path == folderPath.standardizedFileURL.path)
+        #expect(!isStale)
+    #endif
+}
+
 #if !APKRUN_EMBEDDED_RUNTIME
     @Test func daemonInstallCommandParsesConfirmationAndJSONFlags() async throws {
         let command = try await APKRunCommand.asyncParseAsRoot([
@@ -851,6 +958,24 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
     #else
         #expect(APKRunCommand.helpMessage() == golden("help.txt"))
     #endif
+}
+
+private func sharedFolderFixture(
+    id: String,
+    name: String,
+    path: String,
+    access: SharedFolderAccess,
+    builtIn: Bool,
+    availability: SharedFolderAvailability
+) -> SharedFolder {
+    SharedFolder(
+        id: id,
+        name: name,
+        path: path,
+        access: access,
+        builtIn: builtIn,
+        availability: availability
+    )
 }
 
 #if APKRUN_EMBEDDED_RUNTIME

@@ -184,7 +184,6 @@ let package = Package(
                 "IntegrationCore",
                 "ImageCore",
                 "InputCore",
-                "GraphicsCore",
                 "GuestProtocol",
                 "RuntimeAPI",
                 "DiagnosticsCore",

@@ -154,8 +154,8 @@ WrapperCore              → RuntimeAPI, DiagnosticsCore
 IntegrationCore          → GuestProtocol, RuntimeAPI, DiagnosticsCore
 RuntimeClient            → RuntimeAPI, DiagnosticsCore
 RuntimeHost              → RuntimeCore, APKStoreCore, UpdateCore, WrapperCore,
-                           IntegrationCore, ImageCore, InputCore, GraphicsCore,
-                           GuestProtocol, RuntimeAPI, DiagnosticsCore
+                           IntegrationCore, ImageCore, InputCore, GuestProtocol,
+                           RuntimeAPI, DiagnosticsCore
 ```
 
 Executables:

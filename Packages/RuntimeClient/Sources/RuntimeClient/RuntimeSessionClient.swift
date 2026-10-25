@@ -9,12 +9,14 @@ import RuntimeAPI
 public final class RuntimeSessionClient: @unchecked Sendable {
     private let clientKind: RuntimeClientKind
     private let channel: any RuntimeSessionChannel
+    private let exportOfferReceiver: RuntimeSessionExportReceiver
 
     /// Connects to a session endpoint using the current signed APKRun process identity.
     public init(
         endpoint: NSXPCListenerEndpoint,
         clientKind: RuntimeClientKind = .wrapper,
-        claimedIdentity: String? = nil
+        claimedIdentity: String? = nil,
+        onExportOffer: (@Sendable (ExportOffer) -> Void)? = nil
     ) throws(RuntimeControlClientError) {
         guard clientKind == .wrapper else {
             throw .invalidClientIdentity
@@ -23,17 +25,27 @@ public final class RuntimeSessionClient: @unchecked Sendable {
             clientKind: clientKind,
             claimedIdentity: claimedIdentity
         )
+        let exportOfferReceiver = RuntimeSessionExportReceiver(onOffer: onExportOffer)
         let channel = try XPCSessionChannel(
             endpoint: endpoint,
             daemonSigningRequirement: configuration.daemonCodeSigningRequirement
         )
         self.clientKind = configuration.clientKind
         self.channel = channel
+        self.exportOfferReceiver = exportOfferReceiver
+        channel.installExportOfferReceiver(exportOfferReceiver)
     }
 
-    init(clientKind: RuntimeClientKind, channel: any RuntimeSessionChannel) {
+    init(
+        clientKind: RuntimeClientKind,
+        channel: any RuntimeSessionChannel,
+        onExportOffer: (@Sendable (ExportOffer) -> Void)? = nil
+    ) {
+        let exportOfferReceiver = RuntimeSessionExportReceiver(onOffer: onExportOffer)
         self.clientKind = clientKind
         self.channel = channel
+        self.exportOfferReceiver = exportOfferReceiver
+        channel.installExportOfferReceiver(exportOfferReceiver)
     }
 
     /// Transfers files to the session represented by this endpoint.
@@ -130,7 +142,55 @@ public final class RuntimeSessionClient: @unchecked Sendable {
 protocol RuntimeSessionChannel: Sendable {
     func importFiles(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
     func acceptExport(_ request: Data, file: FileHandle?) async throws(RuntimeControlClientError) -> Data
+    func installExportOfferReceiver(_ receiver: RuntimeSessionExportReceiver)
     func invalidate()
+}
+
+/// Decodes and validates export offers before handing them to wrapper code.
+final class RuntimeSessionExportReceiver: NSObject, RuntimeSessionExportSink, @unchecked Sendable {
+    private let onOffer: (@Sendable (ExportOffer) -> Void)?
+
+    init(onOffer: (@Sendable (ExportOffer) -> Void)?) {
+        self.onOffer = onOffer
+    }
+
+    func exportOffered(_ data: Data, reply: @escaping (Bool) -> Void) {
+        guard let onOffer,
+            let offer = try? JSONDecoder().decode(ExportOffer.self, from: data),
+            Self.isValid(offer)
+        else {
+            reply(false)
+            return
+        }
+        onOffer(offer)
+        reply(true)
+    }
+
+    private static func isValid(_ offer: ExportOffer) -> Bool {
+        let name = offer.name
+        guard !name.isEmpty,
+            name.utf8.count <= 255,
+            name == name.trimmingCharacters(in: .whitespacesAndNewlines),
+            name != ".",
+            name != "..",
+            !name.contains("/"),
+            !name.contains("\\"),
+            !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+            offer.size.map({ $0 >= 0 }) ?? true
+        else {
+            return false
+        }
+
+        let mimeType = offer.type
+        let components = mimeType.split(separator: "/", omittingEmptySubsequences: false)
+        return mimeType.utf8.count <= 255
+            && components.count == 2
+            && components.allSatisfy { !$0.isEmpty }
+            && !mimeType.unicodeScalars.contains(where: {
+                CharacterSet.whitespacesAndNewlines.contains($0)
+                    || CharacterSet.controlCharacters.contains($0)
+            })
+    }
 }
 
 private final class XPCSessionChannel: RuntimeSessionChannel, @unchecked Sendable {
@@ -156,7 +216,6 @@ private final class XPCSessionChannel: RuntimeSessionChannel, @unchecked Sendabl
         let connection = NSXPCConnection(listenerEndpoint: endpoint)
         connection.remoteObjectInterface = interface
         connection.setCodeSigningRequirement(daemonSigningRequirement)
-        connection.resume()
         self.connection = connection
     }
 
@@ -192,6 +251,12 @@ private final class XPCSessionChannel: RuntimeSessionChannel, @unchecked Sendabl
                 finish(.success(response))
             }
         }
+    }
+
+    func installExportOfferReceiver(_ receiver: RuntimeSessionExportReceiver) {
+        connection.exportedInterface = NSXPCInterface(with: RuntimeSessionExportSink.self)
+        connection.exportedObject = receiver
+        connection.resume()
     }
 
     func invalidate() {

@@ -9,8 +9,8 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
     /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
     /// 1.12 adds package-scoped file transfer; 1.13 adds shared-folder root management;
-    /// 1.14 adds integration status queries.
-    public static let current = APIVersion(major: 1, minor: 14)
+    /// 1.14 adds integration status queries; 1.15 adds Android-to-Mac session file export.
+    public static let current = APIVersion(major: 1, minor: 15)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -623,6 +623,12 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func importFiles(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
     /// Accepts or cancels an Android file offer for the session captured by this endpoint.
     func acceptExport(_ request: Data, file: FileHandle?, reply: @escaping (Data) -> Void)
+}
+
+/// Client-exported receiver for file offers from the authenticated session endpoint.
+@objc public protocol RuntimeSessionExportSink {
+    /// Delivers one serialized export offer; replies false when the offer is invalid or unhandled.
+    func exportOffered(_ offer: Data, reply: @escaping (Bool) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.

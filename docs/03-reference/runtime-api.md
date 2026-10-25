@@ -8,13 +8,13 @@ This document is the wire contract of RuntimeAPI, the XPC interface between apkr
 
 ### 1.1 Scope and modules
 
-Built operations: broker `hello`, `requestEndpoint`; control `runtimeStatus`, `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime`, `listPackages`, `packageInfo`, `importPackage`, `installImported`, `beginInstallImported`, `beginUninstallPackage`, `cancelOperation`, `listOperations`, `operationStatus`, `subscribe`, `unsubscribe`, `launch`, `terminate`; event sink `handshake`, `deliver`. Shared-folder DTOs and client calls are implemented; server handling remains target contract. Every other operation and type is target contract.
+Built operations: broker `hello`, `requestEndpoint`; control `runtimeStatus`, `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime`, `listPackages`, `packageInfo`, `importPackage`, `installImported`, `beginInstallImported`, `beginUninstallPackage`, `cancelOperation`, `listOperations`, `operationStatus`, `subscribe`, `unsubscribe`, `launch`, `terminate`; event sink `handshake`, `deliver`. Shared-folder DTOs and client calls are implemented; server handling remains target contract. Session-file client methods and the Android-to-Mac offer receiver are implemented; session-server handling remains target contract.
 
 | Part | Module | Role |
 |---|---|---|
 | Contract: DTOs, `@objc` protocols, `APIVersion`, service protocols | RuntimeAPI | Foundation and IOSurface only ([modules.md](../01-architecture/modules.md) §2) |
 | Server | RuntimeHost (`RuntimeXPCServer.swift`, `RuntimeEventHub.swift`) | Serves the contract ([runtime-daemon.md](../02-design/runtime-daemon.md) §8.1) |
-| Client | RuntimeClient (`RuntimeControlClient.swift`, `RuntimeEventDelivery.swift`) | Connection, reconnect, error conversion |
+| Client | RuntimeClient (`RuntimeControlClient.swift`, `RuntimeEventDelivery.swift`, `RuntimeSessionClient.swift`) | Connection, reconnect, error conversion |
 
 ### 1.2 Endpoints
 
@@ -25,7 +25,7 @@ Built operations: broker `hello`, `requestEndpoint`; control `runtimeStatus`, `s
 | Maintenance (target) | anonymous listener per host client | APKRun.app, APKRunMenuBar, apkrun | `MaintenanceControl` | frozen, additive only |
 | Wrapper (target) | anonymous listener per registered wrapper, dropped 10 min after its last connection | that wrapper's launcher | `RuntimeWrapperXPC` | major N and N−1 |
 
-Clients that subscribe or open sessions export one `RuntimeEventSink` on their endpoint connection (§4.1). The broker exposes no capabilities ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2).
+Clients that subscribe or open sessions export one `RuntimeEventSink` on their endpoint connection (§4.1). Wrapper session clients also export a `RuntimeSessionExportSink` on the session connection to receive file offers (§6.3). The broker exposes no capabilities ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2).
 
 ### 1.3 Client kinds
 
@@ -84,11 +84,11 @@ apkrund sets a requirement on each listener with `setConnectionCodeSigningRequir
 
 ### 2.1 Constants
 
-`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 14}`. Ordering compares `major`, then `minor`.
+`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 15}`. Ordering compares `major`, then `minor`.
 
 ```swift
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
-    public static let current = APIVersion(major: 1, minor: 14)
+    public static let current = APIVersion(major: 1, minor: 15)
     public let major: Int
     public let minor: Int
 }
@@ -113,6 +113,7 @@ Target constants (not in code): `wrapperMajors = [1]` (served on the wrapper end
 | 1.12 | package-scoped file transfer |
 | 1.13 | shared-folder root listing, add, remove, and maximum-access control |
 | 1.14 | integration status queries |
+| 1.15 | Android-to-Mac file offers and session-bound accept/cancel |
 
 ### 2.2 Rules per endpoint
 
@@ -648,6 +649,8 @@ Client → apkrund:
 apkrund → client (`RuntimeEventSink`): `frameReady(generation, surfaceIndex, frameSeq, presentationTime)` (not JSON; `presentationTime` is `mach_absolute_time`); `surfacesReplaced(SurfaceSet, [IOSurface])`; `sessionEvent(SessionEvent)`.
 
 `SessionEvent`: `stateChanged(SessionPhase)`, `imeStateChanged(EditorState)`, `windowRequest(WindowRequest)` (`activate`, `close`, `setTitle(String)`), `windowPrefsChanged(WindowPrefs)`, `clipboardFromGuest(ClipItem)` (key window only), `exportOffered(ExportOffer)`, `linkPrompt(LinkPrompt)`, `unknown`.
+
+The wrapper publishes `RuntimeSessionExportSink` on the same XPC connection. Its `exportOffered` callback carries JSON-encoded `ExportOffer` data; the client decodes and validates the file name, size, and MIME type before invoking the optional handler. It replies `true` only when a valid offer reaches a handler; malformed or unhandled offers receive `false`. `acceptExport` binds to the session owning that endpoint and sends its destination file handle separately from the request data.
 
 `EditorState`: `focused` (Bool), `inputType`, `imeOptions` (Int32), `selection`, `composing` (`TextRange`?), `cursorRect` (`DisplayRect`? in display pixels).
 

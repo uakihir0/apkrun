@@ -55,6 +55,22 @@ import Testing
     #expect(try exportRoundTrip(failure) == failure)
 }
 
+@Test func exportOfferUsesOneSerializedObjectiveCSessionCallback() throws {
+    let offer = ExportOffer(
+        offerID: UUID(),
+        name: "report.pdf",
+        size: nil,
+        type: "application/pdf"
+    )
+    let data = try JSONEncoder().encode(offer)
+
+    #expect(try JSONDecoder().decode(ExportOffer.self, from: data) == offer)
+    #expect(#selector(RuntimeSessionExportSink.exportOffered(_:reply:)) == NSSelectorFromString("exportOffered:reply:"))
+    #expect(throws: DecodingError.self) {
+        try JSONDecoder().decode(ExportOffer.self, from: Data("not-json".utf8))
+    }
+}
+
 private func exportRoundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Value {
     let data = try JSONEncoder().encode(value)
     return try JSONDecoder().decode(Value.self, from: data)

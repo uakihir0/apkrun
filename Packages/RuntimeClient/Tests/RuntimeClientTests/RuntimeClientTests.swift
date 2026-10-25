@@ -773,6 +773,68 @@ import Testing
     client.invalidate()
 }
 
+@Test func sessionClientDeliversValidatedExportOffersFromItsSessionChannel() throws {
+    let channel = try MockRuntimeSessionChannel(exportReply: RuntimeAcceptExportSessionReply())
+    let capture = ExportOfferCapture()
+    let client = RuntimeSessionClient(
+        clientKind: .wrapper,
+        channel: channel,
+        onExportOffer: { capture.record($0) }
+    )
+    let offer = ExportOffer(
+        offerID: UUID(),
+        name: "report.pdf",
+        size: 4096,
+        type: "application/pdf"
+    )
+    let receiver = try #require(channel.snapshot().exportOfferReceiver)
+    var accepted: Bool?
+
+    receiver.exportOffered(try JSONEncoder().encode(offer)) { accepted = $0 }
+
+    #expect(accepted == true)
+    #expect(capture.offer == offer)
+    client.invalidate()
+}
+
+@Test func sessionClientRejectsMalformedOrUnsafeExportOffers() throws {
+    let channel = try MockRuntimeSessionChannel(exportReply: RuntimeAcceptExportSessionReply())
+    let capture = ExportOfferCapture()
+    let client = RuntimeSessionClient(
+        clientKind: .wrapper,
+        channel: channel,
+        onExportOffer: { capture.record($0) }
+    )
+    let receiver = try #require(channel.snapshot().exportOfferReceiver)
+    let unsafeOffer = ExportOffer(
+        offerID: UUID(),
+        name: "../private.txt",
+        size: 100,
+        type: "text/plain"
+    )
+
+    for data in [Data("not-json".utf8), try JSONEncoder().encode(unsafeOffer)] {
+        var accepted: Bool?
+        receiver.exportOffered(data) { accepted = $0 }
+        #expect(accepted == false)
+    }
+    #expect(capture.offer == nil)
+    client.invalidate()
+}
+
+private final class ExportOfferCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var offerValue: ExportOffer?
+
+    func record(_ offer: ExportOffer) {
+        lock.withLock { offerValue = offer }
+    }
+
+    var offer: ExportOffer? {
+        lock.withLock { offerValue }
+    }
+}
+
 private final class MockRuntimeSessionChannel: RuntimeSessionChannel, @unchecked Sendable {
     private let lock = NSLock()
     private let replyData: Data
@@ -781,6 +843,7 @@ private final class MockRuntimeSessionChannel: RuntimeSessionChannel, @unchecked
     private var fileHandleIDsValue: [[ObjectIdentifier]] = []
     private var exportRequestsValue: [Data] = []
     private var exportFileHandleIDsValue: [ObjectIdentifier?] = []
+    private var exportOfferReceiverValue: RuntimeSessionExportReceiver?
     private var invalidationsValue = 0
 
     init(reply: RuntimeImportFilesSessionReply) throws {
@@ -809,6 +872,10 @@ private final class MockRuntimeSessionChannel: RuntimeSessionChannel, @unchecked
         return exportReplyData
     }
 
+    func installExportOfferReceiver(_ receiver: RuntimeSessionExportReceiver) {
+        lock.withLock { exportOfferReceiverValue = receiver }
+    }
+
     func invalidate() {
         lock.withLock { invalidationsValue += 1 }
     }
@@ -821,9 +888,18 @@ private final class MockRuntimeSessionChannel: RuntimeSessionChannel, @unchecked
         requests: [Data],
         fileHandleIDs: [[ObjectIdentifier]],
         exportRequests: [Data],
-        exportFileHandleIDs: [ObjectIdentifier?]
+        exportFileHandleIDs: [ObjectIdentifier?],
+        exportOfferReceiver: RuntimeSessionExportReceiver?
     ) {
-        lock.withLock { (requestsValue, fileHandleIDsValue, exportRequestsValue, exportFileHandleIDsValue) }
+        lock.withLock {
+            (
+                requestsValue,
+                fileHandleIDsValue,
+                exportRequestsValue,
+                exportFileHandleIDsValue,
+                exportOfferReceiverValue
+            )
+        }
     }
 }
 

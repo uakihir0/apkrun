@@ -31,7 +31,7 @@ private func sharedFolderRoundTrip<Value: Codable & Equatable>(_ value: Value) t
         header: header,
         request: SetSharedFolderAccessRequest(id: folder.id, access: .readWrite)
     )
-    #expect(APIVersion.current == APIVersion(major: 1, minor: 14))
+    #expect(APIVersion.current == APIVersion(major: 1, minor: 15))
     #expect(try sharedFolderRoundTrip(folder) == folder)
     #expect(try sharedFolderRoundTrip(AddSharedFolderRequest(bookmark: bookmark)).access == .readOnly)
     #expect(try sharedFolderRoundTrip(listRequest) == listRequest)

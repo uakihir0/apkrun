@@ -44,6 +44,8 @@ Stored in the package settings ([package-store.md](package-store.md) §2.4). The
 
 The `integration` object in `wrapper.json` carries the same initial values without the `integrations.` prefix ([wrapper.md](wrapper.md) §3). Its `"files": true` value maps to `integrations.files`.
 
+If a package's file-integration settings cannot be read or validated, file access fails closed with `integration.settingsUnreadable`.
+
 ### 2.2 Global settings
 
 Set in APKRun Settings → Privacy ([host-ui.md](host-ui.md) §9.4). Stored in the app configuration ([configuration.md](../03-reference/configuration.md)).

@@ -2648,6 +2648,26 @@
       }
     },
     {
+      "code": "integration.settingsUnreadable",
+      "parameters": [],
+      "message": {
+        "en": "APKRun can't read file-sharing settings for this app.",
+        "ja": "このアプリのファイル共有設定を APKRun が読み取れません。"
+      },
+      "remediation": {
+        "en": "Repair this package's settings and retry the file transfer.",
+        "ja": "このパッケージの設定を修復してから、ファイル転送をやり直してください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "settingsUnreadable",
+        "when": "the file-integration settings are invalid or unsafe to read and access must fail closed",
+        "raisedBy": "PackageStore, EmbeddedPackageService",
+        "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §2.1, §6.2"
+      }
+    },
+    {
       "code": "integration.tooManyFiles",
       "parameters": [
         "count",
@@ -2901,6 +2921,107 @@
         "when": "an Android request names a hidden item, an item outside its root, or a non-file system object",
         "raisedBy": "SharedFolderService",
         "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.4 rules 2–3"
+      }
+    },
+    {
+      "code": "integration.folderRefused",
+      "parameters": [
+        "file",
+        "reason"
+      ],
+      "message": {
+        "en": "APKRun doesn't share {file}.",
+        "ja": "APKRun は {file} を共有しません。"
+      },
+      "action": "none",
+      "cliExit": 5,
+      "variants": {
+        "volumeRoot": {
+          "message": {
+            "en": "APKRun doesn't share a whole disk.",
+            "ja": "ディスク全体は共有できません。"
+          },
+          "remediation": {
+            "en": "Choose a folder on the disk instead.",
+            "ja": "ディスク内のフォルダを選んでください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "the selected folder is a mounted volume root",
+            "raisedBy": "SharedFolderRootStore",
+            "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        },
+        "homeFolder": {
+          "message": {
+            "en": "APKRun doesn't share your whole home folder.",
+            "ja": "ホームフォルダ全体は共有できません。"
+          },
+          "remediation": {
+            "en": "Choose a folder inside it, such as Documents or Downloads.",
+            "ja": "書類やダウンロードなど、ホームフォルダ内のフォルダを選んでください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "the selected folder is the home directory",
+            "raisedBy": "SharedFolderRootStore",
+            "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        },
+        "insideLibrary": {
+          "message": {
+            "en": "APKRun doesn't share folders in your Library.",
+            "ja": "ライブラリ内のフォルダは共有できません。"
+          },
+          "remediation": {
+            "en": "Choose a folder outside ~/Library.",
+            "ja": "~/Library 以外のフォルダを選んでください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "the selected folder is ~/Library or a descendant",
+            "raisedBy": "SharedFolderRootStore",
+            "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        },
+        "hidden": {
+          "message": {
+            "en": "APKRun doesn't share hidden folders.",
+            "ja": "隠しフォルダは共有できません。"
+          },
+          "remediation": {
+            "en": "Choose a folder that isn't hidden.",
+            "ja": "隠しフォルダではないフォルダを選んでください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "the selected folder or one of its ancestors is hidden",
+            "raisedBy": "SharedFolderRootStore",
+            "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        },
+        "limitReached": {
+          "message": {
+            "en": "You can share at most 32 folders.",
+            "ja": "共有できるフォルダは最大 32 個です。"
+          },
+          "remediation": {
+            "en": "Remove a shared folder in Settings → Files first.",
+            "ja": "設定 → ファイルで共有フォルダを削除してから追加してください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "32 user-selected roots are already configured",
+            "raisedBy": "SharedFolderRootStore",
+            "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        }
+      },
+      "doc": {
+        "case": "folderRefused(FolderRefusal, name:)",
+        "when": "addSharedFolder selects a protected root or exceeds the root limit",
+        "raisedBy": "SharedFolderRootStore",
+        "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.4"
       }
     },
     {

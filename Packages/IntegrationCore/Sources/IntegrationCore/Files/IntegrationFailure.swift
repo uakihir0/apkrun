@@ -25,6 +25,20 @@ public enum PathProblem: String, Equatable, Sendable {
     case notRegularFile
 }
 
+/// The reason an explicitly selected Mac folder is refused as a shared root.
+public enum FolderRefusal: String, Equatable, Sendable {
+    /// The selected directory is the root of a mounted volume.
+    case volumeRoot
+    /// The selected directory is the user's home folder.
+    case homeFolder
+    /// The selected directory is inside the user's Library folder.
+    case insideLibrary
+    /// The selected directory or one of its ancestors is hidden.
+    case hidden
+    /// The maximum number of user-selected roots is already configured.
+    case limitReached
+}
+
 /// A file integration operation could not proceed.
 public enum IntegrationFailure: APKRunError, Equatable {
     /// A file import operation must contain at least one item.
@@ -32,6 +46,9 @@ public enum IntegrationFailure: APKRunError, Equatable {
 
     /// The package has disabled Mac-to-Android file integration.
     case filesDisabled
+
+    /// File-sharing preferences could not be read safely.
+    case settingsUnreadable
 
     /// The XPC file handle is invalid or does not name a regular file.
     case invalidFileHandle
@@ -50,6 +67,8 @@ public enum IntegrationFailure: APKRunError, Equatable {
 
     /// A shared folder cannot currently be opened.
     case folderUnavailable(FolderProblem, name: String)
+    /// A user-selected folder is not eligible to share.
+    case folderRefused(FolderRefusal, name: String)
 
     /// An Android shared-folder request named a disallowed path or item.
     case pathRejected(PathProblem)
@@ -82,6 +101,8 @@ public enum IntegrationFailure: APKRunError, Equatable {
             "emptyFileSet"
         case .filesDisabled:
             "filesDisabled"
+        case .settingsUnreadable:
+            "settingsUnreadable"
         case .invalidFileHandle:
             "invalidFileHandle"
         case .invalidMetadata:
@@ -94,6 +115,8 @@ public enum IntegrationFailure: APKRunError, Equatable {
             "transferFailed"
         case .folderUnavailable:
             "folderUnavailable"
+        case .folderRefused:
+            "folderRefused"
         case .pathRejected:
             "pathRejected"
         case .packageAccessDenied:
@@ -114,7 +137,7 @@ public enum IntegrationFailure: APKRunError, Equatable {
     /// Safe catalog parameters. File names are reduced to their final path component.
     public var parameters: [String: ErrorParameter] {
         switch self {
-        case .emptyFileSet, .filesDisabled, .invalidFileHandle, .invalidMetadata, .transferFailed,
+        case .emptyFileSet, .filesDisabled, .settingsUnreadable, .invalidFileHandle, .invalidMetadata, .transferFailed,
             .packageAccessDenied, .readOnly,
             .resourceExhausted, .itemNotFound, .invalidRequest, .invalidRootConfiguration:
             [:]
@@ -126,6 +149,11 @@ public enum IntegrationFailure: APKRunError, Equatable {
             [
                 "file": .fileName(URL(fileURLWithPath: name).lastPathComponent),
                 "reason": .text(problem.rawValue),
+            ]
+        case .folderRefused(let reason, let name):
+            [
+                "file": .fileName(URL(fileURLWithPath: name).lastPathComponent),
+                "reason": .text(reason.rawValue),
             ]
         case .pathRejected(let problem):
             ["reason": .text(problem.rawValue)]

@@ -1,4 +1,5 @@
 import DiagnosticsCore
+import Foundation
 import Testing
 
 @testable import IntegrationCore
@@ -97,4 +98,42 @@ import Testing
     #expect(failure.parameters["file"] == .fileName("test secret.txt"))
     #expect(ErrorCatalog.entry(for: failure.qualifiedCode)?.parameters == ["file", "bytes"])
     #expect(ErrorCatalog.cliExit(for: failure) == 1)
+}
+
+@Test func unreadableFileIntegrationSettingsHaveACatalogEntry() {
+    let failure = IntegrationFailure.settingsUnreadable
+
+    #expect(failure.qualifiedCode == "integration.settingsUnreadable")
+    #expect(ErrorCatalog.entry(for: failure.qualifiedCode)?.remediation?["en"] != nil)
+    #expect(ErrorCatalog.cliExit(for: failure) == 1)
+}
+
+@Test func stoppedSharedFolderServiceCannotReopenRootsDuringReconfiguration() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-shared-folder-stop-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let definition = SharedFolderRoot(
+        id: "root",
+        title: "Root",
+        directoryURL: root,
+        maximumAccess: .readWrite
+    )
+    let service = try SharedFolderService(roots: [definition])
+    await service.runtimeDidStop()
+
+    do {
+        try await service.replaceConfiguration(roots: [definition], packageAccess: [:])
+        Issue.record("A stopped service must not reopen configured roots.")
+    } catch {
+        #expect(error == .transferFailed)
+    }
+
+    do {
+        _ = try await service.listRoots(packageID: "com.example.app")
+        Issue.record("A stopped service must not expose roots.")
+    } catch {
+        #expect(error == .transferFailed)
+    }
 }

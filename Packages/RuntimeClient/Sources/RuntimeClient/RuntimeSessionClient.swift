@@ -80,6 +80,47 @@ public final class RuntimeSessionClient: @unchecked Sendable {
         }
     }
 
+    /// Accepts an Android file offer, or cancels it when `destination` is nil.
+    ///
+    /// The endpoint binds the operation to its app session. A transport failure is returned
+    /// without replay because the daemon may already be writing to the destination.
+    public func acceptExport(
+        offerID: UUID,
+        destination: FileHandle?
+    ) async throws(RuntimeControlClientError) {
+        do {
+            let request = AcceptExportRequest(offerID: offerID, fileIndex: destination == nil ? nil : 0)
+            let sessionRequest = RuntimeAcceptExportSessionRequest(
+                header: APIRequestHeader(clientKind: clientKind),
+                request: request
+            )
+            let data: Data
+            do {
+                data = try JSONEncoder().encode(sessionRequest)
+            } catch {
+                throw RuntimeControlClientError.encodingFailure
+            }
+            let response = try await channel.acceptExport(data, file: destination)
+            let reply: RuntimeAcceptExportSessionReply
+            do {
+                reply = try JSONDecoder().decode(RuntimeAcceptExportSessionReply.self, from: response)
+            } catch {
+                throw RuntimeControlClientError.malformedReply
+            }
+            guard (reply.result != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+        } catch let error as RuntimeControlClientError {
+            throw error
+        } catch {
+            let error = error as NSError
+            throw .transportFailure(domain: error.domain, code: error.code)
+        }
+    }
+
     /// Invalidates the session connection.
     public func invalidate() {
         channel.invalidate()
@@ -88,6 +129,7 @@ public final class RuntimeSessionClient: @unchecked Sendable {
 
 protocol RuntimeSessionChannel: Sendable {
     func importFiles(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
+    func acceptExport(_ request: Data, file: FileHandle?) async throws(RuntimeControlClientError) -> Data
     func invalidate()
 }
 
@@ -102,6 +144,12 @@ private final class XPCSessionChannel: RuntimeSessionChannel, @unchecked Sendabl
         interface.setClasses(
             fileHandleClasses,
             for: #selector(RuntimeSessionXPC.importFiles(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
+        interface.setClasses(
+            fileHandleClasses,
+            for: #selector(RuntimeSessionXPC.acceptExport(_:file:reply:)),
             argumentIndex: 1,
             ofReply: false
         )
@@ -124,6 +172,23 @@ private final class XPCSessionChannel: RuntimeSessionChannel, @unchecked Sendabl
                 return
             }
             proxy.importFiles(request, files: files) { response in
+                finish(.success(response))
+            }
+        }
+    }
+
+    func acceptExport(_ request: Data, file: FileHandle?) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    let error = error as NSError
+                    finish(.failure(.transportFailure(domain: error.domain, code: error.code)))
+                } as? any RuntimeSessionXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.acceptExport(request, file: file) { response in
                 finish(.success(response))
             }
         }

@@ -621,6 +621,8 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
 @objc public protocol RuntimeSessionXPC {
     /// Transfers host files to the session captured when this endpoint was created.
     func importFiles(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
+    /// Accepts or cancels an Android file offer for the session captured by this endpoint.
+    func acceptExport(_ request: Data, file: FileHandle?, reply: @escaping (Data) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.
@@ -677,6 +679,12 @@ public protocol RuntimeSessionService: Sendable {
         _ request: ImportFilesRequest,
         files: [FileHandle]
     ) async throws(RuntimeWireError) -> ImportResult
+
+    /// Saves or declines one file offered by Android in the session captured by this endpoint.
+    func acceptExport(
+        _ request: AcceptExportRequest,
+        file: FileHandle?
+    ) async throws(RuntimeWireError)
 }
 
 extension RuntimeSessionService {
@@ -685,6 +693,19 @@ extension RuntimeSessionService {
         _ request: ImportFilesRequest,
         files: [FileHandle]
     ) async throws(RuntimeWireError) -> ImportResult {
+        throw RuntimeWireError(
+            domain: "integration",
+            code: "integration.notSupported",
+            message: "File sharing isn't available in this runtime.",
+            remediation: "Start Android with a supported image, then retry."
+        )
+    }
+
+    /// Returns a typed error for runtimes that do not expose file transfers.
+    public func acceptExport(
+        _ request: AcceptExportRequest,
+        file: FileHandle?
+    ) async throws(RuntimeWireError) {
         throw RuntimeWireError(
             domain: "integration",
             code: "integration.notSupported",

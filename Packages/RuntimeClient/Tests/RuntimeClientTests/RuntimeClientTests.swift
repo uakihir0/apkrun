@@ -748,15 +748,49 @@ import Testing
     #expect(channel.invalidations == 1)
 }
 
+@Test func sessionClientAcceptsOrCancelsExportWithoutSendingSessionIdentity() async throws {
+    let offerID = UUID()
+    let channel = try MockRuntimeSessionChannel(exportReply: RuntimeAcceptExportSessionReply())
+    let client = RuntimeSessionClient(clientKind: .wrapper, channel: channel)
+    let file = FileHandle.nullDevice
+
+    try await client.acceptExport(offerID: offerID, destination: file)
+    try await client.acceptExport(offerID: offerID, destination: nil)
+
+    let snapshot = channel.snapshot()
+    #expect(snapshot.exportRequests.count == 2)
+    #expect(snapshot.exportFileHandleIDs == [ObjectIdentifier(file), nil])
+    for (index, data) in snapshot.exportRequests.enumerated() {
+        let decoded = try JSONDecoder().decode(RuntimeAcceptExportSessionRequest.self, from: data)
+        #expect(decoded.request.offerID == offerID)
+        #expect(decoded.request.fileIndex == (index == 0 ? 0 : nil))
+        #expect(decoded.header.apiVersion == APIVersion.current)
+        #expect(decoded.header.clientKind == .wrapper)
+        let encoded = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let encodedRequest = try #require(encoded["request"] as? [String: Any])
+        #expect(encodedRequest["sessionID"] == nil)
+    }
+    client.invalidate()
+}
+
 private final class MockRuntimeSessionChannel: RuntimeSessionChannel, @unchecked Sendable {
     private let lock = NSLock()
     private let replyData: Data
+    private let exportReplyData: Data
     private var requestsValue: [Data] = []
     private var fileHandleIDsValue: [[ObjectIdentifier]] = []
+    private var exportRequestsValue: [Data] = []
+    private var exportFileHandleIDsValue: [ObjectIdentifier?] = []
     private var invalidationsValue = 0
 
     init(reply: RuntimeImportFilesSessionReply) throws {
         replyData = try JSONEncoder().encode(reply)
+        exportReplyData = Data()
+    }
+
+    init(exportReply: RuntimeAcceptExportSessionReply) throws {
+        replyData = Data()
+        exportReplyData = try JSONEncoder().encode(exportReply)
     }
 
     func importFiles(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data {
@@ -767,6 +801,14 @@ private final class MockRuntimeSessionChannel: RuntimeSessionChannel, @unchecked
         return replyData
     }
 
+    func acceptExport(_ request: Data, file: FileHandle?) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock {
+            exportRequestsValue.append(request)
+            exportFileHandleIDsValue.append(file.map(ObjectIdentifier.init))
+        }
+        return exportReplyData
+    }
+
     func invalidate() {
         lock.withLock { invalidationsValue += 1 }
     }
@@ -775,8 +817,13 @@ private final class MockRuntimeSessionChannel: RuntimeSessionChannel, @unchecked
         lock.withLock { invalidationsValue }
     }
 
-    func snapshot() -> (requests: [Data], fileHandleIDs: [[ObjectIdentifier]]) {
-        lock.withLock { (requestsValue, fileHandleIDsValue) }
+    func snapshot() -> (
+        requests: [Data],
+        fileHandleIDs: [[ObjectIdentifier]],
+        exportRequests: [Data],
+        exportFileHandleIDs: [ObjectIdentifier?]
+    ) {
+        lock.withLock { (requestsValue, fileHandleIDsValue, exportRequestsValue, exportFileHandleIDsValue) }
     }
 }
 

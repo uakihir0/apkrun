@@ -230,6 +230,8 @@ targets:
         link: false
       - package: APKRun
         product: RuntimeHost
+      - package: APKRun
+        product: DiagnosticsCore
 
   APKRunTestHost:
     type: application

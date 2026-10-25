@@ -16,6 +16,7 @@ SUBCOMMANDS:
   info                    Show runtime status or details for one Android app.
   launch                  Launch an installed Android app.
   stop                    Stop an Android app session.
+  shared-folders          List and manage Mac folders shared with Android.
   dev                     Run development-only APKRun commands.
 
   See 'apkrun help <subcommand>' for detailed help.

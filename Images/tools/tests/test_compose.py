@@ -20,6 +20,7 @@ from apkrun_image.compose import (
 from apkrun_image.erofs import (
     DIRECTORY,
     REGULAR_FILE,
+    Entry,
     ErofsTools,
     TarMember,
     build_image,
@@ -271,11 +272,50 @@ def test_entry_diff_allows_only_planned_entries_and_receiving_directory_sizes() 
     ]
 
 
+def test_replacements_reject_same_size_digest_mismatch() -> None:
+    path = "/etc/selinux/system_ext_sepolicy.cil"
+    stock = Entry(
+        path,
+        REGULAR_FILE,
+        0o640,
+        1000,
+        1000,
+        5,
+        "stock timestamp",
+        sha256=hashlib.sha256(b"stock").hexdigest(),
+        label=LABEL,
+    )
+    expected = Entry(
+        path,
+        REGULAR_FILE,
+        0o640,
+        1000,
+        1000,
+        5,
+        "stock timestamp",
+        sha256=hashlib.sha256(b"first").hexdigest(),
+        label=LABEL,
+    )
+    actual = Entry(
+        path,
+        REGULAR_FILE,
+        0o640,
+        1000,
+        1000,
+        5,
+        "stock timestamp",
+        sha256=hashlib.sha256(b"other").hexdigest(),
+        label=LABEL,
+    )
+
+    assert _entry_differences({path: stock}, {path: actual}, replaced={path: expected}) == [
+        f"{path}: sha256 differs from the replacement plan"
+    ]
+
+
 def test_replacements_are_limited_to_stock_selinux_files_and_preserve_inode_metadata(
     tmp_path: Path,
 ) -> None:
-    from apkrun_image.erofs import Entry
-
     tree = tmp_path / "tree"
     selinux_tree = tree / "etc/selinux"
     selinux_tree.mkdir(parents=True)

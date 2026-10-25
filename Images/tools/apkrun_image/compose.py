@@ -501,6 +501,8 @@ def _entry_differences(
                     problems.append(f"{path}: {field} differs from the replacement plan")
             if expected.size != new.size:
                 problems.append(f"{path}: size differs from the replacement plan")
+            if expected.sha256 != new.sha256:
+                problems.append(f"{path}: sha256 differs from the replacement plan")
             if old.kind != REGULAR_FILE:
                 problems.append(f"{path}: only stock regular files may be replaced")
             continue

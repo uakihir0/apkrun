@@ -58,6 +58,46 @@ import Testing
     #expect((remove as? SharedFoldersRemoveCommand)?.target == "folder-id")
 }
 
+@Test func integrationStatusCommandParsesPackageAndJSONFlag() async throws {
+    let command = try await APKRunCommand.asyncParseAsRoot([
+        "integrations", "status", "com.example.app", "--json",
+    ])
+
+    #expect((command as? IntegrationsStatusCommand)?.package == "com.example.app")
+    #expect((command as? IntegrationsStatusCommand)?.json == true)
+}
+
+@Test func integrationStatusOutputIncludesSettingDecisionSupportAndPermission() throws {
+    let status = integrationStatusFixture()
+    let human = try IntegrationStatusCommandOutput.human(status)
+
+    #expect(human.contains("Integrations for com.example.app"))
+    #expect(human.contains("clipboard: true (user) — allowed; supported"))
+    #expect(human.contains("files: false (global switch) — denied (globally off); supported"))
+    #expect(human.contains("microphone: false (default) — asks; unsupported (audio capture)"))
+    #expect(human.contains("macOS permission: denied"))
+    #expect(human.contains("Microphone setting changes take effect after the app restarts."))
+}
+
+@Test func integrationStatusJSONOutputContainsFullStatusEnvelope() throws {
+    let status = integrationStatusFixture()
+    let json = try IntegrationStatusCommandOutput.json(status)
+    let data = try #require(json.data(using: .utf8))
+    let root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let result = try #require(root["result"] as? [String: Any])
+    let items = try #require(result["items"] as? [[String: Any]])
+
+    #expect(root["schemaVersion"] as? Int == 1)
+    #expect(result["packageID"] as? String == "com.example.app")
+    #expect(result["microphoneNeedsRestart"] as? Bool == true)
+    #expect(items.count == 3)
+    #expect(items[0]["kind"] as? String == "clipboard")
+    #expect(items[0]["value"] as? Bool == true)
+    #expect(items[1]["source"] as? String == "globalSwitch")
+    #expect(items[1]["decision"] != nil)
+    #expect(items[2]["macPermission"] as? String == "denied")
+}
+
 @Test func sharedFolderRemovalResolvesIDAndDisplayedPath() throws {
     let folder = sharedFolderFixture(
         id: "56e4c834-c8a2-41a0-8bb2-5aa5d8d48eb1",
@@ -975,6 +1015,38 @@ private func sharedFolderFixture(
         access: access,
         builtIn: builtIn,
         availability: availability
+    )
+}
+
+private func integrationStatusFixture() -> IntegrationStatus {
+    let packageID = RuntimePackageID(rawValue: "com.example.app")!
+    return IntegrationStatus(
+        packageID: packageID,
+        items: [
+            IntegrationItemStatus(
+                kind: .clipboard,
+                value: .bool(true),
+                source: .user,
+                decision: .allow,
+                support: .supported
+            ),
+            IntegrationItemStatus(
+                kind: .files,
+                value: .bool(false),
+                source: .globalSwitch,
+                decision: .deny(.globallyOff),
+                support: .supported
+            ),
+            IntegrationItemStatus(
+                kind: .microphone,
+                value: .bool(false),
+                source: .default,
+                decision: .ask,
+                support: .unsupported(capability: "audio capture"),
+                macPermission: .denied
+            ),
+        ],
+        microphoneNeedsRestart: true
     )
 }
 

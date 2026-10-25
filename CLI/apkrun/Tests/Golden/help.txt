@@ -16,6 +16,7 @@ SUBCOMMANDS:
   launch                  Launch an installed Android app.
   stop                    Stop an Android app session.
   shared-folders          List and manage Mac folders shared with Android.
+  integrations            Inspect Android app integrations.
   operations              Inspect or cancel long-running APKRun operations.
 
   See 'apkrun help <subcommand>' for detailed help.

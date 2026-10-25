@@ -438,3 +438,78 @@ func anInputAckOnTheControlChannelIsAViolation() async throws {
     }
     #expect(reason == .malformedFrame)
 }
+
+@Test(.timeLimit(.minutes(1)))
+func storeArtifactConnectionSendsAndReceivesBulkFramesWithBackpressure() async throws {
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello(capabilities: ["store.install.v1", "store.metadata.v1"])
+    }
+    let connection = GuestConnection(
+        endpoint: .storeArtifacts,
+        transport: transport,
+        presentedToken: Data(repeating: 7, count: 16)
+    )
+    _ = try await connection.open()
+
+    var begin = GPBulkBegin()
+    begin.kind = .installArtifact
+    begin.name = "base"
+    begin.mimeType = "application/vnd.android.package-archive"
+    begin.size = 3
+    begin.sha256 = Data(repeating: 9, count: 32)
+    begin.context = "install-1"
+    var outgoing = GPBulkFrame()
+    outgoing.transferID = 2
+    outgoing.kind = .begin(begin)
+    try await connection.sendBulkFrame(outgoing)
+
+    try await eventually {
+        transport.agents[0].envelopes.contains { envelope in
+            guard case .bulk(let frame)? = envelope.body,
+                  case .begin(let received)? = frame.kind
+            else {
+                return false
+            }
+            return frame.transferID == 2 && received.context == "install-1"
+        }
+    }
+
+    let receivedFrame = Task { () -> GPBulkFrame? in
+        for await frame in connection.bulkFrames {
+            return frame
+        }
+        return nil
+    }
+    var ack = GPBulkAck()
+    ack.status = .ok
+    var incoming = GPBulkFrame()
+    incoming.transferID = 2
+    incoming.kind = .ack(ack)
+    transport.agents[0].sendBulkFrame(incoming)
+    let decoded = await receivedFrame.value
+    #expect(decoded?.transferID == 2)
+    if case .ack(let value)? = decoded?.kind {
+        #expect(value.status == .ok)
+    } else {
+        Issue.record("the artifact stream did not deliver its bulk acknowledgement")
+    }
+    await connection.close()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func bulkFramesAreRejectedOnControlEndpoints() async throws {
+    let connection = GuestConnection(
+        endpoint: .storeControl,
+        transport: InMemoryTransport { _, agent, _ in
+            agent.sendHello(capabilities: ["store.install.v1"])
+        }
+    )
+    _ = try await connection.open()
+    do {
+        try await connection.sendBulkFrame(GPBulkFrame())
+        Issue.record("a control connection accepted a bulk frame")
+    } catch {
+        #expect(error == .malformedFrame)
+    }
+    await connection.close()
+}

@@ -5,6 +5,10 @@ import GuestProtocol
 import ImageCore
 import VirtualMachineCore
 
+/// Reconciles host-owned state against a fresh snapshot before the Guest Agent connection becomes ready.
+public typealias GuestAgentResynchronizationHandler =
+    @Sendable (DevelopmentGuestAgent, GuestSnapshotState, GuestConnection) async -> Void
+
 /// The runtime's state (state-machines.md §2). The M1 cut has no suspend.
 public enum RuntimeState: Equatable, Sendable {
     /// No VM.
@@ -161,6 +165,12 @@ public actor RuntimeSupervisor {
     private var adbPollTask: Task<Void, Never>?
     /// The bundled development Guest Agent, when developer mode is given one (guest-components.md §3).
     private let guestAgentBundle: GuestAgentBundle?
+    /// The host-side shared-folder operations installed for the running Guest Agent, when supported.
+    private let hostRequestHandler: GuestHostRequestHandler?
+    /// Creates an isolated reverse-request handler for each guest bulk connection.
+    private let hostRequestSessionFactory: GuestHostRequestSessionFactory?
+    /// Applies host-owned state over each in-flight Guest Agent connection before readiness.
+    private let guestAgentResynchronizationHandler: GuestAgentResynchronizationHandler?
     /// The development display of scanout 0, or `nil` (`apkrun dev boot --window`, #24).
     private let developmentDisplay: DevelopmentDisplay?
     /// The development Guest Agent of the boot in flight, from the start of the ADB bridge until the boot ends.
@@ -196,12 +206,18 @@ public actor RuntimeSupervisor {
         timeouts: BootTimeouts = .standard,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         guestAgentBundle: GuestAgentBundle? = nil,
+        hostRequestHandler: GuestHostRequestHandler? = nil,
+        hostRequestSessionFactory: GuestHostRequestSessionFactory? = nil,
+        guestAgentResynchronizationHandler: GuestAgentResynchronizationHandler? = nil,
         guestAgentTimeout: Duration = DevelopmentGuestAgent.defaultConnectTimeout,
         requiredAgentOutageTimeout: Duration = .seconds(30),
         developmentDisplay: DevelopmentDisplay? = nil,
         guestAgentTransportMode: GuestAgentTransportMode = .adb
     ) {
         self.guestAgentBundle = guestAgentBundle
+        self.hostRequestHandler = hostRequestHandler
+        self.hostRequestSessionFactory = hostRequestSessionFactory
+        self.guestAgentResynchronizationHandler = guestAgentResynchronizationHandler
         self.developmentDisplay = developmentDisplay
         self.image = image
         self.instanceStore = instanceStore
@@ -446,7 +462,7 @@ public actor RuntimeSupervisor {
             throw .androidBootFailed(detail: "the runtime was stopped while starting")
         }
         if options.developerMode {
-            startADBBridge(controller: controller, tracker: tracker, progress: progress.continuation)
+            await startADBBridge(controller: controller, tracker: tracker, progress: progress.continuation)
         }
         try await waitForBootCompletion(progress.stream, firstBoot: isFirstBoot, started: bootStarted)
         let requiredAgentDeadline: ContinuousClock.Instant? =
@@ -623,7 +639,7 @@ public actor RuntimeSupervisor {
         controller: VMController,
         tracker: BootPhaseTracker,
         progress: AsyncStream<Progress>.Continuation
-    ) {
+    ) async {
         let forwarder = VsockLoopbackForwarder(
             requestedPort: options.adbHostPort,
             guestPort: Self.developmentADBGuestPort,
@@ -669,12 +685,20 @@ public actor RuntimeSupervisor {
                 } else {
                     guestTransport = nil
                 }
-                developmentGuestAgent = DevelopmentGuestAgent(
+                let agent = DevelopmentGuestAgent(
                     adb: client,
                     bundle: bundle,
                     transport: guestTransport,
+                    hostRequestHandler: hostRequestHandler,
+                    hostRequestSessionFactory: hostRequestSessionFactory,
                     logSink: diagnostics.logSink
                 )
+                developmentGuestAgent = agent
+                if guestAgentResynchronizationHandler != nil {
+                    await agent.supervisor.addResynchronizationHandler { [weak self] snapshot, connection in
+                        await self?.resynchronizeGuestAgent(snapshot: snapshot, connection: connection)
+                    }
+                }
             }
             let task = Task {
                 await self.pollADB(client, tracker: tracker, progress: progress)
@@ -687,6 +711,19 @@ public actor RuntimeSupervisor {
                 errorCode: error.qualifiedCode
             )
         }
+    }
+
+    /// Applies the caller's policy on the connection that is held behind the resynchronization barrier.
+    private func resynchronizeGuestAgent(
+        snapshot: GuestSnapshotState,
+        connection: GuestConnection
+    ) async {
+        guard let guestAgentResynchronizationHandler,
+            let developmentGuestAgent
+        else {
+            return
+        }
+        await guestAgentResynchronizationHandler(developmentGuestAgent, snapshot, connection)
     }
 
     /// Connects ADB once the forwarder is up, then reads the boot properties every 500 ms until

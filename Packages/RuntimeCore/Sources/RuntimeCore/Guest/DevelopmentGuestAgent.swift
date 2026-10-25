@@ -70,6 +70,8 @@ public actor DevelopmentGuestAgent {
     /// The transport of the control connection, which the input connection shares.
     private let transport: any GuestTransport
     private let hostVersion: String
+    private let hostRequestHandler: GuestHostRequestHandler?
+    private let hostRequestSessionFactory: GuestHostRequestSessionFactory?
     private let logSink: (any LogSink)?
     private var budget = GuestAgentRestartBudget()
     private var restartsRefused = false
@@ -93,12 +95,16 @@ public actor DevelopmentGuestAgent {
         bundle: GuestAgentBundle,
         transport guestTransport: (any GuestTransport)? = nil,
         hostVersion: String = "dev",
+        hostRequestHandler: GuestHostRequestHandler? = nil,
+        hostRequestSessionFactory: GuestHostRequestSessionFactory? = nil,
         logSink: (any LogSink)? = nil,
         clock: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
     ) {
         self.adb = adb
         self.clock = clock
         self.hostVersion = hostVersion
+        self.hostRequestHandler = hostRequestHandler
+        self.hostRequestSessionFactory = hostRequestSessionFactory
         self.logSink = logSink
         logger = APKLogger(category: RuntimeLogCategory.agents, sink: logSink)
         provisioner = GuestAgentProvisioner(adb: adb, bundle: bundle)
@@ -108,6 +114,8 @@ public actor DevelopmentGuestAgent {
         supervisor = GuestAgentSupervisor(
             transport: selectedTransport,
             hostVersion: hostVersion,
+            hostRequestHandler: hostRequestHandler,
+            hostRequestSessionFactory: hostRequestSessionFactory,
             logSink: logSink,
             restartAgent: { loss in await relay.restart(loss) }
         )
@@ -339,6 +347,68 @@ public actor DevelopmentGuestAgent {
         )
     }
 
+    /// Announces files already received over the bulk endpoint to the package on the selected Android display.
+    public func importFiles(
+        package: String,
+        displayID: Int32,
+        files: [GPFileRef]
+    ) async throws(GuestAgentFailure) -> GPImportResult {
+        try requireAvailable()
+        do {
+            return try await supervisor.send(
+                GuestImportFilesOperation(package: package, displayID: displayID, files: files)
+            )
+        } catch {
+            throw .operation(error)
+        }
+    }
+
+    /// Replaces the MacFilesProvider grants and opens the guest bulk channel for provider RPC.
+    public func setSharedFolderAccess(
+        roots: [GPSharedRoot],
+        access: [GPPackageAccess]
+    ) async throws(GuestAgentFailure) {
+        try requireAvailable()
+        guard await supervisor.statusSnapshot().state == .ready else {
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
+        }
+        do throws(GuestProtocolFailure) {
+            _ = try await supervisor.send(
+                GuestSetSharedFolderAccessOperation(roots: roots, access: access)
+            )
+        } catch {
+            throw .operation(error)
+        }
+        _ = try await bulkTransferChannel()
+    }
+
+    /// Applies shared-folder policy on the just-handshaken connection while its supervisor is still reconciling.
+    /// This keeps guest filesystem access synchronized before queued host operations can run.
+    public func setSharedFolderAccess(
+        roots: [GPSharedRoot],
+        access: [GPPackageAccess],
+        on controlConnection: GuestConnection
+    ) async throws(GuestAgentFailure) {
+        try requireAvailable()
+        guard controlConnection.endpoint == .guestControl,
+            await controlConnection.isUsable,
+            let session = await controlConnection.sessionInfo
+        else {
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
+        }
+        do throws(GuestProtocolFailure) {
+            _ = try await controlConnection.send(
+                GuestSetSharedFolderAccessOperation(roots: roots, access: access)
+            )
+        } catch {
+            throw .operation(error)
+        }
+        _ = try await bulkTransferChannel(
+            token: session.sessionToken,
+            resynchronizingControlConnection: controlConnection
+        )
+    }
+
     /// The bulk channel for the current control session, opening or replacing it when necessary.
     private func bulkTransferChannel() async throws(GuestAgentFailure) -> GuestBulkChannel {
         let started = generation
@@ -347,6 +417,21 @@ public actor DevelopmentGuestAgent {
             throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
         }
         guard let token = await supervisor.session?.sessionToken else {
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
+        }
+        return try await bulkTransferChannel(token: token, generation: started)
+    }
+
+    /// Opens the bulk endpoint for `token`. During a resync the in-flight control connection is the authority; in the
+    /// ordinary path the supervisor's ready state and session token are the authority.
+    private func bulkTransferChannel(
+        token: Data,
+        generation expectedGeneration: UInt64? = nil,
+        resynchronizingControlConnection: GuestConnection? = nil
+    ) async throws(GuestAgentFailure) -> GuestBulkChannel {
+        let started = expectedGeneration ?? generation
+        try requireAvailable()
+        guard await authorizedControlSession(token, connection: resynchronizingControlConnection) else {
             throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
         }
         if let channel = await reusableBulkChannel(token: token) {
@@ -366,6 +451,8 @@ public actor DevelopmentGuestAgent {
             transport: transport,
             presentedToken: token,
             hostVersion: hostVersion,
+            hostRequestHandler: hostRequestHandler,
+            hostRequestSessionFactory: hostRequestSessionFactory,
             logSink: logSink
         )
         let session: GuestSessionInfo
@@ -374,9 +461,7 @@ public actor DevelopmentGuestAgent {
         } catch {
             throw Self.inputFailure(error)
         }
-        guard await supervisor.statusSnapshot().state == .ready,
-            await supervisor.session?.sessionToken == token
-        else {
+        guard await authorizedControlSession(token, connection: resynchronizingControlConnection) else {
             await connection.close()
             throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
         }
@@ -396,6 +481,27 @@ public actor DevelopmentGuestAgent {
         bulkConnectionToken = token
         bulkChannel = channel
         return channel
+    }
+
+    private func authorizedControlSession(
+        _ token: Data,
+        connection: GuestConnection?
+    ) async -> Bool {
+        if let connection {
+            guard connection.endpoint == .guestControl,
+                await connection.isUsable,
+                await connection.sessionInfo?.sessionToken == token
+            else {
+                return false
+            }
+            return true
+        }
+        guard await supervisor.statusSnapshot().state == .ready,
+            await supervisor.session?.sessionToken == token
+        else {
+            return false
+        }
+        return true
     }
 
     private func reusableBulkChannel(token: Data) async -> GuestBulkChannel? {

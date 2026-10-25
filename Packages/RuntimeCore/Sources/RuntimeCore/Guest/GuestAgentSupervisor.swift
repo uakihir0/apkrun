@@ -100,6 +100,11 @@ public enum GuestAgentLoss: Equatable, Sendable {
 /// budget, and the supervisor only reconnects after a restart that it allows. Five protocol violations within ten
 /// minutes stop the reconnection (guest-protocol.md §12.2).
 public actor GuestAgentSupervisor {
+    private enum ResynchronizationHandler: Sendable {
+        case snapshot(@Sendable (GuestSnapshotState) async -> Void)
+        case connection(@Sendable (GuestSnapshotState, GuestConnection) async -> Void)
+    }
+
     private struct SendWaiter {
         let continuation: CheckedContinuation<Void, Never>
         let timeoutTask: Task<Void, Never>
@@ -165,12 +170,14 @@ public actor GuestAgentSupervisor {
     private let backoffMaximum: Duration
     private let requestReconnectTimeout: Duration
     private let hostVersion: String
+    private let hostRequestHandler: GuestHostRequestHandler?
+    private let hostRequestSessionFactory: GuestHostRequestSessionFactory?
     private let logger: APKLogger
     private let logSink: (any LogSink)?
     private let updateContinuation: AsyncStream<GPEvent>.Continuation
     private let androidRestartContinuation: AsyncStream<GuestAndroidRestart>.Continuation
     private var stateObservers: [UUID: AsyncStream<State>.Continuation] = [:]
-    private var resynchronizationHandlers: [UUID: @Sendable (GuestSnapshotState) async -> Void] = [:]
+    private var resynchronizationHandlers: [UUID: ResynchronizationHandler] = [:]
     private var connection: GuestConnection?
     private var consumer: Task<Void, Never>?
     private var maintenance: Task<Void, Never>?
@@ -198,6 +205,8 @@ public actor GuestAgentSupervisor {
         backoffMinimum: Duration = .milliseconds(100),
         backoffMaximum: Duration = .seconds(2),
         requestReconnectTimeout: Duration = .seconds(5),
+        hostRequestHandler: GuestHostRequestHandler? = nil,
+        hostRequestSessionFactory: GuestHostRequestSessionFactory? = nil,
         logSink: (any LogSink)? = nil,
         restartAgent: @escaping @Sendable (GuestAgentLoss) async -> Bool
     ) {
@@ -211,6 +220,8 @@ public actor GuestAgentSupervisor {
         self.backoffMinimum = backoffMinimum
         self.backoffMaximum = backoffMaximum
         self.requestReconnectTimeout = requestReconnectTimeout
+        self.hostRequestHandler = hostRequestHandler
+        self.hostRequestSessionFactory = hostRequestSessionFactory
         self.restartAgent = restartAgent
         let stream = AsyncStream.makeStream(of: GPEvent.self, bufferingPolicy: .bufferingNewest(1024))
         updates = stream.stream
@@ -341,13 +352,30 @@ public actor GuestAgentSupervisor {
         _ handler: @escaping @Sendable (GuestSnapshotState) async -> Void
     ) async -> UUID {
         let id = UUID()
-        resynchronizationHandlers[id] = handler
+        resynchronizationHandlers[id] = .snapshot(handler)
         guard state == .ready, let current = connection, await current.isUsable,
             state == .ready, connection === current
         else {
             return id
         }
         await handler(snapshot)
+        return id
+    }
+
+    /// Registers a reconciler that can send operations on the new connection before it becomes ready.
+    /// When already ready, the current snapshot and usable connection are delivered once before this method returns.
+    @discardableResult
+    public func addResynchronizationHandler(
+        _ handler: @escaping @Sendable (GuestSnapshotState, GuestConnection) async -> Void
+    ) async -> UUID {
+        let id = UUID()
+        resynchronizationHandlers[id] = .connection(handler)
+        guard state == .ready, let current = connection, await current.isUsable,
+            state == .ready, connection === current
+        else {
+            return id
+        }
+        await handler(snapshot, current)
         return id
     }
 
@@ -509,6 +537,8 @@ public actor GuestAgentSupervisor {
             transport: transport,
             hostVersion: hostVersion,
             handshakeTimeout: handshakeTimeout,
+            hostRequestHandler: hostRequestHandler,
+            hostRequestSessionFactory: hostRequestSessionFactory,
             logSink: logSink
         )
         awaitingSnapshot = true
@@ -565,7 +595,12 @@ public actor GuestAgentSupervisor {
                     guard resynchronizationHandlers[id] != nil else {
                         continue
                     }
-                    await handler(snapshot)
+                    switch handler {
+                    case .snapshot(let reconcile):
+                        await reconcile(snapshot)
+                    case .connection(let reconcile):
+                        await reconcile(snapshot, next)
+                    }
                     guard generation == started, connection === next else {
                         throw GuestProtocolFailure.disconnected
                     }

@@ -387,6 +387,87 @@ func aClosedConnectionIsReconnectedAndResynchronised() async throws {
     await supervisor.stop()
 }
 
+/// Holds a connection-aware reconciliation after it sends directly on the in-flight control connection.
+private actor InFlightConnectionReconciliationGate {
+    private var entered = false
+    private var entryContinuation: CheckedContinuation<Void, Never>?
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+    private(set) var stateAtEntry: GuestAgentSupervisor.State?
+    private(set) var directPingSucceeded = false
+    private(set) var connectionWasUsable = false
+
+    func reconcile(
+        _ snapshot: GuestSnapshotState,
+        connection: GuestConnection,
+        supervisor: GuestAgentSupervisor
+    ) async {
+        _ = snapshot
+        stateAtEntry = await supervisor.state
+        if connection.endpoint == .guestControl {
+            connectionWasUsable = await connection.isUsable
+        }
+        do {
+            let response = try await connection.send(GuestPing(nonce: 818), timeout: .seconds(1))
+            directPingSucceeded = response.nonce == 818
+        } catch {
+            directPingSucceeded = false
+        }
+        entered = true
+        entryContinuation?.resume()
+        entryContinuation = nil
+        await withCheckedContinuation { releaseContinuation = $0 }
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else {
+            return
+        }
+        await withCheckedContinuation { entryContinuation = $0 }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func connectionAwareResynchronizationCanSendBeforeReady() async throws {
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello()
+        agent.answer = { request in
+            if isGetSnapshot(request) {
+                return .getSnapshot(snapshot(displays: [0]))
+            }
+            return pongResult(for: request)
+        }
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: transport,
+        keepaliveInterval: .seconds(60),
+        restartAgent: { _ in true }
+    )
+    let gate = InFlightConnectionReconciliationGate()
+    await supervisor.addResynchronizationHandler { state, connection in
+        await gate.reconcile(state, connection: connection, supervisor: supervisor)
+    }
+
+    let startup = Task {
+        try await supervisor.start(connectTimeout: .seconds(2))
+    }
+    await gate.waitUntilEntered()
+
+    #expect(await gate.stateAtEntry == .connecting)
+    #expect(await gate.connectionWasUsable)
+    #expect(await gate.directPingSucceeded)
+    #expect(await supervisor.state == .connecting)
+
+    await gate.release()
+    try await startup.value
+    #expect(await supervisor.state == .ready)
+    await supervisor.stop()
+}
+
 @Test(.timeLimit(.minutes(1)))
 func queuedSendsWaitForSnapshotReconciliationAndEventsStayOrdered() async throws {
     let gate = SnapshotReconciliationGate(pausesOnInvocation: 2)

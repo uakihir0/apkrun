@@ -96,6 +96,14 @@ final class InMemoryAgent: @unchecked Sendable {
         send(body: .bulk(frame))
     }
 
+    /// Sends a host file request to the host and returns its envelope ID.
+    @discardableResult
+    func sendHostFileRequest(_ operation: GPRequest.OneOf_Op) -> UInt64 {
+        var request = GPRequest()
+        request.op = operation
+        return send(body: .request(request))
+    }
+
     /// Sends a response to the request with `id`.
     func respond(to id: UInt64, with result: GPResponse.OneOf_Result) {
         var response = GPResponse()
@@ -171,17 +179,20 @@ final class InMemoryAgent: @unchecked Sendable {
         }
     }
 
-    private func send(body: GPEnvelope.OneOf_Body, replyTo: UInt64 = 0) {
+    @discardableResult
+    private func send(body: GPEnvelope.OneOf_Body, replyTo: UInt64 = 0) -> UInt64 {
         var envelope = GPEnvelope()
         lock.lock()
         envelope.id = nextID
         nextID += 1
         lock.unlock()
+        let id = envelope.id
         envelope.replyTo = replyTo
         envelope.body = body
         if let frame = try? FrameCodec.encode(envelope) {
             toHostContinuation.yield(frame)
         }
+        return id
     }
 }
 

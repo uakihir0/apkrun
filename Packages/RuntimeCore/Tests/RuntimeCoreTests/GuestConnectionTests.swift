@@ -67,6 +67,82 @@ func handshakeAcceptsAMatchingAgentAndMakesTheSessionToken() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func guestBulkHostRequestsAreRoutedAndAnsweredOutOfBand() async throws {
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello(capabilities: ["core.v1", "bulk.v1", "files.shared.v1"])
+    }
+    let connection = GuestConnection(
+        endpoint: .guestBulk,
+        transport: transport,
+        presentedToken: Data(repeating: 7, count: 16),
+        hostRequestHandler: { request in
+            #expect(request.hostListRoots.package == "com.android.documentsui")
+            var root = GPRootInfo()
+            root.rootID = "shared"
+            root.title = "Shared"
+            root.access = .readWrite
+            root.available = true
+            var roots = GPRootList()
+            roots.roots = [root]
+            var response = GPResponse()
+            response.result = .hostListRoots(roots)
+            return response
+        }
+    )
+    let info = try await connection.open()
+    #expect(info.enabledCapabilities.contains("files.shared.v1"))
+
+    var hostListRoots = GPHostListRoots()
+    hostListRoots.package = "com.android.documentsui"
+    let requestID = transport.agents[0].sendHostFileRequest(.hostListRoots(hostListRoots))
+    try await eventually {
+        transport.agents[0].envelopes.contains { $0.replyTo == requestID }
+    }
+
+    let responseEnvelope = transport.agents[0].envelopes.first { $0.replyTo == requestID }
+    guard case .response(let response)? = responseEnvelope?.body,
+        case .hostListRoots(let roots)? = response.result
+    else {
+        Issue.record("the host did not answer HostListRoots with RootList")
+        return
+    }
+    #expect(roots.roots.map(\.rootID) == ["shared"])
+    #expect(roots.roots.first?.access == .readWrite)
+    await connection.close()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func guestBulkDoesNotEnableSharedFolderRequestsWithoutAHostHandler() async throws {
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello(capabilities: ["core.v1", "bulk.v1", "files.shared.v1"])
+    }
+    let connection = GuestConnection(
+        endpoint: .guestBulk,
+        transport: transport,
+        presentedToken: Data(repeating: 4, count: 16)
+    )
+    let info = try await connection.open()
+    #expect(!info.enabledCapabilities.contains("files.shared.v1"))
+    await connection.close()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func guestControlEnablesSharedFolderControlOperations() async throws {
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello(capabilities: ["core.v1", "bulk.v1", "files.shared.v1"])
+    }
+    let connection = GuestConnection(
+        endpoint: .guestControl,
+        transport: transport,
+        presentedToken: Data(repeating: 8, count: 16),
+        hostRequestHandler: { _ in GPResponse() }
+    )
+    let info = try await connection.open()
+    #expect(info.enabledCapabilities.contains("files.shared.v1"))
+    await connection.close()
+}
+
+@Test(.timeLimit(.minutes(1)))
 func handshakeRefusesAnotherMajorVersionAndSaysSo() async throws {
     let transport = InMemoryTransport { _, agent, _ in agent.sendHello(major: 2) }
     let connection = GuestConnection(endpoint: .guestControl, transport: transport)

@@ -2,6 +2,29 @@ import DiagnosticsCore
 import Foundation
 import GuestProtocol
 
+/// Handles a request the guest sends to the host on a supported guest bulk connection.
+public typealias GuestHostRequestHandler = @Sendable (GPRequest) async -> GPResponse
+
+/// The request handler and cleanup hook owned by one guest bulk connection.
+public struct GuestHostRequestSession: Sendable {
+    /// Handles one reverse request from the guest.
+    public let handle: GuestHostRequestHandler
+    /// Releases resources, including file handles, owned by this connection.
+    public let close: @Sendable () async -> Void
+
+    /// Creates a connection-scoped host request session.
+    public init(
+        handle: @escaping GuestHostRequestHandler,
+        close: @escaping @Sendable () async -> Void = {}
+    ) {
+        self.handle = handle
+        self.close = close
+    }
+}
+
+/// Creates one isolated handler session for each guest bulk connection.
+public typealias GuestHostRequestSessionFactory = @Sendable () -> GuestHostRequestSession
+
 /// What the handshake established (guest-protocol.md §5.1, §5.4).
 public struct GuestSessionInfo: Equatable, Sendable {
     /// The protocol version that the agent speaks.
@@ -54,6 +77,8 @@ public actor GuestConnection {
 
     /// The number of requests that may be in flight at once (guest-protocol.md §6).
     public static let maximumInFlight = 64
+    /// The number of reverse file requests accepted from one guest bulk connection (§7.5).
+    public static let maximumHostRequestsInFlight = 16
     /// How long the agent has to answer Hello, and then HelloAck (guest-protocol.md §5.1).
     public static let defaultHandshakeTimeout: Duration = .seconds(5)
     /// How long after the agent's own timeout the host gives up on a request (guest-protocol.md §4.1 and §6).
@@ -63,6 +88,9 @@ public actor GuestConnection {
     private let presentedToken: Data?
     private let hostVersion: String
     private let handshakeTimeout: Duration
+    private let hostRequestHandler: GuestHostRequestHandler?
+    private let hostRequestSessionFactory: GuestHostRequestSessionFactory?
+    private let hostRequestSession: GuestHostRequestSession?
     private let logger: APKLogger
     private let eventContinuation: AsyncStream<GPEvent>.Continuation
     private let inputAckContinuation: AsyncStream<GPInputAck>.Continuation
@@ -80,6 +108,7 @@ public actor GuestConnection {
     private var pending: [UInt64: PendingCall] = [:]
     private var deadlines: [UInt64: Task<Void, Never>] = [:]
     private var abandoned: Set<UInt64> = []
+    private var inboundRequests: [UInt64: Task<Void, Never>] = [:]
     private var slotWaiters: [CheckedContinuation<Void, Never>] = []
     private var tasks: [Task<Void, Never>] = []
     private var isStarted = false
@@ -101,6 +130,8 @@ public actor GuestConnection {
         presentedToken: Data? = nil,
         hostVersion: String = "dev",
         handshakeTimeout: Duration = GuestConnection.defaultHandshakeTimeout,
+        hostRequestHandler: GuestHostRequestHandler? = nil,
+        hostRequestSessionFactory: GuestHostRequestSessionFactory? = nil,
         logSink: (any LogSink)? = nil
     ) {
         self.endpoint = endpoint
@@ -109,6 +140,9 @@ public actor GuestConnection {
         self.presentedToken = presentedToken
         self.hostVersion = hostVersion
         self.handshakeTimeout = handshakeTimeout
+        self.hostRequestHandler = hostRequestHandler
+        self.hostRequestSessionFactory = hostRequestSessionFactory
+        self.hostRequestSession = endpoint == .guestBulk ? hostRequestSessionFactory?() : nil
         let stream = AsyncStream.makeStream(of: GPEvent.self, bufferingPolicy: .bufferingNewest(1024))
         events = stream.stream
         eventContinuation = stream.continuation
@@ -381,6 +415,8 @@ public actor GuestConnection {
                 throw .malformedFrame
             }
             inputAckContinuation.yield(ack)
+        case .request(let request):
+            try receiveHostRequest(request, envelope: envelope)
         case .bulk(let frame):
             guard endpoint == .guestBulk, case .ack? = frame.kind else {
                 throw .malformedFrame
@@ -392,7 +428,15 @@ public actor GuestConnection {
     }
 
     private func acceptHello(_ hello: GPHello) throws(GuestProtocolFailure) {
-        let decision = GuestHandshake.evaluate(hello, expectedChannel: endpoint.channel)
+        var supportedCapabilities = Set(GuestCapability.allCases)
+        if hostRequestHandler == nil && hostRequestSessionFactory == nil {
+            supportedCapabilities.remove(.filesShared)
+        }
+        let decision = GuestHandshake.evaluate(
+            hello,
+            expectedChannel: endpoint.channel,
+            supportedCapabilities: supportedCapabilities
+        )
         switch decision {
         case .accepted(let enabled, let agentVersion):
             let token = presentedToken ?? Self.randomToken()
@@ -446,6 +490,66 @@ public actor GuestConnection {
             return
         }
         throw .malformedFrame
+    }
+
+    /// Accepts only the reverse file operations defined for the guest bulk channel (§7.5).
+    private func receiveHostRequest(_ request: GPRequest, envelope: GPEnvelope) throws(GuestProtocolFailure) {
+        guard endpoint == .guestBulk,
+            envelope.replyTo == 0,
+            sessionInfo?.enabledCapabilities.contains(GuestCapability.filesShared.rawValue) == true,
+            Self.isHostFileOperation(request.op)
+        else {
+            throw .malformedFrame
+        }
+
+        guard let hostRequestHandler = hostRequestSession?.handle ?? hostRequestHandler else {
+            sendHostResponse(Self.hostRequestFailure(.unsupported), replyTo: envelope.id)
+            return
+        }
+        guard inboundRequests.count < Self.maximumHostRequestsInFlight else {
+            sendHostResponse(Self.hostRequestFailure(.resourceExhausted), replyTo: envelope.id)
+            return
+        }
+
+        let id = envelope.id
+        inboundRequests[id] = Task { [weak self] in
+            let response = await hostRequestHandler(request)
+            await self?.finishHostRequest(response, id: id)
+        }
+    }
+
+    private func finishHostRequest(_ response: GPResponse, id: UInt64) {
+        guard inboundRequests.removeValue(forKey: id) != nil else {
+            return
+        }
+        sendHostResponse(response, replyTo: id)
+    }
+
+    private func sendHostResponse(_ response: GPResponse, replyTo: UInt64) {
+        sendEnvelope { envelope in
+            envelope.replyTo = replyTo
+            envelope.body = .response(response)
+        }
+    }
+
+    private static func isHostFileOperation(_ operation: GPRequest.OneOf_Op?) -> Bool {
+        switch operation {
+        case .hostListRoots, .hostQueryChildren, .hostStat, .hostOpenFile,
+            .hostReadRange, .hostWriteRange, .hostCloseFile, .hostCreateDocument,
+            .hostDeleteDocument, .hostRenameDocument:
+            true
+        default:
+            false
+        }
+    }
+
+    private static func hostRequestFailure(_ code: GPGuestErrorCode) -> GPResponse {
+        var error = GPGuestError()
+        error.code = code
+        error.message = "the host cannot serve this file operation"
+        var response = GPResponse()
+        response.result = .error(error)
+        return response
     }
 
     private func deliver(_ event: GPEvent) throws(GuestProtocolFailure) {
@@ -571,6 +675,13 @@ public actor GuestConnection {
             timer.cancel()
         }
         deadlines.removeAll()
+        for (_, task) in inboundRequests {
+            task.cancel()
+        }
+        inboundRequests.removeAll()
+        if let hostRequestSession {
+            Task { await hostRequestSession.close() }
+        }
         for waiter in slotWaiters {
             waiter.resume()
         }

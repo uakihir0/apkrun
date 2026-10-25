@@ -922,6 +922,200 @@ public actor PackageStore {
         return snapshot
     }
 
+    /// Reconciles managed records against Android's current Store Agent package inventory.
+    ///
+    /// Android remains authoritative for installed package metadata. Host artifact records stay
+    /// intact when Android reports a higher version so APKRun can identify external updates.
+    public func reconcileAndroidPackages(
+        _ packages: [StorePackageInfo],
+        userdataGeneration: UUID? = nil
+    ) async throws -> [StorePackageSummary] {
+        try requireOpen()
+        let summaries = packages.map(Self.summary(from:))
+        guard !isReadOnly else { return summaries }
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+
+        var observed: [PackageID: StorePackageInfo] = [:]
+        for package in packages {
+            observed[package.packageID] = package
+        }
+        for packageID in records.keys.sorted() {
+            guard var record = records[packageID],
+                Self.canReconcileAndroidState(record.state)
+            else {
+                continue
+            }
+            if let info = observed[packageID] {
+                Self.reconcile(record: &record, with: info, userdataGeneration: userdataGeneration, now: clock())
+            } else if Self.reconcileAndroidAbsence(
+                record: &record,
+                userdataGeneration: userdataGeneration,
+                now: clock()
+            ) {
+                // Reconciliation can distinguish an Android removal from a userdata reset.
+            } else {
+                continue
+            }
+            try writeRecord(record, directory: directories[packageID] ?? directoryName(for: packageID))
+            records[packageID] = record
+        }
+        return summaries
+    }
+
+    /// Refreshes or marks one managed package in response to Android's PackageChanged event.
+    public func reconcileAndroidPackage(
+        packageID: PackageID,
+        info: StorePackageInfo?,
+        userdataGeneration: UUID? = nil
+    ) async throws {
+        try requireOpen()
+        guard !isReadOnly else { return }
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard var record = records[packageID],
+            Self.canReconcileAndroidState(record.state)
+        else {
+            return
+        }
+        if let info {
+            guard info.packageID == packageID else { throw PackageStoreFailure.guestPackageMismatch }
+            Self.reconcile(record: &record, with: info, userdataGeneration: userdataGeneration, now: clock())
+        } else if !Self.reconcileAndroidAbsence(
+            record: &record,
+            userdataGeneration: userdataGeneration,
+            now: clock()
+        ) {
+            return
+        }
+        try writeRecord(record, directory: directories[packageID] ?? directoryName(for: packageID))
+        records[packageID] = record
+    }
+
+    private static func summary(from info: StorePackageInfo) -> StorePackageSummary {
+        StorePackageSummary(
+            packageID: info.packageID,
+            displayName: info.displayName,
+            versionCode: info.versionCode,
+            launchable: info.launchableComponent != nil,
+            userInstalled: true
+        )
+    }
+
+    private static func wasRemovedInAndroid(_ state: PackageState) -> Bool {
+        if case .broken(.removedInAndroid) = state { return true }
+        return false
+    }
+
+    private static func canReconcileAndroidState(_ state: PackageState) -> Bool {
+        switch state {
+        case .installed, .needsReinstall, .broken(.removedInAndroid):
+            return true
+        case .uninstalledKeepingData, .broken(.signerChanged), .broken(.artifactMissing),
+            .broken(.reinstallFailed):
+            return false
+        }
+    }
+
+    /// Returns whether an absence observation changed the package record.
+    private static func reconcileAndroidAbsence(
+        record: inout PackageRecord,
+        userdataGeneration: UUID?,
+        now: Date
+    ) -> Bool {
+        let generationChanged =
+            userdataGeneration.map { $0 != record.android.userdataGeneration } ?? false
+        if generationChanged {
+            if case .needsReinstall(.userdataRestored) = record.state {
+                // Preserve the more specific recovery-point state on repeated absent snapshots.
+            } else {
+                record.state = .needsReinstall(.userdataReset)
+            }
+            record.updatedAt = now
+            return true
+        }
+        if case .needsReinstall = record.state {
+            // A reset/recovery reinstall remains pending until Android reports the package again.
+            return false
+        }
+        guard record.state == .installed else { return false }
+        record.state = .broken(.removedInAndroid)
+        record.updatedAt = now
+        return true
+    }
+
+    private static func reconcile(
+        record: inout PackageRecord,
+        with info: StorePackageInfo,
+        userdataGeneration: UUID?,
+        now: Date
+    ) {
+        let recordedVersionCode = record.versionCode
+        let signerChanged =
+            !record.signingCertificates.isEmpty
+            && !info.signingDigests.isEmpty
+            && Set(record.signingCertificates) != Set(info.signingDigests)
+        let generationChanged =
+            userdataGeneration.map { $0 != record.android.userdataGeneration } ?? false
+        let userdataResetReconciled =
+            isPendingUserdataReset(record.state) && info.versionCode >= recordedVersionCode
+        let restoredLowerVersion =
+            (info.versionCode < recordedVersionCode && generationChanged)
+            || (isPendingUserdataRestore(record.state)
+                && info.versionCode < (record.artifacts.current?.versionCode ?? record.versionCode))
+        record.displayName = info.displayName
+        record.versionName = info.versionName
+        record.versionCode = info.versionCode
+        if let artifactVersion = record.artifacts.current?.versionCode {
+            let installTimeMatches =
+                record.android.lastUpdateTime != nil
+                && record.android.lastUpdateTime == info.lastUpdateTime
+            if artifactVersion != info.versionCode || !installTimeMatches {
+                record.artifacts.currentMatchesAndroid = false
+            }
+        }
+        if signerChanged {
+            record.state = .broken(.signerChanged)
+        } else if restoredLowerVersion {
+            record.state = .needsReinstall(.userdataRestored)
+        } else if wasRemovedInAndroid(record.state)
+            || isPendingUserdataRestore(record.state)
+            || userdataResetReconciled
+        {
+            record.state = .installed
+        }
+        if !signerChanged {
+            record.signingCertificates = info.signingDigests
+            record.signingLineage = info.signingLineage
+        }
+        record.android = AndroidPackageFacts(
+            updateOwner: info.updateOwner,
+            installerOfRecord: info.installerPackage,
+            firstInstallTime: info.firstInstallTime,
+            lastUpdateTime: info.lastUpdateTime,
+            minSdk: info.minSDK,
+            targetSdk: info.targetSDK,
+            nativeAbis: info.nativeABIs.isEmpty ? record.android.nativeAbis : info.nativeABIs,
+            userdataGeneration: generationChanged && restoredLowerVersion
+                ? record.android.userdataGeneration
+                : userdataGeneration ?? record.android.userdataGeneration,
+            lastSyncedAt: now
+        )
+        record.updatedAt = now
+    }
+
+    private static func isPendingUserdataRestore(_ state: PackageState) -> Bool {
+        if case .needsReinstall(.userdataRestored) = state { return true }
+        return false
+    }
+
+    private static func isPendingUserdataReset(_ state: PackageState) -> Bool {
+        if case .needsReinstall(.userdataReset) = state { return true }
+        return false
+    }
+
     private var journalURL: URL {
         packagesDirectory.appendingPathComponent("journal.jsonl")
     }
@@ -995,6 +1189,28 @@ public actor PackageStore {
         }
         let transaction = Self.makeTransactionID(at: clock())
         let startedAt = clock()
+        let installMode: StoreInstallRequest.Mode
+        switch kind {
+        case "firstInstall":
+            installMode = .installNew
+        case "update":
+            installMode = .update
+        case "reinstall":
+            if let previousRecord, Self.isPendingUserdataRestore(previousRecord.state) {
+                installMode = .update
+            } else {
+                installMode = .reinstall
+            }
+        default:
+            throw PackageStoreFailure.invalidImport
+        }
+        let artifactSpecs = preview.artifactSet.files.map {
+            StoreArtifactSpec(
+                name: $0.splitName ?? "base",
+                size: UInt64($0.size),
+                sha256: $0.sha256
+            )
+        }
         try append(
             JournalEntry(
                 v: 1,
@@ -1044,7 +1260,10 @@ public actor PackageStore {
                     StoreInstallRequest(
                         packageID: packageID,
                         versionCode: preview.versionCode,
-                        allowDowngrade: false
+                        allowDowngrade: false,
+                        mode: installMode,
+                        expectedSignerDigests: preview.artifactSet.signerDigests,
+                        artifacts: artifactSpecs
                     ),
                     files: Self.artifactURLs(in: incoming, set: preview.artifactSet)
                 )
@@ -1335,12 +1554,15 @@ public actor PackageStore {
             fileCount: set.files.count
         )
         let android = AndroidPackageFacts(
+            updateOwner: info.updateOwner,
             installerOfRecord: info.installerPackage,
             firstInstallTime: info.firstInstallTime,
             lastUpdateTime: info.lastUpdateTime,
             minSdk: info.minSDK,
             targetSdk: info.targetSDK,
-            nativeAbis: manifest.facts.first(where: { $0.splitName == nil })?.nativeABIs ?? [],
+            nativeAbis: info.nativeABIs.isEmpty
+                ? manifest.facts.first(where: { $0.splitName == nil })?.nativeABIs ?? []
+                : info.nativeABIs,
             userdataGeneration: generation,
             lastSyncedAt: clock()
         )
@@ -1350,7 +1572,7 @@ public actor PackageStore {
             versionCode: info.versionCode,
             versionName: info.versionName,
             signingCertificates: info.signingDigests,
-            signingLineage: [],
+            signingLineage: info.signingLineage,
             installer: .apkrun,
             updateAuthority: .manual,
             state: .installed,
@@ -1392,15 +1614,17 @@ public actor PackageStore {
         record.versionCode = info.versionCode
         record.versionName = info.versionName
         record.signingCertificates = info.signingDigests
+        record.signingLineage = info.signingLineage
         record.state = .installed
         record.artifacts = ArtifactSlots(current: setSummary, currentMatchesAndroid: setSummary != nil)
         record.android = AndroidPackageFacts(
+            updateOwner: info.updateOwner,
             installerOfRecord: info.installerPackage,
             firstInstallTime: info.firstInstallTime,
             lastUpdateTime: info.lastUpdateTime,
             minSdk: info.minSDK,
             targetSdk: info.targetSDK,
-            nativeAbis: old.android.nativeAbis,
+            nativeAbis: info.nativeABIs.isEmpty ? old.android.nativeAbis : info.nativeABIs,
             userdataGeneration: generation,
             lastSyncedAt: clock()
         )

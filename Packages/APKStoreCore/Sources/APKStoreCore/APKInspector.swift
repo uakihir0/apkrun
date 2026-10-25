@@ -162,10 +162,12 @@ public struct APKInspector: Sendable {
             }
         }
         process.waitUntilExit()
-        try? outputPipe.fileHandleForReading.close()
         let outputData: Data
         do {
-            outputData = try await outputReader.value
+            outputData = try await Self.finishCapturingOutput(
+                outputReader,
+                readingFrom: outputPipe.fileHandleForReading
+            )
         } catch {
             throw .io
         }
@@ -201,8 +203,9 @@ public struct APKInspector: Sendable {
                 packageFields = keyValueFields(in: String(line.dropFirst("package:".count)))
             } else if line.hasPrefix("application-label:'") {
                 label = quotedValue(after: "application-label:", in: line)
-            } else if line.hasPrefix("sdkVersion:'") {
-                minSDK = integerValue(after: "sdkVersion:", in: line)
+            } else if line.hasPrefix("sdkVersion:'") || line.hasPrefix("minSdkVersion:'") {
+                let prefix = line.hasPrefix("minSdkVersion:") ? "minSdkVersion:" : "sdkVersion:"
+                minSDK = integerValue(after: prefix, in: line)
             } else if line.hasPrefix("targetSdkVersion:'") {
                 targetSDK = integerValue(after: "targetSdkVersion:", in: line)
             } else if line.hasPrefix("native-code:") {
@@ -277,6 +280,18 @@ public struct APKInspector: Sendable {
             guard await output.append(chunk) else { break }
         }
         return await output.result()
+    }
+
+    static func finishCapturingOutput(
+        _ reader: Task<Data, any Error>,
+        readingFrom handle: FileHandle
+    ) async throws(APKInspectionFailure) -> Data {
+        defer { try? handle.close() }
+        do {
+            return try await reader.value
+        } catch {
+            throw .io
+        }
     }
 
     private static func bundledAapt2(resourcesDirectory: URL?) -> URL? {

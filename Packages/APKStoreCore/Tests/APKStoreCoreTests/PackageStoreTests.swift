@@ -51,6 +51,7 @@ private actor FakeStoreChannel: StoreAgentChannel {
     private var packages: [PackageID: StorePackageInfo] = [:]
     private(set) var lastKeepData: Bool?
     private(set) var installCallCount = 0
+    private(set) var lastInstallRequest: StoreInstallRequest?
     private(set) var packageInfoCallCount = 0
     private var installThrowsAfterCommit = false
     private var installThrowsBeforeCommit = false
@@ -117,6 +118,7 @@ private actor FakeStoreChannel: StoreAgentChannel {
 
     func install(_ request: StoreInstallRequest, files: [URL]) async throws -> StorePackageInfo {
         installCallCount += 1
+        lastInstallRequest = request
         #expect(!files.isEmpty)
         #expect(files.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
         if installThrowsBeforeCommit {
@@ -183,7 +185,7 @@ private actor FakeStoreChannel: StoreAgentChannel {
 
 private actor FakeStoreRuntime: StoreRuntimeAccess {
     private let channel: FakeStoreChannel
-    private let generation: UUID
+    private var generation: UUID
     private let acquisitionGate: StoreAgentAcquisitionGate?
 
     init(
@@ -194,6 +196,10 @@ private actor FakeStoreRuntime: StoreRuntimeAccess {
         self.channel = channel
         self.generation = generation
         self.acquisitionGate = acquisitionGate
+    }
+
+    func setGeneration(_ generation: UUID) {
+        self.generation = generation
     }
 
     func withStoreAgent<T: Sendable>(
@@ -939,11 +945,20 @@ private actor CompletionFlag {
     #expect(record.state == .installed)
     #expect(record.versionCode == 7)
     #expect(record.updateAuthority == .manual)
+    let firstInstallRequest = try #require(await channel.lastInstallRequest)
+    #expect(firstInstallRequest.mode == .installNew)
+    #expect(firstInstallRequest.expectedSignerDigests == preview.artifactSet.signerDigests)
+    #expect(
+        firstInstallRequest.artifacts
+            == preview.artifactSet.files.map {
+                StoreArtifactSpec(name: $0.splitName ?? "base", size: UInt64($0.size), sha256: $0.sha256)
+            })
 
     let reinstallPreview = try await store.importPackage(files: [input])
     let reinstall = try await store.reinstallWithOutcome(ticket: reinstallPreview.ticket)
     #expect(reinstall.previousVersionCode == 7)
     #expect(!reinstall.restoredRetainedData)
+    #expect(await channel.lastInstallRequest?.mode == .reinstall)
 
     let packageDirectory = temporary.appendingPathComponent("Packages/io.apkrun.fixture.hellotext")
     let current = packageDirectory.appendingPathComponent("current", isDirectory: true)
@@ -1562,6 +1577,266 @@ private actor CompletionFlag {
                 .path
         )
     )
+}
+
+@Test func packageStoreReconcilesAndroidMetadataAndPackageChanges() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let channel = FakeStoreChannel()
+    let store = PackageStore(
+        packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
+        runtimeAccess: FakeStoreRuntime(channel: channel),
+        inspector: { _ in facts() }
+    )
+    try await store.open()
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let preview = try await store.importPackage(files: [input])
+    _ = try await store.installImported(ticket: preview.ticket)
+
+    let generation = UUID()
+    let externalUpdate = StorePackageInfo(
+        packageID: packageID,
+        displayName: "HelloText updated",
+        versionCode: 9,
+        versionName: "2.0",
+        enabled: true,
+        launchableComponent: "\(packageID.rawValue)/.MainActivity",
+        targetSDK: 36,
+        minSDK: 24,
+        updateOwner: PackageID(rawValue: "io.apkrun.store"),
+        nativeABIs: ["arm64-v8a", "x86_64"]
+    )
+    let inventory = try await store.reconcileAndroidPackages(
+        [externalUpdate],
+        userdataGeneration: generation
+    )
+    #expect(inventory.first?.versionCode == 9)
+    var record = try #require(try await store.listManagedPackages().first)
+    #expect(record.versionCode == 9)
+    #expect(record.displayName == "HelloText updated")
+    #expect(!record.artifacts.currentMatchesAndroid)
+    #expect(record.android.updateOwner == PackageID(rawValue: "io.apkrun.store"))
+    #expect(record.android.nativeAbis == ["arm64-v8a", "x86_64"])
+    #expect(record.android.userdataGeneration == generation)
+
+    try await store.reconcileAndroidPackage(
+        packageID: packageID,
+        info: nil,
+        userdataGeneration: generation
+    )
+    record = try #require(try await store.listManagedPackages().first)
+    #expect(record.state == .broken(.removedInAndroid))
+
+    try await store.reconcileAndroidPackage(
+        packageID: packageID,
+        info: externalUpdate,
+        userdataGeneration: generation
+    )
+    record = try #require(try await store.listManagedPackages().first)
+    #expect(record.state == .installed)
+}
+
+@Test func packageStoreDetectsSameVersionAndroidReplacement() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let channel = FakeStoreChannel()
+    let generation = UUID()
+    let store = PackageStore(
+        packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
+        runtimeAccess: FakeStoreRuntime(channel: channel, generation: generation),
+        inspector: { _ in facts() }
+    )
+    try await store.open()
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let preview = try await store.importPackage(files: [input])
+    let installed = try await store.installImported(ticket: preview.ticket)
+    let signer = try #require(SHA256Digest(hex: String(repeating: "a", count: 64)))
+
+    let originalInstall = StorePackageInfo(
+        packageID: packageID,
+        displayName: "HelloText",
+        versionCode: installed.versionCode,
+        versionName: "1.0",
+        enabled: true,
+        launchableComponent: "\(packageID.rawValue)/.MainActivity",
+        lastUpdateTime: Date(timeIntervalSince1970: 200),
+        targetSDK: 35,
+        minSDK: 24,
+        signingDigests: [signer]
+    )
+    try await store.reconcileAndroidPackage(
+        packageID: packageID,
+        info: originalInstall,
+        userdataGeneration: generation
+    )
+    var record = try #require(try await store.listManagedPackages().first)
+    #expect(record.artifacts.currentMatchesAndroid)
+    #expect(record.signingCertificates == [signer])
+
+    let sameVersionReplacement = StorePackageInfo(
+        packageID: packageID,
+        displayName: "HelloText",
+        versionCode: installed.versionCode,
+        versionName: "1.0",
+        enabled: true,
+        launchableComponent: "\(packageID.rawValue)/.MainActivity",
+        lastUpdateTime: Date(timeIntervalSince1970: 300),
+        targetSDK: 35,
+        minSDK: 24,
+        signingDigests: [signer]
+    )
+    try await store.reconcileAndroidPackage(
+        packageID: packageID,
+        info: sameVersionReplacement,
+        userdataGeneration: generation
+    )
+
+    record = try #require(try await store.listManagedPackages().first)
+    #expect(record.state == .installed)
+    #expect(record.versionCode == installed.versionCode)
+    #expect(record.signingCertificates == [signer])
+    #expect(!record.artifacts.currentMatchesAndroid)
+}
+
+@Test func packageStorePreservesUserdataResetAndRecoveryReconciliation() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let channel = FakeStoreChannel()
+    let originalGeneration = UUID()
+    let runtime = FakeStoreRuntime(channel: channel, generation: originalGeneration)
+    let store = PackageStore(
+        packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
+        runtimeAccess: runtime,
+        inspector: { _ in facts() }
+    )
+    try await store.open()
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let initialPreview = try await store.importPackage(files: [input])
+    _ = try await store.installImported(ticket: initialPreview.ticket)
+
+    let resetGeneration = UUID()
+    await runtime.setGeneration(resetGeneration)
+    _ = try await store.reconcileAndroidPackages([], userdataGeneration: resetGeneration)
+    var record = try #require(try await store.listManagedPackages().first)
+    #expect(record.state == .needsReinstall(.userdataReset))
+    #expect(record.android.userdataGeneration == originalGeneration)
+
+    let restoredInfo = storePackageInfo(packageID: packageID, versionCode: 6)
+    await channel.seed(restoredInfo)
+    try await store.reconcileAndroidPackage(
+        packageID: packageID,
+        info: restoredInfo,
+        userdataGeneration: resetGeneration
+    )
+    record = try #require(try await store.listManagedPackages().first)
+    #expect(record.state == .needsReinstall(.userdataRestored))
+    #expect(record.versionCode == 6)
+    #expect(!record.artifacts.currentMatchesAndroid)
+    #expect(record.android.userdataGeneration == originalGeneration)
+
+    let reinstallPreview = try await store.importPackage(files: [input])
+    let reinstall = try await store.reinstallWithOutcome(ticket: reinstallPreview.ticket)
+    #expect(await channel.lastInstallRequest?.mode == .update)
+    #expect(reinstall.record.state == .installed)
+    #expect(reinstall.record.versionCode == 7)
+    #expect(reinstall.record.android.userdataGeneration == resetGeneration)
+}
+
+@Test func packageStoreResolvesUserdataResetWhenAndroidReportsSameOrNewerVersion() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let installerPackage = try #require(PackageID(rawValue: "com.android.packageinstaller"))
+    let updateOwner = try #require(PackageID(rawValue: "io.apkrun.store"))
+    let channel = FakeStoreChannel()
+    let originalGeneration = UUID()
+    let store = PackageStore(
+        packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
+        runtimeAccess: FakeStoreRuntime(channel: channel, generation: originalGeneration),
+        inspector: { _ in facts() }
+    )
+    try await store.open()
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let preview = try await store.importPackage(files: [input])
+    _ = try await store.installImported(ticket: preview.ticket)
+
+    let resetGeneration = UUID()
+    _ = try await store.reconcileAndroidPackages([], userdataGeneration: resetGeneration)
+    #expect(try await store.listManagedPackages().first?.state == .needsReinstall(.userdataReset))
+
+    let sameVersion = StorePackageInfo(
+        packageID: packageID,
+        displayName: "HelloText after reset",
+        versionCode: preview.versionCode,
+        versionName: "1.0-reset",
+        enabled: true,
+        launchableComponent: "\(packageID.rawValue)/.MainActivity",
+        installerPackage: installerPackage,
+        firstInstallTime: Date(timeIntervalSince1970: 100),
+        lastUpdateTime: Date(timeIntervalSince1970: 300),
+        targetSDK: 36,
+        minSDK: 25,
+        updateOwner: updateOwner,
+        nativeABIs: ["arm64-v8a", "x86_64"]
+    )
+    try await store.reconcileAndroidPackage(
+        packageID: packageID,
+        info: sameVersion,
+        userdataGeneration: resetGeneration
+    )
+
+    var record = try #require(try await store.listManagedPackages().first)
+    #expect(record.state == .installed)
+    #expect(record.versionCode == preview.versionCode)
+    #expect(record.versionName == "1.0-reset")
+    #expect(record.displayName == "HelloText after reset")
+    #expect(record.android.updateOwner == updateOwner)
+    #expect(record.android.installerOfRecord == installerPackage)
+    #expect(record.android.lastUpdateTime == Date(timeIntervalSince1970: 300))
+    #expect(record.android.targetSdk == 36)
+    #expect(record.android.nativeAbis == ["arm64-v8a", "x86_64"])
+    #expect(record.android.userdataGeneration == resetGeneration)
+
+    let newerGeneration = UUID()
+    _ = try await store.reconcileAndroidPackages([], userdataGeneration: newerGeneration)
+    #expect(try await store.listManagedPackages().first?.state == .needsReinstall(.userdataReset))
+
+    let newerVersion = StorePackageInfo(
+        packageID: packageID,
+        displayName: "HelloText newer install",
+        versionCode: preview.versionCode + 2,
+        versionName: "1.2",
+        enabled: true,
+        launchableComponent: "\(packageID.rawValue)/.MainActivity",
+        installerPackage: installerPackage,
+        firstInstallTime: Date(timeIntervalSince1970: 100),
+        lastUpdateTime: Date(timeIntervalSince1970: 400),
+        targetSDK: 37,
+        minSDK: 26,
+        updateOwner: updateOwner,
+        nativeABIs: ["arm64-v8a"]
+    )
+    _ = try await store.reconcileAndroidPackages(
+        [newerVersion],
+        userdataGeneration: newerGeneration
+    )
+
+    record = try #require(try await store.listManagedPackages().first)
+    #expect(record.state == .installed)
+    #expect(record.versionCode == newerVersion.versionCode)
+    #expect(record.versionName == "1.2")
+    #expect(record.displayName == "HelloText newer install")
+    #expect(record.android.lastUpdateTime == Date(timeIntervalSince1970: 400))
+    #expect(record.android.targetSdk == 37)
+    #expect(record.android.nativeAbis == ["arm64-v8a"])
+    #expect(record.android.userdataGeneration == newerGeneration)
 }
 
 private func facts(versionCode: VersionCode = 7) -> APKFacts {

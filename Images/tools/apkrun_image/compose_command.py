@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -103,6 +105,9 @@ ODM_PARTITION = "odm_a"
 VENDOR_PARTITION = "vendor_a"
 MESA_PRODUCT_RELATIVE_PATH = "mesa/prebuilt"
 OUTPUT_FILES = ("super.img", "vbmeta_system_a.img", "vbmeta_a.img", "composition.json")
+DARWIN_RENAME_EXCL = 0x00000004
+LINUX_RENAME_NOREPLACE = 0x00000001
+LINUX_AT_FDCWD = -100
 PRODUCT_POLICY_INPUTS = (
     "sepolicy/apkrun_guest.cil",
     "sepolicy/apkrun_vsockd.cil",
@@ -1603,7 +1608,7 @@ def compose_image(
                 raise ImageCompositionError(f"{path}: a composition output is missing or unsafe.")
         shutil.rmtree(snapshot_product)
         shutil.rmtree(work)
-        os.rename(stage, output_directory)
+        _rename_directory_without_replacement(stage, output_directory)
         return record
     except (
         ComposeAvbError,
@@ -1620,6 +1625,60 @@ def compose_image(
     ):
         shutil.rmtree(stage, ignore_errors=True)
         raise
+
+
+def _rename_directory_without_replacement(source: Path, destination: Path) -> None:
+    """Atomically publish a directory without replacing a concurrent destination."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    source_bytes = os.fsencode(source)
+    destination_bytes = os.fsencode(destination)
+
+    if sys.platform == "darwin":
+        try:
+            rename = libc.renamex_np
+        except AttributeError as error:
+            raise ImageCompositionError(
+                "atomic no-replace directory publication is unavailable on macOS."
+            ) from error
+        rename.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint)
+        rename.restype = ctypes.c_int
+        result = rename(source_bytes, destination_bytes, DARWIN_RENAME_EXCL)
+    elif sys.platform.startswith("linux"):
+        try:
+            rename = libc.renameat2
+        except AttributeError as error:
+            raise ImageCompositionError(
+                "atomic no-replace directory publication is unavailable on Linux."
+            ) from error
+        rename.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        rename.restype = ctypes.c_int
+        result = rename(
+            LINUX_AT_FDCWD,
+            source_bytes,
+            LINUX_AT_FDCWD,
+            destination_bytes,
+            LINUX_RENAME_NOREPLACE,
+        )
+    else:
+        raise ImageCompositionError(
+            "atomic no-replace directory publication is unsupported on this platform."
+        )
+
+    if result == 0:
+        return
+
+    error_number = ctypes.get_errno()
+    if error_number in (errno.EEXIST, errno.ENOTEMPTY):
+        raise ImageCompositionError(
+            f"{destination}: output was created while composition was running."
+        )
+    raise OSError(error_number, os.strerror(error_number), destination)
 
 
 def _filesystem_is_case_sensitive(directory: Path) -> bool:

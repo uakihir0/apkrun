@@ -947,6 +947,50 @@ def test_compose_image_removes_staged_outputs_after_late_failure(
     assert list(output.parent.iterdir()) == []
 
 
+@pytest.mark.parametrize("existing_destination", ["directory", "symlink"])
+def test_compose_does_not_replace_destination_created_during_composition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    existing_destination: str,
+) -> None:
+    manifest, product, output, _document = _install_composer_fakes(monkeypatch, tmp_path)
+    publish = command._rename_directory_without_replacement
+    preserved = tmp_path / "preserved"
+    preserved.mkdir()
+    marker = preserved / "created-during-composition"
+    marker.write_text("preserve this output", encoding="utf-8")
+
+    def publish_after_destination_is_created(source: Path, destination: Path) -> None:
+        if existing_destination == "directory":
+            destination.mkdir()
+            destination_marker = destination / marker.name
+            destination_marker.write_text(
+                marker.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+        else:
+            destination.symlink_to(preserved, target_is_directory=True)
+        publish(source, destination)
+
+    monkeypatch.setattr(
+        command,
+        "_rename_directory_without_replacement",
+        publish_after_destination_is_created,
+    )
+
+    with pytest.raises(command.ImageCompositionError, match="output was created"):
+        command.compose_image(manifest, output_directory=output, product_root=product)
+
+    if existing_destination == "directory":
+        assert output.is_dir()
+        assert (output / marker.name).read_text(encoding="utf-8") == "preserve this output"
+    else:
+        assert output.is_symlink()
+        assert output.resolve() == preserved
+    assert marker.read_text(encoding="utf-8") == "preserve this output"
+    assert not list(output.parent.glob(".apkrun-compose-*"))
+
+
 def test_compose_rejects_mismatched_stock_system_ext_descriptors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

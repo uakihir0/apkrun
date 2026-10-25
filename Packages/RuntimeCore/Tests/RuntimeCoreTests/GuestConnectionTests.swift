@@ -96,7 +96,7 @@ func handshakeRefusesAnotherMajorVersionAndSaysSo() async throws {
 
 @Test(.timeLimit(.minutes(1)))
 func handshakeRefusesTheWrongChannel() async throws {
-    let transport = InMemoryTransport { _, agent, _ in agent.sendHello(channel: .guestInput) }
+    let transport = GatedHandshakeAckTransport()
     let connection = GuestConnection(endpoint: .guestControl, transport: transport)
     do {
         _ = try await connection.open()
@@ -104,6 +104,26 @@ func handshakeRefusesTheWrongChannel() async throws {
     } catch {
         #expect(error == .handshakeFailed(.wrongChannel))
     }
+    try await eventually {
+        transport.stream?.didBlockRejectedAck == true
+    }
+    let closeTask = Task { await connection.close() }
+    let closeDeadline = ContinuousClock.now + .seconds(5)
+    while !(await connection.isCloseRequested), ContinuousClock.now < closeDeadline {
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(await connection.isCloseRequested)
+    transport.stream?.releaseRejectedAck()
+    await closeTask.value
+
+    let rejection = transport.agent.envelopes.compactMap { envelope -> GPRejected? in
+        if case .helloAck(let ack)? = envelope.body, case .rejected(let rejected)? = ack.outcome {
+            return rejected
+        }
+        return nil
+    }
+    #expect(rejection.first?.reason == .wrongChannel)
+    #expect(transport.stream?.closeCount == 1)
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -466,7 +486,7 @@ func storeArtifactConnectionSendsAndReceivesBulkFramesWithBackpressure() async t
     try await eventually {
         transport.agents[0].envelopes.contains { envelope in
             guard case .bulk(let frame)? = envelope.body,
-                  case .begin(let received)? = frame.kind
+                case .begin(let received)? = frame.kind
             else {
                 return false
             }
@@ -497,6 +517,74 @@ func storeArtifactConnectionSendsAndReceivesBulkFramesWithBackpressure() async t
 }
 
 @Test(.timeLimit(.minutes(1)))
+func bulkFrameWriteTimeoutClosesAStalledTransport() async throws {
+    let transport = BlockingBulkWriteTransport()
+    let connection = GuestConnection(
+        endpoint: .storeArtifacts,
+        transport: transport,
+        presentedToken: Data(repeating: 7, count: 16)
+    )
+    _ = try await connection.open()
+
+    var begin = GPBulkBegin()
+    begin.kind = .installArtifact
+    begin.name = "base"
+    begin.mimeType = "application/vnd.android.package-archive"
+    begin.size = 1
+    begin.sha256 = Data(repeating: 9, count: 32)
+    begin.context = "install-1"
+    var outgoing = GPBulkFrame()
+    outgoing.transferID = 2
+    outgoing.kind = .begin(begin)
+
+    do {
+        try await connection.sendBulkFrame(outgoing, timeout: .milliseconds(100))
+        Issue.record("a stalled bulk frame write did not time out")
+    } catch {
+        #expect(error == GuestProtocolFailure.timeout(operation: "bulk frame write"))
+    }
+
+    #expect(await connection.closeReason == .timeout(operation: "bulk frame write"))
+    try await eventually {
+        transport.stream?.closeCount == 1
+    }
+    #expect(transport.stream?.closeCount == 1)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func closingConnectionForcesAStalledWriterAfterDrainDeadline() async throws {
+    let transport = BlockingBulkWriteTransport()
+    let connection = GuestConnection(
+        endpoint: .storeArtifacts,
+        transport: transport,
+        presentedToken: Data(repeating: 7, count: 16)
+    )
+    _ = try await connection.open()
+
+    var begin = GPBulkBegin()
+    begin.kind = .installArtifact
+    begin.name = "base"
+    begin.mimeType = "application/vnd.android.package-archive"
+    begin.size = 1
+    begin.sha256 = Data(repeating: 9, count: 32)
+    begin.context = "install-1"
+    var outgoing = GPBulkFrame()
+    outgoing.transferID = 2
+    outgoing.kind = .begin(begin)
+
+    let send = Task { try? await connection.sendBulkFrame(outgoing) }
+    try await eventually {
+        transport.stream?.didBlockBulkWrite == true
+    }
+
+    await connection.close()
+    await send.value
+
+    #expect(await connection.closeReason == .disconnected)
+    #expect(transport.stream?.closeCount == 1)
+}
+
+@Test(.timeLimit(.minutes(1)))
 func bulkFramesAreRejectedOnControlEndpoints() async throws {
     let connection = GuestConnection(
         endpoint: .storeControl,
@@ -512,4 +600,177 @@ func bulkFramesAreRejectedOnControlEndpoints() async throws {
         #expect(error == .malformedFrame)
     }
     await connection.close()
+}
+
+private final class GatedHandshakeAckTransport: GuestTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private let backing: InMemoryTransport
+    private var openedStream: GatedHandshakeAckStream?
+
+    init() {
+        backing = InMemoryTransport { _, agent, _ in agent.sendHello(channel: .guestInput) }
+    }
+
+    var agent: InMemoryAgent {
+        backing.agents[0]
+    }
+
+    var stream: GatedHandshakeAckStream? {
+        lock.withLock { openedStream }
+    }
+
+    func open(_ endpoint: GuestEndpoint) async throws -> any GuestByteStream {
+        let base = try await backing.open(endpoint)
+        let stream = GatedHandshakeAckStream(base: base)
+        lock.withLock { openedStream = stream }
+        return stream
+    }
+}
+
+private final class GatedHandshakeAckStream: GuestByteStream, @unchecked Sendable {
+    private let lock = NSLock()
+    private let base: any GuestByteStream
+    private var isClosed = false
+    private var pendingWrite: CheckedContinuation<Void, Error>?
+    private var didBlockRejectedAckStorage = false
+    private var closeCountStorage = 0
+
+    init(base: any GuestByteStream) {
+        self.base = base
+    }
+
+    var didBlockRejectedAck: Bool {
+        lock.withLock { didBlockRejectedAckStorage }
+    }
+
+    var closeCount: Int {
+        lock.withLock { closeCountStorage }
+    }
+
+    func read() async throws -> Data? {
+        try await base.read()
+    }
+
+    func write(_ bytes: Data) async throws {
+        let envelope = try FrameCodec.decode(bytes)
+        guard case .helloAck(let ack)? = envelope.body,
+            case .rejected(let rejected)? = ack.outcome,
+            rejected.reason == .wrongChannel
+        else {
+            try await base.write(bytes)
+            return
+        }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let shouldWait = lock.withLock {
+                guard !isClosed else {
+                    return false
+                }
+                didBlockRejectedAckStorage = true
+                pendingWrite = continuation
+                return true
+            }
+            if !shouldWait {
+                continuation.resume(throwing: CancellationError())
+            }
+        }
+        try await base.write(bytes)
+    }
+
+    func releaseRejectedAck() {
+        let pending = lock.withLock {
+            let pending = pendingWrite
+            pendingWrite = nil
+            return pending
+        }
+        pending?.resume()
+    }
+
+    func close() async {
+        let pending = lock.withLock {
+            closeCountStorage += 1
+            isClosed = true
+            let pending = pendingWrite
+            pendingWrite = nil
+            return pending
+        }
+        pending?.resume(throwing: CancellationError())
+        await base.close()
+    }
+}
+
+private final class BlockingBulkWriteTransport: GuestTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var openedStream: BlockingBulkWriteStream?
+    private let agent = InMemoryTransport { _, agent, _ in
+        agent.sendHello(channel: .storeArtifacts, capabilities: ["store.install.v1"])
+    }
+
+    var stream: BlockingBulkWriteStream? {
+        lock.withLock { openedStream }
+    }
+
+    func open(_ endpoint: GuestEndpoint) async throws -> any GuestByteStream {
+        let base = try await agent.open(endpoint)
+        let stream = BlockingBulkWriteStream(base: base)
+        lock.withLock { openedStream = stream }
+        return stream
+    }
+}
+
+private final class BlockingBulkWriteStream: GuestByteStream, @unchecked Sendable {
+    private let lock = NSLock()
+    private let base: any GuestByteStream
+    private var isClosed = false
+    private var didBlockBulkWriteStorage = false
+    private var pendingWrite: CheckedContinuation<Void, Error>?
+    private var closeCountStorage = 0
+
+    init(base: any GuestByteStream) {
+        self.base = base
+    }
+
+    var closeCount: Int {
+        lock.withLock { closeCountStorage }
+    }
+
+    var didBlockBulkWrite: Bool {
+        lock.withLock { didBlockBulkWriteStorage }
+    }
+
+    func read() async throws -> Data? {
+        return try await base.read()
+    }
+
+    func write(_ bytes: Data) async throws {
+        let envelope = try FrameCodec.decode(bytes)
+        if case .bulk? = envelope.body {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let shouldWait = lock.withLock {
+                    guard !isClosed, !didBlockBulkWriteStorage else {
+                        return false
+                    }
+                    didBlockBulkWriteStorage = true
+                    pendingWrite = continuation
+                    return true
+                }
+                if !shouldWait {
+                    continuation.resume(throwing: CancellationError())
+                }
+            }
+        }
+        try await base.write(bytes)
+    }
+
+    func close() async {
+        let pending = lock.withLock {
+            closeCountStorage += 1
+            isClosed = true
+            let pending = pendingWrite
+            pendingWrite = nil
+            return pending
+        }
+        pending?.resume(throwing: CancellationError())
+        await base.close()
+    }
 }

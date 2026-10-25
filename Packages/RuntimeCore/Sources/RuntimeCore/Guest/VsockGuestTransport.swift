@@ -3,7 +3,7 @@ import GuestProtocol
 import VirtualMachineCore
 
 /// Opens Guest Agent and Store Agent channels over the VM's host-to-guest vsock connection.
-public struct VsockGuestTransport: GuestTransport {
+public struct VsockGuestTransport: GuestTransport, RuntimeGuestTransport {
     /// Connects to a guest port with a timeout and returns its byte stream.
     public typealias Connector = @Sendable (UInt32, Duration) async throws -> VsockConnection
 
@@ -33,6 +33,16 @@ public struct VsockGuestTransport: GuestTransport {
         return VsockGuestByteStream(connection: try await connect(port, connectTimeout))
     }
 
+    /// Opens one Store Agent endpoint through the same vsock bridge as the Guest Agent transport.
+    public func open(_ endpoint: RuntimeGuestEndpoint) async throws -> any RuntimeGuestByteStream {
+        let port: UInt32
+        switch endpoint {
+        case .storeControl: port = 6110
+        case .storeArtifacts: port = 6111
+        }
+        return VsockGuestByteStream(connection: try await connect(port, connectTimeout))
+    }
+
     private static func port(for endpoint: GuestEndpoint) -> UInt32? {
         switch endpoint {
         case .guestControl: 6100
@@ -46,7 +56,7 @@ public struct VsockGuestTransport: GuestTransport {
 }
 
 /// Adapts the vsock stream's empty EOF value to the GuestByteStream nil EOF value.
-private actor VsockGuestByteStream: GuestByteStream {
+private actor VsockGuestByteStream: GuestByteStream, RuntimeGuestByteStream {
     private let connection: VsockConnection
     private var reachedEOF = false
 
@@ -70,5 +80,6 @@ private actor VsockGuestByteStream: GuestByteStream {
 
     func close() async {
         connection.close()
+        await connection.closed.value
     }
 }

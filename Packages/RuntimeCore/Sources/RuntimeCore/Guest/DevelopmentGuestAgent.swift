@@ -1,6 +1,7 @@
 import DiagnosticsCore
 import Foundation
 import GuestProtocol
+import RuntimeAPI
 
 /// A relay from the supervisor's restart closure to the coordinator. The coordinator is an actor that holds the
 /// supervisor, so the closure cannot capture it while the two are built.
@@ -18,6 +19,51 @@ private final class RestartRelay: @unchecked Sendable {
             return false
         }
         return await current(loss)
+    }
+}
+
+/// Broadcasts package changes from one Guest Agent relay to independently cancellable clients.
+private final class RuntimeStorePackageEventHub: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuations: [UUID: AsyncStream<RuntimeStorePackageEvent>.Continuation] = [:]
+
+    func makeStream() -> AsyncStream<RuntimeStorePackageEvent> {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream.makeStream(
+            of: RuntimeStorePackageEvent.self,
+            bufferingPolicy: .bufferingNewest(1_024)
+        )
+        lock.withLock {
+            continuations[id] = continuation
+        }
+        continuation.onTermination = { [weak self] _ in
+            self?.remove(id)
+        }
+        return stream
+    }
+
+    func yield(_ event: RuntimeStorePackageEvent) {
+        let subscribers = lock.withLock { Array(continuations.values) }
+        for subscriber in subscribers {
+            subscriber.yield(event)
+        }
+    }
+
+    func finish() {
+        let subscribers = lock.withLock {
+            let current = Array(continuations.values)
+            continuations.removeAll()
+            return current
+        }
+        for subscriber in subscribers {
+            subscriber.finish()
+        }
+    }
+
+    private func remove(_ id: UUID) {
+        _ = lock.withLock {
+            continuations.removeValue(forKey: id)
+        }
     }
 }
 
@@ -58,6 +104,8 @@ public actor DevelopmentGuestAgent {
     public nonisolated let taskEvents: AsyncStream<DevelopmentGuestTaskEvent>
     /// Display lifecycle changes from the same sequenced Guest Agent event relay.
     public nonisolated let displayEvents: AsyncStream<GuestDisplayEvent>
+    /// Package lifecycle changes reported by Android's PackageManager through the Guest Agent.
+    public nonisolated let packageEvents: AsyncStream<RuntimeStorePackageEvent>
     /// Android reboot notifications inferred from consecutive supervisor snapshots.
     public nonisolated var androidRestartEvents: AsyncStream<GuestAndroidRestart> {
         supervisor.androidRestartEvents
@@ -80,7 +128,9 @@ public actor DevelopmentGuestAgent {
     private var inputConnectionToken: Data?
     private let taskEventContinuation: AsyncStream<DevelopmentGuestTaskEvent>.Continuation
     private let displayEventContinuation: AsyncStream<GuestDisplayEvent>.Continuation
-    private var taskEventRelay: Task<Void, Never>?
+    private let packageEventContinuation: AsyncStream<RuntimeStorePackageEvent>.Continuation
+    private nonisolated let packageEventHub: RuntimeStorePackageEventHub
+    private var eventRelay: Task<Void, Never>?
 
     /// Creates the coordinator for `bundle`; ADB installs and starts the agent, while the selected transport connects
     /// to its protocol endpoints.
@@ -119,6 +169,13 @@ public actor DevelopmentGuestAgent {
         )
         self.displayEvents = displayEvents
         self.displayEventContinuation = displayEventContinuation
+        packageEventHub = RuntimeStorePackageEventHub()
+        let packageEvents = AsyncStream.makeStream(
+            of: RuntimeStorePackageEvent.self,
+            bufferingPolicy: .bufferingNewest(1_024)
+        )
+        self.packageEvents = packageEvents.stream
+        packageEventContinuation = packageEvents.continuation
         relay.set { [weak self] loss in
             guard let self else {
                 return false
@@ -190,7 +247,7 @@ public actor DevelopmentGuestAgent {
         }
         try requireStarted(started)
         _ = try connectionTimeRemaining(until: deadline)
-        startTaskEventRelay()
+        startEventRelay()
         do {
             try await supervisor.start(until: deadline)
             try requireStarted(started)
@@ -240,15 +297,24 @@ public actor DevelopmentGuestAgent {
     public func stop() async {
         generation += 1
         await supervisor.stop()
-        taskEventRelay?.cancel()
-        taskEventRelay = nil
+        eventRelay?.cancel()
+        eventRelay = nil
         taskEventContinuation.finish()
         displayEventContinuation.finish()
+        packageEventContinuation.finish()
+        packageEventHub.finish()
         // The input connection belongs to the control session, so it ends with it.
         await inputConnection?.close()
         inputConnection = nil
         inputConnectionToken = nil
         try? await removeForwards()
+    }
+
+    /// Creates an independent stream for observing PackageManager changes.
+    ///
+    /// A subscriber can cancel its stream without ending other subscribers or future subscriptions.
+    public nonisolated func makePackageEventStream() -> AsyncStream<RuntimeStorePackageEvent> {
+        packageEventHub.makeStream()
     }
 
     /// The number of `adb shell` commands that this agent's ADB client has started (input.md §11, #25). The input path
@@ -320,15 +386,17 @@ public actor DevelopmentGuestAgent {
         }
     }
 
-    /// Starts relaying task lifecycle events before the control connection can publish them.
-    private func startTaskEventRelay() {
-        guard taskEventRelay == nil else {
+    /// Starts relaying task, display, and package lifecycle events before the control connection can publish them.
+    func startEventRelay() {
+        guard eventRelay == nil else {
             return
         }
         let updates = supervisor.updates
         let continuation = taskEventContinuation
         let displayContinuation = displayEventContinuation
-        taskEventRelay = Task {
+        let packageContinuation = packageEventContinuation
+        let packageEventHub = self.packageEventHub
+        eventRelay = Task {
             for await event in updates {
                 guard let kind = event.kind else {
                     continue
@@ -346,11 +414,32 @@ public actor DevelopmentGuestAgent {
                     displayContinuation.yield(.removed(displayID: display.displayID))
                 case .tasksCleared(let tasks):
                     displayContinuation.yield(.tasksCleared(displayID: tasks.displayID))
+                case .packageChanged(let package):
+                    if let event = Self.packageEvent(package) {
+                        packageContinuation.yield(event)
+                        packageEventHub.yield(event)
+                    }
                 default:
                     break
                 }
             }
         }
+    }
+
+    private static func packageEvent(_ wire: GPPackageChanged) -> RuntimeStorePackageEvent? {
+        guard let packageID = RuntimePackageID(rawValue: wire.package), wire.versionCode >= 0 else {
+            return nil
+        }
+        let kind: RuntimeStorePackageEvent.Kind
+        switch wire.kind {
+        case .added: kind = .added
+        case .replaced: kind = .replaced
+        case .removed: kind = .removed
+        case .changed: kind = .changed
+        case .unspecified, .UNRECOGNIZED:
+            return nil
+        }
+        return RuntimeStorePackageEvent(packageID: packageID, kind: kind, versionCode: wire.versionCode)
     }
 
     /// Throws `stopped` when ``stop()`` has run since `started`, so that a start in flight does not go on.
@@ -528,6 +617,48 @@ public actor DevelopmentGuestAgent {
             return result.packages
         } catch {
             throw .operation(error)
+        }
+    }
+
+    /// Reads PackageManager package facts through RuntimeCore-owned value types for host adapters.
+    public func storePackageInfo(_ package: String) async throws(GuestAgentFailure) -> GuestPackageMetadata? {
+        guard let info = try await queryPackage(package) else {
+            return nil
+        }
+        return GuestPackageMetadata(
+            package: info.package,
+            label: info.label,
+            versionCode: info.versionCode,
+            versionName: info.versionName,
+            enabled: info.enabled,
+            launchableComponent: info.launchableComponent,
+            installerPackage: info.installerPackage,
+            firstInstallTimeMs: info.firstInstallTimeMs,
+            lastUpdateTimeMs: info.lastUpdateTimeMs,
+            targetSDK: info.targetSdk,
+            minSDK: info.minSdk,
+            signingSHA256: info.signingSha256
+        )
+    }
+
+    /// Lists PackageManager packages through RuntimeCore-owned value types for host adapters.
+    public func listStorePackages(
+        filter: GuestPackageFilter = .userInstalled
+    ) async throws(GuestAgentFailure) -> [GuestPackageSummary] {
+        let wireFilter: GPPackageFilter
+        switch filter {
+        case .launchable: wireFilter = .launchable
+        case .userInstalled: wireFilter = .userInstalled
+        case .all: wireFilter = .all
+        }
+        return try await listPackages(filter: wireFilter).map { package in
+            GuestPackageSummary(
+                package: package.package,
+                label: package.label,
+                versionCode: package.versionCode,
+                launchable: package.launchable,
+                userInstalled: package.userInstalled
+            )
         }
     }
 

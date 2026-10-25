@@ -59,6 +59,7 @@ public actor GuestConnection {
     public static let defaultHandshakeTimeout: Duration = .seconds(5)
     /// How long after the agent's own timeout the host gives up on a request (guest-protocol.md §4.1 and §6).
     public static let responseGrace: Duration = .seconds(1)
+    private static let closeDrainTimeout: Duration = .seconds(1)
 
     private let transport: any GuestTransport
     private let presentedToken: Data?
@@ -69,6 +70,9 @@ public actor GuestConnection {
     private let inputAckContinuation: AsyncStream<GPInputAck>.Continuation
     private let bulkFrameContinuation: AsyncStream<GPBulkFrame>.Continuation
     private var outbound: AsyncStream<Data>.Continuation?
+    private var closeRequested = false
+    private var activeStream: (any GuestByteStream)?
+    private var streamCloseTask: Task<Void, Never>?
     /// The bytes that the frames yielded to `outbound` hold, until the transport has written them.
     private var outboundBacklog = 0
     private var outboundDrainWaiters: [CheckedContinuation<Void, Never>] = []
@@ -138,6 +142,10 @@ public actor GuestConnection {
         failure
     }
 
+    var isCloseRequested: Bool {
+        closeRequested
+    }
+
     /// Opens the stream, reads the agent's Hello, and answers with HelloAck (guest-protocol.md §5.1). It fails with
     /// the typed failure of the handshake, and within ``handshakeTimeout`` at most. That limit covers the transport's
     /// open as well as the Hello and the HelloAck.
@@ -158,6 +166,7 @@ public actor GuestConnection {
                 Task { await opened.close() }
                 return
             }
+            activeStream = opened
             handshakeContinuation = continuation
             let frames = AsyncStream.makeStream(of: Data.self, bufferingPolicy: .unbounded)
             outbound = frames.continuation
@@ -179,7 +188,7 @@ public actor GuestConnection {
                             break
                         }
                     }
-                    await opened.close()
+                    await self.closeActiveStream()
                 }
             )
             tasks.append(Task { await self.readLoop(opened) })
@@ -285,8 +294,25 @@ public actor GuestConnection {
     }
 
     /// Closes the connection. The pending requests fail with `disconnected`, and the events stream finishes.
-    public func close() {
+    /// The writer drains any already queued frames before it closes the underlying stream.
+    public func close() async {
+        closeRequested = true
         connectionLost(.disconnected)
+        if let writer = tasks.first {
+            let forceClose = Task {
+                do {
+                    try await Task.sleep(for: Self.closeDrainTimeout)
+                } catch {
+                    return
+                }
+                await self.closeActiveStream()
+            }
+            await writer.value
+            forceClose.cancel()
+            await forceClose.value
+        } else {
+            await closeActiveStream()
+        }
     }
 
     /// Sends one input batch on the input endpoint, as an `InputBatch` envelope (guest-protocol.md §9). The frame goes
@@ -307,8 +333,14 @@ public actor GuestConnection {
     /// Sends one frame on the bulk or Store Agent artifact endpoint and waits until the transport has written it.
     ///
     /// This bounds queued transfer data to one frame while preserving ordering with request and event frames. Callers
-    /// send chunks of at most 1 MiB as specified by guest-protocol.md §10.
-    public func sendBulkFrame(_ bulk: GPBulkFrame) async throws(GuestProtocolFailure) {
+    /// send chunks of at most 1 MiB as specified by guest-protocol.md §10. When `timeout` is provided, it bounds the
+    /// time spent waiting for the frame to be written; expiration fails the connection and closes its stream.
+    ///
+    /// - Parameter timeout: Maximum write time, or `nil` to wait until the frame is written.
+    public func sendBulkFrame(
+        _ bulk: GPBulkFrame,
+        timeout: Duration? = nil
+    ) async throws(GuestProtocolFailure) {
         guard endpoint == .guestBulk || endpoint == .storeArtifacts else {
             throw .malformedFrame
         }
@@ -318,15 +350,36 @@ public actor GuestConnection {
         if case .begin(let begin)? = bulk.kind, begin.size > 2 * 1_024 * 1_024 * 1_024 {
             throw .malformedFrame
         }
+        let deadline = timeout.map { ContinuousClock.now + $0 }
+        let timeoutTask: Task<Void, Never>?
+        if let timeout {
+            timeoutTask = Task {
+                do {
+                    try await Task.sleep(for: timeout)
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else {
+                    return
+                }
+                self.bulkFrameWriteTimedOut()
+            }
+        } else {
+            timeoutTask = nil
+        }
+        defer { timeoutTask?.cancel() }
+
         while outboundBacklog > 0 {
             guard isUsable else {
                 throw failure ?? .disconnected
             }
             await withCheckedContinuation { outboundDrainWaiters.append($0) }
+            try checkBulkFrameWriteDeadline(deadline)
         }
         guard isUsable else {
             throw failure ?? .disconnected
         }
+        try checkBulkFrameWriteDeadline(deadline)
         var envelope = GPEnvelope()
         envelope.id = allocateEnvelopeID()
         envelope.body = .bulk(bulk)
@@ -340,10 +393,12 @@ public actor GuestConnection {
                 throw failure ?? .disconnected
             }
             await withCheckedContinuation { outboundDrainWaiters.append($0) }
+            try checkBulkFrameWriteDeadline(deadline)
         }
         guard isUsable else {
             throw failure ?? .disconnected
         }
+        try checkBulkFrameWriteDeadline(deadline)
     }
 
     // MARK: - Reading
@@ -531,6 +586,42 @@ public actor GuestConnection {
         for waiter in waiters {
             waiter.resume()
         }
+    }
+
+    private func checkBulkFrameWriteDeadline(
+        _ deadline: ContinuousClock.Instant?
+    ) throws(GuestProtocolFailure) {
+        guard let deadline, deadline <= ContinuousClock.now else {
+            return
+        }
+        failBulkFrameWriteTimeout()
+        throw failure ?? .timeout(operation: "bulk frame write")
+    }
+
+    private func bulkFrameWriteTimedOut() {
+        guard outboundBacklog > 0 else {
+            return
+        }
+        failBulkFrameWriteTimeout()
+    }
+
+    private func failBulkFrameWriteTimeout() {
+        connectionLost(.timeout(operation: "bulk frame write"))
+        Task { await self.closeActiveStream() }
+    }
+
+    /// Closes the underlying stream at most once, including when a timed-out write is later unwound by the writer task.
+    private func closeActiveStream() async {
+        if let streamCloseTask {
+            await streamCloseTask.value
+            return
+        }
+        guard let activeStream else {
+            return
+        }
+        let task = Task { await activeStream.close() }
+        streamCloseTask = task
+        await task.value
     }
 
     // MARK: - Writing and failure

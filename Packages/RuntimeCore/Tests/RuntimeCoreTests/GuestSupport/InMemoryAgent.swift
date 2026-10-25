@@ -17,6 +17,7 @@ final class InMemoryAgent: @unchecked Sendable {
     private var requestsSeen: [GPRequest] = []
     private var envelopesSeen: [GPEnvelope] = []
     private var held: [(id: UInt64, request: GPRequest)] = []
+    private var nextHostWriteGate: AsyncHostWriteGate?
 
     /// Answers a request: the result to send, or nil to hold the request for ``releaseHeld`` or never answer it.
     var answer: @Sendable (GPRequest) -> GPResponse.OneOf_Result? = { _ in nil }
@@ -94,6 +95,27 @@ final class InMemoryAgent: @unchecked Sendable {
         frame.transferID = transferID
         frame.kind = .ack(ack)
         send(body: .bulk(frame))
+    }
+
+    /// Sends one bulk frame with the next envelope ID.
+    func sendBulkFrame(_ frame: GPBulkFrame) {
+        send(body: .bulk(frame))
+    }
+
+    /// Pauses the next host write so a test can observe a transfer while its acknowledgement is in flight.
+    func blockNextHostWrite() -> AsyncHostWriteGate {
+        let gate = AsyncHostWriteGate()
+        lock.withLock { nextHostWriteGate = gate }
+        return gate
+    }
+
+    fileprivate func waitAtHostWriteGate() async {
+        let gate = lock.withLock {
+            let gate = nextHostWriteGate
+            nextHostWriteGate = nil
+            return gate
+        }
+        await gate?.pause()
     }
 
     /// Sends a host file request to the host and returns its envelope ID.
@@ -211,11 +233,57 @@ private final class FakeHostStream: GuestByteStream, @unchecked Sendable {
     }
 
     func write(_ bytes: Data) async throws {
+        await agent.waitAtHostWriteGate()
         agent.receive(bytes)
     }
 
     func close() async {
         agent.hangUp()
+    }
+}
+
+/// A one-shot gate for pausing and resuming the next host-to-agent write.
+final class AsyncHostWriteGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didBlock = false
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+    private var blockedContinuation: CheckedContinuation<Void, Never>?
+
+    func pause() async {
+        await withCheckedContinuation { continuation in
+            let blocked = lock.withLock {
+                didBlock = true
+                releaseContinuation = continuation
+                let blocked = blockedContinuation
+                blockedContinuation = nil
+                return blocked
+            }
+            blocked?.resume()
+        }
+    }
+
+    func waitUntilBlocked() async {
+        await withCheckedContinuation { continuation in
+            let alreadyBlocked = lock.withLock {
+                guard !didBlock else {
+                    return true
+                }
+                blockedContinuation = continuation
+                return false
+            }
+            if alreadyBlocked {
+                continuation.resume()
+            }
+        }
+    }
+
+    func release() {
+        let continuation = lock.withLock {
+            let continuation = releaseContinuation
+            releaseContinuation = nil
+            return continuation
+        }
+        continuation?.resume()
     }
 }
 

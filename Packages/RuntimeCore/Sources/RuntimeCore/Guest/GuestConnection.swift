@@ -95,6 +95,9 @@ public actor GuestConnection {
     private let eventContinuation: AsyncStream<GPEvent>.Continuation
     private let inputAckContinuation: AsyncStream<GPInputAck>.Continuation
     private let bulkFrameContinuation: AsyncStream<GPBulkFrame>.Continuation
+    private let inboundBulkFrameInbox = GuestBulkFrameInbox()
+    private var inboundFileReceiveID: UUID?
+    private var inboundFileReceiver: GuestBulkFileReceiver?
     private var outbound: AsyncStream<Data>.Continuation?
     /// The bytes that the frames yielded to `outbound` hold, until the transport has written them.
     private var outboundBacklog = 0
@@ -206,7 +209,7 @@ public actor GuestConnection {
                             // A write that fails ends the connection, and the requests that wait on it get the reason.
                             self.logger.warning(
                                 "A frame could not be written to the guest: \(error.localizedDescription, .public)")
-                            self.connectionLost(.disconnected)
+                            await self.connectionLost(.disconnected)
                             break
                         }
                     }
@@ -216,7 +219,7 @@ public actor GuestConnection {
             tasks.append(Task { await self.readLoop(opened) })
             handshakeTimer = Task {
                 try? await Task.sleep(for: remaining)
-                self.handshakeTimedOut()
+                await self.handshakeTimedOut()
             }
         }
         switch result {
@@ -308,7 +311,7 @@ public actor GuestConnection {
                 )
             }
             guard let value = Operation.decode(result) else {
-                connectionLost(.malformedFrame)
+                await connectionLost(.malformedFrame)
                 throw .malformedFrame
             }
             return value
@@ -316,8 +319,60 @@ public actor GuestConnection {
     }
 
     /// Closes the connection. The pending requests fail with `disconnected`, and the events stream finishes.
-    public func close() {
-        connectionLost(.disconnected)
+    public func close() async {
+        await connectionLost(.disconnected)
+    }
+
+    /// Prepares one temporary-file receiver for a guest-originated export before the caller accepts it.
+    ///
+    /// The guest's offer determines `expectedSize`. Create the receiver before sending `ResolveExport(ACCEPT)`,
+    /// bind the `transferID` returned by that operation, then start ``GuestBulkFileReceiver/receive()``. The receiver
+    /// creates `temporaryFileURL` exclusively, removes it on any failed transfer, and preserves it only after size
+    /// and SHA-256 verification. Frames sent before the control response are held in a one-frame backpressured inbox.
+    public func prepareBulkFileReceive(
+        expectedSize: UInt64,
+        temporaryFileURL: URL
+    ) async throws(GuestBulkFileReceiveFailure) -> GuestBulkFileReceiver {
+        guard endpoint == .guestBulk,
+            isUsable,
+            sessionInfo?.enabledCapabilities.contains("bulk.v1") == true,
+            inboundFileReceiveID == nil
+        else {
+            throw .invalidOffer
+        }
+        let receiveID = UUID()
+        let receiver = try GuestBulkFileReceiver(
+            connection: self,
+            inbox: inboundBulkFrameInbox,
+            receiveID: receiveID,
+            expectedSize: expectedSize,
+            temporaryFileURL: temporaryFileURL
+        )
+        inboundFileReceiveID = receiveID
+        inboundFileReceiver = receiver
+        await inboundBulkFrameInbox.activate(receiveID: receiveID)
+        guard isUsable else {
+            inboundFileReceiveID = nil
+            await inboundBulkFrameInbox.close()
+            throw .invalidOffer
+        }
+        return receiver
+    }
+
+    func finishBulkFileReceive(receiveID: UUID) async {
+        guard inboundFileReceiveID == receiveID else {
+            return
+        }
+        inboundFileReceiveID = nil
+        inboundFileReceiver = nil
+        await inboundBulkFrameInbox.deactivate(receiveID: receiveID)
+    }
+
+    func failBulkFileReceive(receiveID: UUID, reason: GuestProtocolFailure) async {
+        guard inboundFileReceiveID == receiveID else {
+            return
+        }
+        await connectionLost(reason)
     }
 
     /// Sends one input batch on the input endpoint, as an `InputBatch` envelope (guest-protocol.md §9). The frame goes
@@ -360,17 +415,17 @@ public actor GuestConnection {
         while true {
             do {
                 guard let bytes = try await opened.read() else {
-                    connectionLost(.disconnected)
+                    await connectionLost(.disconnected)
                     return
                 }
                 if !bytes.isEmpty {
-                    try consume(bytes)
+                    try await consume(bytes)
                 }
             } catch let reason as GuestProtocolFailure {
-                connectionLost(reason)
+                await connectionLost(reason)
                 return
             } catch {
-                connectionLost(.disconnected)
+                await connectionLost(.disconnected)
                 return
             }
             if failure != nil {
@@ -379,15 +434,15 @@ public actor GuestConnection {
         }
     }
 
-    private func consume(_ bytes: Data) throws(GuestProtocolFailure) {
+    private func consume(_ bytes: Data) async throws(GuestProtocolFailure) {
         decoder.append(bytes)
         while let body = try decoder.nextBody() {
             let envelope = try FrameCodec.decodeBody(body)
-            try handle(envelope)
+            try await handle(envelope)
         }
     }
 
-    private func handle(_ envelope: GPEnvelope) throws(GuestProtocolFailure) {
+    private func handle(_ envelope: GPEnvelope) async throws(GuestProtocolFailure) {
         guard envelope.id > lastAgentEnvelopeID else {
             throw .malformedFrame
         }
@@ -418,10 +473,20 @@ public actor GuestConnection {
         case .request(let request):
             try receiveHostRequest(request, envelope: envelope)
         case .bulk(let frame):
-            guard endpoint == .guestBulk, case .ack? = frame.kind else {
+            guard endpoint == .guestBulk, let kind = frame.kind else {
                 throw .malformedFrame
             }
-            bulkFrameContinuation.yield(frame)
+            switch kind {
+            case .ack:
+                bulkFrameContinuation.yield(frame)
+            case .begin, .chunk, .end, .abort:
+                guard let receiveID = inboundFileReceiveID else {
+                    throw .malformedFrame
+                }
+                guard await inboundBulkFrameInbox.enqueue(frame, receiveID: receiveID) else {
+                    throw failure ?? .disconnected
+                }
+            }
         default:
             throw .malformedFrame
         }
@@ -645,15 +710,15 @@ public actor GuestConnection {
         }
     }
 
-    private func handshakeTimedOut() {
+    private func handshakeTimedOut() async {
         if sessionInfo == nil {
-            connectionLost(.handshakeTimedOut)
+            await connectionLost(.handshakeTimedOut)
         }
     }
 
     /// Ends the connection once: the handshake and every pending request fail with `reason`, and the streams end.
     /// The writer task closes the byte stream after the frames already queued, such as a rejection, have gone out.
-    private func connectionLost(_ reason: GuestProtocolFailure) {
+    private func connectionLost(_ reason: GuestProtocolFailure) async {
         guard failure == nil else {
             return
         }
@@ -682,6 +747,8 @@ public actor GuestConnection {
         if let hostRequestSession {
             Task { await hostRequestSession.close() }
         }
+        let receiver = inboundFileReceiver
+        inboundFileReceiver = nil
         for waiter in slotWaiters {
             waiter.resume()
         }
@@ -694,6 +761,9 @@ public actor GuestConnection {
         eventContinuation.finish()
         inputAckContinuation.finish()
         bulkFrameContinuation.finish()
+        inboundFileReceiveID = nil
+        await inboundBulkFrameInbox.close()
+        await receiver?.connectionDidClose()
         outbound?.finish()
     }
 

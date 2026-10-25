@@ -84,6 +84,40 @@ final class RuntimeSessionEndpointService: NSObject, RuntimeSessionXPC, @uncheck
         }
     }
 
+    func acceptExport(_ requestData: Data, file: FileHandle?, reply: @escaping (Data) -> Void) {
+        let response = RuntimeSessionDataReply(reply)
+        guard requestData.count <= Self.maximumRequestSize,
+            let request = try? JSONDecoder().decode(RuntimeAcceptExportSessionRequest.self, from: requestData),
+            Self.isSupported(request.header.apiVersion)
+        else {
+            response.send(Self.encode(RuntimeAcceptExportSessionReply(error: Self.malformedRequestError)))
+            return
+        }
+        guard request.header.clientKind == .wrapper else {
+            response.send(Self.encode(RuntimeAcceptExportSessionReply(error: Self.notAuthorizedError)))
+            return
+        }
+        guard
+            (request.request.fileIndex == nil && file == nil)
+                || (request.request.fileIndex == 0 && file != nil)
+        else {
+            response.send(Self.encode(RuntimeAcceptExportSessionReply(error: Self.exportFailedError)))
+            return
+        }
+
+        let boundRequest = request.request.bound(to: sessionID)
+        let service = service
+        Task {
+            do {
+                try await service.acceptExport(boundRequest, file: file)
+                response.send(Self.encode(RuntimeAcceptExportSessionReply()))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalError
+                response.send(Self.encode(RuntimeAcceptExportSessionReply(error: wireError)))
+            }
+        }
+    }
+
     private static let maximumRequestSize = 16 * 1024
     private static let maximumFiles = 20
 
@@ -101,6 +135,12 @@ final class RuntimeSessionEndpointService: NSObject, RuntimeSessionXPC, @uncheck
         code: "integration.transferFailed",
         message: "The dropped files could not be transferred.",
         remediation: "Choose the files again and retry the drop."
+    )
+    private static let exportFailedError = RuntimeWireError(
+        domain: "integration",
+        code: "integration.transferFailed",
+        message: "The offered file could not be saved.",
+        remediation: "Choose a destination and try again."
     )
     private static let internalError = RuntimeWireError.runtime(
         "internal",
@@ -145,6 +185,12 @@ private final class SessionListenerDelegate: NSObject, NSXPCListenerDelegate, @u
         interface.setClasses(
             fileHandleClasses,
             for: #selector(RuntimeSessionXPC.importFiles(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
+        interface.setClasses(
+            fileHandleClasses,
+            for: #selector(RuntimeSessionXPC.acceptExport(_:file:reply:)),
             argumentIndex: 1,
             ofReply: false
         )

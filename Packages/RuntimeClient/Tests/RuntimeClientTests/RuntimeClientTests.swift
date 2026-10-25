@@ -510,6 +510,112 @@ import Testing
     }
 }
 
+@Test func controlClientManagesSharedFolderRootsWithBookmarksAndOpaqueIDs() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .app,
+        claimedIdentity: "io.apkrun.APKRun",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let builtIn = SharedFolder(
+        id: "shared",
+        name: "Shared",
+        path: "~/Library/Application Support/APKRun/Shared",
+        access: .readOnly,
+        builtIn: true,
+        availability: .available
+    )
+    let added = SharedFolder(
+        id: "root-123",
+        name: "Documents",
+        path: "/Users/example/Documents",
+        access: .readOnly,
+        builtIn: false,
+        availability: .available
+    )
+    let updated = SharedFolder(
+        id: added.id,
+        name: added.name,
+        path: added.path,
+        access: .readWrite,
+        builtIn: false,
+        availability: .available
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        sharedFoldersReply: RuntimeSharedFoldersControlReply(result: [builtIn, added]),
+        addSharedFolderReply: RuntimeAddSharedFolderControlReply(result: added),
+        removeSharedFolderReply: RuntimeRemoveSharedFolderControlReply(),
+        setSharedFolderAccessReply: RuntimeSetSharedFolderAccessControlReply(result: updated)
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let bookmark = Data([0, 1, 2, 253, 254, 255])
+
+    #expect(try await client.sharedFolders() == [builtIn, added])
+    #expect(try await client.addSharedFolder(AddSharedFolderRequest(bookmark: bookmark)) == added)
+    #expect(try await client.removeSharedFolder(id: added.id) == RuntimeEmpty())
+    #expect(try await client.setSharedFolderAccess(id: added.id, access: .readWrite) == updated)
+
+    let snapshot = transport.snapshot()
+    let listRequest = try #require(snapshot.sharedFoldersRequests.first)
+    let addRequest = try #require(snapshot.addSharedFolderRequests.first)
+    let removeRequest = try #require(snapshot.removeSharedFolderRequests.first)
+    let accessRequest = try #require(snapshot.setSharedFolderAccessRequests.first)
+    let decodedList = try JSONDecoder().decode(RuntimeSharedFoldersControlRequest.self, from: listRequest)
+    let decodedAdd = try JSONDecoder().decode(RuntimeAddSharedFolderControlRequest.self, from: addRequest)
+    let decodedRemove = try JSONDecoder().decode(RuntimeRemoveSharedFolderControlRequest.self, from: removeRequest)
+    let decodedAccess = try JSONDecoder().decode(RuntimeSetSharedFolderAccessControlRequest.self, from: accessRequest)
+
+    #expect(decodedAdd.request.bookmark == bookmark)
+    #expect(decodedAdd.request.access == .readOnly)
+    #expect(decodedRemove.request.id == added.id)
+    #expect(decodedAccess.request.id == added.id)
+    #expect(decodedAccess.request.access == .readWrite)
+    for header in [decodedList.header, decodedAdd.header, decodedRemove.header, decodedAccess.header] {
+        #expect(header.apiVersion == APIVersion.current)
+        #expect(header.clientKind == .app)
+    }
+}
+
+@Test func controlClientPreservesSharedFolderErrors() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .app,
+        claimedIdentity: "io.apkrun.APKRun",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let failure = RuntimeWireError(
+        domain: "integration",
+        code: "integration.folderUnavailable",
+        message: "The selected folder is not available.",
+        remediation: "Select a folder that is available on this Mac."
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        addSharedFolderReply: RuntimeAddSharedFolderControlReply(error: failure)
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    do {
+        _ = try await client.addSharedFolder(AddSharedFolderRequest(bookmark: Data([1])))
+        Issue.record("The shared-folder error was not returned to the caller.")
+    } catch {
+        #expect(error == .remoteFailure(code: failure.code, message: failure.message))
+    }
+}
+
 @Test func controlClientImportsAndInstallsPackageThroughVersionedRequests() async throws {
     let configuration = try RuntimeControlClientConfiguration(
         clientKind: .cli,
@@ -1379,6 +1485,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private let statusData: Data
     private let packageListData: Data
     private let packageInfoData: Data
+    private let sharedFoldersData: Data
+    private let addSharedFolderData: Data
+    private let removeSharedFolderData: Data
+    private let setSharedFolderAccessData: Data
     private let importPackageData: Data
     private let installImportedData: Data
     private let beginInstallImportedData: Data
@@ -1400,6 +1510,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var restartRequestsValue: [Data] = []
     private var packageListRequestsValue: [Data] = []
     private var packageInfoRequestsValue: [Data] = []
+    private var sharedFoldersRequestsValue: [Data] = []
+    private var addSharedFolderRequestsValue: [Data] = []
+    private var removeSharedFolderRequestsValue: [Data] = []
+    private var setSharedFolderAccessRequestsValue: [Data] = []
     private var importPackageRequestsValue: [Data] = []
     private var importFileHandleIDsValue: [[ObjectIdentifier]] = []
     private var installImportedRequestsValue: [Data] = []
@@ -1438,6 +1552,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         helloFailure: RuntimeControlError? = nil,
         packageListReply: RuntimeListPackagesControlReply? = nil,
         packageInfoReply: RuntimePackageInfoControlReply? = nil,
+        sharedFoldersReply: RuntimeSharedFoldersControlReply? = nil,
+        addSharedFolderReply: RuntimeAddSharedFolderControlReply? = nil,
+        removeSharedFolderReply: RuntimeRemoveSharedFolderControlReply? = nil,
+        setSharedFolderAccessReply: RuntimeSetSharedFolderAccessControlReply? = nil,
         importReply: RuntimeImportPackageControlReply? = nil,
         installImportedReply: RuntimeInstallImportedControlReply? = nil,
         beginInstallImportedReply: RuntimeBeginInstallImportedControlReply? = nil,
@@ -1481,6 +1599,26 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         )
         let defaultPackageInfoReply = RuntimePackageInfoControlReply(
             result: RuntimePackageDetails(summary: defaultSummary, files: [], artifactBytes: 0)
+        )
+        let defaultSharedFolder = SharedFolder(
+            id: "shared",
+            name: "Shared",
+            path: "~/Library/Application Support/APKRun/Shared",
+            access: .readOnly,
+            builtIn: true,
+            availability: .available
+        )
+        sharedFoldersData = try JSONEncoder().encode(
+            sharedFoldersReply ?? RuntimeSharedFoldersControlReply(result: [defaultSharedFolder])
+        )
+        addSharedFolderData = try JSONEncoder().encode(
+            addSharedFolderReply ?? RuntimeAddSharedFolderControlReply(result: defaultSharedFolder)
+        )
+        removeSharedFolderData = try JSONEncoder().encode(
+            removeSharedFolderReply ?? RuntimeRemoveSharedFolderControlReply()
+        )
+        setSharedFolderAccessData = try JSONEncoder().encode(
+            setSharedFolderAccessReply ?? RuntimeSetSharedFolderAccessControlReply(result: defaultSharedFolder)
         )
         let defaultImportReply = RuntimeImportPackageControlReply(
             result: RuntimeImportPreview(
@@ -1656,6 +1794,26 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return packageInfoData
     }
 
+    func sharedFolders(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { sharedFoldersRequestsValue.append(request) }
+        return sharedFoldersData
+    }
+
+    func addSharedFolder(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { addSharedFolderRequestsValue.append(request) }
+        return addSharedFolderData
+    }
+
+    func removeSharedFolder(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { removeSharedFolderRequestsValue.append(request) }
+        return removeSharedFolderData
+    }
+
+    func setSharedFolderAccess(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { setSharedFolderAccessRequestsValue.append(request) }
+        return setSharedFolderAccessData
+    }
+
     func importPackage(
         _ request: Data,
         files: [FileHandle]
@@ -1796,6 +1954,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 restartRequests: restartRequestsValue,
                 packageListRequests: packageListRequestsValue,
                 packageInfoRequests: packageInfoRequestsValue,
+                sharedFoldersRequests: sharedFoldersRequestsValue,
+                addSharedFolderRequests: addSharedFolderRequestsValue,
+                removeSharedFolderRequests: removeSharedFolderRequestsValue,
+                setSharedFolderAccessRequests: setSharedFolderAccessRequestsValue,
                 importRequests: importPackageRequestsValue,
                 importFileHandleIDs: importFileHandleIDsValue,
                 installImportedRequests: installImportedRequestsValue,
@@ -1879,6 +2041,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let restartRequests: [Data]
         let packageListRequests: [Data]
         let packageInfoRequests: [Data]
+        let sharedFoldersRequests: [Data]
+        let addSharedFolderRequests: [Data]
+        let removeSharedFolderRequests: [Data]
+        let setSharedFolderAccessRequests: [Data]
         let importRequests: [Data]
         let importFileHandleIDs: [[ObjectIdentifier]]
         let installImportedRequests: [Data]

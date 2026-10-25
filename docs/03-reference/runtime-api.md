@@ -8,7 +8,7 @@ This document is the wire contract of RuntimeAPI, the XPC interface between apkr
 
 ### 1.1 Scope and modules
 
-Built operations: broker `hello`, `requestEndpoint`; control `runtimeStatus`, `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime`, `listPackages`, `packageInfo`, `importPackage`, `installImported`, `beginInstallImported`, `beginUninstallPackage`, `cancelOperation`, `listOperations`, `operationStatus`, `subscribe`, `unsubscribe`, `launch`, `terminate`; event sink `handshake`, `deliver`. Every other operation and type is target contract.
+Built operations: broker `hello`, `requestEndpoint`; control `runtimeStatus`, `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime`, `listPackages`, `packageInfo`, `importPackage`, `installImported`, `beginInstallImported`, `beginUninstallPackage`, `cancelOperation`, `listOperations`, `operationStatus`, `subscribe`, `unsubscribe`, `launch`, `terminate`; event sink `handshake`, `deliver`. Shared-folder DTOs and client calls are implemented; server handling remains target contract. Every other operation and type is target contract.
 
 | Part | Module | Role |
 |---|---|---|
@@ -84,11 +84,11 @@ apkrund sets a requirement on each listener with `setConnectionCodeSigningRequir
 
 ### 2.1 Constants
 
-`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 11}`. Ordering compares `major`, then `minor`.
+`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 13}`. Ordering compares `major`, then `minor`.
 
 ```swift
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
-    public static let current = APIVersion(major: 1, minor: 11)
+    public static let current = APIVersion(major: 1, minor: 13)
     public let major: Int
     public let minor: Int
 }
@@ -110,6 +110,8 @@ Target constants (not in code): `wrapperMajors = [1]` (served on the wrapper end
 | 1.9 | `subscribe`, `unsubscribe`; event-sink handshake; sequenced batches |
 | 1.10 | `packages.installed` and `packages.updated` events |
 | 1.11 | `beginUninstallPackage`; `PackageChange.removed`; `OperationSnapshot.requestFingerprint` |
+| 1.12 | package-scoped file transfer |
+| 1.13 | shared-folder root listing, add, remove, and maximum-access control |
 
 ### 2.2 Rules per endpoint
 
@@ -1027,7 +1029,7 @@ Server steps ([wrapper.md](../02-design/wrapper.md) §10.2):
 
 ## 11. Integrations
 
-Semantics: [desktop-integration.md](../02-design/desktop-integration.md). Per-package integration settings change through `updatePackageSettings` (§14). All of §11 is target.
+Semantics: [desktop-integration.md](../02-design/desktop-integration.md). Per-package integration settings change through `updatePackageSettings` (§14). Shared-folder root DTOs and client calls are implemented; server handling and the remaining operations in §11 are target.
 
 ### 11.1 Operations
 

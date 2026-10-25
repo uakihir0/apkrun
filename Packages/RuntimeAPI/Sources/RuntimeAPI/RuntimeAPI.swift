@@ -8,8 +8,8 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.7 adds daemon-backed package import and install; 1.8 adds asynchronous install handles
     /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
     /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
-    /// 1.12 adds package-scoped file transfer.
-    public static let current = APIVersion(major: 1, minor: 12)
+    /// 1.12 adds package-scoped file transfer; 1.13 adds shared-folder root management.
+    public static let current = APIVersion(major: 1, minor: 13)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -582,6 +582,14 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func listPackages(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns details for one package.
     func packageInfo(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Lists shared-folder roots and their current availability.
+    func sharedFolders(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Adds a shared-folder root from a security-scoped bookmark.
+    func addSharedFolder(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Removes a shared-folder root by its opaque ID.
+    func removeSharedFolder(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Changes the maximum access mode for a shared-folder root.
+    func setSharedFolderAccess(_ request: Data, reply: @escaping (Data) -> Void)
     /// Copies and inspects APK files without starting Android.
     func importPackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
     /// Starts installation and returns an operation handle without waiting for installation to finish.

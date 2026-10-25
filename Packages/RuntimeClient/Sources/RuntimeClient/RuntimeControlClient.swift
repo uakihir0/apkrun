@@ -276,6 +276,78 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Lists the configured shared-folder roots.
+    public func sharedFolders() async throws(RuntimeControlClientError) -> [SharedFolder] {
+        let opened = try await ensureControl()
+        do {
+            let request = RuntimeSharedFoldersControlRequest(header: makeHeader())
+            let data = try Self.encode(request)
+            let response = try await opened.channel.sharedFolders(data)
+            return try Self.decodeSharedFoldersReply(from: response)
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
+    /// Adds a root using bookmark data created by the client app.
+    public func addSharedFolder(
+        _ request: AddSharedFolderRequest
+    ) async throws(RuntimeControlClientError) -> SharedFolder {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeAddSharedFolderControlRequest(
+                header: makeHeader(),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.addSharedFolder(data)
+            return try Self.decodeAddSharedFolderReply(from: response)
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
+    /// Removes a configured root by its opaque ID.
+    public func removeSharedFolder(
+        id: String
+    ) async throws(RuntimeControlClientError) -> RuntimeEmpty {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeRemoveSharedFolderControlRequest(
+                header: makeHeader(),
+                request: SharedFolderRequest(id: id)
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.removeSharedFolder(data)
+            return try Self.decodeRemoveSharedFolderReply(from: response)
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
+    /// Changes a root's maximum access by its opaque ID.
+    public func setSharedFolderAccess(
+        id: String,
+        access: SharedFolderAccess
+    ) async throws(RuntimeControlClientError) -> SharedFolder {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeSetSharedFolderAccessControlRequest(
+                header: makeHeader(),
+                request: SetSharedFolderAccessRequest(id: id, access: access)
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.setSharedFolderAccess(data)
+            return try Self.decodeSetSharedFolderAccessReply(from: response)
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
     /// Copies and inspects package files without starting Android.
     ///
     /// The file handles are passed once to the daemon. A transport failure is not replayed because
@@ -1133,6 +1205,66 @@ public actor RuntimeControlClient {
         return result
     }
 
+    private static func decodeSharedFoldersReply(from data: Data) throws(RuntimeControlClientError) -> [SharedFolder] {
+        let reply = try Self.decode(RuntimeSharedFoldersControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
+    private static func decodeAddSharedFolderReply(from data: Data) throws(RuntimeControlClientError) -> SharedFolder {
+        let reply = try Self.decode(RuntimeAddSharedFolderControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
+    private static func decodeRemoveSharedFolderReply(from data: Data) throws(RuntimeControlClientError)
+        -> RuntimeEmpty
+    {
+        let reply = try Self.decode(RuntimeRemoveSharedFolderControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
+    private static func decodeSetSharedFolderAccessReply(from data: Data) throws(RuntimeControlClientError)
+        -> SharedFolder
+    {
+        let reply = try Self.decode(RuntimeSetSharedFolderAccessControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
     private static func encode<Value: Encodable>(_ value: Value) throws(RuntimeControlClientError) -> Data {
         do {
             return try JSONEncoder().encode(value)
@@ -1334,6 +1466,10 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func resetRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func listPackages(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func packageInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func sharedFolders(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func addSharedFolder(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func removeSharedFolder(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func setSharedFolderAccess(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func importPackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
     func installImported(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func beginInstallImported(_ request: Data) async throws(RuntimeControlClientError) -> Data
@@ -1602,6 +1738,62 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.packageInfo(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func sharedFolders(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.sharedFolders(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func addSharedFolder(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.addSharedFolder(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func removeSharedFolder(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.removeSharedFolder(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func setSharedFolderAccess(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.setSharedFolderAccess(request) { response in finish(.success(response)) }
         }
     }
 

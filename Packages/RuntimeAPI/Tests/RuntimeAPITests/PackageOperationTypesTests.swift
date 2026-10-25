@@ -201,7 +201,7 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     #expect(try roundTrip(installReply) == installReply)
     #expect(try roundTrip(RuntimeImportPackageControlReply(error: failure)).error == failure)
     #expect(try roundTrip(RuntimeInstallImportedControlReply(error: failure)).error == failure)
-    #expect(importRequest.header.apiVersion == APIVersion(major: 1, minor: 11))
+    #expect(importRequest.header.apiVersion == APIVersion(major: 1, minor: 12))
 }
 
 private struct TestRuntimeService: RuntimeService {
@@ -219,6 +219,12 @@ private struct TestRuntimeService: RuntimeService {
             files: [],
             relation: .newPackage
         )
+    }
+
+    func importFiles(_ request: ImportFilesRequest, files: [FileHandle]) async throws(RuntimeWireError)
+        -> ImportResult
+    {
+        ImportResult(contentURIs: [], disposition: .savedToDownloads)
     }
 
     func installImported(_ request: RuntimeInstallImportedRequest) async throws(RuntimeWireError)
@@ -266,6 +272,13 @@ private struct TestRuntimeService: RuntimeService {
     let file = FileHandle.nullDevice
     let preview = try await service.importPackage(request, files: [file])
     #expect(preview.packageID == packageID)
+    let importFilesRequest = ImportFilesRequest(
+        packageID: packageID,
+        displayID: DisplayID(rawValue: "f19b7331-f940-4ce6-91d1-a0f979d08f3f")!,
+        files: [],
+        target: .shareToApp
+    )
+    #expect(try await service.importFiles(importFilesRequest, files: []).disposition == .savedToDownloads)
     #expect(try await service.listPackages(RuntimeListPackagesRequest()).packages.count == 1)
     #expect(try await service.packageInfo(RuntimePackageRequest(packageID: packageID)).summary.packageID == packageID)
     #expect(try await service.launch(RuntimeLaunchRequest(packageID: packageID)).state == .running)

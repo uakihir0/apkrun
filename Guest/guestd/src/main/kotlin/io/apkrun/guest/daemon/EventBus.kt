@@ -39,12 +39,13 @@ class EventBus {
      * published.
      */
     @Synchronized
-    fun publish(capability: GuestCapability, build: (Event.Builder) -> Unit) {
-        if (capability !in enabledCapabilities) return
-        val target = writer ?: return
+    fun publish(capability: GuestCapability, build: (Event.Builder) -> Unit): Boolean {
+        if (capability !in enabledCapabilities) return false
+        val target = writer ?: return false
         sequence += 1
         val event = Event.newBuilder().setSeq(sequence)
         build(event)
         target.send { it.setEvent(event) }
+        return true
     }
 }

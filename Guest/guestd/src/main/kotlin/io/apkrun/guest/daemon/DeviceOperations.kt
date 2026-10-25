@@ -3,6 +3,7 @@ package io.apkrun.guest.daemon
 import android.os.SystemClock
 import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.v1.ClearDisplay
+import io.apkrun.guest.protocol.v1.ExportStart
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.Health
 import io.apkrun.guest.protocol.v1.ImportFiles
@@ -15,6 +16,7 @@ import io.apkrun.guest.protocol.v1.MoveTaskToDisplay
 import io.apkrun.guest.protocol.v1.PackageInfo
 import io.apkrun.guest.protocol.v1.PackageList
 import io.apkrun.guest.protocol.v1.QueryPackage
+import io.apkrun.guest.protocol.v1.ResolveExport
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
 import io.apkrun.guest.protocol.v1.Shutdown
@@ -43,6 +45,9 @@ class DeviceOperations(
     private val system: SystemOperations,
     private val appProcessMonitoringAvailable: () -> Boolean,
     private val importFilesHandler: ((ImportFiles) -> ImportResult)? = null,
+    private val resolveExportHandler: ((Long, ResolveExport) -> ExportStart)? = null,
+    private val exportResponseSent: ((Long) -> Unit)? = null,
+    private val exportResponseFailed: ((Long) -> Unit)? = null,
     private val sharedFolderAccessHandler: ((SetSharedFolderAccess) -> Unit)? = null,
     private val hasMethod: (SystemServiceWrapper, String) -> Boolean = { wrapper, method ->
         wrapper.supports(method)
@@ -80,7 +85,7 @@ class DeviceOperations(
         }
         add(GuestCapability.INPUT_ACK_TRACE)
         add(GuestCapability.PACKAGES)
-        if (importFilesHandler != null) {
+        if (importFilesHandler != null || resolveExportHandler != null) {
             add(GuestCapability.FILES)
             add(GuestCapability.BULK)
         }
@@ -187,6 +192,13 @@ class DeviceOperations(
                 )
         }
 
+    override fun resolveExport(requestId: Long, request: ResolveExport): ExportStart =
+        resolveExportHandler?.invoke(requestId, request)
+            ?: throw GuestFailure(
+                GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
+                "Save to Mac is unavailable in this agent mode",
+            )
+
     override fun setSharedFolderAccess(request: SetSharedFolderAccess) {
         sharedFolderAccessHandler?.invoke(request)
             ?: throw GuestFailure(
@@ -199,9 +211,15 @@ class DeviceOperations(
 
     override fun shutdown(requestId: Long, request: Shutdown) = system.shutdown(requestId, request)
 
-    override fun responseSent(requestId: Long) = system.responseSent(requestId)
+    override fun responseSent(requestId: Long) {
+        system.responseSent(requestId)
+        exportResponseSent?.invoke(requestId)
+    }
 
-    override fun responseFailed(requestId: Long) = system.responseFailed(requestId)
+    override fun responseFailed(requestId: Long) {
+        system.responseFailed(requestId)
+        exportResponseFailed?.invoke(requestId)
+    }
 
     override fun recordFailure(error: io.apkrun.guest.protocol.v1.GuestError) =
         health.recordFailure(error)

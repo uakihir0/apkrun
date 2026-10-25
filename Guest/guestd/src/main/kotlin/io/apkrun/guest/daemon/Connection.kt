@@ -2,7 +2,10 @@ package io.apkrun.guest.daemon
 
 import android.net.LocalSocket
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import io.apkrun.guest.BuildConfig
+import io.apkrun.guest.daemon.files.ExportBulkSender
+import io.apkrun.guest.daemon.files.ExportFileStreamer
 import io.apkrun.guest.daemon.files.MacFilesBulkHostClient
 import io.apkrun.guest.daemon.files.MacFilesProviderServices
 import io.apkrun.guest.protocol.AgentHandshake
@@ -14,7 +17,10 @@ import io.apkrun.guest.protocol.v1.AgentKind
 import io.apkrun.guest.protocol.v1.AndroidInfo
 import io.apkrun.guest.protocol.v1.BulkAck
 import io.apkrun.guest.protocol.v1.BulkAckStatus
+import io.apkrun.guest.protocol.v1.BulkBegin
+import io.apkrun.guest.protocol.v1.BulkEnd
 import io.apkrun.guest.protocol.v1.BulkFrame
+import io.apkrun.guest.protocol.v1.BulkKind
 import io.apkrun.guest.protocol.v1.ChannelKind
 import io.apkrun.guest.protocol.v1.Envelope
 import io.apkrun.guest.protocol.v1.Hello
@@ -43,14 +49,16 @@ private const val HANDSHAKE_TIMEOUT_MILLIS = 5_000
  * channel (guest-protocol.md §3). A protocol violation closes the connection and is logged with the
  * envelope id only (guest-protocol.md §12.2).
  */
-class Connection(
+internal class Connection(
     private val socket: LocalSocket,
     private val channel: ChannelKind,
     private val daemon: Daemon,
-) {
+) : ExportBulkSender {
     private val writer = FrameWriter(socket.outputStream)
     private val reader = FrameReader(socket.inputStream)
     private val hostRequests = ConcurrentHashMap<Long, CompletableFuture<Response>>()
+    private val pendingBulkAcks = ConcurrentHashMap<Long, CompletableFuture<BulkAck>>()
+    private val outgoingBulkSlots = Semaphore(MAXIMUM_OUTGOING_TRANSFERS)
     private val abandonedHostRequests = ConcurrentHashMap.newKeySet<Long>()
     private val hostRequestSlots = Semaphore(MAXIMUM_HOST_REQUESTS)
     private val hostRequestLifecycleLock = Any()
@@ -81,6 +89,10 @@ class Connection(
                 hostConnectionClosed = true
                 failPendingHostRequests(IOException("the bulk connection closed"))
             }
+            pendingBulkAcks.values.forEach {
+                it.completeExceptionally(IOException("the bulk connection closed"))
+            }
+            pendingBulkAcks.clear()
             socket.close()
         }
     }
@@ -104,12 +116,15 @@ class Connection(
             AgentLog.warning("refused a control connection: ${reason.name}")
             return
         }
+        var exportControlConnected = false
         try {
             val negotiated = handshake()
             if (!daemon.sessions.openControl(socket, negotiated.token)) {
                 return
             }
             daemon.events.attach(writer, negotiated.enabled)
+            daemon.controlConnected(socket)
+            exportControlConnected = true
             try {
                 controlLoop(negotiated.enabled, negotiated.lastHostEnvelopeId)
             } finally {
@@ -117,6 +132,7 @@ class Connection(
             }
         } finally {
             if (daemon.sessions.endControl(socket)) {
+                if (exportControlConnected) daemon.controlDisconnected(socket)
                 daemon.input.resetState()
             }
         }
@@ -132,6 +148,13 @@ class Connection(
         try {
             if (
                 channel == ChannelKind.CHANNEL_KIND_GUEST_BULK &&
+                    GuestCapability.FILES in negotiated.enabled &&
+                    GuestCapability.BULK in negotiated.enabled
+            ) {
+                daemon.exports?.attachBulkSender(this)
+            }
+            if (
+                channel == ChannelKind.CHANNEL_KIND_GUEST_BULK &&
                     GuestCapability.FILES_SHARED in negotiated.enabled &&
                     hostClient != null
             ) {
@@ -139,6 +162,13 @@ class Connection(
             }
             secondaryLoop(negotiated.enabled, negotiated.lastHostEnvelopeId)
         } finally {
+            if (
+                channel == ChannelKind.CHANNEL_KIND_GUEST_BULK &&
+                    GuestCapability.FILES in negotiated.enabled &&
+                    GuestCapability.BULK in negotiated.enabled
+            ) {
+                daemon.exports?.detachBulkSender(this)
+            }
             daemon.sessions.untrack(socket)
             if (channel == ChannelKind.CHANNEL_KIND_GUEST_BULK) {
                 daemon.files?.abortIncompleteTransfers(this)
@@ -261,6 +291,19 @@ class Connection(
                 ChannelKind.CHANNEL_KIND_GUEST_BULK -> {
                     when (envelope.bodyCase) {
                         Envelope.BodyCase.BULK -> {
+                            val frame = envelope.bulk
+                            if (frame.kindCase == BulkFrame.KindCase.ACK) {
+                                if (
+                                    GuestCapability.FILES !in enabled ||
+                                        GuestCapability.BULK !in enabled
+                                ) {
+                                    throw GuestProtocolFailure.MalformedFrame(
+                                        "a bulk acknowledgement arrived without files.v1"
+                                    )
+                                }
+                                receiveBulkAck(frame)
+                                continue
+                            }
                             if (
                                 GuestCapability.FILES !in enabled ||
                                     GuestCapability.BULK !in enabled ||
@@ -270,7 +313,6 @@ class Connection(
                                     "a bulk transfer arrived without an enabled files capability"
                                 )
                             }
-                            val frame = envelope.bulk
                             val status = daemon.files.receive(frame, this)
                             if (status != null) sendBulkAck(frame.transferId, status)
                         }
@@ -321,6 +363,129 @@ class Connection(
         } catch (error: IOException) {
             AgentLog.info(
                 "a bulk transfer acknowledgement was not sent: ${error.javaClass.simpleName}"
+            )
+        }
+    }
+
+    /**
+     * Streams an accepted Android content URI to the host without buffering the whole file. BulkEnd
+     * carries the SHA-256 of the exact bytes sent, as required for file exports.
+     */
+    override fun send(
+        transferId: Long,
+        descriptor: ParcelFileDescriptor,
+        name: String,
+        mimeType: String,
+        size: Long,
+    ) {
+        if (
+            channel != ChannelKind.CHANNEL_KIND_GUEST_BULK ||
+                transferId <= 0L ||
+                transferId % 2L != 1L ||
+                size !in 0L..MAXIMUM_EXPORT_BYTES
+        ) {
+            throw IOException("the export transfer is not valid")
+        }
+        if (!outgoingBulkSlots.tryAcquire()) {
+            throw IOException("too many bulk transfers are in flight")
+        }
+        val completion = CompletableFuture<BulkAck>()
+        if (pendingBulkAcks.putIfAbsent(transferId, completion) != null) {
+            outgoingBulkSlots.release()
+            throw IOException("the export transfer ID is already in use")
+        }
+
+        var began = false
+        var ended = false
+        try {
+            writer.send {
+                it.setBulk(
+                    BulkFrame.newBuilder()
+                        .setTransferId(transferId)
+                        .setBegin(
+                            BulkBegin.newBuilder()
+                                .setKind(BulkKind.BULK_KIND_FILE)
+                                .setName(name)
+                                .setMimeType(mimeType)
+                                .setSize(size)
+                        )
+                )
+            }
+            began = true
+
+            ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
+                ExportFileStreamer.stream(
+                    input,
+                    size,
+                    sendChunk = { chunk ->
+                        writer.send {
+                            it.setBulk(
+                                BulkFrame.newBuilder().setTransferId(transferId).setChunk(chunk)
+                            )
+                        }
+                    },
+                    sendEnd = { sha256 ->
+                        writer.send {
+                            it.setBulk(
+                                BulkFrame.newBuilder()
+                                    .setTransferId(transferId)
+                                    .setEnd(BulkEnd.newBuilder().setSha256(sha256))
+                            )
+                        }
+                        ended = true
+                    },
+                )
+            }
+
+            val ack =
+                try {
+                    completion.get(BULK_ACK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+                } catch (timeout: TimeoutException) {
+                    throw IOException("the host did not acknowledge the export transfer", timeout)
+                } catch (error: ExecutionException) {
+                    throw IOException(
+                        "the bulk connection closed before the export was acknowledged",
+                        error,
+                    )
+                } catch (interrupted: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw IOException("the export transfer was interrupted", interrupted)
+                }
+            if (ack.status != BulkAckStatus.BULK_ACK_STATUS_OK) {
+                throw IOException("the host rejected the export transfer")
+            }
+        } catch (error: Exception) {
+            if (began && !ended) {
+                runCatching {
+                    writer.send {
+                        it.setBulk(
+                            BulkFrame.newBuilder()
+                                .setTransferId(transferId)
+                                .setAbort(
+                                    io.apkrun.guest.protocol.v1.BulkAbort.newBuilder()
+                                        .setReason("transferFailed")
+                                )
+                        )
+                    }
+                }
+            }
+            if (error is IOException) throw error
+            throw IOException("the export transfer failed", error)
+        } finally {
+            pendingBulkAcks.remove(transferId, completion)
+            outgoingBulkSlots.release()
+        }
+    }
+
+    private fun receiveBulkAck(frame: BulkFrame) {
+        val completion =
+            pendingBulkAcks[frame.transferId]
+                ?: throw GuestProtocolFailure.MalformedFrame(
+                    "the host acknowledged an unknown bulk transfer"
+                )
+        if (!completion.complete(frame.ack)) {
+            throw GuestProtocolFailure.MalformedFrame(
+                "the host acknowledged a bulk transfer more than once"
             )
         }
     }
@@ -445,7 +610,10 @@ class Connection(
 
     companion object {
         private const val MAXIMUM_HOST_REQUESTS = 16
+        private const val MAXIMUM_OUTGOING_TRANSFERS = 4
+        private const val MAXIMUM_EXPORT_BYTES = 2L * 1024L * 1024L * 1024L
         private const val HOST_REQUEST_TIMEOUT_MILLIS = 30_000L
+        private const val BULK_ACK_TIMEOUT_MILLIS = 300_000L
 
         /** The capabilities that this build implements (guest-protocol.md §5.3). */
         val IMPLEMENTED: Set<GuestCapability> =

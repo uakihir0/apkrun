@@ -13,9 +13,13 @@ import android.os.Process
 import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.provider.Settings
+import io.apkrun.guest.daemon.files.ExportFileService
+import io.apkrun.guest.daemon.files.ExportOfferPublisher
 import io.apkrun.guest.daemon.files.FilesBridge
 import io.apkrun.guest.daemon.files.MAC_FILES_AUTHORITY
 import io.apkrun.guest.daemon.files.MacFilesProviderServices
+import io.apkrun.guest.daemon.files.SaveToMacRuntime
+import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.v1.AgentMode
 import io.apkrun.guest.protocol.v1.ChannelKind
 import io.apkrun.guest.runtime.AgentLog
@@ -83,6 +87,21 @@ class Daemon(
 
     internal val events = EventBus()
     internal val sessions = SessionManager { SystemClock.elapsedRealtime() }
+    internal val exports =
+        if (mode == AgentMode.AGENT_MODE_PRIVILEGED_APP) {
+            ExportFileService(
+                    ExportOfferPublisher { offer ->
+                        events.publish(GuestCapability.FILES) { event ->
+                            event.setExportFileOffered(offer)
+                        }
+                    },
+                    scope,
+                )
+                .also { SaveToMacRuntime.service = it }
+        } else {
+            SaveToMacRuntime.service = null
+            null
+        }
     private val displays = DisplayService(events, post)
     private val tasks = TaskService(events, post)
     private val launch = LaunchService(tasks, displays) { SystemContext.get() }
@@ -142,6 +161,9 @@ class Daemon(
             system,
             appProcessMonitoringAvailable = { appProcessMonitor.available },
             importFilesHandler = files?.let { bridge -> bridge::import },
+            resolveExportHandler = exports?.let { service -> service::resolve },
+            exportResponseSent = exports?.let { service -> service::responseSent },
+            exportResponseFailed = exports?.let { service -> service::responseFailed },
             sharedFolderAccessHandler =
                 if (mode == AgentMode.AGENT_MODE_PRIVILEGED_APP) {
                     { request ->
@@ -230,6 +252,10 @@ class Daemon(
 
     /** Drops a queued shutdown when the response could not be written. */
     internal fun responseFailed(requestId: Long) = operations.responseFailed(requestId)
+
+    internal fun controlConnected(owner: Any) = exports?.controlConnected(owner)
+
+    internal fun controlDisconnected(owner: Any) = exports?.controlDisconnected(owner)
 
     private fun serve(socket: LocalSocket, channel: ChannelKind) {
         scope.launch(Dispatchers.IO) { Connection(socket, channel, this@Daemon).run() }

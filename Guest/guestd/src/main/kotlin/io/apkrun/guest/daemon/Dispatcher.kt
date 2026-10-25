@@ -177,6 +177,10 @@ class Dispatcher(
                 val result = withDisplayLock(files.displayId) { operations.importFiles(files) }
                 Response.newBuilder().setImportFiles(result).build()
             }
+            Request.OpCase.RESOLVE_EXPORT ->
+                Response.newBuilder()
+                    .setResolveExport(operations.resolveExport(id, request.resolveExport))
+                    .build()
             Request.OpCase.SET_SHARED_FOLDER_ACCESS -> {
                 operations.setSharedFolderAccess(request.setSharedFolderAccess)
                 Response.newBuilder().setSetSharedFolderAccess(Empty.getDefaultInstance()).build()
@@ -237,7 +241,8 @@ class Dispatcher(
                 Request.OpCase.FOCUS_DISPLAY -> GuestCapability.INPUT
                 Request.OpCase.QUERY_PACKAGE,
                 Request.OpCase.LIST_PACKAGES -> GuestCapability.PACKAGES
-                Request.OpCase.IMPORT_FILES -> GuestCapability.FILES
+                Request.OpCase.IMPORT_FILES,
+                Request.OpCase.RESOLVE_EXPORT -> GuestCapability.FILES
                 Request.OpCase.SET_SHARED_FOLDER_ACCESS -> GuestCapability.FILES_SHARED
                 Request.OpCase.GET_HEALTH -> GuestCapability.HEALTH
                 Request.OpCase.SHUTDOWN -> GuestCapability.SYSTEM

@@ -1,7 +1,9 @@
 package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.v1.ClearDisplay
+import io.apkrun.guest.protocol.v1.ExportStart
 import io.apkrun.guest.protocol.v1.GuestError
+import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.Health
 import io.apkrun.guest.protocol.v1.ImportFiles
 import io.apkrun.guest.protocol.v1.ImportResult
@@ -13,6 +15,7 @@ import io.apkrun.guest.protocol.v1.MoveTaskToDisplay
 import io.apkrun.guest.protocol.v1.PackageInfo
 import io.apkrun.guest.protocol.v1.PackageList
 import io.apkrun.guest.protocol.v1.QueryPackage
+import io.apkrun.guest.protocol.v1.ResolveExport
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
 import io.apkrun.guest.protocol.v1.Shutdown
@@ -58,6 +61,15 @@ interface AgentOperations {
 
     /** Shares or saves files received through the bulk stream (files.v1). */
     suspend fun importFiles(request: ImportFiles): ImportResult
+
+    /**
+     * Resolves a Save to Mac offer and reserves its guest-allocated bulk transfer ID (files.v1).
+     */
+    fun resolveExport(requestId: Long, request: ResolveExport): ExportStart =
+        throw GuestFailure(
+            GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
+            "Save to Mac is unavailable in this agent mode",
+        )
 
     /** Replaces the package and root access policy for MacFilesProvider (files.shared.v1). */
     fun setSharedFolderAccess(request: SetSharedFolderAccess) {}

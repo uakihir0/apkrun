@@ -257,6 +257,7 @@ targets:
       - path: Tests/IntegrationTests/LinuxGuestTests
       - path: Tests/IntegrationTests/AndroidADBTests
       - path: Tests/IntegrationTests/AndroidPackageTests
+      - path: Tests/IntegrationTests/StoreTests
       - path: Tests/IntegrationTests/AndroidSupport
       - path: Tests/IntegrationTests/AndroidBootTests
       - path: Tests/IntegrationTests/AndroidCustomTests

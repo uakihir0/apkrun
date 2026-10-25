@@ -3,6 +3,9 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
+val fixtureVersionCode =
+    providers.gradleProperty("apkrunFixtureVersionCode").orElse("1").get().toInt()
+
 android {
     namespace = "io.apkrun.fixture.hellotext"
     compileSdk = 37
@@ -14,8 +17,8 @@ android {
         applicationId = "io.apkrun.fixture.hellotext"
         minSdk = 29
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = fixtureVersionCode
+        versionName = "$fixtureVersionCode.0"
     }
 
     signingConfigs {

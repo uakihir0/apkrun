@@ -177,6 +177,8 @@ public actor SharedFolderService {
     private var nextHandle: UInt64 = 1
     private var inFlightRequests = 0
     private var isStopped = false
+    private var isReconfiguring = false
+    private var inFlightWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Opens the configured roots and records their effective package access.
     ///
@@ -275,6 +277,95 @@ public actor SharedFolderService {
     public func replacePackageAccess(_ newAccess: [String: [String: SharedFolderAccess]]) throws(IntegrationFailure) {
         try ensureRunning()
         packageAccess = newAccess
+    }
+
+    /// Replaces the roots and package access after shared-folder settings change.
+    ///
+    /// The service pauses new work, waits for queued filesystem operations to drain, closes all
+    /// package handles and previous root descriptors, then publishes the new configuration.
+    public func replaceConfiguration(
+        roots definitions: [SharedFolderRoot],
+        packageAccess newAccess: [String: [String: SharedFolderAccess]]
+    ) async throws(IntegrationFailure) {
+        try ensureRunning()
+        var rootIDs = Set<String>()
+        for definition in definitions {
+            guard Self.isValidRootID(definition.id), rootIDs.insert(definition.id).inserted else {
+                throw .invalidRootConfiguration
+            }
+        }
+
+        isReconfiguring = true
+        defer { isReconfiguring = false }
+        while inFlightRequests > 0 {
+            await withCheckedContinuation { continuation in
+                inFlightWaiters.append(continuation)
+            }
+        }
+        // `runtimeDidStop()` can re-enter this actor while the drain is suspended and mark
+        // the service stopped. Do not publish newly opened roots after shutdown has begun.
+        guard !isStopped else {
+            throw .transferFailed
+        }
+
+        var descriptors: [String: RootDescriptor] = [:]
+        for definition in definitions {
+            let opened = definition.directoryURL.path.withCString {
+                Darwin.open($0, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+            }
+            if opened >= 0 {
+                descriptors[definition.id] = RootDescriptor(
+                    definition: definition,
+                    fileDescriptor: opened,
+                    unavailableProblem: nil
+                )
+            } else {
+                descriptors[definition.id] = RootDescriptor(
+                    definition: definition,
+                    fileDescriptor: -1,
+                    unavailableProblem: Self.folderProblem(for: errno)
+                )
+            }
+        }
+
+        let oldDescriptors =
+            handles.values.map(\.fileDescriptor)
+            + roots.values.map(\.fileDescriptor).filter { $0 >= 0 }
+        handles.removeAll()
+        reservedHandlesByPackage.removeAll()
+        roots = descriptors
+        packageAccess = newAccess
+        await withCheckedContinuation { continuation in
+            ioQueue.async {
+                for descriptor in oldDescriptors {
+                    _ = Darwin.close(descriptor)
+                }
+                continuation.resume()
+            }
+        }
+    }
+
+    /// Closes package file handles when Android stops while retaining configured root descriptors.
+    public func closeAllOpenFiles() async {
+        guard !isStopped, !isReconfiguring else { return }
+        isReconfiguring = true
+        defer { isReconfiguring = false }
+        while inFlightRequests > 0 {
+            await withCheckedContinuation { continuation in
+                inFlightWaiters.append(continuation)
+            }
+        }
+        let descriptors = handles.values.map(\.fileDescriptor)
+        handles.removeAll()
+        reservedHandlesByPackage.removeAll()
+        await withCheckedContinuation { continuation in
+            ioQueue.async {
+                for descriptor in descriptors {
+                    _ = Darwin.close(descriptor)
+                }
+                continuation.resume()
+            }
+        }
     }
 
     /// Lists one bounded page of regular files and directories.
@@ -505,7 +596,7 @@ public actor SharedFolderService {
             }
         }
 
-        guard !isStopped else {
+        guard !isStopped, !isReconfiguring else {
             await closeDescriptor(opened.0)
             throw .transferFailed
         }
@@ -610,7 +701,7 @@ public actor SharedFolderService {
             throw .resourceExhausted
         }
         inFlightRequests += 1
-        defer { inFlightRequests -= 1 }
+        defer { finishInFlightRequest() }
         handles.removeValue(forKey: handleID)
         let result: Result<Void, IntegrationFailure> = await withCheckedContinuation { continuation in
             ioQueue.async {
@@ -770,6 +861,12 @@ public actor SharedFolderService {
     public func runtimeDidStop() async {
         guard !isStopped else { return }
         isStopped = true
+        isReconfiguring = true
+        while inFlightRequests > 0 {
+            await withCheckedContinuation { continuation in
+                inFlightWaiters.append(continuation)
+            }
+        }
         let openDescriptors =
             handles.values.map(\.fileDescriptor) + roots.values.map(\.fileDescriptor).filter { $0 >= 0 }
         handles.removeAll()
@@ -827,8 +924,18 @@ public actor SharedFolderService {
     // MARK: - Authorization and request limits
 
     private func ensureRunning() throws(IntegrationFailure) {
-        guard !isStopped else {
+        guard !isStopped, !isReconfiguring else {
             throw .transferFailed
+        }
+    }
+
+    private func finishInFlightRequest() {
+        inFlightRequests -= 1
+        guard inFlightRequests == 0 else { return }
+        let waiters = inFlightWaiters
+        inFlightWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
         }
     }
 
@@ -930,7 +1037,7 @@ public actor SharedFolderService {
             throw .resourceExhausted
         }
         inFlightRequests += 1
-        defer { inFlightRequests -= 1 }
+        defer { finishInFlightRequest() }
 
         let result: Result<Value, IntegrationFailure> = await withCheckedContinuation { continuation in
             ioQueue.async {

@@ -58,6 +58,9 @@ import Testing
                 "untrustedKey", "signatureInvalid", "unexpectedFile", "downgradeRejected",
                 "imageNotInstalled", "noCurrentImage",
             ].map { "image.\($0)" }
+            + [
+                "tooManyFiles", "fileTooLarge",
+            ].map { "integration.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)
     #expect(
@@ -89,6 +92,7 @@ import Testing
                 || entry.code.hasPrefix("runtime.")
                 || entry.code.hasPrefix("graphics.")
                 || entry.code.hasPrefix("image.")
+                || entry.code.hasPrefix("integration.")
         )
         for text in entry.message?.values ?? [String: String]().values {
             #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

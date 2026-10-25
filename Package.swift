@@ -375,7 +375,7 @@ let package = Package(
         ),
         .testTarget(
             name: "IntegrationCoreTests",
-            dependencies: ["IntegrationCore"],
+            dependencies: ["IntegrationCore", "DiagnosticsCore"],
             path: "Packages/IntegrationCore/Tests/IntegrationCoreTests"
         ),
         // The per-run resources of the VM tests (test-strategy §3.10). The same helper is compiled into the

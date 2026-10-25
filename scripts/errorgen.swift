@@ -109,9 +109,9 @@ func loadEntries(release: Bool) throws -> [CatalogEntry] {
         }
         guard
             code.hasPrefix("vm.") || code.hasPrefix("graphics.") || code.hasPrefix("runtime.")
-                || code.hasPrefix("image.") || code.hasPrefix("cli.")
+                || code.hasPrefix("image.") || code.hasPrefix("integration.") || code.hasPrefix("cli.")
         else {
-            fail("\(code) is outside the vm/graphics/runtime/image/cli catalog scope")
+            fail("\(code) is outside the vm/graphics/runtime/image/integration/cli catalog scope")
         }
         guard codes.insert(code).inserted else {
             fail("duplicate code \(code)")
@@ -461,11 +461,14 @@ func renderVMMarkdown(_ entries: [CatalogEntry]) -> String {
     return lines.joined(separator: "\n")
 }
 
-func renderCLIMarkdown(_ entries: [CatalogEntry]) -> String {
-    var lines = [
-        "| Case | Code | When raised | Raised by | Message | Remediation · action | Exit | Ref |",
-        "|---|---|---|---|---|---|---|---|",
-    ]
+func renderCLIMarkdown(_ entries: [CatalogEntry], includeHeader: Bool = true) -> String {
+    var lines =
+        includeHeader
+        ? [
+            "| Case | Code | When raised | Raised by | Message | Remediation · action | Exit | Ref |",
+            "|---|---|---|---|---|---|---|---|",
+        ]
+        : []
     for entry in entries {
         let row = [
             "`\(markdownText(entry, key: "case"))`",
@@ -503,7 +506,7 @@ func renderCLIMarkdown(_ entries: [CatalogEntry]) -> String {
 
 func renderMarkdown(_ entries: [CatalogEntry], source: String) -> String {
     var result = source
-    for domain in ["vm", "graphics", "runtime", "image", "cli"] {
+    for domain in ["vm", "graphics", "runtime", "image", "integration", "cli"] {
         let begin = "<!-- errorgen:begin \(domain) -->"
         let end = "<!-- errorgen:end \(domain) -->"
         guard let beginRange = result.range(of: begin),
@@ -517,6 +520,8 @@ func renderMarkdown(_ entries: [CatalogEntry], source: String) -> String {
         switch domain {
         case "vm":
             body = renderVMMarkdown(domainEntries)
+        case "integration":
+            body = renderCLIMarkdown(domainEntries, includeHeader: false)
         default:
             body = renderCLIMarkdown(domainEntries)
         }

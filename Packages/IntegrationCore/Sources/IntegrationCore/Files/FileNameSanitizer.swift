@@ -6,7 +6,9 @@ public enum FileNameSanitizer {
     public static func sanitize(_ name: String, packageID: String) -> String {
         let sanitized = sanitizeBase(name)
         guard !sanitized.isEmpty else {
-            return packageID.split(separator: ".").last.map(String.init) ?? "file"
+            let packageSegment = packageID.split(separator: ".").last.map(String.init) ?? ""
+            let sanitizedPackageSegment = sanitizeBase(packageSegment)
+            return sanitizedPackageSegment.isEmpty ? "file" : sanitizedPackageSegment
         }
         return sanitized
     }
@@ -22,7 +24,7 @@ public enum FileNameSanitizer {
                     true
                 }
             }
-        )
+        ).precomposedStringWithCanonicalMapping
 
         var replacedScalars = String.UnicodeScalarView()
         for scalar in filtered.unicodeScalars {

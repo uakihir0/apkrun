@@ -2646,6 +2646,52 @@
         "raisedBy": "RuntimeHost, `apkrun dev boot --window`, `apkrun dev launch`",
         "ref": "[../02-design/input.md](../02-design/input.md) §7.1, §11"
       }
+    },
+    {
+      "code": "integration.tooManyFiles",
+      "parameters": [
+        "count",
+        "limit"
+      ],
+      "message": {
+        "en": "Too many files at once ({count}).",
+        "ja": "一度に処理できるファイル数を超えています（{count}）。"
+      },
+      "remediation": {
+        "en": "Drop at most 20 files at a time.",
+        "ja": "一度にドロップできるファイルは最大 20 個です。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "tooManyFiles(count:limit:)",
+        "when": "a drop contains more than 20 files",
+        "raisedBy": "DropTarget, FileTransferService",
+        "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.2; [runtime-api.md](runtime-api.md) §4.10"
+      }
+    },
+    {
+      "code": "integration.fileTooLarge",
+      "parameters": [
+        "file",
+        "bytes"
+      ],
+      "message": {
+        "en": "{file} is too large to drop into Android ({bytes}).",
+        "ja": "{file} は Android にドロップするには大きすぎます（{bytes}）。"
+      },
+      "remediation": {
+        "en": "Drop files of up to 2 GB each and 4 GB in total.",
+        "ja": "各ファイルは 2 GB まで、合計 4 GB までのファイルをドロップしてください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "fileTooLarge(name:bytes:)",
+        "when": "a dropped file is above 2 GiB, or the combined drop is above 4 GiB. For the combined limit, `file` is `Files`",
+        "raisedBy": "DropTarget, FileTransferService",
+        "ref": "[desktop-integration.md](../02-design/desktop-integration.md) §6.2"
+      }
     }
   ]
 }

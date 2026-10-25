@@ -908,8 +908,10 @@ Owner: IntegrationCore (in apkrund) and the window-side adapters in APKRunLaunch
 | — | `integration.linkRejected / tooLong` | longer than 8 KiB | LinkForwarder | "The link from {app} is too long to open." | — `none` | 5 | desktop-integration.md §7.2 |
 | — | `integration.linkRejected / notFocused` | the window is not key and had no input in the last 5 s | LinkForwarder | "APKRun opens links from {app} only while you use its window." | — `none` | 5 | desktop-integration.md §7.2 |
 | — | `integration.linkRejected / rateLimited` | more than 3 links in 10 s | LinkForwarder | "{app} opened too many links at once." | — `none` | 5 | desktop-integration.md §7.2 |
-| `tooManyFiles(count:limit:)` | `integration.tooManyFiles` | a drop of more than 20 files. Shown in the window | DropTarget, FileTransferService | "Too many files at once ({count})." | "Drop at most 20 files at a time." `none` | 1 | desktop-integration.md §6.2; [runtime-api.md](runtime-api.md) §4.10 |
-| `fileTooLarge(name:bytes:)` | `integration.fileTooLarge` | a dropped file above 2 GiB, or a drop above 4 GiB in total. `{file}` is the name of the dropped file | DropTarget, FileTransferService | "{file} is too large to drop into Android ({bytes})." | "Drop files of up to 2 GB each and 4 GB in total." `none` | 1 | desktop-integration.md §6.2 |
+<!-- errorgen:begin integration -->
+| `tooManyFiles(count:limit:)` | `integration.tooManyFiles` | a drop contains more than 20 files | DropTarget, FileTransferService | "Too many files at once ({count})." | "Drop at most 20 files at a time." `none` | 1 | [desktop-integration.md](../02-design/desktop-integration.md) §6.2; [runtime-api.md](runtime-api.md) §4.10 |
+| `fileTooLarge(name:bytes:)` | `integration.fileTooLarge` | a dropped file is above 2 GiB, or the combined drop is above 4 GiB. For the combined limit, `file` is `Files` | DropTarget, FileTransferService | "{file} is too large to drop into Android ({bytes})." | "Drop files of up to 2 GB each and 4 GB in total." `none` | 1 | [desktop-integration.md](../02-design/desktop-integration.md) §6.2 |
+<!-- errorgen:end integration -->
 | `transferFailed(String)` | `integration.transferFailed` | a bulk transfer aborts, the SHA-256 of `BulkEnd` differs, or a file system error occurs in `SharedFolderService`. The partial file is deleted | FileTransferService, SharedFolderService | "The file transfer didn't finish." | "Try again." `retry` | 1 | desktop-integration.md §6.2, §6.3 |
 
 - `integration.linkRejected` has no remediation. The user did not ask for anything, so there is nothing to do.

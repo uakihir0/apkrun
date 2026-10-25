@@ -104,6 +104,49 @@ import Testing
     #expect(await service.exportCount == 0)
 }
 
+@Test func sessionEndpointDeliversExportOffersThroughTheInstalledWrapperSink() async throws {
+    let endpoint = RuntimeSessionEndpointService(sessionID: UUID(), service: SessionImportSpy())
+    let connectionID = UUID()
+    let sender = ExportOfferSenderSpy(acceptsOffer: true)
+    let offer = ExportOffer(offerID: UUID(), name: "report.pdf", size: 42, type: "application/pdf")
+
+    #expect(endpoint.installExportOfferSender(sender, connectionID: connectionID))
+    #expect(await receiveOfferReply(from: endpoint, offer: offer))
+    let deliveredData = try #require(sender.lastOfferData)
+    #expect(try JSONDecoder().decode(ExportOffer.self, from: deliveredData) == offer)
+    #expect(sender.deliveryCount == 1)
+}
+
+@Test func sessionEndpointRejectsInvalidExportOffersBeforeDelivery() async {
+    let endpoint = RuntimeSessionEndpointService(sessionID: UUID(), service: SessionImportSpy())
+    let sender = ExportOfferSenderSpy(acceptsOffer: true)
+    let offer = ExportOffer(offerID: UUID(), name: "../report.pdf", size: 42, type: "application/pdf")
+
+    #expect(endpoint.installExportOfferSender(sender, connectionID: UUID()))
+    #expect(!(await receiveOfferReply(from: endpoint, offer: offer)))
+    #expect(sender.deliveryCount == 0)
+}
+
+@Test func sessionEndpointDisconnectClearsOnlyItsOwnExportSink() async {
+    let endpoint = RuntimeSessionEndpointService(sessionID: UUID(), service: SessionImportSpy())
+    let firstConnectionID = UUID()
+    let secondConnectionID = UUID()
+    let firstSender = ExportOfferSenderSpy(acceptsOffer: true)
+    let secondSender = ExportOfferSenderSpy(acceptsOffer: true)
+    let offer = ExportOffer(offerID: UUID(), name: "report.pdf", size: 42, type: "application/pdf")
+
+    #expect(endpoint.installExportOfferSender(firstSender, connectionID: firstConnectionID))
+    endpoint.removeExportOfferSender(connectionID: firstConnectionID)
+    #expect(firstSender.invalidationCount == 1)
+
+    #expect(endpoint.installExportOfferSender(secondSender, connectionID: secondConnectionID))
+    endpoint.removeExportOfferSender(connectionID: firstConnectionID)
+    #expect(await receiveOfferReply(from: endpoint, offer: offer))
+    #expect(secondSender.deliveryCount == 1)
+    endpoint.removeExportOfferSender(connectionID: secondConnectionID)
+    #expect(!(await receiveOfferReply(from: endpoint, offer: offer)))
+}
+
 private func receiveReply(
     from endpoint: RuntimeSessionEndpointService,
     request: Data,
@@ -112,6 +155,17 @@ private func receiveReply(
     await withCheckedContinuation { continuation in
         endpoint.importFiles(request, files: files) { response in
             continuation.resume(returning: response)
+        }
+    }
+}
+
+private func receiveOfferReply(
+    from endpoint: RuntimeSessionEndpointService,
+    offer: ExportOffer
+) async -> Bool {
+    await withCheckedContinuation { continuation in
+        endpoint.deliverExportOffer(offer) { delivered in
+            continuation.resume(returning: delivered)
         }
     }
 }
@@ -160,5 +214,49 @@ private actor SessionImportSpy: RuntimeSessionService {
     ) async throws(RuntimeWireError) {
         lastExportSessionID = request.sessionID
         exportCount += 1
+    }
+}
+
+private final class ExportOfferSenderSpy: RuntimeSessionExportOfferSender, @unchecked Sendable {
+    private let lock = NSLock()
+    private let acceptsOffer: Bool
+    private var storedOfferData: Data?
+    private var storedDeliveryCount = 0
+    private var storedInvalidationCount = 0
+
+    init(acceptsOffer: Bool) {
+        self.acceptsOffer = acceptsOffer
+    }
+
+    var lastOfferData: Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedOfferData
+    }
+
+    var deliveryCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedDeliveryCount
+    }
+
+    var invalidationCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedInvalidationCount
+    }
+
+    func exportOffered(_ offer: Data, reply: @escaping @Sendable (Bool) -> Void) {
+        lock.lock()
+        storedOfferData = offer
+        storedDeliveryCount += 1
+        lock.unlock()
+        reply(acceptsOffer)
+    }
+
+    func invalidate() {
+        lock.lock()
+        storedInvalidationCount += 1
+        lock.unlock()
     }
 }

@@ -36,7 +36,16 @@ final class RuntimeSessionXPCListener: @unchecked Sendable {
     }
 
     func invalidate() {
+        endpointService.invalidateExportOfferDelivery()
         listener.invalidate()
+    }
+
+    /// Delivers one Android file offer to the wrapper connected to this session.
+    ///
+    /// The reply is false when no wrapper is connected, the offer is invalid, or the
+    /// wrapper cannot receive it.
+    func deliverExportOffer(_ offer: ExportOffer, reply: @escaping @Sendable (Bool) -> Void) {
+        endpointService.deliverExportOffer(offer, reply: reply)
     }
 }
 
@@ -44,6 +53,9 @@ final class RuntimeSessionXPCListener: @unchecked Sendable {
 final class RuntimeSessionEndpointService: NSObject, RuntimeSessionXPC, @unchecked Sendable {
     private let sessionID: UUID
     private let service: any RuntimeSessionService
+    private let exportOfferLock = NSLock()
+    private var exportOfferSenderID: UUID?
+    private var exportOfferSender: (any RuntimeSessionExportOfferSender)?
 
     init(sessionID: UUID, service: any RuntimeSessionService) {
         self.sessionID = sessionID
@@ -118,8 +130,100 @@ final class RuntimeSessionEndpointService: NSObject, RuntimeSessionXPC, @uncheck
         }
     }
 
+    /// Registers the reverse XPC route for this session's connected wrapper.
+    ///
+    /// A session has one wrapper window, so a second connection is not allowed to replace
+    /// an existing receiver before it disconnects.
+    @discardableResult
+    func installExportOfferSender(
+        _ sender: any RuntimeSessionExportOfferSender,
+        connectionID: UUID
+    ) -> Bool {
+        exportOfferLock.lock()
+        defer { exportOfferLock.unlock() }
+        guard exportOfferSender == nil else {
+            return false
+        }
+        exportOfferSenderID = connectionID
+        exportOfferSender = sender
+        return true
+    }
+
+    /// Removes the reverse route only when the invalidated connection still owns it.
+    func removeExportOfferSender(connectionID: UUID) {
+        exportOfferLock.lock()
+        guard exportOfferSenderID == connectionID else {
+            exportOfferLock.unlock()
+            return
+        }
+        let sender = exportOfferSender
+        exportOfferSenderID = nil
+        exportOfferSender = nil
+        exportOfferLock.unlock()
+        sender?.invalidate()
+    }
+
+    /// Tears down the session's reverse route while the daemon is stopping.
+    func invalidateExportOfferDelivery() {
+        exportOfferLock.lock()
+        let sender = exportOfferSender
+        exportOfferSenderID = nil
+        exportOfferSender = nil
+        exportOfferLock.unlock()
+        sender?.invalidate()
+    }
+
+    /// Sends a validated offer to the wrapper, returning false if it cannot be delivered.
+    func deliverExportOffer(_ offer: ExportOffer, reply: @escaping @Sendable (Bool) -> Void) {
+        let response = RuntimeSessionBoolReply(reply)
+        guard Self.isValid(offer),
+            let data = try? JSONEncoder().encode(offer),
+            data.count <= Self.maximumExportOfferSize
+        else {
+            response.send(false)
+            return
+        }
+
+        exportOfferLock.lock()
+        let sender = exportOfferSender
+        exportOfferLock.unlock()
+        guard let sender else {
+            response.send(false)
+            return
+        }
+        sender.exportOffered(data) { accepted in
+            response.send(accepted)
+        }
+    }
+
     private static let maximumRequestSize = 16 * 1024
+    private static let maximumExportOfferSize = 4 * 1024
     private static let maximumFiles = 20
+
+    private static func isValid(_ offer: ExportOffer) -> Bool {
+        let name = offer.name
+        guard !name.isEmpty,
+            name.utf8.count <= 255,
+            name == name.trimmingCharacters(in: .whitespacesAndNewlines),
+            name != ".",
+            name != "..",
+            !name.contains("/"),
+            !name.contains("\\"),
+            !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+            offer.size.map({ $0 >= 0 }) ?? true
+        else {
+            return false
+        }
+
+        let components = offer.type.split(separator: "/", omittingEmptySubsequences: false)
+        return offer.type.utf8.count <= 255
+            && components.count == 2
+            && components.allSatisfy { !$0.isEmpty }
+            && !offer.type.unicodeScalars.contains(where: {
+                CharacterSet.whitespacesAndNewlines.contains($0)
+                    || CharacterSet.controlCharacters.contains($0)
+            })
+    }
 
     private static let malformedRequestError = RuntimeWireError.runtime(
         "malformedRequest",
@@ -155,6 +259,68 @@ final class RuntimeSessionEndpointService: NSObject, RuntimeSessionXPC, @uncheck
 
     private static func encode<T: Encodable>(_ value: T) -> Data {
         (try? JSONEncoder().encode(value)) ?? Data()
+    }
+}
+
+protocol RuntimeSessionExportOfferSender: Sendable {
+    func exportOffered(_ offer: Data, reply: @escaping @Sendable (Bool) -> Void)
+    func invalidate()
+}
+
+private final class RuntimeSessionXPCExportOfferSender: RuntimeSessionExportOfferSender, @unchecked Sendable {
+    private let lock = NSLock()
+    private weak var connection: NSXPCConnection?
+
+    init(connection: NSXPCConnection) {
+        self.connection = connection
+    }
+
+    func exportOffered(_ offer: Data, reply: @escaping @Sendable (Bool) -> Void) {
+        lock.lock()
+        let connection = connection
+        lock.unlock()
+        guard let connection, connection.isValid else {
+            reply(false)
+            return
+        }
+
+        let response = RuntimeSessionBoolReply(reply)
+        let proxy =
+            connection.remoteObjectProxyWithErrorHandler { _ in
+                response.send(false)
+            } as? any RuntimeSessionExportSink
+        guard let proxy else {
+            response.send(false)
+            return
+        }
+        proxy.exportOffered(offer) { accepted in
+            response.send(accepted)
+        }
+    }
+
+    func invalidate() {
+        lock.lock()
+        let connection = connection
+        self.connection = nil
+        lock.unlock()
+        connection?.invalidate()
+    }
+}
+
+private final class RuntimeSessionBoolReply: @unchecked Sendable {
+    private let lock = NSLock()
+    private var callback: (@Sendable (Bool) -> Void)?
+
+    init(_ callback: @escaping @Sendable (Bool) -> Void) {
+        self.callback = callback
+    }
+
+    func send(_ value: Bool) {
+        lock.lock()
+        let callback = callback
+        self.callback = nil
+        lock.unlock()
+        callback?(value)
     }
 }
 
@@ -196,6 +362,22 @@ private final class SessionListenerDelegate: NSObject, NSXPCListenerDelegate, @u
         )
         connection.exportedInterface = interface
         connection.exportedObject = endpointService
+        connection.remoteObjectInterface = NSXPCInterface(with: RuntimeSessionExportSink.self)
+        let connectionID = UUID()
+        guard
+            endpointService.installExportOfferSender(
+                RuntimeSessionXPCExportOfferSender(connection: connection),
+                connectionID: connectionID
+            )
+        else {
+            return false
+        }
+        connection.invalidationHandler = { [weak endpointService] in
+            endpointService?.removeExportOfferSender(connectionID: connectionID)
+        }
+        connection.interruptionHandler = { [weak endpointService] in
+            endpointService?.removeExportOfferSender(connectionID: connectionID)
+        }
         connection.resume()
         return true
     }

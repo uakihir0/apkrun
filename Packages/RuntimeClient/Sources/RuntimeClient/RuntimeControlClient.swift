@@ -299,29 +299,6 @@ public actor RuntimeControlClient {
         }
     }
 
-    /// Transfers host files to the selected Android package and display.
-    ///
-    /// The file handles are passed once to the daemon. A transport failure is not replayed because
-    /// the daemon may already have delivered the files to Android.
-    public func importFiles(
-        _ request: ImportFilesRequest,
-        files: [FileHandle]
-    ) async throws(RuntimeControlClientError) -> ImportResult {
-        let opened = try await ensureControl()
-        do {
-            let controlRequest = RuntimeImportFilesControlRequest(
-                header: makeHeader(),
-                request: request
-            )
-            let data = try Self.encode(controlRequest)
-            let response = try await opened.channel.importFiles(data, files: files)
-            return try Self.decodeImportFilesReply(from: response)
-        } catch {
-            invalidateAfterTransportFailure(opened.channel, error: error)
-            throw error
-        }
-    }
-
     /// Installs a package import previously inspected by `importPackage`.
     ///
     /// The daemon may have installed the package even when the client loses the reply, so this
@@ -994,20 +971,6 @@ public actor RuntimeControlClient {
         return result
     }
 
-    private static func decodeImportFilesReply(from data: Data) throws(RuntimeControlClientError) -> ImportResult {
-        let reply = try Self.decode(RuntimeImportFilesControlReply.self, from: data)
-        guard (reply.result != nil) != (reply.error != nil) else {
-            throw .malformedReply
-        }
-        if let failure = reply.error {
-            throw .remoteFailure(code: failure.code, message: failure.message)
-        }
-        guard let result = reply.result else {
-            throw .malformedReply
-        }
-        return result
-    }
-
     private static func decodeInstallImportedReply(from data: Data) throws(RuntimeControlClientError)
         -> RuntimePackageSummary
     {
@@ -1372,7 +1335,6 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func listPackages(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func packageInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func importPackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
-    func importFiles(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
     func installImported(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func beginInstallImported(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func beginUninstallPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data
@@ -1472,12 +1434,6 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
         interface.setClasses(
             fileClasses,
             for: #selector(RuntimeControlXPC.importPackage(_:files:reply:)),
-            argumentIndex: 1,
-            ofReply: false
-        )
-        interface.setClasses(
-            fileClasses,
-            for: #selector(RuntimeControlXPC.importFiles(_:files:reply:)),
             argumentIndex: 1,
             ofReply: false
         )
@@ -1660,20 +1616,6 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.importPackage(request, files: files) { response in finish(.success(response)) }
-        }
-    }
-
-    func importFiles(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data {
-        try await withXPCReply { finish in
-            let proxy =
-                connection.remoteObjectProxyWithErrorHandler { error in
-                    finish(.failure(Self.transportFailure(error)))
-                } as? any RuntimeControlXPC
-            guard let proxy else {
-                finish(.failure(.invalidRemoteProxy))
-                return
-            }
-            proxy.importFiles(request, files: files) { response in finish(.success(response)) }
         }
     }
 
@@ -1865,7 +1807,7 @@ private final class XPCReplyGate: @unchecked Sendable {
     }
 }
 
-private func withXPCReply<Value: Sendable>(
+func withXPCReply<Value: Sendable>(
     _ invoke: (@escaping (Result<Value, RuntimeControlClientError>) -> Void) -> Void
 ) async throws(RuntimeControlClientError) -> Value {
     do {

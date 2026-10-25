@@ -571,34 +571,15 @@ import Testing
     }
 }
 
-@Test func controlClientTransfersFilesToTheRequestedPackageAndDisplay() async throws {
-    let configuration = try RuntimeControlClientConfiguration(
-        clientKind: .launcher,
-        claimedIdentity: "io.apkrun.launcher.dev",
-        buildIdentity: .development
-    )
-    let hello = RuntimeHelloReply(
-        runtimeVersion: "0.1.0",
-        runtimeBuild: 1,
-        apiVersion: APIVersion.current,
-        hostState: "running"
-    )
-    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellofiles"))
-    let displayID = try #require(DisplayID(rawValue: "f19b7331-f940-4ce6-91d1-a0f979d08f3f"))
+@Test func sessionClientTransfersFilesWithoutSendingSessionIdentity() async throws {
     let result = ImportResult(
         contentURIs: ["content://io.apkrun.guest.files/import/notes"],
         disposition: .shared
     )
-    let transport = try MockRuntimeTransport(
-        hello: hello,
-        status: nil,
-        importFilesReply: RuntimeImportFilesControlReply(result: result)
-    )
-    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let channel = try MockRuntimeSessionChannel(reply: RuntimeImportFilesSessionReply(result: result))
+    let client = RuntimeSessionClient(clientKind: .wrapper, channel: channel)
     let file = FileHandle.nullDevice
     let request = ImportFilesRequest(
-        packageID: packageID,
-        displayID: displayID,
         files: [
             ImportFileInfo(fileIndex: 0, name: "notes.txt", size: 2048, uti: "public.plain-text")
         ],
@@ -607,13 +588,50 @@ import Testing
 
     #expect(try await client.importFiles(request, files: [file]) == result)
 
-    let snapshot = transport.snapshot()
-    #expect(snapshot.importFilesRequests.count == 1)
-    #expect(snapshot.importFilesFileHandleIDs == [[ObjectIdentifier(file)]])
-    let decoded = try JSONDecoder().decode(RuntimeImportFilesControlRequest.self, from: snapshot.importFilesRequests[0])
+    let snapshot = channel.snapshot()
+    #expect(snapshot.requests.count == 1)
+    #expect(snapshot.fileHandleIDs == [[ObjectIdentifier(file)]])
+    let decoded = try JSONDecoder().decode(RuntimeImportFilesSessionRequest.self, from: snapshot.requests[0])
     #expect(decoded.request == request)
     #expect(decoded.header.apiVersion == APIVersion.current)
-    #expect(decoded.header.clientKind == .launcher)
+    #expect(decoded.header.clientKind == .wrapper)
+    let encoded = try #require(JSONSerialization.jsonObject(with: snapshot.requests[0]) as? [String: Any])
+    let encodedRequest = try #require(encoded["request"] as? [String: Any])
+    #expect(encodedRequest["sessionID"] == nil)
+    client.invalidate()
+    #expect(channel.invalidations == 1)
+}
+
+private final class MockRuntimeSessionChannel: RuntimeSessionChannel, @unchecked Sendable {
+    private let lock = NSLock()
+    private let replyData: Data
+    private var requestsValue: [Data] = []
+    private var fileHandleIDsValue: [[ObjectIdentifier]] = []
+    private var invalidationsValue = 0
+
+    init(reply: RuntimeImportFilesSessionReply) throws {
+        replyData = try JSONEncoder().encode(reply)
+    }
+
+    func importFiles(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock {
+            requestsValue.append(request)
+            fileHandleIDsValue.append(files.map(ObjectIdentifier.init))
+        }
+        return replyData
+    }
+
+    func invalidate() {
+        lock.withLock { invalidationsValue += 1 }
+    }
+
+    var invalidations: Int {
+        lock.withLock { invalidationsValue }
+    }
+
+    func snapshot() -> (requests: [Data], fileHandleIDs: [[ObjectIdentifier]]) {
+        lock.withLock { (requestsValue, fileHandleIDsValue) }
+    }
 }
 
 @Test func controlClientBeginsAndTracksInstallOperationsWithVersionedRequests() async throws {
@@ -1362,7 +1380,6 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private let packageListData: Data
     private let packageInfoData: Data
     private let importPackageData: Data
-    private let importFilesData: Data
     private let installImportedData: Data
     private let beginInstallImportedData: Data
     private let beginUninstallPackageData: Data
@@ -1385,8 +1402,6 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var packageInfoRequestsValue: [Data] = []
     private var importPackageRequestsValue: [Data] = []
     private var importFileHandleIDsValue: [[ObjectIdentifier]] = []
-    private var importFilesRequestsValue: [Data] = []
-    private var importFilesFileHandleIDsValue: [[ObjectIdentifier]] = []
     private var installImportedRequestsValue: [Data] = []
     private var beginInstallImportedRequestsValue: [Data] = []
     private var beginUninstallPackageRequestsValue: [Data] = []
@@ -1424,7 +1439,6 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         packageListReply: RuntimeListPackagesControlReply? = nil,
         packageInfoReply: RuntimePackageInfoControlReply? = nil,
         importReply: RuntimeImportPackageControlReply? = nil,
-        importFilesReply: RuntimeImportFilesControlReply? = nil,
         installImportedReply: RuntimeInstallImportedControlReply? = nil,
         beginInstallImportedReply: RuntimeBeginInstallImportedControlReply? = nil,
         beginUninstallPackageReply: RuntimeBeginUninstallPackageControlReply? = nil,
@@ -1479,9 +1493,6 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
             )
         )
         let defaultInstallImportedReply = RuntimeInstallImportedControlReply(result: defaultSummary)
-        let defaultImportFilesReply = RuntimeImportFilesControlReply(
-            result: ImportResult(contentURIs: [], disposition: .savedToDownloads)
-        )
         let defaultOperationID = try #require(OperationID(wire: "b4a90e78-5e1f-4d5a-9ba1-0b691f180032"))
         let defaultOperationHandle = OperationHandle(operationID: defaultOperationID, kind: .install)
         let defaultUninstallOperationHandle = OperationHandle(operationID: defaultOperationID, kind: .uninstall)
@@ -1503,7 +1514,6 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         packageListData = try JSONEncoder().encode(packageListReply ?? defaultListReply)
         packageInfoData = try JSONEncoder().encode(packageInfoReply ?? defaultPackageInfoReply)
         importPackageData = try JSONEncoder().encode(importReply ?? defaultImportReply)
-        importFilesData = try JSONEncoder().encode(importFilesReply ?? defaultImportFilesReply)
         installImportedData = try JSONEncoder().encode(installImportedReply ?? defaultInstallImportedReply)
         beginInstallImportedData =
             try beginInstallImportedReplyData
@@ -1657,17 +1667,6 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return importPackageData
     }
 
-    func importFiles(
-        _ request: Data,
-        files: [FileHandle]
-    ) async throws(RuntimeControlClientError) -> Data {
-        lock.withLock {
-            importFilesRequestsValue.append(request)
-            importFilesFileHandleIDsValue.append(files.map(ObjectIdentifier.init))
-        }
-        return importFilesData
-    }
-
     func installImported(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         let shouldFail = lock.withLock {
             installImportedRequestsValue.append(request)
@@ -1799,8 +1798,6 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 packageInfoRequests: packageInfoRequestsValue,
                 importRequests: importPackageRequestsValue,
                 importFileHandleIDs: importFileHandleIDsValue,
-                importFilesRequests: importFilesRequestsValue,
-                importFilesFileHandleIDs: importFilesFileHandleIDsValue,
                 installImportedRequests: installImportedRequestsValue,
                 beginInstallImportedRequests: beginInstallImportedRequestsValue,
                 beginUninstallPackageRequests: beginUninstallPackageRequestsValue,
@@ -1884,8 +1881,6 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let packageInfoRequests: [Data]
         let importRequests: [Data]
         let importFileHandleIDs: [[ObjectIdentifier]]
-        let importFilesRequests: [Data]
-        let importFilesFileHandleIDs: [[ObjectIdentifier]]
         let installImportedRequests: [Data]
         let beginInstallImportedRequests: [Data]
         let beginUninstallPackageRequests: [Data]

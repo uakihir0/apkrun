@@ -273,9 +273,7 @@ private struct TestRuntimeService: RuntimeService {
     let preview = try await service.importPackage(request, files: [file])
     #expect(preview.packageID == packageID)
     let importFilesRequest = ImportFilesRequest(
-        packageID: packageID,
-        displayID: DisplayID(rawValue: "f19b7331-f940-4ce6-91d1-a0f979d08f3f")!,
-        files: [],
+        files: [ImportFileInfo(fileIndex: 0, name: "notes.txt", size: 1, uti: "public.plain-text")],
         target: .shareToApp
     )
     #expect(try await service.importFiles(importFilesRequest, files: []).disposition == .savedToDownloads)

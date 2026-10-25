@@ -26,28 +26,61 @@ public enum ImportTarget: String, Codable, Equatable, Sendable {
     case shareToApp
 }
 
-/// A request to pass host files to one package on one Android display.
+/// A request to pass host files through one running app session.
 public struct ImportFilesRequest: Codable, Equatable, Sendable {
-    /// The package that receives the files.
-    public let packageID: RuntimePackageID
-    /// The Android display on which the package is running.
-    public let displayID: DisplayID
+    /// The session bound by the authenticated session endpoint. This value is not encoded.
+    ///
+    /// The initial value on a client-created or decoded request is only a placeholder. A
+    /// session endpoint must replace it with the session ID captured when that endpoint was
+    /// created before forwarding the request to a ``RuntimeSessionService``.
+    public let sessionID: UUID
     /// Metadata matching the order of the accompanying file handles.
     public let files: [ImportFileInfo]
     /// The requested delivery behavior.
     public let target: ImportTarget
 
-    /// Creates a file-import request.
+    /// Creates a file-import request. Session identity is supplied by the session endpoint.
     public init(
-        packageID: RuntimePackageID,
-        displayID: DisplayID,
         files: [ImportFileInfo],
         target: ImportTarget
     ) {
-        self.packageID = packageID
-        self.displayID = displayID
+        sessionID = UUID()
         self.files = files
         self.target = target
+    }
+
+    private init(sessionID: UUID, files: [ImportFileInfo], target: ImportTarget) {
+        self.sessionID = sessionID
+        self.files = files
+        self.target = target
+    }
+
+    /// Returns a copy bound to the session that owns the authenticated endpoint.
+    @_spi(APKRunSessionBinding)
+    public func bound(to sessionID: UUID) -> Self {
+        Self(sessionID: sessionID, files: files, target: target)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case files
+        case target
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sessionID = UUID()
+        files = try container.decode([ImportFileInfo].self, forKey: .files)
+        target = try container.decode(ImportTarget.self, forKey: .target)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(files, forKey: .files)
+        try container.encode(target, forKey: .target)
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.files == rhs.files && lhs.target == rhs.target
     }
 }
 
@@ -73,22 +106,22 @@ public enum ImportDisposition: String, Codable, Equatable, Sendable {
     case savedToDownloads
 }
 
-/// The authenticated control request used to import files.
-public struct RuntimeImportFilesControlRequest: Codable, Equatable, Sendable {
+/// The authenticated session-channel request used to import files.
+public struct RuntimeImportFilesSessionRequest: Codable, Equatable, Sendable {
     /// The request metadata.
     public let header: APIRequestHeader
-    /// The package, display, and file metadata.
+    /// The file metadata and delivery behavior.
     public let request: ImportFilesRequest
 
-    /// Creates a file-import control request.
+    /// Creates a file-import session request.
     public init(header: APIRequestHeader, request: ImportFilesRequest) {
         self.header = header
         self.request = request
     }
 }
 
-/// The result or typed error returned by a control file-import request.
-public struct RuntimeImportFilesControlReply: Codable, Equatable, Sendable {
+/// The result or typed error returned by a session-channel file-import request.
+public struct RuntimeImportFilesSessionReply: Codable, Equatable, Sendable {
     /// The import result, present on success.
     public let result: ImportResult?
     /// The structured failure, present on failure.

@@ -584,8 +584,6 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func packageInfo(_ request: Data, reply: @escaping (Data) -> Void)
     /// Copies and inspects APK files without starting Android.
     func importPackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
-    /// Transfers host files to the requested package and Android display.
-    func importFiles(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
     /// Starts installation and returns an operation handle without waiting for installation to finish.
     func beginInstallImported(_ request: Data, reply: @escaping (Data) -> Void)
     /// Starts a package uninstall or store forget and returns its operation handle.
@@ -608,6 +606,12 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func terminate(_ request: Data, reply: @escaping (Data) -> Void)
 }
 
+/// File transfer operations on an endpoint bound to one running application session.
+@objc public protocol RuntimeSessionXPC {
+    /// Transfers host files to the session captured when this endpoint was created.
+    func importFiles(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
+}
+
 /// Client-exported callback for event batches from the authenticated control endpoint.
 @objc public protocol RuntimeEventSink {
     /// Confirms that the client exported an event receiver on this connection.
@@ -623,12 +627,6 @@ public protocol RuntimePackageService: Sendable {
         _ request: RuntimeImportPackageRequest,
         files: [FileHandle]
     ) async throws(RuntimeWireError) -> RuntimeImportPreview
-
-    /// Transfers host files to a package on a specific Android display.
-    func importFiles(
-        _ request: ImportFilesRequest,
-        files: [FileHandle]
-    ) async throws(RuntimeWireError) -> ImportResult
 
     /// Installs a previously inspected import into Android through the runtime's package channel.
     func installImported(
@@ -662,6 +660,27 @@ public protocol RuntimeSessionService: Sendable {
     func terminate(
         _ request: RuntimeTerminateRequest
     ) async throws(RuntimeWireError) -> RuntimeTerminateResult
+
+    /// Transfers dropped host files to the exact running session returned by `launch`.
+    func importFiles(
+        _ request: ImportFilesRequest,
+        files: [FileHandle]
+    ) async throws(RuntimeWireError) -> ImportResult
+}
+
+public extension RuntimeSessionService {
+    /// Returns a typed error for runtimes that do not expose file transfers.
+    func importFiles(
+        _ request: ImportFilesRequest,
+        files: [FileHandle]
+    ) async throws(RuntimeWireError) -> ImportResult {
+        throw RuntimeWireError(
+            domain: "integration",
+            code: "integration.notSupported",
+            message: "File sharing isn't available in this runtime.",
+            remediation: "Start Android with a supported image, then retry."
+        )
+    }
 }
 
 /// The package and application session operations shared by embedded and daemon clients.

@@ -1,6 +1,6 @@
 import DiagnosticsCore
 @preconcurrency import Foundation
-import RuntimeAPI
+@_spi(APKRunSessionBinding) import RuntimeAPI
 import RuntimeCore
 
 #if canImport(Security)
@@ -8,6 +8,152 @@ import RuntimeCore
 #endif
 
 private let runtimeAPIVersion = APIVersion.current
+
+/// Owns one daemon-created session channel and the session binding used by its requests.
+///
+/// The session bootstrap must keep this value for the full app-window lifetime and expose its
+/// endpoint only to the wrapper whose code-signing requirement it supplies.
+final class RuntimeSessionXPCListener: @unchecked Sendable {
+    let listener: NSXPCListener
+    let endpointService: RuntimeSessionEndpointService
+    private let delegate: SessionListenerDelegate
+
+    init(
+        sessionID: UUID,
+        service: any RuntimeSessionService,
+        wrapperCodeSigningRequirement: String
+    ) {
+        endpointService = RuntimeSessionEndpointService(sessionID: sessionID, service: service)
+        delegate = SessionListenerDelegate(endpointService: endpointService)
+        listener = NSXPCListener.anonymous()
+        listener.setConnectionCodeSigningRequirement(wrapperCodeSigningRequirement)
+        listener.delegate = delegate
+        listener.resume()
+    }
+
+    var endpoint: NSXPCListenerEndpoint {
+        listener.endpoint
+    }
+
+    func invalidate() {
+        listener.invalidate()
+    }
+}
+
+/// The narrow implementation behind an authenticated, session-bound endpoint.
+final class RuntimeSessionEndpointService: NSObject, RuntimeSessionXPC, @unchecked Sendable {
+    private let sessionID: UUID
+    private let service: any RuntimeSessionService
+
+    init(sessionID: UUID, service: any RuntimeSessionService) {
+        self.sessionID = sessionID
+        self.service = service
+    }
+
+    func importFiles(_ requestData: Data, files: [FileHandle], reply: @escaping (Data) -> Void) {
+        let response = RuntimeSessionDataReply(reply)
+        guard requestData.count <= Self.maximumRequestSize,
+            let request = try? JSONDecoder().decode(RuntimeImportFilesSessionRequest.self, from: requestData),
+            Self.isSupported(request.header.apiVersion)
+        else {
+            response.send(Self.encode(RuntimeImportFilesSessionReply(error: Self.malformedRequestError)))
+            return
+        }
+        guard request.header.clientKind == .wrapper else {
+            response.send(Self.encode(RuntimeImportFilesSessionReply(error: Self.notAuthorizedError)))
+            return
+        }
+        guard !files.isEmpty, files.count <= Self.maximumFiles,
+            request.request.files.count == files.count,
+            request.request.files.enumerated().allSatisfy({ index, file in file.fileIndex == index })
+        else {
+            response.send(Self.encode(RuntimeImportFilesSessionReply(error: Self.transferFailedError)))
+            return
+        }
+
+        let boundRequest = request.request.bound(to: sessionID)
+        let service = service
+        Task {
+            do {
+                let result = try await service.importFiles(boundRequest, files: files)
+                response.send(Self.encode(RuntimeImportFilesSessionReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalError
+                response.send(Self.encode(RuntimeImportFilesSessionReply(error: wireError)))
+            }
+        }
+    }
+
+    private static let maximumRequestSize = 16 * 1024
+    private static let maximumFiles = 20
+
+    private static let malformedRequestError = RuntimeWireError.runtime(
+        "malformedRequest",
+        message: safeMessage(for: "runtime.malformedRequest")
+    )
+    private static let notAuthorizedError = RuntimeWireError(
+        domain: "runtime",
+        code: "runtime.notAuthorized",
+        message: safeMessage(for: "runtime.notAuthorized")
+    )
+    private static let transferFailedError = RuntimeWireError(
+        domain: "integration",
+        code: "integration.transferFailed",
+        message: "The dropped files could not be transferred.",
+        remediation: "Choose the files again and retry the drop."
+    )
+    private static let internalError = RuntimeWireError.runtime(
+        "internal",
+        message: safeMessage(for: "runtime.internal")
+    )
+
+    private static func isSupported(_ version: APIVersion) -> Bool {
+        version.major == runtimeAPIVersion.major
+            && version.minor >= 0
+            && version.minor <= runtimeAPIVersion.minor
+    }
+
+    private static func encode<T: Encodable>(_ value: T) -> Data {
+        (try? JSONEncoder().encode(value)) ?? Data()
+    }
+}
+
+private final class RuntimeSessionDataReply: @unchecked Sendable {
+    private let callback: (Data) -> Void
+
+    init(_ callback: @escaping (Data) -> Void) {
+        self.callback = callback
+    }
+
+    func send(_ data: Data) {
+        callback(data)
+    }
+}
+
+private final class SessionListenerDelegate: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
+    private let endpointService: RuntimeSessionEndpointService
+
+    init(endpointService: RuntimeSessionEndpointService) {
+        self.endpointService = endpointService
+    }
+
+    func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
+        let interface = NSXPCInterface(with: RuntimeSessionXPC.self)
+        guard let fileHandleClasses = NSSet(array: [NSArray.self, FileHandle.self]) as? Set<AnyHashable> else {
+            return false
+        }
+        interface.setClasses(
+            fileHandleClasses,
+            for: #selector(RuntimeSessionXPC.importFiles(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
+        connection.exportedInterface = interface
+        connection.exportedObject = endpointService
+        connection.resume()
+        return true
+    }
+}
 
 /// Errors that prevent the daemon from establishing a protected XPC endpoint.
 public enum RuntimeXPCServerError: Error, Equatable, Sendable {

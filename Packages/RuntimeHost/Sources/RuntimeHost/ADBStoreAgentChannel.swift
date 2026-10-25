@@ -1,6 +1,5 @@
 import APKStoreCore
 import Foundation
-import GuestProtocol
 import RuntimeCore
 
 /// The stock-image package channel.
@@ -15,7 +14,11 @@ public struct ADBStoreAgentChannel: StoreAgentChannel {
     ///
     /// Downgrade reinstall is available only when the caller has verified `ro.debuggable=1`.
     public let capabilities: StoreCapabilities
+    /// PackageManager changes reported by the Guest Agent while the channel is active.
+    public let packageEvents: AsyncStream<StorePackageEvent>
 
+    private let packageEventRelayTask: Task<Void, Never>
+    private let packageEventContinuation: AsyncStream<StorePackageEvent>.Continuation
     /// Creates a channel using the active Guest Agent and ADB client for one Android runtime.
     public init(agent: DevelopmentGuestAgent, adb: AdbClient) {
         self.init(
@@ -43,6 +46,35 @@ public struct ADBStoreAgentChannel: StoreAgentChannel {
         self.agent = agent
         self.adb = adb
         self.capabilities = capabilities
+        let events = AsyncStream.makeStream(
+            of: StorePackageEvent.self,
+            bufferingPolicy: .bufferingNewest(1_024)
+        )
+        packageEvents = events.stream
+        packageEventContinuation = events.continuation
+        let runtimeEvents = agent.makePackageEventStream()
+        packageEventRelayTask = Task {
+            for await event in runtimeEvents {
+                guard let packageID = PackageID(rawValue: event.packageID.rawValue) else {
+                    continue
+                }
+                events.continuation.yield(
+                    StorePackageEvent(
+                        packageID: packageID,
+                        kind: Self.packageEventKind(event.kind),
+                        versionCode: event.versionCode
+                    )
+                )
+            }
+            events.continuation.finish()
+        }
+    }
+
+    /// Stops relaying Guest Agent events and finishes this channel's event stream.
+    public func close() async {
+        packageEventRelayTask.cancel()
+        packageEventContinuation.finish()
+        await packageEventRelayTask.value
     }
 
     /// Installs the requested package set, then verifies PackageManager reports the exact package and version.
@@ -56,7 +88,7 @@ public struct ADBStoreAgentChannel: StoreAgentChannel {
 
         try await agent.installMultiple(apks: files, allowDowngrade: request.allowDowngrade)
 
-        guard let installed = try await agent.queryPackage(request.packageID.rawValue) else {
+        guard let installed = try await agent.storePackageInfo(request.packageID.rawValue) else {
             throw ADBStoreAgentChannelFailure.packageNotInstalled(request.packageID)
         }
         let info = try Self.packageInfo(installed)
@@ -80,7 +112,7 @@ public struct ADBStoreAgentChannel: StoreAgentChannel {
 
     /// Reads the package through Guest Agent `QueryPackage`; `nil` means PackageManager says it is not installed.
     public func packageInfo(_ package: PackageID) async throws -> StorePackageInfo? {
-        guard let info = try await agent.queryPackage(package.rawValue) else {
+        guard let info = try await agent.storePackageInfo(package.rawValue) else {
             return nil
         }
         let result = try Self.packageInfo(info)
@@ -92,7 +124,7 @@ public struct ADBStoreAgentChannel: StoreAgentChannel {
 
     /// Lists packages through Guest Agent `ListPackages`, never by parsing `pm list packages` output.
     public func listPackages(_ filter: StorePackageFilter) async throws -> [StorePackageSummary] {
-        let guestFilter: GPPackageFilter
+        let guestFilter: GuestPackageFilter
         switch filter {
         case .launchable:
             guestFilter = .launchable
@@ -102,7 +134,7 @@ public struct ADBStoreAgentChannel: StoreAgentChannel {
             guestFilter = .all
         }
 
-        return try await agent.listPackages(filter: guestFilter).map { summary in
+        return try await agent.listStorePackages(filter: guestFilter).map { summary in
             guard let packageID = PackageID(rawValue: summary.package) else {
                 throw ADBStoreAgentChannelFailure.invalidPackageID(summary.package)
             }
@@ -119,14 +151,14 @@ public struct ADBStoreAgentChannel: StoreAgentChannel {
         }
     }
 
-    private static func packageInfo(_ guest: GPPackageInfo) throws -> StorePackageInfo {
+    private static func packageInfo(_ guest: GuestPackageMetadata) throws -> StorePackageInfo {
         guard let packageID = PackageID(rawValue: guest.package) else {
             throw ADBStoreAgentChannelFailure.invalidPackageID(guest.package)
         }
         guard guest.versionCode >= 0 else {
             throw ADBStoreAgentChannelFailure.invalidVersionCode(package: guest.package)
         }
-        guard guest.targetSdk >= 0, guest.minSdk >= 0 else {
+        guard guest.targetSDK >= 0, guest.minSDK >= 0 else {
             throw ADBStoreAgentChannelFailure.invalidSDK(package: guest.package)
         }
 
@@ -139,11 +171,15 @@ public struct ADBStoreAgentChannel: StoreAgentChannel {
             throw ADBStoreAgentChannelFailure.invalidInstallerPackage(guest.installerPackage)
         }
 
-        let signingDigests = try guest.signingSha256.map { bytes -> SHA256Digest in
+        let signingDigests = try guest.signingSHA256.map { bytes -> SHA256Digest in
             guard bytes.count == 32 else {
                 throw ADBStoreAgentChannelFailure.invalidSigningDigest(package: guest.package)
             }
-            return SHA256Digest(data: bytes)
+            let hex = bytes.map { String(format: "%02x", $0) }.joined()
+            guard let digest = SHA256Digest(hex: hex) else {
+                throw ADBStoreAgentChannelFailure.invalidSigningDigest(package: guest.package)
+            }
+            return digest
         }
 
         return StorePackageInfo(
@@ -156,10 +192,19 @@ public struct ADBStoreAgentChannel: StoreAgentChannel {
             installerPackage: installerPackage,
             firstInstallTime: Self.date(milliseconds: guest.firstInstallTimeMs),
             lastUpdateTime: Self.date(milliseconds: guest.lastUpdateTimeMs),
-            targetSDK: Int(guest.targetSdk),
-            minSDK: Int(guest.minSdk),
+            targetSDK: Int(guest.targetSDK),
+            minSDK: Int(guest.minSDK),
             signingDigests: signingDigests
         )
+    }
+
+    private static func packageEventKind(_ kind: RuntimeStorePackageEvent.Kind) -> StorePackageEvent.Kind {
+        switch kind {
+        case .added: .added
+        case .replaced: .replaced
+        case .removed: .removed
+        case .changed: .changed
+        }
     }
 
     private static func date(milliseconds: Int64) -> Date? {
@@ -170,9 +215,10 @@ public struct ADBStoreAgentChannel: StoreAgentChannel {
 
 /// Narrow testing seam for the Guest Agent operations used by the stock-image channel.
 protocol ADBStoreGuestAgent: Sendable {
+    func makePackageEventStream() -> AsyncStream<RuntimeStorePackageEvent>
     func installMultiple(apks: [URL], allowDowngrade: Bool) async throws(AdbFailure)
-    func queryPackage(_ package: String) async throws(GuestAgentFailure) -> GPPackageInfo?
-    func listPackages(filter: GPPackageFilter) async throws(GuestAgentFailure) -> [GPPackageSummary]
+    func storePackageInfo(_ package: String) async throws(GuestAgentFailure) -> GuestPackageMetadata?
+    func listStorePackages(filter: GuestPackageFilter) async throws(GuestAgentFailure) -> [GuestPackageSummary]
 }
 
 /// Narrow testing seam for package removal through RuntimeCore's ADB helper.

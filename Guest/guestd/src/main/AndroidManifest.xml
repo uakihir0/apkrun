@@ -26,5 +26,12 @@
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+        <provider
+            android:name=".files.GuestFileProvider"
+            android:authorities="io.apkrun.guest.files"
+            android:directBootAware="true"
+            android:enabled="${apkrunPersistentAgent}"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

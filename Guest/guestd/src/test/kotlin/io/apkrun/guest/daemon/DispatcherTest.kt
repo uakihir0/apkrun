@@ -7,6 +7,8 @@ import io.apkrun.guest.protocol.v1.ClearPolicy
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.Health
 import io.apkrun.guest.protocol.v1.ImePolicy
+import io.apkrun.guest.protocol.v1.ImportFiles
+import io.apkrun.guest.protocol.v1.ImportResult
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchOutcome
 import io.apkrun.guest.protocol.v1.LaunchResult
@@ -126,6 +128,13 @@ private class FakeOperations : AgentOperations {
             .build()
     }
 
+    override suspend fun importFiles(request: ImportFiles): ImportResult {
+        enter()
+        return ImportResult.newBuilder()
+            .setDisposition(io.apkrun.guest.protocol.v1.ImportDisposition.IMPORT_DISPOSITION_SHARED)
+            .build()
+    }
+
     override fun getHealth(): Health {
         enter()
         return healthSnapshot
@@ -195,6 +204,36 @@ class DispatcherTest {
         val response = dispatcher(FakeOperations()).dispatch(1, request, everything)
         assertEquals(42L, response.getPing().getNonce())
         assertEquals(1_000L, response.getPing().getGuestUptimeMs())
+    }
+
+    @Test
+    fun importFilesRequiresTheFilesCapability() = runBlocking {
+        val request =
+            Request.newBuilder()
+                .setImportFiles(
+                    ImportFiles.newBuilder()
+                        .setTarget(io.apkrun.guest.protocol.v1.ImportTarget.IMPORT_TARGET_DOWNLOADS)
+                        .setDisplayId(0)
+                        .addFiles(
+                            io.apkrun.guest.protocol.v1.FileRef.newBuilder()
+                                .setTransferId(2)
+                                .setName("report.txt")
+                                .setMimeType("text/plain")
+                                .setSize(1)
+                        )
+                )
+                .build()
+        val operations = FakeOperations()
+
+        val disabled = dispatcher(operations).dispatch(3, request, setOf(GuestCapability.CORE))
+        assertEquals(GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED, disabled.error.code)
+
+        val enabled = dispatcher(operations).dispatch(4, request, setOf(GuestCapability.FILES))
+        assertTrue(enabled.hasImportFiles())
+        assertEquals(
+            io.apkrun.guest.protocol.v1.ImportDisposition.IMPORT_DISPOSITION_SHARED,
+            enabled.importFiles.disposition,
+        )
     }
 
     @Test

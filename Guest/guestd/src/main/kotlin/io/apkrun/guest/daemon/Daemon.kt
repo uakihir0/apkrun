@@ -12,6 +12,7 @@ import android.os.HandlerThread
 import android.os.Process
 import android.os.SystemClock
 import android.provider.Settings
+import io.apkrun.guest.daemon.files.FilesBridge
 import io.apkrun.guest.protocol.v1.AgentMode
 import io.apkrun.guest.protocol.v1.ChannelKind
 import io.apkrun.guest.runtime.AgentLog
@@ -21,6 +22,8 @@ import io.apkrun.guest.runtime.ServiceMethodMissing
 import io.apkrun.guest.runtime.SystemContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /** The abstract socket of the control channel (guest-components.md §3.2). */
@@ -81,6 +84,12 @@ class Daemon(
     private val tasks = TaskService(events, post)
     private val launch = LaunchService(tasks, displays) { SystemContext.get() }
     private val packages = PackageService(AndroidPackageCatalog(SystemContext.get().packageManager))
+    internal val files =
+        if (mode == AgentMode.AGENT_MODE_PRIVILEGED_APP) {
+            FilesBridge.create(SystemContext.get(), displayExists = { displays.modeOf(it) != null })
+        } else {
+            null
+        }
     private val health =
         HealthService(
             events = events,
@@ -129,10 +138,14 @@ class Daemon(
             health,
             system,
             appProcessMonitoringAvailable = { appProcessMonitor.available },
+            importFilesHandler = files?.let { bridge -> bridge::import },
         )
     private val systemStateMonitor =
         SystemStateMonitor(events, operations::systemState, ::registerSystemStateReceiver)
-    private val packageChangeMonitor = PackageChangeMonitor(events, packages::versionCode)
+    private val packageChangeMonitor =
+        PackageChangeMonitor(events, packages::versionCode).apply {
+            files?.let { bridge -> addPackageRemovedListener(bridge::removePackage) }
+        }
     internal val dispatcher =
         Dispatcher(
             operations = operations,
@@ -173,6 +186,14 @@ class Daemon(
         systemStateMonitor.start()
         registerPackageChangeReceiver()
         DeviceSetup.apply(mode, SystemContext.get())
+        files?.let { bridge ->
+            scope.launch(Dispatchers.IO) {
+                while (isActive) {
+                    delay(FILE_CACHE_CLEANUP_INTERVAL_MILLIS)
+                    bridge.cleanupExpired()
+                }
+            }
+        }
         sockets.forEach { it.start() }
         AgentLog.info("apkrun_guestd is serving the control, input, and bulk sockets")
     }
@@ -298,6 +319,7 @@ class Daemon(
 
     private companion object {
         const val KIBIBYTE = 1024L
+        const val FILE_CACHE_CLEANUP_INTERVAL_MILLIS = 60L * 60L * 1000L
         const val APKRUN_IME_COMPONENT_PREFIX = "io.apkrun.guest/"
         const val ENABLED_NOTIFICATION_LISTENERS_SETTING = "enabled_notification_listeners"
     }

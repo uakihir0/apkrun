@@ -5,6 +5,8 @@ import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.v1.ClearDisplay
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.Health
+import io.apkrun.guest.protocol.v1.ImportFiles
+import io.apkrun.guest.protocol.v1.ImportResult
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
 import io.apkrun.guest.protocol.v1.ListPackages
@@ -23,6 +25,8 @@ import io.apkrun.guest.runtime.HiddenApi
 import io.apkrun.guest.runtime.ServiceMethodMissing
 import io.apkrun.guest.runtime.SystemServiceWrapper
 import io.apkrun.guest.runtime.SystemServices
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The operations of the agent on the device, over the services (guest-components.md §6.1). The
@@ -37,6 +41,7 @@ class DeviceOperations(
     private val health: HealthService,
     private val system: SystemOperations,
     private val appProcessMonitoringAvailable: () -> Boolean,
+    private val importFilesHandler: ((ImportFiles) -> ImportResult)? = null,
     private val hasMethod: (SystemServiceWrapper, String) -> Boolean = { wrapper, method ->
         wrapper.supports(method)
     },
@@ -73,6 +78,10 @@ class DeviceOperations(
         }
         add(GuestCapability.INPUT_ACK_TRACE)
         add(GuestCapability.PACKAGES)
+        if (importFilesHandler != null) {
+            add(GuestCapability.FILES)
+            add(GuestCapability.BULK)
+        }
         if (appProcessMonitoringAvailable()) {
             add(GuestCapability.HEALTH)
         }
@@ -163,6 +172,15 @@ class DeviceOperations(
     override fun queryPackage(request: QueryPackage): PackageInfo = packages.query(request)
 
     override fun listPackages(request: ListPackages): PackageList = packages.list(request)
+
+    override suspend fun importFiles(request: ImportFiles): ImportResult =
+        withContext(Dispatchers.IO) {
+            importFilesHandler?.invoke(request)
+                ?: throw GuestFailure(
+                    GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
+                    "file import is unavailable in this agent mode",
+                )
+        }
 
     override fun getHealth(): Health = health.getHealth()
 

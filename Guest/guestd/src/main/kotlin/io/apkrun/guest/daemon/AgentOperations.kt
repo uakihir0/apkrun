@@ -3,6 +3,8 @@ package io.apkrun.guest.daemon
 import io.apkrun.guest.protocol.v1.ClearDisplay
 import io.apkrun.guest.protocol.v1.GuestError
 import io.apkrun.guest.protocol.v1.Health
+import io.apkrun.guest.protocol.v1.ImportFiles
+import io.apkrun.guest.protocol.v1.ImportResult
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
 import io.apkrun.guest.protocol.v1.ListPackages
@@ -52,6 +54,9 @@ interface AgentOperations {
 
     /** Lists packages from Android's PackageManager (packages.v1). */
     fun listPackages(request: ListPackages): PackageList
+
+    /** Shares or saves files received through the bulk stream (files.v1). */
+    suspend fun importFiles(request: ImportFiles): ImportResult
 
     /** Returns the health snapshot (health.v1). */
     fun getHealth(): Health

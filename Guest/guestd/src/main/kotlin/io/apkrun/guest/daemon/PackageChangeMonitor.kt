@@ -3,12 +3,20 @@ package io.apkrun.guest.daemon
 import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.v1.PackageChangeKind
 import io.apkrun.guest.protocol.v1.PackageChanged
+import java.util.concurrent.CopyOnWriteArrayList
 
 /** Package broadcast translation for the stock Guest Agent (packages.v1, guest-protocol §8.1). */
 class PackageChangeMonitor(
     private val events: EventBus,
     private val versionCode: (String) -> Long?,
 ) {
+    private val packageRemovedListeners = CopyOnWriteArrayList<(String) -> Unit>()
+
+    /** Runs when a package is actually removed, excluding Android's replacement broadcast. */
+    fun addPackageRemovedListener(listener: (String) -> Unit) {
+        packageRemovedListeners += listener
+    }
+
     /**
      * Processes one package broadcast. The strings match PackageManager's documented action names;
      * keeping this boundary Android-free makes replacement and removal semantics testable on the
@@ -28,6 +36,7 @@ class PackageChangeMonitor(
             }
         val version =
             if (kind == PackageChangeKind.PACKAGE_CHANGE_KIND_REMOVED) {
+                packageRemovedListeners.forEach { listener -> listener(packageName) }
                 0L
             } else {
                 versionCode(packageName) ?: 0L

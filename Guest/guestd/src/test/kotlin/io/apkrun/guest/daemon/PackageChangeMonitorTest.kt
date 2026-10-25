@@ -8,6 +8,26 @@ import org.junit.Test
 
 class PackageChangeMonitorTest {
     @Test
+    fun uninstallPurgesPackageScopedFilesOnlyAfterReplacementIsRuledOut() {
+        val removed = mutableListOf<String>()
+        val monitor =
+            PackageChangeMonitor(
+                    events = EventBus(),
+                    versionCode = { 1L },
+                )
+                .apply { addPackageRemovedListener(removed::add) }
+
+        monitor.onPackageChanged(
+            "android.intent.action.PACKAGE_REMOVED",
+            "io.example.app",
+            replacing = true,
+        )
+        monitor.onPackageChanged("android.intent.action.PACKAGE_REMOVED", "io.example.app")
+
+        assertEquals(listOf("io.example.app"), removed)
+    }
+
+    @Test
     fun packageBroadcastsCollapseReplacementAndReportCurrentVersions() {
         val output = ByteArrayOutputStream()
         val events = EventBus().apply { attach(FrameWriter(output)) }

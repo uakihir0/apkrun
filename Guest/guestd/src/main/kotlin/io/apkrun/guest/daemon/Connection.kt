@@ -10,6 +10,9 @@ import io.apkrun.guest.protocol.ProtocolVersion
 import io.apkrun.guest.protocol.v1.AgentInfo
 import io.apkrun.guest.protocol.v1.AgentKind
 import io.apkrun.guest.protocol.v1.AndroidInfo
+import io.apkrun.guest.protocol.v1.BulkAck
+import io.apkrun.guest.protocol.v1.BulkAckStatus
+import io.apkrun.guest.protocol.v1.BulkFrame
 import io.apkrun.guest.protocol.v1.ChannelKind
 import io.apkrun.guest.protocol.v1.Envelope
 import io.apkrun.guest.protocol.v1.Hello
@@ -100,6 +103,9 @@ class Connection(
             secondaryLoop(negotiated.enabled)
         } finally {
             daemon.sessions.untrack(socket)
+            if (channel == ChannelKind.CHANNEL_KIND_GUEST_BULK) {
+                daemon.files?.abortIncompleteTransfers()
+            }
             if (channel == ChannelKind.CHANNEL_KIND_GUEST_INPUT) {
                 // A closed input stream releases the gestures it left open (input.md §7.3).
                 daemon.input.streamClosed(this)
@@ -206,9 +212,25 @@ class Connection(
                             "the body is not allowed on the input channel"
                         )
                     }
-                // The bulk channel carries transfers, which arrive with #71 and #81. Until then
-                // its frames are read and dropped.
-                ChannelKind.CHANNEL_KIND_GUEST_BULK -> Unit
+                ChannelKind.CHANNEL_KIND_GUEST_BULK -> {
+                    if (envelope.bodyCase != Envelope.BodyCase.BULK) {
+                        throw GuestProtocolFailure.MalformedFrame(
+                            "the body is not allowed on the bulk channel"
+                        )
+                    }
+                    if (
+                        GuestCapability.FILES !in enabled ||
+                            GuestCapability.BULK !in enabled ||
+                            daemon.files == null
+                    ) {
+                        throw GuestProtocolFailure.MalformedFrame(
+                            "a bulk transfer arrived without an enabled files capability"
+                        )
+                    }
+                    val frame = envelope.bulk
+                    val status = daemon.files.receive(frame)
+                    if (status != null) sendBulkAck(frame.transferId, status)
+                }
                 else ->
                     throw GuestProtocolFailure.MalformedFrame(
                         "the channel ${channel.name} is not served here"
@@ -226,6 +248,23 @@ class Connection(
             writer.send { it.setInputAck(ack) }
         } catch (error: IOException) {
             AgentLog.info("an input ack was not sent: ${error.javaClass.simpleName}")
+        }
+    }
+
+    /** Sends the final status of an incoming file transfer on the same bulk stream. */
+    private fun sendBulkAck(transferId: Long, status: BulkAckStatus) {
+        try {
+            writer.send {
+                it.setBulk(
+                    BulkFrame.newBuilder()
+                        .setTransferId(transferId)
+                        .setAck(BulkAck.newBuilder().setStatus(status))
+                )
+            }
+        } catch (error: IOException) {
+            AgentLog.info(
+                "a bulk transfer acknowledgement was not sent: ${error.javaClass.simpleName}"
+            )
         }
     }
 
@@ -266,6 +305,8 @@ class Connection(
                 GuestCapability.INPUT,
                 GuestCapability.INPUT_ACK_TRACE,
                 GuestCapability.PACKAGES,
+                GuestCapability.FILES,
+                GuestCapability.BULK,
                 GuestCapability.HEALTH,
                 GuestCapability.SYSTEM,
             )

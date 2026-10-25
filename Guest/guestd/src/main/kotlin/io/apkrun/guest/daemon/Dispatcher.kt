@@ -172,6 +172,11 @@ class Dispatcher(
                 Response.newBuilder()
                     .setListPackages(operations.listPackages(request.listPackages))
                     .build()
+            Request.OpCase.IMPORT_FILES -> {
+                val files = request.importFiles
+                val result = withDisplayLock(files.displayId) { operations.importFiles(files) }
+                Response.newBuilder().setImportFiles(result).build()
+            }
             Request.OpCase.FOCUS_DISPLAY -> {
                 val displayId = request.focusDisplay.displayId
                 withDisplayLock(displayId) { operations.focusDisplay(displayId) }
@@ -228,6 +233,7 @@ class Dispatcher(
                 Request.OpCase.FOCUS_DISPLAY -> GuestCapability.INPUT
                 Request.OpCase.QUERY_PACKAGE,
                 Request.OpCase.LIST_PACKAGES -> GuestCapability.PACKAGES
+                Request.OpCase.IMPORT_FILES -> GuestCapability.FILES
                 Request.OpCase.GET_HEALTH -> GuestCapability.HEALTH
                 Request.OpCase.SHUTDOWN -> GuestCapability.SYSTEM
                 else -> null

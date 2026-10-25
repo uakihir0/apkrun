@@ -15,6 +15,12 @@ class DeviceOperationsCapabilityTest {
         assertTrue(GuestCapability.HEALTH in operations(appProcessMonitorAvailable = true))
     }
 
+    @Test
+    fun filesAndBulkCapabilitiesRequireTheCustomImageFilesBridge() {
+        assertFalse(GuestCapability.FILES in operations(appProcessMonitorAvailable = true))
+        assertFalse(GuestCapability.BULK in operations(appProcessMonitorAvailable = true))
+    }
+
     private fun operations(appProcessMonitorAvailable: Boolean): Set<GuestCapability> {
         val events = EventBus()
         val displays = DisplayService(events, callbacks = {})

@@ -9,6 +9,7 @@ junit = "4.13.2"
 ktfmt = "0.64"
 protobuf = "4.31.1"
 protobufPlugin = "0.10.0"
+robolectric = "4.17"
 
 [libraries]
 junit = { module = "junit:junit", version.ref = "junit" }
@@ -16,6 +17,7 @@ kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-c
 ktfmt = { module = "com.facebook:ktfmt", version.ref = "ktfmt" }
 protobuf-javalite = { module = "com.google.protobuf:protobuf-javalite", version.ref = "protobuf" }
 protoc = { module = "com.google.protobuf:protoc", version.ref = "protobuf" }
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

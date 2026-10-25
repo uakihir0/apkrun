@@ -16,6 +16,7 @@ import io.apkrun.guest.protocol.v1.PackageInfo
 import io.apkrun.guest.protocol.v1.PackageList
 import io.apkrun.guest.protocol.v1.QueryPackage
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
+import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
 import io.apkrun.guest.protocol.v1.Shutdown
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
@@ -42,6 +43,7 @@ class DeviceOperations(
     private val system: SystemOperations,
     private val appProcessMonitoringAvailable: () -> Boolean,
     private val importFilesHandler: ((ImportFiles) -> ImportResult)? = null,
+    private val sharedFolderAccessHandler: ((SetSharedFolderAccess) -> Unit)? = null,
     private val hasMethod: (SystemServiceWrapper, String) -> Boolean = { wrapper, method ->
         wrapper.supports(method)
     },
@@ -81,6 +83,9 @@ class DeviceOperations(
         if (importFilesHandler != null) {
             add(GuestCapability.FILES)
             add(GuestCapability.BULK)
+        }
+        if (sharedFolderAccessHandler != null) {
+            add(GuestCapability.FILES_SHARED)
         }
         if (appProcessMonitoringAvailable()) {
             add(GuestCapability.HEALTH)
@@ -181,6 +186,14 @@ class DeviceOperations(
                     "file import is unavailable in this agent mode",
                 )
         }
+
+    override fun setSharedFolderAccess(request: SetSharedFolderAccess) {
+        sharedFolderAccessHandler?.invoke(request)
+            ?: throw GuestFailure(
+                GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
+                "Mac folder access is unavailable in this agent mode",
+            )
+    }
 
     override fun getHealth(): Health = health.getHealth()
 

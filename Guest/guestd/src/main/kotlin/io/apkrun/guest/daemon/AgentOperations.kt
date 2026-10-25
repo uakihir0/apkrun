@@ -14,6 +14,7 @@ import io.apkrun.guest.protocol.v1.PackageInfo
 import io.apkrun.guest.protocol.v1.PackageList
 import io.apkrun.guest.protocol.v1.QueryPackage
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
+import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
 import io.apkrun.guest.protocol.v1.Shutdown
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
@@ -57,6 +58,9 @@ interface AgentOperations {
 
     /** Shares or saves files received through the bulk stream (files.v1). */
     suspend fun importFiles(request: ImportFiles): ImportResult
+
+    /** Replaces the package and root access policy for MacFilesProvider (files.shared.v1). */
+    fun setSharedFolderAccess(request: SetSharedFolderAccess) {}
 
     /** Returns the health snapshot (health.v1). */
     fun getHealth(): Health

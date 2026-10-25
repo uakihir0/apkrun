@@ -3,6 +3,7 @@ package io.apkrun.guest.daemon
 import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.v1.AgentMode
 import io.apkrun.guest.protocol.v1.InputCounters
+import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
 import io.apkrun.guest.runtime.SystemServiceWrapper
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -21,7 +22,28 @@ class DeviceOperationsCapabilityTest {
         assertFalse(GuestCapability.BULK in operations(appProcessMonitorAvailable = true))
     }
 
-    private fun operations(appProcessMonitorAvailable: Boolean): Set<GuestCapability> {
+    @Test
+    fun sharedFilesCapabilityIsAdvertisedWhenItsPrivilegedHandlerExists() {
+        assertFalse(
+            GuestCapability.FILES_SHARED in
+                operations(
+                    appProcessMonitorAvailable = true,
+                    sharedFolderAccessAvailable = false,
+                )
+        )
+        assertTrue(
+            GuestCapability.FILES_SHARED in
+                operations(
+                    appProcessMonitorAvailable = true,
+                    sharedFolderAccessAvailable = true,
+                )
+        )
+    }
+
+    private fun operations(
+        appProcessMonitorAvailable: Boolean,
+        sharedFolderAccessAvailable: Boolean = false,
+    ): Set<GuestCapability> {
         val events = EventBus()
         val displays = DisplayService(events, callbacks = {})
         val tasks = TaskService(events, callbacks = {})
@@ -56,6 +78,12 @@ class DeviceOperationsCapabilityTest {
                 health = health,
                 system = SystemOperations(powerOff = {}),
                 appProcessMonitoringAvailable = { appProcessMonitorAvailable },
+                sharedFolderAccessHandler =
+                    if (sharedFolderAccessAvailable) {
+                        { _: SetSharedFolderAccess -> Unit }
+                    } else {
+                        null
+                    },
                 hasMethod = { _: SystemServiceWrapper, _: String -> true },
             )
             .supportedCapabilities()

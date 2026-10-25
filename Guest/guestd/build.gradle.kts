@@ -65,4 +65,5 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.protobuf.javalite)
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
 }

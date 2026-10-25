@@ -33,5 +33,16 @@
             android:enabled="${apkrunPersistentAgent}"
             android:exported="false"
             android:grantUriPermissions="true" />
+        <provider
+            android:name=".daemon.files.MacFilesProvider"
+            android:authorities="io.apkrun.guest.macfiles"
+            android:enabled="${apkrunPersistentAgent}"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
     </application>
 </manifest>

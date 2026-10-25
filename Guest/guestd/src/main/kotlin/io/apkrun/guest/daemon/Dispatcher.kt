@@ -177,6 +177,10 @@ class Dispatcher(
                 val result = withDisplayLock(files.displayId) { operations.importFiles(files) }
                 Response.newBuilder().setImportFiles(result).build()
             }
+            Request.OpCase.SET_SHARED_FOLDER_ACCESS -> {
+                operations.setSharedFolderAccess(request.setSharedFolderAccess)
+                Response.newBuilder().setSetSharedFolderAccess(Empty.getDefaultInstance()).build()
+            }
             Request.OpCase.FOCUS_DISPLAY -> {
                 val displayId = request.focusDisplay.displayId
                 withDisplayLock(displayId) { operations.focusDisplay(displayId) }
@@ -234,6 +238,7 @@ class Dispatcher(
                 Request.OpCase.QUERY_PACKAGE,
                 Request.OpCase.LIST_PACKAGES -> GuestCapability.PACKAGES
                 Request.OpCase.IMPORT_FILES -> GuestCapability.FILES
+                Request.OpCase.SET_SHARED_FOLDER_ACCESS -> GuestCapability.FILES_SHARED
                 Request.OpCase.GET_HEALTH -> GuestCapability.HEALTH
                 Request.OpCase.SHUTDOWN -> GuestCapability.SYSTEM
                 else -> null

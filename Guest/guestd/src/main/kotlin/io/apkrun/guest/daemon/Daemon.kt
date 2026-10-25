@@ -11,8 +11,11 @@ import android.net.LocalSocket
 import android.os.HandlerThread
 import android.os.Process
 import android.os.SystemClock
+import android.provider.DocumentsContract
 import android.provider.Settings
 import io.apkrun.guest.daemon.files.FilesBridge
+import io.apkrun.guest.daemon.files.MAC_FILES_AUTHORITY
+import io.apkrun.guest.daemon.files.MacFilesProviderServices
 import io.apkrun.guest.protocol.v1.AgentMode
 import io.apkrun.guest.protocol.v1.ChannelKind
 import io.apkrun.guest.runtime.AgentLog
@@ -139,6 +142,27 @@ class Daemon(
             system,
             appProcessMonitoringAvailable = { appProcessMonitor.available },
             importFilesHandler = files?.let { bridge -> bridge::import },
+            sharedFolderAccessHandler =
+                if (mode == AgentMode.AGENT_MODE_PRIVILEGED_APP) {
+                    { request ->
+                        val valid = MacFilesProviderServices.replaceAccess(request)
+                        SystemContext.get()
+                            .contentResolver
+                            .notifyChange(
+                                DocumentsContract.buildRootsUri(MAC_FILES_AUTHORITY),
+                                null,
+                            )
+                        if (!valid) {
+                            throw GuestFailure(
+                                io.apkrun.guest.protocol.v1.GuestErrorCode
+                                    .GUEST_ERROR_CODE_INVALID_ARGUMENT,
+                                "the Mac folder access policy is invalid",
+                            )
+                        }
+                    }
+                } else {
+                    null
+                },
         )
     private val systemStateMonitor =
         SystemStateMonitor(events, operations::systemState, ::registerSystemStateReceiver)

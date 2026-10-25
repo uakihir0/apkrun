@@ -104,7 +104,7 @@ class Connection(
         } finally {
             daemon.sessions.untrack(socket)
             if (channel == ChannelKind.CHANNEL_KIND_GUEST_BULK) {
-                daemon.files?.abortIncompleteTransfers()
+                daemon.files?.abortIncompleteTransfers(this)
             }
             if (channel == ChannelKind.CHANNEL_KIND_GUEST_INPUT) {
                 // A closed input stream releases the gestures it left open (input.md §7.3).
@@ -228,7 +228,7 @@ class Connection(
                         )
                     }
                     val frame = envelope.bulk
-                    val status = daemon.files.receive(frame)
+                    val status = daemon.files.receive(frame, this)
                     if (status != null) sendBulkAck(frame.transferId, status)
                 }
                 else ->

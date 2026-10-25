@@ -38,13 +38,18 @@ internal class FilesBridge(
     private val platform: FilesBridgePlatform,
 ) {
     /** Processes one host-to-guest bulk frame and returns a status when an ACK should be sent. */
-    fun receive(frame: BulkFrame): BulkAckStatus? =
+    fun receive(
+        frame: BulkFrame,
+        transferOwner: Any = ImportedFileCache.DEFAULT_TRANSFER_OWNER,
+    ): BulkAckStatus? =
         when (frame.kindCase) {
-            BulkFrame.KindCase.BEGIN -> cache.begin(frame.transferId, frame.begin)
-            BulkFrame.KindCase.CHUNK -> cache.append(frame.transferId, frame.chunk.toByteArray())
-            BulkFrame.KindCase.END -> cache.end(frame.transferId, frame.end.sha256.toByteArray())
+            BulkFrame.KindCase.BEGIN -> cache.begin(frame.transferId, frame.begin, transferOwner)
+            BulkFrame.KindCase.CHUNK ->
+                cache.append(frame.transferId, frame.chunk.toByteArray(), transferOwner)
+            BulkFrame.KindCase.END ->
+                cache.end(frame.transferId, frame.end.sha256.toByteArray(), transferOwner)
             BulkFrame.KindCase.ABORT -> {
-                cache.abort(frame.transferId)
+                cache.abort(frame.transferId, transferOwner)
                 null
             }
             BulkFrame.KindCase.ACK,
@@ -92,7 +97,8 @@ internal class FilesBridge(
     fun cleanupExpired() = cache.cleanupExpired()
 
     /** Incomplete transfers are scoped to their bulk connection and are deleted on disconnect. */
-    fun abortIncompleteTransfers() = cache.abortIncomplete()
+    fun abortIncompleteTransfers(transferOwner: Any = ImportedFileCache.DEFAULT_TRANSFER_OWNER) =
+        cache.abortIncomplete(transferOwner)
 
     private fun saveToDownloads(refs: List<FileRef>): ImportResult {
         val files =

@@ -179,6 +179,61 @@ class FilesBridgeTest {
         )
     }
 
+    @Test
+    fun closingOneBulkStreamAbortsOnlyItsOwnIncompleteTransfers() {
+        val bridge = bridge(FakePlatform(shareTarget = true))
+        val firstOwner = Any()
+        val secondOwner = Any()
+        val firstContent = "first stream".toByteArray()
+        val secondContent = "second stream".toByteArray()
+
+        assertEquals(null, bridge.receive(beginFrame(2, "first.txt", firstContent), firstOwner))
+        assertEquals(null, bridge.receive(beginFrame(4, "second.txt", secondContent), secondOwner))
+
+        assertEquals(
+            BulkAckStatus.BULK_ACK_STATUS_REJECTED,
+            bridge.receive(chunkFrame(4, secondContent), firstOwner),
+        )
+        bridge.abortIncompleteTransfers(firstOwner)
+
+        assertEquals(
+            BulkAckStatus.BULK_ACK_STATUS_REJECTED,
+            bridge.receive(endFrame(2), firstOwner),
+        )
+        assertEquals(null, bridge.receive(chunkFrame(4, secondContent), secondOwner))
+        assertEquals(
+            BulkAckStatus.BULK_ACK_STATUS_OK,
+            bridge.receive(endFrame(4), secondOwner),
+        )
+    }
+
+    private fun beginFrame(transferId: Long, name: String, content: ByteArray) =
+        BulkFrame.newBuilder()
+            .setTransferId(transferId)
+            .setBegin(
+                BulkBegin.newBuilder()
+                    .setKind(BulkKind.BULK_KIND_FILE)
+                    .setName(name)
+                    .setMimeType("text/plain")
+                    .setSize(content.size.toLong())
+                    .setSha256(
+                        ByteString.copyFrom(MessageDigest.getInstance("SHA-256").digest(content))
+                    )
+            )
+            .build()
+
+    private fun chunkFrame(transferId: Long, content: ByteArray) =
+        BulkFrame.newBuilder()
+            .setTransferId(transferId)
+            .setChunk(ByteString.copyFrom(content))
+            .build()
+
+    private fun endFrame(transferId: Long) =
+        BulkFrame.newBuilder()
+            .setTransferId(transferId)
+            .setEnd(BulkEnd.getDefaultInstance())
+            .build()
+
     private fun bridge(platform: FakePlatform) =
         FilesBridge(
             ImportedFileCache(temporaryFolder.newFolder()),

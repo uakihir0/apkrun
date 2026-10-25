@@ -33,7 +33,11 @@ internal class ImportedFileCache(
 
     /** Starts an incoming transfer, returning an immediate rejection when it cannot be accepted. */
     @Synchronized
-    fun begin(transferId: Long, begin: BulkBegin): BulkAckStatus? {
+    fun begin(
+        transferId: Long,
+        begin: BulkBegin,
+        transferOwner: Any = DEFAULT_TRANSFER_OWNER,
+    ): BulkAckStatus? {
         cleanupExpiredLocked()
         val size = begin.size
         if (
@@ -79,6 +83,7 @@ internal class ImportedFileCache(
                     mimeType = begin.mimeType,
                     expectedSize = size,
                     expectedDigest = if (begin.hasSha256()) begin.sha256.toByteArray() else null,
+                    transferOwner = transferOwner,
                     partFile = part,
                     output = FileOutputStream(part),
                     digest = MessageDigest.getInstance("SHA-256"),
@@ -92,8 +97,15 @@ internal class ImportedFileCache(
 
     /** Writes one bounded chunk, returning an acknowledgement status only when it rejects. */
     @Synchronized
-    fun append(transferId: Long, bytes: ByteArray): BulkAckStatus? {
+    fun append(
+        transferId: Long,
+        bytes: ByteArray,
+        transferOwner: Any = DEFAULT_TRANSFER_OWNER,
+    ): BulkAckStatus? {
         val incoming = active[transferId] ?: return BulkAckStatus.BULK_ACK_STATUS_REJECTED
+        if (incoming.transferOwner !== transferOwner) {
+            return BulkAckStatus.BULK_ACK_STATUS_REJECTED
+        }
         if (bytes.isEmpty() || bytes.size > MAXIMUM_CHUNK_BYTES) {
             discard(incoming)
             return if (bytes.size > MAXIMUM_CHUNK_BYTES) {
@@ -119,8 +131,15 @@ internal class ImportedFileCache(
 
     /** Completes and atomically publishes a file after exact size and SHA-256 checks. */
     @Synchronized
-    fun end(transferId: Long, endDigest: ByteArray): BulkAckStatus {
+    fun end(
+        transferId: Long,
+        endDigest: ByteArray,
+        transferOwner: Any = DEFAULT_TRANSFER_OWNER,
+    ): BulkAckStatus {
         val incoming = active[transferId] ?: return BulkAckStatus.BULK_ACK_STATUS_REJECTED
+        if (incoming.transferOwner !== transferOwner) {
+            return BulkAckStatus.BULK_ACK_STATUS_REJECTED
+        }
         if (incoming.receivedBytes != incoming.expectedSize) {
             discard(incoming)
             return BulkAckStatus.BULK_ACK_STATUS_REJECTED
@@ -172,14 +191,14 @@ internal class ImportedFileCache(
 
     /** Aborts an in-flight transfer, if any. */
     @Synchronized
-    fun abort(transferId: Long) {
-        active[transferId]?.let(::discard)
+    fun abort(transferId: Long, transferOwner: Any = DEFAULT_TRANSFER_OWNER) {
+        active[transferId]?.takeIf { it.transferOwner === transferOwner }?.let(::discard)
     }
 
-    /** Removes incomplete files when their bulk connection or control session closes. */
+    /** Removes only this bulk connection's incomplete files when its stream closes. */
     @Synchronized
-    fun abortIncomplete() {
-        active.values.toList().forEach(::discard)
+    fun abortIncomplete(transferOwner: Any = DEFAULT_TRANSFER_OWNER) {
+        active.values.filter { it.transferOwner === transferOwner }.toList().forEach(::discard)
     }
 
     /**
@@ -427,6 +446,7 @@ internal class ImportedFileCache(
         val mimeType: String,
         val expectedSize: Long,
         val expectedDigest: ByteArray?,
+        val transferOwner: Any,
         val partFile: File,
         val output: FileOutputStream,
         val digest: MessageDigest,
@@ -467,6 +487,7 @@ internal class ImportedFileCache(
         const val MAXIMUM_AGE_MILLIS = 24L * 60L * 60L * 1000L
 
         private const val SHA256_BYTES = 32
+        internal val DEFAULT_TRANSFER_OWNER = Any()
         private val UUID_PATTERN = Regex("[0-9a-fA-F-]{36}")
         private val MIME_TOKEN = Regex("[A-Za-z0-9!#$&^_.+*-]+")
 

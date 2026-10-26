@@ -1,0 +1,266 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Android is asleep" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Android is asleep"
+          }
+        }
+      }
+    },
+    "Android is running" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Android is running"
+          }
+        }
+      }
+    },
+    "Android is stopped" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Android is stopped"
+          }
+        }
+      }
+    },
+    "Android status is unknown" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Android status is unknown"
+          }
+        }
+      }
+    },
+    "Android stopped unexpectedly" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Android stopped unexpectedly"
+          }
+        }
+      }
+    },
+    "APKRun background service isn't running" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APKRun background service isn't running"
+          }
+        }
+      }
+    },
+    "APKRun couldn't complete this action. Open APKRun for details." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APKRun couldn't complete this action. Open APKRun for details."
+          }
+        }
+      }
+    },
+    "Apps" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apps"
+          }
+        }
+      }
+    },
+    "Cancel" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel"
+          }
+        }
+      }
+    },
+    "Developer mode on" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Developer mode on"
+          }
+        }
+      }
+    },
+    "No apps running" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No apps running"
+          }
+        }
+      }
+    },
+    "No updates available" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No updates available"
+          }
+        }
+      }
+    },
+    "Open APKRun…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open APKRun…"
+          }
+        }
+      }
+    },
+    "Quit Menu Bar Item" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quit Menu Bar Item"
+          }
+        }
+      }
+    },
+    "Running apps will close." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Running apps will close."
+          }
+        }
+      }
+    },
+    "Running apps" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Running apps"
+          }
+        }
+      }
+    },
+    "Start Android" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start Android"
+          }
+        }
+      }
+    },
+    "Starting Android…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starting Android…"
+          }
+        }
+      }
+    },
+    "Stop Android" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop Android"
+          }
+        }
+      }
+    },
+    "Stop Android?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop Android?"
+          }
+        }
+      }
+    },
+    "Stopping Android…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopping Android…"
+          }
+        }
+      }
+    },
+    "Troubleshooting…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Troubleshooting…"
+          }
+        }
+      }
+    },
+    "Updates" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Updates"
+          }
+        }
+      }
+    },
+    "Update information isn't available yet." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update information isn't available yet."
+          }
+        }
+      }
+    },
+    "Updates are available. Open APKRun to manage updates." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Updates are available. Open APKRun to manage updates."
+          }
+        }
+      }
+    },
+    "⚠ Needs attention" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "⚠ Needs attention"
+          }
+        }
+      }
+    }
+  },
+  "version" : 1
+}

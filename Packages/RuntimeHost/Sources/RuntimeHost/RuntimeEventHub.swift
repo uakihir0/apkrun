@@ -180,6 +180,17 @@ final class RuntimeEventHub: @unchecked Sendable {
         )
     }
 
+    func publishSessionListChange(_ change: SessionListChange) {
+        publish(
+            QueuedEvent(
+                topic: .sessions,
+                time: Date(),
+                operationID: nil,
+                payload: .sessions(change)
+            )
+        )
+    }
+
     private func publish(_ event: QueuedEvent) {
         queue.sync {
             for connectionID in Array(subscribers.keys) {

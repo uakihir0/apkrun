@@ -486,6 +486,20 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Lists the current live app sessions without starting Android.
+    public func listSessions() async throws(RuntimeControlClientError) -> [RuntimeSessionSnapshot] {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeListSessionsControlRequest(header: makeHeader())
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.listSessions(data)
+            return try Self.decodeListSessionsReply(from: response)
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
     /// Requests cancellation at the operation's next supported cancellation point.
     public func cancelOperation(_ operationID: OperationID) async throws(RuntimeControlClientError)
         -> CancelReply
@@ -1051,6 +1065,22 @@ public actor RuntimeControlClient {
         return result
     }
 
+    private static func decodeListSessionsReply(from data: Data) throws(RuntimeControlClientError)
+        -> [RuntimeSessionSnapshot]
+    {
+        let reply = try Self.decode(RuntimeListSessionsControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
     private static func decodeCancelOperationReply(from data: Data) throws(RuntimeControlClientError)
         -> CancelReply
     {
@@ -1340,6 +1370,7 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func beginUninstallPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func cancelOperation(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func listOperations(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func listSessions(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func operationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func subscribe(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func unsubscribe(_ request: Data) async throws(RuntimeControlClientError) -> Data
@@ -1686,6 +1717,20 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.listOperations(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func listSessions(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.listSessions(request) { response in finish(.success(response)) }
         }
     }
 

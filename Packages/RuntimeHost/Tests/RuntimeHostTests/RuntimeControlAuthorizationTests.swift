@@ -20,6 +20,7 @@ import Testing
         .importPackage,
         .installImported,
         .beginUninstallPackage,
+        .listSessions,
         .subscribe,
         .unsubscribe,
     ]
@@ -36,6 +37,7 @@ import Testing
     #expect(fullControlClients.allSatisfy { RuntimeControlOperation.importPackage.allows($0) })
     #expect(fullControlClients.allSatisfy { RuntimeControlOperation.installImported.allows($0) })
     #expect(fullControlClients.allSatisfy { RuntimeControlOperation.beginUninstallPackage.allows($0) })
+    #expect(fullControlClients.allSatisfy { RuntimeControlOperation.listSessions.allows($0) })
     #expect(RuntimeControlOperation.subscribe.allows(.launcher))
     #expect(RuntimeControlOperation.unsubscribe.allows(.launcher))
 
@@ -51,5 +53,6 @@ import Testing
     #expect(!RuntimeControlOperation.importPackage.allows(.launcher))
     #expect(!RuntimeControlOperation.installImported.allows(.launcher))
     #expect(!RuntimeControlOperation.beginUninstallPackage.allows(.launcher))
+    #expect(!RuntimeControlOperation.listSessions.allows(.launcher))
     #expect(allOperations.allSatisfy { !$0.allows(.wrapper) })
 }

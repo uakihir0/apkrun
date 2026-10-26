@@ -1,0 +1,146 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Allow APKRun in System Settings > General > Login Items, then reopen it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow APKRun in System Settings > General > Login Items, then reopen it."
+          }
+        }
+      }
+    },
+    "APKRun couldn't change the menu bar item. Check Login Items in System Settings." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APKRun couldn't change the menu bar item. Check Login Items in System Settings."
+          }
+        }
+      }
+    },
+    "APKRun couldn't open the menu bar item. Check Login Items in System Settings." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APKRun couldn't open the menu bar item. Check Login Items in System Settings."
+          }
+        }
+      }
+    },
+    "APKRun couldn't register the menu bar item. Check Login Items in System Settings." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APKRun couldn't register the menu bar item. Check Login Items in System Settings."
+          }
+        }
+      }
+    },
+    "Allow APKRun in System Settings > General > Login Items to show the menu bar item." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow APKRun in System Settings > General > Login Items to show the menu bar item."
+          }
+        }
+      }
+    },
+    "Approval required" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Approval required"
+          }
+        }
+      }
+    },
+    "APKRun" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APKRun"
+          }
+        }
+      }
+    },
+    "Background service setup failed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Background service setup failed"
+          }
+        }
+      }
+    },
+    "General" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "General"
+          }
+        }
+      }
+    },
+    "Later" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Later"
+          }
+        }
+      }
+    },
+    "Move APKRun.app to Applications and reopen it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move APKRun.app to Applications and reopen it."
+          }
+        }
+      }
+    },
+    "Open Login Items Settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Login Items Settings"
+          }
+        }
+      }
+    },
+    "Show APKRun in the menu bar" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show APKRun in the menu bar"
+          }
+        }
+      }
+    },
+    "The menu bar item is unavailable in this copy of APKRun." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The menu bar item is unavailable in this copy of APKRun."
+          }
+        }
+      }
+    }
+  },
+  "version" : 1
+}

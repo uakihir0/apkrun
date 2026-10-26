@@ -597,12 +597,14 @@ import Testing
         progress: OperationProgress(fraction: 0.5, stage: "installing"),
         result: nil
     )
+    let sessionSnapshot = RuntimeSessionSnapshot(packageID: packageID, phase: .running)
     let transport = try MockRuntimeTransport(
         hello: hello,
         status: nil,
         beginInstallImportedReply: RuntimeBeginInstallImportedControlReply(result: handle),
         operationStatusReply: RuntimeOperationStatusControlReply(result: snapshot),
         listOperationsReply: RuntimeListOperationsControlReply(result: [snapshot]),
+        listSessionsReply: RuntimeListSessionsControlReply(result: [sessionSnapshot]),
         cancelOperationReply: RuntimeCancelOperationControlReply(result: .cancelling)
     )
     let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
@@ -610,12 +612,14 @@ import Testing
     #expect(try await client.beginInstallImported(request, operationID: operationID) == handle)
     #expect(try await client.operationStatus(operationID) == snapshot)
     #expect(try await client.listOperations() == [snapshot])
+    #expect(try await client.listSessions() == [sessionSnapshot])
     #expect(try await client.cancelOperation(operationID) == .cancelling)
 
     let requests = transport.snapshot()
     #expect(requests.beginInstallImportedRequests.count == 1)
     #expect(requests.operationStatusRequests.count == 1)
     #expect(requests.listOperationsRequests.count == 1)
+    #expect(requests.listSessionsRequests.count == 1)
     #expect(requests.cancelOperationRequests.count == 1)
     let begin = try JSONDecoder().decode(
         RuntimeBeginInstallImportedControlRequest.self,
@@ -637,6 +641,12 @@ import Testing
         from: requests.listOperationsRequests[0]
     )
     #expect(listRequest.header.apiVersion == APIVersion.current)
+    let listSessionsRequest = try JSONDecoder().decode(
+        RuntimeListSessionsControlRequest.self,
+        from: requests.listSessionsRequests[0]
+    )
+    #expect(listSessionsRequest.header.apiVersion == APIVersion.current)
+    #expect(listSessionsRequest.header.clientKind == .cli)
     let cancelRequest = try JSONDecoder().decode(
         RuntimeCancelOperationControlRequest.self,
         from: requests.cancelOperationRequests[0]
@@ -1322,6 +1332,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private let beginUninstallPackageData: Data
     private let operationStatusData: Data
     private let listOperationsData: Data
+    private let listSessionsData: Data
     private let cancelOperationData: Data
     private let launchData: Data
     private let terminateData: Data
@@ -1344,6 +1355,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var beginUninstallPackageRequestsValue: [Data] = []
     private var operationStatusRequestsValue: [Data] = []
     private var listOperationsRequestsValue: [Data] = []
+    private var listSessionsRequestsValue: [Data] = []
     private var cancelOperationRequestsValue: [Data] = []
     private var subscribeRequestsValue: [Data] = []
     private var unsubscribeRequestsValue: [Data] = []
@@ -1381,6 +1393,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         beginUninstallPackageReply: RuntimeBeginUninstallPackageControlReply? = nil,
         operationStatusReply: RuntimeOperationStatusControlReply? = nil,
         listOperationsReply: RuntimeListOperationsControlReply? = nil,
+        listSessionsReply: RuntimeListSessionsControlReply? = nil,
         cancelOperationReply: RuntimeCancelOperationControlReply? = nil,
         beginInstallImportedReplyData: Data? = nil,
         launchReply: RuntimeLaunchControlReply? = nil,
@@ -1468,6 +1481,9 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         )
         listOperationsData = try JSONEncoder().encode(
             listOperationsReply ?? RuntimeListOperationsControlReply(result: [])
+        )
+        listSessionsData = try JSONEncoder().encode(
+            listSessionsReply ?? RuntimeListSessionsControlReply(result: [])
         )
         cancelOperationData = try JSONEncoder().encode(
             cancelOperationReply ?? RuntimeCancelOperationControlReply(result: .cancelling)
@@ -1690,6 +1706,11 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return listOperationsData
     }
 
+    func listSessions(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { listSessionsRequestsValue.append(request) }
+        return listSessionsData
+    }
+
     func cancelOperation(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         lock.withLock { cancelOperationRequestsValue.append(request) }
         return cancelOperationData
@@ -1740,6 +1761,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 beginUninstallPackageRequests: beginUninstallPackageRequestsValue,
                 operationStatusRequests: operationStatusRequestsValue,
                 listOperationsRequests: listOperationsRequestsValue,
+                listSessionsRequests: listSessionsRequestsValue,
                 cancelOperationRequests: cancelOperationRequestsValue,
                 subscribeRequests: subscribeRequestsValue,
                 unsubscribeRequests: unsubscribeRequestsValue,
@@ -1823,6 +1845,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let beginUninstallPackageRequests: [Data]
         let operationStatusRequests: [Data]
         let listOperationsRequests: [Data]
+        let listSessionsRequests: [Data]
         let cancelOperationRequests: [Data]
         let subscribeRequests: [Data]
         let unsubscribeRequests: [Data]

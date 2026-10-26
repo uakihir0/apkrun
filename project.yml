@@ -177,6 +177,31 @@ targets:
         product: RuntimeAPI
       - package: APKRun
         product: DiagnosticsCore
+    scheme:
+      testTargets:
+        - APKRunMenuBarTests
+
+  APKRunMenuBarTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Apps/APKRunMenuBar/MenuBarPresentation.swift
+      - path: Apps/APKRunMenuBar/MenuBarModel.swift
+      - path: Apps/APKRun/MenuBarItemSettings.swift
+      - path: Tests/MenuBarTests
+    settings:
+      base:
+        PRODUCT_NAME: APKRunMenuBarTests
+        PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.menu-bar-tests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
+    dependencies:
+      - package: APKRun
+        product: RuntimeAPI
+      - package: APKRun
+        product: RuntimeClient
+      - package: APKRun
+        product: DiagnosticsCore
 
   APKRunLauncher:
     type: application

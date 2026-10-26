@@ -15,7 +15,9 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     private let displayPool: DisplayPool
     private let registry: SessionRegistry
     private let displayConfiguration: DisplayConfiguration
+    private let onSessionSnapshotChanged: @Sendable () -> Void
     private var sessionsByPackage: [String: SessionID] = [:]
+    private var lastPublishedSessions: [RuntimeSessionSnapshot] = []
     private var frameDrainers: [SessionID: Task<Void, Never>] = [:]
     private var taskEventMonitor: Task<Void, Never>?
     private var guestResynchronizationHandlerID: UUID?
@@ -33,24 +35,28 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     public init(
         guestAgent: DevelopmentGuestAgent,
         displayPool: DisplayPool,
-        logSink: (any LogSink)? = nil
+        logSink: (any LogSink)? = nil,
+        onSessionSnapshotChanged: @escaping @Sendable () -> Void = {}
     ) {
         self.guestAgent = guestAgent
         self.displayPool = displayPool
         registry = SessionRegistry(logSink: logSink)
         displayConfiguration = Self.defaultDisplayConfiguration
+        self.onSessionSnapshotChanged = onSessionSnapshotChanged
     }
 
     init(
         guestAgent: any DaemonHeadlessGuestAgent,
         displayPool: DisplayPool,
         registry: SessionRegistry,
-        displayConfiguration: DisplayConfiguration
+        displayConfiguration: DisplayConfiguration,
+        onSessionSnapshotChanged: @escaping @Sendable () -> Void = {}
     ) {
         self.guestAgent = guestAgent
         self.displayPool = displayPool
         self.registry = registry
         self.displayConfiguration = displayConfiguration
+        self.onSessionSnapshotChanged = onSessionSnapshotChanged
     }
 
     /// Stops background observers before Android is shut down by the daemon.
@@ -113,7 +119,9 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         let packageID = request.packageID.rawValue
         if let existing = await registry.session(packageID: packageID) {
             sessionsByPackage[packageID] = existing.id
-            return try await launchExisting(existing)
+            let result = try await launchExisting(existing)
+            await publishSessionListChangeIfNeeded()
+            return result
         }
 
         let isInstalled: Bool
@@ -141,6 +149,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             throw Self.wireError(for: error)
         }
         sessionsByPackage[packageID] = session.id
+        await publishSessionListChangeIfNeeded()
         guard session.state == .acquiringDisplay,
             let lease = await registry.displayLease(session.id)
         else {
@@ -155,6 +164,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             await endFailedLaunch(session.id)
             throw Self.wireError(for: error)
         }
+        await publishSessionListChangeIfNeeded()
 
         let report: GuestLaunchReport
         do throws(GuestAgentFailure) {
@@ -162,6 +172,8 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         } catch {
             if !Self.isTransientLaunchFailure(error) {
                 await endFailedLaunch(session.id)
+            } else {
+                await publishSessionListChangeIfNeeded()
             }
             throw Self.wireError(for: error)
         }
@@ -169,6 +181,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         guard let completed = await registry.launchCompleted(packageID: packageID, taskID: report.taskID) else {
             if let current = await registry.session(session.id), Self.isEnded(current.state) {
                 await stopDrainingFrames(for: session.id)
+                await publishSessionListChangeIfNeeded()
                 return try Self.launchResult(for: current)
             }
             if let current = await registry.session(session.id),
@@ -181,6 +194,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         }
         guard !Self.isEnded(completed.state) else {
             await stopDrainingFrames(for: session.id)
+            await publishSessionListChangeIfNeeded()
             return try Self.launchResult(for: completed)
         }
 
@@ -190,12 +204,15 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         } catch {
             if let current = await registry.session(session.id), Self.isEnded(current.state) {
                 await stopDrainingFrames(for: session.id)
+                await publishSessionListChangeIfNeeded()
                 return try Self.launchResult(for: current)
             }
             await endFailedLaunch(session.id)
             throw Self.wireError(for: error)
         }
-        return try Self.launchResult(for: running)
+        let result = try Self.launchResult(for: running)
+        await publishSessionListChangeIfNeeded()
+        return result
     }
 
     /// Stops package tasks and completes the session, releasing its secondary-display lease.
@@ -226,6 +243,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         if current.state != .closing {
             do throws(SessionRegistryFailure) {
                 _ = try await registry.transition(current.id, to: .closing)
+                await publishSessionListChangeIfNeeded()
             } catch {
                 guard let latest = await registry.session(current.id), Self.isEnded(latest.state) else {
                     throw Self.wireError(for: error)
@@ -240,10 +258,12 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 stopped = try await guestAgent.forceStopApplication(package: packageID)
             } catch {
                 _ = await registry.stopFailed(packageID: packageID)
+                await publishSessionListChangeIfNeeded()
                 throw Self.wireError(for: error)
             }
             guard stopped else {
                 _ = await registry.stopFailed(packageID: packageID)
+                await publishSessionListChangeIfNeeded()
                 throw Self.guestTasksStillRunningError
             }
         }
@@ -251,7 +271,22 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         await stopDrainingFrames(for: current.id)
         _ = await registry.stopCompleted(sessionID: current.id)
         forgetSession(packageID: packageID, sessionID: current.id)
+        await publishSessionListChangeIfNeeded()
         return RuntimeTerminateResult(packageID: request.packageID, hadSession: true)
+    }
+
+    /// Lists live app sessions owned by this daemon service.
+    func listSessions() async -> [RuntimeSessionSnapshot] {
+        await registry.snapshot().compactMap { session in
+            guard case .app = session.id,
+                session.state != .closing,
+                !Self.isEnded(session.state),
+                let packageID = RuntimePackageID(rawValue: session.packageID)
+            else {
+                return nil
+            }
+            return RuntimeSessionSnapshot(packageID: packageID, phase: Self.phase(for: session.state))
+        }
     }
 
     /// Reports whether this package still owns a live app session.
@@ -276,6 +311,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         if current.state != .closing {
             do throws(SessionRegistryFailure) {
                 _ = try await registry.transition(current.id, to: .closing)
+                await publishSessionListChangeIfNeeded()
             } catch {
                 guard let latest = await registry.session(current.id), Self.isEnded(latest.state) else {
                     throw Self.wireError(for: error)
@@ -290,10 +326,12 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 stopped = try await guestAgent.forceStopApplication(package: packageID)
             } catch {
                 _ = await registry.stopFailed(packageID: packageID)
+                await publishSessionListChangeIfNeeded()
                 throw Self.wireError(for: error)
             }
             guard stopped else {
                 _ = await registry.stopFailed(packageID: packageID)
+                await publishSessionListChangeIfNeeded()
                 throw Self.guestTasksStillRunningError
             }
         }
@@ -301,6 +339,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         await stopDrainingFrames(for: current.id)
         _ = await registry.stopCompleted(sessionID: current.id, endReason: .packageUninstalled)
         forgetSession(packageID: packageID, sessionID: current.id)
+        await publishSessionListChangeIfNeeded()
     }
 
     static func terminateWithoutSession(
@@ -479,11 +518,15 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             } catch {
                 return
             }
+            await publishSessionListChangeIfNeeded()
         case .vanished(let package, let taskID):
             let updated = await registry.taskVanished(packageID: package, taskID: taskID)
-            if let updated, Self.isEnded(updated.state) {
-                await stopDrainingFrames(for: updated.id)
-                forgetSession(packageID: package, sessionID: updated.id)
+            if let updated {
+                if Self.isEnded(updated.state) {
+                    await stopDrainingFrames(for: updated.id)
+                    forgetSession(packageID: package, sessionID: updated.id)
+                }
+                await publishSessionListChangeIfNeeded()
             }
         }
     }
@@ -521,6 +564,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 scheduleRelaunch(sessionID: sessionID)
             }
         }
+        await publishSessionListChangeIfNeeded()
     }
 
     private func scheduleResynchronizationCompletion() {
@@ -576,6 +620,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 forgetSession(packageID: current.packageID, sessionID: sessionID)
             }
         }
+        await publishSessionListChangeIfNeeded()
     }
 
     private func relaunchAfterResynchronization(sessionID: SessionID) async {
@@ -629,6 +674,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 forgetSession(packageID: current.packageID, sessionID: sessionID)
             }
         }
+        await publishSessionListChangeIfNeeded()
     }
 
     private func startDrainingFrames(from lease: DisplayLease) {
@@ -665,6 +711,16 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             _ = try? await registry.transition(sessionID, to: .ended(.error(.runtimeFailed)))
         }
         forgetSession(packageID: current.packageID, sessionID: sessionID)
+        await publishSessionListChangeIfNeeded()
+    }
+
+    private func publishSessionListChangeIfNeeded() async {
+        let sessions = await listSessions()
+        guard sessions != lastPublishedSessions else {
+            return
+        }
+        lastPublishedSessions = sessions
+        onSessionSnapshotChanged()
     }
 
     private func forgetSession(packageID: String, sessionID: SessionID) {
@@ -751,16 +807,18 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         else {
             throw .runtime("internal", message: "APKRun could not identify the app session.")
         }
-        let phase: RuntimeSessionPhase
-        switch session.state {
-        case .running, .backgrounded: phase = .running
-        case .launching: phase = .launching
-        case .requested: phase = .starting
-        case .waitingForRuntime: phase = .booting
-        case .acquiringDisplay: phase = .waitingForPackage
-        case .closing, .ended: phase = .ended
+        return RuntimeLaunchResult(sessionID: sessionID, packageID: packageID, state: phase(for: session.state))
+    }
+
+    private static func phase(for state: AppSessionState) -> RuntimeSessionPhase {
+        switch state {
+        case .running, .backgrounded: .running
+        case .launching: .launching
+        case .requested: .starting
+        case .waitingForRuntime: .booting
+        case .acquiringDisplay: .waitingForPackage
+        case .closing, .ended: .ended
         }
-        return RuntimeLaunchResult(sessionID: sessionID, packageID: packageID, state: phase)
     }
 
     private static func isEnded(_ state: AppSessionState) -> Bool {

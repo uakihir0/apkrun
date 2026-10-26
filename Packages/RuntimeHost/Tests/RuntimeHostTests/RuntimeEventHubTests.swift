@@ -82,6 +82,31 @@ func eventHubDeliversSequencedOperationEventsToSubscribedConnections() async thr
 }
 
 @Test(.timeLimit(.minutes(1)))
+func eventHubDeliversSessionSnapshotChangeToSessionSubscribers() async throws {
+    let hub = RuntimeEventHub()
+    let sink = RecordingRuntimeEventSink()
+    let connectionID = ObjectIdentifier(sink)
+    _ = try hub.subscribe(
+        connectionID: connectionID,
+        clientKind: .menuBar,
+        topics: [.sessions],
+        sink: RuntimeEventSinkReference(value: sink),
+        outputQueue: DispatchQueue(label: "RuntimeEventHubTests.sessions"),
+        isConnectionOpen: { true }
+    )
+
+    hub.publishSessionListChange(.snapshotChanged)
+    await sink.waitForEnvelopeCount(1)
+
+    let envelopes = try sink.envelopes()
+    #expect(envelopes.count == 1)
+    #expect(envelopes[0].topic == .sessions)
+    #expect(envelopes[0].seq == 1)
+    #expect(envelopes[0].payload == .sessions(.snapshotChanged))
+    hub.remove(connectionID: connectionID)
+}
+
+@Test(.timeLimit(.minutes(1)))
 func eventHubCoalescesRuntimeProgressButPreservesStateTransitions() async throws {
     let hub = RuntimeEventHub()
     let sink = RecordingRuntimeEventSink()
@@ -510,6 +535,8 @@ private final class RecordingRuntimeEventSink: NSObject, RuntimeEventSink, @unch
     private let lock = NSLock()
     private var batches: [Data] = []
     private var acknowledgementHandlers: [() -> Void] = []
+    private var envelopeCountWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var deliveredEnvelopeCount = 0
     private let acknowledgesImmediately: Bool
 
     init(acknowledgesImmediately: Bool = true) {
@@ -521,14 +548,36 @@ private final class RecordingRuntimeEventSink: NSObject, RuntimeEventSink, @unch
     }
 
     func deliver(_ batch: Data, reply: @escaping () -> Void) {
+        let envelopeCount =
+            (try? JSONDecoder().decode([EventEnvelope].self, from: batch).count)
+            ?? 0
         lock.lock()
         batches.append(batch)
+        deliveredEnvelopeCount += envelopeCount
+        let readyWaiters = envelopeCountWaiters.filter { deliveredEnvelopeCount >= $0.count }
+        envelopeCountWaiters.removeAll { deliveredEnvelopeCount >= $0.count }
         if !acknowledgesImmediately {
             acknowledgementHandlers.append(reply)
         }
         lock.unlock()
+        for waiter in readyWaiters {
+            waiter.continuation.resume()
+        }
         if acknowledgesImmediately {
             reply()
+        }
+    }
+
+    func waitForEnvelopeCount(_ count: Int) async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            guard deliveredEnvelopeCount < count else {
+                lock.unlock()
+                continuation.resume()
+                return
+            }
+            envelopeCountWaiters.append((count: count, continuation: continuation))
+            lock.unlock()
         }
     }
 

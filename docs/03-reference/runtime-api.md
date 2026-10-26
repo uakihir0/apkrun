@@ -84,11 +84,11 @@ apkrund sets a requirement on each listener with `setConnectionCodeSigningRequir
 
 ### 2.1 Constants
 
-`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 11}`. Ordering compares `major`, then `minor`.
+`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 12}`. Ordering compares `major`, then `minor`.
 
 ```swift
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
-    public static let current = APIVersion(major: 1, minor: 11)
+    public static let current = APIVersion(major: 1, minor: 13)
     public let major: Int
     public let minor: Int
 }
@@ -110,6 +110,8 @@ Target constants (not in code): `wrapperMajors = [1]` (served on the wrapper end
 | 1.9 | `subscribe`, `unsubscribe`; event-sink handshake; sequenced batches |
 | 1.10 | `packages.installed` and `packages.updated` events |
 | 1.11 | `beginUninstallPackage`; `PackageChange.removed`; `OperationSnapshot.requestFingerprint` |
+| 1.12 | Authenticated control operation `listSessions`; `RuntimeSessionSnapshot` |
+| 1.13 | `sessions.snapshotChanged` event; clients refresh `listSessions` |
 
 ### 2.2 Rules per endpoint
 
@@ -450,7 +452,7 @@ Cancellation points:
 | Topic | Payload | Subscribers |
 |---|---|---|
 | `runtime` | `RuntimeChange` | C, L |
-| `sessions` | `SessionListChange` (target) | C |
+| `sessions` | `SessionListChange` | C |
 | `packages` | `PackageChange` | C |
 | `updates` | `UpdateEvent` (target) | C |
 | `operations` | `OperationEvent` | C; W for own operations (target) |
@@ -587,12 +589,13 @@ Target `RuntimeStatus` replaces `RuntimeHostStatus` for `runtimeStatus`. Fields:
 | `launch` (built) | `RuntimeLaunchControlRequest` (`packageID`) → `RuntimeLaunchControlReply` (`result`: `RuntimeLaunchResult`) | C | W | `sessions.*` (target) | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.2 |
 | `terminate` (built) | `RuntimeTerminateControlRequest` (`packageID`) → `RuntimeTerminateControlReply` (`result`: `RuntimeTerminateResult`) | C | U | `sessions.ended` (target) | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.2 |
 | `openSession` (target) | `OpenSessionRequest` → `SessionDescriptor` + `[IOSurface]` | W, L | W | session channel, `sessions.opened` | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.1 |
-| `listSessions` (target) | — → `[SessionSummary]` | C | Q | — | [runtime-daemon.md](../02-design/runtime-daemon.md) §8.6 |
+| `listSessions` (built) | `RuntimeListSessionsControlRequest` → `RuntimeListSessionsControlReply` (`[RuntimeSessionSnapshot]`) | C | Q | — | [runtime-daemon.md](../02-design/runtime-daemon.md) §8.6 |
 
 APKRun.app and the CLI never open app sessions. They call `launch`, and the launched process opens the session (ADR-0006). Debug builds can use `APKRUN_TEST_HEADLESS_LAUNCH=1` for a daemon-owned headless session until #69 removes it ([configuration.md](configuration.md) §5.1).
 
 - `RuntimeLaunchResult`: `sessionID` (UUID), `packageID`, `state` (`RuntimeSessionPhase`).
 - `RuntimeSessionPhase` (built): `starting`, `booting`, `waitingForPackage`, `launching`, `running`, `ended`, `unknown`.
+- `RuntimeSessionSnapshot` (built): `packageID`, `phase` (`RuntimeSessionPhase`). `listSessions` returns live app sessions from the daemon's session registry and does not start Android. It exposes no display mapping or point size. The current daemon populates this registry only through Debug headless launches (`APKRUN_TEST_HEADLESS_LAUNCH=1`); it returns an empty list when that service is absent.
 - `RuntimeTerminateResult`: `packageID`, `hadSession` (Bool).
 - `launch` opens the registered wrapper when its `WrapperStatus.state` is `valid`, otherwise the generic launcher. A running wrapper is activated. The process must connect within 20 s, or `runtime.launchTimedOut`.
 - `terminate` closes the window and force-stops the app through the Guest Agent. Without a session it force-stops only when Android is `ready`. It never starts Android.
@@ -1329,7 +1332,7 @@ Topics fan out state changes to every subscriber. Streams deliver a sequence to 
 
 `EventEnvelope`: `topic` (`EventTopic`), `seq` (UInt64, per connection from 1, assigned at send), `time` (Date), `operationID` (`OperationID`?), `payload` (`EventPayload`).
 
-`EventPayload`: `runtime(RuntimeChange)`, `sessions(SessionListChange)` (target), `packages(PackageChange)`, `updates(UpdateEvent)` (target), `operations(OperationEvent)`, `health(HealthEvent)` (target), `maintenance(MaintenanceEvent)` (target), `wrappers(WrapperChange)` (target), `integrations(IntegrationChange)` (target), `resyncRequired(EventTopic)`, `unknown`.
+`EventPayload`: `runtime(RuntimeChange)`, `sessions(SessionListChange)`, `packages(PackageChange)`, `updates(UpdateEvent)` (target), `operations(OperationEvent)`, `health(HealthEvent)` (target), `maintenance(MaintenanceEvent)` (target), `wrappers(WrapperChange)` (target), `integrations(IntegrationChange)` (target), `resyncRequired(EventTopic)`, `unknown`.
 
 | Rule | Value |
 |---|---|
@@ -1357,7 +1360,9 @@ Coalescing keys: `runtime.bootProgress` (one key); `operations.progress` and `pa
 
 `PackageChange` (topic `packages`): `installed(RuntimePackageSummary)`, `updated(RuntimePackageSummary, from: RuntimeVersionCode)` (also same-version reinstall; `from` is a best observation), `removed(RuntimePackageID, keptData: Bool)`, `unknown`. Target cases: `rolledBack`, `stateChanged(RuntimePackageID, WirePackageState)`, `operationProgress(RuntimePackageID, OperationID, StoreOperationProgress)`, `iconChanged`, `settingsChanged(RuntimePackageID, keys:)`, `unmanagedChanged([RuntimePackageSummary])` ([package-store.md](../02-design/package-store.md) §11.3). Target `WirePackageState` adds `importing`, `inspecting`, `updating`, `needsReinstall`.
 
-Other target events: `UpdateEvent` (`phaseChanged`, `progress`, `finished`, `summaryChanged(available:waiting:failed:)`) ([update-system.md](../02-design/update-system.md) §11.2); `IntegrationChange` (`statusChanged`, `recordingChanged`, `sharedFoldersChanged`) ([desktop-integration.md](../02-design/desktop-integration.md) §11); `SessionListChange` (`opened`, `stateChanged`, `ended`, each with `SessionSummary`).
+`SessionListChange` (built): `snapshotChanged`. After receiving it, fetch a fresh `listSessions` snapshot; the notification carries no session data. The daemon currently publishes it for changes in its Debug headless session service. Normal app-window sessions remain a #69 dependency. Target cases are `opened`, `stateChanged`, and `ended`, each with `SessionSummary`.
+
+Other target events: `UpdateEvent` (`phaseChanged`, `progress`, `finished`, `summaryChanged(available:waiting:failed:)`) ([update-system.md](../02-design/update-system.md) §11.2); `IntegrationChange` (`statusChanged`, `recordingChanged`, `sharedFoldersChanged`) ([desktop-integration.md](../02-design/desktop-integration.md) §11).
 
 `StoreOperationProgress`: `stage` (`StoreOperationStage`: `copying`, `inspecting`, `receiving`, `verifying`, `committing`, `uninstalling`, `unknown`; target), `fraction` (Double?).
 
@@ -1506,7 +1511,7 @@ Sections refer to [host-ui.md](../02-design/host-ui.md). Operations marked (targ
 
 | Surface | Operations | Notes |
 |---|---|---|
-| Models | `runtimeStatus`, `listPackages(all)`, `packageInfo`, `listOperations`; target: `integrationStatus`, `listWrappers`, `listUpdates`, `listSessions`, `configuration`, `selfUpdateStatus`, `imageUpdateStatus`, `pendingApprovals`, `hostNotifications` | topics `runtime`, `packages`, `operations`; target: others |
+| Models | `runtimeStatus`, `listPackages(all)`, `packageInfo`, `listOperations`, `listSessions`; target: `integrationStatus`, `listWrappers`, `listUpdates`, `configuration`, `selfUpdateStatus`, `imageUpdateStatus`, `pendingApprovals`, `hostNotifications` | topics `runtime`, `packages`, `operations`; target: others |
 | Banner **Restart Service**, `--register-runtime` | no operation | `SMAppService` |
 | Onboarding | `setup` (target) | **Start Over** sets `recreateInstance`; **Report…** calls `createDiagnostics` |
 | Header: **Start/Stop Android**, **Restart** | `startRuntime`, `stopRuntime`, `restartRuntime` | stop asks on `runtime.busy` |
@@ -1535,7 +1540,7 @@ Sections refer to [host-ui.md](../02-design/host-ui.md) §12. The menu bar obser
 | Item | Operations | Notes |
 |---|---|---|
 | Runtime line, dot | `runtimeStatus` | topics `runtime`, `maintenance`; target `health` |
-| **Apps** | `listSessions`, `activeRecordings`, `launch` | target except `launch` |
+| **Apps** | `listSessions`, `activeRecordings`, `launch` | `activeRecordings` is target |
 | **Updates**: **Update**, **Update All** | `listUpdates`, `updatePackage` | target |
 | Maintenance rows | `selfUpdateStatus`, `imageUpdateStatus`, `applyImageUpdate`, `restartForUpdate` | target; **Update…** opens `apkrun://settings/general` |
 | **Stop Android**, **Start Android** | `stopRuntime`, `startRuntime` | |

@@ -16,6 +16,10 @@ func daemonHeadlessSessionUsesSecondaryDisplayDiscardsFramesAndReleasesLease() a
     let launched = try await fixture.service.launch(RuntimeLaunchRequest(packageID: package))
 
     #expect(launched.state == .running)
+    #expect(
+        await fixture.service.listSessions()
+            == [RuntimeSessionSnapshot(packageID: package, phase: .running)]
+    )
     #expect(await fixture.agent.launchCalls == [HeadlessLaunchCall(packageID: package.rawValue, displayID: 1)])
     #expect(await fixture.registry.session(.app(launched.sessionID))?.state == .running)
     let lease = await fixture.registry.displayLease(.app(launched.sessionID))
@@ -42,7 +46,88 @@ func daemonHeadlessSessionUsesSecondaryDisplayDiscardsFramesAndReleasesLease() a
     #expect(terminated.hadSession)
     #expect(await fixture.agent.forceStoppedPackages == [package.rawValue])
     #expect(await fixture.registry.session(.app(launched.sessionID))?.state == .ended(.userClosed))
+    #expect(await fixture.service.listSessions().isEmpty)
     #expect((await fixture.displayPool.snapshot())[0].state == .free)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonHeadlessSessionServiceNotifiesWhenItsPublishedSnapshotChanges() async throws {
+    let changes = SessionSnapshotChangeRecorder()
+    let fixture = makeHeadlessServiceFixture(onSessionSnapshotChanged: { changes.record() })
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    _ = try await fixture.service.launch(RuntimeLaunchRequest(packageID: package))
+    #expect(changes.count == 3)
+
+    _ = try await fixture.service.terminate(RuntimeTerminateRequest(packageID: package))
+    #expect(changes.count == 4)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonHeadlessSessionServiceNotifiesWhenFailedCloseRestoresTheSnapshot() async throws {
+    let changes = SessionSnapshotChangeRecorder()
+    let fixture = makeHeadlessServiceFixture(
+        stopResults: [false],
+        onSessionSnapshotChanged: { changes.record() }
+    )
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    _ = try await fixture.service.launch(RuntimeLaunchRequest(packageID: package))
+    #expect(changes.count == 3)
+
+    do {
+        _ = try await fixture.service.terminate(RuntimeTerminateRequest(packageID: package))
+        Issue.record("A close with remaining guest tasks should fail.")
+    } catch let error as RuntimeWireError {
+        #expect(error.code == "runtime.guestAgentOperationFailed")
+    }
+
+    #expect(changes.count == 5)
+    #expect(await fixture.service.listSessions() == [RuntimeSessionSnapshot(packageID: package, phase: .running)])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonHeadlessSessionServiceNotifiesWhenGuestTaskEndsASession() async throws {
+    let changes = SessionSnapshotChangeRecorder()
+    let fixture = makeHeadlessServiceFixture(onSessionSnapshotChanged: { changes.record() })
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    _ = try await fixture.service.launch(RuntimeLaunchRequest(packageID: package))
+    #expect(changes.count == 3)
+    await fixture.agent.sendTaskEvent(.vanished(packageID: package.rawValue, taskID: 41))
+    for _ in 0..<100 {
+        if changes.count == 4 {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+
+    #expect(changes.count == 4)
+    #expect(await fixture.service.listSessions().isEmpty)
+}
+
+@Test
+func daemonSessionListProjectsRegistryLifecycleWithoutDisplayDetails() async throws {
+    let fixture = makeHeadlessServiceFixture()
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let session = try await fixture.registry.request(packageID: package.rawValue)
+
+    #expect(await fixture.service.listSessions() == [RuntimeSessionSnapshot(packageID: package, phase: .starting)])
+
+    _ = try await fixture.registry.transition(session.id, to: .waitingForRuntime)
+    #expect(await fixture.service.listSessions() == [RuntimeSessionSnapshot(packageID: package, phase: .booting)])
+
+    _ = try await fixture.registry.transition(session.id, to: .acquiringDisplay)
+    #expect(
+        await fixture.service.listSessions()
+            == [RuntimeSessionSnapshot(packageID: package, phase: .waitingForPackage)]
+    )
+
+    _ = try await fixture.registry.transition(session.id, to: .launching)
+    #expect(await fixture.service.listSessions() == [RuntimeSessionSnapshot(packageID: package, phase: .launching)])
+
+    _ = try await fixture.registry.transition(session.id, to: .closing)
+    #expect(await fixture.service.listSessions().isEmpty)
 }
 
 @Test
@@ -202,7 +287,8 @@ private struct HeadlessServiceFixture {
 private func makeHeadlessServiceFixture(
     isInstalled: Bool = true,
     stopResults: [Bool] = [true],
-    snapshotOnRegistration: GuestSnapshotState? = nil
+    snapshotOnRegistration: GuestSnapshotState? = nil,
+    onSessionSnapshotChanged: @escaping @Sendable () -> Void = {}
 ) -> HeadlessServiceFixture {
     let displayControl = FakeHeadlessDisplayControlChannel()
     let scanouts = FakeHeadlessScanoutController(guest: displayControl)
@@ -230,7 +316,8 @@ private func makeHeadlessServiceFixture(
                 pointSize: CGSize(width: 480, height: 850),
                 backingScale: 1
             )
-        )
+        ),
+        onSessionSnapshotChanged: onSessionSnapshotChanged
     )
     return HeadlessServiceFixture(
         service: service,
@@ -239,6 +326,21 @@ private func makeHeadlessServiceFixture(
         agent: agent,
         scanouts: scanouts
     )
+}
+
+private final class SessionSnapshotChangeRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedCount = 0
+
+    var count: Int {
+        lock.withLock { recordedCount }
+    }
+
+    func record() {
+        lock.withLock {
+            recordedCount += 1
+        }
+    }
 }
 
 private struct HeadlessLaunchCall: Sendable, Equatable {

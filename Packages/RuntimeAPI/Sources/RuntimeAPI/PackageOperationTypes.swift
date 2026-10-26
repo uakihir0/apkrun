@@ -713,6 +713,20 @@ public enum RuntimeSessionPhase: String, Codable, Sendable, Equatable {
     }
 }
 
+/// A live app session as visible to authenticated control clients.
+public struct RuntimeSessionSnapshot: Codable, Sendable, Equatable {
+    /// The Android package that owns this session.
+    public let packageID: RuntimePackageID
+    /// The lifecycle phase observed by the runtime.
+    public let phase: RuntimeSessionPhase
+
+    /// Creates a session snapshot.
+    public init(packageID: RuntimePackageID, phase: RuntimeSessionPhase) {
+        self.packageID = packageID
+        self.phase = phase
+    }
+}
+
 private struct RuntimeDynamicCodingKey: CodingKey, Hashable {
     let stringValue: String
     let intValue: Int?

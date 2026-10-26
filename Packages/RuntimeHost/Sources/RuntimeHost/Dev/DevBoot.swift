@@ -25,6 +25,14 @@ public enum DevGPUProfile: String, CaseIterable, Sendable {
     }
 }
 
+/// The transport selected for Guest Agent connections by `apkrun dev boot`.
+public enum DevGuestTransport: String, CaseIterable, Equatable, Sendable {
+    /// ADB forwards the agent's abstract sockets to loopback (the default).
+    case adb
+    /// The host connects directly to the Guest Agent's virtio-vsock ports.
+    case vsock
+}
+
 /// Inputs for `apkrun dev boot` (cli.md §5; #13-#15, #22).
 public struct DevBootOptions: Sendable {
     /// The GPU profile of the boot. `none` is the default.
@@ -42,6 +50,8 @@ public struct DevBootOptions: Sendable {
     /// The directory of the Guest Agent bundle (`apkrun-guest.apk` and `apkrun-guest.json`), which the boot installs
     /// and starts (guest-components.md §3). Nil boots without the agent.
     public var guestAgentDirectory: URL?
+    /// Transport used for Guest Agent channels. ADB remains available for provisioning and debugging.
+    public var guestTransport: DevGuestTransport
     /// A package to launch on display 0 once Android is ready (`apkrun dev launch`, #73). Nil launches nothing.
     public var launchPackage: String?
     /// An optional APK to install before launching `launchPackage` (#27).
@@ -67,6 +77,7 @@ public struct DevBootOptions: Sendable {
         resetInstance: Bool = false,
         stopWhenReady: Bool = false,
         guestAgentDirectory: URL? = nil,
+        guestTransport: DevGuestTransport = .adb,
         launchPackage: String? = nil,
         launchAPKURL: URL? = nil,
         appLaunches: [DevBootAppLaunch] = [],
@@ -82,6 +93,7 @@ public struct DevBootOptions: Sendable {
         self.resetInstance = resetInstance
         self.stopWhenReady = stopWhenReady
         self.guestAgentDirectory = guestAgentDirectory
+        self.guestTransport = guestTransport
         self.launchPackage = launchPackage
         self.launchAPKURL = launchAPKURL
         self.appLaunches = appLaunches
@@ -504,7 +516,8 @@ public struct DevBoot: Sendable {
             ),
             diagnostics: diagnostics,
             guestAgentBundle: guestAgentBundle,
-            developmentDisplay: options.developerDisplay?.core
+            developmentDisplay: options.developerDisplay?.core,
+            guestAgentTransportMode: options.guestTransport == .vsock ? .vsock : .adb
         )
         let stopSignal = DevBootStopSignal()
         var embeddedSession: EmbeddedRuntimeService?

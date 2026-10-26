@@ -53,8 +53,8 @@ public protocol GuestByteStream: Sendable {
     func close() async
 }
 
-/// Opens byte streams to the guest endpoints (guest-protocol.md §13.1). The development transport opens them
-/// through an ADB forward, and the vsock transport arrives with #35.
+/// Opens byte streams to the guest endpoints (guest-protocol.md §13.1). Development builds select either
+/// `ADBForwardGuestTransport` or `VsockGuestTransport`; the ADB transport also serves the development IME endpoint.
 public protocol GuestTransport: Sendable {
     /// Opens one stream to `endpoint`. Each call opens a new connection.
     func open(_ endpoint: GuestEndpoint) async throws -> any GuestByteStream

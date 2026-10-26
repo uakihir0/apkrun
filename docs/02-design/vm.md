@@ -255,9 +255,9 @@ On a spontaneous `guestDidStop`, `VMController` records `.stopped` before it awa
 
 `requestGuestStop()` maps to `VZVirtualMachine.requestStop()`, a **power-button press** through the PL061 GPIO. Android reads a short press as "screen off", not shutdown. Therefore:
 
-- RuntimeCore stops Android through the Guest Agent `Shutdown` RPC (`PowerManager.shutdown`, [guest-protocol.md](guest-protocol.md) §7.1). In development it may also run `adb shell reboot -p`. Android powers off through PSCI `SYSTEM_OFF`, which VZ reports as `guestDidStop`.
-- If `guestDidStop` has not arrived after 20 s, RuntimeCore calls `VMController.stop()` (forced). In developer mode a forced stop logs a warning. The next boot runs normally: f2fs and ext4 recover, and Android's userdata checkpointing covers the rest.
-- In developer mode the 20 s deadline runs from the start of the `reboot -p` request, sent over ADB, or over the serial shell if ADB fails. The wait runs whenever a channel was tried, even if its reply was lost, because the request may have reached Android. Only a stop that no channel could try forces at once. A cancelled stop keeps the deadline, because the VM still has to stop. Outside developer mode no request is sent, so the stop forces at once. The rule is `AndroidStopSequence` (RuntimeCore).
+- RuntimeCore first stops Android through the Guest Agent `Shutdown` RPC (`PowerManager.shutdown`, [guest-protocol.md](guest-protocol.md) §7.1). If the Guest Agent explicitly refuses the operation, developer mode may fall back to `adb shell reboot -p`, then the serial shell. A lost reply is ambiguous: the host does not resend the shutdown request through another channel. Android powers off through PSCI `SYSTEM_OFF`, which VZ reports as `guestDidStop`.
+- If `guestDidStop` has not arrived after 20 s, RuntimeCore calls `VMController.stop()` (forced) and logs a warning in every mode. The next boot runs normally: f2fs and ext4 recover, and Android's userdata checkpointing covers the rest.
+- The 20 s post-request deadline starts after the Guest Agent request or a developer-mode fallback returns. The Guest Agent request itself may take up to 20 s, so a normal stop can take up to 40 s; host shutdown has its own 40 s overall deadline ([runtime-daemon.md](runtime-daemon.md) §2.4). The wait runs when a request may have reached Android, even if its reply was lost. A cancelled stop keeps the deadline, because the VM still has to stop. Outside developer mode, an unavailable or explicitly unsupported Guest Agent causes an immediate forced stop. The rule is `AndroidStopSequence` (RuntimeCore).
 - A forced stop not completed after 10 s fails with `VMFailure.stopTimedOut` and the state becomes `failed` ([state-machines.md](../01-architecture/state-machines.md) §1).
 - The test Linux guest needs `requestGuestStop()` (§12). Its `/init` maps a rising edge on GPIO offset 6 to `poweroff -f`.
 
@@ -367,6 +367,6 @@ Codes, messages, and remediations are in [error-catalog.md](../03-reference/erro
 
 - Whether the microphone prompt appears at VM start or at first capture (OQ-29, §11). #85 decides.
 - Whether the stock arm64 kernel carries `virtio_snd` (OQ-38, §11). If not, the custom image adds it ([android-image.md](android-image.md) §7.5). #84 decides.
-- RuntimeCore does not send the Guest Agent `Shutdown` RPC yet (§9.3), so only developer mode stops Android gracefully. #35 and #36 hold it.
+- RuntimeCore sends the Guest Agent `Shutdown` RPC before stopping Android (§9.3). Stock-image shutdown behavior and VSOCK transport still require T2 validation in #35; custom-image provisioning of `apkrun_vsockd` is tracked by #36.
 - Pause and resume across host sleep is not verified on hardware (§9.4). #70 holds it.
 - Whether VZ reports a start failure through the start completion, `didStopWithError`, or both (§9.1, §9.2). The controller accepts either path and never makes a second transition. Not verified across macOS builds (R-16).

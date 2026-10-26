@@ -84,12 +84,15 @@ final class GuestAgentTests: XCTestCase {
     /// A killed agent is restarted by the host, and the supervisor reconnects and resynchronises (#73 acceptance,
     /// guest-components.md §3.3). The new session has a new token.
     func testKilledAgentIsRestartedAndTheSupervisorResynchronises() async throws {
+        let apk = try Self.fixtureAPK()
         let bundle = try Self.bundle()
         try await AndroidBootSession.withBoot(developerMode: true, guestAgentBundle: bundle) { session in
             guard let agent = await session.supervisor.developmentGuestAgent else {
                 return XCTFail("the boot did not start the development Guest Agent")
             }
             let adb = try await Self.connectedClient(session)
+            try await adb.install(apk: apk)
+            let launch = try await agent.launch(package: Self.helloText, displayID: 0)
             let pidBefore = try await adb.processID(named: Self.processName)
             let tokenBefore = await agent.supervisor.session?.sessionToken
             try await adb.terminateProcess(named: Self.processName)
@@ -104,6 +107,10 @@ final class GuestAgentTests: XCTestCase {
             XCTAssertNotEqual(pidBefore, pidAfter)
             let pong = try await agent.supervisor.send(GuestPing(nonce: 3))
             XCTAssertEqual(pong.nonce, 3)
+            let taskContinued = await Self.waitUntil {
+                await agent.supervisor.snapshot.tasks[launch.taskID]?.package == Self.helloText
+            }
+            XCTAssertTrue(taskContinued, "the open HelloText task did not survive Guest Agent reconnection")
         }
     }
 

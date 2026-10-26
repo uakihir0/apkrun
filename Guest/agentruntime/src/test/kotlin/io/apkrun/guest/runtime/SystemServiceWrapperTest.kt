@@ -28,6 +28,8 @@ class SystemServiceWrapperTest {
     fun aMissingMethodMakesOnlyItsOwnCallUnusable() {
         val wrapper = wrapper("fixture", "size", "noSuchFrameworkMethod")
         assertFalse(wrapper.available)
+        assertTrue(wrapper.supports("size"))
+        assertFalse(wrapper.supports("noSuchFrameworkMethod"))
         assertEquals(listOf("noSuchFrameworkMethod"), wrapper.missingMethods)
         assertEquals(0, wrapper.call("size"))
         assertThrows(ServiceMethodMissing::class.java) { wrapper.call("noSuchFrameworkMethod") }

@@ -9,6 +9,18 @@ import Testing
 
 #if APKRUN_EMBEDDED_RUNTIME
     import Darwin
+
+    @Test func devBootParsesVSOCKGuestTransportSelection() async throws {
+        let command = try await APKRunCommand.asyncParseAsRoot([
+            "dev", "boot", "--guest-transport", "vsock",
+        ])
+        #expect((command as? DevBootCommand)?.guestTransport == "vsock")
+    }
+
+    @Test func devBootDefaultsToADBGuestTransport() async throws {
+        let command = try await APKRunCommand.asyncParseAsRoot(["dev", "boot"])
+        #expect((command as? DevBootCommand)?.guestTransport == "adb")
+    }
 #endif
 
 @Test func packageQueryAndRuntimeInfoCommandsParse() async throws {

@@ -19,3 +19,13 @@ import Testing
 @Test func devBootDefaultsToTheHeadlessProfile() {
     #expect(DevBootOptions().gpu == DevGPUProfile.none)
 }
+
+@Test func devBootDefaultsToADBGuestTransport() {
+    #expect(DevBootOptions().guestTransport == .adb)
+}
+
+@Test func devGuestTransportIsSelectableByName() {
+    #expect(DevGuestTransport(rawValue: "adb") == .adb)
+    #expect(DevGuestTransport(rawValue: "vsock") == .vsock)
+    #expect(DevGuestTransport(rawValue: "tcp") == nil)
+}

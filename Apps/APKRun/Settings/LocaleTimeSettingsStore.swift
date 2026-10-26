@@ -68,7 +68,11 @@ final class LocaleTimeSettingsStore: ObservableObject {
             return
         }
         configurationEventTask = Task { [weak self] in
-            await self?.subscribeThenRefreshAndObserve()
+            let observeConfigurationChanges = self?.observeConfigurationChanges
+            await Self.subscribeThenRefreshAndObserve(
+                observeConfigurationChanges: observeConfigurationChanges,
+                refresh: { [weak self] in await self?.refresh() }
+            )
         }
     }
 
@@ -102,31 +106,53 @@ final class LocaleTimeSettingsStore: ObservableObject {
         await pendingUpdate?.value
     }
 
-    private func subscribeThenRefreshAndObserve() async {
-        let events: AsyncStream<EventEnvelope>?
-        if let observeConfigurationChanges {
+    private static func subscribeThenRefreshAndObserve(
+        observeConfigurationChanges: (@Sendable () async throws -> AsyncStream<EventEnvelope>)?,
+        refresh: @escaping @MainActor @Sendable () async -> Void
+    ) async {
+        guard let observeConfigurationChanges else {
+            await refresh()
+            return
+        }
+
+        var retryDelaySeconds: Int64 = 1
+        while !Task.isCancelled {
+            let events: AsyncStream<EventEnvelope>
             do {
                 events = try await observeConfigurationChanges()
             } catch {
-                events = nil
+                await refresh()
+                await waitBeforeRetry(seconds: retryDelaySeconds)
+                retryDelaySeconds = min(retryDelaySeconds * 2, 30)
+                continue
             }
-        } else {
-            events = nil
-        }
-        await refresh()
+            await refresh()
 
-        guard let events else { return }
-        for await event in events {
-            guard !Task.isCancelled else { return }
-            switch event.payload {
-            case .runtime(.configurationChanged(let keys))
-            where keys.contains(where: Self.localeTimeKeys.contains):
-                await refresh()
-            case .resyncRequired(.runtime):
-                await refresh()
-            default:
-                break
+            for await event in events {
+                guard !Task.isCancelled else { return }
+                retryDelaySeconds = 1
+                switch event.payload {
+                case .runtime(.configurationChanged(let keys))
+                where keys.contains(where: Self.localeTimeKeys.contains):
+                    await refresh()
+                case .resyncRequired(.runtime):
+                    await refresh()
+                default:
+                    break
+                }
             }
+            guard !Task.isCancelled else { return }
+            await refresh()
+            await waitBeforeRetry(seconds: retryDelaySeconds)
+            retryDelaySeconds = min(retryDelaySeconds * 2, 30)
+        }
+    }
+
+    private static func waitBeforeRetry(seconds: Int64) async {
+        do {
+            try await Task.sleep(for: .seconds(seconds))
+        } catch {
+            // Cancellation means the settings owner no longer needs an event subscription.
         }
     }
 

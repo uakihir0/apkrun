@@ -121,6 +121,41 @@ final class LocaleTimeSettingsStoreTests: XCTestCase {
         continuation.finish()
     }
 
+    func testInitialConfigurationSubscriptionFailureRetriesAndRefreshes() async {
+        let (events, continuation) = AsyncStream<EventEnvelope>.makeStream()
+        let source = ConfigurationSubscriptionRetrySource(
+            snapshot: Self.snapshot(syncLocale: true, syncTimeZone: true, syncClockFormat: true),
+            snapshotAfterInitialFailure: Self.snapshot(
+                syncLocale: false,
+                syncTimeZone: true,
+                syncClockFormat: true
+            ),
+            events: events
+        )
+        let store = LocaleTimeSettingsStore(
+            readConfiguration: { try await source.read() },
+            updateConfiguration: { _ in try await source.read() },
+            observeConfigurationChanges: { try await source.subscribe() }
+        )
+        let recovered = expectation(description: "Retried configuration read updates the visible setting")
+        let subscription = store.$syncLocale
+            .dropFirst()
+            .sink { value in
+                if !value {
+                    recovered.fulfill()
+                }
+            }
+
+        await source.waitForSubscriptionAttemptCount(2)
+        await source.waitForReadCount(2)
+        await fulfillment(of: [recovered], timeout: 2)
+
+        XCTAssertFalse(store.syncLocale)
+        XCTAssertTrue(store.isAvailable)
+        continuation.finish()
+        withExtendedLifetime(subscription) {}
+    }
+
     nonisolated private static func snapshot(
         syncLocale: Bool,
         syncTimeZone: Bool,
@@ -207,4 +242,73 @@ private actor ConfigurationSnapshotSource {
             readWaiters.append((count, continuation))
         }
     }
+}
+
+private actor ConfigurationSubscriptionRetrySource {
+    private var snapshot: ConfigurationSnapshot
+    private let snapshotAfterInitialFailure: ConfigurationSnapshot
+    private let events: AsyncStream<EventEnvelope>
+    private var subscriptionAttemptCount = 0
+    private var readCount = 0
+    private var subscriptionWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var readWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+    init(
+        snapshot: ConfigurationSnapshot,
+        snapshotAfterInitialFailure: ConfigurationSnapshot,
+        events: AsyncStream<EventEnvelope>
+    ) {
+        self.snapshot = snapshot
+        self.snapshotAfterInitialFailure = snapshotAfterInitialFailure
+        self.events = events
+    }
+
+    func subscribe() throws -> AsyncStream<EventEnvelope> {
+        subscriptionAttemptCount += 1
+        let ready = subscriptionWaiters.filter { $0.count <= subscriptionAttemptCount }
+        subscriptionWaiters.removeAll { $0.count <= subscriptionAttemptCount }
+        for waiter in ready {
+            waiter.continuation.resume()
+        }
+        guard subscriptionAttemptCount > 1 else {
+            snapshot = snapshotAfterInitialFailure
+            throw ConfigurationSubscriptionFailure.initialAttempt
+        }
+        return events
+    }
+
+    func read() throws -> ConfigurationSnapshot {
+        readCount += 1
+        let ready = readWaiters.filter { $0.count <= readCount }
+        readWaiters.removeAll { $0.count <= readCount }
+        for waiter in ready {
+            waiter.continuation.resume()
+        }
+        guard readCount > 1 else {
+            throw ConfigurationSnapshotFailure.initialAttempt
+        }
+        return snapshot
+    }
+
+    func waitForSubscriptionAttemptCount(_ count: Int) async {
+        guard subscriptionAttemptCount < count else { return }
+        await withCheckedContinuation { continuation in
+            subscriptionWaiters.append((count, continuation))
+        }
+    }
+
+    func waitForReadCount(_ count: Int) async {
+        guard readCount < count else { return }
+        await withCheckedContinuation { continuation in
+            readWaiters.append((count, continuation))
+        }
+    }
+}
+
+private enum ConfigurationSubscriptionFailure: Error {
+    case initialAttempt
+}
+
+private enum ConfigurationSnapshotFailure: Error {
+    case initialAttempt
 }

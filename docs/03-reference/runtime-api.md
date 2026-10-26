@@ -84,11 +84,11 @@ apkrund sets a requirement on each listener with `setConnectionCodeSigningRequir
 
 ### 2.1 Constants
 
-`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 11}`. Ordering compares `major`, then `minor`.
+`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 12}`. Ordering compares `major`, then `minor`.
 
 ```swift
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
-    public static let current = APIVersion(major: 1, minor: 11)
+    public static let current = APIVersion(major: 1, minor: 12)
     public let major: Int
     public let minor: Int
 }
@@ -110,6 +110,7 @@ Target constants (not in code): `wrapperMajors = [1]` (served on the wrapper end
 | 1.9 | `subscribe`, `unsubscribe`; event-sink handshake; sequenced batches |
 | 1.10 | `packages.installed` and `packages.updated` events |
 | 1.11 | `beginUninstallPackage`; `PackageChange.removed`; `OperationSnapshot.requestFingerprint` |
+| 1.12 | `configuration` and `updateConfiguration` global settings operations |
 
 ### 2.2 Rules per endpoint
 
@@ -459,7 +460,7 @@ Cancellation points:
 | `wrappers` | `WrapperChange` (target) | C |
 | `integrations` | `IntegrationChange` (target) | C |
 
-API 1.10 publishes `packages.installed` and `packages.updated` after a successful install; `from` is the best pre-install version observed. API 1.11 publishes `packages.removed` after the uninstall commits; `keptData` says whether app data stayed. `uninstall --forget` removes only APKRun's record and publishes no event.
+API 1.10 publishes `packages.installed` and `packages.updated` after a successful install; `from` is the best pre-install version observed. API 1.11 publishes `packages.removed` after the uninstall commits; `keptData` says whether app data stayed. `uninstall --forget` removes only APKRun's record and publishes no event. API 1.12 adds authenticated global configuration reads and updates.
 
 ### 4.9 File handles, bookmarks, IOSurfaces
 
@@ -1250,8 +1251,10 @@ A launcher reads its own settings from `packageInfo`, `SessionDescriptor.windowP
 
 ### 14.2 DTOs
 
-- `ConfigurationSnapshot`: `entries` (`ConfigurationEntry`: `key` (dotted), `value` (`JSONValue`), `defaultValue`, `isSet` (Bool: present in `settings.json`, even when equal to the default), `applies` (`SettingApplies`)).
+- `ConfigurationSnapshot`: `entries` (`ConfigurationEntry`: `key` (dotted), `value` (`JSONValue`), `defaultValue`, `isSet` (Bool: present in `settings.json`, even when equal to the default), `applies` (`SettingApplies`)). The locale-and-time implementation returns `system.syncLocale`, `system.syncTimeZone`, and `system.syncClockFormat`; other setting families are added with their owning tasks.
 - `ConfigurationPatch`: `patch` (`JSONValue`, RFC 7396 merge patch on the nested form, [configuration.md](configuration.md) §1.2).
+- `RuntimeConfigurationControlRequest` / `RuntimeUpdateConfigurationControlRequest`: authenticated control requests; the update request carries `ConfigurationPatch`.
+- `RuntimeConfigurationControlReply` / `RuntimeUpdateConfigurationControlReply`: a `ConfigurationSnapshot` result or a `RuntimeWireError`.
 - `PackageSettingsPatch`: `packageID`, `patch` (`JSONValue`, merge patch on package keys, [configuration.md](configuration.md) §3.1).
 - `ResolvedPackageSettings`: `packageID`, `entries` (`ResolvedSetting`: `key`, `value`, `source` (`SettingSource`), `defaultValue`, `recommended`? (compatibility database), `applies`), `window` (`WindowSettings`), `input` (`InputPrefs`).
 - `SettingSource`: `globalSwitch`, `user`, `recommended`, `default`, `unknown`. `SettingApplies`: `live`, `nextSession`, `runtimeRestart`, `nextCheck`, `nextLogin`, `newPackages`, `provisioning`, `nextBoot`, `nextHealthCheckResult`, `nextUpdate`, `unknown`. For compound values, `applies` is the first.
@@ -1266,6 +1269,7 @@ A launcher reads its own settings from `packageInfo`, `SessionDescriptor.windowP
 - Arrays are replaced whole. An unknown key group is `unknownSetting`.
 - A no-op patch is accepted: nothing is written, no event is posted.
 - An explicit default value is stored (`isSet = true`, source `user`).
+- The current implementation accepts locale-and-time keys under `system`; other global keys return `runtime.unknownSetting` until their owning tasks add them.
 - A patch containing `sharedFolders` returns `runtime.invalidSettingValue` (§11.1 is the only writer). A package patch containing `update.mode` returns `store.invalidSettingValue`; `setUpdatePolicy` is the only writer.
 - `updatePackageSettings` on an unmanaged package returns `store.packageNotFound`; the user adopts it first.
 - `config reset --all` and `settings reset --all` are built by the client as one patch with `null` for each set key.

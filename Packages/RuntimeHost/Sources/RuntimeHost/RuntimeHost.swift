@@ -1410,7 +1410,13 @@ public actor RuntimeHost {
         let handlerID = await guestSupervisor.addResynchronizationHandler(
             deliveringCurrentSnapshot: false
         ) { [weak self] _ in
-            Task { await self?.enqueueLocaleTimeTrigger(.guestReconnected) }
+            Task { [weak self] in
+                guard let self else { return }
+                let states = await guestSupervisor.stateUpdates()
+                await LocaleTimeReconnectReadiness.waitForReady(states: states) {
+                    await self.enqueueLocaleTimeTrigger(.guestReconnected)
+                }
+            }
         }
         guard !isShuttingDown, !isRuntimeStopping, !isRuntimeRestarting,
             await supervisor?.developmentGuestAgent === guestAgent

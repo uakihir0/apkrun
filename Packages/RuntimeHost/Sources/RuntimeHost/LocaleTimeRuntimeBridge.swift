@@ -3,6 +3,25 @@ import Foundation
 import IntegrationCore
 import RuntimeCore
 
+enum LocaleTimeReconnectReadiness {
+    static func waitForReady(
+        states: AsyncStream<GuestAgentSupervisor.State>,
+        onReady: @Sendable () async -> Void
+    ) async {
+        for await state in states {
+            switch state {
+            case .ready:
+                await onReady()
+                return
+            case .stopped, .incompatible, .unavailable:
+                return
+            case .connecting, .reconnecting, .unresponsive:
+                continue
+            }
+        }
+    }
+}
+
 enum LocaleTimeHostSettings {
     static let suiteName = "io.apkrun"
     static let changedNotification = Notification.Name("io.apkrun.system.localeTimeSettingsDidChange")

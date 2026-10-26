@@ -44,7 +44,7 @@ Keys use dots. **Applies** uses these values:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "runtime": { "memoryGiB": 6, "idleSuspendMinutes": 5 },
   "maintenance": { "channel": "beta" },
   "integrations": { "enabled": { "microphone": false } },
@@ -57,10 +57,11 @@ Keys use dots. **Applies** uses these values:
 ### 1.3 Schema versions and migration
 
 - Each file has an integer `schemaVersion`. This build's values are in `components.json` `dataSchemas` ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.1).
-- Older files migrate on load ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §5): keep the original as `<name>.v<old>.json` (one backup per old version, deleted 90 days after migration); migrate and validate in memory; write atomically with `FileManager.replaceItemAt`.
+- Older files migrate on load ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §5): keep the original as `<name>.v<old>.json` (one backup per old version, deleted 90 days after migration); migrate and validate in memory; write a same-directory temporary file, flush it, then atomically rename it over the original.
 - A migration never changes what a value means.
 - Adding a key raises the schema version, because an older build would drop the key on decode.
 - Renaming or removing a key is a migration step.
+- At daemon startup, the one-time locale-and-time migration imports the three legacy `io.apkrun` UserDefaults values only when `settings.json` has no explicit value for that key, then removes the legacy entries.
 - A file with a newer schema is handled per §8.3.
 
 ### 1.4 Reading and writing through RuntimeAPI
@@ -69,8 +70,8 @@ Signatures are in [runtime-api.md](runtime-api.md) §14, the authority for them.
 
 | Operation | Endpoint | Behavior |
 |---|---|---|
-| `configuration()` → `ConfigurationSnapshot` | control | every key of §2 with effective value, default, whether set, and when a change applies |
-| `updateConfiguration(patch)` | control | RFC 7396 merge patch on the nested form (§1.2). `null` resets a key. The whole patch is validated first (§8.1). A patch with `sharedFolders` is refused |
+| `configuration()` → `ConfigurationSnapshot` | control | currently implemented keys with effective value, default, whether set, and when a change applies. Locale-and-time keys are implemented; other key families are added with their owning tasks |
+| `updateConfiguration(patch)` | control | RFC 7396 merge patch on the nested form (§1.2). `null` resets a key. The whole patch is validated first (§8.1). Currently implemented keys are locale-and-time keys; a patch with `sharedFolders` is refused |
 | `sharedFolders()`, `addSharedFolder`, `removeSharedFolder`, `setSharedFolderAccess` | control | the only way to change `sharedFolders.roots` ([desktop-integration.md](../02-design/desktop-integration.md) §6.4) |
 | `packageSettings(id)` → `ResolvedPackageSettings` | control | every key of §3 with effective value and source: `globalSwitch`, `user`, `recommended`, or `default` (§3.2) |
 | `updatePackageSettings(id, patch)` | control | validated merge patch on package settings ([package-store.md](../02-design/package-store.md) §11.1). `null` removes the user value |

@@ -61,13 +61,17 @@ private struct RuntimeTrackedOperation {
 /// The host acquires the same instance lock used by `apkrun dev`, records its process state,
 /// opens the current image, and creates one RuntimeSupervisor. Runtime start remains on demand.
 public actor RuntimeHost {
+    static let newerSettingsSchemaFailureCode = "maintenance.dataCreatedByNewerVersion"
+
     nonisolated let eventHub = RuntimeEventHub()
 
     private let paths: APKRunPaths
+    private let configurationStore: RuntimeConfigurationStore
     private let buildInfo: BuildInfo
     private let environment: [String: String]
     private let executableURL: URL
     private let uncleanExitRecoveryOverride: (any DaemonUncleanExitRecovering)?
+    private let legacySettingsSuiteName: String
     private var diagnostics: DiagnosticsContext?
     private var logger: APKLogger?
     private var instanceLock: InstanceLock?
@@ -125,10 +129,29 @@ public actor RuntimeHost {
         uncleanExitRecovery: (any DaemonUncleanExitRecovering)? = nil
     ) {
         self.paths = paths
+        configurationStore = RuntimeConfigurationStore(fileURL: paths.settingsFile)
         self.buildInfo = buildInfo
         self.environment = environment
         self.executableURL = executableURL
         uncleanExitRecoveryOverride = uncleanExitRecovery
+        legacySettingsSuiteName = "io.apkrun"
+    }
+
+    init(
+        paths: APKRunPaths,
+        buildInfo: BuildInfo = .current,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        executableURL: URL = URL(fileURLWithPath: CommandLine.arguments.first ?? "apkrund"),
+        uncleanExitRecovery: (any DaemonUncleanExitRecovering)? = nil,
+        legacySettingsSuiteName: String
+    ) {
+        self.paths = paths
+        configurationStore = RuntimeConfigurationStore(fileURL: paths.settingsFile)
+        self.buildInfo = buildInfo
+        self.environment = environment
+        self.executableURL = executableURL
+        uncleanExitRecoveryOverride = uncleanExitRecovery
+        self.legacySettingsSuiteName = legacySettingsSuiteName
     }
 
     /// Performs daemon startup. The LaunchAgent listener is published after the instance lock and
@@ -207,6 +230,22 @@ public actor RuntimeHost {
                 }
             } catch {
                 recordDegradedStartup(step: 3, code: "hostStartupFailed")
+            }
+        }
+
+        // Startup step 4: only the lock owner may migrate or read global settings.
+        if instanceLock != nil {
+            do {
+                let settings = try configurationStore.readLocaleTimeSettings()
+                logConfigurationStoreIssues(settings.issues)
+                migrateLegacyLocaleTimeSettings()
+            } catch RuntimeConfigurationStoreError.unsupportedSchema(_) {
+                recordDegradedStartup(
+                    step: 4,
+                    code: Self.newerSettingsSchemaFailureCode
+                )
+            } catch {
+                recordDegradedStartup(step: 4, code: "runtime.hostStartupFailed")
             }
         }
 
@@ -1295,6 +1334,28 @@ public actor RuntimeHost {
         )
     }
 
+    /// Returns the global configuration entries implemented by this runtime.
+    public func configuration() throws -> ConfigurationSnapshot {
+        try requireConfigurationAccess()
+        let settings = try configurationStore.readLocaleTimeSettings()
+        logConfigurationStoreIssues(settings.issues)
+        let values = settings.values
+        return Self.configurationSnapshot(for: values)
+    }
+
+    /// Validates and persists supported global settings before publishing their change event.
+    public func updateConfiguration(_ patch: ConfigurationPatch) throws -> ConfigurationSnapshot {
+        try requireConfigurationAccess()
+        let mutations = try Self.localeTimeMutations(from: patch.patch)
+        let update = try configurationStore.updateLocaleTimeSettings(mutations)
+        logConfigurationStoreIssues(update.issues)
+        if !update.changedKeys.isEmpty {
+            eventHub.publishRuntimeChange(.configurationChanged(keys: update.changedKeys))
+            enqueueLocaleTimeTrigger(.hostPreferencesChanged)
+        }
+        return Self.configurationSnapshot(for: update.values)
+    }
+
     /// Whether the daemon can exit after its idle grace period without cancelling an operation.
     public func canExitWhenIdle() async -> Bool {
         guard hasStarted, !isShuttingDown, activeLifecycleOperations == 0 else {
@@ -1324,11 +1385,6 @@ public actor RuntimeHost {
             .init(center: .default, name: NSLocale.currentLocaleDidChangeNotification, trigger: .hostLocaleChanged),
             .init(center: .default, name: .NSSystemTimeZoneDidChange, trigger: .timeZoneChanged),
             .init(center: .default, name: .NSSystemClockDidChange, trigger: .systemClockChanged),
-            .init(
-                center: DistributedNotificationCenter.default(),
-                name: LocaleTimeHostSettings.changedNotification,
-                trigger: .hostPreferencesChanged
-            ),
             LocaleTimeNotificationRelay.workspaceWakeBinding(
                 notificationCenter: NSWorkspace.shared.notificationCenter
             ),
@@ -1382,9 +1438,25 @@ public actor RuntimeHost {
         }
 
         let roundTripMilliseconds = await guestAgent.supervisor.lastPingRoundTripMilliseconds
+        let settings: LocaleTimeConfigurationValues
+        do {
+            let result = try configurationStore.readLocaleTimeSettings()
+            logConfigurationStoreIssues(result.issues)
+            settings = result.values
+        } catch {
+            logger?.warning(
+                "Locale and time settings could not be read.",
+                errorCode: "runtime.internal"
+            )
+            return
+        }
         let warnings = await synchronizer.synchronize(
             trigger: trigger,
-            settings: LocaleTimeHostSettings.current(),
+            settings: LocaleTimeSyncSettings(
+                syncLocale: settings.syncLocale,
+                syncTimeZone: settings.syncTimeZone,
+                syncClockFormat: settings.syncClockFormat
+            ),
             sessionIsRunning: activePackageLaunches == 0,
             roundTripMilliseconds: roundTripMilliseconds
         )
@@ -1469,6 +1541,126 @@ public actor RuntimeHost {
         localeTimeNotificationRelay?.stop()
         localeTimeNotificationRelay = nil
         await waitForLocaleTimeSyncToFinish()
+    }
+
+    private func migrateLegacyLocaleTimeSettings() {
+        guard let defaults = UserDefaults(suiteName: legacySettingsSuiteName) else { return }
+        let keys = [
+            LocaleTimeConfigurationValues.syncLocaleKey,
+            LocaleTimeConfigurationValues.syncTimeZoneKey,
+            LocaleTimeConfigurationValues.syncClockFormatKey,
+        ]
+        var legacyValues: [String: Bool] = [:]
+        for key in keys {
+            if let value = defaults.object(forKey: key) as? Bool {
+                legacyValues[key] = value
+            }
+        }
+        do {
+            let importedKeys = try configurationStore.importLegacyPreferences(legacyValues)
+            for key in keys {
+                defaults.removeObject(forKey: key)
+            }
+            if !importedKeys.isEmpty {
+                logger?.notice("Migrated legacy locale and time preferences into settings.json")
+            }
+        } catch {
+            logger?.warning(
+                "Legacy locale and time preferences could not be migrated.",
+                errorCode: "runtime.internal"
+            )
+        }
+    }
+
+    private func requireConfigurationAccess() throws {
+        guard instanceLock != nil else {
+            throw RuntimeHostError.runtimeFailure(.instanceLocked(owner: .unknown))
+        }
+        if let startupFailure, startupFailure.step == 4 {
+            throw RuntimeHostError.startupFailed(step: startupFailure.step, code: startupFailure.code)
+        }
+    }
+
+    private func logConfigurationStoreIssues(_ issues: [RuntimeConfigurationStoreIssue]) {
+        for issue in issues {
+            switch issue {
+            case .corruptFileQuarantined:
+                logger?.error(
+                    "The global settings file was corrupt and has been quarantined.",
+                    errorCode: "runtime.internal"
+                )
+            case .unknownSetting(let key):
+                logger?.warning(
+                    "Unknown global setting \(key, .public) was ignored.",
+                    errorCode: "runtime.unknownSetting"
+                )
+            case .invalidSettingValue(let key):
+                logger?.error(
+                    "Invalid global setting value for \(key, .public) was ignored.",
+                    errorCode: "runtime.invalidSettingValue"
+                )
+            }
+        }
+    }
+
+    private static func configurationSnapshot(
+        for values: LocaleTimeConfigurationValues
+    ) -> ConfigurationSnapshot {
+        let entries = [
+            LocaleTimeConfigurationValues.syncLocaleKey,
+            LocaleTimeConfigurationValues.syncTimeZoneKey,
+            LocaleTimeConfigurationValues.syncClockFormatKey,
+        ].map { key in
+            ConfigurationEntry(
+                key: key,
+                value: .bool(values[key]),
+                defaultValue: .bool(true),
+                isSet: values.explicitlySetKeys.contains(key),
+                applies: .live
+            )
+        }
+        return ConfigurationSnapshot(entries: entries)
+    }
+
+    private static func localeTimeMutations(
+        from patch: JSONValue
+    ) throws -> [String: LocaleTimeSettingMutation] {
+        guard case .object(let root) = patch else {
+            throw RuntimeConfigurationStoreError.invalidSettingValue("configuration")
+        }
+        var mutations: [String: LocaleTimeSettingMutation] = [:]
+        for (group, value) in root {
+            if group == "sharedFolders" {
+                throw RuntimeConfigurationStoreError.invalidSettingValue(group)
+            }
+            guard group == "system" else {
+                throw RuntimeConfigurationStoreError.unknownSetting(group)
+            }
+            guard case .object(let system) = value else {
+                throw RuntimeConfigurationStoreError.invalidSettingValue(group)
+            }
+            for (key, value) in system {
+                let qualifiedKey = "\(group).\(key)"
+                guard
+                    [
+                        LocaleTimeConfigurationValues.syncLocaleKey,
+                        LocaleTimeConfigurationValues.syncTimeZoneKey,
+                        LocaleTimeConfigurationValues.syncClockFormatKey,
+                    ].contains(qualifiedKey)
+                else {
+                    throw RuntimeConfigurationStoreError.unknownSetting(qualifiedKey)
+                }
+                switch value {
+                case .bool(let value):
+                    mutations[qualifiedKey] = .set(value)
+                case .null:
+                    mutations[qualifiedKey] = .reset
+                default:
+                    throw RuntimeConfigurationStoreError.invalidSettingValue(qualifiedKey)
+                }
+            }
+        }
+        return mutations
     }
 
     private func recordLocaleTimeWarnings(_ warnings: [LocaleTimeWarning]) {

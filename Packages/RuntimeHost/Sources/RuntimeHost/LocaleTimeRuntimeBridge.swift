@@ -22,33 +22,6 @@ enum LocaleTimeReconnectReadiness {
     }
 }
 
-enum LocaleTimeHostSettings {
-    static let suiteName = "io.apkrun"
-    static let changedNotification = Notification.Name("io.apkrun.system.localeTimeSettingsDidChange")
-
-    private enum Key {
-        static let syncLocale = "system.syncLocale"
-        static let syncTimeZone = "system.syncTimeZone"
-        static let syncClockFormat = "system.syncClockFormat"
-    }
-
-    static func current() -> LocaleTimeSyncSettings {
-        guard let defaults = UserDefaults(suiteName: suiteName) else {
-            return LocaleTimeSyncSettings()
-        }
-        defaults.register(defaults: [
-            Key.syncLocale: true,
-            Key.syncTimeZone: true,
-            Key.syncClockFormat: true,
-        ])
-        return LocaleTimeSyncSettings(
-            syncLocale: defaults.bool(forKey: Key.syncLocale),
-            syncTimeZone: defaults.bool(forKey: Key.syncTimeZone),
-            syncClockFormat: defaults.bool(forKey: Key.syncClockFormat)
-        )
-    }
-}
-
 struct DevelopmentGuestLocaleTimeChannel: LocaleTimeGuestChannel {
     private let agent: DevelopmentGuestAgent
 

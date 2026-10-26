@@ -1070,6 +1070,8 @@ extension StartRuntimeRequest: VersionedControlRequest {}
 extension StopRuntimeRequest: VersionedControlRequest {}
 extension RestartRuntimeRequest: VersionedControlRequest {}
 extension RuntimeResetControlRequest: VersionedControlRequest {}
+extension RuntimeConfigurationControlRequest: VersionedControlRequest {}
+extension RuntimeUpdateConfigurationControlRequest: VersionedControlRequest {}
 extension RuntimeListPackagesControlRequest: VersionedControlRequest {}
 extension RuntimePackageInfoControlRequest: VersionedControlRequest {}
 extension RuntimeLaunchControlRequest: VersionedControlRequest {}
@@ -1090,6 +1092,8 @@ enum RuntimeControlOperation {
     case stopRuntime
     case restartRuntime
     case resetRuntime
+    case configuration
+    case updateConfiguration
     case listPackages
     case packageInfo
     case launch
@@ -1111,6 +1115,13 @@ enum RuntimeControlOperation {
             case .app, .menuBar, .cli, .launcher:
                 true
             case .wrapper:
+                false
+            }
+        case .configuration, .updateConfiguration:
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
                 false
             }
         case .startRuntime, .stopRuntime, .restartRuntime, .resetRuntime,
@@ -1199,7 +1210,102 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 return
             }
             response.beginSnapshotBarrier()
-            response.send(Self.encode(RuntimeControlReply(status: await host.status())))
+            let status = await host.status()
+            if status.startupFailureCode == RuntimeHost.newerSettingsSchemaFailureCode {
+                response.send(
+                    Self.errorReply(
+                        for: RuntimeControlError(
+                            code: "runtime.hostStartupFailed",
+                            message: safeMessage(for: "runtime.hostStartupFailed")
+                        )
+                    )
+                )
+            } else {
+                response.send(Self.encode(RuntimeControlReply(status: status)))
+            }
+        }
+    }
+
+    func configuration(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply, snapshotBarrier: true)
+        let admission = connectionRegistry.beginRequest(on: connectionID, allowDuringShutdown: true)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeConfigurationControlReply(
+                        error: Self.wireError(for: Self.rejection(for: admission).controlError)
+                    )
+                )
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .configuration,
+                as: RuntimeConfigurationControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeConfigurationControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            response.beginSnapshotBarrier()
+            do {
+                response.send(
+                    Self.encode(
+                        RuntimeConfigurationControlReply(result: try await host.configuration())
+                    )
+                )
+            } catch {
+                response.send(
+                    Self.encode(
+                        RuntimeConfigurationControlReply(error: Self.configurationWireError(for: error))
+                    )
+                )
+            }
+        }
+    }
+
+    func updateConfiguration(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeUpdateConfigurationControlReply(
+                        error: Self.wireError(for: Self.rejection(for: admission).controlError)
+                    )
+                )
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .updateConfiguration,
+                as: RuntimeUpdateConfigurationControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeUpdateConfigurationControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimeUpdateConfigurationControlRequest.self, from: request)
+            else {
+                response.send(Self.encode(RuntimeUpdateConfigurationControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let result = try await host.updateConfiguration(decoded.patch)
+                response.send(Self.encode(RuntimeUpdateConfigurationControlReply(result: result)))
+            } catch {
+                response.send(
+                    Self.encode(
+                        RuntimeUpdateConfigurationControlReply(error: Self.configurationWireError(for: error))
+                    )
+                )
+            }
         }
     }
 
@@ -2020,7 +2126,10 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             case .alreadyStarted:
                 code = "runtime.internal"
             case .startupFailed(_, let startupCode):
-                code = startupCode.contains(".") ? startupCode : "runtime.hostStartupFailed"
+                code =
+                    startupCode == RuntimeHost.newerSettingsSchemaFailureCode
+                    ? "runtime.hostStartupFailed"
+                    : startupCode.contains(".") ? startupCode : "runtime.hostStartupFailed"
             case .crashLoopActive, .stateStore:
                 code = "runtime.hostStartupFailed"
             case .runtimeFailure(let failure):
@@ -2036,6 +2145,32 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             code = "runtime.internal"
         }
         return RuntimeControlError(code: code, message: safeMessage(for: code))
+    }
+
+    private static func configurationWireError(for error: any Error) -> RuntimeWireError {
+        if let hostError = error as? RuntimeHostError {
+            switch hostError {
+            case .startupFailed(_, _):
+                return .runtime("hostStartupFailed", message: safeMessage(for: "runtime.hostStartupFailed"))
+            case .runtimeFailure(.instanceLocked(owner: _)):
+                return .runtime("serviceUnavailable", message: safeMessage(for: "runtime.serviceUnavailable"))
+            default:
+                return .runtime("internal", message: safeMessage(for: "runtime.internal"))
+            }
+        }
+        if let storeError = error as? RuntimeConfigurationStoreError {
+            switch storeError {
+            case .unknownSetting:
+                return .runtime("unknownSetting", message: safeMessage(for: "runtime.unknownSetting"))
+            case .invalidSettingValue:
+                return .runtime("invalidSettingValue", message: safeMessage(for: "runtime.invalidSettingValue"))
+            case .unsupportedSchema:
+                return .runtime("hostStartupFailed", message: safeMessage(for: "runtime.hostStartupFailed"))
+            case .unreadable, .writeFailed:
+                return .runtime("internal", message: safeMessage(for: "runtime.internal"))
+            }
+        }
+        return .runtime("internal", message: safeMessage(for: "runtime.internal"))
     }
 
     private static func errorReply(for error: RuntimeControlError) -> Data {
@@ -2151,6 +2286,10 @@ private func safeMessage(for code: String) -> String {
         "APKRun's background service couldn't read the request."
     case "runtime.notAuthorized":
         "This part of APKRun isn't allowed to do that."
+    case "runtime.unknownSetting":
+        "APKRun doesn't recognize this setting."
+    case "runtime.invalidSettingValue":
+        "The setting value isn't valid."
     case "runtime.hostShuttingDown":
         "APKRun's background service is stopping. Try again in a moment."
     case "runtime.serviceUnavailable", "runtime.hostStartupFailed":

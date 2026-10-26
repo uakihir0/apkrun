@@ -64,6 +64,51 @@ def apkrun_variant(stock: Document) -> Document:
     return document
 
 
+def apkrun_guest_only_variant(stock: Document) -> Document:
+    document = apkrun_variant(stock)
+    document["requirements"]["agents"] = [
+        agent
+        for agent in document["requirements"]["agents"]
+        if agent["package"] == "io.apkrun.guest"
+    ]
+    return document
+
+
+def apkrun_composed_variant(stock: Document) -> Document:
+    """A development product image composed from a pinned CI image on the Mac."""
+    document = copy.deepcopy(stock)
+    document["kind"] = "apkrun"
+    document["provenance"]["revisions"]["guest"] = "f" * 40
+    document["provenance"]["composition"] = {
+        "schemaVersion": 1,
+        "sourceManifest": {
+            "path": "Images/manifests/16373615/android-image.json",
+            "sha256": "4" * 64,
+        },
+        "productInputs": [
+            {"path": "compose.json", "sha256": "5" * 64},
+            {"path": "init/apkrun.rc", "sha256": "6" * 64},
+        ],
+        "testOverlayInputs": [
+            {
+                "path": "Tests/Fixtures/AndroidImageProduct/compose.json",
+                "sha256": "8" * 64,
+            },
+            {
+                "path": "Tests/Fixtures/AndroidImageProduct/init/apkrun-test.rc",
+                "sha256": "9" * 64,
+            },
+        ],
+        "apkrunRevision": "7" * 40,
+    }
+    document["requirements"] = {
+        "minimumRuntimeVersion": "1.1.0",
+        "guestProtocol": {"min": 1, "max": 1},
+        "agents": [{"package": "io.apkrun.guest", "versionCode": 12}],
+    }
+    return document
+
+
 def userdata_at_the_bound(stock: Document) -> Document:
     """The userdata integers at 2^63 - 1, the largest value that every reader holds exactly."""
     document = copy.deepcopy(stock)
@@ -177,6 +222,13 @@ def _stock_agent(d: Document) -> None:
     d["requirements"]["agents"] = [{"package": "io.apkrun.guest", "versionCode": 12}]
 
 
+def _apkrun_missing_guest(d: Document) -> None:
+    product = apkrun_variant(d)
+    d.clear()
+    d.update(product)
+    d["requirements"]["agents"] = [{"package": "io.apkrun.store", "versionCode": 12}]
+
+
 def _userdata_not_contained(d: Document) -> None:
     d["userdata"] = {"schemaVersion": 2, "upgradableFrom": [1]}
 
@@ -187,6 +239,39 @@ def _minimum_above_image(d: Document) -> None:
 
 def _stock_guest_revision(d: Document) -> None:
     d["provenance"]["revisions"]["guest"] = "a" * 40
+
+
+def _composed_with_builder_pin(d: Document) -> None:
+    product = apkrun_composed_variant(d)
+    product["provenance"]["builderImageDigest"] = "sha256:" + "3" * 64
+    d.clear()
+    d.update(product)
+
+
+def _composed_unsorted_product_inputs(d: Document) -> None:
+    product = apkrun_composed_variant(d)
+    product["provenance"]["composition"]["productInputs"].reverse()
+    d.clear()
+    d.update(product)
+
+
+def _composed_unsorted_test_overlay_inputs(d: Document) -> None:
+    product = apkrun_composed_variant(d)
+    product["provenance"]["composition"]["testOverlayInputs"].reverse()
+    d.clear()
+    d.update(product)
+
+
+def _composed_duplicate_test_overlay_input(d: Document) -> None:
+    product = apkrun_composed_variant(d)
+    inputs = product["provenance"]["composition"]["testOverlayInputs"]
+    inputs.append(copy.deepcopy(inputs[0]))
+    d.clear()
+    d.update(product)
+
+
+def _null_composition(d: Document) -> None:
+    d["provenance"]["composition"] = None
 
 
 def _sdk_mismatch(d: Document) -> None:
@@ -245,14 +330,20 @@ INVALID_CASES: tuple[tuple[str, str, Callable[[Document], None]], ...] = (
     ("s8-override-not-in-profile", "S8", _unknown_override),
     ("s9-protocol-range-reversed", "S9", _protocol_range),
     ("s10-stock-with-agent", "S10", _stock_agent),
+    ("s10-apkrun-without-guest", "S10", _apkrun_missing_guest),
     ("s11-upgradable-without-schema", "S11", _userdata_not_contained),
     ("s12-minimum-above-image", "S12", _minimum_above_image),
     ("s13-stock-with-guest-revision", "S13", _stock_guest_revision),
+    ("s13-composed-with-builder-pin", "S13", _composed_with_builder_pin),
+    ("s13-composed-unsorted-product-inputs", "S13", _composed_unsorted_product_inputs),
+    ("s13-composed-unsorted-test-overlay-inputs", "S13", _composed_unsorted_test_overlay_inputs),
+    ("s13-composed-duplicate-test-overlay-input", "S13", _composed_duplicate_test_overlay_input),
     ("s14-sdk-mismatch", "S14", _sdk_mismatch),
     ("s14-target-sdk-floor", "S14", _sdk_floor),
     ("schema-trailing-line-break", "schema", _trailing_line_break),
     ("schema-legal-null", "schema", _legal_null),
     ("schema-userdata-strategy-null", "schema", _strategy_null),
+    ("schema-null-composition", "schema", _null_composition),
     ("s5-first-lba-beyond-the-disk", "S5", _first_lba_overflow),
     ("schema-userdata-version-beyond-int64", "schema", _userdata_beyond_int64),
     ("schema-upgradable-version-beyond-int64", "schema", _upgradable_beyond_int64),
@@ -270,6 +361,8 @@ def main() -> int:
     write_json(VALID / "stock-cf16373615.json", stock)
     write_json(VALID / "stock-with-legal-notice.json", with_legal(stock))
     write_json(VALID / "apkrun-ar000123.json", apkrun_variant(stock))
+    write_json(VALID / "apkrun-guest-only.json", apkrun_guest_only_variant(stock))
+    write_json(VALID / "apkrun-composed-cf16373615.json", apkrun_composed_variant(stock))
     write_json(VALID / "userdata-at-int64-maximum.json", userdata_at_the_bound(stock))
     for name, rule, mutate in INVALID_CASES:
         document = copy.deepcopy(stock)
@@ -284,7 +377,7 @@ def main() -> int:
     (INVALID / "schema-repeated-key.expected.txt").write_text("schema\n", encoding="ascii")
     (INVALID / "schema-byte-order-mark.json").write_bytes(b"\xef\xbb\xbf" + text.encode("utf-8"))
     (INVALID / "schema-byte-order-mark.expected.txt").write_text("schema\n", encoding="ascii")
-    print(f"wrote {len(INVALID_CASES) + 2} invalid and 4 valid manifest fixtures")
+    print(f"wrote {len(INVALID_CASES) + 2} invalid and 6 valid manifest fixtures")
     return 0
 
 

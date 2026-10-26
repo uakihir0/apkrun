@@ -34,7 +34,7 @@ class LaunchServiceTest {
                         forceStopPackage = { packageName, userId ->
                             forceStops += packageName to userId
                             remainingTasks.removeAll { it.getPackage() == packageName }
-                        },
+                        }
                     ),
             )
 
@@ -42,7 +42,7 @@ class LaunchServiceTest {
             StopApplication.newBuilder()
                 .setPackage(TARGET_PACKAGE)
                 .setMode(StopMode.STOP_MODE_FORCE_STOP)
-                .build(),
+                .build()
         )
 
         assertEquals(listOf(TARGET_PACKAGE to 0), forceStops)

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "source": "init/apkrun-test.rc",
+      "destination": "/system_ext/etc/init/apkrun-test.rc",
+      "kind": "regular file",
+      "mode": "0644",
+      "owner": {
+        "uid": 0,
+        "gid": 0
+      },
+      "label": "u:object_r:system_file:s0"
+    }
+  ]
+}

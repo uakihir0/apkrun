@@ -34,7 +34,7 @@ This document lists every functional (`FR-*`) and non-functional (`NFR-*`) requi
 | FR-IMG-02 | Describe an image set with `AndroidImageManifest` (no hard-coded file names) | Must | 0.1 | #10 |
 | FR-IMG-03 | Extract kernel and ramdisk from boot / init_boot / vendor_boot and assemble bootconfig, never modifying originals | Must | 0.1 | #11 |
 | FR-IMG-04 | Map partitions to virtio-blk devices in a data-driven way | Must | 0.1 | #12 |
-| FR-IMG-05 | Build the APKRun AOSP product reproducibly on a Linux builder | Must | 0.3 | #36 |
+| FR-IMG-05 | Build the release APKRun image reproducibly from source, signed with APKRun's keys | Must | 1.0 | #120 |
 | FR-IMG-06 | Version runtime images; migrate A → B keeping userdata; return to A on failure | Must | 0.5 | #59, #88 |
 
 ### 1.3 Graphics and display (FR-GFX, FR-DSP)

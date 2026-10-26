@@ -69,6 +69,50 @@
       }
     },
     {
+      "id" : "0F4AFC2E-3F03-4E56-9C1F-003003003036",
+      "name" : "AndroidCustom",
+      "options" : {
+        "environmentVariableEntries" : [
+          {
+            "key" : "APKRUN_INTEGRATION_SUITE",
+            "value" : "android-custom",
+            "enabled" : true
+          },
+          {
+            "key" : "APKRUN_CI",
+            "value" : "1",
+            "enabled" : true
+          },
+          {
+            "key" : "APKRUN_VIRGL_RUNTIME_PATH",
+            "value" : "/tmp/apkrun-test-linux/virgl-runtime",
+            "enabled" : true
+          },
+          {
+            "key" : "APKRUN_TEST_ANDROID_BUNDLE",
+            "value" : "/tmp/apkrun-test-linux/android-custom-bundle",
+            "enabled" : true
+          },
+          {
+            "key" : "APKRUN_FIXTURE_PROBE_APK",
+            "value" : "/tmp/apkrun-test-fixtures/HelloProbe.apk",
+            "enabled" : true
+          },
+          {
+            "key" : "APKRUN_SYSTEM_SERVICES_TEST_APK",
+            "value" : "/tmp/apkrun-test-fixtures/SystemServicesTest.apk",
+            "enabled" : true
+          },
+          {
+            "key" : "APKRUN_TEST_ADB_PORT",
+            "value" : "6520",
+            "enabled" : true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance" : 1800
+      }
+    },
+    {
       "id" : "0F4AFC2E-3F03-4E56-9C1F-003003003007",
       "name" : "AndroidNetwork",
       "options" : {
@@ -125,6 +169,40 @@
           {
             "key": "APKRUN_GUEST_OTHER_DIR",
             "value": "/tmp/apkrun-test-guest-1001",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_FIXTURE_APK",
+            "value": "/tmp/apkrun-test-fixtures/HelloText.apk",
+            "enabled": true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance": 1800
+      }
+    },
+    {
+      "id": "0F4AFC2E-3F03-4E56-9C1F-003003003016",
+      "name": "AndroidGuestProtocolLaunch",
+      "options": {
+        "environmentVariableEntries": [
+          {
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "android-guest-protocol-launch",
+            "enabled": true
+          },
+          {
+            "key": "ANDROID_ADB_SERVER_PORT",
+            "value": "15045",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_VIRGL_RUNTIME_PATH",
+            "value": "/tmp/apkrun-test-linux/virgl-runtime",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_GUEST_DIR",
+            "value": "/tmp/apkrun-test-guest",
             "enabled": true
           },
           {

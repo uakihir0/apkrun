@@ -1,7 +1,6 @@
 import CoreGraphics
 import DiagnosticsCore
 import Foundation
-import GraphicsCore
 import GuestProtocol
 import RuntimeAPI
 import RuntimeCore

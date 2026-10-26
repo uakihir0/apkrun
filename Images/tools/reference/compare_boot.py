@@ -1025,16 +1025,23 @@ def compare_captures(
     expected_path: Path | None = None,
     report_directory: Path | None = None,
     rules_path: Path = RULES_PATH,
+    require_complete_reference: bool = False,
 ) -> int:
     """Compare ten documented boot categories and write JSON/text reports."""
     if not reference.is_dir():
         raise CaptureToolError(f"reference capture directory does not exist: {reference}")
     if not candidate.is_dir():
         raise CaptureToolError(f"candidate capture directory does not exist: {candidate}")
+    if require_complete_reference and (reference / "MISSING.txt").exists():
+        raise CaptureToolError(f"reference capture is incomplete: {reference / 'MISSING.txt'}")
     expected_file = expected_path or reference.parent / "expected-differences.yaml"
     expected = _load_expected_differences(expected_file)
     substitutions = _load_substitutions(rules_path)
     differences, stale, not_compared = _compare(reference, candidate, expected, substitutions)
+    if require_complete_reference and not_compared:
+        raise CaptureToolError(
+            "reference capture has no booted data for: " + ", ".join(sorted(not_compared))
+        )
     output_directory = report_directory or candidate
     _write_report(output_directory, reference, candidate, differences, stale, not_compared)
     for category in not_compared:
@@ -1240,6 +1247,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rules", type=Path, default=RULES_PATH, help="normalization rules file")
     parser.add_argument("--expected", type=Path, help="expected-differences YAML subset")
     parser.add_argument("--report-dir", type=Path, help="directory for report.json and report.txt")
+    parser.add_argument(
+        "--require-complete-reference",
+        action="store_true",
+        help="fail if the reference is incomplete or omits a booted-data category",
+    )
     return parser
 
 
@@ -1292,6 +1304,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             expected_path=arguments.expected,
             report_directory=arguments.report_dir,
             rules_path=arguments.rules,
+            require_complete_reference=arguments.require_complete_reference,
         )
     except CaptureToolError as error:
         print(f"error: {error}", file=sys.stderr)

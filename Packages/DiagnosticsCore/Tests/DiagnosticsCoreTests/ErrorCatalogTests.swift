@@ -28,7 +28,7 @@ import Testing
             ].map { "cli.\($0)" }
             + [
                 "instanceLocked", "instanceLockFailed", "hostShuttingDown", "hostStartupFailed",
-                "serviceUnavailable", "apiVersionMismatch", "operationResultUnknown",
+                "serviceUnavailable", "apiVersionMismatch", "operationNotFound", "operationResultUnknown",
                 "requestTimedOut", "cancelled", "notAuthorized", "malformedRequest",
                 "internal", "devLinuxTimedOut",
                 "devLinuxInvalidOptions", "devLinuxArtifactDirectoryMustBeAbsolute",

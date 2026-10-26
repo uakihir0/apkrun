@@ -216,7 +216,7 @@ Answer every comment: change the code, or explain why not. `fixup!` commits are 
 
 ### 7.1 When a pull request may merge
 
-1. Every required CI check passes: `workflow-policy` and every job of `ci.yml` (`lint`, `codegen`, `third-party`, `build`, `test-swift`, `test-graphics`, `test-images`).
+1. Every required CI check passes: `workflow-policy` and every job of `ci.yml` (`lint`, `test-vsockd`, `codegen`, `third-party`, `build`, `test-swift`, `test-graphics`, `test-images`).
 2. A pull request that closes a task links the results of every T2 suite the task lists, run on a real Mac.
 3. A person approved it, and the security review is done where §6.3 requires it.
 4. The branch is rebased on the current `main`.

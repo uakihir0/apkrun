@@ -21,6 +21,7 @@ These terms have exactly these meanings in the documents and the code. A design 
 | **Guest Agent / `apkrun_guestd`** | Control agent inside Android: display launch and stop, package query, **input injection** (the only input path for app displays), IME, clipboard, notifications, display lifecycle, health. |
 | **Store Agent / `io.apkrun.store`** | Privileged Android app that installs, updates, and uninstalls through `PackageInstaller`. It is the installer of record and the update owner. |
 | **APKRun AOSP product** | The custom Android build: a device and product definition that inherits from Cuttlefish arm64. |
+| **Composed image** | The development custom image: the stock Cuttlefish build with the APKRun product files added on the Mac (ADR-0019). Never published. |
 | **Runtime image** | A versioned, ready-to-boot bundle (kernel, initrd, disk images, manifest) that the Mac runtime consumes. |
 
 ## Architecture

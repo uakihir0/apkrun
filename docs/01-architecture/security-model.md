@@ -69,9 +69,10 @@ Bridged networking (`com.apple.vm.networking`) is a restricted entitlement and i
 
 | Control | Detail |
 |---|---|
-| Agent identities | `io.apkrun.guest` and `io.apkrun.store` are platform-signed on the custom image. Their SELinux domains are `apkrun_guest_app` and `apkrun_store_app`, assigned through `seapp_contexts` by package name and signing seinfo (`platform`). |
+| Agent identities | `io.apkrun.guest` is platform-signed in the #36 composed image; #37 adds `io.apkrun.store`. Their SELinux domains are `apkrun_guest_app` and `apkrun_store_app`, assigned through `seapp_contexts` by package name and signing seinfo (`platform`). |
 | vsock | Only `apkrun_vsockd` (and adbd when developer mode is on) may use vsock. Third-party apps cannot reach the host except through normal NAT networking. |
 | Agent sockets | Abstract Unix sockets. Only `apkrun_vsockd` may `connectto` (SELinux), plus a `SO_PEERCRED` uid check. |
+| Agent socket MCS labels | Agent processes retain `levelFrom=all`. `apkrun_vsockd` is an MLS trusted subject, which bypasses MLS checks for every constrained class it uses, not just `connectto`. Android 17's inherited `domain` grants let it search/read generic `/proc` directories and read `/proc` symlinks across app MCS categories, exposing process metadata. The captured policy audit found no effective allow to ordinary app-data types or arbitrary app IPC. Re-audit the effective TE closure, including inherited `coredomain` rules, whenever the Android base policy changes. |
 | Privileged operations | Input injection (`INJECT_EVENTS`), launching on any display (`INTERNAL_SYSTEM_WINDOW`), install without user action (`INSTALL_PACKAGES`), update ownership (`ENFORCE_UPDATE_OWNERSHIP`), per-package microphone gating (`MANAGE_APP_OPS_MODES`), and the package names of active recordings (`MODIFY_AUDIO_ROUTING`). They are granted through `privapp-permissions-apkrun.xml`, and only to the agents that need them. Full list: [guest-components.md](../02-design/guest-components.md) §5. |
 | Developer mode | ADB (`adbd` on vsock 5555) is off by default on production images. Turning it on requires user action in APKRun settings, and the menu bar shows it. |
 | Development images | Stock Cuttlefish `userdebug` images have ADB on and are unlocked (`verifiedbootstate=orange`). They are for development only. `apkrun doctor` warns if one is used as the user's runtime. |
@@ -117,6 +118,7 @@ Clipboard, notification, and file contents never appear in logs or diagnostics b
 | Sparkle EdDSA private key | Offline and CI secret | Signs APKRun update archives and the appcast. Never rotate together with the Developer ID certificate in the same release (release rule R6). A new key ships in a release signed with the old key ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §10). |
 | Runtime image signing key (Ed25519, for image manifests and the image feed) | Offline and CI secret | Key ID in the manifest and in `feed.json.sig`. The app trusts a list of key IDs (`ImageTrustStore`). A compromised key ID is removed in an APKRun release. |
 | AOSP platform and release keys for the custom image | Offline, on the image build machine only | Changing them breaks platform-signed agent updates. Treat as permanent. |
+| Public AOSP test platform signing pair | `Tests/Fixtures/signing/aosp-test-platform.pk8` and `.x509.pem` | Used only for the local composed development image (#36); never for release images or ordinary APKs |
 | Test keys | `Tests/Fixtures/signing/` (named `test-*`) | Never used for anything shipped |
 
 ## 8. Threats and mitigations

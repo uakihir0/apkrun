@@ -16,21 +16,7 @@ struct AndroidBootFixture {
 
     /// The unsigned development bundle. It is skipped locally and fails on CI when it is missing.
     static func bundleDirectory() throws -> URL {
-        let configured =
-            ProcessInfo.processInfo.environment["APKRUN_TEST_LINUX_DIR"]
-            ?? Bundle.main.object(forInfoDictionaryKey: "APKRUN_TEST_LINUX_DIR") as? String
-        let rootPath = configured.flatMap { $0.isEmpty ? nil : $0 } ?? "/tmp/apkrun-test-linux"
-        let bundle = URL(fileURLWithPath: rootPath).appendingPathComponent("android-bundle", isDirectory: true)
-        guard FileManager.default.fileExists(atPath: bundle.appendingPathComponent("manifest.json").path) else {
-            let message = "The Android bundle is missing. Run scripts/build-test-android-bundle.sh."
-            if ProcessInfo.processInfo.environment["APKRUN_CI"] == "1"
-                || Bundle.main.object(forInfoDictionaryKey: "APKRUN_CI") as? String == "1"
-            {
-                XCTFail(message)
-            }
-            throw XCTSkip(message)
-        }
-        return bundle
+        try AndroidTestBundleLocator.bundleDirectory()
     }
 
     /// Creates a fixture with a fresh private home and the image in `bundle`.

@@ -186,6 +186,30 @@ def test_identical_captures_pass(tmp_path: Path) -> None:
     assert report["differenceCount"] == 0
 
 
+def test_complete_reference_mode_rejects_an_incomplete_capture(tmp_path: Path) -> None:
+    reference = tmp_path / "reference"
+    candidate = tmp_path / "candidate"
+    _seed_category_files(reference, candidate)
+    (reference / "MISSING.txt").write_text("guest did not boot\n", encoding="utf-8")
+
+    result = _run("--require-complete-reference", str(reference), str(candidate))
+
+    assert result.returncode == 2
+    assert "reference capture is incomplete" in result.stderr
+
+
+def test_complete_reference_mode_rejects_omitted_booted_categories(tmp_path: Path) -> None:
+    reference = tmp_path / "reference"
+    candidate = tmp_path / "candidate"
+    _seed_category_files(reference, candidate)
+    (reference / "properties.txt").unlink()
+
+    result = _run("--require-complete-reference", str(reference), str(candidate))
+
+    assert result.returncode == 2
+    assert "reference capture has no booted data for: props" in result.stderr
+
+
 def test_comparison_redacts_private_keys_without_modifying_captures(tmp_path: Path) -> None:
     reference = tmp_path / "reference"
     candidate = tmp_path / "candidate"

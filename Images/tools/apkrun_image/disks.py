@@ -86,6 +86,7 @@ class _PlannedPartition:
     label: str
     source: str
     artifact: Mapping[str, Any] | None
+    override_path: Path | None
     sparse: bool
     size: int
     first_lba: int
@@ -119,10 +120,19 @@ def _artifact_by_partition(document: Mapping[str, Any]) -> dict[str, Mapping[str
     return by_partition
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(COPY_CHUNK_SIZE):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _plan(
     document: Mapping[str, Any],
     layout: Layout,
     open_artifact: ArtifactOpener,
+    artifact_overrides: Mapping[str, Path] | None = None,
 ) -> tuple[_PlannedDisk, ...]:
     artifacts = _artifact_by_partition(document)
     blank_entries = document.get("blankPartitions")
@@ -141,6 +151,21 @@ def _plan(
         planned: list[_PlannedPartition] = []
         for partition in disk.partitions:
             artifact = None if partition.blank else artifacts.get(partition.source)
+            override_path = (
+                artifact_overrides.get(partition.source)
+                if artifact is not None and artifact_overrides is not None
+                else None
+            )
+            if artifact is not None and override_path is not None:
+                override_record = dict(artifact)
+                try:
+                    override_record["size"] = override_path.stat(follow_symlinks=False).st_size
+                    override_record["sha256"] = _sha256_file(override_path)
+                except OSError as error:
+                    raise DisksError(
+                        f"{override_path}: cannot read composition override: {error}"
+                    ) from None
+                artifact = override_record
             sparse = artifact is not None and artifact.get("kind") == "sparse"
             if partition.size is not None:
                 size = partition.size
@@ -152,7 +177,12 @@ def _plan(
                     )
                 size = int(blank_sizes[partition.source])
             elif sparse:
-                with open_artifact(artifact) as stream:
+                source = (
+                    override_path.open("rb")
+                    if override_path is not None
+                    else open_artifact(artifact)
+                )
+                with source as stream:
                     size = read_header(stream).logical_size
             else:
                 size = int(artifact["size"])
@@ -166,6 +196,7 @@ def _plan(
                     label=partition.label,
                     source=partition.source,
                     artifact=artifact,
+                    override_path=override_path,
                     sparse=sparse,
                     size=size,
                     first_lba=cursor // SECTOR_SIZE,
@@ -174,6 +205,16 @@ def _plan(
             cursor = _align_up(cursor + size, ALIGNMENT)
         planned_disks.append(
             _PlannedDisk(disk=disk, size=cursor + ALIGNMENT, partitions=tuple(planned))
+        )
+    unused_overrides = set(artifact_overrides or {}) - {
+        partition.source
+        for disk in layout.disks
+        for partition in disk.partitions
+        if not partition.blank
+    }
+    if unused_overrides:
+        raise DisksError(
+            f'composition override "{sorted(unused_overrides)[0]}" is not used by the layout.'
         )
     return tuple(planned_disks)
 
@@ -217,7 +258,12 @@ def _write_disk(
             offset = partition.first_lba * SECTOR_SIZE
             artifact = partition.artifact
             if artifact is not None:
-                with open_artifact(artifact) as stream:
+                source = (
+                    partition.override_path.open("rb")
+                    if partition.override_path is not None
+                    else open_artifact(artifact)
+                )
+                with source as stream:
                     reader = _HashingReader(stream)
                     if partition.sparse:
                         expand_into(reader, out, offset)  # type: ignore[arg-type]
@@ -269,6 +315,7 @@ def build_disks(
     image_version: str | None = None,
     source: Path | None = None,
     inventory_path: Path | None = None,
+    artifact_overrides: Mapping[str, Path] | None = None,
 ) -> dict[str, object]:
     """Validate the inputs and write every layout disk plus `disks.json`."""
     failures = validate_manifest(
@@ -291,7 +338,20 @@ def build_disks(
     def open_artifact(artifact: Mapping[str, Any]) -> AbstractContextManager[BinaryIO]:
         return _open_artifact(document, source_root, archive_paths, artifact)
 
-    plan = _plan(document, layout, open_artifact)
+    artifact_records = _artifact_by_partition(document)
+    overrides = dict(artifact_overrides or {})
+    if set(overrides) - set(artifact_records):
+        unknown = sorted(set(overrides) - set(artifact_records))[0]
+        raise DisksError(f'composition override "{unknown}" is not a manifest partition.')
+    for partition, path in overrides.items():
+        if (
+            not isinstance(partition, str)
+            or not isinstance(path, Path)
+            or path.is_symlink()
+            or not path.is_file()
+        ):
+            raise DisksError(f"{path}: composition overrides must be regular, non-symlink files.")
+    plan = _plan(document, layout, open_artifact, overrides)
 
     output_directory = output_directory.expanduser()
     if output_directory.is_symlink():

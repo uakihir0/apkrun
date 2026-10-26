@@ -97,8 +97,17 @@ def semantic_violations(document: Mapping[str, Any]) -> list[Violation]:
     if base != expected_base:
         fail("S1", "/imageVersion", f"base {base} must be {expected_base}")
 
-    if (document["kind"] == "stock") != (origin == "ci.android.com"):
-        fail("S2", "/kind", "kind is stock exactly when the origin is ci.android.com")
+    composition = document["provenance"].get("composition")
+    if origin == "ci.android.com":
+        expected_kind = "apkrun" if composition is not None else "stock"
+    else:
+        expected_kind = "apkrun" if composition is None else None
+    if document["kind"] != expected_kind:
+        fail(
+            "S2",
+            "/kind",
+            "kind must match the CI source and composition",
+        )
 
     files = _files_by_path(document)
     named: dict[str, tuple[int, str | None]] = {}
@@ -173,8 +182,8 @@ def semantic_violations(document: Mapping[str, Any]) -> list[Violation]:
     agents = [agent["package"] for agent in document["requirements"]["agents"]]
     if document["kind"] == "stock" and agents:
         fail("S10", "/requirements/agents", "a stock image has no agents")
-    if document["kind"] == "apkrun" and not {"io.apkrun.guest", "io.apkrun.store"} <= set(agents):
-        fail("S10", "/requirements/agents", "an apkrun image lists the guest and store agents")
+    if document["kind"] == "apkrun" and "io.apkrun.guest" not in agents:
+        fail("S10", "/requirements/agents", "an apkrun image lists the guest agent")
     if len(set(agents)) != len(agents):
         fail("S10", "/requirements/agents", "agent packages must be unique")
 
@@ -188,15 +197,53 @@ def semantic_violations(document: Mapping[str, Any]) -> list[Violation]:
         fail("S12", "/compatibility/upgradeFrom/minimumImageVersion", "above this image")
 
     provenance = document["provenance"]
-    revisions = [
-        provenance["revisions"]["guest"],
-        provenance["pinnedManifestSHA256"],
-        provenance["builderImageDigest"],
-    ]
-    if document["kind"] == "apkrun" and any(value is None for value in revisions):
-        fail("S13", "/provenance", "an apkrun image records the guest revision and pins")
-    if document["kind"] == "stock" and any(value is not None for value in revisions):
-        fail("S13", "/provenance", "a stock image records no guest revision or pins")
+    guest_revision = provenance["revisions"]["guest"]
+    pins = [provenance["pinnedManifestSHA256"], provenance["builderImageDigest"]]
+    if composition is not None:
+        input_paths = [entry["path"] for entry in composition["productInputs"]]
+        if input_paths != sorted(input_paths, key=lambda text: text.encode("utf-8")) or len(
+            set(input_paths)
+        ) != len(input_paths):
+            fail(
+                "S13",
+                "/provenance/composition/productInputs",
+                "composition product inputs must be sorted by path with no duplicates",
+            )
+        test_overlay_inputs = composition.get("testOverlayInputs")
+        if test_overlay_inputs is not None:
+            test_input_paths = [entry["path"] for entry in test_overlay_inputs]
+            if test_input_paths != sorted(
+                test_input_paths, key=lambda text: text.encode("utf-8")
+            ) or len(set(test_input_paths)) != len(test_input_paths):
+                fail(
+                    "S13",
+                    "/provenance/composition/testOverlayInputs",
+                    "test overlay inputs must be sorted by path with no duplicates",
+                )
+    if document["kind"] == "apkrun" and composition is not None:
+        if guest_revision is None or any(value is not None for value in pins):
+            fail(
+                "S13",
+                "/provenance",
+                "a composed image records guest revision and composition without builder pins",
+            )
+    elif document["kind"] == "apkrun":
+        if guest_revision is None or any(value is None for value in pins):
+            fail(
+                "S13",
+                "/provenance",
+                "a builder image records guest revision and both builder pins",
+            )
+    elif (
+        guest_revision is not None
+        or any(value is not None for value in pins)
+        or composition is not None
+    ):
+        fail(
+            "S13",
+            "/provenance",
+            "a stock image has no guest revision, builder pins, or composition",
+        )
 
     android_sdk = provenance["android"]["sdk"]
     if document["guest"]["sdk"] != android_sdk:

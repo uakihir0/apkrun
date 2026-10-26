@@ -11,16 +11,23 @@ private actor FakeAndroidVM {
     private(set) var requestCount = 0
     private(set) var forceCount = 0
     private(set) var forcedAt: ContinuousClock.Instant?
+    private(set) var requestReturnedAt: ContinuousClock.Instant?
     private var requestedAt: ContinuousClock.Instant?
     private let powerOffDelay: Duration?
+    private let requestDelay: Duration
 
-    init(powerOffDelay: Duration?) {
+    init(powerOffDelay: Duration?, requestDelay: Duration = .zero) {
         self.powerOffDelay = powerOffDelay
+        self.requestDelay = requestDelay
     }
 
-    func requestPowerOff() -> Bool {
+    func requestPowerOff() async -> Bool {
         requestCount += 1
         requestedAt = ContinuousClock.now
+        if requestDelay > .zero {
+            try? await Task.sleep(for: requestDelay)
+        }
+        requestReturnedAt = ContinuousClock.now
         return true
     }
 
@@ -76,7 +83,7 @@ func aCancelledStopStillWaitsOutTheDeadline() async throws {
     }
     try await Task.sleep(for: .milliseconds(100))
     stop.cancel()
-    await stop.value
+    _ = await stop.value
 
     #expect(await vm.forceCount == 1)
     let forcedAt = try #require(await vm.forcedAt)
@@ -136,6 +143,25 @@ func aPowerOffThatWasNotSentForcesAtOnce() async {
     #expect(ContinuousClock.now - started < .seconds(5))
 }
 
+/// Time spent waiting for the Guest Protocol reply does not reduce Android's post-request shutdown grace period.
+@Test(.timeLimit(.minutes(1)))
+func thePowerOffDeadlineStartsAfterTheRequestReturns() async throws {
+    let deadline = Duration.milliseconds(300)
+    let vm = FakeAndroidVM(powerOffDelay: nil, requestDelay: .milliseconds(400))
+
+    await AndroidStopSequence(deadline: deadline).run(
+        requestPowerOff: { await vm.requestPowerOff() },
+        isStopped: { await vm.isStopped() },
+        forceStop: { await vm.forceStop() }
+    )
+
+    let requestReturnedAt = try #require(await vm.requestReturnedAt)
+    let forcedAt = try #require(await vm.forcedAt)
+    #expect(forcedAt - requestReturnedAt >= deadline)
+    #expect(forcedAt - requestReturnedAt < deadline + .seconds(5))
+    #expect(await vm.forceCount == 1)
+}
+
 /// The production deadline is the 20 s of vm.md §9.3, and a sequence made without a deadline uses it.
 @Test
 func theStandardStopDeadlineIsTwentySeconds() {
@@ -158,6 +184,7 @@ private actor ChannelRecorder {
 func aPowerOffAcceptedByADBIsNotSentAgainOverTheShell() async {
     let recorder = ChannelRecorder()
     let tried = await AndroidStopSequence.sendPowerOff(
+        guestAttempt: nil,
         overADB: { await recorder.attempt("adb", succeeds: true) },
         overShell: { await recorder.attempt("shell", succeeds: true) }
     )
@@ -170,6 +197,7 @@ func aPowerOffAcceptedByADBIsNotSentAgainOverTheShell() async {
 func aFailedADBRequestFallsBackToTheShell() async {
     let recorder = ChannelRecorder()
     let tried = await AndroidStopSequence.sendPowerOff(
+        guestAttempt: nil,
         overADB: { await recorder.attempt("adb", succeeds: false) },
         overShell: { await recorder.attempt("shell", succeeds: true) }
     )
@@ -183,6 +211,7 @@ func aFailedADBRequestFallsBackToTheShell() async {
 func aFailedADBRequestWithoutAShellStillCountsAsTried() async {
     let recorder = ChannelRecorder()
     let tried = await AndroidStopSequence.sendPowerOff(
+        guestAttempt: nil,
         overADB: { await recorder.attempt("adb", succeeds: false) },
         overShell: nil
     )
@@ -195,6 +224,7 @@ func aFailedADBRequestWithoutAShellStillCountsAsTried() async {
 func aRequestThatFailedOnEveryChannelStillCountsAsTried() async {
     let recorder = ChannelRecorder()
     let tried = await AndroidStopSequence.sendPowerOff(
+        guestAttempt: nil,
         overADB: { await recorder.attempt("adb", succeeds: false) },
         overShell: { await recorder.attempt("shell", succeeds: false) }
     )
@@ -205,6 +235,66 @@ func aRequestThatFailedOnEveryChannelStillCountsAsTried() async {
 /// With neither channel there is nothing to send, so the request is not tried and the stop does not wait.
 @Test
 func aPowerOffWithNoChannelIsNotTried() async {
-    let tried = await AndroidStopSequence.sendPowerOff(overADB: nil, overShell: nil)
+    let tried = await AndroidStopSequence.sendPowerOff(guestAttempt: nil, overADB: nil, overShell: nil)
     #expect(!tried)
+}
+
+/// An acknowledged Guest Protocol shutdown is not repeated through ADB or the serial shell.
+@Test
+func anAcceptedGuestShutdownIsNotSentAgain() async {
+    let recorder = ChannelRecorder()
+    let tried = await AndroidStopSequence.sendPowerOff(
+        guestAttempt: .accepted,
+        overADB: { await recorder.attempt("adb", succeeds: true) },
+        overShell: { await recorder.attempt("shell", succeeds: true) }
+    )
+    #expect(tried)
+    #expect(await recorder.calls.isEmpty)
+}
+
+/// A lost reply may hide a running shutdown, so the host waits instead of resending it.
+@Test
+func anUncertainGuestShutdownIsNotSentAgain() async {
+    let recorder = ChannelRecorder()
+    let tried = await AndroidStopSequence.sendPowerOff(
+        guestAttempt: .uncertain,
+        overADB: { await recorder.attempt("adb", succeeds: true) },
+        overShell: { await recorder.attempt("shell", succeeds: true) }
+    )
+    #expect(tried)
+    #expect(await recorder.calls.isEmpty)
+}
+
+/// A definite Guest Protocol rejection allows the developer-only ADB fallback.
+@Test
+func aRejectedGuestShutdownFallsBackToADB() async {
+    let recorder = ChannelRecorder()
+    let tried = await AndroidStopSequence.sendPowerOff(
+        guestAttempt: .rejected,
+        overADB: { await recorder.attempt("adb", succeeds: true) },
+        overShell: { await recorder.attempt("shell", succeeds: true) }
+    )
+    #expect(tried)
+    #expect(await recorder.calls == ["adb"])
+}
+
+@Test
+func shutdownFallbackClassificationDoesNotResendAfterAnAmbiguousReply() {
+    #expect(
+        GuestAgentFailure.operationFailed(reason: "timeout.Shutdown").shutdownAttempt == .uncertain
+    )
+    #expect(
+        GuestAgentFailure.operationFailed(reason: "disconnected").shutdownAttempt == .uncertain
+    )
+}
+
+@Test
+func shutdownFallbackClassificationAllowsOnlyDefiniteFailuresToUseADB() {
+    #expect(
+        GuestAgentFailure.operationFailed(reason: "capabilityMissing.shutdown.v1").shutdownAttempt == .rejected
+    )
+    #expect(
+        GuestAgentFailure.operationFailed(reason: "remote.Shutdown.unsupported").shutdownAttempt == .rejected
+    )
+    #expect(GuestAgentFailure.stopped.shutdownAttempt == .rejected)
 }

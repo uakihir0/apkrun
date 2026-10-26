@@ -31,7 +31,6 @@ is_exempt() {
     # Product code owns the rule; integration tests and experiments intentionally exercise raw ADB,
     # while generated protobuf comments are not executable source.
     case "$1" in
-        Packages/RuntimeHost/Sources/RuntimeHost/ADBStoreAgentChannel.swift|\
         Packages/RuntimeCore/Sources/RuntimeCore/Android/AdbClient.swift|\
         Packages/GuestProtocol/Sources/GuestProtocol/Generated/*|\
         scripts/dev/*|\

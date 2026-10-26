@@ -15,6 +15,7 @@ Guest/build/
 Guest/**/build/
 Guest/.gradle/
 Guest/product/mesa/prebuilt/
+Guest/product/prebuilt/
 Guest/product/mesa/.prebuilt.*/
 Guest/product/mesa/.prebuilt-old.*/
 Guest/local.properties

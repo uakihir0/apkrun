@@ -268,7 +268,7 @@ The layout file is the source of truth. Image-layer values come from the Cuttlef
 | `androidboot.lcd_density` | 160 × backing scale of display 0 ([display-and-windowing.md](display-and-windowing.md)) | 4 | |
 | `androidboot.ddr_size` | VM memory as `<MiB>MB`, for example `4096MB` | 4 | |
 | `androidboot.apkrun.instance`, `androidboot.apkrun.devmode`, `androidboot.apkrun.image` | instance UUID; `0` or `1` (custom image only, §11.3); `imageVersion` | 4 | |
-| `androidboot.apkrun.test.*` | test bundles only, never in release bundles (CI checks the release manifest): `marker=<value>` (§12.4), `fail_health=1`, `fail_boot=1` (init stops `zygote` before `sys.boot_completed`) | 2 | [diagnostics.md](diagnostics.md) §12 |
+| `androidboot.apkrun.test.*` | test bundles only, never in release bundles (CI checks the release manifest): `marker=<value>` (§12.4), `fail_health=1`, `fail_boot=1` (init stops `zygote` before `sys.boot_completed`), `secret=1` (the fixed test overlay emits the fixture secret) | 2 | [diagnostics.md](diagnostics.md) §12 |
 
 AVB metadata follows the top-level vbmeta chain in stored order. The digest covers each AVB0 header, authentication block, and auxiliary block, and excludes padding and footers. Chained partitions with their own footer are read through the vbmeta their footer declares. `hash_alg` follows the top-level algorithm (`NONE` uses SHA-256). `avb_version` follows the pinned AVB 1.4 toolchain. The hashtree policy is `restart_and_invalidate`, so `invalidate_on_error` is `yes`. `avb.py` rejects a top-level vbmeta with `VERIFICATION_DISABLED`.
 
@@ -450,7 +450,7 @@ Rules:
 
 ### 8.5 Gate G2 verification
 
-Gate G2 ([roadmap.md](../04-plan/roadmap.md) §2) requires five cold boots of the stock image on VZ, each reaching `sys.boot_completed=1` and staying up 10 minutes with no `system_server` restart, watchdog kill, or HAL crash loop. The reference diff of §8.4 after the last boot must have no unexplained difference. The gate test is `Tests/AcceptanceTests/G2AndroidBoot/`, which uses the `headless` profile (§9.1). The gate result is in [roadmap.md](../04-plan/roadmap.md) §2.
+Gate G2 ([roadmap.md](../04-plan/roadmap.md) §2) requires five cold boots of the selected stock baseline or composed development image on VZ, each reaching `sys.boot_completed=1` and staying up 10 minutes with no `system_server` restart, watchdog kill, or HAL crash loop. The reference diff of §8.4 after the last boot must have no unexplained difference. The gate test is `Tests/AcceptanceTests/G2AndroidBoot/`, which uses the `headless` profile (§9.1) and a complete target reference capture. `scripts/run-gate.sh G2` selects the stock baseline by default; an explicit composed bundle override must carry composition provenance. The gate result is in [roadmap.md](../04-plan/roadmap.md) §2.
 
 ---
 
@@ -585,17 +585,17 @@ python3 -m apkrun_image bundle \
 
 ## 11. APKRun AOSP product
 
-The guest agents are designed in [guest-components.md](guest-components.md). This section covers the image build, which #36 implements.
+The guest agents are designed in [guest-components.md](guest-components.md). This section covers the image. Development images are composed from the stock build on the Mac (§11.5, #36). Release images are built from source (§11.6, #120). Both take the product files from `Guest/product/` ([ADR-0019](../01-architecture/decisions/0019-composed-development-image.md)).
 
 ### 11.1 Product definition
 
-The source is `Guest/product/`, mapped into the AOSP tree as `device/apkrun/apkrun_arm64/`. It contains `AndroidProducts.mk` (lunch targets `apkrun_arm64-trunk_staging-userdebug` and `-user`), `apkrun_arm64.mk` (inherits `device/google/cuttlefish/vsoc_arm64_only/phone/aosp_cf.mk`; `PRODUCT_PACKAGES += apkrun_vsockd ApkRunGuest ApkRunStore`), `Android.bp` (agent APKs with the platform certificate, privileged, in `/system_ext/priv-app`), `prebuilt/` (git-ignored agent APKs copied by `scripts/build-guest.sh`), `init/apkrun.rc`, `sepolicy/`, `permissions/`, `overlay/`, `settings/`, and `manifest/pinned.xml` (the `repo manifest -r` snapshot for release builds).
+The source is `Guest/product/`. The composer reads its placement list `compose.json` (§11.5). A source build maps it into the AOSP tree as `device/apkrun/apkrun_arm64/`. It contains `compose.json`, `AndroidProducts.mk` (lunch targets `apkrun_arm64-trunk_staging-userdebug` and `-user`), `apkrun_arm64.mk` (inherits `device/google/cuttlefish/vsoc_arm64_only/phone/aosp_cf.mk`; `PRODUCT_PACKAGES += apkrun_vsockd ApkRunGuest ApkRunStore`), `Android.bp` (agent APKs with the platform certificate, privileged, in `/system_ext/priv-app`), `prebuilt/` (git-ignored agent APKs copied by `scripts/build-guest.sh`), `init/apkrun.rc`, `sepolicy/` (CIL fragments), `permissions/`, `overlay/`, `settings/`, and `manifest/pinned.xml` (the `repo manifest -r` snapshot for release builds).
 
-- The policy starts in `BOARD_SEPOLICY_DIRS`. If Treble `neverallow` checks reject `/system_ext` types, #36 moves those rules to `SYSTEM_EXT_PRIVATE_SEPOLICY_DIRS` and records the split here.
-- `PRODUCT_IGNORE_ALL_ANDROIDMK := true`: all modules use `Android.bp`. The base product uses a 16 KiB page size, which the Rust and Kotlin components do not assume.
+- The policy is CIL, the form of the image's split policy. Its types are `system_ext` types. How a source build carries the CIL into Soong is decided by #120.
+- In a source build, `PRODUCT_IGNORE_ALL_ANDROIDMK := true`: all modules use `Android.bp`. The base product uses a 16 KiB page size, which the Rust and Kotlin components do not assume.
 - `ro.apkrun.product=1`, plus the default profile's GPU properties. `bundle --image-version` sets the image version, and ImageCore passes `androidboot.apkrun.image` at every boot.
-- `Guest/product/mesa/` (#99) holds the pinned EGL, GLES, and Gallium prebuilts, staged by `scripts/guest/stage-mesa-product.sh`. It supplies neither the product nor a SELinux policy.
-- The guest loads `/odm/etc/selinux/precompiled_sepolicy`, not the `/sepolicy` of the boot ramdisk. The product build must change that ODM policy or its split inputs. A sysfs label comes from `genfscon`, so a vendor `file_contexts` entry cannot change it.
+- `Guest/product/mesa/prebuilt/` (#99) holds the verified EGL, GLES, and Gallium prebuilts staged by `scripts/guest/stage-mesa-product.sh`. The #36 composer consumes and hashes this output, then adds its four shared libraries to `/vendor/lib64/egl/`; the staged directory supplies no AOSP product definition or SELinux policy.
+- The guest loads `/odm/etc/selinux/precompiled_sepolicy`, not the `/sepolicy` of the boot ramdisk. The composer compiles a new ODM policy from the split inputs (§11.5). A sysfs label comes from `genfscon`, so a vendor `file_contexts` entry cannot change it.
 - The virtio-gpu PCI nodes under `/sys/devices/platform/40000000.pci/` carry the default `sysfs` label. On the `odm4` bundle the launcher (`priv_app`) and Settings (`system_app`) fail Mesa's DRM probe, while platform and untrusted apps pass. The untested candidate is a `genfscon` label `sysfs_gpu` on that path, plus a decision on `system_app` (R-13).
 
 ### 11.2 What the product changes, and what it does not
@@ -603,12 +603,13 @@ The source is `Guest/product/`, mapped into the AOSP tree as `device/apkrun/apkr
 | Change | Why |
 |---|---|
 | Adds the Guest Agent, Store Agent, `apkrun_vsockd`, their sepolicy and privapp permissions | production control path ([ADR-0008](../01-architecture/decisions/0008-guest-agents.md)) |
+| Adds the four pinned Mesa EGL, GLES, and Gallium libraries to the existing `vendor_a` filesystem | the `drmVirgl` boot profile selects Mesa, while stock `vendor_a` contains only emulation EGL/GLES libraries |
 | Defaults KeyMint and Gatekeeper to the in-guest APEX variants; adds `virtio_snd` if missing | §7.2, §7.5 |
 | `Settings.Global.AUTO_TIME = 0`, `AUTO_TIME_ZONE = 0` | the host is the only time source ([desktop-integration.md](desktop-integration.md) §9) |
 | Adds an in-Android browser (AOSP `Browser2`) if the base has none | "Keep in Android" for links ([desktop-integration.md](desktop-integration.md) §7.1) |
 | Multi-display and freeform overlays | [display-and-windowing.md](display-and-windowing.md) |
 | Disables a HAL or service only with evidence from the §7 checks (#96) | "Do not aggressively remove services" (#36) |
-| Does **not** change the kernel, partition layout, or fstab | the stock image stays a valid development target |
+| Does **not** change the kernel, GPT, or fstab; may grow `system_ext_a` and `odm_a` within their existing super group | the stock image remains a valid development target |
 
 ### 11.3 Developer mode on custom images
 
@@ -620,17 +621,34 @@ The source is `Guest/product/`, mapped into the AOSP tree as `device/apkrun/apkr
 
 | Build | Variant | AVB state |
 |---|---|---|
-| Development | `apkrun_arm64-trunk_staging-userdebug` (M5 onward, CI) | `orange`, unlocked |
-| Release | `apkrun_arm64-trunk_staging-user`, release keys | open (OQ-36) |
+| Development | the stock `userdebug` build, composed (§11.5; M5 onward, CI); AOSP test keys | `orange`, unlocked |
+| Release | `user`, built from source with APKRun release keys (§11.6) | open (OQ-36) |
 
 Proposed for release: pass `orange` and unlocked, but keep dm-verity on through the vbmeta hashtree descriptors. The guest has no bootloader, so it cannot establish a hardware root of trust. The integrity chain is host-side: signed manifest, file hashes, then `os.img` read-only. Claiming `green` would misstate the device state.
 
-### 11.5 Build
+### 11.5 Composition (development images)
+
+`python3 -m apkrun_image compose` (#36) makes the development image from the pinned stock build, on the developer Mac ([ADR-0019](../01-architecture/decisions/0019-composed-development-image.md), as extended by [ADR-0020](../01-architecture/decisions/0020-composed-development-image-mesa.md)).
+
+- **Workspace.** The output directory must be on a case-sensitive filesystem because EROFS permits case-distinct paths. On the usual case-insensitive macOS startup volume, compose to a mounted case-sensitive APFS scratch volume.
+- **Inputs.** Before composing, build and stage the pinned guest Mesa output with `scripts/guest/build-mesa-android.sh` and `scripts/guest/stage-mesa-product.sh`. The composer verifies its lock identity, ELF architecture, SONAMEs, file hashes, and labels, then records the manifest and all four libraries in `composition.json` and `provenance.composition.productInputs`.
+- **Placement.** Every APKRun product file is listed in `Guest/product/compose.json` with its image path, mode, owner, and SELinux label and goes into `system_ext_a`. The composer also adds only the four staged Mesa libraries to `/vendor/lib64/egl/` in `vendor_a`, using the stock platform and vendor file contexts. It rebuilds both EROFS images and verifies every stock entry remains unchanged apart from the Mesa libraries and their containing directory metadata.
+- **Growth.** `system_ext_a` has no free space. The composer grows it in the super metadata inside its existing group, and refuses to exceed that group's maximum size. If the compiled prebuilt policy and hash sidecars do not fit in `odm_a`, the composer grows `odm_a` inside its existing group under the same limit. No other partition moves.
+- **Policy.** The CIL fragments are added to `system_ext_sepolicy.cil`, and the entries to `system_ext_seapp_contexts` and `system_ext_file_contexts`. A pinned `secilc` compiles `precompiled_sepolicy` from the same inputs as `init`, and the composer writes the matching SHA-256 files into `odm_a`. `secilc` enforces `neverallow`.
+- **Signing.** The agents are signed with the public AOSP test platform key (certificate SHA-256 `c8a2e9bc…2ab8`), which `seinfo=platform` of the stock build names. The `system_ext`, `odm`, and `vendor` hashtrees and FEC are rebuilt with the pinned avbtool using their stock parameters. The updated `system_ext` descriptor is signed in `vbmeta_system_a`. The composer signs `vbmeta_a` with the updated `odm` descriptor, then updates and verifies its `vendor` descriptor with the AOSP AVB test key (§4.6).
+- **Bundle.** `kind: apkrun`, with the stock build and the composition inputs in `provenance` ([runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.3). The Guest Agent package and version come from the hash-pinned `prebuilt/ApkRunGuest.json` product input and populate `requirements.agents`. A composed bundle contains the stock build, so it is never published ([legal-and-licensing.md](../05-development/legal-and-licensing.md) §2).
+- **Publication.** The composer stages outputs beside the destination and atomically renames the finished directory without replacement. If another process creates the destination during composition, the composer fails and preserves that entry.
+- **Limits.** No `user` variant, no kernel or module change, and no release keys. Those need §11.6.
+- Acceptance (#36): the composed image reaches `boot_completed`, the agents start, and the reference diff has no unexplained differences beyond the documented product changes.
+
+### 11.6 Release build
+
+This is the plan for #120, which may instead re-sign the CI target files ([ADR-0019](../01-architecture/decisions/0019-composed-development-image.md)).
 
 - The host is x86-64 Linux with 64 GB of RAM and 400 GB of disk ([environment-setup.md](../05-development/environment-setup.md) §5). macOS cannot build AOSP.
 - `repo init` with the pinned manifest, `repo sync`, `lunch apkrun_arm64-trunk_staging-userdebug`, `m`, `m dist DIST_DIR=out/dist` with `BUILD_NUMBER=ar<counter>` (`scripts/aosp/build-product.sh`). The `*-img-*.zip` goes through §3–§10.
 - `provenance` records the pinned manifest, the builder image digest, and the `Guest/` git revision.
-- Acceptance (#36): the custom image reaches `boot_completed`, the agents start, and the reference diff has no unexplained differences beyond the documented product changes.
+- Acceptance (#120): the image passes the suites of the composed image, and no AOSP test key signs it.
 
 ---
 
@@ -711,8 +729,11 @@ Each deviation has an ID with the prefix `CF-`. `Images/reference/<buildId>/expe
 | CF-17 | The kernel logs `KVM is not available. Ignoring kvm-arm.mode` | VZ does not expose pKVM | §6.6 |
 | CF-18 | `log_buf_len=2M` is added | the default buffer wraps before the serial shell answers | §6.4, §6.6 |
 | CF-19 | The reference cmdline has `earlycon`, `ramoops.*`, and a second `panic=-1`; none is passed on VZ | crosvm's UART and ramoops do not exist on VZ | §6.4, §6.6 |
+| CF-20 | APKRun product files are composed into `system_ext_a`; the four staged Mesa libraries are added to the same-size `vendor_a`; the composer grows the `system_ext` and, when needed, `odm` allocations and reseals all three AVB trees | the development image reuses the pinned stock build without rebuilding AOSP, while its Mesa boot property matches the guest EGL/GLES libraries | §11.5 |
+| CF-21 | The Guest Agent and `apkrun_vsockd` are added as product components; their CIL is compiled into the precompiled policy, and only those two domains are permissive | development services need APKRun-specific access while all other domains remain enforcing | §11.1, §11.2 |
+| CF-22 | `adbd` listens on guest vsock 5555 only when developer mode is enabled; the host forwards it from loopback TCP 6520 | debugging remains opt-in and is not exposed on other host interfaces | §7.3, §11.3 |
 
-#36 adds the product changes of §11.2 that differ at runtime, such as the developer-mode gate of adbd (§11.3).
+#36 records the composed-product differences above. The system-service, policy, and developer-mode checks run in AndroidCustom (§15); the release image uses the same checks under #120 with its own approved build and signing inputs.
 
 ---
 
@@ -752,7 +773,7 @@ Subsystem `io.apkrun.image`, categories `store`, `install`, `verify`, `instance`
 | T0 Python | inventory classification; manifest schema and semantic checks; sparse decoder; GPT round trip; bootconfig golden vectors; kernel decompression | `Images/tools/tests/` |
 | T0 Swift | `ImageVersion` ordering; manifest decoding; bootconfig merge conflicts; GPT backup relocation; `VMDefinition` mapping (§9.2) | `Packages/ImageCore/Tests/ImageCoreTests/` |
 | T1 | Pipeline on synthetic fixtures, built twice with identical `SHA256SUMS`; install, hole punching, signature and extra-file rejection; provisioning and `clonefile`; recovery points | `Images/tools/tests/`; `Packages/ImageCore/Tests/ImageCoreTests/` |
-| T2 | Linux test guest disks and `/proc/bootconfig`; stock boot, init, `sys.boot_completed`, ADB; 20-port numbering; hvc roles; migration (§12.4) | `Tests/IntegrationTests/LinuxGuestTests/`, `…/AndroidBootTests/`, `…/AndroidADBTests/` |
+| T2 | Linux test guest disks and `/proc/bootconfig`; stock boot, init, `sys.boot_completed`, ADB; 20-port numbering; hvc roles; migration (§12.4); composed-image boot, privileged Guest Agent, vsock, developer-mode ADB, SELinux, and HelloProbe isolation | `Tests/IntegrationTests/LinuxGuestTests/`, `…/AndroidBootTests/`, `…/AndroidADBTests/`, `…/AndroidCustomTests/` |
 | T3 | Gate G2 (§8.5) | `Tests/AcceptanceTests/G2AndroidBoot/` |
 
 ---
@@ -764,7 +785,8 @@ Subsystem `io.apkrun.image`, categories `store`, `install`, `verify`, `instance`
 - Archive extraction writes zero runs before holes are punched (§10.4). R-25.
 - Licensing of redistributed images (§2.3). R-10, #94.
 - SELinux for the vsock bridge, the agents, and the virtio-gpu sysfs label (§11.1). R-13, #36.
-- AOSP build infrastructure and upstream changes (§11.5). R-14, #36.
+- AOSP build infrastructure and upstream changes (§11.6). R-14, #120.
+- Differences between the composed image and a source build (§11.5). R-26, #120.
 - `virtio_snd` in the stock kernel (§7.5). OQ-38, #84.
 - Intermittent Wi-Fi and name resolution (§7.4, §7.8). Pending: marker checks of 20 ports on the Android kernel, and the RIL's CPU and log cost. R-12, #96.
 - `androidboot.boot_devices` `40000000.pci` across macOS builds (§5.3). R-16.

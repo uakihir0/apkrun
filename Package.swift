@@ -184,6 +184,7 @@ let package = Package(
                 "IntegrationCore",
                 "ImageCore",
                 "InputCore",
+                "GuestProtocol",
                 "RuntimeAPI",
                 "DiagnosticsCore",
             ],
@@ -339,7 +340,7 @@ let package = Package(
         ),
         .testTarget(
             name: "RuntimeCoreTests",
-            dependencies: ["RuntimeCore", "GraphicsCore"],
+            dependencies: ["RuntimeCore", "GraphicsCore", "VirtualMachineCore"],
             path: "Packages/RuntimeCore/Tests/RuntimeCoreTests",
             exclude: ["Fixtures"]
         ),

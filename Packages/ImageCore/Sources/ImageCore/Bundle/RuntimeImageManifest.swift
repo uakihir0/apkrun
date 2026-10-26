@@ -235,14 +235,34 @@ public struct RuntimeImageManifest: Codable, Equatable, Sendable {
         public var tools: Tools
         /// Git revisions of `Images/tools` and `Guest/`.
         public var revisions: Revisions
-        /// SHA-256 of the pinned manifest: required for `apkrun`, null for `stock`.
+        /// SHA-256 of the pinned manifest: required for builder images, null for stock/composed.
         public var pinnedManifestSHA256: String?
-        /// Digest of the builder container image: required for `apkrun`, null for `stock`.
+        /// Digest of the builder container image: required for builder images, null otherwise.
         public var builderImageDigest: String?
+        /// Inputs and source revision for a development image composed from a CI build.
+        public var composition: Composition?
 
         enum CodingKeys: String, CodingKey, CaseIterable {
             case source, android, deviceFamily, layout, reference, tools, revisions
-            case pinnedManifestSHA256, builderImageDigest
+            case pinnedManifestSHA256, builderImageDigest, composition
+        }
+
+        /// Auditable inputs for a Mac-composed development image.
+        public struct Composition: Codable, Equatable, Sendable {
+            /// The composition provenance format version.
+            public var schemaVersion: Int
+            /// The pinned stock Android image manifest and its SHA-256.
+            public var sourceManifest: FileReference
+            /// Product files and policy inputs, sorted by path.
+            public var productInputs: [FileReference]
+            /// Fixed, opt-in test fixture inputs, sorted by path; omitted from product images.
+            public var testOverlayInputs: [FileReference]?
+            /// The APKRun source revision used for the product inputs.
+            public var apkrunRevision: String
+
+            enum CodingKeys: String, CodingKey, CaseIterable {
+                case schemaVersion, sourceManifest, productInputs, testOverlayInputs, apkrunRevision
+            }
         }
 
         /// A repository-relative file and its SHA-256.
@@ -551,6 +571,13 @@ extension RuntimeImageManifest.Provenance {
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let composition: Composition?
+        if c.contains(.composition) {
+            // The schema allows omission for stock and builder images, but not explicit null.
+            composition = try c.decode(Composition.self, forKey: .composition)
+        } else {
+            composition = nil
+        }
         self.init(
             source: try c.decode(Source.self, forKey: .source),
             android: try c.decode(Android.self, forKey: .android),
@@ -561,7 +588,8 @@ extension RuntimeImageManifest.Provenance {
             tools: try c.decode(Tools.self, forKey: .tools),
             revisions: try c.decode(Revisions.self, forKey: .revisions),
             pinnedManifestSHA256: try c.decode(String?.self, forKey: .pinnedManifestSHA256),
-            builderImageDigest: try c.decode(String?.self, forKey: .builderImageDigest)
+            builderImageDigest: try c.decode(String?.self, forKey: .builderImageDigest),
+            composition: composition
         )
     }
 
@@ -577,6 +605,41 @@ extension RuntimeImageManifest.Provenance {
         try c.encode(revisions, forKey: .revisions)
         try c.encode(pinnedManifestSHA256, forKey: .pinnedManifestSHA256)
         try c.encode(builderImageDigest, forKey: .builderImageDigest)
+        try c.encodeIfPresent(composition, forKey: .composition)
+    }
+}
+
+extension RuntimeImageManifest.Provenance.Composition {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
+    public init(from decoder: any Decoder) throws {
+        try decoder.rejectUnknownKeys(CodingKeys.self)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let testOverlayInputs: [RuntimeImageManifest.Provenance.FileReference]?
+        if c.contains(.testOverlayInputs) {
+            testOverlayInputs = try c.decode(
+                [RuntimeImageManifest.Provenance.FileReference].self,
+                forKey: .testOverlayInputs
+            )
+        } else {
+            testOverlayInputs = nil
+        }
+        self.init(
+            schemaVersion: try c.decode(Int.self, forKey: .schemaVersion),
+            sourceManifest: try c.decode(RuntimeImageManifest.Provenance.FileReference.self, forKey: .sourceManifest),
+            productInputs: try c.decode([RuntimeImageManifest.Provenance.FileReference].self, forKey: .productInputs),
+            testOverlayInputs: testOverlayInputs,
+            apkrunRevision: try c.decode(String.self, forKey: .apkrunRevision)
+        )
+    }
+
+    /// Encodes test provenance only when the fixed test overlay was composed.
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(schemaVersion, forKey: .schemaVersion)
+        try c.encode(sourceManifest, forKey: .sourceManifest)
+        try c.encode(productInputs, forKey: .productInputs)
+        try c.encodeIfPresent(testOverlayInputs, forKey: .testOverlayInputs)
+        try c.encode(apkrunRevision, forKey: .apkrunRevision)
     }
 }
 

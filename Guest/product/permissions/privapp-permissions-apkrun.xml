@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<permissions>
+    <privapp-permissions package="io.apkrun.guest">
+        <permission name="android.permission.FORCE_STOP_PACKAGES" />
+        <permission name="android.permission.WRITE_SECURE_SETTINGS" />
+        <permission name="android.permission.REBOOT" />
+    </privapp-permissions>
+</permissions>

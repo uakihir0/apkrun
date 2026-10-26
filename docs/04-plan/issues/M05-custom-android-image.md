@@ -1,45 +1,47 @@
 # M5 Custom Android runtime image
 
-APKRun gets its own Android image: the APKRun AOSP product, built on a Linux builder from Cuttlefish's arm64 phone product. The Guest Agent runs in it as a persistent, platform-signed priv-app. `apkrun_vsockd` bridges vsock to the agents' local sockets, and SELinux confines all of it. The host talks to the agents over vsock with ADB off, and the Store Agent installs apps without `adb install`. From M5 on, this image is the product test image. The milestone closes no gate; the G2–G6 checks run again on it ([test-strategy.md](../test-strategy.md) §5). AOSP is never built on macOS: every image build runs on the Linux x86-64 builder ([build-system.md](../../05-development/build-system.md) §9).
+APKRun gets its own Android image: the stock Cuttlefish arm64 phone build with the APKRun product files composed into it on the Mac (ADR-0019, extended by ADR-0020). The Guest Agent runs in it as a persistent, platform-signed priv-app. `apkrun_vsockd` bridges vsock to the agents' local sockets, and SELinux confines all of it. The host talks to the agents over vsock with ADB off, and the Store Agent installs apps without `adb install`. From M5 on, this image is the product test image. The milestone closes no gate; the G2–G6 checks run again on it ([test-strategy.md](../test-strategy.md) §5). The release image is built from source on Linux by #120 ([build-system.md](../../05-development/build-system.md) §9).
 
 ---
 
-## #36 APKRun AOSP product
+## #36 Composed APKRun custom image
 
 | Field | Value |
 |---|---|
 | Milestone | M5 (v0.3) |
 | Depends on | #35 |
-| Design | [android-image.md](../../02-design/android-image.md) §8.4, §11, §13; [guest-components.md](../../02-design/guest-components.md) §4, §5, §10 |
-| Code | `Guest/product/`; `Guest/vsockd/`; `Guest/guestd/`; `scripts/aosp/`; `Images/manifests/ar<n>/`; `Tests/Fixtures/AndroidApps/` (HelloProbe); `Tests/IntegrationTests/AndroidBootTests/`, `GuestAgentTests/`, `SecurityTests/` |
+| Design | [ADR-0019](../../01-architecture/decisions/0019-composed-development-image.md), [ADR-0020](../../01-architecture/decisions/0020-composed-development-image-mesa.md); [android-image.md](../../02-design/android-image.md) §11, §13; [guest-components.md](../../02-design/guest-components.md) §4, §5, §10 |
+| Code | `Images/tools/apkrun_image/`; `Guest/product/`; `Guest/vsockd/`; `Guest/agentruntime/`; `Packages/ImageCore/`; `Tests/Fixtures/signing/`; `Tests/Fixtures/AndroidApps/` (HelloProbe, SystemServicesTest); `Tests/IntegrationTests/` |
 
-**Goal.** The APKRun AOSP product builds reproducibly on the Linux builder. Its image boots under the APKRun VM with the Guest Agent as a platform-signed priv-app, reached over vsock with ADB off.
+**Goal.** `apkrun_image compose` turns the pinned stock build into a `kind: apkrun` development image on the Mac. It boots under the APKRun VM with the Guest Agent as a platform-signed priv-app, reached over vsock with ADB off.
 
-**Out of scope.** The Store Agent (#37). M9 components (#55, #82, #83). Image updates (#59, #88). Removing services without #96 evidence; kernel, partition, or fstab changes (R-14).
+**Out of scope.** The release image, the `user` variant, release keys, and OQ-36 (#120). The Store Agent (#37). M9 components (#55, #82, #83). Image updates (#59, #88). Removing services without #96 evidence; kernel, partition-table, or fstab changes.
 
 **Steps.**
-1. **Builder.** `scripts/aosp/builder.Dockerfile`, `build-product.sh --revision <commit> --variant userdebug|user`, and `remote-build.sh` ([android-image.md](../../02-design/android-image.md) §11.1, §11.5). **Check:** a userdebug build without APKRun modules yields `apkrun_arm64-img-ar<n>.zip`.
-2. **Priv-apps.** `GuestAgentApplication` runs in `AgentMode.PRIVILEGED_APP`. `Android.bp` imports both APKs with `certificate: "platform"`, `privileged: true`, `presigned: false` ([guest-components.md](../../02-design/guest-components.md) §4.1). Permissions: [guest-components.md](../../02-design/guest-components.md) §5. Product changes: [android-image.md](../../02-design/android-image.md) §11.2. **Check:** `dumpsys package io.apkrun.guest` shows the platform signature and every permission granted.
-3. **`apkrun_vsockd`.** `Guest/vsockd` builds a `rust_binary` in `PRODUCT_PACKAGES`; ports and the init service are in [guest-components.md](../../02-design/guest-components.md) §10.1 and §10.2. Extend `PeerCheck` (`Guest/agentruntime/`) for the custom image: accept `system` and `root`, and `shell` only with developer mode on ([guest-components.md](../../02-design/guest-components.md) §10.1). **Check:** T0 `cargo test` for ports and limits; T1 with `vsock_loopback`: a ninth connection and a peer CID other than 2 are refused; a JVM test covers `PeerCheck` in both modes.
-4. **SELinux.** Domains: [guest-components.md](../../02-design/guest-components.md) §4.2, §10.2. The three new domains are `permissive` in `userdebug` only; `scripts/check-sepolicy.sh` rejects `permissive` in `user` builds. Fix the virtio-gpu `sysfs` label in the product policy, and never grant `sysfs` to app domains ([android-image.md](../../02-design/android-image.md) §11.1). **Check:** T2 `SelinuxDenialTests`: no `avc: denied` for the three domains when enforcing.
-5. **Developer mode.** adbd listens on vsock 5555 only with `ro.boot.apkrun.devmode=1`. Override the base product's always-on adbd, and record the override in [android-image.md](../../02-design/android-image.md) §11.3. **Check:** T2 `DeveloperModeAdbTests`: `devmode=1` works on `127.0.0.1:6520`; `devmode=0` runs no adbd and refuses uid `shell`.
-6. **Bundle and release.** `scripts/inventory-cuttlefish.py`, then `python3 -m apkrun_image bundle` (`kind: apkrun`); commit `Images/manifests/ar<n>/`. vsock is the custom-image transport. Rebuild test bundles A, B, B′, F, P, and S ([test-strategy.md](../test-strategy.md) §3.5). Add CF rows to [android-image.md](../../02-design/android-image.md) §13. The `user` variant uses the OQ-36 default ([android-image.md](../../02-design/android-image.md) §11.4). **Check:** T2 `VsockAgentTests`.
+1. **Composer.** `compose` reads the placement list `Guest/product/compose.json`, rebuilds `system_ext_a` with the listed files, and adds the four lock-verified Mesa libraries staged in `Guest/product/mesa/prebuilt/` to `vendor_a`. It grows `system_ext_a` and, when required, `odm_a` inside their super groups; reseals `system_ext_a`, `odm_a`, and `vendor_a` with their stock AVB parameters; and signs `vbmeta_system_a` and `vbmeta_a` with the AOSP AVB test key ([android-image.md](../../02-design/android-image.md) §11.5). **Check:** T0 pytest for placement, growth, vendor rebuild, and the vbmeta chain; T2 `CustomImageBootTests`: the image reaches `boot_completed` with Mesa selected and all four vendor libraries present.
+2. **Priv-apps.** `GuestAgentApplication` runs in `AgentMode.PRIVILEGED_APP`. `scripts/build-guest.sh --platform-test-key` signs the agent with the pinned AOSP test platform key. The APK goes to `/system_ext/priv-app/ApkRunGuest/`, the permissions to `/system_ext/etc/permissions/` ([guest-components.md](../../02-design/guest-components.md) §4.1, §4.3, §5). **Check:** `dumpsys package io.apkrun.guest` shows the platform signature and every permission granted.
+3. **`apkrun_vsockd`.** Built with `cargo ndk`, placed in `/system_ext/bin/`, with the init service of [guest-components.md](../../02-design/guest-components.md) §10.2. Extend `PeerCheck` (`Guest/agentruntime/`): accept `system` and `root`, and `shell` only with developer mode on ([guest-components.md](../../02-design/guest-components.md) §10.1). **Check:** T0 `cargo test` for ports and limits; T1 with `vsock_loopback`: a ninth connection and a peer CID other than 2 are refused; a JVM test covers `PeerCheck` in both modes.
+4. **SELinux.** CIL fragments in `Guest/product/sepolicy/` for the Guest Agent and `apkrun_vsockd` domains of [guest-components.md](../../02-design/guest-components.md) §4.2, §10.2. The Store Agent domain is #37. `compose` adds the fragments and context entries, then compiles `precompiled_sepolicy` in `odm_a` with the pinned `secilc` ([android-image.md](../../02-design/android-image.md) §11.1). Only the Guest Agent and `apkrun_vsockd` domains are permissive in the #36 userdebug image. Fix the virtio-gpu `sysfs` label, and never grant `sysfs` to app domains. **Check:** T0: the compiled policy has the two domains and passes `neverallow`; T2 `SelinuxDenialTests`: no `avc: denied` for those domains when enforcing.
+5. **Developer mode.** adbd listens on vsock 5555 only with `ro.boot.apkrun.devmode=1` ([android-image.md](../../02-design/android-image.md) §11.3). **Check:** T2 `DeveloperModeAdbTests`: `devmode=1` works on `127.0.0.1:6520`; `devmode=0` runs no adbd and refuses uid `shell`.
+6. **Bundle.** `bundle` writes `kind: apkrun` with `provenance.composition`. Change S1, S2, S13, the build-time checks, and the schema ([runtime-image-manifest.md](../../03-reference/runtime-image-manifest.md) §7.2, §7.3), and ImageCore's checks. Rebuild test bundles A, B, B′, F, P, and S from the composed image ([test-strategy.md](../test-strategy.md) §3.5). Add CF rows to [android-image.md](../../02-design/android-image.md) §13. **Check:** T0 ImageCore manifest rules; T2 `VsockAgentTests`.
 7. **Acceptance.** Compare with `Images/reference/16373615/target` ([android-image.md](../../02-design/android-image.md) §8.4). Run AndroidCustom, HelloProbe, G2–G6, and the graphics checks without the #99 profile. **Check:** the Done-when items.
 
 **Tests.**
-- T0 (`Guest/vsockd`, `cargo test`): port table, connection limits.
+- T0: `Images/tools/tests/` (composer, policy compile); `cargo test` in `Guest/vsockd`; ImageCore manifest rules.
 - T1 (`Guest/vsockd`, `vsock_loopback`): the bridge splices both ways and refuses peers other than CID 2.
-- T2 (`Tests/IntegrationTests/AndroidBootTests/`, `GuestAgentTests/`, `SecurityTests/`, AndroidCustom): `CustomImageBootTests`, `AgentSocketIsolationTests`, `SystemServicesTest`, `DeveloperModeAdbTests`, `VsockAgentTests`, `SelinuxDenialTests`.
-- T3: G2–G6 on the custom image; the `user` release-candidate boot.
-- HelloProbe fixture: [test-strategy.md](../test-strategy.md) §4.2.
+- T2 (AndroidCustom): `CustomImageBootTests`, `AgentSocketIsolationTests`, `SystemServicesTest`, `DeveloperModeAdbTests`, `VsockAgentTests`, `SelinuxDenialTests`.
+- T3: G2–G6 on the composed image.
 
 **Done when.**
-- The image reaches `boot_completed` with its enforcing policy and no diagnostic profile. SurfaceFlinger reports Mesa VirGL, and HelloGL renders in `u:r:untrusted_app` (FR-IMG-05).
-- Built from the pinned manifest on the Linux builder; bundle `provenance` records the manifest, container digest, and APKRun revision (FR-IMG-05).
+- The image reaches `boot_completed` with the enforcing policy and no diagnostic profile. SurfaceFlinger reports Mesa VirGL, and HelloGL renders in `u:r:untrusted_app`.
+- Two compositions of the same inputs give identical bundles, and `provenance` records the stock build, the APKRun revision, and the input SHA-256s, including the Mesa manifest and libraries.
 - Agents run as persistent, platform-signed priv-apps, and boot succeeds with `ro.control_privapp_permissions=enforce`. With developer mode off, `Hello` lists every capability up to number 21 (FR-RT-04).
 - HelloProbe cannot reach agent sockets or use vsock, and the new domains log no `avc: denied` (R-13).
 - ADB works on `127.0.0.1:6520` with developer mode on, and adbd stays off without it (FR-RT-05).
-- The reference diff shows only documented changes, a `user` image boots, and the AVB state and signing are decided (OQ-36).
+- The reference diff shows only documented changes, and the release checks refuse a composed bundle.
+
+**Pitfalls.**
+- The AOSP test platform key is public. Never sign anything outside composed images with it.
 
 ---
 
@@ -77,5 +79,5 @@ APKRun gets its own Android image: the APKRun AOSP product, built on a Linux bui
 - After a handshake and after `PackageChanged`, the store matches Android's package list.
 
 **Pitfalls.**
-- Never install the development-signed agent on the custom image; agents come from the image build.
+- Never install the development-signed agent on the custom image; agents come from the composed image.
 - OQ-34: if the Store Agent's memory is too large, start it on demand (`EnsureStoreAgent`).

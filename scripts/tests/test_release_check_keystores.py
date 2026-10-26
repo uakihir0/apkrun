@@ -43,6 +43,29 @@ def openssl(*arguments, stdin=None):
     ).stdout
 
 
+def encrypted_pkcs1_rsa_pem(path):
+    arguments = [
+        "rsa",
+        "-in",
+        str(path),
+        "-aes256",
+        "-passout",
+        "pass:test-fixture",
+    ]
+    result = subprocess.run(
+        ["openssl", *arguments[:3], "-traditional", *arguments[3:]],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        result = subprocess.run(
+            ["openssl", *arguments], capture_output=True, check=True
+        )
+    if not result.stdout.startswith(b"-----BEGIN RSA PRIVATE KEY-----"):
+        raise AssertionError("OpenSSL did not produce an encrypted PKCS#1 RSA key")
+    return result.stdout
+
+
 def der_length(length):
     if length < 0x80:
         return bytes([length])
@@ -169,6 +192,29 @@ def expect_accepted(name, output):
         or "unrecognized test signing fixture format" in output
         or "could not read" in output
         or TEST_MATERIAL in output
+    ):
+        fail(name, output)
+    passed(name)
+
+
+def expect_image_manifest_accepted(name, output):
+    image_policy_errors = (
+        "a stock image cannot be published",
+        "release image revision",
+        "a composed image cannot be published",
+        "release image cannot list the headless GPU profile",
+        "missing manifest.sig",
+        "contains an androidboot.apkrun.test.* key",
+    )
+    if any(error in output for error in image_policy_errors):
+        fail(name, output)
+    passed(name)
+
+
+def expect_composed_image_refused(name, output):
+    if (
+        "a composed image cannot be published" not in output
+        or "provenance.composition is present" not in output
     ):
         fail(name, output)
     passed(name)
@@ -456,6 +502,55 @@ expect_accepted(
 # 6. The AOSP AVB fixture is a PKCS#1 RSA private key. Its private material is refused in the app bundle
 # regardless of whether it is copied as PEM, PKCS#1 DER, or re-encoded as PKCS#8 DER. The public key remains
 # safe to include in the app.
+platform_key = (signing_folder / "aosp-test-platform.pk8").read_bytes()
+platform_certificate = (signing_folder / "aosp-test-platform.x509.pem").read_bytes()
+platform_certificate_der = openssl(
+    "x509", "-inform", "PEM", "-outform", "DER", stdin=platform_certificate
+)
+platform_public_key_pem = openssl(
+    "x509", "-inform", "DER", "-pubkey", "-noout", stdin=platform_certificate_der
+)
+platform_public_key_der = openssl(
+    "pkey", "-pubin", "-outform", "DER", stdin=platform_public_key_pem
+)
+platform_fixture = {
+    "test-fixture-a.jks": keystore,
+    "aosp-test-platform.pk8": platform_key,
+    "aosp-test-platform.x509.pem": platform_certificate,
+}
+expect_accepted("aosp-platform-test-signing-fixtures-accepted", check(platform_fixture))
+expect_unrecognized(
+    "malformed-aosp-platform-private-key-refused",
+    check({"test-fixture-a.jks": keystore, "aosp-test-platform.pk8": b"not a private key"}),
+    "aosp-test-platform.pk8",
+)
+malformed_platform_certificate = check(
+    {
+        "test-fixture-a.jks": keystore,
+        "aosp-test-platform.x509.pem": b"-----BEGIN CERTIFICATE-----\nYQ==\n-----END CERTIFICATE-----\n",
+    }
+)
+if "certificate signing fixture cannot be inspected" not in malformed_platform_certificate:
+    fail("malformed-aosp-platform-certificate-refused", malformed_platform_certificate)
+passed("malformed-aosp-platform-certificate-refused")
+expect_bundle_refused(
+    "bundle-aosp-platform-private-key-refused",
+    check(platform_fixture, app_files={"Contents/Resources/platform.pk8": platform_key}),
+)
+expect_bundle_refused(
+    "bundle-aosp-platform-certificate-refused",
+    check(
+        platform_fixture,
+        image_files={"system_ext/priv-app/ApkRunGuest/platform-cert.der": platform_certificate_der},
+    ),
+)
+expect_bundle_refused(
+    "bundle-aosp-platform-public-key-refused",
+    check(
+        platform_fixture,
+        app_files={"Contents/Resources/platform-public-key.der": platform_public_key_der},
+    ),
+)
 avb_private_key_path = signing_folder / "aosp-avb-testkey-rsa4096.pem"
 avb_private_key = avb_private_key_path.read_bytes()
 avb_private_der = openssl("rsa", "-in", str(avb_private_key_path), "-outform", "DER")
@@ -487,15 +582,7 @@ avb_private_pkcs8_encrypted_der = openssl(
     "-outform",
     "DER",
 )
-avb_private_pkcs1_encrypted_pem = openssl(
-    "rsa",
-    "-in",
-    str(avb_private_key_path),
-    "-traditional",
-    "-aes256",
-    "-passout",
-    "pass:test-fixture",
-)
+avb_private_pkcs1_encrypted_pem = encrypted_pkcs1_rsa_pem(avb_private_key_path)
 avb_private_pkcs8_base64 = base64.b64encode(avb_private_pkcs8_der)
 avb_public_der = openssl("pkey", "-in", str(avb_private_key_path), "-pubout", "-outform", "DER")
 avb_fixture = {"aosp-avb-testkey-rsa4096.pem": avb_private_key}
@@ -880,7 +967,35 @@ expect_bundle_refused(
     "image-bundle-keystore-refused",
     check({"test-fixture-a.jks": keystore}, image_files={"disks/os.img": keystore}),
 )
-expect_accepted(
-    "clean-image-bundle-accepted",
-    check({"test-fixture-a.jks": keystore}, image_files={"manifest.json": b"{}\n", "boot/kernel": b"kernel"}),
+release_image_manifest = {
+    "kind": "apkrun",
+    "provenance": {
+        "revisions": {
+            "imagesTools": "a" * 40,
+            "guest": "b" * 40,
+        }
+    },
+    "gpuProfiles": {"virgl": {}},
+}
+release_image_files = {
+    "manifest.json": json.dumps(release_image_manifest).encode("utf-8"),
+    "manifest.sig": b"key-id: release-signer\n",
+    "boot/kernel": b"kernel",
+}
+expect_image_manifest_accepted(
+    "uncomposed-apkrun-image-bundle-accepted",
+    check({"test-fixture-a.jks": keystore}, image_files=release_image_files),
+)
+composed_image_manifest = copy.deepcopy(release_image_manifest)
+composed_image_manifest["provenance"]["composition"] = {
+    "source": "ci.android.com",
+    "inputs": [],
+}
+composed_image_files = dict(release_image_files)
+composed_image_files["manifest.json"] = json.dumps(composed_image_manifest).encode(
+    "utf-8"
+)
+expect_composed_image_refused(
+    "composed-image-bundle-refused",
+    check({"test-fixture-a.jks": keystore}, image_files=composed_image_files),
 )

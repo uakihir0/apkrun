@@ -140,9 +140,7 @@ private constructor(
             .build()
     }
 
-    /**
-     * Finishes every task, or force-stops every task and process, of the requested package.
-     */
+    /** Finishes every task, or force-stops every task and process, of the requested package. */
     suspend fun stop(request: StopApplication) {
         val pkg = request.getPackage()
         if (!PackageName.isValid(pkg)) {

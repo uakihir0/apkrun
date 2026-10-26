@@ -61,7 +61,7 @@
       "name": "alpine-linux-virt",
       "group": "test-linux",
       "kind": "prebuilt",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/linux-virt-6.18.54-r0.apk",
+      "url": "https://mirrors.huaweicloud.com/alpine/v3.24/main/aarch64/linux-virt-6.18.54-r0.apk",
       "version": "6.18.54-r0",
       "sha256": "9a4a6fa042b60b70f453dded99762810516b35793c64d776d75986b0b110b6e0",
       "license": "GPL-2.0-only",
@@ -768,6 +768,60 @@
       "license": "LGPL-2.1-only",
       "licenseFiles": ["LICENSE"],
       "buildFlags": ["DISABLE_CIL=y", "CFLAGS=-O2"],
+      "patches": [],
+      "ships": "tooling"
+    },
+    {
+      "name": "selinux-cil",
+      "group": "image-tooling",
+      "kind": "source",
+      "repository": "https://github.com/SELinuxProject/selinux",
+      "commit": "2233a23a4d4f1bf29054037babec13f30d038e65",
+      "version": "3.11",
+      "license": "BSD-2-Clause AND LGPL-2.1-only",
+      "licenseFiles": [
+        "secilc-LICENSE",
+        "libsepol-LICENSE"
+      ],
+      "buildFlags": [
+        "libsepol.DISABLE_CIL=n",
+        "libsepol.DISABLE_SHARED=y",
+        "secilc.target=secilc"
+      ],
+      "patches": [],
+      "ships": "tooling"
+    },
+    {
+      "name": "aosp-verity",
+      "group": "image-tooling",
+      "kind": "source",
+      "repository": "https://android.googlesource.com/platform/system/extras",
+      "commit": "1289e9b3f282909eec6e80414e14dcc207bda439",
+      "version": "android-17.0.0_r1",
+      "license": "Apache-2.0",
+      "licenseFiles": ["verity/NOTICE"],
+      "buildFlags": [
+        "upstream-tag-object=740be3463713251280b0471d3dfb3cdd321520dd",
+        "fec-host-adapter=macOS-arm64",
+        "FEC-root-count=2"
+      ],
+      "patches": [],
+      "ships": "tooling"
+    },
+    {
+      "name": "libfec-rs",
+      "group": "image-tooling",
+      "kind": "source",
+      "repository": "https://android.googlesource.com/platform/external/fec",
+      "commit": "90857deb7973c0ca24c79b9c1809fc9667f32c4f",
+      "version": "2024-11-20",
+      "license": "LGPL-2.1-or-later",
+      "licenseFiles": ["NOTICE"],
+      "buildFlags": [
+        "pinned-upstream-reed-solomon-source",
+        "C11",
+        "no-source-patches"
+      ],
       "patches": [],
       "ships": "tooling"
     },

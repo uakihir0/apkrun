@@ -1,0 +1,27 @@
+(type apkrun_guest_app)
+(typeattributeset domain (apkrun_guest_app))
+(typeattributeset appdomain (apkrun_guest_app))
+(typeattributeset coredomain (apkrun_guest_app))
+
+(typeattribute apkrun_guest_services)
+(typeattributeset apkrun_guest_services
+    (activity_service activity_task_service input_service
+        window_service display_service power_service package_service
+        lock_settings_service gpu_service netstats_service
+        content_capture_service))
+
+(allow apkrun_guest_app apkrun_guest_services (service_manager (find)))
+
+(type apkrun_guest_app_userfaultfd)
+(roletype object_r apkrun_guest_app_userfaultfd)
+(typetransition apkrun_guest_app apkrun_guest_app anon_inode
+    "[userfaultfd]" apkrun_guest_app_userfaultfd)
+(allow apkrun_guest_app apkrun_guest_app_userfaultfd
+    (anon_inode (create ioctl read)))
+(typeattribute apkrun_guest_app_userfaultfd_other_domains)
+(typeattributeset apkrun_guest_app_userfaultfd_other_domains
+    (and (domain) (not (apkrun_guest_app))))
+(neverallow apkrun_guest_app_userfaultfd_other_domains
+    apkrun_guest_app_userfaultfd (anon_inode (all)))
+
+(allow apkrun_guest_app apkrun_guest_app (memfd_file (execute)))

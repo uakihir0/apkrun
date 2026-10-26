@@ -154,13 +154,14 @@ WrapperCore              → RuntimeAPI, DiagnosticsCore
 IntegrationCore          → GuestProtocol, RuntimeAPI, DiagnosticsCore
 RuntimeClient            → RuntimeAPI, DiagnosticsCore
 RuntimeHost              → RuntimeCore, APKStoreCore, UpdateCore, WrapperCore,
-                           IntegrationCore, ImageCore, InputCore, RuntimeAPI, DiagnosticsCore
+                           IntegrationCore, ImageCore, InputCore, GuestProtocol,
+                           RuntimeAPI, DiagnosticsCore
 ```
 
 Executables:
 
 ```text
-apkrund          → RuntimeHost
+apkrund          → RuntimeHost, DiagnosticsCore
 APKRunLauncher   → RuntimeClient, RuntimeAPI, WindowingCore, InputCore, DiagnosticsCore
 APKRun.app       → RuntimeClient, RuntimeAPI, DiagnosticsCore, Sparkle (third party; APKRun updates, ADR-0016)
 APKRunMenuBar    → RuntimeClient, RuntimeAPI, DiagnosticsCore

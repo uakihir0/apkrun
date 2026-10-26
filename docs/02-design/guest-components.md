@@ -41,10 +41,10 @@ Guest/
 | Dependencies | Kotlin stdlib, kotlinx-coroutines, protobuf-javalite. No AndroidX in the daemon code path, because `app_process` has no application context |
 | Build | `./gradlew -p Guest assembleRelease` (called by `scripts/build-guest.sh`). Output: `Guest/build/out/{apkrun-guest.apk, apkrun-store.apk}` |
 | Development signing | `Tests/Fixtures/signing/test-guest-dev.jks` (test-only, [modules.md](../01-architecture/modules.md) §1) |
-| Custom image signing | the product imports the APKs with `android_app_import { certificate: "platform", privileged: true, presigned: false }`, which re-signs them with the image's platform key ([android-image.md](android-image.md) §11.1) |
+| Custom image signing | the composed development image uses the pre-signed persistent APK from `scripts/build-guest.sh --platform-test-key`; source-built images use `android_app_import { certificate: "platform", privileged: true, presigned: false }` with the image's platform key ([android-image.md](android-image.md) §11.1, §11.5) |
 | Version | `versionCode = major × 1 000 000 + minor × 1 000 + patch` of the APKRun release that built them. `versionName` is the APKRun version plus the git revision |
 
-The host app bundle carries the development-mode APK at `APKRun.app/Contents/Resources/guest/apkrun-guest.apk`, with its version record `apkrun-guest.json`. The host finds the bundle in this order:
+Debug host app bundles carry the development-mode APK at `APKRun.app/Contents/Resources/guest/apkrun-guest.apk`, with its version record `apkrun-guest.json`. Release bundles omit this development APK; the release image is planned to carry the platform-signed Guest Agent (#120). A Debug host finds its bundle in this order:
 
 1. the `--guest-dir` flag,
 2. the `APKRUN_GUEST_DIR` environment variable,
@@ -81,7 +81,7 @@ adb shell 'CLASSPATH=$(pm path io.apkrun.guest | sed "s/^package://") \
 - `app_process` with the installed APK on the class path is the scrcpy pattern. The process runs under the shell uid in the `shell` SELinux domain, with the shell's permissions (§5).
 - `setsid nohup … &` detaches it from the ADB session, so it survives host reconnects.
 - Single instance: the daemon binds the abstract socket `@apkrun-guestd-control` first. If the bind fails with `EADDRINUSE`, another instance runs, and the new one exits with status 3.
-- `Main` calls `Looper.prepareMainLooper()`, creates the service objects, binds `@apkrun-guestd-control`, `@apkrun-guestd-input`, and `@apkrun-guestd-bulk`, and runs the looper. There is no `Context`. System services are reached through `SystemServices` (§6.2).
+- `Main` calls `Looper.prepareMainLooper()`, creates the service objects, binds `@apkrun-guestd-control`, `@apkrun-guestd-input`, and `@apkrun-guestd-bulk`, and runs the looper. The development `app_process` path has no app `Context`; system services are reached through `SystemServices` (§6.2). The custom-image Application supplies its real context to the same daemon.
 
 ### 3.3 Supervision
 
@@ -91,12 +91,12 @@ adb shell 'CLASSPATH=$(pm path io.apkrun.guest | sed "s/^package://") \
 
 ### 3.4 Device setup applied at start
 
-The daemon applies these once per start. They are idempotent, and each is one service call, not a shell command.
+The daemon applies these once per start. They are idempotent and use one service call for each setting.
 
 | Setting | Call (shell equivalent) | Why |
 |---|---|---|
 | Stay awake | `Settings.Global.STAY_ON_WHILE_PLUGGED_IN = 7`, `Settings.System.SCREEN_OFF_TIMEOUT = Int.MAX_VALUE` (`svc power stayon true`) | external displays follow the power state of display 0 ([display-and-windowing.md](display-and-windowing.md) §4) |
-| No keyguard | `ILockSettings.setLockScreenDisabled(true, 0)` (`cmd lock_settings set-disabled true`) | a keyguard would cover app displays |
+| No keyguard | `ILockSettings.setBoolean("lockscreen.disabled", true, 0)` (`cmd lock_settings set-disabled true`) | a keyguard would cover app displays |
 | APKRun IME enabled and default | `Settings.Secure.ENABLED_INPUT_METHODS` += the IME, `DEFAULT_INPUT_METHOD` = the IME (`ime enable`, `ime set`) | [input.md](input.md) §5.6 |
 | Window animations | unchanged | apps expect normal animation. `apkrun dev --no-animations` turns them off for tests |
 | Show IME with a hardware keyboard | `Settings.Secure.SHOW_IME_WITH_HARD_KEYBOARD = 1` | keeps Android from hiding the IME's input connection when key events come from a "physical" keyboard source |
@@ -105,7 +105,7 @@ The IME rows are the IME steps. The daemon applies the other rows without the IM
 
 The original values are not restored when the agent stops. The stock image is a development runtime.
 
-The steps run through each service's shell entry point (`IBinder.shellCommand`). The settings provider and the keyguard switch refuse direct calls from the shell uid. The keyguard switch is the `lockscreen.disabled` key (R-18).
+In development mode the steps run through each service's shell entry point (`IBinder.shellCommand`), because the settings provider and keyguard switch refuse direct calls from the shell uid. On the custom image the privileged app uses `Settings.Global` and `Settings.System` for the stay-awake settings, and `ILockSettings.setBoolean("lockscreen.disabled", true, 0)` for keyguard (R-18). Neither path starts a process.
 
 ---
 
@@ -113,7 +113,7 @@ The steps run through each service's shell entry point (`IBinder.shellCommand`).
 
 ### 4.1 Manifest
 
-The application is `io.apkrun.guest`, with `android:persistent="true"`, `directBootAware="true"`, `defaultToDeviceProtectedStorage="true"`, `allowBackup="false"`, class `.GuestAgentApplication`, and label "APKRun Guest Agent".
+The application is `io.apkrun.guest`, with `android:persistent="true"` in the AOSP prebuilt and false in the development APK, `directBootAware="true"`, `defaultToDeviceProtectedStorage="true"`, `allowBackup="false"`, class `.GuestAgentApplication`, and label "APKRun Guest Agent".
 
 | Component | Declaration | Purpose |
 |---|---|---|
@@ -131,7 +131,7 @@ The application is `io.apkrun.guest`, with `android:persistent="true"`, `directB
 
 ### 4.2 SELinux
 
-- `seapp_contexts`: `user=_app isPrivApp=true seinfo=platform name=io.apkrun.guest domain=apkrun_guest_app type=app_data_file levelFrom=all`, and the same for `io.apkrun.store` with `apkrun_store_app`.
+- `seapp_contexts`: `user=_app isPrivApp=true seinfo=platform name=io.apkrun.guest domain=apkrun_guest_app type=app_data_file levelFrom=all`. #37 adds the corresponding `io.apkrun.store` / `apkrun_store_app` entry; the #36 image maps only the Guest Agent.
 - `apkrun_guest_app.te` (sketch; the final rules come from the audit of permissive-mode denials, §13):
 
 ```text
@@ -147,6 +147,8 @@ allow apkrun_vsockd apkrun_guest_app:unix_stream_socket connectto;
 ```
 
 - `apkrun_store_app` follows the same pattern, with `package_service`, `storagestats_service`, and the installer-related services.
+- The Guest Agent domain keeps only the `service_manager find` rules observed for `gpu_service`, `netstats_service`, and `content_capture_service`; it does not receive the full `app_api_service` attribute. It gets its own `[userfaultfd]` object type with only `create`, `ioctl`, and `read`, plus `memfd_file execute` for its own type, matching the Android app-domain behavior needed by ART.
+- `apkrun_vsockd` is an MLS trusted subject so it can connect to the agents' per-app MCS-labeled abstract sockets. This attribute bypasses MLS checks for every constrained class the daemon uses; it does not scope the exception to `connectto`. Android 17's inherited `domain` rules let the trusted bridge search/read generic `/proc` directories and read `/proc` symlinks across app MCS categories, exposing process metadata. The captured effective-policy audit found no allow to ordinary app-data types or arbitrary app IPC. Re-audit the daemon's full effective TE closure, including inherited `coredomain` rules, whenever the Android base policy changes. #36 grants `connectto` only to `apkrun_guest_app`; #37 adds `apkrun_store_app`. Keep the agents' `levelFrom=all` labels.
 - The new domains are developed in permissive mode only (`permissive apkrun_guest_app;` in userdebug development builds), and the denials become rules. Release builds have no permissive domains. CI checks that `permissive` does not appear in a `user` build's policy.
 
 ### 4.3 Privileged permissions
@@ -230,7 +232,7 @@ Main / GuestAgentApplication
 `SystemServices` (in `Guest/agentruntime`) wraps the hidden framework interfaces. It gets each service with `ServiceManager.getService(name)` and `I*.Stub.asInterface`, through reflection, as scrcpy does. Each wrapper:
 
 - resolves its methods once at start and records which signatures exist. Android changes hidden signatures between releases, so each wrapper has variants selected by `Build.VERSION.SDK_INT` and by what is present at run time;
-- fails the owning capability, not the agent, when a method is missing. The capability is then left out of `Hello`, and `GetHealth` reports the missing method name;
+- fails the owning capability, not the agent, when a method is missing. The capability is then left out of `Hello`. When `health.v1` remains available, `GetHealth` reports missing method names; when a missing health method disables `health.v1`, startup diagnostics report the unavailable method because `GetHealth` cannot be called;
 - is covered by an instrumented test on each supported image (§12).
 
 Hidden API restrictions do not apply to `app_process` or to platform-signed system apps, so the same wrappers work in both modes. On the custom image, public or system APIs are used where they exist (`Context.getSystemService`). The reflection wrappers are used only where they do not.
@@ -320,7 +322,7 @@ The content rules of the host apply ([guest-protocol.md](guest-protocol.md) §14
 - For each port: `socket(AF_VSOCK, SOCK_STREAM)`, bind `VMADDR_CID_ANY:<port>`, and listen. On accept, check that the peer CID is `VMADDR_CID_HOST` (2). Then connect to the abstract socket and splice both directions until either side closes. `SO_KEEPALIVE` stays off. Liveness is the protocol's job.
 - Limits: at most 8 concurrent connections per port. Excess connections are closed at once. If the upstream connect fails (the agent is not running), the vsock connection is closed at once, and the host's backoff handles it ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3.1).
 - The bridge does not parse, log, or buffer payloads beyond a 64 KiB copy buffer per direction.
-- The agents accept the bridge by its uid (`PeerCheck`, the `SO_PEERCRED` rule of [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3.1). On the custom image they accept `system` (1000, the bridge) and `root` (0), and `shell` (2000, the ADB forward) only with developer mode on. On the stock image in development mode they accept `shell` and `root`, because adbd is the only peer there; that is the rule built so far. #36 adds the custom-image rule.
+- The agents accept peers by uid (`PeerCheck`, the `SO_PEERCRED` rule of [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3.1). The daemon maps its explicit `AgentMode` to a peer policy for each socket: `PRIVILEGED_APP` selects the custom-image rule, allowing `system` (1000, the bridge) and `root` (0), plus `shell` (2000) only when `ro.boot.apkrun.devmode=1`; an unreadable or unset developer-mode property never enables `shell`. `DEVELOPMENT_SHELL` is the stock-image path and accepts only `shell` and `root`, because adbd is the only peer there. Unknown modes are refused. The custom-image rule does not depend on reading `ro.apkrun.product` from the app domain.
 
 ### 10.2 Implementation
 
@@ -337,7 +339,7 @@ service apkrun_vsockd /system_ext/bin/apkrun_vsockd
     restart_period 1
 ```
 
-- `sepolicy/apkrun_vsockd.te` (sketch):
+- `sepolicy/apkrun_vsockd.te` (sketch; #36 allows the Guest Agent, and #37 adds the Store Agent):
 
 ```text
 type apkrun_vsockd, domain;
@@ -361,7 +363,7 @@ The exact names of the attribute and the permission set are confirmed against th
 | T0 | `SystemServices` wrappers: a missing framework method fails only its capability | `Guest/agentruntime/src/test/` (`SystemServiceWrapperTest.kt`) |
 | T0 | Rust unit tests for the bridge's port table and connection limits (`cargo test`) | `Guest/vsockd/` |
 | T1 | `apkrun_vsockd` on Linux with the `vsock_loopback` kernel module | `Guest/vsockd/` |
-| T2 | Instrumented `SystemServicesTest` on each supported image (`am instrument`): every wrapper resolves, and a missing method fails only its capability | on the image |
+| T2 | `SystemServicesTest` instrumentation APK on each supported image (`am instrument`): it inspects the installed Guest Agent's actual wrappers, verifies each resolves, and checks that a synthetic missing method throws `ServiceMethodMissing` without disabling other methods or wrappers. The AndroidCustom host test compares the wrapper report with the Guest Agent handshake capabilities | `Tests/Fixtures/AndroidApps/SystemServicesTest/`; AndroidCustom installs the platform-test-signed fixture through ADB |
 | T2 | Development mode: install, start, kill, restart, and reinstall with a different version | `Tests/IntegrationTests/GuestAgentTests/` |
 | T2 | Custom image: persistent restart after `kill`. The HelloProbe fixture app (an ordinary `untrusted_app`) fails to connect to the agents' sockets. No denials for the agents in enforcing mode during the suite | `Tests/IntegrationTests/` |
 | T2 | Store Agent: install, update, uninstall, metadata | `Tests/IntegrationTests/AndroidPackageTests/` |

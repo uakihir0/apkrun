@@ -27,7 +27,7 @@ The ADR also decides the header format. The proposal is one line, `SPDX-License-
 
 ## 2. Prebuilt Cuttlefish image
 
-The `kind: stock` image comes from a ci.android.com build ([android-image.md](../02-design/android-image.md) §2). It is for development only (M1–M4; [android-image.md](../02-design/android-image.md) §2.3).
+The `kind: stock` image comes from a ci.android.com build ([android-image.md](../02-design/android-image.md) §2). It is for development only (M1–M4; [android-image.md](../02-design/android-image.md) §2.3). A composed `kind: apkrun` bundle ([ADR-0019](../01-architecture/decisions/0019-composed-development-image.md)) contains it, so every rule of this section applies to composed bundles too.
 
 | Allowed | Never |
 |---|---|
@@ -177,7 +177,7 @@ These rules apply to components APKRun distributes or uses as build or test tool
 | Kotlin stdlib, `org.jetbrains:annotations`, kotlinx-coroutines | app, image | Apache-2.0 | the Guest Agent APK (`Resources/guest/`) and the image |
 | protobuf-javalite | app, image | BSD-3-Clause | same |
 | RiftVM | reference | MIT | analysis input only (§3.1) |
-| `libc`, `log`, `android_logger` and their dependencies (planned, #35) | image | MIT OR Apache-2.0 | `apkrun_vsockd`; the product uses AOSP `external/rust/crates`, which carry their own metadata |
+| `libc`, `log`, `android_logger` and their dependencies | image | MIT OR Apache-2.0 | `apkrun_vsockd`; the product uses AOSP `external/rust/crates`, which carry their own metadata |
 | AOSP, including the prebuilt kernel | image | many; kernel GPL-2.0-only | not lock entries (§4.3); notices and source offer in §7 |
 | `avbtool.py`, AOSP AVB test key | tooling, committed | MIT | vendored, test only (§3.3) |
 | `mkbootimg.py`, `unpack_bootimg.py` | tooling, committed | Apache-2.0 | vendored (§3.3) |

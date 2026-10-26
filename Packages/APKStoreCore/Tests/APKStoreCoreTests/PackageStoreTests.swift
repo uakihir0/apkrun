@@ -553,7 +553,7 @@ private actor CompletionFlag {
                 runtimeAccess: runtime,
                 inspector: { _ in facts() },
                 faultInjector: { kind, step in
-                    if kind == "uninstall", step == "guestUninstallRequested" {
+                    if kind == "uninstall", step == "guestUninstallReplyReceived" {
                         throw InjectedStoreCrash()
                     }
                 }

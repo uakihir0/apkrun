@@ -88,7 +88,7 @@ apkrund sets a requirement on each listener with `setConnectionCodeSigningRequir
 
 ```swift
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
-    public static let current = APIVersion(major: 1, minor: 12)
+    public static let current = APIVersion(major: 1, minor: 13)
     public let major: Int
     public let minor: Int
 }
@@ -111,6 +111,7 @@ Target constants (not in code): `wrapperMajors = [1]` (served on the wrapper end
 | 1.10 | `packages.installed` and `packages.updated` events |
 | 1.11 | `beginUninstallPackage`; `PackageChange.removed`; `OperationSnapshot.requestFingerprint` |
 | 1.12 | Authenticated control operation `listSessions`; `RuntimeSessionSnapshot` |
+| 1.13 | `sessions.snapshotChanged` event; clients refresh `listSessions` |
 
 ### 2.2 Rules per endpoint
 
@@ -451,7 +452,7 @@ Cancellation points:
 | Topic | Payload | Subscribers |
 |---|---|---|
 | `runtime` | `RuntimeChange` | C, L |
-| `sessions` | `SessionListChange` (target) | C |
+| `sessions` | `SessionListChange` | C |
 | `packages` | `PackageChange` | C |
 | `updates` | `UpdateEvent` (target) | C |
 | `operations` | `OperationEvent` | C; W for own operations (target) |
@@ -1331,7 +1332,7 @@ Topics fan out state changes to every subscriber. Streams deliver a sequence to 
 
 `EventEnvelope`: `topic` (`EventTopic`), `seq` (UInt64, per connection from 1, assigned at send), `time` (Date), `operationID` (`OperationID`?), `payload` (`EventPayload`).
 
-`EventPayload`: `runtime(RuntimeChange)`, `sessions(SessionListChange)` (target), `packages(PackageChange)`, `updates(UpdateEvent)` (target), `operations(OperationEvent)`, `health(HealthEvent)` (target), `maintenance(MaintenanceEvent)` (target), `wrappers(WrapperChange)` (target), `integrations(IntegrationChange)` (target), `resyncRequired(EventTopic)`, `unknown`.
+`EventPayload`: `runtime(RuntimeChange)`, `sessions(SessionListChange)`, `packages(PackageChange)`, `updates(UpdateEvent)` (target), `operations(OperationEvent)`, `health(HealthEvent)` (target), `maintenance(MaintenanceEvent)` (target), `wrappers(WrapperChange)` (target), `integrations(IntegrationChange)` (target), `resyncRequired(EventTopic)`, `unknown`.
 
 | Rule | Value |
 |---|---|
@@ -1359,7 +1360,9 @@ Coalescing keys: `runtime.bootProgress` (one key); `operations.progress` and `pa
 
 `PackageChange` (topic `packages`): `installed(RuntimePackageSummary)`, `updated(RuntimePackageSummary, from: RuntimeVersionCode)` (also same-version reinstall; `from` is a best observation), `removed(RuntimePackageID, keptData: Bool)`, `unknown`. Target cases: `rolledBack`, `stateChanged(RuntimePackageID, WirePackageState)`, `operationProgress(RuntimePackageID, OperationID, StoreOperationProgress)`, `iconChanged`, `settingsChanged(RuntimePackageID, keys:)`, `unmanagedChanged([RuntimePackageSummary])` ([package-store.md](../02-design/package-store.md) §11.3). Target `WirePackageState` adds `importing`, `inspecting`, `updating`, `needsReinstall`.
 
-Other target events: `UpdateEvent` (`phaseChanged`, `progress`, `finished`, `summaryChanged(available:waiting:failed:)`) ([update-system.md](../02-design/update-system.md) §11.2); `IntegrationChange` (`statusChanged`, `recordingChanged`, `sharedFoldersChanged`) ([desktop-integration.md](../02-design/desktop-integration.md) §11); `SessionListChange` (`opened`, `stateChanged`, `ended`, each with `SessionSummary`).
+`SessionListChange` (built): `snapshotChanged`. After receiving it, fetch a fresh `listSessions` snapshot; the notification carries no session data. The daemon currently publishes it for changes in its Debug headless session service. Normal app-window sessions remain a #69 dependency. Target cases are `opened`, `stateChanged`, and `ended`, each with `SessionSummary`.
+
+Other target events: `UpdateEvent` (`phaseChanged`, `progress`, `finished`, `summaryChanged(available:waiting:failed:)`) ([update-system.md](../02-design/update-system.md) §11.2); `IntegrationChange` (`statusChanged`, `recordingChanged`, `sharedFoldersChanged`) ([desktop-integration.md](../02-design/desktop-integration.md) §11).
 
 `StoreOperationProgress`: `stage` (`StoreOperationStage`: `copying`, `inspecting`, `receiving`, `verifying`, `committing`, `uninstalling`, `unknown`; target), `fraction` (Double?).
 

@@ -16,7 +16,7 @@ private func eventRoundTrip<Value: Codable & Equatable>(_ value: Value) throws -
     let subscribe = RuntimeSubscribeControlRequest(header: header, topics: [.operations, .packages])
     let unsubscribe = RuntimeUnsubscribeControlRequest(header: header, topics: [.operations])
 
-    #expect(APIVersion.current == APIVersion(major: 1, minor: 12))
+    #expect(APIVersion.current == APIVersion(major: 1, minor: 13))
     #expect(try topics.map(eventRoundTrip) == topics)
     #expect(try eventRoundTrip(subscribe) == subscribe)
     #expect(try eventRoundTrip(unsubscribe) == unsubscribe)
@@ -44,6 +44,33 @@ private func eventRoundTrip<Value: Codable & Equatable>(_ value: Value) throws -
                 error: .runtime("notAuthorized", message: "Not authorized.", remediation: "Reconnect.")
             )
     )
+}
+
+@Test func sessionListChangeEventsRoundTripAndPreserveFutureCases() throws {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let envelope = EventEnvelope(
+        topic: .sessions,
+        seq: 1,
+        time: now,
+        payload: .sessions(.snapshotChanged)
+    )
+
+    #expect(try eventRoundTrip(envelope) == envelope)
+    #expect(
+        try JSONDecoder().decode(
+            EventPayload.self,
+            from: Data(#"{"sessions":{"_0":{"stateChanged":{"_0":"running"}}}}"#.utf8)
+        ) == .sessions(.unknown)
+    )
+    #expect(
+        try JSONDecoder().decode(
+            EventPayload.self,
+            from: Data(#"{"futureSessionsEvent":{"value":1}}"#.utf8)
+        ) == .unknown
+    )
+    #expect(throws: EncodingError.self) {
+        try JSONEncoder().encode(SessionListChange.unknown)
+    }
 }
 
 @Test func operationEventsAndEnvelopesRoundTrip() throws {

@@ -8,8 +8,8 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.7 adds daemon-backed package import and install; 1.8 adds asynchronous install handles
     /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
     /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
-    /// 1.12 adds the authenticated `listSessions` operation.
-    public static let current = APIVersion(major: 1, minor: 12)
+    /// 1.12 adds the authenticated `listSessions` operation; 1.13 adds session snapshot change events.
+    public static let current = APIVersion(major: 1, minor: 13)
 
     /// The incompatible protocol generation.
     public let major: Int

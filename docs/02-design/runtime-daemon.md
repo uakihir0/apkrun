@@ -506,6 +506,7 @@ Long operations return an `OperationHandle { operationID }` at once. `OperationK
 - Session events (`frameReady`, `surfacesReplaced`, `imeStateChanged`, …) go only to the session's own connection.
 - For `runtime` boot progress, `operations` progress, and `health`, only the latest value per key is delivered, at most 10 per second per subscriber. State changes and results are never coalesced. An invalidated subscriber is removed at once.
 - A successful install publishes `packages.installed` or `packages.updated`. A successful tracked uninstall publishes `packages.removed`.
+- A change in the available headless session snapshot publishes `sessions.snapshotChanged`; clients then fetch `listSessions`. This currently covers Debug headless sessions only. Normal app-window sessions join this topic when the window session path is connected (#69).
 
 ### 8.5 The CLI as a client
 

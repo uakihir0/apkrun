@@ -429,12 +429,9 @@ public actor RuntimeHost {
         try beginLifecycleOperation()
         defer { finishLifecycleOperation() }
         runtimeSessionGeneration &+= 1
-        if let service = headlessSessionService as? DaemonHeadlessSessionService {
-            await service.shutdown()
-        }
+        await stopHeadlessSessionService()
         await supervisor?.stop(reason: reason)
         await packageQueryService?.detachRuntime()
-        headlessSessionService = nil
     }
 
     /// Clears the automatic boot-loop guard without starting Android or deleting user data.
@@ -1443,10 +1440,7 @@ public actor RuntimeHost {
             return
         }
         await waitForPackageMutations()
-        if let service = headlessSessionService as? DaemonHeadlessSessionService {
-            await service.shutdown()
-        }
-        headlessSessionService = nil
+        await stopHeadlessSessionService()
         // Mark an in-flight VM start for cancellation before waiting for any storage work to finish.
         await supervisor?.stop(reason: .hostShutdown)
         await waitForLifecycleOperations()
@@ -1715,10 +1709,26 @@ public actor RuntimeHost {
         let service = DaemonHeadlessSessionService(
             guestAgent: guestAgent,
             displayPool: displayPool,
-            logSink: diagnostics?.logSink
+            logSink: diagnostics?.logSink,
+            onSessionSnapshotChanged: { [eventHub] in
+                eventHub.publishSessionListChange(.snapshotChanged)
+            }
         )
         headlessSessionService = service
         return service
+    }
+
+    private func stopHeadlessSessionService() async {
+        guard let service = headlessSessionService as? DaemonHeadlessSessionService else {
+            headlessSessionService = nil
+            return
+        }
+        await service.shutdown()
+        let hadLiveSessions = !(await service.listSessions()).isEmpty
+        headlessSessionService = nil
+        if hadLiveSessions {
+            eventHub.publishSessionListChange(.snapshotChanged)
+        }
     }
 
     private func packageQueryServiceInstance() -> EmbeddedPackageService {

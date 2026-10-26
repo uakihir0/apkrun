@@ -260,6 +260,7 @@ class Connection(
                 GuestCapability.INPUT,
                 GuestCapability.INPUT_ACK_TRACE,
                 GuestCapability.PACKAGES,
+                GuestCapability.LOCALE,
             )
     }
 }

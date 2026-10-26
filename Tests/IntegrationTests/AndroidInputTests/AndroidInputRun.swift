@@ -25,6 +25,7 @@ enum AndroidInputRunFailure: Error, Equatable {
     case ambiguousDisplay
     case cannotCreateSystemEvent
     case periodicAcknowledgementRequiresDirectView
+    case adbEndpointUnavailable
 }
 
 enum InputPointerDelivery: Sendable, Equatable {
@@ -102,8 +103,11 @@ final class AndroidInputRun {
     private static let width = 1024
     private static let height = 768
 
-    let adb: AdbClient
+    private(set) var adb: AdbClient
+    private let adbExecutable: URL
+    private let adbHostPort: UInt16
     private let home: URL
+    private let adbHostPortEvents = AsyncStream.makeStream(of: UInt16?.self)
     private let pointerDelivery: InputPointerDelivery
     private let display = DeveloperDisplay(pixelWidth: AndroidInputRun.width, pixelHeight: AndroidInputRun.height)
     private let route = DevInputRoute()
@@ -118,9 +122,16 @@ final class AndroidInputRun {
     private var boot: Task<Void, Never>?
     private var activationPolicyToRestore: NSApplication.ActivationPolicy?
 
-    private init(home: URL, adb: AdbClient, pointerDelivery: InputPointerDelivery) {
+    private init(
+        home: URL,
+        adbExecutable: URL,
+        adbHostPort: UInt16,
+        pointerDelivery: InputPointerDelivery
+    ) {
         self.home = home
-        self.adb = adb
+        self.adbExecutable = adbExecutable
+        self.adbHostPort = adbHostPort
+        adb = AdbClient(executable: adbExecutable)
         self.pointerDelivery = pointerDelivery
     }
 
@@ -152,7 +163,8 @@ final class AndroidInputRun {
             // DevBoot passes its environment only to the paths, and the supervisor finds adb in the process environment.
             setenv("ANDROID_HOME", sdk, 1)
         }
-        let home = try AndroidBootFixture.makeHome()
+        let resources = try VMRunResources.new(environment: ProcessInfo.processInfo.environment)
+        let home = resources.home
         do {
             _ = try await AndroidBootFixture(home: home, bundle: bundle)
         } catch {
@@ -161,7 +173,8 @@ final class AndroidInputRun {
         }
         let run = AndroidInputRun(
             home: home,
-            adb: AdbClient(executable: adbExecutable),
+            adbExecutable: adbExecutable,
+            adbHostPort: resources.adbHostPort,
             pointerDelivery: pointerDelivery
         )
         run.startBoot(guestAgentDirectory: URL(fileURLWithPath: guest, isDirectory: true))
@@ -591,12 +604,18 @@ final class AndroidInputRun {
     }
 
     private func startBoot(guestAgentDirectory: URL) {
-        var options = DevBootOptions(gpu: .virgl, stopWhenReady: false, guestAgentDirectory: guestAgentDirectory)
+        var options = DevBootOptions(
+            gpu: .virgl,
+            adbHostPort: adbHostPort,
+            stopWhenReady: false,
+            guestAgentDirectory: guestAgentDirectory
+        )
         options.developerDisplay = display
         options.inputRoute = route
         let bootLog = bootLog
         let stops = stop.stream
         let home = home
+        let adbHostPortContinuation = adbHostPortEvents.continuation
         let report: @Sendable (DevBootEvent) -> Void = { event in
             if case .message(let text) = event { bootLog.append(text) }
             if case .warning(let text) = event { bootLog.append(text) }
@@ -607,7 +626,17 @@ final class AndroidInputRun {
         boot = Task.detached {
             do {
                 try await DevBoot().run(
-                    options: options, environment: ["APKRUN_HOME": home.path], stopRequests: stops, onEvent: report)
+                    options: options,
+                    environment: ["APKRUN_HOME": home.path],
+                    stopRequests: stops,
+                    onRuntimeReady: { context in
+                        let port = await context.supervisor.developmentADBHostPort
+                        adbHostPortContinuation.yield(port)
+                        adbHostPortContinuation.finish()
+                        return nil
+                    },
+                    onEvent: report
+                )
             } catch {
                 bootLog.append("failed: \(error)")
             }
@@ -667,6 +696,13 @@ final class AndroidInputRun {
             self.bootLog.contains("input is bound to display 0")
         }
         try await waitUntil(seconds: 120, "the first frames") { self.framesSeen >= 2 }
+        guard let adbHostPort = await nextADBHostPort() else {
+            throw AndroidInputRunFailure.adbEndpointUnavailable
+        }
+        adb = AdbClient(
+            executable: adbExecutable,
+            endpoint: AdbClient.loopbackEndpoint(port: adbHostPort)
+        )
         try await adb.connect(timeout: .seconds(30))
         try await adb.install(apk: apk)
         // The lock screen covers the app on this image: the dump of the first failing case showed only SystemUI (IR-1285). The
@@ -674,6 +710,13 @@ final class AndroidInputRun {
         _ = try await adb.shell("input keyevent 82")
         _ = try await adb.shell("wm dismiss-keyguard")
         try await launch(package)
+    }
+
+    private func nextADBHostPort() async -> UInt16? {
+        for await port in adbHostPortEvents.stream {
+            return port
+        }
+        return nil
     }
 
     /// Polls `condition` every 200 ms until it holds. It throws when `seconds` have passed.

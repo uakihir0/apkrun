@@ -1,5 +1,6 @@
 import DiagnosticsCore
 import Foundation
+import XCTest
 
 /// What one VM test run owns: its APKRUN home and its developer ADB port (test-strategy §3.10).
 ///
@@ -104,13 +105,15 @@ public struct VMRunResources: Equatable, Sendable {
         }
     }
 
-    /// Removes the run's home, and writes the path and the error to standard error when that fails. A `defer`
-    /// cannot throw, so the failure appears in the test output instead of being discarded.
+    /// Removes the run's home, and fails the current test after writing the path and error to standard error when
+    /// removal fails. A `defer` cannot throw, so the failure must be recorded in the test result.
     public static func removeHomeOrReport(_ home: URL) {
         do {
             try removeHome(home)
         } catch {
-            FileHandle.standardError.write(Data("VMRunResources: the run home was not removed: \(error)\n".utf8))
+            let message = "VMRunResources: the run home was not removed: \(error)"
+            FileHandle.standardError.write(Data("\(message)\n".utf8))
+            XCTFail(message)
         }
     }
 

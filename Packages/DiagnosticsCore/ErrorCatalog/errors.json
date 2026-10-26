@@ -1076,6 +1076,26 @@
       }
     },
     {
+      "code": "runtime.timeSyncFailed",
+      "parameters": [],
+      "message": {
+        "en": "Android's locale or time settings may differ from this Mac.",
+        "ja": "Android の言語または時刻の設定がこの Mac と異なる可能性があります。"
+      },
+      "remediation": {
+        "en": "Check Settings → Language & Region. Restart Android if the problem continues.",
+        "ja": "設定 → 言語と地域を確認してください。問題が続く場合は Android を再起動してください。"
+      },
+      "action": "restartAndroid",
+      "cliExit": 1,
+      "doc": {
+        "case": "localeTimeSyncFailed",
+        "when": "the host cannot synchronize Android's locale, time zone, clock format, or wall clock",
+        "raisedBy": "LocaleTimeHealthCheck",
+        "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §9"
+      }
+    },
+    {
       "code": "runtime.apiVersionMismatch",
       "parameters": [],
       "message": {

@@ -33,6 +33,7 @@ import Testing
                 "internal", "devLinuxTimedOut",
                 "devLinuxInvalidOptions", "devLinuxArtifactDirectoryMustBeAbsolute",
                 "devLinuxCheckFailed", "devLinuxDidNotFinish",
+                "operationNotFound", "timeSyncFailed",
                 "adbExecutableMissing", "adbLaunchFailed", "adbConnectionUnavailable",
                 "adbCommandFailed", "adbCommandTimedOut", "adbInvalidArgument", "adbUnexpectedOutput",
                 "adbPackageRejected",

@@ -1610,21 +1610,8 @@ def compose_image(
         shutil.rmtree(work)
         _rename_directory_without_replacement(stage, output_directory)
         return record
-    except (
-        ComposeAvbError,
-        ComposeError,
-        ContextsError,
-        ErofsError,
-        ExtractError,
-        ImageCompositionError,
-        LpGrowError,
-        LpWriteError,
-        ManifestError,
-        OSError,
-        ValueError,
-    ):
+    finally:
         shutil.rmtree(stage, ignore_errors=True)
-        raise
 
 
 def _rename_directory_without_replacement(source: Path, destination: Path) -> None:

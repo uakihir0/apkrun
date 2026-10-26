@@ -947,6 +947,23 @@ def test_compose_image_removes_staged_outputs_after_late_failure(
     assert list(output.parent.iterdir()) == []
 
 
+def test_compose_image_removes_staging_after_keyboard_interrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, product, output, _document = _install_composer_fakes(monkeypatch, tmp_path)
+
+    def interrupt_before_final_vbmeta(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(command, "refresh_vbmeta_partition", interrupt_before_final_vbmeta)
+
+    with pytest.raises(KeyboardInterrupt):
+        command.compose_image(manifest, output_directory=output, product_root=product)
+
+    assert not output.exists()
+    assert list(output.parent.iterdir()) == []
+
+
 @pytest.mark.parametrize("existing_destination", ["directory", "symlink"])
 def test_compose_does_not_replace_destination_created_during_composition(
     tmp_path: Path,

@@ -43,3 +43,21 @@ import Testing
     #expect(status.runtimeState == "stopped")
     await host.shutdown()
 }
+
+@Test func localePostBootTriggerIsEnqueuedAfterRestartGuardClears() {
+    var isRestarting = true
+    var didEnqueuePostBoot = false
+
+    LocaleTimeRestartCompletion.finish(
+        didRestart: true,
+        activePackageLaunches: 0,
+        clearRestarting: { isRestarting = false },
+        enqueuePostBoot: {
+            #expect(!isRestarting)
+            didEnqueuePostBoot = true
+        }
+    )
+
+    #expect(!isRestarting)
+    #expect(didEnqueuePostBoot)
+}

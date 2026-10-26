@@ -1,10 +1,26 @@
+import AppKit
 import DiagnosticsCore
 import Foundation
 import ImageCore
+import IntegrationCore
 import RuntimeAPI
 import RuntimeCore
 
 typealias WireOperationID = RuntimeAPI.OperationID
+
+/// Runs the locale post-boot trigger only after a successful restart has cleared its lifecycle guard.
+enum LocaleTimeRestartCompletion {
+    static func finish(
+        didRestart: Bool,
+        activePackageLaunches: Int,
+        clearRestarting: () -> Void,
+        enqueuePostBoot: () -> Void
+    ) {
+        clearRestarting()
+        guard didRestart, activePackageLaunches == 0 else { return }
+        enqueuePostBoot()
+    }
+}
 
 /// Failures that prevent the daemon from accepting lifecycle operations.
 public enum RuntimeHostError: Error, Equatable, Sendable {
@@ -86,6 +102,14 @@ public actor RuntimeHost {
     private var isRuntimeStopping = false
     private var isRuntimeResetting = false
     private var isRuntimeRestarting = false
+    private var activePackageLaunches = 0
+    private var localeTimeGuestAgent: DevelopmentGuestAgent?
+    private var localeTimeResynchronizationHandlerID: UUID?
+    private var localeTimeSynchronizer: LocaleTimeSynchronizer?
+    private var localeTimeSyncTask: Task<Void, Never>?
+    private var localeTimeRefreshTask: Task<Void, Never>?
+    private var localeTimeNotificationRelay: LocaleTimeNotificationRelay?
+    private var localeTimeWarningsSnapshot = Set<LocaleTimeWarning>()
     private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
     private var packageMutationWaiters: [CheckedContinuation<Void, Never>] = []
     private var shutdownWaiters: [CheckedContinuation<Void, Never>] = []
@@ -139,6 +163,14 @@ public actor RuntimeHost {
         self.diagnostics = diagnostics
         let logger = APKLogger(category: RuntimeLogCategory.host, sink: diagnostics.logSink)
         self.logger = logger
+        try? await diagnostics.healthChecks.register(
+            LocaleTimeHealthCheck { [weak self] in
+                guard let self else { return [] }
+                return await self.localeTimeWarnings()
+            }
+        )
+        observeLocaleTimeChanges()
+        startLocaleTimeRefreshLoop()
         recordedBootOperationIDs = Set(
             BootRecordLog.read(from: paths.bootPerformanceFile).map(\.operationID)
         )
@@ -302,6 +334,9 @@ public actor RuntimeHost {
         runtimeStartTask = task
         defer { runtimeStartTask = nil }
         try await task.value.get()
+        if activePackageLaunches == 0 {
+            enqueueLocaleTimeTrigger(.postBoot)
+        }
     }
 
     private func performRuntimeStart(
@@ -419,9 +454,18 @@ public actor RuntimeHost {
             throw .invalidTransition
         }
         isRuntimeRestarting = true
-        defer { isRuntimeRestarting = false }
+        var restartCompleted = false
+        defer {
+            LocaleTimeRestartCompletion.finish(
+                didRestart: restartCompleted,
+                activePackageLaunches: activePackageLaunches,
+                clearRestarting: { isRuntimeRestarting = false },
+                enqueuePostBoot: { enqueueLocaleTimeTrigger(.postBoot) }
+            )
+        }
         try await stopRuntimeBody(reason: .user)
         try await startRuntimeBody(reason: reason)
+        restartCompleted = true
     }
 
     private func stopRuntimeBody(reason: StopReason) async throws(RuntimeHostError) {
@@ -429,6 +473,7 @@ public actor RuntimeHost {
         try beginLifecycleOperation()
         defer { finishLifecycleOperation() }
         runtimeSessionGeneration &+= 1
+        await waitForLocaleTimeSyncToFinish()
         if let service = headlessSessionService as? DaemonHeadlessSessionService {
             await service.shutdown()
         }
@@ -489,7 +534,17 @@ public actor RuntimeHost {
     /// leaves frame surfaces unconsumed.
     public func launch(_ request: RuntimeLaunchRequest) async throws(RuntimeWireError) -> RuntimeLaunchResult {
         try beginPackageLaunch(request.packageID)
-        defer { finishPackageLaunch(request.packageID) }
+        activePackageLaunches += 1
+        var launchCountReleased = false
+        defer {
+            if !launchCountReleased {
+                activePackageLaunches -= 1
+                if activePackageLaunches == 0 {
+                    enqueueLocaleTimeTrigger(.sessionRunning)
+                }
+            }
+            finishPackageLaunch(request.packageID)
+        }
         guard headlessLaunchHookIsEnabled else {
             throw Self.launchUnavailableError
         }
@@ -501,7 +556,11 @@ public actor RuntimeHost {
         try requirePackageLaunchAllowed(request.packageID)
         let service = try await makeHeadlessSessionService()
         try requirePackageLaunchAllowed(request.packageID)
-        return try await service.launch(request)
+        let result = try await service.launch(request)
+        activePackageLaunches -= 1
+        launchCountReleased = true
+        enqueueLocaleTimeTrigger(.sessionRunning)
+        return result
     }
 
     /// Stops a package session through the daemon-owned Guest Agent.
@@ -1259,6 +1318,172 @@ public actor RuntimeHost {
         }
     }
 
+    private func observeLocaleTimeChanges() {
+        guard localeTimeNotificationRelay == nil else { return }
+        let bindings: [LocaleTimeNotificationRelay.Binding] = [
+            .init(center: .default, name: NSLocale.currentLocaleDidChangeNotification, trigger: .hostLocaleChanged),
+            .init(center: .default, name: .NSSystemTimeZoneDidChange, trigger: .timeZoneChanged),
+            .init(center: .default, name: .NSSystemClockDidChange, trigger: .systemClockChanged),
+            .init(
+                center: DistributedNotificationCenter.default(),
+                name: LocaleTimeHostSettings.changedNotification,
+                trigger: .hostPreferencesChanged
+            ),
+            LocaleTimeNotificationRelay.workspaceWakeBinding(
+                notificationCenter: NSWorkspace.shared.notificationCenter
+            ),
+        ]
+        let relay = LocaleTimeNotificationRelay(bindings: bindings) { [weak self] trigger in
+            await self?.enqueueLocaleTimeTrigger(trigger)
+        }
+        relay.start()
+        localeTimeNotificationRelay = relay
+    }
+
+    private func startLocaleTimeRefreshLoop() {
+        guard localeTimeRefreshTask == nil else { return }
+        localeTimeRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(30 * 60))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                await self?.enqueueLocaleTimeTrigger(.periodic)
+            }
+        }
+    }
+
+    private func enqueueLocaleTimeTrigger(_ trigger: LocaleTimeSyncTrigger) {
+        guard !isShuttingDown, !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else { return }
+        let previous = localeTimeSyncTask
+        localeTimeSyncTask = Task { [weak self] in
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            await self?.performLocaleTimeTrigger(trigger)
+        }
+    }
+
+    private func performLocaleTimeTrigger(_ trigger: LocaleTimeSyncTrigger) async {
+        guard !isShuttingDown, !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting,
+            let supervisor,
+            await supervisor.state == .ready,
+            let guestAgent = await supervisor.developmentGuestAgent
+        else {
+            return
+        }
+        await bindLocaleTimeSynchronizer(to: guestAgent)
+        guard await guestAgent.supervisor.state == .ready,
+            let synchronizer = localeTimeSynchronizer,
+            localeTimeGuestAgent === guestAgent
+        else {
+            return
+        }
+
+        let roundTripMilliseconds = await guestAgent.supervisor.lastPingRoundTripMilliseconds
+        let warnings = await synchronizer.synchronize(
+            trigger: trigger,
+            settings: LocaleTimeHostSettings.current(),
+            sessionIsRunning: activePackageLaunches == 0,
+            roundTripMilliseconds: roundTripMilliseconds
+        )
+        recordLocaleTimeWarnings(warnings)
+    }
+
+    private func bindLocaleTimeSynchronizer(to guestAgent: DevelopmentGuestAgent) async {
+        guard localeTimeGuestAgent !== guestAgent || localeTimeSynchronizer == nil else { return }
+        await unbindLocaleTimeSynchronizer()
+
+        let guestSupervisor = guestAgent.supervisor
+        let synchronizer = LocaleTimeSynchronizer(
+            channel: DevelopmentGuestLocaleTimeChannel(agent: guestAgent),
+            onWarningsChanged: { [weak self] warnings in
+                await self?.recordLocaleTimeWarnings(warnings)
+            },
+            onLocaleApplied: { [weak self] in
+                await self?.refreshPackageLabelsAfterLocaleUpdate()
+            }
+        )
+        localeTimeGuestAgent = guestAgent
+        localeTimeSynchronizer = synchronizer
+        let handlerID = await guestSupervisor.addResynchronizationHandler(
+            deliveringCurrentSnapshot: false
+        ) { [weak self] _ in
+            Task { await self?.enqueueLocaleTimeTrigger(.guestReconnected) }
+        }
+        guard !isShuttingDown, !isRuntimeStopping, !isRuntimeRestarting,
+            await supervisor?.developmentGuestAgent === guestAgent
+        else {
+            await guestSupervisor.removeResynchronizationHandler(handlerID)
+            localeTimeGuestAgent = nil
+            localeTimeSynchronizer = nil
+            return
+        }
+        localeTimeResynchronizationHandlerID = handlerID
+    }
+
+    private func refreshPackageLabelsAfterLocaleUpdate() async {
+        guard !isShuttingDown, let supervisor, await supervisor.state == .ready else { return }
+        let service = packageQueryServiceInstance()
+        do {
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+            try await service.refreshLocaleDependentPackageLabels()
+        } catch {
+            logger?.warning(
+                "Android package labels may not reflect the current locale.",
+                errorCode: "integration.displayNameRefreshFailed"
+            )
+        }
+    }
+
+    private func unbindLocaleTimeSynchronizer() async {
+        if let guestAgent = localeTimeGuestAgent,
+            let handlerID = localeTimeResynchronizationHandlerID
+        {
+            await guestAgent.supervisor.removeResynchronizationHandler(handlerID)
+        }
+        localeTimeResynchronizationHandlerID = nil
+        localeTimeGuestAgent = nil
+        localeTimeSynchronizer = nil
+        localeTimeWarningsSnapshot.removeAll()
+    }
+
+    private func waitForLocaleTimeSyncToFinish() async {
+        if let localeTimeSyncTask {
+            await localeTimeSyncTask.value
+            self.localeTimeSyncTask = nil
+        }
+        await unbindLocaleTimeSynchronizer()
+    }
+
+    private func stopLocaleTimeObservers() async {
+        localeTimeRefreshTask?.cancel()
+        localeTimeRefreshTask = nil
+        localeTimeNotificationRelay?.stop()
+        localeTimeNotificationRelay = nil
+        await waitForLocaleTimeSyncToFinish()
+    }
+
+    private func recordLocaleTimeWarnings(_ warnings: [LocaleTimeWarning]) {
+        let current = Set(warnings)
+        guard current != localeTimeWarningsSnapshot else { return }
+        let recovered = !localeTimeWarningsSnapshot.isEmpty && current.isEmpty
+        localeTimeWarningsSnapshot = current
+        if recovered {
+            logger?.notice("Locale and time synchronization recovered")
+        } else if !current.isEmpty {
+            logger?.warning(
+                "Locale and time synchronization needs attention",
+                errorCode: "runtime.timeSyncFailed"
+            )
+        }
+    }
+
+    private func localeTimeWarnings() -> [LocaleTimeWarning] {
+        localeTimeWarningsSnapshot.sorted { $0.rawValue < $1.rawValue }
+    }
+
     /// Advances the status cache without changing the ordered event-delivery cursor.
     func synchronizeRuntimeStateSnapshot(_ snapshot: RuntimeStateSnapshot) {
         guard snapshot.revision > runtimeStateSnapshotRevision else { return }
@@ -1427,6 +1652,7 @@ public actor RuntimeHost {
             return
         }
         isShuttingDown = true
+        await stopLocaleTimeObservers()
         runtimeSessionGeneration &+= 1
         hostState = "shuttingDown"
         guard hasStarted else {

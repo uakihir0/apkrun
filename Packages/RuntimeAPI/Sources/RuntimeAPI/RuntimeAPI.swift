@@ -7,8 +7,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.4 adds package queries; 1.5 adds runtime reset; 1.6 adds one-request runtime restart;
     /// 1.7 adds daemon-backed package import and install; 1.8 adds asynchronous install handles
     /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
-    /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints.
-    public static let current = APIVersion(major: 1, minor: 11)
+    /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
+    /// 1.12 adds global configuration reads and updates.
+    public static let current = APIVersion(major: 1, minor: 12)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -577,6 +578,10 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func restartRuntime(_ request: Data, reply: @escaping (Data) -> Void)
     /// Clears a runtime failure and boot-loop guard without deleting Android data.
     func resetRuntime(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns the effective global configuration.
+    func configuration(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Validates and applies a global configuration merge patch.
+    func updateConfiguration(_ request: Data, reply: @escaping (Data) -> Void)
     /// Lists managed or all known packages.
     func listPackages(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns details for one package.

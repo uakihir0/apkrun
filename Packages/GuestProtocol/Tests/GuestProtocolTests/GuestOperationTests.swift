@@ -51,6 +51,10 @@ private enum EnvelopeSchema {
         ("focus_display", GuestFocusDisplay.number),
         ("query_package", GuestQueryPackage.number),
         ("list_packages", GuestListPackages.number),
+        ("set_locale", GuestSetLocale.number),
+        ("set_time_zone", GuestSetTimeZone.number),
+        ("sync_time", GuestSyncTime.number),
+        ("set_clock_format", GuestSetClockFormat.number),
     ]
     for pair in pairs {
         #expect(requests[pair.name] == pair.number, "Request.\(pair.name) is not \(pair.number)")
@@ -63,6 +67,44 @@ private enum EnvelopeSchema {
     #expect(requests["ping"] == 10)
     #expect(requests["launch_application"] == 14)
     #expect(requests["timeout_ms"] == 1)
+}
+
+@Test func localeTimeOperationsEncodeTheirSchemaRequests() {
+    let locale = GuestSetLocale(languageTags: ["ja-JP", "en-US"])
+    #expect(locale.capability == .locale)
+    #expect(locale.timeout == .seconds(5))
+    #expect(GuestSetLocale.decode(.setLocale(GPEmpty())) != nil)
+    #expect(GuestSetLocale.decode(.setTimeZone(GPEmpty())) == nil)
+    if case .setLocale(let request) = locale.request() {
+        #expect(request.bcp47 == ["ja-JP", "en-US"])
+    } else {
+        Issue.record("GuestSetLocale does not build the set-locale request")
+    }
+
+    let timeZone = GuestSetTimeZone(identifier: "Asia/Tokyo")
+    #expect(GuestSetTimeZone.decode(.setTimeZone(GPEmpty())) != nil)
+    if case .setTimeZone(let request) = timeZone.request() {
+        #expect(request.tzID == "Asia/Tokyo")
+    } else {
+        Issue.record("GuestSetTimeZone does not build the set-time-zone request")
+    }
+
+    let syncTime = GuestSyncTime(unixTimeMilliseconds: 1_800_000_000_123, roundTripMilliseconds: 42)
+    #expect(GuestSyncTime.decode(.syncTime(GPEmpty())) != nil)
+    if case .syncTime(let request) = syncTime.request() {
+        #expect(request.unixTimeMs == 1_800_000_000_123)
+        #expect(request.rttMs == 42)
+    } else {
+        Issue.record("GuestSyncTime does not build the sync-time request")
+    }
+
+    let clockFormat = GuestSetClockFormat(format: .twentyFour)
+    #expect(GuestSetClockFormat.decode(.setClockFormat(GPEmpty())) != nil)
+    if case .setClockFormat(let request) = clockFormat.request() {
+        #expect(request.format == .twentyFour)
+    } else {
+        Issue.record("GuestSetClockFormat does not build the set-clock-format request")
+    }
 }
 
 @Test func anOperationPutsItsOwnCaseInTheRequest() {

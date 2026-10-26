@@ -1,0 +1,36 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Language & Region" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Language & Region" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "言語と地域" } }
+      }
+    },
+    "These settings are temporarily unavailable." : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "These settings are temporarily unavailable." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "これらの設定は一時的に利用できません。" } }
+      }
+    },
+    "Use the Mac's 12/24-hour setting" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Use the Mac's 12/24-hour setting" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "Mac の 12 時間／24 時間表示設定を使用" } }
+      }
+    },
+    "Use the Mac's language in Android" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Use the Mac's language in Android" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "Android で Mac の言語を使用" } }
+      }
+    },
+    "Use the Mac's time zone" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Use the Mac's time zone" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "Mac のタイムゾーンを使用" } }
+      }
+    }
+  },
+  "version" : "1.1"
+}

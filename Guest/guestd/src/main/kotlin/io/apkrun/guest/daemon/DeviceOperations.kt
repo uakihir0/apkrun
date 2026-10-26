@@ -9,9 +9,13 @@ import io.apkrun.guest.protocol.v1.ListPackages
 import io.apkrun.guest.protocol.v1.PackageInfo
 import io.apkrun.guest.protocol.v1.PackageList
 import io.apkrun.guest.protocol.v1.QueryPackage
+import io.apkrun.guest.protocol.v1.SetClockFormat
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
+import io.apkrun.guest.protocol.v1.SetLocale
+import io.apkrun.guest.protocol.v1.SetTimeZone
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
+import io.apkrun.guest.protocol.v1.SyncTime
 import io.apkrun.guest.protocol.v1.SystemState
 import io.apkrun.guest.runtime.HiddenApi
 
@@ -25,6 +29,7 @@ class DeviceOperations(
     private val tasks: TaskService,
     private val launch: LaunchService,
     private val packages: PackageService,
+    private val localeTime: LocaleTimeService = LocaleTimeService(),
 ) : AgentOperations {
     override fun snapshot(): Snapshot =
         Snapshot.newBuilder()
@@ -60,6 +65,14 @@ class DeviceOperations(
     override fun queryPackage(request: QueryPackage): PackageInfo = packages.query(request)
 
     override fun listPackages(request: ListPackages): PackageList = packages.list(request)
+
+    override fun setLocale(request: SetLocale) = localeTime.setLocale(request)
+
+    override fun setTimeZone(request: SetTimeZone) = localeTime.setTimeZone(request)
+
+    override fun setClockFormat(request: SetClockFormat) = localeTime.setClockFormat(request)
+
+    override fun syncTime(request: SyncTime) = localeTime.syncTime(request)
 
     private fun systemState(): SystemState =
         SystemState.newBuilder()

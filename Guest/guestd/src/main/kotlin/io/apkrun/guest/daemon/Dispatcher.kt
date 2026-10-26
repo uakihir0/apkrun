@@ -165,6 +165,22 @@ class Dispatcher(
                 Response.newBuilder()
                     .setListPackages(operations.listPackages(request.listPackages))
                     .build()
+            Request.OpCase.SET_LOCALE -> {
+                operations.setLocale(request.setLocale)
+                Response.newBuilder().setSetLocale(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.SET_TIME_ZONE -> {
+                operations.setTimeZone(request.setTimeZone)
+                Response.newBuilder().setSetTimeZone(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.SET_CLOCK_FORMAT -> {
+                operations.setClockFormat(request.setClockFormat)
+                Response.newBuilder().setSetClockFormat(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.SYNC_TIME -> {
+                operations.syncTime(request.syncTime)
+                Response.newBuilder().setSyncTime(Empty.getDefaultInstance()).build()
+            }
             Request.OpCase.FOCUS_DISPLAY -> {
                 val displayId = request.focusDisplay.displayId
                 withDisplayLock(displayId) { operations.focusDisplay(displayId) }
@@ -213,6 +229,10 @@ class Dispatcher(
                 Request.OpCase.FOCUS_DISPLAY -> GuestCapability.INPUT
                 Request.OpCase.QUERY_PACKAGE,
                 Request.OpCase.LIST_PACKAGES -> GuestCapability.PACKAGES
+                Request.OpCase.SET_LOCALE,
+                Request.OpCase.SET_TIME_ZONE,
+                Request.OpCase.SET_CLOCK_FORMAT,
+                Request.OpCase.SYNC_TIME -> GuestCapability.LOCALE
                 else -> null
             }
 

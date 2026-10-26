@@ -137,6 +137,16 @@ public actor EmbeddedPackageService: RuntimeService {
         self.sessionService = sessionService
     }
 
+    /// Refreshes managed package labels after the guest applies a new locale.
+    func refreshLocaleDependentPackageLabels() async throws(RuntimeWireError) {
+        do {
+            try await ensureOpen()
+            try await refreshAndroidInventory()
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
     /// Launches an installed package in the embedded runtime through the Guest Agent.
     public func launch(_ request: RuntimeLaunchRequest) async throws(RuntimeWireError) -> RuntimeLaunchResult {
         let packageID = request.packageID.rawValue
@@ -881,6 +891,7 @@ public actor EmbeddedPackageService: RuntimeService {
             try await channel.listPackages(.all)
         }
         _ = try await store.saveLastKnownAndroidInventory(packages)
+        _ = try await store.updateManagedDisplayNames(from: packages)
     }
 
     private static func summary(from record: PackageRecord) throws -> RuntimePackageSummary {

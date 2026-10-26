@@ -180,13 +180,13 @@ M9 makes Android apps behave like Mac apps at their edges: notifications, clipbo
 | Field | Value |
 |---|---|
 | Milestone | M9 (v0.5) |
-| Depends on | #35, #36, #70 |
+| Depends on | #35, #36, #70, #77 |
 | Design | [desktop-integration.md](../../02-design/desktop-integration.md) §3.2, §9; [guest-protocol.md](../../02-design/guest-protocol.md) §7.1; [android-image.md](../../02-design/android-image.md) §11.2; [host-ui.md](../../02-design/host-ui.md) §9.6; [wrapper.md](../../02-design/wrapper.md) §9.1 |
 | Code | `Packages/IntegrationCore/Sources/IntegrationCore/Locale/` (`LocaleTimeSync`), `Packages/RuntimeCore/`, `Packages/GuestProtocol/proto/`, `Apps/APKRun/` (Settings → Language & Region), `Guest/guestd/` (`locale/`, `LocaleTimeService`) |
 
 **Goal.** Android uses the Mac's languages, region, time zone, and 12/24-hour setting, and follows changes while it runs. The guest clock stays within 1 s of the Mac, and within 2 s after the Mac wakes.
 
-**Out of scope.** `SyncTime` after resume and wake, and the ADB fallback (#70). Per-app languages and dark mode (post-v1). New tzdata, which comes with image updates (#88).
+**Out of scope.** `SyncTime` after a VM-only resume and the ADB fallback are owned by #70. Per-app languages and dark mode (post-v1). New tzdata, which comes with image updates (#88).
 
 **Steps.**
 1. **Host sources.** `LocaleTimeSync` reads `Locale.preferredLanguages`, adds the region of `Locale.current` to the first tag when it has none, and sends at most 8 BCP 47 tags with script subtags kept (`zh-Hans`, `sr-Latn`). The zone is `TimeZone.current.identifier`, read after `TimeZone.resetSystemTimeZone()`. The 12/24 value is `TWELVE` if `DateFormatter.dateFormat(fromTemplate: "j", options: 0, locale: .current)` contains `a`, else `TWENTY_FOUR`. Use `Locale.autoupdatingCurrent`. **Check:** T0 tag mapping passes, including a first tag without a region.
@@ -197,7 +197,7 @@ M9 makes Android apps behave like Mac apps at their edges: notifications, clipbo
 **Tests.**
 - T0 (`Packages/IntegrationCore/Tests/IntegrationCoreTests/`): tag mapping, 12/24 detection for several locales, the `Etc/GMT` sign and the non-whole-hour case, change-only pushes, and no push on the launch path.
 - T1: simulated power events for the `SyncTime` triggers with a fake channel (FR-VM-11).
-- T2 (`Tests/IntegrationTests/`, custom image): with HelloText running, change the language order, region, and 24-hour setting with `defaults write -g` plus a distributed notification from a test helper, and change the zone with `systemsetup -settimezone`. `GetSnapshot` follows within 2 s, and HelloText shows the new time format. Restore the Mac settings afterwards.
+- T2 (`Tests/IntegrationTests/`, custom image): with HelloText running, change the language order, region, and 24-hour setting with `defaults write -g` plus a distributed notification from a test helper, and change the zone with `systemsetup -settimezone`. `GetSnapshot` follows within 2 s, and HelloText shows the new time format. The `AndroidGuestAgent` configuration also checks `SetTimeZone` through the shell-launched Guest Agent on the stock image; record that result in [guest-components.md](../../02-design/guest-components.md) §5. Restore the Mac settings afterwards.
 - T3 (reference Mac, manual): sleep for 2 min with `pmset sleepnow` and a scheduled wake, then check the guest clock. Make the same changes in System Settings. Check C05-9 ([test-strategy.md](../test-strategy.md) §8.6): with macOS in Japanese, HelloSplit (#43) shows its Japanese string.
 
 **Done when.**

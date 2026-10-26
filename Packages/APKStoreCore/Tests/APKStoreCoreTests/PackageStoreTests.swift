@@ -289,6 +289,85 @@ private actor CompletionFlag {
     #expect(storedAPK != input)
 }
 
+@Test func packageStorePersistsCurrentAndroidLabelsForInstalledManagedPackages() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let packages = temporary.appendingPathComponent("Packages", isDirectory: true)
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let packageDirectory = packages.appendingPathComponent(packageID.rawValue, isDirectory: true)
+    try FileManager.default.createDirectory(at: packageDirectory, withIntermediateDirectories: true)
+    let originalDate = Date(timeIntervalSince1970: 1_800_000_000)
+    let record = PackageRecord(
+        packageId: packageID,
+        displayName: "Hello Text",
+        versionCode: 7,
+        versionName: "1.0",
+        signingCertificates: [],
+        installer: .apkrun,
+        state: .installed,
+        artifacts: ArtifactSlots(currentMatchesAndroid: true),
+        android: AndroidPackageFacts(
+            minSdk: 24,
+            targetSdk: 35,
+            nativeAbis: ["arm64-v8a"],
+            userdataGeneration: UUID(),
+            lastSyncedAt: originalDate
+        ),
+        source: PackageSource(kind: .file, at: originalDate, origin: .cli, fileNames: ["HelloText.apk"]),
+        createdAt: originalDate,
+        updatedAt: originalDate
+    )
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    try encoder.encode(record).write(to: packageDirectory.appendingPathComponent("metadata.json"))
+
+    let store = PackageStore(
+        packagesDirectory: packages,
+        inspector: { _ in facts() },
+        clock: { Date(timeIntervalSince1970: 1_800_000_001) }
+    )
+    try await store.open()
+    let changed = try await store.updateManagedDisplayNames(from: [
+        StorePackageSummary(
+            packageID: packageID,
+            displayName: "テキスト",
+            versionCode: 7,
+            launchable: true,
+            userInstalled: true
+        ),
+        StorePackageSummary(
+            packageID: packageID,
+            displayName: "System copy",
+            versionCode: 7,
+            launchable: true,
+            userInstalled: false
+        ),
+    ])
+
+    #expect(changed == [packageID])
+    let saved = try #require(try await store.listManagedPackages().first)
+    #expect(saved.displayName == "テキスト")
+    #expect(saved.updatedAt == Date(timeIntervalSince1970: 1_800_000_001))
+    #expect(saved.versionCode == record.versionCode)
+    #expect(saved.signingCertificates == record.signingCertificates)
+    #expect(saved.artifacts == record.artifacts)
+    #expect(saved.android == record.android)
+
+    let reopened = PackageStore(packagesDirectory: packages, inspector: { _ in facts() })
+    try await reopened.open()
+    #expect(try await reopened.listManagedPackages().first?.displayName == "テキスト")
+    #expect(
+        try await reopened.updateManagedDisplayNames(from: [
+            StorePackageSummary(
+                packageID: packageID,
+                displayName: "テキスト",
+                versionCode: 7,
+                launchable: true,
+                userInstalled: true
+            )
+        ]).isEmpty)
+}
+
 @Test func packageStoreDiscardsUnusedImportTicketAndPrivateAPKCopy() async throws {
     let temporary = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: temporary) }

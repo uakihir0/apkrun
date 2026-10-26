@@ -48,13 +48,20 @@
             switch event {
             case .attached(let surfaceSet), .surfacesReplaced(let surfaceSet):
                 replaceSurfaceSet(surfaceSet)
-            case .frameReady(let generation, let bufferIndex, let sequence):
+            case .frameReady(let generation, let bufferIndex, let sequence, let presentationTime):
                 if surfaceSet(generation: generation) == nil,
                     let recovered = display.surfaceSet(generation: generation)
                 {
                     replaceSurfaceSet(recovered, publish: false)
                 }
-                continuation.yield(.frameReady(generation: generation, bufferIndex: bufferIndex, sequence: sequence))
+                continuation.yield(
+                    .frameReady(
+                        generation: generation,
+                        bufferIndex: bufferIndex,
+                        sequence: sequence,
+                        presentationTime: presentationTime
+                    )
+                )
             }
         }
 

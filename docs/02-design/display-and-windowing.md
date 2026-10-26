@@ -315,16 +315,17 @@ wrapper                                  apkrund                                
 windowWillStartLiveResize: gravity=.resizeAspect (last frame scaled, letterboxed black)
 ... user drags ...
 windowDidResize (+150 ms quiet)
-resize(DisplayGeometry) ─────────────▶ embedded RuntimeCore (display 0)
+resizeSession(DisplayGeometry) ──────▶ DisplayPool (session display)
                                         advertise mode + new EDID; raise display event
                                                               ──────────────────────────────▶ HWC / SurfaceFlinger
-                                        ◀─────────── display 0 reports new size (≤ 3 s)
-                                        setDisplayPolicy(display 0, density) ───────────────▶ app gets config change
+                                        ◀─────────── display reports new size (≤ 3 s)
+                                        setDisplayPolicy(display, density) ──────────────────▶ app gets config change
                                         create pool g+1; drain old present fence; swap scanout
-◀────────────── surfacesReplaced(SurfaceSet g+1)
+◀────────────── resize reply: descriptor + three IOSurfaces (g+1)
 first frame of g+1 commits to Core Animation; then switch geometry and input mapper
 ```
 
+- The authenticated `resizeSession` reply transfers the updated descriptor and all three IOSurfaces. RuntimeClient installs the replacement before returning `.applied`; apkrund releases frame delivery after sending the reply, so a new-generation frame cannot arrive before its surfaces. RuntimeClient publishes `surfacesReplaced` on the session stream and attaches each generation's `WindowPrefs` to its local frame records so a zoom change uses the matching render scale.
 - The embedded path advertises the new mode and waits up to 3 s for Android display 0 to report that size. Then it applies the density policy and publishes a replacement pool. If confirmation or the policy fails, it restores the prior mode and density where possible, and keeps the old pool.
 - For pool displays, a resize event is confirmed against the latest Guest Agent snapshot before the presenter pool is replaced. A queued event for a mode Android has already left cannot confirm the resize.
 - During a resize request, input is disabled. The old IOSurface stays letterboxed at its aspect ratio until the first frame of the new generation commits. At that commit, the view updates the layer geometry and `CoordinateMapper` together, then resumes input ([input.md](input.md) §3).

@@ -62,7 +62,7 @@ public actor RuntimeHost {
     private var supervisor: RuntimeSupervisor?
     private var supervisorEventsTask: Task<Void, Never>?
     private var packageQueryService: EmbeddedPackageService?
-    private var headlessSessionService: (any RuntimeSessionService)?
+    private var sessionService: DaemonSessionService?
     private var runtimeSessionGeneration: UInt64 = 0
     private var bootProgressEstimator: BootProgressEstimator?
     private var bootStartedAt: ContinuousClock.Instant?
@@ -429,12 +429,12 @@ public actor RuntimeHost {
         try beginLifecycleOperation()
         defer { finishLifecycleOperation() }
         runtimeSessionGeneration &+= 1
-        if let service = headlessSessionService as? DaemonHeadlessSessionService {
+        if let service = sessionService {
             await service.shutdown()
         }
         await supervisor?.stop(reason: reason)
         await packageQueryService?.detachRuntime()
-        headlessSessionService = nil
+        sessionService = nil
     }
 
     /// Clears the automatic boot-loop guard without starting Android or deleting user data.
@@ -483,25 +483,64 @@ public actor RuntimeHost {
     }
 
     /// Launches an app through the daemon-owned Guest Agent session path.
-    ///
-    /// Until the native launcher endpoint is available, this operation is enabled only by the
-    /// Debug-only headless acceptance hook. The headless session owns a DisplayPool lease and
-    /// leaves frame surfaces unconsumed.
     public func launch(_ request: RuntimeLaunchRequest) async throws(RuntimeWireError) -> RuntimeLaunchResult {
         try beginPackageLaunch(request.packageID)
         defer { finishPackageLaunch(request.packageID) }
-        guard headlessLaunchHookIsEnabled else {
-            throw Self.launchUnavailableError
-        }
         do {
             try await startRuntime(reason: .automatic)
         } catch {
             throw Self.sessionWireError(for: error)
         }
         try requirePackageLaunchAllowed(request.packageID)
-        let service = try await makeHeadlessSessionService()
+        let service = try await makeSessionService()
         try requirePackageLaunchAllowed(request.packageID)
         return try await service.launch(request)
+    }
+
+    func openSession(
+        _ request: OpenSessionRequest,
+        connectionID: ObjectIdentifier,
+        frameReady: @escaping @Sendable (FrameReady) -> Void,
+        closeRequested: @escaping @Sendable () async -> Bool
+    ) async throws(RuntimeWireError) -> DaemonOpenedSession {
+        try beginPackageLaunch(request.packageID)
+        defer { finishPackageLaunch(request.packageID) }
+        do {
+            try await startRuntime(reason: .automatic)
+        } catch {
+            throw Self.sessionWireError(for: error)
+        }
+        try requirePackageLaunchAllowed(request.packageID)
+        let service = try await makeSessionService()
+        try requirePackageLaunchAllowed(request.packageID)
+        return try await service.openSession(
+            request,
+            connectionID: connectionID,
+            frameReady: frameReady,
+            closeRequested: closeRequested
+        )
+    }
+
+    func resizeSession(
+        _ request: ResizeSessionRequest,
+        connectionID: ObjectIdentifier
+    ) async throws(RuntimeWireError) -> DaemonSessionResizeResult {
+        guard let sessionService else {
+            throw .runtime("notAuthorized", message: "This launcher does not own an active app window.")
+        }
+        return try await sessionService.resizeSession(request, from: connectionID)
+    }
+
+    func frameDisplayed(_ message: FrameDisplayed, from connectionID: ObjectIdentifier) async {
+        await sessionService?.frameDisplayed(message, from: connectionID)
+    }
+
+    func visibilityChanged(_ visible: Bool, from connectionID: ObjectIdentifier) async {
+        await sessionService?.visibilityChanged(visible, from: connectionID)
+    }
+
+    func sessionClientDisconnected(_ connectionID: ObjectIdentifier) async {
+        await sessionService?.sessionClientDisconnected(connectionID)
     }
 
     /// Stops a package session through the daemon-owned Guest Agent.
@@ -511,13 +550,13 @@ public actor RuntimeHost {
         guard let supervisor, await supervisor.state == .ready else {
             return RuntimeTerminateResult(packageID: request.packageID, hadSession: false)
         }
-        if let headlessSessionService {
-            return try await headlessSessionService.terminate(request)
+        if let sessionService {
+            return try await sessionService.terminate(request)
         }
         guard let guestAgent = await supervisor.developmentGuestAgent else {
             throw Self.guestAgentUnavailableError
         }
-        return try await DaemonHeadlessSessionService.terminateWithoutSession(
+        return try await DaemonSessionService.terminateWithoutSession(
             request,
             using: guestAgent
         )
@@ -884,8 +923,8 @@ public actor RuntimeHost {
         operationID: WireOperationID?
     ) async throws(RuntimeWireError) -> RuntimePackageSummary {
         let service = packageQueryServiceInstance()
-        if let headlessSessionService {
-            await service.setSessionService(headlessSessionService)
+        if let sessionService {
+            await service.setSessionService(sessionService)
         }
         try await service.open()
         try await waitForPackageLaunches(packageID.rawValue)
@@ -902,8 +941,8 @@ public actor RuntimeHost {
         }
 
         try await attachPackageQueriesIfRuntimeIsReady(to: service)
-        if let headlessSessionService {
-            await service.setSessionService(headlessSessionService)
+        if let sessionService {
+            await service.setSessionService(sessionService)
         }
         let storeMutationBoundary: PackageMutationBoundary = { [weak self] () async throws(RuntimeWireError) in
             guard let self else { throw Self.cancelledOperationError }
@@ -940,8 +979,8 @@ public actor RuntimeHost {
             throw Self.incompatibleUninstallOptionsError
         }
         let service = packageQueryServiceInstance()
-        if let headlessSessionService {
-            await service.setSessionService(headlessSessionService)
+        if let sessionService {
+            await service.setSessionService(sessionService)
         }
         try await service.open()
         do {
@@ -960,8 +999,8 @@ public actor RuntimeHost {
                 throw Self.sessionWireError(for: error)
             }
             try await attachPackageQueriesIfRuntimeIsReady(to: service)
-            if let headlessSessionService {
-                await service.setSessionService(headlessSessionService)
+            if let sessionService {
+                await service.setSessionService(sessionService)
             }
             guard !Task.isCancelled else {
                 throw Self.cancelledOperationError
@@ -1435,10 +1474,10 @@ public actor RuntimeHost {
             return
         }
         await waitForPackageMutations()
-        if let service = headlessSessionService as? DaemonHeadlessSessionService {
+        if let service = sessionService {
             await service.shutdown()
         }
-        headlessSessionService = nil
+        sessionService = nil
         // Mark an in-flight VM start for cancellation before waiting for any storage work to finish.
         await supervisor?.stop(reason: .hostShutdown)
         await waitForLifecycleOperations()
@@ -1666,17 +1705,9 @@ public actor RuntimeHost {
         }
     }
 
-    private var headlessLaunchHookIsEnabled: Bool {
-        #if DEBUG
-            buildInfo.configuration == .debug && environment["APKRUN_TEST_HEADLESS_LAUNCH"] == "1"
-        #else
-            false
-        #endif
-    }
-
-    private func makeHeadlessSessionService() async throws(RuntimeWireError) -> any RuntimeSessionService {
-        if let headlessSessionService {
-            return headlessSessionService
+    private func makeSessionService() async throws(RuntimeWireError) -> DaemonSessionService {
+        if let sessionService {
+            return sessionService
         }
         guard let supervisor else {
             throw RuntimeWireError.runtime(
@@ -1701,15 +1732,15 @@ public actor RuntimeHost {
                 remediation: "Start Android and try again."
             )
         }
-        if let headlessSessionService {
-            return headlessSessionService
+        if let sessionService {
+            return sessionService
         }
-        let service = DaemonHeadlessSessionService(
+        let service = DaemonSessionService(
             guestAgent: guestAgent,
             displayPool: displayPool,
             logSink: diagnostics?.logSink
         )
-        headlessSessionService = service
+        sessionService = service
         return service
     }
 
@@ -1751,11 +1782,6 @@ public actor RuntimeHost {
         )
     }
 
-    private static let launchUnavailableError = RuntimeWireError.runtime(
-        "windowUnavailable",
-        message: "APKRun can't open an Android app window in this build.",
-        remediation: "Use a Debug headless launch or update APKRun when native app windows are available."
-    )
     private static let guestAgentUnavailableError = RuntimeWireError.runtime(
         "guestAgentUnavailable",
         message: "The Android Guest Agent is unavailable.",

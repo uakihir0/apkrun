@@ -25,6 +25,8 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Select pinned Xcode
+        run: scripts/ci/select-pinned-xcode.sh
       - name: Install pinned repository tools
         run: scripts/bootstrap
       - name: Run repository checks
@@ -38,6 +40,8 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Select pinned Xcode
+        run: scripts/ci/select-pinned-xcode.sh
       - name: Install pinned repository tools
         run: scripts/bootstrap
       - name: Check generated files
@@ -52,6 +56,8 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Select pinned Xcode
+        run: scripts/ci/select-pinned-xcode.sh
       - name: Install pinned repository tools
         run: scripts/bootstrap
       - name: Compute verified build cache key
@@ -78,6 +84,8 @@ jobs:
           persist-credentials: false
       - name: Prepare result directories
         run: mkdir -p build/ci
+      - name: Select pinned Xcode
+        run: scripts/ci/select-pinned-xcode.sh
       - name: Install pinned repository tools
         run: scripts/bootstrap
       - name: Compute verified build cache key
@@ -112,6 +120,8 @@ jobs:
           -configuration Release -jobs 2 -derivedDataPath build/ReleaseDerivedData
           -resultBundlePath build/ci/APKRun-Release.xcresult
           CODE_SIGNING_ALLOWED=NO build
+      - name: Check launcher binary
+        run: scripts/check-launcher.sh build/ReleaseDerivedData/Build/Products/Release/APKRun.app/Contents/Helpers/APKRunLauncher.app
       - name: Check Release bundle
         run: scripts/release/check-release-build.sh build/ReleaseDerivedData/Build/Products/Release/APKRun.app
       - name: Upload build results on failure
@@ -134,6 +144,8 @@ jobs:
           persist-credentials: false
       - name: Prepare result directory
         run: mkdir -p build/ci
+      - name: Select pinned Xcode
+        run: scripts/ci/select-pinned-xcode.sh
       - name: Install pinned repository tools
         run: scripts/bootstrap
       - name: Compute verified build cache key
@@ -172,6 +184,8 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Select pinned Xcode
+        run: scripts/ci/select-pinned-xcode.sh
       - name: Install pinned repository tools
         run: scripts/bootstrap
       - name: Compute verified build cache key

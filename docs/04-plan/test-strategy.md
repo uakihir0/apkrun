@@ -183,7 +183,6 @@ All hooks are compiled into Debug builds only, unless the Builds column says oth
 | `APKRUN_GRAPHICS_FAULT=rendererInit` | renderer initialization fails | Debug | [../02-design/diagnostics.md](../02-design/diagnostics.md) §12 T2-4 (c) |
 | `APKRUN_RUNTIME_FAULT=rejectAgent:guest` | apkrund rejects the Guest Agent handshake | Debug | [../02-design/diagnostics.md](../02-design/diagnostics.md) §12 T2-4 (d) |
 | `APKRUN_LAUNCHER_TEST_NO_RUNTIME=1` | the launcher runs without a runtime (screen R) | Debug | #45 |
-| `APKRUN_TEST_HEADLESS_LAUNCH=1` | `launch` opens a session owned by apkrund that discards its frames. #69 removes it. | Debug | #33, the G6 stages |
 | `APKRUN_TEST_MARKER_TIMEOUT=<n>s` | shortens the maintenance marker timeout | Debug, `ReleaseUpdateTest` | [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §14 variant (c) |
 | `APKRUN_HOME` | relocates the data root. CLI commands other than `apkrun dev` ignore it ([../02-design/cli.md](../02-design/cli.md) §3.6), so their tests run in a separate macOS test user account ([../02-design/diagnostics.md](../02-design/diagnostics.md) §12 T2-1). | Debug (`apkrun dev`, debug apkrund, test hosts) | isolation (§3.9) |
 | `apkrun dev power sleep\|wake` | injects host sleep and wake messages | Debug | #70 |
@@ -200,7 +199,7 @@ All hooks are compiled into Debug builds only, unless the Builds column says oth
 
 Release checks (`scripts/release/check-release-build.sh`, run by the `build` job on every Release build and again in the release jobs, [../05-development/build-system.md](../05-development/build-system.md) §3.1):
 
-- The Release binaries contain no `APKRUN_*_FAULT` string, no `APKRUN_TEST_*` string (such as `APKRUN_TEST_HEADLESS_LAUNCH`), no `APKRUN_LAUNCHER_TEST_NO_RUNTIME`, no test key or test key ID from `Tests/Fixtures/signing/`, and no `ReleaseUpdateTest` setting.
+- The Release binaries contain no `APKRUN_*_FAULT` string, no `APKRUN_TEST_*` string, no `APKRUN_LAUNCHER_TEST_NO_RUNTIME`, no test key or test key ID from `Tests/Fixtures/signing/`, and no `ReleaseUpdateTest` setting.
 - A release image manifest contains no `androidboot.apkrun.test.*` key ([../02-design/android-image.md](../02-design/android-image.md) §6.2).
 - `ImageTrustStore` in a Release build contains only release key IDs ([../02-design/android-image.md](../02-design/android-image.md) §10.1).
 

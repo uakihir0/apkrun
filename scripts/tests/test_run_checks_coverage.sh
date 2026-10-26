@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Checks that scripts/ci/run-checks.sh runs every scripts/check-*.sh script of
-# build-system.md §3. A check that is missing from the runner would pass in
-# lint without ever running, so each one must be registered there.
+# Checks that each scripts/check-*.sh script of build-system.md §3 runs in
+# either the static-check runner or a dedicated CI workflow job.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,8 +12,8 @@ trap 'rm -rf "$temporary_root"' EXIT
 # compiler-failure check of build-system.md §12.
 manual_checks=(check-compile-fail.sh)
 
-# unregistered_checks <root>: prints each scripts/check-*.sh that the runner in
-# <root> does not register and that is not a manual check.
+# unregistered_checks <root>: prints each checker that neither the static
+# runner nor a dedicated CI workflow job registers, excluding manual checks.
 unregistered_checks() {
     local root="$1"
     local path name
@@ -27,7 +26,10 @@ unregistered_checks() {
                 manual=1
             fi
         done
-        if ((manual == 0)) && ! grep -Fq -- "scripts/$name" "$root/scripts/ci/run-checks.sh"; then
+        if ((manual == 0)) \
+            && ! grep -Fq -- "scripts/$name" "$root/scripts/ci/run-checks.sh" \
+            && ! { [[ -d "$root/.github/workflows" ]] \
+                && grep -R -Fq -- "scripts/$name" "$root/.github/workflows"; }; then
             printf '%s\n' "$name"
         fi
     done
@@ -39,7 +41,7 @@ if [[ -n "$missing" ]]; then
     printf 'FAIL run-checks coverage: not registered in scripts/ci/run-checks.sh:\n%s\n' "$missing" >&2
     exit 1
 fi
-printf 'PASS run-checks coverage: every scripts/check-*.sh is registered\n'
+printf 'PASS run-checks coverage: every scripts/check-*.sh is registered in lint or CI\n'
 
 fixture="$temporary_root/fixture"
 mkdir -p "$fixture/scripts/ci"

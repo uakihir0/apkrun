@@ -79,7 +79,7 @@ A clean checkout builds and passes `swift test` without manual steps (NFR-DEV-02
 
 | Configuration | Use | Differences |
 |---|---|---|
-| `Debug` | development | `APKRUN_BUILD_IDENTITY` = `dev`. Test hooks: `APKRUN_TEST_HEADLESS_LAUNCH`, `APKRUN_LAUNCHER_TEST_NO_RUNTIME`, `APKRUN_STORE_FAULT`; planned: `APKRUN_GRAPHICS_FAULT` (#60), `APKRUN_RUNTIME_FAULT` (#60, #61), `APKRUN_TEST_MARKER_TIMEOUT` (#58) and the others of [test-strategy.md](../04-plan/test-strategy.md) §3.3 ([configuration.md](../03-reference/configuration.md) §5.1). The development image key is trusted (§10.1). Development signing (§12.4). `-Onone` |
+| `Debug` | development | `APKRUN_BUILD_IDENTITY` = `dev`. Test hooks: `APKRUN_LAUNCHER_TEST_NO_RUNTIME`, `APKRUN_STORE_FAULT`; planned: `APKRUN_GRAPHICS_FAULT` (#60), `APKRUN_RUNTIME_FAULT` (#60, #61), `APKRUN_TEST_MARKER_TIMEOUT` (#58) and the others of [test-strategy.md](../04-plan/test-strategy.md) §3.3 ([configuration.md](../03-reference/configuration.md) §5.1). The development image key is trusted (§10.1). Development signing (§12.4). `-Onone` |
 | `Release` | shipped builds | `APKRUN_BUILD_IDENTITY` = `release`. Developer ID signing (§12). Release image keys only (planned, #66). Sparkle feed and key (planned, #58). `-O`, whole-module optimization. No test hooks (§3.1) |
 | `ReleaseUpdateTest` (planned, #58) | the T2 "APKRun N → N+1" test ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §14) | Release settings, plus: `SUFeedURL` at the local appcast server `scripts/dev/appcast-server.py` on `127.0.0.1`; `SUPublicEDKey` from `Tests/Fixtures/signing/test-sparkle-ed25519.pub`; identity suffix `.updatetest`; Developer ID signed, not notarized; honors `APKRUN_TEST_MARKER_TIMEOUT`; Sparkle test user driver; trusts the build machine's development image key and the release image keys ([android-image.md](../02-design/android-image.md) §10.1). The Maintenance suite builds versions 9000 and 9001 (9001 adds `Resources/test-build-marker`) |
 
@@ -107,7 +107,7 @@ All executables in one APKRun.app carry the same `CFBundleShortVersionString` an
 
 ## 3. Static checks
 
-Each check is a script that runs without arguments. `scripts/ci/run-checks.sh`, run by the `lint` job, runs the checks marked *yes*.
+`scripts/ci/run-checks.sh`, run by the `lint` job, runs the checks marked *yes*. Checks marked *no* run in a dedicated build or acceptance job when they need build outputs or a test environment.
 
 | Script | Checks | Task | `lint` |
 |---|---|---|---|
@@ -119,8 +119,8 @@ Each check is a script that runs without arguments. `scripts/ci/run-checks.sh`, 
 | `scripts/check-lock.sh` | `ThirdParty/ThirdParty.lock.json` and patches; Swift pins against `Package.resolved` and `project.yml` (§6.1). `--apply` applies patches (§6.2) | #63; `--apply` #21 | yes |
 | `scripts/check-protos.sh` | `buf lint` on `Packages/GuestProtocol` | #34 | yes |
 | `scripts/tests/run.sh` | self-tests of `scripts/` | #63 | yes |
-| `scripts/check-raw-adb.sh` | no `adb shell` or `pm ` outside the allowlist: `ADBStoreAgentChannel.swift`, `AdbClient.swift`, tests, `scripts/dev/`, `Tests/Compatibility/`, `Experiments/`, `Images/tools/reference/`, generated protobuf ([test-strategy.md](../04-plan/test-strategy.md) §3.3) | #28 | no |
-| `scripts/check-launcher.sh` | built APKRunLauncher: `otool -L` lists only `/System/Library` and `/usr/lib`; `lipo -archs` is `arm64`; minimum OS 27.0 | #69 (planned) | no |
+| `scripts/check-raw-adb.sh` | no `adb shell` or `pm ` outside the allowlist: `ADBStoreAgentChannel.swift`, `AdbClient.swift`, tests, `scripts/dev/`, `Tests/Compatibility/`, `Experiments/`, `Images/tools/reference/`, generated protobuf ([test-strategy.md](../04-plan/test-strategy.md) §3.3) | #28 | yes |
+| `scripts/check-launcher.sh` | Release-built APKRunLauncher: system frameworks only, `arm64` only, macOS 27.0 minimum. Runs in the CI build job | #69 | no |
 | `scripts/check-sepolicy.sh` | release (`user`) product sources declare no permissive domain (R-13) | #36 (planned) | no |
 | `scripts/check-fixtures.sh` | APKs in `Tests/Fixtures/apks/` are newer than their sources; no committed fixture over 10 MiB (§8) | #42 (planned) | no |
 | `scripts/check-compatibility-db.sh` | `compatibility.json` against `compatibility.schema.json` ([diagnostics.md](../02-design/diagnostics.md) §10) | #91 (planned) | no |
@@ -135,7 +135,7 @@ A new dependency edge or third-party component needs an ADR before its check cha
 
 | Check | Rule |
 |---|---|
-| no test hooks | `strings` over Mach-O files finds no `APKRUN_*_FAULT`, `APKRUN_TEST_*` (such as `APKRUN_TEST_HEADLESS_LAUNCH`), `APKRUN_LAUNCHER_TEST_NO_RUNTIME`, or `ReleaseUpdateTest` |
+| no test hooks | `strings` over Mach-O files finds no `APKRUN_*_FAULT`, `APKRUN_TEST_*`, `APKRUN_LAUNCHER_TEST_NO_RUNTIME`, or `ReleaseUpdateTest` |
 | no test keys | a test keystore is accepted only if its name and full-file SHA-256 match `scripts/release/test-keystore-pins.json`. Bundles are refused if they contain a pinned keystore's bytes, fragments, certificate or public key, or a zip member with them. Other keystores, and `.jks` files not named `test-*` and pinned, fail as unsupported |
 | image trust | planned (#66): `ImageTrustStore` of Release holds only release key IDs ([android-image.md](../02-design/android-image.md) §10.1) |
 | image manifest | no `androidboot.apkrun.test.*` key ([android-image.md](../02-design/android-image.md) §6.2) |
@@ -585,7 +585,7 @@ WrapperCore signs each local wrapper at run time, not at build time ([wrapper.md
 ```
 
 - No `--deep`. Signing is the last write to the bundle. The cdhash goes into the wrapper registry.
-- The launcher must be re-signable this way: system frameworks only, arm64 only, no nested code. `scripts/check-launcher.sh` enforces it (planned, #69).
+- The launcher must be re-signable this way: system frameworks only, arm64 only, no nested code. `scripts/check-launcher.sh` enforces it.
 - `scripts/dev/make-wrapper.sh <package> <out-dir>` (planned, #46) builds a wrapper by hand with the same command and registers it with `apkrun wrapper approve`.
 
 ### 12.6 Notarization (planned)
@@ -666,7 +666,7 @@ Jobs marked *(planned)* do not exist yet.
 | `ci.yml` | every pull request; push to `main` | `lint` | — | `xcode-27` | `scripts/bootstrap`; `scripts/ci/run-checks.sh` (`tests/run.sh`, `check-module-deps.sh`, `check-logging.sh`, `check-todos.sh`, `check-format.sh`, `check-lock.sh`, `check-protos.sh`) |
 | | | `codegen` | — | `xcode-27` | `scripts/ci/codegen.sh` (§4) |
 | | | `third-party` | — | `xcode-27` | cache key from `build-third-party.sh --print-cache-key virgl-runtime`; restore; `build-third-party.sh virgl-runtime`; `generate-notices.py --check` |
-| | | `build` | — | `xcode-27` | needs `third-party`; `swift build -j 2`; `swift build -j 2 --traits EmbeddedRuntime`; `xcodebuild` Debug and Release (unsigned); `check-release-build.sh` |
+| | | `build` | — | `xcode-27` | needs `third-party`; `swift build -j 2`; `swift build -j 2 --traits EmbeddedRuntime`; `xcodebuild` Debug and Release (unsigned); `check-launcher.sh`; `check-release-build.sh` |
 | | | `test-swift` | T0 | `xcode-27` | needs `third-party`; `swift test --skip 'SystemTests'`, parallel width 2 |
 | | | `test-graphics` | T1 | `xcode-27` | needs `third-party`; Metal device required; `GraphicsCoreSystemTests` plain, with Address and Undefined Behavior Sanitizers |
 | | | `test-images` | T0 (T1 planned) | `xcode-27` | `Images/tools/.venv` (Python 3.12); manifest check; `pytest Images/tools/tests`; `ruff check`; `ruff format --check` |

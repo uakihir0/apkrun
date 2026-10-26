@@ -97,6 +97,25 @@ final class GuestGPUSession {
         presenters[scanout.rawValue]
     }
 
+    /// Updates visibility and returns a fresh present when the scanout becomes visible again.
+    func visibilityChanged(scanout: ScanoutID, visible: Bool) -> VirGLRenderWork? {
+        guard let presenter = presenters[scanout.rawValue] else { return nil }
+        presenter.setVisible(visible)
+        return visible ? requestPresent(scanout) : nil
+    }
+
+    /// Requests a present of the resource currently bound to this scanout.
+    func requestPresent(_ scanout: ScanoutID) -> VirGLRenderWork? {
+        guard
+            let presenter = presenters[scanout.rawValue],
+            let resource = scanoutBindings[scanout.rawValue],
+            let source = scanoutRects[scanout.rawValue]
+        else {
+            return nil
+        }
+        return presenter.requestPresent(resource: resource, source: source)
+    }
+
     /// The attached presenters, so the device can close them before the renderer is destroyed.
     var attachedPresenters: [ScanoutPresenter] {
         Array(presenters.values)

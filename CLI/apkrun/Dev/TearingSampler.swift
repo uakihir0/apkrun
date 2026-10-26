@@ -26,7 +26,7 @@
 
         /// Reads the buffer of a frame that is ready to show. Other events are ignored.
         func observe(_ event: DeveloperDisplayEvent, surfaces: [IOSurface]) {
-            guard case .frameReady(_, let bufferIndex, _) = event else {
+            guard case .frameReady(_, let bufferIndex, _, _) = event else {
                 return
             }
             guard surfaces.indices.contains(bufferIndex) else {

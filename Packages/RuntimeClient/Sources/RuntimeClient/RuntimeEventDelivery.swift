@@ -1,4 +1,5 @@
 import Foundation
+import IOSurface
 import RuntimeAPI
 
 /// Routes event batches received from the authenticated XPC endpoint to topic-specific streams.
@@ -127,9 +128,21 @@ final class RuntimeEventStreamHub: @unchecked Sendable {
 /// The client-exported XPC object that decodes event batches and acknowledges receipt.
 final class RuntimeEventSinkReceiver: NSObject, RuntimeEventSink, @unchecked Sendable {
     private let streamHub: RuntimeEventStreamHub
+    private let sessionLock = NSLock()
+    private var sessionHub: RuntimeSessionEventStreamHub
 
-    init(streamHub: RuntimeEventStreamHub) {
+    init(
+        streamHub: RuntimeEventStreamHub,
+        sessionHub: RuntimeSessionEventStreamHub = RuntimeSessionEventStreamHub()
+    ) {
         self.streamHub = streamHub
+        self.sessionHub = sessionHub
+    }
+
+    func replaceSessionHub(_ sessionHub: RuntimeSessionEventStreamHub) {
+        sessionLock.withLock {
+            self.sessionHub = sessionHub
+        }
     }
 
     func handshake(reply: @escaping (Bool) -> Void) {
@@ -144,5 +157,61 @@ final class RuntimeEventSinkReceiver: NSObject, RuntimeEventSink, @unchecked Sen
         }
         streamHub.deliver(envelopes)
         reply()
+    }
+
+    func frameReady(
+        _ generation: UInt32,
+        surfaceIndex: Int,
+        frameSeq: UInt64,
+        presentationTime: UInt64
+    ) {
+        sessionLock.withLock {
+            sessionHub.receiveFrame(
+                FrameReady(
+                    generation: generation,
+                    surfaceIndex: surfaceIndex,
+                    frameSeq: frameSeq,
+                    presentationTime: presentationTime
+                )
+            )
+        }
+    }
+
+    func sessionCloseRequested(reply: @escaping () -> Void) {
+        let reply = RuntimeXPCSessionCloseReply(reply)
+        sessionLock.withLock {
+            sessionHub.receiveCloseRequest(acknowledge: {
+                reply.call()
+            })
+        }
+    }
+
+    func surfacesReplaced(_ message: Data, surfaces: [IOSurface], reply: @escaping () -> Void) {
+        defer { reply() }
+        guard let replacement = try? JSONDecoder().decode(SurfacesReplaced.self, from: message) else {
+            return
+        }
+        sessionLock.withLock {
+            sessionHub.receiveSurfaceReplacement(replacement.surfaceSet, surfaces: surfaces)
+        }
+    }
+}
+
+/// Holds an XPC reply block while its close request crosses into the session's Sendable stream.
+private final class RuntimeXPCSessionCloseReply: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reply: (() -> Void)?
+
+    init(_ reply: @escaping () -> Void) {
+        self.reply = reply
+    }
+
+    func call() {
+        let callback = lock.withLock {
+            let callback = reply
+            reply = nil
+            return callback
+        }
+        callback?()
     }
 }

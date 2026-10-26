@@ -1,22 +1,35 @@
 import CoreGraphics
 import DiagnosticsCore
 import Foundation
-import GraphicsCore
-import GuestProtocol
+import IOSurface
 import RuntimeAPI
 import RuntimeCore
 
-/// Launches CLI-owned sessions on secondary displays before the daemon has a window client (#33).
-///
-/// This service owns no window. It drains each lease's frame stream and acknowledges frames as discarded, then marks
-/// the session running as soon as Android confirms the launch operation.
-public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutationSessionHandling {
-    private let guestAgent: any DaemonHeadlessGuestAgent
+struct DaemonOpenedSession: @unchecked Sendable {
+    let descriptor: SessionDescriptor
+    let surfaces: [IOSurface]
+}
+
+enum DaemonSessionResizeResult: @unchecked Sendable {
+    case applied(DaemonOpenedSession)
+    case unchanged
+    case stateUncertain
+}
+
+/// Owns app-session lifecycle and display leases while authenticated launcher connections present the surfaces.
+public actor DaemonSessionService: RuntimeSessionService, PackageMutationSessionHandling {
+    private let guestAgent: any DaemonSessionGuestAgent
     private let displayPool: DisplayPool
     private let registry: SessionRegistry
     private let displayConfiguration: DisplayConfiguration
     private var sessionsByPackage: [String: SessionID] = [:]
-    private var frameDrainers: [SessionID: Task<Void, Never>] = [:]
+    private var frameRelays: [SessionID: Task<Void, Never>] = [:]
+    private var frameReadyBySession: [SessionID: @Sendable (FrameReady) -> Void] = [:]
+    private var connectionBySession: [SessionID: ObjectIdentifier] = [:]
+    private var sessionByConnection: [ObjectIdentifier: SessionID] = [:]
+    private var closeRequestByConnection: [ObjectIdentifier: @Sendable () async -> Bool] = [:]
+    private var orphanTasks: [SessionID: Task<Void, Never>] = [:]
+    private var orphanTokens: [SessionID: UUID] = [:]
     private var taskEventMonitor: Task<Void, Never>?
     private var guestResynchronizationHandlerID: UUID?
     private var reconciliationTasks: [UUID: Task<Void, Never>] = [:]
@@ -29,7 +42,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     private var isShuttingDown = false
     private var didCompleteShutdown = false
 
-    /// Creates the daemon's Guest Agent-backed headless session service.
+    /// Creates the daemon's Guest Agent-backed app session service.
     public init(
         guestAgent: DevelopmentGuestAgent,
         displayPool: DisplayPool,
@@ -42,7 +55,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     }
 
     init(
-        guestAgent: any DaemonHeadlessGuestAgent,
+        guestAgent: any DaemonSessionGuestAgent,
         displayPool: DisplayPool,
         registry: SessionRegistry,
         displayConfiguration: DisplayConfiguration
@@ -83,13 +96,22 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         for task in tasks {
             await task.value
         }
-        let drainers = Array(frameDrainers.values)
-        frameDrainers.removeAll()
-        for drainer in drainers {
-            drainer.cancel()
+        let relays = Array(frameRelays.values)
+        frameRelays.removeAll()
+        for relay in relays {
+            relay.cancel()
         }
-        for drainer in drainers {
-            await drainer.value
+        for relay in relays {
+            await relay.value
+        }
+        let orphanTasks = Array(self.orphanTasks.values)
+        self.orphanTasks.removeAll()
+        orphanTokens.removeAll()
+        for task in orphanTasks {
+            task.cancel()
+        }
+        for task in orphanTasks {
+            await task.value
         }
         didCompleteShutdown = true
         let waiters = shutdownCallWaiters
@@ -110,6 +132,13 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             throw Self.shuttingDownError
         }
 
+        return try await launchAcquired(request, configuration: displayConfiguration)
+    }
+
+    private func launchAcquired(
+        _ request: RuntimeLaunchRequest,
+        configuration: DisplayConfiguration
+    ) async throws(RuntimeWireError) -> RuntimeLaunchResult {
         let packageID = request.packageID.rawValue
         if let existing = await registry.session(packageID: packageID) {
             sessionsByPackage[packageID] = existing.id
@@ -134,7 +163,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         do throws(SessionRegistryFailure) {
             session = try await registry.requestLeased(
                 packageID: packageID,
-                configuration: displayConfiguration,
+                configuration: configuration,
                 displayPool: displayPool
             )
         } catch {
@@ -142,11 +171,10 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         }
         sessionsByPackage[packageID] = session.id
         guard session.state == .acquiringDisplay,
-            let lease = await registry.displayLease(session.id)
+            await registry.displayLease(session.id) != nil
         else {
             return try await launchExisting(session)
         }
-        startDrainingFrames(from: lease)
 
         let launching: AppSessionSnapshot
         do throws(SessionRegistryFailure) {
@@ -259,6 +287,315 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         await registry.session(packageID: packageID.rawValue) != nil
     }
 
+    func openSession(
+        _ request: OpenSessionRequest,
+        connectionID: ObjectIdentifier,
+        frameReady: @escaping @Sendable (FrameReady) -> Void,
+        closeRequested: @escaping @Sendable () async -> Bool
+    ) async throws(RuntimeWireError) -> DaemonOpenedSession {
+        guard await acquireOperation() else {
+            throw Self.shuttingDownError
+        }
+        defer { releaseOperation() }
+        await ensureGuestObservation()
+        guard !isShuttingDown else {
+            throw Self.shuttingDownError
+        }
+
+        let packageID = request.packageID.rawValue
+        if let ownedSessionID = sessionByConnection[connectionID],
+            let ownedSession = await registry.session(ownedSessionID),
+            ownedSession.packageID != packageID
+        {
+            throw .runtime(
+                "notAuthorized",
+                message: "A launcher connection can own only one app session."
+            )
+        }
+
+        let snapshot: AppSessionSnapshot
+        if let existing = await registry.session(packageID: packageID) {
+            if let owner = connectionBySession[existing.id], owner != connectionID {
+                if connectionBySession[existing.id] == owner {
+                    let priorFrameReady = frameReadyBySession[existing.id]
+                    frameReadyBySession[existing.id] = nil
+                    guard let closeRequest = closeRequestByConnection[owner] else {
+                        frameReadyBySession[existing.id] = priorFrameReady
+                        throw Self.sessionAlreadyConnectedError
+                    }
+                    let didClose = await closeRequest()
+                    if !didClose, connectionBySession[existing.id] == owner {
+                        frameReadyBySession[existing.id] = priorFrameReady
+                        throw Self.sessionAlreadyConnectedError
+                    }
+                    if connectionBySession[existing.id] == owner {
+                        connectionBySession[existing.id] = nil
+                        sessionByConnection[owner] = nil
+                        closeRequestByConnection[owner] = nil
+                        frameReadyBySession[existing.id] = nil
+                    }
+                }
+            }
+            _ = try await launchExisting(existing)
+            guard let latest = await registry.session(existing.id) else {
+                throw .runtime("internal", message: "The app session disappeared while its window was opening.")
+            }
+            snapshot = latest
+        } else {
+            let geometry = RuntimeCore.DisplayGeometry(
+                pointSize: CGSize(
+                    width: request.geometry.pointSize.width,
+                    height: request.geometry.pointSize.height
+                ),
+                backingScale: request.geometry.backingScale,
+                zoom: request.geometry.zoom
+            )
+            let configuration = DisplayConfiguration(geometry: geometry)
+            _ = try await launchAcquired(
+                RuntimeLaunchRequest(packageID: request.packageID),
+                configuration: configuration
+            )
+            guard let created = await registry.session(packageID: packageID) else {
+                throw .runtime("internal", message: "The app session disappeared while its window was opening.")
+            }
+            snapshot = created
+        }
+
+        guard let lease = await registry.displayLease(snapshot.id),
+            let generation = UInt32(exactly: lease.sessionPool.generation),
+            lease.sessionPool.surfaces.count == SurfaceSet.requiredSurfaceCount
+        else {
+            throw .runtime(
+                "internal",
+                message: "APKRun couldn't transfer the app's three display surfaces to its window."
+            )
+        }
+
+        orphanTasks.removeValue(forKey: snapshot.id)?.cancel()
+        orphanTokens[snapshot.id] = nil
+        if let priorSession = sessionByConnection[connectionID], priorSession != snapshot.id {
+            connectionBySession[priorSession] = nil
+            frameReadyBySession[priorSession] = nil
+            scheduleOrphanCleanup(for: priorSession)
+        }
+        connectionBySession[snapshot.id] = connectionID
+        sessionByConnection[connectionID] = snapshot.id
+        closeRequestByConnection[connectionID] = closeRequested
+        frameReadyBySession[snapshot.id] = frameReady
+        startRelayingFrames(from: lease)
+
+        guard case .app(let sessionUUID) = snapshot.id else {
+            throw .runtime("internal", message: "The app session has an invalid identifier.")
+        }
+        let surfaceSet = SurfaceSet(
+            generation: generation,
+            pixelSize: PixelSize(width: lease.mode.pixelSize.width, height: lease.mode.pixelSize.height),
+            densityDpi: lease.mode.densityDpi
+        )
+        let descriptor = SessionDescriptor(
+            sessionID: sessionUUID,
+            displayID: snapshot.displayID,
+            windowPrefs: WindowPrefs(zoom: lease.mode.zoom),
+            inputPrefs: InputPrefs(),
+            windowMode: lease.scanout.rawValue == 0 ? .primaryDisplayCompatibility : .secondaryDisplay,
+            state: snapshot.state == .launching ? .launching : .running,
+            surfaces: surfaceSet
+        )
+        return DaemonOpenedSession(descriptor: descriptor, surfaces: lease.sessionPool.surfaces)
+    }
+
+    func resizeSession(
+        _ request: ResizeSessionRequest,
+        from connectionID: ObjectIdentifier
+    ) async throws(RuntimeWireError) -> DaemonSessionResizeResult {
+        guard await acquireOperation() else {
+            throw Self.shuttingDownError
+        }
+        defer { releaseOperation() }
+        guard let sessionID = sessionByConnection[connectionID],
+            connectionBySession[sessionID] == connectionID,
+            let session = await registry.session(sessionID),
+            let currentLease = await registry.displayLease(sessionID)
+        else {
+            throw .runtime("notAuthorized", message: "This launcher does not own an active app window.")
+        }
+
+        let geometry = RuntimeCore.DisplayGeometry(
+            pointSize: CGSize(
+                width: request.geometry.pointSize.width,
+                height: request.geometry.pointSize.height
+            ),
+            backingScale: request.geometry.backingScale,
+            zoom: request.geometry.zoom
+        )
+        let requestedMode: ResolvedDisplayMode
+        do throws(DisplayGeometryResolverFailure) {
+            requestedMode = try DisplayGeometryResolver.resolve(geometry)
+        } catch {
+            throw Self.wireError(for: .displayPool(.invalidGeometry(error)))
+        }
+        guard requestedMode != currentLease.mode else {
+            return .unchanged
+        }
+
+        let replacement: DisplayLease
+        do throws(DisplayPoolFailure) {
+            replacement = try await displayPool.reconfigure(currentLease, geometry: geometry)
+        } catch {
+            if case .reconfigureFailed(stateUncertain: true) = error {
+                return .stateUncertain
+            }
+            throw Self.wireError(for: .displayPool(error))
+        }
+        guard await registry.replaceDisplayLease(replacement, for: sessionID),
+            replacement.sessionPool.surfaces.count == SurfaceSet.requiredSurfaceCount,
+            let generation = UInt32(exactly: replacement.sessionPool.generation),
+            case .app(let sessionUUID) = sessionID
+        else {
+            throw .runtime("internal", message: "APKRun could not install the resized app display.")
+        }
+
+        await stopDrainingFrames(for: sessionID)
+        startRelayingFrames(from: replacement)
+        let descriptor = SessionDescriptor(
+            sessionID: sessionUUID,
+            displayID: replacement.androidDisplayID,
+            windowPrefs: WindowPrefs(zoom: replacement.mode.zoom),
+            inputPrefs: InputPrefs(),
+            windowMode: replacement.scanout.rawValue == 0 ? .primaryDisplayCompatibility : .secondaryDisplay,
+            state: session.state == .launching ? .launching : .running,
+            surfaces: SurfaceSet(
+                generation: generation,
+                pixelSize: PixelSize(
+                    width: replacement.mode.pixelSize.width, height: replacement.mode.pixelSize.height),
+                densityDpi: replacement.mode.densityDpi
+            )
+        )
+        return .applied(DaemonOpenedSession(descriptor: descriptor, surfaces: replacement.sessionPool.surfaces))
+    }
+
+    func frameDisplayed(_ message: FrameDisplayed, from connectionID: ObjectIdentifier) async {
+        guard let sessionID = sessionByConnection[connectionID],
+            connectionBySession[sessionID] == connectionID,
+            let lease = await registry.displayLease(sessionID),
+            let generation = UInt32(exactly: lease.sessionPool.generation),
+            message.generation == generation,
+            sessionByConnection[connectionID] == sessionID,
+            connectionBySession[sessionID] == connectionID
+        else {
+            return
+        }
+        lease.sessionPool.frameDisplayed(sequence: message.frameSeq)
+    }
+
+    func visibilityChanged(_ visible: Bool, from connectionID: ObjectIdentifier) async {
+        guard let sessionID = sessionByConnection[connectionID],
+            connectionBySession[sessionID] == connectionID,
+            let lease = await registry.displayLease(sessionID),
+            sessionByConnection[connectionID] == sessionID,
+            connectionBySession[sessionID] == connectionID
+        else {
+            return
+        }
+        await displayPool.visibilityChanged(visible, for: lease)
+    }
+
+    func sessionClientDisconnected(_ connectionID: ObjectIdentifier) async {
+        closeRequestByConnection[connectionID] = nil
+        guard let sessionID = sessionByConnection.removeValue(forKey: connectionID),
+            connectionBySession[sessionID] == connectionID
+        else {
+            return
+        }
+        connectionBySession[sessionID] = nil
+        frameReadyBySession[sessionID] = nil
+        scheduleOrphanCleanup(for: sessionID)
+    }
+
+    private func startRelayingFrames(from lease: DisplayLease) {
+        guard frameRelays[lease.session] == nil else {
+            return
+        }
+        let pool = lease.sessionPool
+        frameRelays[lease.session] = Task.detached { [weak self] in
+            for await frame in pool.makeFrameStream() {
+                guard !Task.isCancelled else {
+                    return
+                }
+                await self?.deliverFrame(frame, from: pool, session: lease.session)
+            }
+        }
+    }
+
+    private func deliverFrame(_ frame: DisplaySessionFrame, from pool: DisplaySessionPool, session: SessionID) {
+        guard connectionBySession[session] != nil,
+            let frameReady = frameReadyBySession[session],
+            frame.generation == pool.generation,
+            let wireGeneration = UInt32(exactly: frame.generation),
+            pool.surfaces.indices.contains(frame.bufferIndex)
+        else {
+            return
+        }
+        frameReady(
+            FrameReady(
+                generation: wireGeneration,
+                surfaceIndex: frame.bufferIndex,
+                frameSeq: frame.sequence,
+                presentationTime: frame.presentationTime
+            )
+        )
+    }
+
+    private func scheduleOrphanCleanup(for sessionID: SessionID) {
+        orphanTasks.removeValue(forKey: sessionID)?.cancel()
+        let token = UUID()
+        orphanTokens[sessionID] = token
+        orphanTasks[sessionID] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else {
+                return
+            }
+            await self?.closeOrphanedSession(sessionID, token: token)
+        }
+    }
+
+    private func closeOrphanedSession(_ sessionID: SessionID, token: UUID) async {
+        guard orphanTokens[sessionID] == token,
+            connectionBySession[sessionID] == nil,
+            await acquireOperation()
+        else {
+            return
+        }
+        defer { releaseOperation() }
+        orphanTasks[sessionID] = nil
+        orphanTokens[sessionID] = nil
+        guard let session = await registry.session(sessionID), !Self.isEnded(session.state) else {
+            if let package = sessionsByPackage.first(where: { $0.value == sessionID })?.key {
+                forgetSession(packageID: package, sessionID: sessionID)
+            }
+            return
+        }
+        if session.state != .closing {
+            do throws(SessionRegistryFailure) {
+                _ = try await registry.transition(sessionID, to: .closing)
+            } catch {
+                return
+            }
+        }
+        do throws(GuestAgentFailure) {
+            guard try await guestAgent.stopApplication(package: session.packageID) else {
+                _ = await registry.stopFailed(packageID: session.packageID)
+                return
+            }
+        } catch {
+            _ = await registry.stopFailed(packageID: session.packageID)
+            return
+        }
+        await stopDrainingFrames(for: sessionID)
+        _ = await registry.stopCompleted(sessionID: sessionID, endReason: .userClosed)
+        forgetSession(packageID: session.packageID, sessionID: sessionID)
+    }
+
     /// Closes an active session with the package-removal reason before the store uninstalls Android's package.
     func endSessionForPackageUninstall(_ request: RuntimeTerminateRequest) async throws(RuntimeWireError) {
         guard await acquireOperation() else {
@@ -305,7 +642,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
 
     static func terminateWithoutSession(
         _ request: RuntimeTerminateRequest,
-        using guestAgent: any DaemonHeadlessGuestAgent
+        using guestAgent: any DaemonSessionGuestAgent
     ) async throws(RuntimeWireError) -> RuntimeTerminateResult {
         let isInstalled: Bool
         do throws(GuestAgentFailure) {
@@ -331,14 +668,8 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     private func launchExisting(_ session: AppSessionSnapshot) async throws(RuntimeWireError) -> RuntimeLaunchResult {
         switch session.state {
         case .running, .backgrounded:
-            if let lease = await registry.displayLease(session.id) {
-                startDrainingFrames(from: lease)
-            }
             return try Self.launchResult(for: session)
         case .launching:
-            if let lease = await registry.displayLease(session.id) {
-                startDrainingFrames(from: lease)
-            }
             if let taskID = session.taskIDs.sorted().first {
                 let completed = await registry.launchCompleted(packageID: session.packageID, taskID: taskID)
                 let latest: AppSessionSnapshot
@@ -631,29 +962,11 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         }
     }
 
-    private func startDrainingFrames(from lease: DisplayLease) {
-        guard frameDrainers[lease.session] == nil else {
-            return
-        }
-        let pool = lease.pool
-        frameDrainers[lease.session] = Task.detached {
-            for await frame in pool.frames {
-                guard !Task.isCancelled else {
-                    return
-                }
-                if case .frameReady(_, _, let sequence) = frame {
-                    pool.frameDisplayed(sequence: sequence)
-                }
-            }
-        }
-    }
-
     private func stopDrainingFrames(for sessionID: SessionID) async {
-        guard let task = frameDrainers.removeValue(forKey: sessionID) else {
-            return
+        if let task = frameRelays.removeValue(forKey: sessionID) {
+            task.cancel()
+            await task.value
         }
-        task.cancel()
-        await task.value
     }
 
     private func endFailedLaunch(_ sessionID: SessionID) async {
@@ -671,6 +984,14 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         if sessionsByPackage[packageID] == sessionID {
             sessionsByPackage[packageID] = nil
         }
+        if let connectionID = connectionBySession.removeValue(forKey: sessionID),
+            sessionByConnection[connectionID] == sessionID
+        {
+            sessionByConnection[connectionID] = nil
+            closeRequestByConnection[connectionID] = nil
+        }
+        frameReadyBySession[sessionID] = nil
+        orphanTasks.removeValue(forKey: sessionID)?.cancel()
     }
 
     private func releaseOperation() {
@@ -743,6 +1064,10 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         "hostShuttingDown",
         message: "The app session service is shutting down.",
         remediation: "Try again after the runtime has started."
+    )
+    private static let sessionAlreadyConnectedError = RuntimeWireError.runtime(
+        "busy",
+        message: "This Android app is already open in another window."
     )
 
     private static func launchResult(for session: AppSessionSnapshot) throws(RuntimeWireError) -> RuntimeLaunchResult {
@@ -938,11 +1263,11 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     }
 }
 
-protocol DaemonHeadlessGuestAgent: EmbeddedSessionGuestAgent {
+protocol DaemonSessionGuestAgent: EmbeddedSessionGuestAgent {
     func taskEventStream() async -> AsyncStream<DevelopmentGuestTaskEvent>
 }
 
-extension DevelopmentGuestAgent: DaemonHeadlessGuestAgent {
+extension DevelopmentGuestAgent: DaemonSessionGuestAgent {
     func taskEventStream() async -> AsyncStream<DevelopmentGuestTaskEvent> {
         taskEvents
     }

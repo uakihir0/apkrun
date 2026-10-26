@@ -138,10 +138,81 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
 
     #expect(blitCalls(harness.engine) == [.presentBlit(resource: 3, source: fullRect, target: 1)])
     try await eventually { presenter.statistics.framesPresented == 1 }
-    #expect(await frames.next() == .frameReady(generation: 1, bufferIndex: 0, sequence: 1))
+    guard
+        case .frameReady(
+            let generation,
+            let bufferIndex,
+            let sequence,
+            let presentationTime
+        )? = await frames.next()
+    else {
+        Issue.record("A completed blit should publish a frame for the consumer.")
+        return
+    }
+    #expect(generation == 1)
+    #expect(bufferIndex == 0)
+    #expect(sequence == 1)
+    #expect(presentationTime > 0)
     // The present path never reads pixels back or copies them on the CPU (graphics.md §6.2, §7).
     #expect(harness.device.statistics.hostReadbacks == 0)
     #expect(harness.device.statistics.cpuPixelCopies == 0)
+    presenter.close()
+}
+
+@Test func hiddenFlushesCoalesceAndVisibilityRestoresTheBoundResource() async throws {
+    let harness = try PresenterHarness()
+    let presenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)
+    let scanouts = VirtioGPUScanoutController(device: harness.device)
+    let initial = harness.send(
+        bindAndFlush(resource: 3, rect: fullRect) + [flushRequest(resource: 3, rect: fullRect)]
+    )
+    try await eventually { initial.completionCounts == [1, 1, 1] }
+    try await eventually { presenter.statistics.framesPresented == 1 }
+
+    scanouts.visibilityChanged(scanoutZero, visible: false)
+    let hidden = harness.send([
+        flushRequest(resource: 3, rect: fullRect),
+        flushRequest(resource: 3, rect: fullRect),
+        flushRequest(resource: 3, rect: fullRect),
+    ])
+    try await eventually { hidden.completionCounts == [1, 1, 1] }
+    #expect(blitCalls(harness.engine).count == 1)
+    #expect(presenter.statistics.droppedFrames == 2)
+
+    scanouts.visibilityChanged(scanoutZero, visible: true)
+    try await eventually { presenter.statistics.framesPresented == 2 }
+    #expect(blitCalls(harness.engine).count == 2)
+    // Resuming requests the current scanout binding, replacing the held hidden request.
+    #expect(presenter.statistics.droppedFrames == 3)
+    presenter.close()
+}
+
+@Test func anInFlightBlitDoesNotDrainPendingFramesUntilTheScanoutIsVisible() async throws {
+    let harness = try PresenterHarness()
+    let presenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)
+    let scanouts = VirtioGPUScanoutController(device: harness.device)
+    harness.engine.autoCompletePresentFences = false
+    let initial = harness.send(
+        bindAndFlush(resource: 3, rect: fullRect) + [flushRequest(resource: 3, rect: fullRect)]
+    )
+    try await eventually { initial.completionCounts == [1, 1, 1] }
+    try await eventually { blitCalls(harness.engine).count == 1 }
+
+    scanouts.visibilityChanged(scanoutZero, visible: false)
+    let hidden = harness.send([
+        flushRequest(resource: 3, rect: fullRect),
+        flushRequest(resource: 3, rect: fullRect),
+    ])
+    try await eventually { hidden.completionCounts == [1, 1] }
+    harness.engine.completePresentFences()
+    try await eventually { presenter.statistics.framesPresented == 1 }
+    #expect(blitCalls(harness.engine).count == 1)
+
+    scanouts.visibilityChanged(scanoutZero, visible: true)
+    try await eventually { blitCalls(harness.engine).count == 2 }
+    harness.engine.completePresentFences()
+    try await eventually { presenter.statistics.framesPresented == 2 }
+    #expect(presenter.statistics.droppedFrames == 2)
     presenter.close()
 }
 
@@ -304,7 +375,21 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
         bindAndFlush(resource: 3, rect: fullRect) + [flushRequest(resource: 3, rect: fullRect)]
     )
     try await eventually { first.completionCounts == [1, 1, 1] && oldPresenter.statistics.framesPresented == 1 }
-    #expect(await oldFrames.next() == .frameReady(generation: 1, bufferIndex: 0, sequence: 1))
+    guard
+        case .frameReady(
+            let oldGeneration,
+            let oldBufferIndex,
+            let oldSequence,
+            let oldPresentationTime
+        )? = await oldFrames.next()
+    else {
+        Issue.record("The old presenter should publish its completed frame.")
+        return
+    }
+    #expect(oldGeneration == 1)
+    #expect(oldBufferIndex == 0)
+    #expect(oldSequence == 1)
+    #expect(oldPresentationTime > 0)
 
     let mode = DisplayMode(widthPixels: 800, heightPixels: 600, refreshHz: 60, dotsPerInch: 160)
     let newPresenter = try harness.device.reconfigurePresenter(
@@ -317,7 +402,21 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
     var newFrames = newPresenter.frames.makeAsyncIterator()
     let second = harness.send([flushRequest(resource: 3, rect: fullRect)])
     try await eventually { second.completionCounts == [1] && newPresenter.statistics.framesPresented == 1 }
-    #expect(await newFrames.next() == .frameReady(generation: 2, bufferIndex: 0, sequence: 2))
+    guard
+        case .frameReady(
+            let newGeneration,
+            let newBufferIndex,
+            let newSequence,
+            let newPresentationTime
+        )? = await newFrames.next()
+    else {
+        Issue.record("The replacement presenter should publish its completed frame.")
+        return
+    }
+    #expect(newGeneration == 2)
+    #expect(newBufferIndex == 0)
+    #expect(newSequence == 2)
+    #expect(newPresentationTime > 0)
 
     harness.device.frameDisplayed(scanout: scanoutZero, generation: 2, sequence: 2)
     harness.device.deviceWillStop()

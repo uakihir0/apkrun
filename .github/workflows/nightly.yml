@@ -37,6 +37,8 @@ jobs:
             printf 'Set APKRUN_TEST_DEVELOPMENT_TEAM and APKRUN_TEST_CODE_SIGN_IDENTITY repository variables for the lab Apple Development certificate.\n' >&2
             exit 1
           fi
+      - name: Select pinned Xcode
+        run: scripts/ci/select-pinned-xcode.sh
       - name: Install pinned repository tools
         run: scripts/bootstrap
       - name: Run closed acceptance gates
@@ -75,6 +77,8 @@ jobs:
             printf 'Set APKRUN_TEST_DEVELOPMENT_TEAM and APKRUN_TEST_CODE_SIGN_IDENTITY repository variables for the lab Apple Development certificate.\n' >&2
             exit 1
           fi
+      - name: Select pinned Xcode
+        run: scripts/ci/select-pinned-xcode.sh
       - name: Install pinned repository tools
         run: scripts/bootstrap
       - name: Generate Xcode project

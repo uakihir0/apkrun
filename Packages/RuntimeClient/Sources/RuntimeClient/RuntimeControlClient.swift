@@ -1,4 +1,5 @@
 @preconcurrency import Foundation
+import IOSurface
 import RuntimeAPI
 import Security
 
@@ -68,6 +69,21 @@ extension RuntimeControlClientError: LocalizedError {
     }
 }
 
+extension RuntimeControlClientError {
+    /// Whether a failed session resize may have changed Android's display despite losing a usable reply.
+    public var sessionResizeResultIsUncertain: Bool {
+        switch self {
+        case .malformedReply, .transportFailure, .requestTimedOut, .operationResultUnknown:
+            true
+        case .remoteFailure(let code, _):
+            code == "runtime.internal"
+        case .invalidClientIdentity, .apiVersionMismatch, .endpointRejected, .endpointMissing, .invalidXPCInterface,
+            .invalidRemoteProxy, .requestCancelled, .encodingFailure:
+            false
+        }
+    }
+}
+
 /// The first RuntimeAPI control client. It authenticates the daemon, obtains an anonymous control
 /// endpoint through the broker, then reuses that endpoint for status, start, and stop requests.
 public actor RuntimeControlClient {
@@ -76,12 +92,16 @@ public actor RuntimeControlClient {
     private let configuration: RuntimeControlClientConfiguration
     private let connectionFactory: any RuntimeXPCConnectionFactory
     private let eventStreamHub: RuntimeEventStreamHub
+    private var sessionEventHub: RuntimeSessionEventStreamHub
     private let eventSink: RuntimeEventSinkReceiver
     private var openedControl: OpenedControlConnection?
     private var openingControl: Task<OpenedControlConnection, any Error>?
     private var remoteEventTopics: [EventTopic] = []
     private var eventReconnectID: UUID?
     private var eventReconnectTask: Task<Void, Never>?
+    private var isOpeningSession = false
+    private var hasOpenedSession = false
+    private var sessionWasInvalidated = false
 
     /// Creates a client for the current signed APKRun process.
     ///
@@ -99,7 +119,9 @@ public actor RuntimeControlClient {
         connectionFactory = SystemRuntimeXPCConnectionFactory()
         let eventStreamHub = RuntimeEventStreamHub()
         self.eventStreamHub = eventStreamHub
-        eventSink = RuntimeEventSinkReceiver(streamHub: eventStreamHub)
+        let sessionEventHub = RuntimeSessionEventStreamHub()
+        self.sessionEventHub = sessionEventHub
+        eventSink = RuntimeEventSinkReceiver(streamHub: eventStreamHub, sessionHub: sessionEventHub)
     }
 
     init(
@@ -110,7 +132,9 @@ public actor RuntimeControlClient {
         self.connectionFactory = connectionFactory
         let eventStreamHub = RuntimeEventStreamHub()
         self.eventStreamHub = eventStreamHub
-        eventSink = RuntimeEventSinkReceiver(streamHub: eventStreamHub)
+        let sessionEventHub = RuntimeSessionEventStreamHub()
+        self.sessionEventHub = sessionEventHub
+        eventSink = RuntimeEventSinkReceiver(streamHub: eventStreamHub, sessionHub: sessionEventHub)
     }
 
     /// Completes broker hello and control-endpoint authentication, returning the daemon facts.
@@ -214,6 +238,88 @@ public actor RuntimeControlClient {
         } catch {
             invalidateAfterTransportFailure(opened.channel, error: error)
             throw error
+        }
+    }
+
+    /// Opens the caller's one app window session and returns its IOSurfaces and frame stream.
+    ///
+    /// The session is bound to this control connection. This method is not replayed after a transport failure.
+    public func openSession(_ request: OpenSessionRequest) async throws(RuntimeControlClientError)
+        -> RuntimeOpenedSession
+    {
+        guard !isOpeningSession else {
+            throw .malformedReply
+        }
+        guard !hasOpenedSession else {
+            throw .malformedReply
+        }
+        if sessionWasInvalidated {
+            sessionEventHub = RuntimeSessionEventStreamHub()
+            eventSink.replaceSessionHub(sessionEventHub)
+            sessionWasInvalidated = false
+        }
+        isOpeningSession = true
+        defer { isOpeningSession = false }
+
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = OpenSessionRequest(
+                header: makeHeader(),
+                packageID: request.packageID,
+                geometry: request.geometry,
+                screenSize: request.screenSize,
+                launchTiming: request.launchTiming
+            )
+            let data = try Self.encode(controlRequest)
+            let wireReply = try await opened.channel.openSession(data)
+            let reply = try Self.decode(OpenSessionControlReply.self, from: wireReply.data)
+            if let error = reply.error {
+                guard reply.result == nil else {
+                    throw RuntimeControlClientError.malformedReply
+                }
+                throw RuntimeControlClientError.remoteFailure(code: error.code, message: error.message)
+            }
+            guard let descriptor = reply.result,
+                wireReply.surfaces.count == descriptor.surfaces.surfaceCount,
+                sessionEventHub.installInitialPool(
+                    descriptor.surfaces,
+                    surfaces: wireReply.surfaces,
+                    windowPrefs: descriptor.windowPrefs
+                )
+            else {
+                throw RuntimeControlClientError.malformedReply
+            }
+
+            hasOpenedSession = true
+            let channel = opened.channel
+            let sessionEventHub = self.sessionEventHub
+            return RuntimeOpenedSession(
+                descriptor: descriptor,
+                surfaces: wireReply.surfaces,
+                messages: sessionEventHub.stream,
+                closeRequests: sessionEventHub.closeRequests,
+                frameDisplayed: { message in
+                    sessionEventHub.acknowledge(message)
+                    channel.frameDisplayed(message)
+                },
+                visibilityChanged: { message in
+                    channel.visibilityChanged(message)
+                },
+                resize: {
+                    [self] (geometry: DisplayGeometry) async throws(RuntimeControlClientError)
+                        -> RuntimeSessionResizeResult in
+                    try await self.resizeSession(
+                        geometry,
+                        using: channel,
+                        sessionEventHub: sessionEventHub,
+                        sessionID: descriptor.sessionID
+                    )
+                }
+            )
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
         }
     }
 
@@ -650,6 +756,11 @@ public actor RuntimeControlClient {
     private func invalidateControlConnection(_ channel: any RuntimeControlChannel) {
         guard let openedControl, openedControl.channel === channel else { return }
         eventStreamHub.markResyncRequired(for: eventStreamHub.activeTopics())
+        if hasOpenedSession {
+            sessionEventHub.finish()
+            hasOpenedSession = false
+            sessionWasInvalidated = true
+        }
         channel.invalidate()
         self.openedControl = nil
         remoteEventTopics = []
@@ -712,6 +823,57 @@ public actor RuntimeControlClient {
             return
         }
         invalidateControlConnection(openedControl.channel)
+    }
+
+    private func resizeSession(
+        _ geometry: DisplayGeometry,
+        using channel: any RuntimeControlChannel,
+        sessionEventHub: RuntimeSessionEventStreamHub,
+        sessionID: UUID
+    ) async throws(RuntimeControlClientError) -> RuntimeSessionResizeResult {
+        do {
+            let request = ResizeSessionRequest(header: makeHeader(), geometry: geometry)
+            let wireReply = try await channel.resizeSession(Self.encode(request))
+            let reply = try Self.decode(ResizeSessionControlReply.self, from: wireReply.data)
+            if let error = reply.error {
+                guard
+                    reply.outcome == nil || reply.outcome == .rejected,
+                    reply.result == nil,
+                    wireReply.surfaces.isEmpty
+                else {
+                    throw RuntimeControlClientError.malformedReply
+                }
+                throw RuntimeControlClientError.remoteFailure(code: error.code, message: error.message)
+            }
+            guard let outcome = reply.outcome else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            var updatedDescriptor: SessionDescriptor?
+            switch outcome {
+            case .applied:
+                guard let descriptor = reply.result,
+                    descriptor.sessionID == sessionID,
+                    descriptor.surfaces.surfaceCount == SurfaceSet.requiredSurfaceCount,
+                    sessionEventHub.installResizedPool(
+                        descriptor.surfaces,
+                        surfaces: wireReply.surfaces,
+                        windowPrefs: descriptor.windowPrefs
+                    )
+                else {
+                    throw RuntimeControlClientError.malformedReply
+                }
+                updatedDescriptor = descriptor
+            case .unchanged, .rejected, .stateUncertain:
+                guard reply.result == nil, wireReply.surfaces.isEmpty else {
+                    throw RuntimeControlClientError.malformedReply
+                }
+            }
+            return RuntimeSessionResizeResult(outcome: outcome, descriptor: updatedDescriptor)
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(channel, error: clientError)
+            throw clientError
+        }
     }
 
     private static func withTimeout<Value: Sendable>(
@@ -1345,13 +1507,32 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func unsubscribe(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func terminate(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func openSession(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeSessionXPCReply
+    func resizeSession(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeSessionXPCReply
+    func frameDisplayed(_ message: FrameDisplayed)
+    func visibilityChanged(_ message: VisibilityChanged)
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void)
     func invalidate()
 }
 
 extension RuntimeControlChannel {
+    func openSession(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeSessionXPCReply {
+        throw .invalidRemoteProxy
+    }
+
+    func resizeSession(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeSessionXPCReply {
+        throw .invalidRemoteProxy
+    }
+
+    func frameDisplayed(_ message: FrameDisplayed) {}
+    func visibilityChanged(_ message: VisibilityChanged) {}
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void) {}
     func invalidate() {}
+}
+
+struct RuntimeSessionXPCReply: @unchecked Sendable {
+    let data: Data
+    let surfaces: [IOSurface]
 }
 
 protocol RuntimeXPCConnectionFactory: Sendable {
@@ -1391,7 +1572,7 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
             NSXPCConnection(listenerEndpoint: listenerEndpoint),
             interface: try controlInterface(),
             signingRequirement: signingRequirement,
-            exportedInterface: NSXPCInterface(with: RuntimeEventSink.self),
+            exportedInterface: try eventSinkInterface(),
             exportedObject: eventSink
         )
         return XPCControlChannel(connection: connection)
@@ -1428,12 +1609,41 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
 
     private func controlInterface() throws(RuntimeControlClientError) -> NSXPCInterface {
         let interface = NSXPCInterface(with: RuntimeControlXPC.self)
-        guard let fileClasses = NSSet(array: [NSArray.self, FileHandle.self]) as? Set<AnyHashable> else {
+        guard
+            let fileClasses = NSSet(array: [NSArray.self, FileHandle.self]) as? Set<AnyHashable>,
+            let surfaceClasses = NSSet(array: [NSArray.self, IOSurface.self]) as? Set<AnyHashable>
+        else {
             throw .invalidXPCInterface
         }
         interface.setClasses(
             fileClasses,
             for: #selector(RuntimeControlXPC.importPackage(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
+        interface.setClasses(
+            surfaceClasses,
+            for: #selector(RuntimeControlXPC.openSession(_:reply:)),
+            argumentIndex: 1,
+            ofReply: true
+        )
+        interface.setClasses(
+            surfaceClasses,
+            for: #selector(RuntimeControlXPC.resizeSession(_:reply:)),
+            argumentIndex: 1,
+            ofReply: true
+        )
+        return interface
+    }
+
+    private func eventSinkInterface() throws(RuntimeControlClientError) -> NSXPCInterface {
+        let interface = NSXPCInterface(with: RuntimeEventSink.self)
+        guard let surfaceClasses = NSSet(array: [NSArray.self, IOSurface.self]) as? Set<AnyHashable> else {
+            throw .invalidXPCInterface
+        }
+        interface.setClasses(
+            surfaceClasses,
+            for: #selector(RuntimeEventSink.surfacesReplaced(_:surfaces:reply:)),
             argumentIndex: 1,
             ofReply: false
         )
@@ -1757,6 +1967,48 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
             }
             proxy.terminate(request) { response in finish(.success(response)) }
         }
+    }
+
+    func openSession(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeSessionXPCReply {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy, let openSession = proxy.openSession else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            openSession(request) { response, surfaces in
+                finish(.success(RuntimeSessionXPCReply(data: response, surfaces: surfaces ?? [])))
+            }
+        }
+    }
+
+    func resizeSession(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeSessionXPCReply {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy, let resizeSession = proxy.resizeSession else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            resizeSession(request) { response, surfaces in
+                finish(.success(RuntimeSessionXPCReply(data: response, surfaces: surfaces ?? [])))
+            }
+        }
+    }
+
+    func frameDisplayed(_ message: FrameDisplayed) {
+        guard let proxy = connection.remoteObjectProxy as? any RuntimeControlXPC else { return }
+        proxy.frameDisplayed?(message.generation, frameSeq: message.frameSeq)
+    }
+
+    func visibilityChanged(_ message: VisibilityChanged) {
+        guard let proxy = connection.remoteObjectProxy as? any RuntimeControlXPC else { return }
+        proxy.visibilityChanged?(message.visible)
     }
 
     func invalidate() {

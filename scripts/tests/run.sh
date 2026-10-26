@@ -1323,6 +1323,32 @@ unless policy_checkout&.dig("with", "ref") == "refs/heads/main"
   abort("FAIL CI policy workflow fixture: policy job must use trusted main")
 end
 puts("PASS CI policy workflow reruns on edits and label revocation using trusted main")
+
+workflow_directory = File.dirname(ARGV.fetch(0))
+missing_xcode_selection = []
+Dir.glob(File.join(workflow_directory, "*.yml")).each do |path|
+  document = YAML.load_file(path)
+  next unless document.is_a?(Hash) && document["jobs"].is_a?(Hash)
+
+  document.fetch("jobs").each do |job_name, job|
+    steps = job.fetch("steps", [])
+    steps.each_with_index do |step, index|
+      next unless step["run"] == "scripts/bootstrap"
+
+      selected_index = steps[...index].rindex do |prior_step|
+        prior_step["run"] == "scripts/ci/select-pinned-xcode.sh"
+      end
+      missing_xcode_selection << "#{File.basename(path)}:#{job_name}" unless selected_index
+    end
+  end
+end
+unless missing_xcode_selection.empty?
+  abort(
+    "FAIL workflow Xcode fixture: select the pinned Xcode before bootstrap in " \
+      "#{missing_xcode_selection.join(", ")}"
+  )
+end
+puts("PASS workflow Xcode fixture selects the pinned Xcode before bootstrap")
 RUBY
 
 ruby - "$repo_root/.github/workflows/clean-third-party.yml" <<'RUBY'

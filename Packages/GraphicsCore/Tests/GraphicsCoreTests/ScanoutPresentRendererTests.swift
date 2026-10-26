@@ -144,7 +144,7 @@ func aFlushOfTheVirGLRendererPresentsTheGuestPixelsInOrderWithTheirOrientation()
     try await eventually { presenter.statistics.framesPresented == 1 }
     var frames = presenter.frames.makeAsyncIterator()
     let firstFrame = await frames.next()
-    guard case .frameReady(_, let firstIndex, let firstSequence) = firstFrame else {
+    guard case .frameReady(_, let firstIndex, let firstSequence, _) = firstFrame else {
         Issue.record("The first flush produced no frame.")
         return
     }
@@ -160,7 +160,7 @@ func aFlushOfTheVirGLRendererPresentsTheGuestPixelsInOrderWithTheirOrientation()
     device.queueNotified(index: 0, context: context)
     try await eventually { presenter.statistics.framesPresented == 2 }
     let secondFrame = await frames.next()
-    guard case .frameReady(_, let secondIndex, let secondSequence) = secondFrame else {
+    guard case .frameReady(_, let secondIndex, let secondSequence, _) = secondFrame else {
         Issue.record("The second flush produced no frame.")
         return
     }

@@ -258,11 +258,13 @@ public struct DisplayLease: Sendable {
     public let androidDisplayID: Int32
     /// The resolved Android mode.
     public let mode: ResolvedDisplayMode
-    /// The fresh IOSurface pool for this lease.
-    public let pool: ScanoutPoolHandle
+    /// The fresh IOSurface pool for this lease, exposed through RuntimeCore's session API.
+    public let sessionPool: DisplaySessionPool
+    /// The GraphicsCore pool used internally for lifecycle management.
+    let pool: ScanoutPoolHandle
 
     /// Creates a display lease.
-    public init(
+    init(
         leaseID: UUID,
         session: SessionID,
         scanout: ScanoutID,
@@ -276,6 +278,7 @@ public struct DisplayLease: Sendable {
         self.androidDisplayID = androidDisplayID
         self.mode = mode
         self.pool = pool
+        sessionPool = DisplaySessionPool(scanoutPool: pool)
     }
 }
 
@@ -609,6 +612,14 @@ public actor DisplayPool {
             mode: nextMode,
             pool: pool
         )
+    }
+
+    /// Forwards session window visibility only while the lease still owns its generation.
+    public func visibilityChanged(_ visible: Bool, for lease: DisplayLease) {
+        guard slotIndex(for: lease) != nil else {
+            return
+        }
+        scanouts.visibilityChanged(lease.scanout, visible: visible)
     }
 
     /// Releases a lease. Failures are retained as a slot fault and never escape to close callers.

@@ -1,5 +1,6 @@
 import DiagnosticsCore
 @preconcurrency import Foundation
+import IOSurface
 import RuntimeAPI
 import RuntimeCore
 
@@ -39,6 +40,7 @@ public final class RuntimeXPCServer: @unchecked Sendable {
     private let brokerListener: NSXPCListener
     private let brokerDelegate: BrokerListenerDelegate
     private let connectionRegistry: RuntimeXPCConnectionRegistry
+    private let workspaceOpener: WorkspaceOpener
     private let startLock = NSLock()
     private var hasStarted = false
     private var hasInvalidated = false
@@ -81,11 +83,18 @@ public final class RuntimeXPCServer: @unchecked Sendable {
         }
 
         let connectionRegistry = RuntimeXPCConnectionRegistry(eventHub: host.eventHub)
+        let workspaceOpener = WorkspaceOpener(
+            launcherBundleURL: appBundleURL.appendingPathComponent(
+                "Contents/Helpers/APKRunLauncher.app",
+                isDirectory: true
+            )
+        )
         let brokerDelegate = BrokerListenerDelegate(
             host: host,
             buildInfo: buildInfo,
             clientRequirements: clientRequirements,
-            connectionRegistry: connectionRegistry
+            connectionRegistry: connectionRegistry,
+            workspaceOpener: workspaceOpener
         )
         let brokerListener = NSXPCListener(machServiceName: identity.machServiceName)
         brokerListener.delegate = brokerDelegate
@@ -94,6 +103,7 @@ public final class RuntimeXPCServer: @unchecked Sendable {
         self.brokerListener = brokerListener
         self.brokerDelegate = brokerDelegate
         self.connectionRegistry = connectionRegistry
+        self.workspaceOpener = workspaceOpener
     }
 
     private static func isExpectedAppBundle(_ url: URL, identifier: String) -> Bool {
@@ -190,6 +200,7 @@ private struct RuntimeXPCConnectionRecord {
     let kind: RuntimeXPCConnectionKind
     let controlListener: RuntimeXPCControlListener?
     let outputQueue: DispatchQueue
+    let onInvalidated: (@Sendable () -> Void)?
     var activeRequests = 0
 }
 
@@ -208,13 +219,15 @@ private final class RuntimeXPCControlListener: @unchecked Sendable {
         clientKind: RuntimeClientKind,
         requirement: String,
         reservationID: UUID,
-        connectionRegistry: RuntimeXPCConnectionRegistry
+        connectionRegistry: RuntimeXPCConnectionRegistry,
+        workspaceOpener: WorkspaceOpener
     ) {
         delegate = ControlListenerDelegate(
             host: host,
             clientKind: clientKind,
             reservationID: reservationID,
-            connectionRegistry: connectionRegistry
+            connectionRegistry: connectionRegistry,
+            workspaceOpener: workspaceOpener
         )
         listener = NSXPCListener.anonymous()
         listener.setConnectionCodeSigningRequirement(requirement)
@@ -286,7 +299,8 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         _ connection: NSXPCConnection,
         kind: RuntimeXPCConnectionKind,
         clientKind: RuntimeClientKind? = nil,
-        reservationID: UUID? = nil
+        reservationID: UUID? = nil,
+        onInvalidated: (@Sendable () -> Void)? = nil
     ) -> Bool {
         let identifier = ObjectIdentifier(connection)
         let outputQueue = DispatchQueue(
@@ -321,7 +335,8 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
             connection: connection,
             kind: kind,
             controlListener: controlListener,
-            outputQueue: outputQueue
+            outputQueue: outputQueue,
+            onInvalidated: onInvalidated
         )
         lastActivity = ContinuousClock.now
         lock.unlock()
@@ -474,6 +489,9 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         lastActivity = ContinuousClock.now
         lock.unlock()
         eventHub.removeAll(connectionIDs: connectionIDs)
+        for record in records {
+            record.onInvalidated?()
+        }
         for controlListener in records.compactMap(\.controlListener) + reservedListeners {
             controlListener.listener.invalidate()
         }
@@ -518,6 +536,7 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         lock.unlock()
         record?.controlListener?.listener.invalidate()
         eventHub.remove(connectionID: identifier)
+        record?.onInvalidated?()
     }
 }
 
@@ -768,17 +787,20 @@ private final class BrokerListenerDelegate: NSObject, NSXPCListenerDelegate, @un
     private let buildInfo: BuildInfo
     private let clientRequirements: [String: String]
     private let connectionRegistry: RuntimeXPCConnectionRegistry
+    private let workspaceOpener: WorkspaceOpener
 
     init(
         host: RuntimeHost,
         buildInfo: BuildInfo,
         clientRequirements: [String: String],
-        connectionRegistry: RuntimeXPCConnectionRegistry
+        connectionRegistry: RuntimeXPCConnectionRegistry,
+        workspaceOpener: WorkspaceOpener
     ) {
         self.host = host
         self.buildInfo = buildInfo
         self.clientRequirements = clientRequirements
         self.connectionRegistry = connectionRegistry
+        self.workspaceOpener = workspaceOpener
     }
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
@@ -800,7 +822,8 @@ private final class BrokerListenerDelegate: NSObject, NSXPCListenerDelegate, @un
             buildInfo: buildInfo,
             clientRequirements: clientRequirements,
             connectionRegistry: connectionRegistry,
-            connectionID: connectionID
+            connectionID: connectionID,
+            workspaceOpener: workspaceOpener
         )
         connection.resume()
         return true
@@ -812,6 +835,7 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
     private let buildInfo: BuildInfo
     private let clientRequirements: [String: String]
     private let connectionRegistry: RuntimeXPCConnectionRegistry
+    private let workspaceOpener: WorkspaceOpener
     private let connectionID: ObjectIdentifier
 
     init(
@@ -819,13 +843,15 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
         buildInfo: BuildInfo,
         clientRequirements: [String: String],
         connectionRegistry: RuntimeXPCConnectionRegistry,
-        connectionID: ObjectIdentifier
+        connectionID: ObjectIdentifier,
+        workspaceOpener: WorkspaceOpener
     ) {
         self.host = host
         self.buildInfo = buildInfo
         self.clientRequirements = clientRequirements
         self.connectionRegistry = connectionRegistry
         self.connectionID = connectionID
+        self.workspaceOpener = workspaceOpener
     }
 
     func hello(_ request: Data, reply: @escaping (Data) -> Void) {
@@ -909,7 +935,8 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
             clientKind: endpointRequest.clientKind,
             requirement: requirement,
             reservationID: reservationID,
-            connectionRegistry: connectionRegistry
+            connectionRegistry: connectionRegistry,
+            workspaceOpener: workspaceOpener
         )
         guard
             connectionRegistry.reserveControlConnection(
@@ -1004,34 +1031,52 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
     private let clientKind: RuntimeClientKind
     private let reservationID: UUID
     private let connectionRegistry: RuntimeXPCConnectionRegistry
+    private let workspaceOpener: WorkspaceOpener
 
     init(
         host: RuntimeHost,
         clientKind: RuntimeClientKind,
         reservationID: UUID,
-        connectionRegistry: RuntimeXPCConnectionRegistry
+        connectionRegistry: RuntimeXPCConnectionRegistry,
+        workspaceOpener: WorkspaceOpener
     ) {
         self.host = host
         self.clientKind = clientKind
         self.reservationID = reservationID
         self.connectionRegistry = connectionRegistry
+        self.workspaceOpener = workspaceOpener
     }
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
+        let connectionID = ObjectIdentifier(connection)
+        let onInvalidated: (@Sendable () -> Void)?
+        if clientKind == .launcher {
+            onInvalidated = { [host] in
+                Task {
+                    await host.sessionClientDisconnected(connectionID)
+                }
+            }
+        } else {
+            onInvalidated = nil
+        }
         guard
             connectionRegistry.register(
                 connection,
                 kind: .control,
                 clientKind: clientKind,
-                reservationID: reservationID
+                reservationID: reservationID,
+                onInvalidated: onInvalidated
             )
         else {
             listener.invalidate()
             return false
         }
-        let connectionID = ObjectIdentifier(connection)
         let controlInterface = NSXPCInterface(with: RuntimeControlXPC.self)
         guard let fileHandleClasses = NSSet(array: [NSArray.self, FileHandle.self]) as? Set<AnyHashable> else {
+            listener.invalidate()
+            return false
+        }
+        guard let surfaceClasses = NSSet(array: [NSArray.self, IOSurface.self]) as? Set<AnyHashable> else {
             listener.invalidate()
             return false
         }
@@ -1041,7 +1086,26 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
             argumentIndex: 1,
             ofReply: false
         )
-        connection.remoteObjectInterface = NSXPCInterface(with: RuntimeEventSink.self)
+        controlInterface.setClasses(
+            surfaceClasses,
+            for: #selector(RuntimeControlXPC.openSession(_:reply:)),
+            argumentIndex: 1,
+            ofReply: true
+        )
+        controlInterface.setClasses(
+            surfaceClasses,
+            for: #selector(RuntimeControlXPC.resizeSession(_:reply:)),
+            argumentIndex: 1,
+            ofReply: true
+        )
+        let eventSinkInterface = NSXPCInterface(with: RuntimeEventSink.self)
+        eventSinkInterface.setClasses(
+            surfaceClasses,
+            for: #selector(RuntimeEventSink.surfacesReplaced(_:surfaces:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
+        connection.remoteObjectInterface = eventSinkInterface
         let eventHub = host.eventHub
         let remoteSink =
             connection.remoteObjectProxyWithErrorHandler { _ in
@@ -1053,7 +1117,8 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
             clientKind: clientKind,
             connectionRegistry: connectionRegistry,
             connectionID: connectionID,
-            eventSink: remoteSink.map(RuntimeEventSinkReference.init(value:))
+            eventSink: remoteSink.map(RuntimeEventSinkReference.init(value:)),
+            workspaceOpener: workspaceOpener
         )
         connection.resume()
         listener.invalidate()
@@ -1083,6 +1148,8 @@ extension RuntimeListOperationsControlRequest: VersionedControlRequest {}
 extension RuntimeOperationStatusControlRequest: VersionedControlRequest {}
 extension RuntimeSubscribeControlRequest: VersionedControlRequest {}
 extension RuntimeUnsubscribeControlRequest: VersionedControlRequest {}
+extension OpenSessionRequest: VersionedControlRequest {}
+extension ResizeSessionRequest: VersionedControlRequest {}
 
 enum RuntimeControlOperation {
     case runtimeStatus
@@ -1092,6 +1159,10 @@ enum RuntimeControlOperation {
     case resetRuntime
     case listPackages
     case packageInfo
+    case openSession
+    case resizeSession
+    case frameDisplayed
+    case visibilityChanged
     case launch
     case terminate
     case importPackage
@@ -1130,6 +1201,8 @@ enum RuntimeControlOperation {
             case .wrapper:
                 false
             }
+        case .openSession, .resizeSession, .frameDisplayed, .visibilityChanged:
+            clientKind == .launcher
         case .listPackages:
             switch clientKind {
             case .app, .menuBar, .cli:
@@ -1161,20 +1234,25 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     private let connectionRegistry: RuntimeXPCConnectionRegistry
     private let connectionID: ObjectIdentifier
     private let eventSink: RuntimeEventSinkReference?
+    private let workspaceOpener: WorkspaceOpener
     private let outputQueue: DispatchQueue
+    private let sessionFrameGateLock = NSLock()
+    private var sessionFrameGate: XPCFrameDeliveryGate?
 
     init(
         host: RuntimeHost,
         clientKind: RuntimeClientKind,
         connectionRegistry: RuntimeXPCConnectionRegistry,
         connectionID: ObjectIdentifier,
-        eventSink: RuntimeEventSinkReference?
+        eventSink: RuntimeEventSinkReference?,
+        workspaceOpener: WorkspaceOpener
     ) {
         self.host = host
         self.clientKind = clientKind
         self.connectionRegistry = connectionRegistry
         self.connectionID = connectionID
         self.eventSink = eventSink
+        self.workspaceOpener = workspaceOpener
         outputQueue =
             connectionRegistry.outputQueue(for: connectionID)
             ?? DispatchQueue(label: "io.apkrun.RuntimeHost.xpc-output-fallback.\(UUID().uuidString)")
@@ -1772,6 +1850,173 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         }
     }
 
+    func openSession(_ request: Data, reply: @escaping (Data, [IOSurface]?) -> Void) {
+        let response = XPCSurfaceReply(reply, outputQueue: outputQueue)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(OpenSessionControlReply(error: Self.rejection(for: admission).wireError)),
+                surfaces: nil
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .openSession,
+                as: OpenSessionRequest.self
+            ) {
+                response.send(
+                    Self.encode(OpenSessionControlReply(error: Self.wireError(for: failure))),
+                    surfaces: nil
+                )
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(OpenSessionRequest.self, from: request) else {
+                response.send(
+                    Self.encode(OpenSessionControlReply(error: Self.malformedWireError)),
+                    surfaces: nil
+                )
+                return
+            }
+            guard await verifyEventSink(eventSink) else {
+                response.send(
+                    Self.encode(
+                        OpenSessionControlReply(
+                            error: .runtime(
+                                "malformedRequest",
+                                message: "The app window's frame receiver is unavailable."
+                            )
+                        )
+                    ),
+                    surfaces: nil
+                )
+                return
+            }
+
+            let frameGate = XPCFrameDeliveryGate(
+                outputQueue: outputQueue,
+                connectionRegistry: connectionRegistry,
+                connectionID: connectionID,
+                eventSink: eventSink
+            )
+            sessionFrameGateLock.withLock {
+                sessionFrameGate = frameGate
+            }
+            do {
+                let opened = try await host.openSession(
+                    decoded,
+                    connectionID: connectionID,
+                    frameReady: { frameGate.deliver($0) },
+                    closeRequested: { [weak self] in
+                        await self?.requestSessionClose() ?? false
+                    }
+                )
+                response.send(
+                    Self.encode(OpenSessionControlReply(result: opened.descriptor)),
+                    surfaces: opened.surfaces,
+                    afterSend: { frameGate.open() }
+                )
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(OpenSessionControlReply(error: wireError)), surfaces: nil)
+            }
+        }
+    }
+
+    func resizeSession(_ request: Data, reply: @escaping (Data, [IOSurface]?) -> Void) {
+        let response = XPCSurfaceReply(reply, outputQueue: outputQueue)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(ResizeSessionControlReply(error: Self.rejection(for: admission).wireError)),
+                surfaces: nil
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .resizeSession,
+                as: ResizeSessionRequest.self
+            ) {
+                response.send(
+                    Self.encode(ResizeSessionControlReply(error: Self.wireError(for: failure))),
+                    surfaces: nil
+                )
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(ResizeSessionRequest.self, from: request) else {
+                response.send(
+                    Self.encode(ResizeSessionControlReply(error: Self.malformedWireError)),
+                    surfaces: nil
+                )
+                return
+            }
+            let frameGate = sessionFrameGateLock.withLock { sessionFrameGate }
+            frameGate?.pause()
+            let resumeFrameDelivery: @Sendable () -> Void = {
+                frameGate?.open()
+            }
+            do {
+                switch try await host.resizeSession(decoded, connectionID: connectionID) {
+                case .applied(let resized):
+                    response.send(
+                        Self.encode(
+                            ResizeSessionControlReply(outcome: .applied, result: resized.descriptor)
+                        ),
+                        surfaces: resized.surfaces,
+                        afterSend: resumeFrameDelivery
+                    )
+                case .unchanged:
+                    response.send(
+                        Self.encode(ResizeSessionControlReply(outcome: .unchanged)),
+                        surfaces: nil,
+                        afterSend: resumeFrameDelivery
+                    )
+                case .stateUncertain:
+                    response.send(
+                        Self.encode(ResizeSessionControlReply(outcome: .stateUncertain)),
+                        surfaces: nil,
+                        afterSend: resumeFrameDelivery
+                    )
+                }
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(
+                    Self.encode(ResizeSessionControlReply(error: wireError)),
+                    surfaces: nil,
+                    afterSend: resumeFrameDelivery
+                )
+            }
+        }
+    }
+
+    func frameDisplayed(_ generation: UInt32, frameSeq: UInt64) {
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else { return }
+        Task {
+            defer { pending.finish() }
+            await host.frameDisplayed(
+                FrameDisplayed(generation: generation, frameSeq: frameSeq),
+                from: connectionID
+            )
+        }
+    }
+
+    func visibilityChanged(_ visible: Bool) {
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else { return }
+        Task {
+            defer { pending.finish() }
+            await host.visibilityChanged(visible, from: connectionID)
+        }
+    }
+
     private func verifyEventSink(_ sink: RuntimeEventSinkReference?) async -> Bool {
         guard let sink else { return false }
         return await withCheckedContinuation { continuation in
@@ -1784,6 +2029,28 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 sink.value.handshake { available in
                     timeout.cancel()
                     gate.complete(available)
+                }
+            }
+        }
+    }
+
+    private func requestSessionClose() async -> Bool {
+        guard let eventSink, connectionRegistry.isRegistered(connectionID) else { return false }
+        return await withCheckedContinuation { continuation in
+            let gate = XPCSessionCloseReplyGate(continuation)
+            let timeout = DispatchWorkItem {
+                gate.complete(false)
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(3), execute: timeout)
+            outputQueue.async { [connectionRegistry, connectionID] in
+                guard connectionRegistry.isRegistered(connectionID) else {
+                    timeout.cancel()
+                    gate.complete(false)
+                    return
+                }
+                eventSink.value.sessionCloseRequested? {
+                    timeout.cancel()
+                    gate.complete(true)
                 }
             }
         }
@@ -1862,6 +2129,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             }
             do {
                 let result = try await host.launch(RuntimeLaunchRequest(packageID: decoded.packageID))
+                try await workspaceOpener.open(packageID: decoded.packageID)
                 response.send(Self.encode(RuntimeLaunchControlReply(result: result)))
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
@@ -2123,6 +2391,129 @@ private final class XPCDataReply: @unchecked Sendable {
         func send(_ data: Data) {
             handler(data)
         }
+    }
+}
+
+private final class XPCSurfaceReply: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handler: ReplyHandler?
+    private let outputQueue: DispatchQueue
+
+    init(_ handler: @escaping (Data, [IOSurface]?) -> Void, outputQueue: DispatchQueue) {
+        self.handler = ReplyHandler(handler)
+        self.outputQueue = outputQueue
+    }
+
+    func send(_ data: Data, surfaces: [IOSurface]?, afterSend: (@Sendable () -> Void)? = nil) {
+        lock.lock()
+        let handler = self.handler
+        self.handler = nil
+        lock.unlock()
+        guard let handler else { return }
+        outputQueue.async {
+            handler.send(data, surfaces: surfaces)
+            afterSend?()
+        }
+    }
+
+    private final class ReplyHandler: @unchecked Sendable {
+        private let handler: (Data, [IOSurface]?) -> Void
+
+        init(_ handler: @escaping (Data, [IOSurface]?) -> Void) {
+            self.handler = handler
+        }
+
+        func send(_ data: Data, surfaces: [IOSurface]?) {
+            handler(data, surfaces)
+        }
+    }
+}
+
+final class XPCFrameDeliveryGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let enqueueFrame: @Sendable (FrameReady) -> Void
+    private var isOpen = false
+    private var pauseCount = 0
+    private var pendingFrame: FrameReady?
+
+    fileprivate init(
+        outputQueue: DispatchQueue,
+        connectionRegistry: RuntimeXPCConnectionRegistry,
+        connectionID: ObjectIdentifier,
+        eventSink: RuntimeEventSinkReference?
+    ) {
+        enqueueFrame = { frame in
+            outputQueue.async {
+                guard connectionRegistry.isRegistered(connectionID), let eventSink else { return }
+                eventSink.value.frameReady?(
+                    frame.generation,
+                    surfaceIndex: frame.surfaceIndex,
+                    frameSeq: frame.frameSeq,
+                    presentationTime: frame.presentationTime
+                )
+            }
+        }
+    }
+
+    init(deliverFrame: @escaping @Sendable (FrameReady) -> Void) {
+        enqueueFrame = deliverFrame
+    }
+
+    func deliver(_ frame: FrameReady) {
+        lock.lock()
+        guard isOpen else {
+            pendingFrame = frame
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+        enqueue(frame)
+    }
+
+    func open() {
+        lock.lock()
+        if pauseCount > 0 {
+            pauseCount -= 1
+        }
+        guard pauseCount == 0 else {
+            lock.unlock()
+            return
+        }
+        isOpen = true
+        let pendingFrame = self.pendingFrame
+        self.pendingFrame = nil
+        lock.unlock()
+        if let pendingFrame {
+            enqueue(pendingFrame)
+        }
+    }
+
+    func pause() {
+        lock.lock()
+        pauseCount += 1
+        isOpen = false
+        lock.unlock()
+    }
+
+    private func enqueue(_ frame: FrameReady) {
+        enqueueFrame(frame)
+    }
+}
+
+private final class XPCSessionCloseReplyGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    init(_ continuation: CheckedContinuation<Bool, Never>) {
+        self.continuation = continuation
+    }
+
+    func complete(_ didClose: Bool) {
+        lock.lock()
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(returning: didClose)
     }
 }
 

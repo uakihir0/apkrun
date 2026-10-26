@@ -254,6 +254,20 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         return RuntimeTerminateResult(packageID: request.packageID, hadSession: true)
     }
 
+    /// Lists live app sessions owned by this daemon service.
+    func listSessions() async -> [RuntimeSessionSnapshot] {
+        await registry.snapshot().compactMap { session in
+            guard case .app = session.id,
+                session.state != .closing,
+                !Self.isEnded(session.state),
+                let packageID = RuntimePackageID(rawValue: session.packageID)
+            else {
+                return nil
+            }
+            return RuntimeSessionSnapshot(packageID: packageID, phase: Self.phase(for: session.state))
+        }
+    }
+
     /// Reports whether this package still owns a live app session.
     func hasActiveSession(packageID: RuntimePackageID) async -> Bool {
         await registry.session(packageID: packageID.rawValue) != nil
@@ -751,16 +765,18 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         else {
             throw .runtime("internal", message: "APKRun could not identify the app session.")
         }
-        let phase: RuntimeSessionPhase
-        switch session.state {
-        case .running, .backgrounded: phase = .running
-        case .launching: phase = .launching
-        case .requested: phase = .starting
-        case .waitingForRuntime: phase = .booting
-        case .acquiringDisplay: phase = .waitingForPackage
-        case .closing, .ended: phase = .ended
+        return RuntimeLaunchResult(sessionID: sessionID, packageID: packageID, state: phase(for: session.state))
+    }
+
+    private static func phase(for state: AppSessionState) -> RuntimeSessionPhase {
+        switch state {
+        case .running, .backgrounded: .running
+        case .launching: .launching
+        case .requested: .starting
+        case .waitingForRuntime: .booting
+        case .acquiringDisplay: .waitingForPackage
+        case .closing, .ended: .ended
         }
-        return RuntimeLaunchResult(sessionID: sessionID, packageID: packageID, state: phase)
     }
 
     private static func isEnded(_ state: AppSessionState) -> Bool {

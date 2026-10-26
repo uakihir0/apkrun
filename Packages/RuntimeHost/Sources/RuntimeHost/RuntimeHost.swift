@@ -766,6 +766,14 @@ public actor RuntimeHost {
             .sorted { $0.startedAt > $1.startedAt }
     }
 
+    /// Returns the current live app sessions without starting Android.
+    public func listSessions() async -> [RuntimeSessionSnapshot] {
+        guard let service = headlessSessionService as? DaemonHeadlessSessionService else {
+            return []
+        }
+        return await service.listSessions()
+    }
+
     /// Returns a retained operation snapshot.
     func operationStatus(
         _ operationID: WireOperationID,

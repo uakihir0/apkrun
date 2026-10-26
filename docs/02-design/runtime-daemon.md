@@ -519,7 +519,7 @@ The request and reply types are in [runtime-api.md](../03-reference/runtime-api.
 |---|---|---|
 | `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime` | The wire names of `ensureReady`, `stop`, `restart`, and `reset` (§3.1). `startRuntime` uses `.cli` for the CLI and `.user` for APKRun.app and the menu bar. `resetRuntime` clears `failed` and the boot-loop guard, and deletes nothing ([runtime-api.md](../03-reference/runtime-api.md) §5.2) | #32 (`startRuntime`, `stopRuntime`), #33 (the others) |
 | `runtimeInfo` | `apkrun info` without a package: versions, state, resource use, and display pool size ([cli.md](cli.md) §4.1) | #33, #29 |
-| `listSessions` | Open sessions (§7) with package, display, phase, and point size. Used by `apkrun status`, the menu bar, and **Use Current Size** | #33 |
+| `listSessions` | Live app sessions from the daemon's session registry, currently populated by Debug headless launches (`APKRUN_TEST_HEADLESS_LAUNCH=1`). It does not start Android; snapshots contain package and phase only, without display mappings or point sizes. Normal app-window sessions will appear when the window session path is connected (#69) | #33 |
 | `restartApp` | Session channel request for Android → Restart ‹App› ([wrapper.md](wrapper.md) §5.6): `StopApplication`, then `LaunchApplication` on the same display. The session stays open | #45 |
 | `listOperations` | Running operations and the last 50 finished ones (§8.3). Used by `apkrun operations list` | #33 |
 | `unsubscribe`, `closeStream` | Counterparts of `subscribe` and of the stream operations (§8.4) | #33 |

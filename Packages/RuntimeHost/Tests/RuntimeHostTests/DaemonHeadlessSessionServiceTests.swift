@@ -16,6 +16,10 @@ func daemonHeadlessSessionUsesSecondaryDisplayDiscardsFramesAndReleasesLease() a
     let launched = try await fixture.service.launch(RuntimeLaunchRequest(packageID: package))
 
     #expect(launched.state == .running)
+    #expect(
+        await fixture.service.listSessions()
+            == [RuntimeSessionSnapshot(packageID: package, phase: .running)]
+    )
     #expect(await fixture.agent.launchCalls == [HeadlessLaunchCall(packageID: package.rawValue, displayID: 1)])
     #expect(await fixture.registry.session(.app(launched.sessionID))?.state == .running)
     let lease = await fixture.registry.displayLease(.app(launched.sessionID))
@@ -42,7 +46,32 @@ func daemonHeadlessSessionUsesSecondaryDisplayDiscardsFramesAndReleasesLease() a
     #expect(terminated.hadSession)
     #expect(await fixture.agent.forceStoppedPackages == [package.rawValue])
     #expect(await fixture.registry.session(.app(launched.sessionID))?.state == .ended(.userClosed))
+    #expect(await fixture.service.listSessions().isEmpty)
     #expect((await fixture.displayPool.snapshot())[0].state == .free)
+}
+
+@Test
+func daemonSessionListProjectsRegistryLifecycleWithoutDisplayDetails() async throws {
+    let fixture = makeHeadlessServiceFixture()
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let session = try await fixture.registry.request(packageID: package.rawValue)
+
+    #expect(await fixture.service.listSessions() == [RuntimeSessionSnapshot(packageID: package, phase: .starting)])
+
+    _ = try await fixture.registry.transition(session.id, to: .waitingForRuntime)
+    #expect(await fixture.service.listSessions() == [RuntimeSessionSnapshot(packageID: package, phase: .booting)])
+
+    _ = try await fixture.registry.transition(session.id, to: .acquiringDisplay)
+    #expect(
+        await fixture.service.listSessions()
+            == [RuntimeSessionSnapshot(packageID: package, phase: .waitingForPackage)]
+    )
+
+    _ = try await fixture.registry.transition(session.id, to: .launching)
+    #expect(await fixture.service.listSessions() == [RuntimeSessionSnapshot(packageID: package, phase: .launching)])
+
+    _ = try await fixture.registry.transition(session.id, to: .closing)
+    #expect(await fixture.service.listSessions().isEmpty)
 }
 
 @Test

@@ -1080,6 +1080,7 @@ extension RuntimeBeginInstallImportedControlRequest: VersionedControlRequest {}
 extension RuntimeBeginUninstallPackageControlRequest: VersionedControlRequest {}
 extension RuntimeCancelOperationControlRequest: VersionedControlRequest {}
 extension RuntimeListOperationsControlRequest: VersionedControlRequest {}
+extension RuntimeListSessionsControlRequest: VersionedControlRequest {}
 extension RuntimeOperationStatusControlRequest: VersionedControlRequest {}
 extension RuntimeSubscribeControlRequest: VersionedControlRequest {}
 extension RuntimeUnsubscribeControlRequest: VersionedControlRequest {}
@@ -1100,6 +1101,7 @@ enum RuntimeControlOperation {
     case beginUninstallPackage
     case cancelOperation
     case listOperations
+    case listSessions
     case operationStatus
     case subscribe
     case unsubscribe
@@ -1116,7 +1118,7 @@ enum RuntimeControlOperation {
         case .startRuntime, .stopRuntime, .restartRuntime, .resetRuntime,
             .importPackage, .installImported, .beginInstallImported,
             .beginUninstallPackage,
-            .cancelOperation, .listOperations, .operationStatus:
+            .cancelOperation, .listOperations, .listSessions, .operationStatus:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -1660,6 +1662,43 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                             response.beginSnapshotBarrier()
                         })
                     )
+                )
+            )
+        }
+    }
+
+    func listSessions(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply, snapshotBarrier: true)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeListSessionsControlReply(error: Self.rejection(for: admission).wireError)
+                )
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .listSessions,
+                as: RuntimeListSessionsControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeListSessionsControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard (try? JSONDecoder().decode(RuntimeListSessionsControlRequest.self, from: request)) != nil
+            else {
+                response.send(Self.encode(RuntimeListSessionsControlReply(error: Self.malformedWireError)))
+                return
+            }
+            response.beginSnapshotBarrier()
+            let result = await host.listSessions()
+            response.send(
+                Self.encode(
+                    RuntimeListSessionsControlReply(result: result)
                 )
             )
         }

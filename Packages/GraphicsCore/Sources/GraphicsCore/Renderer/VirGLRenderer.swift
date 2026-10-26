@@ -1,4 +1,5 @@
 import DiagnosticsCore
+import Darwin
 import GraphicsBridge
 import IOSurface
 import Metal
@@ -94,9 +95,10 @@ public final class VirGLRenderer {
         return device
     }
 
-    /// Makes guest request identifiers available to callbacks raised synchronously by renderer work.
+    /// Makes guest request identifiers available to log callbacks raised synchronously on the owner thread.
     ///
-    /// All callbacks and engine calls run on this renderer's owner thread.
+    /// Engine calls and fence callbacks run on this renderer's owner thread. Log callbacks may also arrive from
+    /// another thread; those callbacks are recorded without command attribution.
     func withCommandDiagnostic<T>(_ diagnostic: VirGLCommandDiagnostic?, perform: () -> T) -> T {
         guard let retainedCallbackContext else { return perform() }
         let context = Unmanaged<GraphicsRendererCallbackContext>
@@ -368,11 +370,13 @@ extension VirGLRenderer: VirGLEngine, VirGLCommandDiagnosticScope, @unchecked Se
     #endif
 }
 
-/// The renderer's callback context. Callbacks run on the render thread.
-// UNCHECKED-SENDABLE: callbacks and active-command updates are confined to the renderer's owner thread.
+/// The renderer's callback context. Only callbacks delivered on the renderer's owner thread may be correlated.
+// UNCHECKED-SENDABLE: active-command updates and reads are confined to the renderer's owner thread. Off-thread
+// callbacks check their pthread identity before reading the active command.
 final class GraphicsRendererCallbackContext: @unchecked Sendable {
     let logger: APKLogger
     let onFenceCompleted: @Sendable (UInt32) -> Void
+    private let ownerThread: pthread_t
     var activeCommandDiagnostic: VirGLCommandDiagnostic?
     #if APKRUN_TEST_READBACK
         let messageSink = VirGLMessageSink()
@@ -384,6 +388,7 @@ final class GraphicsRendererCallbackContext: @unchecked Sendable {
     ) {
         self.onFenceCompleted = onFenceCompleted
         self.logger = logger
+        ownerThread = pthread_self()
     }
 
     func withCommandDiagnostic<T>(_ diagnostic: VirGLCommandDiagnostic?, perform: () -> T) -> T {
@@ -401,8 +406,17 @@ final class GraphicsRendererCallbackContext: @unchecked Sendable {
         case GB_LOG_INFO: severity = "info"
         default: return
         }
-        guard let activeCommandDiagnostic else { return }
-        let message = "VirGL renderer callback level=\(severity) \(activeCommandDiagnostic.logFields)"
+        let fields: String
+        if pthread_equal(ownerThread, pthread_self()) != 0 {
+            guard let activeCommandDiagnostic else { return }
+            fields = activeCommandDiagnostic.logFields
+        } else {
+            // Off-thread callbacks cannot safely inherit the render thread's active command.
+            guard Int(level) != GB_LOG_INFO else { return }
+            fields =
+                "control_ordinal=unattributed command=unattributed context_id=unattributed resource_id=unattributed"
+        }
+        let message = "VirGL renderer callback level=\(severity) \(fields)"
         if Int(level) == GB_LOG_ERROR {
             logger.error("\(message, .public)")
         } else if Int(level) == GB_LOG_WARNING {

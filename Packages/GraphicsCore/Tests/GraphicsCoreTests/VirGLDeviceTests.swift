@@ -627,6 +627,40 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     #expect(sink.entries.count == 1)
 }
 
+@Test func rendererCallbackFromAnotherThreadDuringBackingScopeStaysUnattributed() throws {
+    let sink = RecordingLogSink()
+    let callbackContext = GraphicsRendererCallbackContext(
+        onFenceCompleted: { _ in },
+        logger: APKLogger(category: GraphicsLogCategory.renderer, sink: sink)
+    )
+    let diagnostic = VirGLCommandDiagnostic(
+        ordinal: 14,
+        command: VirtioGPUCommand.resourceAttachBacking.rawValue,
+        contextID: 0,
+        resourceID: 128
+    )
+    let callbackFinished = DispatchSemaphore(value: 0)
+
+    callbackContext.withCommandDiagnostic(diagnostic) {
+        let callbackThread = Thread {
+            callbackContext.logCorrelation(for: Int32(GB_LOG_ERROR))
+            callbackFinished.signal()
+        }
+        callbackThread.start()
+        #expect(callbackFinished.wait(timeout: .now() + 5) == .success)
+    }
+
+    let entry = try #require(sink.entries.first)
+    #expect(entry.level == .error)
+    #expect(
+        entry.publicMessage
+            == "VirGL renderer callback level=error control_ordinal=unattributed command=unattributed context_id=unattributed resource_id=unattributed"
+    )
+    #expect(entry.publicMessage.contains("resource_id=128") == false)
+    #expect(entry.publicMessage.contains("control_ordinal=14") == false)
+    #expect(sink.entries.count == 1)
+}
+
 @Test func rendererCallbackCorrelationPreservesWarningSeverity() throws {
     let sink = RecordingLogSink()
     let callbackContext = GraphicsRendererCallbackContext(

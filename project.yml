@@ -47,7 +47,11 @@ targets:
     type: application
     platform: macOS
     sources:
-      - path: Apps/APKRun
+      - path: Apps/APKRun/APKRunApp.swift
+      - path: Apps/APKRun/Settings/LanguageRegionSettingsView.swift
+      - path: Apps/APKRun/Settings/LocaleTimeSettingsStore.swift
+      - path: Apps/APKRun/Resources/Localizable.xcstrings
+        buildPhase: resources
     settings:
       base:
         PRODUCT_NAME: APKRun
@@ -150,7 +154,28 @@ targets:
         outputFiles:
           - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/LoginItems/APKRunMenuBar.app"
     scheme:
-      testTargets: []
+      testTargets:
+        - APKRunSettingsTests
+
+  APKRunSettingsTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Apps/APKRun/Settings/LocaleTimeSettingsStore.swift
+      - path: Apps/APKRun/Tests
+    dependencies:
+      - target: BuildStamp
+        embed: false
+        link: false
+    settings:
+      base:
+        PRODUCT_NAME: APKRunSettingsTests
+        PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.settings-tests
+        ENABLE_HARDENED_RUNTIME: NO
+        GENERATE_INFOPLIST_FILE: YES
+    scheme:
+      testTargets:
+        - APKRunSettingsTests
 
   APKRunMenuBar:
     type: application

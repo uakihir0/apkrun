@@ -46,6 +46,10 @@ struct APKRunApp: App {
                 }
         }
         .windowResizability(.contentSize)
+
+        Settings {
+            LanguageRegionSettingsView()
+        }
     }
 }
 

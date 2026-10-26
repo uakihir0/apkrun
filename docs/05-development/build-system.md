@@ -119,7 +119,7 @@ Each check is a script that runs without arguments. `scripts/ci/run-checks.sh`, 
 | `scripts/check-lock.sh` | `ThirdParty/ThirdParty.lock.json` and patches; Swift pins against `Package.resolved` and `project.yml` (§6.1). `--apply` applies patches (§6.2) | #63; `--apply` #21 | yes |
 | `scripts/check-protos.sh` | `buf lint` on `Packages/GuestProtocol` | #34 | yes |
 | `scripts/tests/run.sh` | self-tests of `scripts/` | #63 | yes |
-| `scripts/check-raw-adb.sh` | no `adb shell` or `pm ` outside the allowlist: `ADBStoreAgentChannel.swift`, `AdbClient.swift`, tests, `scripts/dev/`, `Tests/Compatibility/`, `Experiments/`, `Images/tools/reference/`, generated protobuf ([test-strategy.md](../04-plan/test-strategy.md) §3.3) | #28 | no |
+| `scripts/check-raw-adb.sh` | no `adb shell` or `pm ` outside the allowlist: `ADBStoreAgentChannel.swift`, `AdbClient.swift`, tests, `scripts/dev/`, `Tests/Compatibility/`, `Experiments/`, `Images/tools/reference/`, generated protobuf ([test-strategy.md](../04-plan/test-strategy.md) §3.3) | #28, #35 | yes |
 | `scripts/check-launcher.sh` | built APKRunLauncher: `otool -L` lists only `/System/Library` and `/usr/lib`; `lipo -archs` is `arm64`; minimum OS 27.0 | #69 (planned) | no |
 | `scripts/check-sepolicy.sh` | release (`user`) product sources declare no permissive domain (R-13) | #36 (planned) | no |
 | `scripts/check-fixtures.sh` | APKs in `Tests/Fixtures/apks/` are newer than their sources; no committed fixture over 10 MiB (§8) | #42 (planned) | no |
@@ -666,7 +666,7 @@ Jobs marked *(planned)* do not exist yet.
 | Workflow | Trigger | Job | Tier | Runner | Content |
 |---|---|---|---|---|---|
 | `ci-policy.yml` | `pull_request_target` to `main`: opened, reopened, synchronize, edited, labeled, unlabeled | `workflow-policy` | — | `ubuntu-latest` | `scripts/ci/check-pr-control-changes.py` from `main`: head, base, changed paths, and reviews through the read-only API. Control paths: workflows, build and convention scripts, generators, pins, formatter and tool settings, test and build manifests, test trees, module graph. The approver applies `ci-policy-approved`; a new commit, reopen, PR edit, or later label event resets the check; removing the label revokes it |
-| `ci.yml` | every pull request; push to `main` | `lint` | — | `xcode-27` | `scripts/bootstrap`; `scripts/ci/run-checks.sh` (`tests/run.sh`, `check-module-deps.sh`, `check-logging.sh`, `check-todos.sh`, `check-format.sh`, `check-lock.sh`, `check-protos.sh`) |
+| `ci.yml` | every pull request; push to `main` | `lint` | — | `xcode-27` | `scripts/bootstrap`; `scripts/ci/run-checks.sh` (`tests/run.sh`, `check-module-deps.sh`, `check-raw-adb.sh`, `check-logging.sh`, `check-todos.sh`, `check-format.sh`, `check-lock.sh`, `check-protos.sh`) |
 | | | `codegen` | — | `xcode-27` | `scripts/ci/codegen.sh` (§4) |
 | | | `third-party` | — | `xcode-27` | cache key from `build-third-party.sh --print-cache-key virgl-runtime`; restore; `build-third-party.sh virgl-runtime`; `generate-notices.py --check` |
 | | | `build` | — | `xcode-27` | needs `third-party`; `swift build -j 2`; `swift build -j 2 --traits EmbeddedRuntime`; `xcodebuild` Debug and Release (unsigned); `check-release-build.sh` |

@@ -7,6 +7,7 @@ repo_root="$(cd "$script_dir/../.." && pwd)"
 checks=(
     "scripts/tests/run.sh"
     "scripts/check-module-deps.sh"
+    "scripts/check-raw-adb.sh"
 )
 if [[ -f "$repo_root/scripts/check-logging.sh" ]]; then
     checks+=("scripts/check-logging.sh")

@@ -313,6 +313,40 @@ func storeSupervisorSelectsOperationsOnlyFromNegotiatedCapabilities() async thro
 }
 
 @Test(.timeLimit(.minutes(1)))
+func storeSupervisorAbandonsInstallWhenCommitBoundaryIsCancelled() async throws {
+    let payload = Data("verified apk bytes".utf8)
+    let file = try temporaryAPK(payload)
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+
+    let transport = StoreTestTransport()
+    let channel = StoreAgentSupervisor(transport: transport)
+    let package = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let spec = StoreArtifactSpec(name: "base", size: UInt64(payload.count), sha256: SHA256Digest(data: payload))
+
+    await #expect(throws: InstallBoundaryTestFailure.cancelled) {
+        try await channel.install(
+            StoreInstallRequest(
+                packageID: package,
+                versionCode: 7,
+                expectedSignerDigests: [rawDigest(0xAB)],
+                artifacts: [spec]
+            ),
+            files: [file],
+            beforeCommit: {
+                throw InstallBoundaryTestFailure.cancelled
+            }
+        )
+    }
+
+    let snapshot = await transport.agent.snapshot()
+    #expect(snapshot.transfers.map(\.context) == ["inspect", "install-1"])
+    #expect(snapshot.transfers.filter { !$0.acknowledged }.isEmpty)
+    #expect(snapshot.commitRequests == 0)
+    #expect(snapshot.abandonRequests == 1)
+    await channel.close()
+}
+
+@Test(.timeLimit(.minutes(1)))
 func storeSupervisorRejectsAnInstallFinishedFailureAndSupportsLaunchableFilter() async throws {
     let payload = Data([0x43])
     let file = try temporaryAPK(payload)
@@ -361,6 +395,10 @@ private func temporaryAPK(_ data: Data) throws -> URL {
 private func rawDigest(_ byte: UInt8) -> SHA256Digest {
     let hexByte = String(format: "%02x", byte)
     return SHA256Digest(hex: String(repeating: hexByte, count: 32))!
+}
+
+private enum InstallBoundaryTestFailure: Error, Equatable {
+    case cancelled
 }
 
 private struct TransferObservation: Sendable {

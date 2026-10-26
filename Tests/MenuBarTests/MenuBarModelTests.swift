@@ -7,14 +7,17 @@ import Testing
 func menuBarModelListsOnlyRunningSessionsWithPackageNames() async {
     let firstPackage = packageID("io.example.first")
     let secondPackage = packageID("io.example.second")
+    let startingPackage = packageID("io.example.starting")
     let service = MenuBarTestRuntimeService(
         sessions: [
             RuntimeSessionSnapshot(packageID: firstPackage, phase: .running),
-            RuntimeSessionSnapshot(packageID: secondPackage, phase: .starting),
+            RuntimeSessionSnapshot(packageID: secondPackage, phase: .running),
+            RuntimeSessionSnapshot(packageID: startingPackage, phase: .starting),
         ],
         packages: [
             package(firstPackage, name: "First app"),
             package(secondPackage, name: "Second app"),
+            package(startingPackage, name: "Starting app"),
         ]
     )
     let model = MenuBarModel(service: service)
@@ -28,7 +31,12 @@ func menuBarModelListsOnlyRunningSessionsWithPackageNames() async {
                 id: firstPackage.rawValue,
                 packageID: firstPackage.rawValue,
                 displayName: "First app"
-            )
+            ),
+            MenuBarSession(
+                id: secondPackage.rawValue,
+                packageID: secondPackage.rawValue,
+                displayName: "Second app"
+            ),
         ])
 }
 
@@ -85,6 +93,67 @@ func menuBarModelReloadsAfterASessionSnapshotChangedEvent() async {
 
     await waitUntil { model.snapshot.sessions.map(\.packageID) == [packageID.rawValue] }
     model.stopListening()
+}
+
+@MainActor
+@Test
+func menuBarModelReloadsSnapshotAfterAnEventStreamReconnects() async {
+    let service = MenuBarTestRuntimeService()
+    let model = MenuBarModel(
+        service: service,
+        subscriptionRetryInitialDelay: .milliseconds(1)
+    )
+    await model.start()
+    await waitUntil {
+        model.isConnected && service.subscriptionCount(for: .sessions) == 1
+    }
+
+    service.holdSubscription(of: .sessions, onAttempt: 2)
+    let appPackageID = packageID("io.example.reconnected")
+    service.finish(.sessions)
+    await waitUntil { model.snapshot.runtimeStatus == nil }
+    await waitUntil { service.subscriptionCount(for: .sessions) == 2 }
+    defer {
+        service.releaseHeldSubscription()
+        model.stopListening()
+    }
+
+    let interimPackageID = packageID("io.example.interim")
+    service.sessions = [RuntimeSessionSnapshot(packageID: interimPackageID, phase: .running)]
+    service.emit(.runtime)
+    await waitUntil {
+        model.isConnected
+            && model.snapshot.sessions.map(\.packageID) == [interimPackageID.rawValue]
+    }
+
+    service.sessions = [RuntimeSessionSnapshot(packageID: appPackageID, phase: .running)]
+    service.releaseHeldSubscription()
+
+    await waitUntil {
+        model.isConnected
+            && service.subscriptionCount(for: .sessions) == 2
+            && model.snapshot.sessions.map(\.packageID) == [appPackageID.rawValue]
+    }
+}
+
+@MainActor
+@Test
+func menuBarModelLaunchesTheSelectedAppPackage() async {
+    let appPackageID = packageID("io.example.launch")
+    let service = MenuBarTestRuntimeService(
+        sessions: [RuntimeSessionSnapshot(packageID: appPackageID, phase: .running)],
+        packages: [package(appPackageID, name: "Launch app")]
+    )
+    let model = MenuBarModel(service: service)
+    await model.reload()
+
+    guard let session = model.snapshot.sessions.first else {
+        Issue.record("Expected the running test session to appear in the menu.")
+        return
+    }
+    await model.launch(session)
+
+    #expect(service.launchedPackageIDs == [appPackageID])
 }
 
 @MainActor
@@ -156,8 +225,12 @@ private final class MenuBarTestRuntimeService: MenuBarRuntimeService {
     private(set) var runtimeStatusReadCount = 0
     private(set) var startCount = 0
     private(set) var stopCount = 0
+    private(set) var launchedPackageIDs: [RuntimePackageID] = []
     private(set) var subscribedTopics: Set<EventTopic> = []
+    private var subscriptionCounts: [EventTopic: Int] = [:]
     private var continuations: [EventTopic: AsyncStream<EventEnvelope>.Continuation] = [:]
+    private var heldSubscriptionAttempt: (topic: EventTopic, count: Int)?
+    private var heldSubscriptionWaiter: CheckedContinuation<Void, Never>?
 
     init(
         status: RuntimeHostStatus = sampleRuntimeStatus("ready"),
@@ -198,13 +271,27 @@ private final class MenuBarTestRuntimeService: MenuBarRuntimeService {
         return status
     }
 
-    func launch(packageID: RuntimePackageID) async throws {}
+    func launch(packageID: RuntimePackageID) async throws {
+        launchedPackageIDs.append(packageID)
+    }
 
     func subscribe(to topic: EventTopic) async throws -> AsyncStream<EventEnvelope> {
-        AsyncStream { continuation in
+        subscriptionCounts[topic, default: 0] += 1
+        if heldSubscriptionAttempt?.topic == topic,
+            heldSubscriptionAttempt?.count == subscriptionCounts[topic]
+        {
+            await withCheckedContinuation { continuation in
+                heldSubscriptionWaiter = continuation
+            }
+        }
+        return AsyncStream { continuation in
             subscribedTopics.insert(topic)
             continuations[topic] = continuation
         }
+    }
+
+    func subscriptionCount(for topic: EventTopic) -> Int {
+        subscriptionCounts[topic, default: 0]
     }
 
     func emit(_ topic: EventTopic) {
@@ -216,6 +303,20 @@ private final class MenuBarTestRuntimeService: MenuBarRuntimeService {
                 payload: .resyncRequired(topic)
             )
         )
+    }
+
+    func finish(_ topic: EventTopic) {
+        continuations[topic]?.finish()
+    }
+
+    func holdSubscription(of topic: EventTopic, onAttempt attempt: Int) {
+        heldSubscriptionAttempt = (topic, attempt)
+    }
+
+    func releaseHeldSubscription() {
+        heldSubscriptionWaiter?.resume()
+        heldSubscriptionWaiter = nil
+        heldSubscriptionAttempt = nil
     }
 }
 

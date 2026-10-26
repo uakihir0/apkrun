@@ -66,19 +66,23 @@ final class MenuBarModel: ObservableObject {
 
     private let service: (any MenuBarRuntimeService)?
     private let snapshotRetryInitialDelay: Duration
+    private let subscriptionRetryInitialDelay: Duration
     private var hasStarted = false
     private var listenerGeneration: UInt64 = 0
     private var reloadIsRunning = false
     private var reloadWasRequested = false
+    private var topicsRequiringSnapshotAfterReconnect: Set<EventTopic> = []
     private var snapshotRetryTask: Task<Void, Never>?
     private var subscriptionRetryTasks: [EventTopic: Task<Void, Never>] = [:]
     private var eventTasks: [EventTopic: Task<Void, Never>] = [:]
 
     init(
         service: (any MenuBarRuntimeService)? = nil,
-        snapshotRetryInitialDelay: Duration = .seconds(1)
+        snapshotRetryInitialDelay: Duration = .seconds(1),
+        subscriptionRetryInitialDelay: Duration = .seconds(1)
     ) {
         self.snapshotRetryInitialDelay = snapshotRetryInitialDelay
+        self.subscriptionRetryInitialDelay = subscriptionRetryInitialDelay
         if let service {
             self.service = service
         } else if let client = try? RuntimeControlClient(clientKind: .menuBar) {
@@ -195,6 +199,7 @@ final class MenuBarModel: ObservableObject {
         eventTasks.removeAll()
         snapshotRetryTask?.cancel()
         snapshotRetryTask = nil
+        topicsRequiringSnapshotAfterReconnect.removeAll()
         hasStarted = false
     }
 
@@ -307,7 +312,8 @@ final class MenuBarModel: ObservableObject {
                     else { return }
                     self.subscriptionRetryTasks[topic] = nil
                     retryDelay = .seconds(1)
-                    if !self.isConnected {
+                    let requiresSnapshot = self.topicsRequiringSnapshotAfterReconnect.remove(topic) != nil
+                    if requiresSnapshot || !self.isConnected {
                         await self.reload()
                     }
                     guard
@@ -346,6 +352,15 @@ final class MenuBarModel: ObservableObject {
                 self.hasStarted, self.listenerGeneration == generation
             else { return }
             self.eventTasks[topic] = nil
+            self.isConnected = false
+            self.snapshot = MenuBarSnapshot(runtimeStatus: nil)
+            self.topicsRequiringSnapshotAfterReconnect.insert(topic)
+            do {
+                try await Task.sleep(for: self.subscriptionRetryInitialDelay)
+            } catch {
+                return
+            }
+            guard self.hasStarted, self.listenerGeneration == generation else { return }
             self.listenForEvents(on: topic, generation: generation)
         }
     }

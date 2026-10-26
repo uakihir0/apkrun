@@ -1,5 +1,6 @@
 import DiagnosticsCore
 import Foundation
+import XCTest
 
 /// What one VM test run owns: its APKRUN home and its developer ADB port (test-strategy §3.10).
 ///
@@ -14,6 +15,8 @@ import Foundation
 public struct VMRunResources: Equatable, Sendable {
     /// The environment variable that sets the developer ADB port of a run.
     public static let adbPortVariable = "APKRUN_TEST_ADB_PORT"
+    /// The name xcodebuild gives the test process for `adbPortVariable`.
+    public static let testRunnerADBPortVariable = "TEST_RUNNER_" + adbPortVariable
     /// The longest socket path `sockaddr_un` holds, without its terminating NUL (`DevConsoleSocketServer`).
     public static let maximumSocketPathBytes = 103
     private static let homePrefix = "/tmp/apkrun-vm-"
@@ -42,10 +45,26 @@ public struct VMRunResources: Equatable, Sendable {
         return resources
     }
 
+    /// Removes `run.home` if an asynchronous setup operation fails, preserving its original error.
+    public static func withCleanupOnFailure<Value>(
+        _ run: VMRunResources,
+        operation: () async throws -> Value
+    ) async throws -> Value {
+        do {
+            return try await operation()
+        } catch {
+            removeHomeOrReport(run.home)
+            throw error
+        }
+    }
+
     /// The developer ADB port that `environment` asks for. Unset or empty means `0`. Anything else must be a
     /// decimal port number from 0 to 65535. A malformed value is an error, never a silent default.
     public static func adbHostPort(environment: [String: String]) throws(VMRunResourcesFailure) -> UInt16 {
-        guard let value = environment[adbPortVariable], !value.isEmpty else {
+        let value =
+            environment[adbPortVariable].flatMap { $0.isEmpty ? nil : $0 }
+            ?? environment[testRunnerADBPortVariable]
+        guard let value, !value.isEmpty else {
             return 0
         }
         guard value.allSatisfy({ $0.isASCII && $0.isNumber }), let port = UInt16(value) else {
@@ -58,6 +77,13 @@ public struct VMRunResources: Equatable, Sendable {
     /// sibling of the home, so removing the home does not remove it.
     public var captureDirectory: URL {
         URL(fileURLWithPath: home.path + "-capture", isDirectory: true)
+    }
+
+    /// The Android graphics evidence directory for this run under the shared artifact root.
+    public func graphicsCaptureDirectory(under artifactRoot: URL) -> URL {
+        artifactRoot
+            .appendingPathComponent("android-graphics", isDirectory: true)
+            .appendingPathComponent(home.lastPathComponent, isDirectory: true)
     }
 
     /// The paths of the run, derived by the product's own `APKRunPaths` from the home.
@@ -86,13 +112,15 @@ public struct VMRunResources: Equatable, Sendable {
         }
     }
 
-    /// Removes the run's home, and writes the path and the error to standard error when that fails. A `defer`
-    /// cannot throw, so the failure appears in the test output instead of being discarded.
+    /// Removes the run's home, and fails the current test after writing the path and error to standard error when
+    /// removal fails. A `defer` cannot throw, so the failure must be recorded in the test result.
     public static func removeHomeOrReport(_ home: URL) {
         do {
             try removeHome(home)
         } catch {
-            FileHandle.standardError.write(Data("VMRunResources: the run home was not removed: \(error)\n".utf8))
+            let message = "VMRunResources: the run home was not removed: \(error)"
+            FileHandle.standardError.write(Data("\(message)\n".utf8))
+            XCTFail(message)
         }
     }
 

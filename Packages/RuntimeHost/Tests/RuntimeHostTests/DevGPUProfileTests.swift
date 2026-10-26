@@ -19,3 +19,9 @@ import Testing
 @Test func devBootDefaultsToTheHeadlessProfile() {
     #expect(DevBootOptions().gpu == DevGPUProfile.none)
 }
+
+@Test func devBootUsesTheProductADBPortByDefaultAndSupportsAnOverride() {
+    #expect(DevBootOptions.defaultADBHostPort == 6520)
+    #expect(DevBootOptions().adbHostPort == DevBootOptions.defaultADBHostPort)
+    #expect(DevBootOptions(adbHostPort: 49_321).adbHostPort == 49_321)
+}

@@ -29,7 +29,8 @@ final class AndroidGraphicsTests: XCTestCase {
     func testVirtioGPUBinds() async throws {
         // The adb lookup skips the test when there is no SDK. It runs before the boot, so a skip never stops a VM.
         let adbExecutable = try AndroidTestEnvironment.adbExecutable()
-        let home = try AndroidBootFixture.makeHome()
+        let run = try AndroidBootFixture.makeRun()
+        let home = run.home
         defer { removeTestHome(home) }
         let bundle = try AndroidBootFixture.bundleDirectory()
         let fixture = try await AndroidBootFixture(home: home, bundle: bundle)
@@ -58,7 +59,11 @@ final class AndroidGraphicsTests: XCTestCase {
 
         let captured: Result<GraphicsCapture, Error>
         do {
-            let adb = AdbClient(executable: adbExecutable)
+            let adbPort = try await Self.waitForADBHostPort(supervisor)
+            let adb = AdbClient(
+                executable: adbExecutable,
+                endpoint: AdbClient.loopbackEndpoint(port: adbPort)
+            )
             try await adb.connect(timeout: Self.adbBudget)
             // SELinux keeps the shell from reading the DRM connector status, so the capture runs as root (#22).
             try await adb.restartAsRoot()
@@ -72,7 +77,7 @@ final class AndroidGraphicsTests: XCTestCase {
         let bootOutcome = await boot.value
         collector.cancel()
 
-        let directory = bundle.deletingLastPathComponent().appendingPathComponent("android-graphics", isDirectory: true)
+        let directory = run.graphicsCaptureDirectory(under: bundle.deletingLastPathComponent())
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try console.text.write(
             to: directory.appendingPathComponent("hvc0-console.log"),
@@ -123,6 +128,19 @@ final class AndroidGraphicsTests: XCTestCase {
         )
     }
 
+    /// Waits for the run's loopback forwarder without waiting for Android's full boot, so the capture can still
+    /// inspect early boot state.
+    private static func waitForADBHostPort(_ supervisor: RuntimeSupervisor) async throws -> UInt16 {
+        let deadline = ContinuousClock.now + Self.adbBudget
+        while ContinuousClock.now < deadline {
+            if let port = await supervisor.developmentADBHostPort {
+                return port
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw AndroidGraphicsFailure.adbHostPortUnavailable
+    }
+
     /// Reads the guest. The kernel log comes from `dmesg` over adb, and from the hvc0 console when adb refuses it.
     private static func capture(adb: AdbClient, consoleText: String) async throws -> GraphicsCapture {
         let kernelLog: String
@@ -143,6 +161,17 @@ final class AndroidGraphicsTests: XCTestCase {
             drmListing: try await adb.shell("ls -l /sys/class/drm /dev/dri").output,
             bootCompleted: try await adb.getprop("sys.boot_completed")
         )
+    }
+}
+
+private enum AndroidGraphicsFailure: Error, CustomStringConvertible {
+    case adbHostPortUnavailable
+
+    var description: String {
+        switch self {
+        case .adbHostPortUnavailable:
+            "the development ADB forwarder did not report its loopback port before the timeout"
+        }
     }
 }
 

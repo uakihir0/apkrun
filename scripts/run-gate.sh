@@ -12,6 +12,14 @@ if [[ "$gate" != G1 && "$gate" != G2 && "$gate" != G3 ]]; then
     exit 64
 fi
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The complete gate body is stdin to the locked shell, so there is no unlocked body entry point.
+exec lockf -k /tmp/apkrun-vm.lock /bin/bash -s -- "$script_dir" "$gate" <<'GATE_BODY'
+set -euo pipefail
+script_dir="$1"
+gate="$2"
+shift 2
+
 if [[ -z "${APKRUN_TEST_DEVELOPMENT_TEAM:-}" || -z "${APKRUN_TEST_CODE_SIGN_IDENTITY:-}" ]]; then
     printf 'run-gate: set APKRUN_TEST_DEVELOPMENT_TEAM and APKRUN_TEST_CODE_SIGN_IDENTITY for the lab Apple Development certificate\n' >&2
     exit 78
@@ -25,7 +33,6 @@ signing_arguments=(
 # The G3 inputs, set once the G3 artifacts are staged. Empty for G1 and G2.
 g3_build_settings=()
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 cd "$repo_root"
 
@@ -201,8 +208,8 @@ xcodebuild test \
     "APKRUN_CI=1" \
     "${signing_arguments[@]}"
 if [[ "$gate" == G3 ]]; then
-    # The G3 check runs one boot in the G3 configuration (graphics.md §14). It is serialised with the other VM runs
-    # by lockf (test-strategy §3.6). The artifacts stay outside ~/Documents until the run ends, and the gate copies them.
+    # The gate-wide lock also covers G3's artifact producers and VM test (test-strategy §3.10).
+    # The artifacts stay outside ~/Documents until the run ends, and the gate copies them.
     artifacts="$APKRUN_TEST_LINUX_DIR/g3-artifacts"
     rm -rf "$artifacts"
     recording="$gate_dir/screen-recording.mov"
@@ -212,7 +219,7 @@ if [[ "$gate" == G3 ]]; then
     screencapture -v -V 1800 "$recording" &
     recording_pid=$!
     g3_status=0
-    lockf -k /tmp/apkrun-vm.lock xcodebuild test \
+    xcodebuild test \
         -project APKRun.xcodeproj \
         -scheme AcceptanceTests \
         -testPlan AcceptanceTests \
@@ -232,6 +239,7 @@ if [[ "$gate" == G3 ]]; then
     if [[ -d "$artifacts" ]]; then
         rm -rf "$gate_dir/artifacts"
         cp -R "$artifacts" "$gate_dir/artifacts"
+        rm -rf "$artifacts"
     fi
     if [[ -f "$recording" ]]; then
         if avconvert --preset PresetMediumQuality --source "$recording" --output "$gate_dir/screen-recording.mp4"; then
@@ -274,3 +282,4 @@ xcodebuild test \
     "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
     "APKRUN_CI=1" \
     "${signing_arguments[@]}"
+GATE_BODY

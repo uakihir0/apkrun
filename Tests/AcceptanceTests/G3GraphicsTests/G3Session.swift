@@ -52,6 +52,7 @@ enum G3Failure: Error, CustomStringConvertible {
     case commandFailed(String, Int32, String)
     case commandTimedOut(String)
     case bootEnded(String)
+    case adbEndpointUnavailable
     /// The window of display 0 was not on screen. The message is what the window list showed, not a permission.
     case noWindow(String)
     case screenshotFailed(String)
@@ -71,6 +72,8 @@ enum G3Failure: Error, CustomStringConvertible {
             "\(command) did not finish in time"
         case .bootEnded(let state):
             "the boot ended before it was ready: \(state)"
+        case .adbEndpointUnavailable:
+            "Android is ready, but its developer ADB host port was not reported."
         case .noWindow(let detail):
             detail
         case .screenshotFailed(let path):
@@ -128,16 +131,18 @@ final class G3Session: @unchecked Sendable {
     let inputs: G3Inputs
     /// The APKRUN_HOME of the boot. It is a new directory, and the run removes it at the end.
     let home: URL
+    private let requestedADBHostPort: UInt16
+    private(set) var adbHostPort: UInt16?
     private(set) var boot: Process?
     private(set) var collector: G3LineCollector?
     private var logFiles: [String: FileHandle] = [:]
 
     init(inputs: G3Inputs) throws {
         self.inputs = inputs
-        // The console socket paths must fit sockaddr_un, so the home is a short directory under /tmp (as G2 does).
-        home = URL(fileURLWithPath: "/tmp").appendingPathComponent(
-            "apkrun-g3-\(UUID().uuidString.prefix(8).lowercased())", isDirectory: true)
         try FileManager.default.createDirectory(at: inputs.artifacts, withIntermediateDirectories: true)
+        let resources = try VMRunResources.new(environment: ProcessInfo.processInfo.environment)
+        home = resources.home
+        requestedADBHostPort = resources.adbHostPort
     }
 
     /// The environment of every child process: the CLI's settings and the search path, and nothing the test host set.
@@ -180,7 +185,10 @@ final class G3Session: @unchecked Sendable {
         let collector = G3LineCollector(file: errFile)
         let process = Process()
         process.executableURL = inputs.cli
-        process.arguments = ["dev", "boot", "--gpu", "virgl", "--window", "--stats", "--console"]
+        process.arguments = [
+            "dev", "boot", "--gpu", "virgl", "--adb-host-port", String(requestedADBHostPort),
+            "--window", "--stats", "--console",
+        ]
         process.environment = childEnvironment
         process.standardOutput = try FileHandle(forWritingTo: outURL)
         let errorPipe = Pipe()
@@ -206,16 +214,26 @@ final class G3Session: @unchecked Sendable {
     /// Waits until the boot reports `state: ready`. A boot that ends first fails the run with its last state.
     func waitForReady(timeout: Duration) async throws {
         let deadline = ContinuousClock.now + timeout
+        let adbPortPrefix = "developer ADB host port: "
         while ContinuousClock.now < deadline {
-            if (collector?.count(containing: "state: ready") ?? 0) > 0 {
+            let lines = collector?.snapshot ?? []
+            if let line = lines.last(where: { $0.hasPrefix(adbPortPrefix) }),
+                let port = UInt16(line.dropFirst(adbPortPrefix.count))
+            {
+                adbHostPort = port
+            }
+            if lines.contains("state: ready"), adbHostPort != nil {
                 return
+            }
+            if adbHostPort == nil, lines.contains(where: { $0.hasPrefix("Android is ready after ") }) {
+                throw G3Failure.adbEndpointUnavailable
             }
             if let boot, !boot.isRunning {
                 throw G3Failure.bootEnded(lastState)
             }
             try await Task.sleep(for: .seconds(1))
         }
-        throw G3Failure.bootEnded("not ready after \(timeout): \(lastState)")
+        throw G3Failure.bootEnded("not ready with developer ADB endpoint after \(timeout): \(lastState)")
     }
 
     /// The number of lines logged so far. A mark is an index into the lines, so that a phase is the lines after it.
@@ -294,7 +312,13 @@ final class G3Session: @unchecked Sendable {
     /// Runs `apkrun dev adb <arguments>` with a 90 s limit, which talks to the developer ADB port of the boot.
     @discardableResult
     func adb(_ arguments: [String], timeout: TimeInterval = 90) throws -> (status: Int32, output: String) {
-        try runCLI(["dev", "adb"] + arguments, timeout: timeout)
+        guard let adbHostPort else {
+            throw G3Failure.adbEndpointUnavailable
+        }
+        return try runCLI(
+            ["dev", "adb", "--adb-host-port", String(adbHostPort)] + arguments,
+            timeout: timeout
+        )
     }
 
     /// The guest log: every line of the persistent capture under APKRUN_HOME/Logs/guest.

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Checks that scripts/run-gate.sh removes the dwell overrides before the first test run and records the
-# dwell in the G2 report (roadmap.md §2, gate G2). Static: the gate itself needs main, a clean tree, and the
-# lab's signing identity, so the check reads the script.
+# Checks that scripts/run-gate.sh removes the dwell overrides before the first test, records the G2 dwell, and
+# holds the VM lock for the full gate. Static: a gate needs main, a clean tree, and the lab's signing identity.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,3 +22,69 @@ if ! grep -qF "printf 'dwell_seconds: %s\\n' \"\$gate_dwell_seconds\"" "$gate_sc
     exit 1
 fi
 printf 'PASS run-gate dwell: overrides removed before the run, dwell recorded in the G2 report\n'
+
+lock_exec_line="$(grep -nF 'exec lockf -k /tmp/apkrun-vm.lock /bin/bash -s -- "$script_dir" "$gate" <<' "$gate_script" \
+    | head -1 | cut -d: -f1 || true)"
+producer_line="$(grep -n '^scripts/generate-project.sh$' "$gate_script" | head -1 | cut -d: -f1 || true)"
+if [[ -z "$lock_exec_line" || -z "$producer_line" ]]; then
+    printf 'FAIL run-gate lock: every gate must acquire the VM lock before changing artifacts\n' >&2
+    exit 1
+fi
+if [[ -e "$repo_root/scripts/run-gate-body.sh" ]]; then
+    printf 'FAIL run-gate lock: the gate body must not have a separate executable entry point\n' >&2
+    exit 1
+fi
+if [[ "$(grep -cF 'lockf -k /tmp/apkrun-vm.lock' "$gate_script")" -ne 1 ]]; then
+    printf 'FAIL run-gate lock: every gate must use exactly one gate-wide lock acquisition\n' >&2
+    exit 1
+fi
+lock_stub_dir="$(mktemp -d "${TMPDIR:-/tmp}/apkrun-lock-test.XXXXXX")"
+trap 'rm -rf "$lock_stub_dir"' EXIT
+lock_stub_marker="$lock_stub_dir/lockf-called"
+cat > "$lock_stub_dir/lockf" <<'EOF'
+#!/usr/bin/env bash
+if [[ -f "$APKRUN_TEST_LOCKF_MARKER" ]]; then
+    exit 42
+fi
+if [[ "$1" != "-k" || "$2" != "/tmp/apkrun-vm.lock" ]]; then
+    exit 43
+fi
+: > "$APKRUN_TEST_LOCKF_MARKER"
+shift 2
+exec "$@"
+EOF
+chmod +x "$lock_stub_dir/lockf"
+
+assert_lock_handoff_with_marker() {
+    local marker_value="$1"
+    local marker_label="$2"
+    rm -f "$lock_stub_marker"
+    set +e
+    PATH="$lock_stub_dir:$PATH" \
+        APKRUN_TEST_LOCKF_MARKER="$lock_stub_marker" \
+        APKRUN_TEST_DEVELOPMENT_TEAM="" \
+        APKRUN_TEST_CODE_SIGN_IDENTITY="" \
+        APKRUN_INTERNAL_RUN_GATE_LOCK_HELD="$marker_value" \
+        "$gate_script" G2 >/dev/null 2>&1
+    local lock_status=$?
+    set -e
+    if [[ "$lock_status" -ne 78 || ! -f "$lock_stub_marker" ]]; then
+        printf 'FAIL run-gate lock: %s did not acquire and hand off the lock exactly once\n' \
+            "$marker_label" >&2
+        exit 1
+    fi
+}
+
+assert_lock_handoff_with_marker G2 "an inherited marker"
+rm -f "$lock_stub_marker"
+set +e
+PATH="$lock_stub_dir:$PATH" APKRUN_TEST_LOCKF_MARKER="$lock_stub_marker" \
+    APKRUN_TEST_DEVELOPMENT_TEAM="" APKRUN_TEST_CODE_SIGN_IDENTITY="" \
+    /bin/bash -c 'APKRUN_INTERNAL_RUN_GATE_LOCK_HELD="G2:$$"; exec "$1" G2' _ "$gate_script" >/dev/null 2>&1
+same_pid_status=$?
+set -e
+if [[ "$same_pid_status" -ne 78 || ! -f "$lock_stub_marker" ]]; then
+    printf 'FAIL run-gate lock: same-PID exec skipped or repeated the lock acquisition\n' >&2
+    exit 1
+fi
+printf 'PASS run-gate lock: G1, G2, and G3 always enter the gate body through one lock acquisition\n'

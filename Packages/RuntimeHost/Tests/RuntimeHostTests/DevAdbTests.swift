@@ -40,6 +40,23 @@ func devAdbLeavesAHealthyTransportAlone() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func devAdbUsesTheSelectedLoopbackPort() async throws {
+    let hostPort: UInt16 = 49_321
+    let fake = try FakeSDK(transportAbsent: true, hostPort: hostPort)
+
+    let status = try await DevAdb().run(
+        arguments: ["shell", "exit-7"],
+        hostPort: hostPort,
+        environment: ["ANDROID_HOME": fake.sdk.path, "PATH": "/nonexistent"]
+    )
+
+    #expect(status == 7)
+    let calls = try fake.calls()
+    #expect(calls.contains("connect 127.0.0.1:49321"))
+    #expect(calls.last == "-s 127.0.0.1:49321 shell exit-7")
+}
+
+@Test(.timeLimit(.minutes(1)))
 func devAdbReturnsZeroWhenAdbSucceeds() async throws {
     let fake = try FakeSDK()
 
@@ -70,7 +87,7 @@ private final class FakeSDK: @unchecked Sendable {
     let sdk: URL
 
     /// `transportAbsent` makes the endpoint unknown to the adb server until the first `connect`, as on a fresh boot.
-    init(transportAbsent: Bool = false) throws {
+    init(transportAbsent: Bool = false, hostPort: UInt16 = 6520) throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("apkrun-015-devadb-\(UUID().uuidString)", isDirectory: true)
         sdk = root.appendingPathComponent("sdk", isDirectory: true)
@@ -79,20 +96,22 @@ private final class FakeSDK: @unchecked Sendable {
         if transportAbsent {
             try Data().write(to: root.appendingPathComponent("absent"))
         }
+        let endpoint = "127.0.0.1:\(hostPort)"
         let script = """
             #!/bin/sh
             dir='\(root.path)'
+            endpoint='\(endpoint)'
             printf '%s\\n' "$*" >> "$dir/calls.log"
             case "$*" in
-              "connect 127.0.0.1:6520") touch "$dir/connected"; echo "connected to 127.0.0.1:6520"; exit 0 ;;
-              "disconnect 127.0.0.1:6520") rm -f "$dir/connected"; exit 0 ;;
+              "connect $endpoint") touch "$dir/connected"; echo "connected to $endpoint"; exit 0 ;;
+              "disconnect $endpoint") rm -f "$dir/connected"; exit 0 ;;
               *"get-state")
                 if [ -f "$dir/absent" ] && [ ! -f "$dir/connected" ]; then
-                  echo "error: device '127.0.0.1:6520' not found" >&2; exit 1
+                  echo "error: device '$endpoint' not found" >&2; exit 1
                 fi
                 echo device; exit 0 ;;
-              "-s 127.0.0.1:6520 shell exit-7") exit 7 ;;
-              "-s 127.0.0.1:6520 devices") echo "List of devices attached"; exit 0 ;;
+              "-s $endpoint shell exit-7") exit 7 ;;
+              "-s $endpoint devices") echo "List of devices attached"; exit 0 ;;
               *) echo "unexpected: $*" >&2; exit 2 ;;
             esac
             """

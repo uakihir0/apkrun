@@ -27,8 +27,13 @@ public enum DevGPUProfile: String, CaseIterable, Sendable {
 
 /// Inputs for `apkrun dev boot` (cli.md §5; #13-#15, #22).
 public struct DevBootOptions: Sendable {
+    /// The product's default host port for developer ADB.
+    public static let defaultADBHostPort = BootOptions.defaultADBHostPort
+
     /// The GPU profile of the boot. `none` is the default.
     public var gpu: DevGPUProfile
+    /// The loopback TCP port used by developer ADB for this boot.
+    public var adbHostPort: UInt16
     /// Guest vCPUs of a newly provisioned instance.
     public var cpuCount: Int
     /// Guest memory in bytes of a newly provisioned instance.
@@ -61,6 +66,7 @@ public struct DevBootOptions: Sendable {
     /// Creates options for one development boot.
     public init(
         gpu: DevGPUProfile = .none,
+        adbHostPort: UInt16 = BootOptions.defaultADBHostPort,
         cpuCount: Int = InstanceSizing.default.cpuCount,
         memoryBytes: UInt64 = InstanceSizing.default.memoryBytes,
         userdataBytes: UInt64 = InstanceSizing.default.userdataBytes,
@@ -76,6 +82,7 @@ public struct DevBootOptions: Sendable {
         windowDisplayMode: AndroidWindowMode = .primaryDisplayCompatibility
     ) {
         self.gpu = gpu
+        self.adbHostPort = adbHostPort
         self.cpuCount = cpuCount
         self.memoryBytes = memoryBytes
         self.userdataBytes = userdataBytes
@@ -500,7 +507,8 @@ public struct DevBoot: Sendable {
             options: BootOptions(
                 gpuProfile: options.gpu.profile,
                 developerMode: true,
-                captureLogcat: true
+                captureLogcat: true,
+                adbHostPort: options.adbHostPort
             ),
             diagnostics: diagnostics,
             guestAgentBundle: guestAgentBundle,
@@ -576,6 +584,9 @@ public struct DevBoot: Sendable {
             do {
                 try await supervisor.ensureReady(.cli)
                 if await stopSignal.current() == nil {
+                    if let port = await supervisor.developmentADBHostPort {
+                        onEvent(.message("developer ADB host port: \(port)"))
+                    }
                     onEvent(.message("Android is ready after \(ContinuousClock.now - started)"))
                     if windowDisplay != nil, options.launchPackage != nil {
                         onEvent(.windowStatus("Preparing app…"))

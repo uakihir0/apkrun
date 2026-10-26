@@ -160,6 +160,7 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     )
     let cancelRequest = RuntimeCancelOperationControlRequest(header: header, operationID: operationID)
     let listRequest = RuntimeListOperationsControlRequest(header: header)
+    let listSessionsRequest = RuntimeListSessionsControlRequest(header: header)
     let statusRequest = RuntimeOperationStatusControlRequest(header: header, operationID: operationID)
     let handle = OperationHandle(operationID: operationID, kind: .install)
     let uninstallHandle = OperationHandle(operationID: operationID, kind: .uninstall)
@@ -168,6 +169,7 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
         kind: .install,
         startedAt: Date(timeIntervalSince1970: 1_800_000_000)
     )
+    let sessionSnapshot = RuntimeSessionSnapshot(packageID: packageID, phase: .running)
     let failure = RuntimeWireError.runtime(
         "operationNotFound",
         message: "The operation is no longer available."
@@ -177,6 +179,7 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     #expect(try roundTrip(beginUninstallRequest) == beginUninstallRequest)
     #expect(try roundTrip(cancelRequest) == cancelRequest)
     #expect(try roundTrip(listRequest) == listRequest)
+    #expect(try roundTrip(listSessionsRequest) == listSessionsRequest)
     #expect(try roundTrip(statusRequest) == statusRequest)
     #expect(
         try roundTrip(RuntimeBeginInstallImportedControlReply(result: handle))
@@ -203,6 +206,12 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
         try roundTrip(RuntimeListOperationsControlReply(error: failure))
             == RuntimeListOperationsControlReply(error: failure))
     #expect(
+        try roundTrip(RuntimeListSessionsControlReply(result: [sessionSnapshot]))
+            == RuntimeListSessionsControlReply(result: [sessionSnapshot]))
+    #expect(
+        try roundTrip(RuntimeListSessionsControlReply(error: failure))
+            == RuntimeListSessionsControlReply(error: failure))
+    #expect(
         try roundTrip(RuntimeOperationStatusControlReply(result: snapshot))
             == RuntimeOperationStatusControlReply(result: snapshot))
     #expect(
@@ -216,7 +225,7 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
         listRequest.header,
         statusRequest.header,
     ] {
-        #expect(requestHeader.apiVersion == APIVersion(major: 1, minor: 11))
+        #expect(requestHeader.apiVersion == APIVersion(major: 1, minor: 12))
         #expect(requestHeader.clientKind == .cli)
     }
 }

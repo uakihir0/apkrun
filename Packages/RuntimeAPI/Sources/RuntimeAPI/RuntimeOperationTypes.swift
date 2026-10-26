@@ -581,6 +581,37 @@ public struct RuntimeListOperationsControlReply: Codable, Equatable, Sendable {
     }
 }
 
+/// Lists app sessions through the authenticated control endpoint.
+public struct RuntimeListSessionsControlRequest: Codable, Equatable, Sendable {
+    /// The authenticated request metadata.
+    public let header: APIRequestHeader
+
+    /// Creates a list-sessions request.
+    public init(header: APIRequestHeader) {
+        self.header = header
+    }
+}
+
+/// The live app sessions or structured failure returned by `listSessions`.
+public struct RuntimeListSessionsControlReply: Codable, Equatable, Sendable {
+    /// The current live sessions, present on success.
+    public let result: [RuntimeSessionSnapshot]?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: [RuntimeSessionSnapshot]) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
 /// Requests the latest snapshot for one operation.
 public struct RuntimeOperationStatusControlRequest: Codable, Equatable, Sendable {
     /// The authenticated request metadata.

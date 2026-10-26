@@ -441,6 +441,7 @@ public protocol StoreAgentChannel: Sendable {
 
     func inspect(_ files: [StagedFile]) async throws -> GuestArchiveInfo
     func install(_ request: StoreInstallRequest, files: [StagedFile],
+                 beforeCommit: @Sendable () async throws -> Void,
                  progress: @Sendable (StoreInstallProgress) -> Void) async throws -> StoreInstallResult
     func uninstall(_ package: PackageID, keepData: Bool) async throws
     func rollback(_ package: PackageID, from: VersionCode, to: VersionCode) async throws -> StoreRollbackResult
@@ -487,8 +488,9 @@ install(ticket, options)
                                      enable_rollback: false, artifacts, install_reason: USER,
                                      package_source: OTHER })
      b. stream every file on the artifact stream (progress: RECEIVING)
-     c. journal step guestCommitRequested
-     d. CommitInstall → wait for InstallFinished (progress: VERIFYING, COMMITTING)
+     c. journal step guestCommitRequested; enter the non-cancellable phase
+     d. CommitInstall → Android verifies the staged APKs, then wait for InstallFinished
+        (progress: VERIFYING, COMMITTING)
   4. SUCCESS → journal step guestInstalled(versionCode)
   5. rename incoming/<ticket> → current                journal step filesPromoted
   6. GetPackageMetadata → write metadata.json           journal step metadataWritten, commit
@@ -499,7 +501,7 @@ install(ticket, options)
 
 - `ADBStoreAgentChannel` does step 3 as `adb install-multiple -r --no-streaming <files>`, after the host verified the digests. Steps 4–6 use `QueryPackage`.
 - Timeouts: `BeginInstall` 30 s. Artifact streaming has a 30 s stall timeout and no total timeout. `InstallFinished` 10 min. `GetPackageMetadata` 10 s. A timeout after `guestCommitRequested` is handled like a crash: the outcome is read back from Android (§5.5).
-- Cancel is allowed until step 3c, which sends `AbandonInstall`. After 3c, cancel is refused ("Android is finishing the install").
+- On a custom image, cancel is allowed until step 3c, after artifact streaming and immediately before the host sends `CommitInstall`; cancellation sends `AbandonInstall`. Android's archive inspection runs inside that request. On the ADB channel, the boundary is immediately before `adb install-multiple`. After the boundary, cancel is refused ("Android is finishing the install").
 - A failed first install ends with `abort`, deletes the ticket, and removes the record if it was created.
 
 ### 6.3 Update ownership at install

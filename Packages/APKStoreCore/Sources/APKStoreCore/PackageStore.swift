@@ -1234,28 +1234,30 @@ public actor PackageStore {
             )
         )
         try injectFault(kind: kind, step: "begin")
-        try appendStep(transaction, kind: kind, step: "guestCommitRequested")
-        try injectFault(kind: kind, step: "guestCommitRequested")
 
         let info: StorePackageInfo
         let boundaryState = GuestInstallBoundaryState()
         do {
             info = try await runtimeAccess.withStoreAgent(operationID) { channel in
-                if let beforeGuestInstall {
+                let beforeCommit: @Sendable () async throws -> Void = {
                     do {
                         try Task.checkCancellation()
-                        try await beforeGuestInstall()
+                        try await self.appendStep(
+                            transaction,
+                            kind: kind,
+                            step: "guestCommitRequested"
+                        )
                     } catch {
                         throw GuestInstallBoundaryFailure(underlying: error)
                     }
-                } else {
                     do {
-                        try Task.checkCancellation()
+                        try await beforeGuestInstall?()
                     } catch {
                         throw GuestInstallBoundaryFailure(underlying: error)
                     }
+                    boundaryState.markPassed()
+                    try await self.injectFault(kind: kind, step: "guestCommitRequested")
                 }
-                boundaryState.markPassed()
                 return try await channel.install(
                     StoreInstallRequest(
                         packageID: packageID,
@@ -1265,7 +1267,8 @@ public actor PackageStore {
                         expectedSignerDigests: preview.artifactSet.signerDigests,
                         artifacts: artifactSpecs
                     ),
-                    files: Self.artifactURLs(in: incoming, set: preview.artifactSet)
+                    files: Self.artifactURLs(in: incoming, set: preview.artifactSet),
+                    beforeCommit: beforeCommit
                 )
             }
         } catch let boundaryFailure as GuestInstallBoundaryFailure {

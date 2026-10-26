@@ -14,6 +14,9 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.OutputStream
 import java.security.MessageDigest
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -72,6 +75,7 @@ class InstallServiceTest {
             CommitInstall.newBuilder().setInstallId(begin.installId).build(),
             CONTROL_SESSION,
         )
+        service.abandonControlSession(CONTROL_SESSION)
 
         assertEquals(listOf("fsync", "commit:${begin.installId}", "close"), session.calls)
         assertArrayEquals(payload, session.stored.getValue("base.apk"))
@@ -103,6 +107,68 @@ class InstallServiceTest {
             android.content.pm.PackageInstaller.STATUS_SUCCESS,
         )
         assertEquals(1, events.finished.size)
+    }
+
+    @Test
+    fun controlDisconnectDuringArchiveInspectionAbandonsBeforePackageInstallerCommit() {
+        val payload = "verified apk payload".toByteArray()
+        val digest = sha256(payload)
+        val inspectionStarted = CountDownLatch(1)
+        val continueInspection = CountDownLatch(1)
+        val installer = FakeStorePackageInstaller()
+        val events = RecordingStoreEvents()
+        val cache = temporaryFolder.newFolder("cache")
+        val inspector =
+            ArchiveInspector(
+                ArchiveReader { file ->
+                    assertArrayEquals(payload, file.readBytes())
+                    inspectionStarted.countDown()
+                    assertTrue(continueInspection.await(5, TimeUnit.SECONDS))
+                    ArchiveFacts(
+                        packageName = PACKAGE_NAME,
+                        versionCode = 7,
+                        versionName = "7.0",
+                        splitName = "base",
+                        nativeAbis = listOf("arm64-v8a"),
+                        minSdk = 23,
+                        targetSdk = 37,
+                        signerSha256 = listOf(SIGNER),
+                        signingSchemeVersion = 3,
+                    )
+                }
+            )
+        val service = newService(installer, events, cache, inspector)
+        val begin =
+            service.beginInstall(
+                installRequest(payload, digest),
+                setOf(StoreDispatcher.STORE_INSTALL_CAPABILITY),
+                CONTROL_SESSION,
+            )
+        val session = installer.sessionFor(begin.androidSessionId)
+        receiveArtifact(service, begin.installId, payload, digest)
+        val executor = Executors.newSingleThreadExecutor()
+
+        try {
+            val commit = executor.submit {
+                service.commitInstall(
+                    CommitInstall.newBuilder().setInstallId(begin.installId).build(),
+                    CONTROL_SESSION,
+                )
+            }
+            assertTrue(inspectionStarted.await(5, TimeUnit.SECONDS))
+
+            service.abandonControlSession(CONTROL_SESSION)
+            assertEquals(listOf("fsync", "abandon", "close"), session.calls)
+            continueInspection.countDown()
+            commit.get(5, TimeUnit.SECONDS)
+
+            assertEquals(listOf("fsync", "abandon", "close"), session.calls)
+            assertTrue(events.finished.isEmpty())
+            assertFalse(File(cache, begin.installId).exists())
+        } finally {
+            continueInspection.countDown()
+            executor.shutdownNow()
+        }
     }
 
     @Test

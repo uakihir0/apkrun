@@ -62,6 +62,10 @@ private actor FakeStoreChannel: StoreAgentChannel {
     private var uninstallStarted = false
     private var uninstallStartWaiter: CheckedContinuation<Void, Never>?
     private var uninstallReleaseWaiter: CheckedContinuation<Void, Never>?
+    private var shouldPauseInstallBeforeCommit = false
+    private var installAtCommitBoundary = false
+    private var installBoundaryWaiter: CheckedContinuation<Void, Never>?
+    private var installBoundaryReleaseWaiter: CheckedContinuation<Void, Never>?
 
     func configureInstallFailureAfterCommit(queryUnavailable: Bool) {
         installThrowsAfterCommit = true
@@ -116,6 +120,23 @@ private actor FakeStoreChannel: StoreAgentChannel {
         uninstallReleaseWaiter = nil
     }
 
+    func pauseInstallBeforeCommit() {
+        shouldPauseInstallBeforeCommit = true
+        installAtCommitBoundary = false
+    }
+
+    func waitForInstallCommitBoundary() async {
+        guard !installAtCommitBoundary else { return }
+        await withCheckedContinuation { continuation in
+            installBoundaryWaiter = continuation
+        }
+    }
+
+    func continueInstallBeforeCommit() {
+        installBoundaryReleaseWaiter?.resume()
+        installBoundaryReleaseWaiter = nil
+    }
+
     func install(_ request: StoreInstallRequest, files: [URL]) async throws -> StorePackageInfo {
         installCallCount += 1
         lastInstallRequest = request
@@ -143,6 +164,24 @@ private actor FakeStoreChannel: StoreAgentChannel {
             throw SimulatedGuestFailure.installFailedAfterCommit
         }
         return info
+    }
+
+    func install(
+        _ request: StoreInstallRequest,
+        files: [URL],
+        beforeCommit: @escaping @Sendable () async throws -> Void
+    ) async throws -> StorePackageInfo {
+        if shouldPauseInstallBeforeCommit {
+            shouldPauseInstallBeforeCommit = false
+            installAtCommitBoundary = true
+            installBoundaryWaiter?.resume()
+            installBoundaryWaiter = nil
+            await withCheckedContinuation { continuation in
+                installBoundaryReleaseWaiter = continuation
+            }
+        }
+        try await beforeCommit()
+        return try await install(request, files: files)
     }
 
     func uninstall(_ package: PackageID, keepData: Bool) async throws {
@@ -1018,7 +1057,7 @@ private actor CompletionFlag {
     #expect(try await store.listManagedPackages().first?.state == .uninstalledKeepingData)
 }
 
-@Test func packageStoreCallsInstallBoundaryAfterChannelSetupImmediatelyBeforeGuestCall() async throws {
+@Test func packageStoreRecordsCommitRequestBeforeCrossingInstallBoundary() async throws {
     let temporary = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: temporary) }
     let channel = FakeStoreChannel()
@@ -1062,6 +1101,54 @@ private actor CompletionFlag {
     #expect(try await store.listManagedPackages().isEmpty)
     let journal = try String(contentsOf: journalURL, encoding: .utf8)
     #expect(journal.contains("installNotStarted"))
+}
+
+@Test func packageStoreKeepsInstallCancellableWhileChannelTransfersArtifacts() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let channel = FakeStoreChannel()
+    let packagesDirectory = temporary.appendingPathComponent("Packages", isDirectory: true)
+    let store = PackageStore(
+        packagesDirectory: packagesDirectory,
+        runtimeAccess: FakeStoreRuntime(channel: channel),
+        inspector: { _ in facts() }
+    )
+    try await store.open()
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let preview = try await store.importPackage(files: [input])
+    await channel.pauseInstallBeforeCommit()
+    let boundary = MutationBoundaryProbe()
+    let install = Task {
+        try await store.installImportedWithOutcome(
+            ticket: preview.ticket,
+            beforeGuestInstall: { await boundary.record() }
+        )
+    }
+
+    await channel.waitForInstallCommitBoundary()
+    install.cancel()
+    #expect(!(await boundary.wasEntered))
+    await channel.continueInstallBeforeCommit()
+    do {
+        _ = try await install.value
+        Issue.record("Cancellation during artifact transfer must stop before the install boundary.")
+    } catch {
+        #expect(error is CancellationError)
+    }
+
+    #expect(!(await boundary.wasEntered))
+    #expect(await channel.installCallCount == 0)
+    #expect(try await store.listManagedPackages().isEmpty)
+    let journal = try String(
+        contentsOf: packagesDirectory.appendingPathComponent("journal.jsonl"),
+        encoding: .utf8
+    )
+    #expect(journal.contains("installNotStarted"))
+    #expect(!journal.contains("guestCommitRequested"))
+
+    let installed = try await store.installImportedWithOutcome(ticket: preview.ticket)
+    #expect(installed.record.state == .installed)
 }
 
 @Test func packageStoreDoesNotCallInstallBoundaryWhenCancelledWaitingForMutationLock() async throws {

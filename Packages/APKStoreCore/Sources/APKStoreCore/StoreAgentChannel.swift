@@ -312,6 +312,12 @@ public protocol StoreAgentChannel: Sendable {
     func inspect(_ artifacts: [StoreArtifactSpec], files: [URL]) async throws -> StoreArchiveInfo
     /// Installs the supplied APK set and returns Android's resulting package metadata.
     func install(_ request: StoreInstallRequest, files: [URL]) async throws -> StorePackageInfo
+    /// Installs the APK set, entering the non-cancellable phase immediately before commit.
+    func install(
+        _ request: StoreInstallRequest,
+        files: [URL],
+        beforeCommit: @escaping @Sendable () async throws -> Void
+    ) async throws -> StorePackageInfo
     /// Uninstalls a package, optionally preserving its Android app data.
     func uninstall(_ package: PackageID, keepData: Bool) async throws
     /// Returns Android's metadata for an installed package, if present.
@@ -341,6 +347,16 @@ extension StoreAgentChannel {
         _ = artifacts
         _ = files
         throw StoreAgentChannelFailure.capabilityMissing("inspect")
+    }
+
+    /// Older channels have no separate transfer phase, so place the boundary before their install call.
+    public func install(
+        _ request: StoreInstallRequest,
+        files: [URL],
+        beforeCommit: @escaping @Sendable () async throws -> Void
+    ) async throws -> StorePackageInfo {
+        try await beforeCommit()
+        return try await install(request, files: files)
     }
 
     /// Stock Guest Agent channels return summaries, so query each installed package for full metadata.

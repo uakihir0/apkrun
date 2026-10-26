@@ -555,7 +555,7 @@ message InstallRequest {
 3. `CommitInstall`. Before committing, the agent checks the complete app-private copies with Android's own parser against `expected_package`, `expected_version_code`, and `expected_signer_sha256` when the host supplied signer digests. Android must report at least one signer. The copies contain the same bytes streamed into the PackageInstaller session. A mismatch finishes with `INVALID` and a message; a match commits the session, where Android verifies the APK signature. The copies are deleted after validation and any leftovers are removed when the Store Agent starts.
 4. `InstallFinished` reports the outcome from the session's status receiver. The Store Agent holds `INSTALL_PACKAGES` as a privileged app, so `STATUS_PENDING_USER_ACTION` is not expected. If it happens, the agent abandons the session and reports `USER_ACTION_REQUIRED`. It never shows UI on a display the user may not see.
 
-The agent abandons sessions that are not committed within 10 minutes, and sessions whose control connection closes.
+The agent abandons sessions that are not committed within 10 minutes, and sessions whose control connection closes. Validation remains cancellable: the agent marks a session committed only after `PackageInstaller.Session.commit` succeeds, and a connection close during APK inspection aborts the session before commit.
 
 ### 11.4 StorePackageInfo
 

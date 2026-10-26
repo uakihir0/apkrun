@@ -79,6 +79,15 @@ public struct ADBStoreAgentChannel: StoreAgentChannel {
 
     /// Installs the requested package set, then verifies PackageManager reports the exact package and version.
     public func install(_ request: StoreInstallRequest, files: [URL]) async throws -> StorePackageInfo {
+        try await install(request, files: files, beforeCommit: {})
+    }
+
+    /// Enters the non-cancellable phase immediately before adb starts the install.
+    public func install(
+        _ request: StoreInstallRequest,
+        files: [URL],
+        beforeCommit: @escaping @Sendable () async throws -> Void
+    ) async throws -> StorePackageInfo {
         guard !files.isEmpty else {
             throw ADBStoreAgentChannelFailure.emptyInstallSet
         }
@@ -86,6 +95,7 @@ public struct ADBStoreAgentChannel: StoreAgentChannel {
             throw ADBStoreAgentChannelFailure.downgradeNotSupported
         }
 
+        try await beforeCommit()
         try await agent.installMultiple(apks: files, allowDowngrade: request.allowDowngrade)
 
         guard let installed = try await agent.storePackageInfo(request.packageID.rawValue) else {

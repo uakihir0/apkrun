@@ -145,6 +145,18 @@ public actor StoreAgentSupervisor: StoreAgentChannel, StoreAgentDisconnectionEve
         return try Self.packageInfo(await client.install(runtime, files: files))
     }
 
+    /// Installs the APK set and forwards the cancellation boundary to the guest commit request.
+    public func install(
+        _ request: StoreInstallRequest,
+        files: [URL],
+        beforeCommit: @escaping @Sendable () async throws -> Void
+    ) async throws -> StorePackageInfo {
+        let runtime = try Self.runtimeInstallRequest(request)
+        return try Self.packageInfo(
+            await client.install(runtime, files: files, beforeCommit: beforeCommit)
+        )
+    }
+
     /// Uninstalls a package through Android's PackageInstaller.
     public func uninstall(_ package: PackageID, keepData: Bool) async throws {
         try await client.uninstall(Self.runtimePackageID(package), keepData: keepData)

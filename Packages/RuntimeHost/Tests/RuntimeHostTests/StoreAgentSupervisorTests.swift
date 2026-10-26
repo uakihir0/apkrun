@@ -159,6 +159,7 @@ func storeSupervisorInstallUsesInspectedIdentityAndRequiresSuccessfulMatchingOut
     let package = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
     let signer = rawDigest(0xAB)
     let spec = StoreArtifactSpec(name: "base", size: UInt64(payload.count), sha256: SHA256Digest(data: payload))
+    let commitBoundary = InstallCommitBoundaryProbe()
 
     let installed = try await channel.install(
         StoreInstallRequest(
@@ -168,12 +169,19 @@ func storeSupervisorInstallUsesInspectedIdentityAndRequiresSuccessfulMatchingOut
             expectedSignerDigests: [signer],
             artifacts: [spec]
         ),
-        files: [file]
+        files: [file],
+        beforeCommit: {
+            await commitBoundary.record(await transport.agent.snapshot())
+        }
     )
 
     #expect(installed.packageID == package)
     #expect(installed.versionCode == 7)
     #expect(installed.signingDigests == [signer])
+    let boundarySnapshot = await commitBoundary.snapshot()
+    #expect(boundarySnapshot?.commitRequests == 0)
+    #expect(boundarySnapshot?.transfers.last?.context == "install-1")
+    #expect(boundarySnapshot?.transfers.last?.acknowledged == true)
     let snapshot = await transport.agent.snapshot()
     #expect(snapshot.beginInstall?.expectedPackage == package.rawValue)
     #expect(snapshot.beginInstall?.expectedVersionCode == 7)
@@ -378,6 +386,18 @@ private struct StoreTestSnapshot: Sendable {
     let uninstallKeptData: Bool?
     let lastListFilter: GPManagedPackageFilter?
     let pingRequests: Int
+}
+
+private actor InstallCommitBoundaryProbe {
+    private var recordedSnapshot: StoreTestSnapshot?
+
+    func record(_ snapshot: StoreTestSnapshot) {
+        recordedSnapshot = snapshot
+    }
+
+    func snapshot() -> StoreTestSnapshot? {
+        recordedSnapshot
+    }
 }
 
 private final class StoreTestTransport: RuntimeGuestTransport, @unchecked Sendable {

@@ -135,7 +135,11 @@ public actor GuestStoreAgentClient {
     }
 
     /// Installs a set only after Android's archive parser confirms package, version, and signing identity.
-    public func install(_ request: RuntimeStoreInstallRequest, files: [URL]) async throws -> RuntimeStorePackageInfo {
+    public func install(
+        _ request: RuntimeStoreInstallRequest,
+        files: [URL],
+        beforeCommit: @escaping @Sendable () async throws -> Void = {}
+    ) async throws -> RuntimeStorePackageInfo {
         try await acquireTransfer()
         defer { releaseTransfer() }
 
@@ -182,6 +186,7 @@ public actor GuestStoreAgentClient {
             // Register before CommitInstall: the agent may emit InstallFinished immediately after the response.
             let (waiterID, finishedEvents) = registerInstallWaiter(started.installID)
             try Task.checkCancellation()
+            try await beforeCommit()
             commitRequested = true
             _ = try await active.control.send(
                 GuestCommitInstall(installID: started.installID),

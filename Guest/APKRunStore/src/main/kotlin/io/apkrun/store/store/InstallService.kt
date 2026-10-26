@@ -218,7 +218,7 @@ internal constructor(
     fun commitInstall(request: CommitInstall, controlSessionId: String) {
         val record = requireOwnedInstall(request.installId, controlSessionId)
         synchronized(record) {
-            if (record.committed || record.abandoned) {
+            if (record.committed || record.commitInProgress || record.abandoned) {
                 throw StoreFailure(
                     GuestErrorCode.GUEST_ERROR_CODE_FAILED_PRECONDITION,
                     "the install session is no longer pending",
@@ -230,7 +230,7 @@ internal constructor(
                     "the install session has missing or incomplete artifacts",
                 )
             }
-            record.committed = true
+            record.commitInProgress = true
         }
         publishProgress(record, InstallStage.INSTALL_STAGE_VERIFYING, 1f)
         val verificationDirectory = File(verificationRoot, record.installId)
@@ -262,8 +262,24 @@ internal constructor(
             return
         }
         publishProgress(record, InstallStage.INSTALL_STAGE_COMMITTING, 1f)
+        var abandonedDuringValidation = false
+        var commitFailure: Exception? = null
+        synchronized(record) {
+            if (record.abandoned) {
+                abandonedDuringValidation = true
+            } else {
+                try {
+                    record.session.commit(record.installId)
+                    record.committed = true
+                } catch (error: Exception) {
+                    commitFailure = error
+                }
+            }
+            record.commitInProgress = false
+        }
+        if (abandonedDuringValidation) return
         try {
-            record.session.commit(record.installId)
+            commitFailure?.let { throw it }
             record.session.close()
         } catch (error: SecurityException) {
             abandonRecord(record)
@@ -287,18 +303,14 @@ internal constructor(
     }
 
     fun abandonControlSession(controlSessionId: String) {
-        pending.values
-            .filter { it.controlSessionId == controlSessionId && !it.committed }
-            .forEach(::abandonRecord)
+        pending.values.filter { it.controlSessionId == controlSessionId }.forEach(::abandonRecord)
     }
 
     /** Abandons any uncommitted PackageInstaller sessions that have aged out. */
     fun expirePendingSessions() {
         val now = clockMillis()
         pending.values
-            .filter {
-                !it.committed && now - it.createdAtMillis >= SESSION_EXPIRATION_MILLIS
-            }
+            .filter { now - it.createdAtMillis >= SESSION_EXPIRATION_MILLIS }
             .forEach(::abandonRecord)
     }
 
@@ -376,9 +388,19 @@ internal constructor(
     }
 
     private fun finishInvalid(record: PendingInstall, message: String) {
-        synchronized(record) { record.abandoned = true }
+        val shouldAbandon =
+            synchronized(record) {
+                if (record.committed || record.abandoned) {
+                    false
+                } else {
+                    record.abandoned = true
+                    record.commitInProgress = false
+                    true
+                }
+            }
+        if (!shouldAbandon) return
         runCatching { record.session.abandon() }
-        record.session.close()
+        runCatching { record.session.close() }
         pending.remove(record.installId)
         installsByAndroidSession.remove(record.androidSessionId)
         publishFinished(
@@ -459,8 +481,9 @@ internal constructor(
 
     private fun abandonRecord(record: PendingInstall) {
         synchronized(record) {
-            if (record.abandoned) return
+            if (record.committed || record.abandoned) return
             record.abandoned = true
+            record.commitInProgress = false
         }
         runCatching { record.session.abandon() }
         runCatching { record.session.close() }
@@ -491,6 +514,7 @@ internal constructor(
             request.artifactsList.associateBy(ArtifactSpec::getName),
         val received: MutableMap<String, ByteArray> = mutableMapOf(),
         val receiving: MutableSet<String> = mutableSetOf(),
+        var commitInProgress: Boolean = false,
         var committed: Boolean = false,
         var abandoned: Boolean = false,
     )

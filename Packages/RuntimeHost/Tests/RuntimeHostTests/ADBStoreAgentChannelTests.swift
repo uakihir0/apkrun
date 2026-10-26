@@ -20,10 +20,14 @@ func adbStoreChannelInstallsAndVerifiesPackageManagerFacts() async throws {
         URL(fileURLWithPath: "/tmp/base.apk"),
         URL(fileURLWithPath: "/tmp/split_config.arm64_v8a.apk"),
     ]
+    let commitBoundary = ADBInstallCommitBoundaryProbe()
 
     let result = try await channel.install(
         StoreInstallRequest(packageID: package, versionCode: 7, allowDowngrade: true),
-        files: files
+        files: files,
+        beforeCommit: {
+            await commitBoundary.record(await guest.installCalls.count)
+        }
     )
 
     #expect(result.packageID == package)
@@ -34,6 +38,8 @@ func adbStoreChannelInstallsAndVerifiesPackageManagerFacts() async throws {
     let installCall = await guest.installCalls.first
     #expect(installCall?.0 == files)
     #expect(installCall?.1 == true)
+    #expect(await commitBoundary.installCallCount == 0)
+    #expect(await guest.installCalls.count == 1)
     #expect(await guest.queryPackages == [package.rawValue])
     #expect(await adb.uninstallCalls.isEmpty)
 }
@@ -343,6 +349,14 @@ private actor FakeStoreGuestAgent: ADBStoreGuestAgent {
     func listStorePackages(filter: GuestPackageFilter) async throws(GuestAgentFailure) -> [GuestPackageSummary] {
         listFilters.append(filter)
         return summaries
+    }
+}
+
+private actor ADBInstallCommitBoundaryProbe {
+    private(set) var installCallCount: Int?
+
+    func record(_ installCallCount: Int) {
+        self.installCallCount = installCallCount
     }
 }
 

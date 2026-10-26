@@ -596,9 +596,9 @@ def test_two_composed_builds_are_byte_identical(
         }
 
     assert first_manifest["kind"] == second_manifest["kind"] == "apkrun"
-    assert first_manifest["provenance"]["composition"] == second_manifest["provenance"][
-        "composition"
-    ]
+    assert (
+        first_manifest["provenance"]["composition"] == second_manifest["provenance"]["composition"]
+    )
     assert bundle_tree(first_output) == bundle_tree(second_output)
 
 

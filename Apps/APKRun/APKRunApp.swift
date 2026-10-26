@@ -5,21 +5,32 @@ import SwiftUI
 
 @main
 struct APKRunApp: App {
-    @State private var registrationTitle = "Background service setup failed"
+    @StateObject private var menuBarItemSettings: MenuBarItemSettingsModel
+    @State private var registrationTitle = String(
+        localized: "Background service setup failed"
+    )
     @State private var registrationMessage: String?
     @State private var isRegistrationErrorPresented = false
 
     init() {
+        let menuBarItemSettings = MenuBarItemSettingsModel()
+        _menuBarItemSettings = StateObject(wrappedValue: menuBarItemSettings)
+
         if CommandLine.arguments.dropFirst().contains("--register-runtime") {
             RuntimeRegistrationCommand.run()
         }
 
+        menuBarItemSettings.initializeForApplicationLaunch()
+
         do {
             if try RuntimeRegistrationCommand.registerRuntimeAgentIfNeeded() {
-                _registrationTitle = State(initialValue: "Approval required")
+                _registrationTitle = State(initialValue: String(localized: "Approval required"))
                 _registrationMessage = State(
                     initialValue:
-                        "Allow APKRun in System Settings > General > Login Items, then reopen it."
+                        String(
+                            localized:
+                                "Allow APKRun in System Settings > General > Login Items, then reopen it."
+                        )
                 )
                 _isRegistrationErrorPresented = State(initialValue: true)
             }
@@ -41,11 +52,15 @@ struct APKRunApp: App {
                 } message: {
                     Text(
                         registrationMessage
-                            ?? "Move APKRun.app to Applications and reopen it."
+                            ?? String(localized: "Move APKRun.app to Applications and reopen it.")
                     )
                 }
         }
         .windowResizability(.contentSize)
+
+        Settings {
+            GeneralSettingsView(model: menuBarItemSettings)
+        }
     }
 }
 

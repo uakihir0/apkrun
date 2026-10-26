@@ -41,6 +41,16 @@
             "enabled" : true
           },
           {
+            "key" : "APKRUN_FIXTURE_APK_V2",
+            "value" : "/tmp/apkrun-test-fixtures/HelloText-v2.apk",
+            "enabled" : true
+          },
+          {
+            "key" : "APKRUN_FIXTURE_HELLOSPLIT_DIR",
+            "value" : "/tmp/apkrun-test-fixtures/HelloSplit",
+            "enabled" : true
+          },
+          {
             "key" : "APKRUN_GUEST_DIR",
             "value" : "/tmp/apkrun-test-guest",
             "enabled" : true

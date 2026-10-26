@@ -14,8 +14,13 @@ android {
         applicationId = "io.apkrun.fixture.hellotext"
         minSdk = 29
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        val fixtureVersionCode =
+            providers.gradleProperty("fixtureVersionCode").orNull?.let {
+                it.toIntOrNull() ?: error("fixtureVersionCode must be a positive Int.")
+            } ?: 1
+        require(fixtureVersionCode > 0) { "fixtureVersionCode must be a positive Int." }
+        versionCode = fixtureVersionCode
+        versionName = "$fixtureVersionCode.0"
     }
 
     signingConfigs {

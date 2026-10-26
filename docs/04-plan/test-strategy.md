@@ -359,6 +359,7 @@ Combinations used by name in the design documents:
 | HelloUpdate V4 | versionCode 4, key A | the normal update after a skipped version (#44) |
 | HelloUpdate rotation variants | V2 signed with lineage A → B, with and without `INSTALLED_DATA`; rotation back with and without `ROLLBACK` | T0 validation matrix (#42) |
 | Corrupted HelloUpdate V2 | one flipped byte in `classes.dex` | `invalidSignature` (#42) |
+| HelloText V2 (package-store downgrade refusal) | Build the HelloText sources with `--version-code 2`; the package and test signer are unchanged | #28 verifies RuntimeAPI refuses V1 over V2, including when the legacy `allowDowngrade` option is true |
 | Container fixtures | from HelloSplit and HelloText: split files, `.apks` (bundletool), `.xapk` with and without OBB, `.apkm` plain and non-ZIP, `.aab`, a zip bomb, a `../` entry, a symlink entry, 600 entries, and a ZIP64 container generated at test time | [../02-design/package-store.md](../02-design/package-store.md) §16 T0 |
 | Generated `.apks` | 3 ABIs, 6 densities, 10 languages, one feature split, `requiredSplitTypes` | split selection (#43, #74) |
 

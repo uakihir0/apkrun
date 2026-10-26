@@ -386,12 +386,12 @@ Each fixture app is a Gradle module with a CamelCase name and package `io.apkrun
 
 | Build rule | Apps |
 |---|---|
-| one plain APK, signed with `test-fixture-a.jks` | HelloText, HelloCompose, HelloGL, HelloWebView, HelloNotification, HelloClipboard, HelloLinks, HelloFiles, HelloFilesPeer, HelloAudio, OtherInstaller, IconLegacy, OddName, HelloProbe |
+| one plain APK, signed with `test-fixture-a.jks` | HelloText (default versionCode 1; `--version-code N` builds a same-signer test version), HelloCompose, HelloGL, HelloWebView, HelloNotification, HelloClipboard, HelloLinks, HelloFiles, HelloFilesPeer, HelloAudio, OtherInstaller, IconLegacy, OddName, HelloProbe |
 | product flavors ([test-strategy.md](../04-plan/test-strategy.md) §4.3) | HelloUpdate: V1, V2, V2-other-signer (`test-fixture-b.jks`), V3-broken, V4. Rotation variants are signed with `apksigner rotate` and `sign --lineage`; the corrupted V2 flips one byte in `classes.dex` |
 | App Bundle, split with the pinned bundletool | HelloSplit (base, `config.arm64_v8a`, `config.xhdpi`, `config.ja`, a feature split) and derived containers ([package-store.md](../02-design/package-store.md) §4.4, §16) |
 | two ABI flavors; v1 signing only with `targetSdk` 29 | HelloNative (`arm64-v8a`, `armeabi-v7a`); HelloLegacySig |
 
-The build is reproducible: the same sources and pinned tools give the same APK bytes. `scripts/build-fixtures.sh --check-reproducible` checks it. `--app <name>` builds one app.
+The build is reproducible: the same sources and pinned tools give the same APK bytes. `scripts/build-fixtures.sh --check-reproducible` checks it. `--app <name>` builds one app. HelloText's optional `--version-code N` sets its version code and name, and writes `HelloText-vN.apk`; it is used to build the V2 candidate for #28's downgrade-refusal test. HelloSplit writes `HelloSplit.apks` and the individually verified APKs in `HelloSplit-splits/`, which the AndroidPackage T2 test passes through RuntimeAPI as a split set.
 
 `scripts/build-fixtures.sh` fills `Tests/Fixtures/update-repos/local/io.apkrun.fixture.helloupdate/{1,2}/` from HelloUpdate V1 and V2 (planned; [update-system.md](../02-design/update-system.md) §4.3). `scripts/dev/update-server.py` (planned, #51) serves the Local fixtures and `direct/` variants as Direct manifests on `127.0.0.1` for Debug builds. `--delay <seconds>` holds every answer. Each other fixture package is served at its own versionCode, so a check reports up to date (#75).
 

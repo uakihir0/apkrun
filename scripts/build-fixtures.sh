@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Builds the fixture apps (build-system.md §8). Writes Tests/Fixtures/AndroidApps/out/<app>.apk (or
-# HelloSplit.apks), which is git-ignored and signed with the test-only key
+# HelloSplit.apks plus its verified split APKs), which are git-ignored and signed with the test-only key
 # Tests/Fixtures/signing/test-fixture-a.jks.
 #
 #   scripts/build-fixtures.sh                     build out/HelloText.apk and check its signer
+#   scripts/build-fixtures.sh --app HelloText --version-code 2
+#                                                 build out/HelloText-v2.apk for the #28 downgrade test
 #   scripts/build-fixtures.sh --app HelloGL       build out/HelloGL.apk instead (the G3 gate, #24)
 #   scripts/build-fixtures.sh --app HelloCompose  build out/HelloCompose.apk instead (the list of #25, G5 of #31)
 #   scripts/build-fixtures.sh --app HelloWebView  build out/HelloWebView.apk instead (#30)
-#   scripts/build-fixtures.sh --app HelloSplit   build the xhdpi/ja/arm64 split set as out/HelloSplit.apks
+#   scripts/build-fixtures.sh --app HelloSplit   build out/HelloSplit.apks and verified out/HelloSplit-splits/
 #   scripts/build-fixtures.sh --check-reproducible
 #                                                 build twice from clean, and compare the badging, the dex
 #                                                 hashes, and the archive listing (build-system.md §14)
@@ -19,6 +21,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 fixtures="$repo_root/Tests/Fixtures/AndroidApps"
 app="HelloText"
+version_code=""
 build_tools_version="37.0.0"
 bundletool_version="1.18.3"
 bundletool_sha256="a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29"
@@ -27,7 +30,7 @@ bundletool_url="https://github.com/google/bundletool/releases/download/$bundleto
 expected_signer_sha256="a2f3893391ae70e6faee50a05c0d0c4b94505781f7af0d547c1625399e05f8b4"
 
 usage() {
-    printf 'usage: scripts/build-fixtures.sh [--app HelloText|HelloGL|HelloCompose|HelloWebView|HelloSplit] [--check-reproducible]\n' >&2
+    printf 'usage: scripts/build-fixtures.sh [--app HelloText|HelloGL|HelloCompose|HelloWebView|HelloSplit] [--version-code N] [--check-reproducible]\n' >&2
     exit 64
 }
 
@@ -40,6 +43,11 @@ while (($# > 0)); do
             app="$2"
             shift
             ;;
+        --version-code)
+            (($# >= 2)) || usage
+            version_code="$2"
+            shift
+            ;;
         *) usage ;;
     esac
     shift
@@ -48,7 +56,12 @@ case "$app" in
     HelloText | HelloGL | HelloCompose | HelloWebView | HelloSplit) ;;
     *) usage ;;
 esac
-output_apk="$fixtures/out/$app.apk"
+if [[ -n "$version_code" ]]; then
+    [[ "$app" == "HelloText" && "$version_code" =~ ^[1-9][0-9]*$ ]] || usage
+    output_apk="$fixtures/out/$app-v$version_code.apk"
+else
+    output_apk="$fixtures/out/$app.apk"
+fi
 gradle_apk="$fixtures/$app/build/outputs/apk/release/$app-release.apk"
 gradle_bundle="$fixtures/$app/build/outputs/bundle/release/$app-release.aab"
 
@@ -67,7 +80,11 @@ for tool in "$apksigner" "$aapt2"; do
 done
 
 gradle_build() {
-    "$fixtures/gradlew" -p "$fixtures" --console=plain "$@"
+    if [[ -n "$version_code" ]]; then
+        "$fixtures/gradlew" -p "$fixtures" --console=plain "-PfixtureVersionCode=$version_code" "$@"
+    else
+        "$fixtures/gradlew" -p "$fixtures" --console=plain "$@"
+    fi
 }
 
 # Fails unless the APK is signed only by the pinned test certificate.
@@ -153,17 +170,23 @@ if [[ "$mode" == "build" ]]; then
     if [[ "$app" == "HelloSplit" ]]; then
         bundletool_jar="$(ensure_bundletool)"
         output_apks="$fixtures/out/HelloSplit.apks"
+        split_apks="$fixtures/out/HelloSplit-splits"
+        rm -rf "$split_apks"
         build_hello_split "$output_apks" "$bundletool_jar"
         verify_hello_split \
             "$output_apks" \
             "$fixtures/out/HelloSplit.splits" \
-            "$fixtures/out/HelloSplit-extracted" \
+            "$split_apks" \
             "$bundletool_jar"
-        rm -rf "$fixtures/out/HelloSplit-extracted" "$fixtures/out/HelloSplit.splits"
-        printf 'build-fixtures: wrote %s\n' "$output_apks"
+        rm -f "$fixtures/out/HelloSplit.splits"
+        printf 'build-fixtures: wrote %s and verified split APKs in %s\n' "$output_apks" "$split_apks"
         exit 0
     fi
-    gradle_build ":$app:assembleRelease"
+    if [[ -n "$version_code" ]]; then
+        gradle_build ":$app:clean" ":$app:assembleRelease"
+    else
+        gradle_build ":$app:assembleRelease"
+    fi
     verify_signer "$gradle_apk"
     mkdir -p "$(dirname "$output_apk")"
     cp "$gradle_apk" "$output_apk"

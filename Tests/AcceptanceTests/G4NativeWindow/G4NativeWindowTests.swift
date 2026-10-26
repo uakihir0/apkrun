@@ -302,8 +302,8 @@ private final class G4ScreenCaptureEvidence: NSObject, SCRecordingOutputDelegate
         let firstFrameMachTime: UInt64?
         let lastFrameMachTime: UInt64?
         let recordedHostInputEventCount: Int
-        let firstHostInputMachTime: UInt64?
-        let lastHostInputMachTime: UInt64?
+        let firstHostInputPostStartedMachTime: UInt64?
+        let lastHostInputPostCompletedMachTime: UInt64?
     }
 
     private let lock = NSLock()
@@ -315,8 +315,8 @@ private final class G4ScreenCaptureEvidence: NSObject, SCRecordingOutputDelegate
     private var firstFrameMachTime: UInt64?
     private var lastFrameMachTime: UInt64?
     private var recordedHostInputEventCount = 0
-    private var firstHostInputMachTime: UInt64?
-    private var lastHostInputMachTime: UInt64?
+    private var firstHostInputPostStartedMachTime: UInt64?
+    private var lastHostInputPostCompletedMachTime: UInt64?
 
     func recordingOutputDidStartRecording(_ recordingOutput: SCRecordingOutput) {
         lock.lock()
@@ -362,17 +362,20 @@ private final class G4ScreenCaptureEvidence: NSObject, SCRecordingOutputDelegate
         recordFrame(at: displayTime.uint64Value)
     }
 
-    func recordHostInput(at machTime: UInt64) throws {
+    func recordHostInput(postStartedAt: UInt64, postCompletedAt: UInt64) throws {
         lock.lock()
         defer { lock.unlock() }
         guard failure == nil, recordingStartedMachTime != nil else {
             throw G4Failure.screenRecordingFailed(failure ?? "input arrived before recording started")
         }
-        recordedHostInputEventCount += 1
-        if firstHostInputMachTime == nil {
-            firstHostInputMachTime = machTime
+        guard postCompletedAt >= postStartedAt else {
+            throw G4Failure.screenRecordingFailed("host input post timestamps are out of order")
         }
-        lastHostInputMachTime = machTime
+        recordedHostInputEventCount += 1
+        if firstHostInputPostStartedMachTime == nil {
+            firstHostInputPostStartedMachTime = postStartedAt
+        }
+        lastHostInputPostCompletedMachTime = postCompletedAt
         changed.signal()
     }
 
@@ -408,8 +411,8 @@ private final class G4ScreenCaptureEvidence: NSObject, SCRecordingOutputDelegate
             firstFrameMachTime: firstFrameMachTime,
             lastFrameMachTime: lastFrameMachTime,
             recordedHostInputEventCount: recordedHostInputEventCount,
-            firstHostInputMachTime: firstHostInputMachTime,
-            lastHostInputMachTime: lastHostInputMachTime
+            firstHostInputPostStartedMachTime: firstHostInputPostStartedMachTime,
+            lastHostInputPostCompletedMachTime: lastHostInputPostCompletedMachTime
         )
     }
 
@@ -444,7 +447,7 @@ private final class G4ScreenCaptureEvidence: NSObject, SCRecordingOutputDelegate
                 return
             case .frameAfterLastHostInput:
                 if let lastFrame = state.lastFrameMachTime,
-                    let lastInput = state.lastHostInputMachTime,
+                    let lastInput = state.lastHostInputPostCompletedMachTime,
                     lastFrame > lastInput
                 {
                     return
@@ -838,8 +841,8 @@ private final class G4Session {
             let nanoseconds = Double(tick - origin) * Double(timebase.numer) / Double(timebase.denom)
             return Int(nanoseconds / 1_000_000)
         }
-        let firstInput = state?.firstHostInputMachTime
-        let lastInput = state?.lastHostInputMachTime
+        let firstInput = state?.firstHostInputPostStartedMachTime
+        let lastInput = state?.lastHostInputPostCompletedMachTime
         let startedBeforeFirstHostEvent =
             state?.recordingStartedMachTime.map { startTime in
                 guard let firstInput else {
@@ -1181,11 +1184,9 @@ private final class G4Session {
         }
         down.setIntegerValueField(.mouseEventClickState, value: 1)
         up.setIntegerValueField(.mouseEventClickState, value: 1)
-        down.post(tap: .cghidEventTap)
-        try noteHostInputEventRecorded()
+        try postHostInput(down)
         Thread.sleep(forTimeInterval: 0.015)
-        up.post(tap: .cghidEventTap)
-        try noteHostInputEventRecorded()
+        try postHostInput(up)
     }
 
     private func postKey(_ type: CGEventType, code: CGKeyCode, shift: Bool) throws {
@@ -1194,17 +1195,22 @@ private final class G4Session {
         }
         event.type = type
         event.flags = shift ? .maskShift : []
-        event.post(tap: .cghidEventTap)
-        try noteHostInputEventRecorded()
+        try postHostInput(event)
     }
 
-    private func noteHostInputEventRecorded() throws {
+    private func postHostInput(_ event: CGEvent) throws {
+        let postStartedAt = mach_absolute_time()
+        event.post(tap: .cghidEventTap)
+        let postCompletedAt = mach_absolute_time()
         hostInputEventCount += 1
         guard let screenCaptureEvidence else {
             throw G4Failure.screenRecordingStoppedDuringInput
         }
         do {
-            try screenCaptureEvidence.recordHostInput(at: mach_absolute_time())
+            try screenCaptureEvidence.recordHostInput(
+                postStartedAt: postStartedAt,
+                postCompletedAt: postCompletedAt
+            )
             recordedHostInputEventCount += 1
         } catch {
             throw G4Failure.screenRecordingStoppedDuringInput

@@ -83,14 +83,23 @@ if ! grep -Fq 'screenRecordingDurationSeconds = 120' "$acceptance_test" \
 then
     fail "the test must cap ScreenCaptureKit, await recording-start and finish markers, and avoid a fixed startup delay"
 fi
-if [[ "$(grep -Fc 'try noteHostInputEventRecorded()' "$acceptance_test")" -ne 3 ]]; then
-    fail "mouse and keyboard event paths must timestamp every posted host event"
+if [[ "$(grep -Fc 'try postHostInput(' "$acceptance_test")" -ne 3 ]] \
+    || [[ "$(grep -Fc '.post(tap: .cghidEventTap)' "$acceptance_test")" -ne 1 ]]
+then
+    fail "mouse and keyboard event paths must use the timestamped host-input post helper"
+fi
+post_started="$(grep -n -F 'let postStartedAt = mach_absolute_time()' "$acceptance_test" | cut -d: -f1)"
+event_post="$(grep -n -F 'event.post(tap: .cghidEventTap)' "$acceptance_test" | cut -d: -f1)"
+post_completed="$(grep -n -F 'let postCompletedAt = mach_absolute_time()' "$acceptance_test" | cut -d: -f1)"
+record_interval="$(grep -n -F 'postCompletedAt: postCompletedAt' "$acceptance_test" | cut -d: -f1)"
+if (( post_started >= event_post || event_post >= post_completed || post_completed >= record_interval )); then
+    fail "the test must record each host-event post interval around CGEvent.post"
 fi
 if ! grep -Fq 'attachment[.displayTime]' "$acceptance_test" \
     || ! grep -Fq 'mach_absolute_time()' "$acceptance_test" \
     || ! grep -Fq 'waitForScreenRecordingFrameAfterLastHostInput' "$acceptance_test"
 then
-    fail "the test must compare captured-frame timestamps with host-input timestamps"
+    fail "the test must compare captured-frame timestamps with host-input post intervals"
 fi
 last_input_frame="$(grep -n 'waitForScreenRecordingFrameAfterLastHostInput' "$acceptance_test" | head -1 | cut -d: -f1)"
 stop_launch="$(grep -n 'let stopped = await session.stopLaunch()' "$acceptance_test" | head -1 | cut -d: -f1)"

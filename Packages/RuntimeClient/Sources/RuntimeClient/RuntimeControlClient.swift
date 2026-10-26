@@ -132,6 +132,34 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Returns the effective global configuration from the daemon.
+    public func configuration() async throws(RuntimeControlClientError) -> ConfigurationSnapshot {
+        let opened = try await ensureControl()
+        do {
+            let request = RuntimeConfigurationControlRequest(header: makeHeader())
+            let data = try Self.encode(request)
+            return try Self.decodeConfigurationReply(from: await opened.channel.configuration(data))
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
+    /// Validates and applies a global configuration merge patch.
+    public func updateConfiguration(
+        _ patch: ConfigurationPatch
+    ) async throws(RuntimeControlClientError) -> ConfigurationSnapshot {
+        let opened = try await ensureControl()
+        do {
+            let request = RuntimeUpdateConfigurationControlRequest(header: makeHeader(), patch: patch)
+            let data = try Self.encode(request)
+            return try Self.decodeUpdateConfigurationReply(from: await opened.channel.updateConfiguration(data))
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
     /// Starts Android and waits until the daemon reports it ready.
     public func startRuntime() async throws(RuntimeControlClientError) -> RuntimeHostStatus {
         let opened = try await ensureControl()
@@ -955,6 +983,38 @@ public actor RuntimeControlClient {
         return status
     }
 
+    private static func decodeConfigurationReply(
+        from data: Data
+    ) throws(RuntimeControlClientError) -> ConfigurationSnapshot {
+        let reply = try Self.decode(RuntimeConfigurationControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
+    private static func decodeUpdateConfigurationReply(
+        from data: Data
+    ) throws(RuntimeControlClientError) -> ConfigurationSnapshot {
+        let reply = try Self.decode(RuntimeUpdateConfigurationControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
     private static func decodeImportPackageReply(from data: Data) throws(RuntimeControlClientError)
         -> RuntimeImportPreview
     {
@@ -1328,6 +1388,8 @@ protocol RuntimeBrokerChannel: Sendable {
 
 protocol RuntimeControlChannel: AnyObject, Sendable {
     func runtimeStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func configuration(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func updateConfiguration(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func startRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func stopRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func restartRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
@@ -1508,6 +1570,34 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.runtimeStatus(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func configuration(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.configuration(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func updateConfiguration(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.updateConfiguration(request) { response in finish(.success(response)) }
         }
     }
 

@@ -14,6 +14,7 @@
         private let display: DeveloperDisplay
         private let showStatistics: Bool
         private let inputSink: PointerInputSink
+        private let holdsPlaceholderUntilAppRunning: Bool
         private let onFocusChanged: @Sendable (Bool) -> Void
         private let onWindowClosed: @MainActor () -> Void
         private var windowTitle = "APKRun display 0"
@@ -34,12 +35,14 @@
             display: DeveloperDisplay,
             showStatistics: Bool,
             inputSink: PointerInputSink,
+            holdsPlaceholderUntilAppRunning: Bool = false,
             onFocusChanged: @escaping @Sendable (Bool) -> Void = { _ in },
             onWindowClosed: @escaping @MainActor () -> Void
         ) {
             self.display = display
             self.showStatistics = showStatistics
             self.inputSink = inputSink
+            self.holdsPlaceholderUntilAppRunning = holdsPlaceholderUntilAppRunning
             self.onFocusChanged = onFocusChanged
             self.onWindowClosed = onWindowClosed
         }
@@ -94,6 +97,10 @@
             window?.setPlaceholderStatus(status)
         }
 
+        func appDidPresentFirstFrame() {
+            window?.appDidPresentFirstFrame()
+        }
+
         func showFailure(appName: String, message: String, remediation: String) -> Bool {
             isShowingFailure = true
             cancelResize()
@@ -125,7 +132,9 @@
                     title: windowTitle,
                     backingScale: display.backingScale,
                     inputSink: inputSink,
-                    allowsResize: display.supportsWindowResize,
+                    // #27 keeps display-0 launch windows fixed-size until #68 implements live resize.
+                    allowsResize: false,
+                    holdsPlaceholderUntilAppRunning: holdsPlaceholderUntilAppRunning,
                     onFocusChanged: { [onFocusChanged] focused in onFocusChanged(focused) },
                     onGeometryChanged: { [weak self] pointSize, backingScale, zoom, completion in
                         guard let self else {

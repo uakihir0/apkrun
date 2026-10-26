@@ -391,7 +391,7 @@ Each fixture app is a Gradle module with a CamelCase name and package `io.apkrun
 | App Bundle, split with the pinned bundletool | HelloSplit (base, `config.arm64_v8a`, `config.xhdpi`, `config.ja`, a feature split) and derived containers ([package-store.md](../02-design/package-store.md) §4.4, §16) |
 | two ABI flavors; v1 signing only with `targetSdk` 29 | HelloNative (`arm64-v8a`, `armeabi-v7a`); HelloLegacySig |
 
-The build is reproducible: the same sources and pinned tools give the same APK bytes. `scripts/build-fixtures.sh --check-reproducible` checks it. `--app <name>` builds one app.
+The build is reproducible: the same sources and pinned tools give the same APK bytes. `scripts/build-fixtures.sh --check-reproducible` checks it. `--app <name>` builds one app. HelloText also has a debug-only variant for acceptance diagnostics: `scripts/build-fixtures.sh --app HelloText --variant debug` writes `out/HelloText-debug.apk`, signed with the same test fixture key. Its debug receiver can report the text field after host typing; release fixtures do not contain that receiver.
 
 `scripts/build-fixtures.sh` fills `Tests/Fixtures/update-repos/local/io.apkrun.fixture.helloupdate/{1,2}/` from HelloUpdate V1 and V2 (planned; [update-system.md](../02-design/update-system.md) §4.3). `scripts/dev/update-server.py` (planned, #51) serves the Local fixtures and `direct/` variants as Direct manifests on `127.0.0.1` for Debug builds. `--delay <seconds>` holds every answer. Each other fixture package is served at its own versionCode, so a check reports up to date (#75).
 
@@ -544,7 +544,7 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
 - Use `-derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd"` and an `APKRUN_ANDROID_HOME` that holds a copy of `platform-tools`. CI uses `$RUNNER_TEMP`. `scripts/run-gate.sh` builds under `build/gates/` in the checkout.
 - `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY` (the SHA-1 fingerprint of the certificate) come from the environment or from CI repository variables. The fingerprint is explicit, because the generic `Apple Development` name does not reliably select the lab certificate.
 - `APKRunTestHost` and the hosted test bundles disable hardened runtime; that exception is limited to test targets.
-- `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per test group: `LinuxGuest`, `AndroidADB`, `AndroidPackage`, `AndroidBoot`, `AndroidNetwork`, `AndroidGraphics`, `AndroidGuestAgent`, `AndroidInput`, and the four input configurations below. The T2 suites of [test-strategy.md](../04-plan/test-strategy.md) §2.4 are `LinuxGuest`, `AndroidStock`, `AndroidCustom`, and `Maintenance`; the last three are planned. T2 has one automatic retry ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
+- `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per test group: `LinuxGuest`, `AndroidADB`, `AndroidPackage`, `AndroidBoot`, `AndroidNetwork`, `AndroidGraphics`, `AndroidGuestAgent`, `AndroidInput`, `NativeWindow`, and the four input configurations below. The T2 suites of [test-strategy.md](../04-plan/test-strategy.md) §2.4 are `LinuxGuest`, `AndroidStock`, `AndroidCustom`, and `Maintenance`; the last three are planned. T2 has one automatic retry ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
 
 Input tests run in their own configurations. Select the configuration and the method together:
 
@@ -555,6 +555,7 @@ Input tests run in their own configurations. Select the configuration and the me
 | `AndroidInputCadence` | `testThreeConsecutiveHundredClickBatchesThroughDirectView` | three batches at 50 ms press and gap through direct view dispatch; posts no system events; cannot satisfy #25 box 3 or #103 |
 | `AndroidInputCadence` | `testOneHundredClickDiagnosticTraceJoinsHostGuestAndFixtureThroughDirectView` | diagnostic only; one untraced warm-up, then a traced batch |
 | `AndroidInputEdges` | `testDragsBeyondTopAndLeftEdgesCloseTheGuestTouch` | the #25 top and left guest-edge check; `SessionWindowController.show()` activates the window |
+| `NativeWindow` | `testHelloTextUsesNativeWindowAndAcceptsInput` | the #27 T2 real-VM window and IOSurface check, a post-launch displayed frame with screenshot OCR for HelloText, a guest-confirmed click and typed string through the native view, and a Guest Agent snapshot that no longer lists HelloText's task before clean DevBoot completion after window close |
 
 - The interactive and edge tests need a dedicated lab GUI session with exactly one display. They activate the test window; the interactive test moves and clicks the desktop pointer. Run them only on a dedicated desktop (typically the reference Mac), never on a desktop used for other work, in unattended CI, or on a self-hosted GUI runner.
 - Run each command separately, with a new `-resultBundlePath` per attempt:
@@ -571,9 +572,23 @@ xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Integrat
   -only-testing:IntegrationTests/AndroidInputTests/testThreeConsecutiveHundredClickBatchesThroughWindowServer test
 ```
 
+Run the #27 native-window check with the dedicated `NativeWindow` configuration and test method:
+
+```bash
+xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+  -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd" \
+  -resultBundlePath "${TMPDIR:-/tmp}/apkrun-native-window.xcresult" \
+  APKRUN_TEST_LINUX_DIR="${TMPDIR:-/tmp}/apkrun-test-linux" \
+  APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+  DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
+  -only-test-configuration NativeWindow \
+  -only-testing:IntegrationTests/NativeWindowTests/testHelloTextUsesNativeWindowAndAcceptsInput test
+```
+
 - On macOS 27, the hosted `APKRunTestHost` checks `CGPreflightPostEventAccess()`. When it fails, enable the exact `APKRunTestHost.app` path from the skip message under System Settings → Privacy & Security → Device Control and Data Access. A grant to Terminal, Xcode, or another app does not satisfy it. Sign the host with the configured identity so its designated requirement stays stable.
 - These tests exercise the embedded `DevBoot` and `DevInputRoute` path, not the wrapper-to-apkrund XPC route.
-- `Tests/AcceptanceTests/AcceptanceTests.xctestplan` has one configuration per gate (`G1`–`G9`; each gate task adds its own), plus `ReleaseSmoke` and `Network`. Current configurations: `G1`, `G2`, `G3`, `Network`. Automatic retry is off, except one retry for `Network` ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
+- `Tests/AcceptanceTests/AcceptanceTests.xctestplan` has one configuration per gate (`G1`–`G9`; each gate task adds its own), plus `ReleaseSmoke` and `Network`. Current configurations: `G1`, `G2`, `G3`, `G4`, `Network`. Automatic retry is off, except one retry for `Network` ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
 - Tests through apkrund use the installed Debug identities (§13). The Maintenance suite builds and installs `ReleaseUpdateTest` bundles instead.
 
 ### 12.5 Local wrapper signing

@@ -2,12 +2,12 @@
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-    printf 'usage: scripts/run-gate.sh G1|G2|G3\n' >&2
+    printf 'usage: scripts/run-gate.sh G1|G2|G3|G4\n' >&2
     exit 64
 fi
 
 gate="$1"
-if [[ "$gate" != G1 && "$gate" != G2 && "$gate" != G3 ]]; then
+if [[ "$gate" != G1 && "$gate" != G2 && "$gate" != G3 && "$gate" != G4 ]]; then
     printf 'run-gate: unsupported gate: %s\n' "$gate" >&2
     exit 64
 fi
@@ -22,8 +22,9 @@ signing_arguments=(
     "CODE_SIGN_STYLE=Manual"
     "CODE_SIGN_IDENTITY=$APKRUN_TEST_CODE_SIGN_IDENTITY"
 )
-# The G3 inputs, set once the G3 artifacts are staged. Empty for G1 and G2.
+# The gate inputs, set once its artifacts are staged.
 g3_build_settings=()
+g4_build_settings=()
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
@@ -75,6 +76,19 @@ if [[ "$gate" == G3 ]]; then
     fi
     rm -rf "$gate_dir/artifacts" "$gate_dir/products" "$gate_dir/screen-recording.mov" "$gate_dir/screen-recording.mp4"
 fi
+if [[ "$gate" == G4 ]]; then
+    g4_android_home="${ANDROID_HOME:-$repo_root/build/android-sdk}"
+    if [[ ! -x "$g4_android_home/platform-tools/adb" ]]; then
+        printf 'run-gate: G4 needs adb at %s/platform-tools/adb (environment-setup.md §2.5)\n' "$g4_android_home" >&2
+        exit 78
+    fi
+    g4_virgl="$repo_root/ThirdParty/out/virgl-runtime/current"
+    if [[ ! -f "$g4_virgl/libvirglrenderer.1.dylib" ]]; then
+        printf 'run-gate: G4 needs the virgl runtime at %s (ThirdParty, #21)\n' "$g4_virgl" >&2
+        exit 78
+    fi
+    rm -rf "$gate_dir/artifacts" "$gate_dir/products" "$gate_dir/screen-recording.mov" "$gate_dir/screen-recording.mp4"
+fi
 
 mkdir -p "$gate_dir"
 rm -rf "$gate_dir/DerivedData" "$gate_dir/LinuxGuest.xcresult" "$gate_dir/$gate.xcresult"
@@ -107,6 +121,12 @@ macos_build="$(sw_vers -buildVersion)"
             "$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["imageVersion"])' "$g3_bundle/manifest.json")"
         printf 'cli_traits: EmbeddedRuntime,TestReadback\n'
     fi
+    if [[ "$gate" == G4 ]]; then
+        printf 'cli_traits: EmbeddedRuntime\n'
+        printf 'android_sdk: %s\n' "$g4_android_home"
+        printf 'virgl_runtime: %s\n' "$g4_virgl"
+        printf 'manual_checks: C01-1 through C01-5 are recorded separately in test-strategy.md §8.2\n'
+    fi
     printf 'status: running\n'
 } > "$report"
 
@@ -123,8 +143,9 @@ gate_report_install "$report"
 
 scripts/generate-project.sh
 scripts/build-test-initramfs.sh
-if [[ "$gate" == G2 ]]; then
-    # G2 boots the stock image from a signed bundle outside ~/Documents (#15, #66).
+if [[ "$gate" == G2 || "$gate" == G4 ]]; then
+    # G2 boots the stock image, and G4 installs it before `apkrun dev launch`; both use a signed bundle outside
+    # ~/Documents (#15, #66).
     scripts/build-test-android-bundle.sh
 fi
 # Both gates run the LinuxGuest suite, whose layout test reads the Android disks. Every gate rebuilds them, so no
@@ -173,6 +194,50 @@ if [[ "$gate" == G3 ]]; then
         printf 'android_sdk: %s\n' "$g3_android_home"
     } >> "$report"
 fi
+if [[ "$gate" == G4 ]]; then
+    # G4 runs `apkrun dev launch` against the stock image with the debug HelloText APK. The debug receiver exposes an
+    # exact text-field oracle; mouse and keyboard input still enters through the native window's host event path.
+    export ANDROID_HOME="$g4_android_home"
+    scripts/build-guest.sh
+    scripts/build-fixtures.sh --app HelloText --variant debug
+    SRCROOT="$repo_root" scripts/build/stamp-commit.sh
+    SRCROOT="$repo_root" \
+        CONFIGURATION=Debug \
+        TARGET_BUILD_DIR="$gate_dir/products" \
+        UNLOCALIZED_RESOURCES_FOLDER_PATH=Resources \
+        DERIVED_FILE_DIR="$gate_dir/derived" \
+        APKRUN_CLI_TRAITS=EmbeddedRuntime \
+        EXPANDED_CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
+        scripts/build/embed-cli.sh
+    staging="$APKRUN_TEST_LINUX_DIR/g4-staging"
+    rm -rf "$staging" "$APKRUN_TEST_LINUX_DIR/g4-artifacts"
+    mkdir -p "$staging/cli" "$staging/guest" "$staging/android-sdk"
+    cp "$gate_dir/products/Resources/bin/apkrun" "$staging/cli/apkrun"
+    cp Guest/build/out/apkrun-guest.apk Guest/build/out/apkrun-guest.json "$staging/guest/"
+    cp -RL "$g4_virgl" "$staging/virgl-runtime"
+    cp -R "$g4_android_home/platform-tools" "$staging/android-sdk/platform-tools"
+    cp Tests/Fixtures/AndroidApps/out/HelloText-debug.apk "$staging/HelloText-debug.apk"
+    g4_build_settings=(
+        "APKRUN_G4_CLI=$staging/cli/apkrun"
+        "APKRUN_G4_BUNDLE=$APKRUN_TEST_LINUX_DIR/android-bundle"
+        "APKRUN_G4_APK=$staging/HelloText-debug.apk"
+        "APKRUN_G4_GUEST_DIR=$staging/guest"
+        "APKRUN_G4_VIRGL_RUNTIME=$staging/virgl-runtime"
+        "APKRUN_G4_ANDROID_HOME=$staging/android-sdk"
+        "APKRUN_G4_ARTIFACTS=$APKRUN_TEST_LINUX_DIR/g4-artifacts"
+    )
+    {
+        printf 'bundle: %s\n' "$APKRUN_TEST_LINUX_DIR/android-bundle"
+        printf 'bundle_manifest_sha256: %s\n' \
+            "$(shasum -a 256 "$APKRUN_TEST_LINUX_DIR/android-bundle/manifest.json" | awk '{ print $1 }')"
+        printf 'bundle_sha256sums_sha256: %s\n' \
+            "$(shasum -a 256 "$APKRUN_TEST_LINUX_DIR/android-bundle/SHA256SUMS" | awk '{ print $1 }')"
+        printf 'hellotext_debug_apk_sha256: %s\n' \
+            "$(shasum -a 256 "$staging/HelloText-debug.apk" | awk '{ print $1 }')"
+        printf 'guest_apk_sha256: %s\n' \
+            "$(shasum -a 256 "$staging/guest/apkrun-guest.apk" | awk '{ print $1 }')"
+    } >> "$report"
+fi
 scripts/tools/verify-gate-artifacts.sh "$APKRUN_TEST_LINUX_DIR" "$gate"
 # Build the test host before any test runs, then check the directory it will read (IR-376).
 xcodebuild build-for-testing \
@@ -185,7 +250,8 @@ xcodebuild build-for-testing \
     "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
     "APKRUN_CI=1" \
     "${signing_arguments[@]}" \
-    ${g3_build_settings[@]+"${g3_build_settings[@]}"}
+    ${g3_build_settings[@]+"${g3_build_settings[@]}"} \
+    ${g4_build_settings[@]+"${g4_build_settings[@]}"}
 scripts/tools/verify-test-host-directory.sh \
     "$gate_dir/DerivedData/Build/Products/Debug/APKRunTestHost.app" "$APKRUN_TEST_LINUX_DIR"
 xcodebuild test \
@@ -260,6 +326,68 @@ if [[ "$gate" == G3 ]]; then
     gate_status=$g3_status
     if [[ $gate_status -eq 0 ]]; then gate_status=$check_status; fi
     if [[ $gate_status -eq 0 ]]; then gate_status=$recorder_status; fi
+    exit "$gate_status"
+fi
+if [[ "$gate" == G4 ]]; then
+    artifacts="$APKRUN_TEST_LINUX_DIR/g4-artifacts"
+    g4_status=0
+    lockf -k /tmp/apkrun-vm.lock xcodebuild test \
+        -project APKRun.xcodeproj \
+        -scheme AcceptanceTests \
+        -testPlan AcceptanceTests \
+        -configuration Debug \
+        -only-test-configuration G4 \
+        -only-testing:AcceptanceTests/G4NativeWindowTests \
+        -test-timeouts-enabled NO \
+        -jobs 1 \
+        -derivedDataPath "$gate_dir/DerivedData" \
+        -resultBundlePath "$gate_dir/$gate.xcresult" \
+        "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
+        "APKRUN_CI=1" \
+        "${signing_arguments[@]}" \
+        ${g4_build_settings[@]+"${g4_build_settings[@]}"} || g4_status=$?
+    if [[ -d "$artifacts" ]]; then
+        rm -rf "$gate_dir/artifacts"
+        mkdir -p "$gate_dir/artifacts"
+        rsync -a --exclude='/screen-recording.mov' "$artifacts/" "$gate_dir/artifacts/"
+        if [[ -f "$artifacts/screen-recording.mov" ]]; then
+            mv "$artifacts/screen-recording.mov" "$gate_dir/artifacts/screen-recording.mov"
+        fi
+    fi
+    recording_status=1
+    if [[ -f "$gate_dir/artifacts/screen-recording.mov" ]]; then
+        if avconvert \
+            --preset PresetMediumQuality \
+            --source "$gate_dir/artifacts/screen-recording.mov" \
+            --output "$gate_dir/screen-recording.mp4"
+        then
+            recording_status=0
+        else
+            recording_status=1
+        fi
+    fi
+    if [[ ! -s "$gate_dir/screen-recording.mp4" ]]; then
+        recording_status=1
+    fi
+    check_status=0
+    python3 -I "$repo_root/scripts/tools/check-g4-evidence.py" \
+        "$gate_dir/artifacts" "$gate_dir/$gate.xcresult" > "$gate_dir/evidence-check.txt" 2>&1 \
+        || check_status=$?
+    {
+        printf 'artifacts: %s\n' "$gate_dir/artifacts"
+        printf 'screen_recording: %s\n' "$gate_dir/screen-recording.mp4"
+        printf 'recording_conversion_exit: %s\n' "$recording_status"
+        printf 'test_exit: %s\n' "$g4_status"
+        printf 'evidence_check_exit: %s\n' "$check_status"
+        sed 's/^/evidence: /' "$gate_dir/evidence-check.txt"
+    } >> "$report"
+    # Keep one compact recording after evidence validation and avoid retaining a duplicate raw movie under /tmp.
+    if [[ $check_status -eq 0 && $recording_status -eq 0 ]]; then
+        rm -f "$gate_dir/artifacts/screen-recording.mov"
+    fi
+    gate_status=$g4_status
+    if [[ $gate_status -eq 0 ]]; then gate_status=$check_status; fi
+    if [[ $gate_status -eq 0 ]]; then gate_status=$recording_status; fi
     exit "$gate_status"
 fi
 xcodebuild test \

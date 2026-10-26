@@ -407,6 +407,9 @@ public struct DevBoot: Sendable {
     /// because migration arrives with #59; `--reset` provisions a new instance instead. Developer
     /// mode is always on: the Android serial shell answers on hvc1, and logcat is captured to
     /// `<logs>/guest/logcat-<timestamp>.log` (android-image.md §7.1).
+    ///
+    /// - Parameter onAppFramePresented: Called after a launched app's first frame commits. A `nil` package ID denotes
+    ///   the primary display; a package ID denotes one of the separately launched app windows.
     public func run(
         options: DevBootOptions,
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -414,6 +417,7 @@ public struct DevBoot: Sendable {
         appCloseRequests: AsyncStream<Void>? = nil,
         preserveWindowOnError: Bool = false,
         onRuntimeReady: (@Sendable (DevelopmentRuntimeContext) async throws -> (any RuntimeSessionService)?)? = nil,
+        onAppFramePresented: (@Sendable (String?) async -> Void)? = nil,
         onEvent: @escaping @Sendable (DevBootEvent) -> Void
     ) async throws {
         if !options.appLaunches.isEmpty {
@@ -441,6 +445,7 @@ public struct DevBoot: Sendable {
                 appCloseRequests: appCloseRequests,
                 preserveWindowOnError: preserveWindowOnError,
                 onRuntimeReady: onRuntimeReady,
+                onAppFramePresented: onAppFramePresented,
                 onEvent: onEvent
             )
         }
@@ -453,6 +458,7 @@ public struct DevBoot: Sendable {
         appCloseRequests: AsyncStream<Void>?,
         preserveWindowOnError: Bool,
         onRuntimeReady: (@Sendable (DevelopmentRuntimeContext) async throws -> (any RuntimeSessionService)?)?,
+        onAppFramePresented: (@Sendable (String?) async -> Void)?,
         onEvent: @escaping @Sendable (DevBootEvent) -> Void
     ) async throws {
         var returnedNormally = false
@@ -593,7 +599,10 @@ public struct DevBoot: Sendable {
                             developerDisplay: windowDisplay,
                             stopSignal: stopSignal,
                             displayPool: displayPool,
-                            inputRoute: options.inputRoute
+                            inputRoute: options.inputRoute,
+                            onAppFramePresented: {
+                                await onAppFramePresented?(nil)
+                            }
                         )
                         if await stopSignal.beginDisplayAcquisition() {
                             let mode = windowDisplay.mode
@@ -650,6 +659,9 @@ public struct DevBoot: Sendable {
                                 displayPool: displayPool,
                                 inputRoute: launch.inputRoute,
                                 windowState: launch.windowState,
+                                onAppFramePresented: {
+                                    await onAppFramePresented?(launch.packageID)
+                                },
                                 onTerminalSessionReconciled: { session in
                                     await coordinator.reconcileTerminalSession(session)
                                 }

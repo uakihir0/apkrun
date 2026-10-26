@@ -248,6 +248,23 @@ targets:
         ENABLE_HARDENED_RUNTIME: NO
         INFOPLIST_FILE: Tests/IntegrationTests/Host/Info.plist
         INFOPLIST_EXPAND_BUILD_SETTINGS: YES
+        APKRUN_CI: "0"
+        APKRUN_TEST_LINUX_DIR: /tmp/apkrun-test-host-unconfigured
+        APKRUN_ANDROID_HOME: /tmp/apkrun-test-host-unconfigured
+        APKRUN_G3_CLI: /tmp/apkrun-test-host-unconfigured
+        APKRUN_G3_BUNDLE: /tmp/apkrun-test-host-unconfigured
+        APKRUN_G3_APK: /tmp/apkrun-test-host-unconfigured
+        APKRUN_G3_GUEST_DIR: /tmp/apkrun-test-host-unconfigured
+        APKRUN_G3_VIRGL_RUNTIME: /tmp/apkrun-test-host-unconfigured
+        APKRUN_G3_ANDROID_HOME: /tmp/apkrun-test-host-unconfigured
+        APKRUN_G3_ARTIFACTS: /tmp/apkrun-test-host-unconfigured
+        APKRUN_G4_CLI: /tmp/apkrun-test-host-unconfigured
+        APKRUN_G4_BUNDLE: /tmp/apkrun-test-host-unconfigured
+        APKRUN_G4_APK: /tmp/apkrun-test-host-unconfigured
+        APKRUN_G4_GUEST_DIR: /tmp/apkrun-test-host-unconfigured
+        APKRUN_G4_VIRGL_RUNTIME: /tmp/apkrun-test-host-unconfigured
+        APKRUN_G4_ANDROID_HOME: /tmp/apkrun-test-host-unconfigured
+        APKRUN_G4_ARTIFACTS: /tmp/apkrun-test-host-unconfigured
         CODE_SIGN_ENTITLEMENTS: Tests/IntegrationTests/Host/APKRunTestHost.entitlements
 
   IntegrationTests:
@@ -263,6 +280,7 @@ targets:
       - path: Tests/IntegrationTests/G3GraphicsTests
       - path: Tests/IntegrationTests/GuestAgentTests
       - path: Tests/IntegrationTests/AndroidInputTests
+      - path: Tests/IntegrationTests/NativeWindowTests
       - path: Tests/IntegrationTests/Support
       - path: Tests/IntegrationTests/RunResources
         excludes:

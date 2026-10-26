@@ -450,7 +450,7 @@ The gates, their pass conditions, and their closing tasks are in [roadmap.md](ro
 | G1 ARM64 Linux boots | `Tests/AcceptanceTests/G1LinuxBoot` | Linux test guest |
 | G2 boot_completed | `G2AndroidBoot` | stock image |
 | G3 SurfaceFlinger → virtio-gpu → Metal | `G3Graphics` | stock image, HelloGL |
-| G4 Hello APK in a native window | `G4NativeWindow` | stock image, HelloText |
+| G4 Hello APK in a native window | `G4NativeWindow` | stock image, HelloText debug APK |
 | G5 Two APKs in two windows | `G5TwoWindows` | stock image, HelloText and HelloCompose (#31) |
 | G6 Warm under apkrund | `G6WarmRuntime` | stock image (custom image after #36), HelloText |
 | G7 v1 → v2 automatically | `G7GentleUpdate` | custom image, HelloUpdate V1 and V2, local provider |
@@ -465,6 +465,10 @@ Rules:
 - After a gate passes, its check runs nightly. From #36 on, the G2–G6 regressions run on the custom image. G2 also runs on the stock image while the stock image is used for development.
 - A red gate regression opens an issue, blocks release candidates, and stops new tasks that depend on the gate ([roadmap.md](roadmap.md) §2).
 - The checks that [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §14 adds to G6 (the warm-launch KPI, a real `pmset sleepnow`, onboarding on a fresh user account) join the nightly G6 run once #67, #70, and #71 are done. Until then they are on the v0.2 checklist (§8.3).
+
+`G4NativeWindow` runs `apkrun dev launch` with the debug HelloText APK in a fresh development home. It sends 100 mouse clicks, Escape, and the exact ASCII string `Hello, APKRun 123!` as host keyboard events to the native window. The debug-only `TEXT` broadcast reports the field value; it is an observation hook and does not inject input. The test compares the Guest Agent's ADB shell invocation count before and after those host events. After capturing HelloText's active native window, the test records that window with `SCRecordingOutput` and observes frames from the same `SCStream`. It records a timestamp interval around every host-event post and requires the recorded stream's first frame to precede the first post start and a later frame to follow the last post completion. The evidence checker requires a successful recording with a readable video track and positive duration. The screenshot, command log, summary, xcresult, and screen recording are kept under `build/gates/G4/`. The reference Mac must already grant the test host Screen Recording and event-posting permissions; the test reports a remediation and never opens a permission prompt.
+
+G4 covers the automated input and native-window conditions. The v0.1 manual checks C01-1 through C01-5 in §8.2 remain separate: the gate does not evaluate Retina sharpness, scroll direction, context-menu placement, both keyboard layouts, or launch from a new Terminal window.
 
 ---
 

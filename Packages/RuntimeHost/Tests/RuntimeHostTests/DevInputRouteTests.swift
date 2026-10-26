@@ -181,6 +181,7 @@ func anUnboundRouteDropsItsEventsAsNotRunning() async {
 func aBoundRouteSendsItsEventsOnDisplayZero() async {
     let channel = CollectingInputChannel()
     let route = DevInputRoute()
+    await route.focusChanged(true, generation: 1)
     await route.bind(router: InputRouter(channel: channel))
     await route.send(
         RuntimeAPI.InputBatch(events: [
@@ -199,6 +200,7 @@ func aBoundRouteUsesItsSelectedLeasedDisplay() async {
     let channel = CollectingInputChannel()
     let route = DevInputRoute()
     await route.setDisplayID(7)
+    await route.focusChanged(true, generation: 1)
     await route.bind(router: InputRouter(channel: channel))
     await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
 
@@ -209,6 +211,7 @@ func aBoundRouteUsesItsSelectedLeasedDisplay() async {
 func aBoundRouteExposesTheAcknowledgementCoverageItReceives() async throws {
     let channel = AcknowledgingInputChannel()
     let route = DevInputRoute()
+    await route.focusChanged(true, generation: 1)
     await route.bind(router: InputRouter(channel: channel))
     await route.send(
         RuntimeAPI.InputBatch(events: [
@@ -265,6 +268,7 @@ func aBoundRouteReportsWhetherGuestAckEventTimesWereNegotiated() async {
 func anOptInPerEventCaptureUsesSingleEventBatches() async {
     let channel = CollectingInputChannel()
     let route = DevInputRoute()
+    await route.focusChanged(true, generation: 1)
     await route.bind(router: InputRouter(channel: channel))
     let baseline = await route.startAcknowledgementHistoryCapture(
         everyBatch: true, captureSentEventHistory: true)
@@ -292,6 +296,7 @@ func anOptInPerEventCaptureUsesSingleEventBatches() async {
 func aBatchOfMoreThan512EventsIsCutAt512() async {
     let channel = CollectingInputChannel()
     let route = DevInputRoute()
+    await route.focusChanged(true, generation: 1)
     await route.bind(router: InputRouter(channel: channel))
     let events = (0..<600).map { index in
         RuntimeAPI.WireInputEvent.touch(
@@ -313,6 +318,7 @@ func aBatchOfMoreThan512EventsIsCutAt512() async {
 func unbindingEndsTheSessionAndLaterEventsAreDropped() async {
     let channel = CollectingInputChannel()
     let route = DevInputRoute()
+    await route.focusChanged(true, generation: 1)
     await route.bind(router: InputRouter(channel: channel))
     await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
     await route.unbind()
@@ -330,6 +336,7 @@ func aRebindMovesTheSessionToTheNewChannelAndCancelsTheOld() async {
     let oldChannel = CollectingInputChannel()
     let newChannel = CollectingInputChannel()
     let route = DevInputRoute()
+    await route.focusChanged(true, generation: 1)
     await route.bind(router: InputRouter(channel: oldChannel))
     await route.bind(router: InputRouter(channel: newChannel))
     await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
@@ -346,6 +353,7 @@ func aRebindKeepsTheCountsOfTheRouterItReplaces() async {
     let oldChannel = CollectingInputChannel()
     let newChannel = CollectingInputChannel()
     let route = DevInputRoute()
+    await route.focusChanged(true, generation: 1)
     await route.bind(router: InputRouter(channel: oldChannel))
     await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
     await route.bind(router: InputRouter(channel: newChannel))

@@ -42,8 +42,7 @@ struct APKRunApp: App {
 
     var body: some Scene {
         WindowGroup("APKRun") {
-            Text("APKRun")
-                .frame(minWidth: 480, minHeight: 320)
+            APKRunHomeView(menuBarItemSettings: menuBarItemSettings)
                 .alert(registrationTitle, isPresented: $isRegistrationErrorPresented) {
                     Button("Open Login Items Settings") {
                         SMAppService.openSystemSettingsLoginItems()
@@ -61,6 +60,24 @@ struct APKRunApp: App {
         Settings {
             GeneralSettingsView(model: menuBarItemSettings)
         }
+    }
+}
+
+private struct APKRunHomeView: View {
+    @ObservedObject var menuBarItemSettings: MenuBarItemSettingsModel
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        Text("APKRun")
+            .frame(minWidth: 480, minHeight: 320)
+            .onAppear {
+                menuBarItemSettings.synchronizeWithSystem()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active {
+                    menuBarItemSettings.synchronizeWithSystem()
+                }
+            }
     }
 }
 

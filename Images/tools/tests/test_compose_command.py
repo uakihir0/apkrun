@@ -951,11 +951,24 @@ def test_compose_image_removes_staging_after_keyboard_interrupt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     manifest, product, output, _document = _install_composer_fakes(monkeypatch, tmp_path)
+    refresh_top_level = command.refresh_vbmeta_partition
 
-    def interrupt_before_final_vbmeta(*_args: object, **_kwargs: object) -> dict[str, object]:
-        raise KeyboardInterrupt
+    def interrupt_after_vendor_vbmeta(
+        avbtool: Path,
+        stock: Path,
+        image: Path,
+        partition_name: str,
+        key: Path,
+        destination: Path,
+        work: Path,
+    ) -> dict[str, object]:
+        record = refresh_top_level(avbtool, stock, image, partition_name, key, destination, work)
+        if partition_name == "vendor":
+            assert destination.read_bytes() == b"refreshed top level vbmeta: vendor"
+            raise KeyboardInterrupt
+        return record
 
-    monkeypatch.setattr(command, "refresh_vbmeta_partition", interrupt_before_final_vbmeta)
+    monkeypatch.setattr(command, "refresh_vbmeta_partition", interrupt_after_vendor_vbmeta)
 
     with pytest.raises(KeyboardInterrupt):
         command.compose_image(manifest, output_directory=output, product_root=product)

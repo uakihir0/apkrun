@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <bool name="def_auto_time">false</bool>
+    <bool name="def_auto_time_zone">false</bool>
+</resources>

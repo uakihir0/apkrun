@@ -3,6 +3,66 @@ import ServiceManagement
 import SwiftUI
 
 @MainActor
+protocol MenuBarLoginItemRegistration {
+    var status: SMAppService.Status { get }
+    func register() throws
+    func unregister() throws
+    func openLoginItemsSettings()
+}
+
+@MainActor
+private final class SystemMenuBarLoginItemRegistration: MenuBarLoginItemRegistration {
+    private let service: SMAppService
+
+    init(identifier: String) {
+        service = .loginItem(identifier: identifier)
+    }
+
+    var status: SMAppService.Status { service.status }
+
+    func register() throws {
+        try service.register()
+    }
+
+    func unregister() throws {
+        try service.unregister()
+    }
+
+    func openLoginItemsSettings() {
+        SMAppService.openSystemSettingsLoginItems()
+    }
+}
+
+@MainActor
+protocol MenuBarItemProcessController {
+    func isRunning(bundleIdentifier: String) -> Bool
+    func launch(at url: URL, completion: @escaping @MainActor @Sendable (Error?) -> Void)
+    func terminate(bundleIdentifier: String)
+}
+
+@MainActor
+private final class SystemMenuBarItemProcessController: MenuBarItemProcessController {
+    func isRunning(bundleIdentifier: String) -> Bool {
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
+            .contains { !$0.isTerminated }
+    }
+
+    func launch(at url: URL, completion: @escaping @MainActor @Sendable (Error?) -> Void) {
+        NSWorkspace.shared.openApplication(at: url, configuration: .init()) { _, error in
+            Task { @MainActor in completion(error) }
+        }
+    }
+
+    func terminate(bundleIdentifier: String) {
+        for application in NSRunningApplication.runningApplications(
+            withBundleIdentifier: bundleIdentifier
+        ) where !application.isTerminated {
+            _ = application.terminate()
+        }
+    }
+}
+
+@MainActor
 final class MenuBarItemSettingsModel: ObservableObject {
     @Published private(set) var isEnabled = false
     @Published private(set) var needsApproval = false
@@ -10,20 +70,33 @@ final class MenuBarItemSettingsModel: ObservableObject {
 
     private static let loginItemIdentifier = "io.apkrun.APKRunMenuBar"
     private static let initializedDefaultsKey = "io.apkrun.menuBarLoginItemInitialized"
-    private let service: SMAppService
+    private let service: any MenuBarLoginItemRegistration
+    private let processController: any MenuBarItemProcessController
     private let defaults: UserDefaults
     private let embeddedHelperURL: URL
+    private let helperBundleIdentifier: String
     private var isLaunchingHelper = false
 
     init(
-        service: SMAppService? = nil,
-        defaults: UserDefaults = .standard
+        service: (any MenuBarLoginItemRegistration)? = nil,
+        processController: (any MenuBarItemProcessController)? = nil,
+        defaults: UserDefaults = .standard,
+        helperURL: URL? = nil,
+        helperBundleIdentifier: String? = nil
     ) {
-        let helperURL = Self.embeddedHelperURL
-        embeddedHelperURL = helperURL
-        let helperIdentifier =
-            Bundle(url: helperURL)?.bundleIdentifier ?? Self.loginItemIdentifier
-        self.service = service ?? .loginItem(identifier: helperIdentifier)
+        let resolvedHelperURL = helperURL ?? Self.embeddedHelperURL
+        let resolvedHelperIdentifier =
+            helperBundleIdentifier
+            ?? Bundle(url: resolvedHelperURL)?.bundleIdentifier
+            ?? Self.loginItemIdentifier
+        embeddedHelperURL = resolvedHelperURL
+        self.helperBundleIdentifier = resolvedHelperIdentifier
+        self.service =
+            service
+            ?? SystemMenuBarLoginItemRegistration(
+                identifier: resolvedHelperIdentifier
+            )
+        self.processController = processController ?? SystemMenuBarItemProcessController()
         self.defaults = defaults
         refreshRegistrationState()
     }
@@ -43,7 +116,7 @@ final class MenuBarItemSettingsModel: ObservableObject {
                 }
                 defaults.set(true, forKey: Self.initializedDefaultsKey)
                 if service.status == .requiresApproval {
-                    SMAppService.openSystemSettingsLoginItems()
+                    service.openLoginItemsSettings()
                 }
             } catch {
                 errorMessage = String(
@@ -94,7 +167,7 @@ final class MenuBarItemSettingsModel: ObservableObject {
         refreshRegistrationState()
         if enabled {
             if needsApproval {
-                SMAppService.openSystemSettingsLoginItems()
+                service.openLoginItemsSettings()
             } else if isEnabled {
                 launchHelperIfNeeded()
             }
@@ -127,7 +200,7 @@ final class MenuBarItemSettingsModel: ObservableObject {
         let helperURL = embeddedHelperURL
         guard
             FileManager.default.fileExists(atPath: helperURL.path),
-            let bundleIdentifier = Bundle(url: helperURL)?.bundleIdentifier
+            Bundle(url: helperURL)?.bundleIdentifier != nil
         else {
             errorMessage = String(
                 localized:
@@ -136,40 +209,32 @@ final class MenuBarItemSettingsModel: ObservableObject {
             return
         }
 
-        let runningHelpers = NSRunningApplication.runningApplications(
-            withBundleIdentifier: bundleIdentifier
-        )
-        guard !runningHelpers.contains(where: { !$0.isTerminated }) else { return }
+        guard !processController.isRunning(bundleIdentifier: helperBundleIdentifier) else { return }
 
         isLaunchingHelper = true
-        NSWorkspace.shared.openApplication(at: helperURL, configuration: .init()) {
-            [weak self] _, error in
-            Task { @MainActor in
-                guard let self else { return }
-                self.isLaunchingHelper = false
-                self.refreshRegistrationState()
-                guard self.isEnabled, !self.needsApproval else {
-                    self.terminateHelperIfRunning()
-                    return
-                }
-                if error != nil {
-                    self.errorMessage = String(
-                        localized:
-                            "APKRun couldn't open the menu bar item. Check Login Items in System Settings."
-                    )
-                }
+        processController.launch(at: helperURL) { [weak self] error in
+            guard let self else { return }
+            self.isLaunchingHelper = false
+            self.refreshRegistrationState()
+            guard self.isEnabled, !self.needsApproval else {
+                self.terminateHelperIfRunning()
+                return
+            }
+            if error != nil {
+                self.errorMessage = String(
+                    localized:
+                        "APKRun couldn't open the menu bar item. Check Login Items in System Settings."
+                )
             }
         }
     }
 
+    func openLoginItemsSettings() {
+        service.openLoginItemsSettings()
+    }
+
     private func terminateHelperIfRunning() {
-        let helperBundleIdentifier =
-            Bundle(url: embeddedHelperURL)?.bundleIdentifier ?? Self.loginItemIdentifier
-        for application in NSRunningApplication.runningApplications(
-            withBundleIdentifier: helperBundleIdentifier
-        ) where !application.isTerminated {
-            _ = application.terminate()
-        }
+        processController.terminate(bundleIdentifier: helperBundleIdentifier)
     }
 
     private static var embeddedHelperURL: URL {
@@ -201,7 +266,7 @@ struct GeneralSettingsView: View {
                             "Allow APKRun in System Settings > General > Login Items to show the menu bar item."
                         )
                         Button("Open Login Items Settings") {
-                            SMAppService.openSystemSettingsLoginItems()
+                            model.openLoginItemsSettings()
                         }
                     }
                 }

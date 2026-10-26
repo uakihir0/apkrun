@@ -45,7 +45,7 @@ struct APKRunApp: App {
             APKRunHomeView(menuBarItemSettings: menuBarItemSettings)
                 .alert(registrationTitle, isPresented: $isRegistrationErrorPresented) {
                     Button("Open Login Items Settings") {
-                        SMAppService.openSystemSettingsLoginItems()
+                        menuBarItemSettings.openLoginItemsSettings()
                     }
                     Button("Later", role: .cancel) {}
                 } message: {

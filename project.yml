@@ -187,6 +187,7 @@ targets:
     sources:
       - path: Apps/APKRunMenuBar/MenuBarPresentation.swift
       - path: Apps/APKRunMenuBar/MenuBarModel.swift
+      - path: Apps/APKRun/MenuBarItemSettings.swift
       - path: Tests/MenuBarTests
     settings:
       base:

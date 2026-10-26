@@ -222,7 +222,7 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 | Milestone | M3 (v0.1) |
 | Depends on | #27 |
 | Design | [package-store.md](../../02-design/package-store.md) §2.3, §5, §11.1; [runtime-api.md](../../03-reference/runtime-api.md) §8.1 |
-| Code | `Packages/APKStoreCore/`, `Packages/RuntimeHost/Sources/RuntimeHost/ADBStoreAgentChannel.swift`, `Packages/RuntimeHost/Sources/RuntimeHost/DevelopmentStoreRuntimeAccess.swift`, `CLI/apkrun/`, `scripts/check-raw-adb.sh`, `Tests/IntegrationTests/PackageStoreTests/` |
+| Code | `Packages/APKStoreCore/`, `Packages/RuntimeHost/Sources/RuntimeHost/ADBStoreAgentChannel.swift`, `Packages/RuntimeHost/Sources/RuntimeHost/DevelopmentStoreRuntimeAccess.swift`, `CLI/apkrun/`, `scripts/check-raw-adb.sh`, `Tests/IntegrationTests/AndroidPackageTests/` |
 
 **Goal.** Install, launch, terminate, uninstall, list, and inspect use the runtime API, not raw shell commands. ADB stays behind one channel.
 
@@ -231,7 +231,7 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 **Steps.**
 1. **Types.** `PackageID`, `VersionCode`, `SHA256Digest`, `ArtifactFile`, `ArtifactSet`, `PackageRecord` (`updateAuthority` is `manual`), `PackageState`, and the APK set digest, in `APKStoreCore`. **Check:** T0 covers `PackageID`, `VersionCode`, and the set digest.
 2. **PackageStore.** `open()`, the journal and recovery table ([package-store.md](../../02-design/package-store.md) §5.1, §5.5), and the kinds `firstInstall`, `reinstall`, `uninstall`, and `forget`. `APKRUN_STORE_FAULT=<kind>:<step>` stops a debug build after that step. **Check:** T0 covers the journal and recovery table. T1 crashes at every step of `firstInstall` and `uninstall`.
-3. **Inspector and channel.** `APKInspector` v0 reads metadata with `aapt2` and hashes every file; the signature check is `notPerformed`. `ADBStoreAgentChannel` installs with `adb install-multiple -r --no-streaming`, uninstalls with `pm uninstall` (`-k` keeps data), downgrades with `-r -d` on debuggable images, and queries through the Guest Agent. **Check:** T1 with a fake channel, and `APKInspector` on HelloText and HelloSplit.
+3. **Inspector and channel.** `APKInspector` v0 reads metadata with `aapt2` and hashes every file; the signature check is `notPerformed`. `ADBStoreAgentChannel` installs with `adb install-multiple -r --no-streaming`, uninstalls with `pm uninstall` (`-k` keeps data), and queries through the Guest Agent. Although a debuggable image can accept a direct `-d` install, normal RuntimeAPI imports always refuse lower versions, even when `allowDowngrade` is set ([runtime-api.md](../../03-reference/runtime-api.md) §8.1). **Check:** T1 with a fake channel, and `APKInspector` on HelloText and HelloSplit.
 4. **Runtime operations and CLI.** Add `importPackage`, `installImported`, `listPackages`, `packageInfo`, and `uninstallPackage` ([runtime-api.md](../../03-reference/runtime-api.md) §8.1), and embedded `launch` and `terminate`. Without a session, `terminate` force-stops with `StopApplication`. Add the CLI `install`, `uninstall`, `list`, and `info`. **Check:** after `apkrun-dev install Tests/Fixtures/apks/HelloText.apk`, `apkrun-dev list` shows its versionCode.
 5. **Lint and migration.** `scripts/check-raw-adb.sh` rejects `adb shell` and `pm` package commands outside `ADBStoreAgentChannel`, `AdbClient`, and the allowlist (`scripts/dev/`, `Images/tools/reference/`). Move the #17 and #18 tests to the runtime API. **Check:** the lint passes on `main` and fails on a planted raw call.
 6. **HelloSplit.** The fixture is specified in [test-strategy.md](../test-strategy.md) §4.2. **Check:** the split set installs as one package.
@@ -239,7 +239,7 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 **Tests.**
 - T0: `Packages/APKStoreCore/Tests/APKStoreCoreTests/`: types, journal, and recovery table.
 - T1: `Packages/APKStoreCore/Tests/APKStoreCoreSystemTests/`: crash injection and the raw-ADB lint.
-- T2: `PackageStoreTests`: install, split install, uninstall with and without data, reinstall, downgrade.
+- T2: `AndroidPackageTests`: RuntimeAPI install and list for HelloText; install HelloSplit as one package and verify its five PackageManager paths; uninstall with and without data; reinstall after keeping data; refuse HelloText V1 over V2, including with `allowDowngrade: true`.
 - T3: none.
 
 **Done when.**
@@ -247,7 +247,7 @@ M3 makes HelloText run in a normal Mac window that responds to the mouse and the
 - `install`, `launch`, `terminate`, `uninstall`, `listInstalled`, and `applicationInfo` exist with the mapping of [package-store.md](../../02-design/package-store.md) §11.1. ADB is used only inside `ADBStoreAgentChannel` and `AdbClient`.
 - An installed package has `Packages/io.apkrun.fixture.hellotext/current/{base.apk,artifact.json,metadata.json}`.
 - A crash at any step of `firstInstall` or `uninstall` is recovered at the next `open()`. Uninstall keeps or deletes the app data, as asked.
-- HelloSplit installs as one package with all its splits.
+- HelloSplit installs as one package with all five base and split APKs reported by PackageManager.
 
 **Pitfalls.**
 - `APKInspector` is for previews only. `PackageManager` is the source of truth ([AGENTS.md](../../../AGENTS.md) §4, invariant 12).

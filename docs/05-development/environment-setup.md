@@ -249,7 +249,21 @@ xcodebuild test -scheme IntegrationTests \
 - To keep the renderer operations for the replay test, add `TEST_RUNNER_APKRUN_TEST_VIRGL_RECORDING=/tmp/<name>.json` to the `xcodebuild test` line. Then `APKRUN_TEST_KMSCUBE_RECORDING=/tmp/<name>.json swift test --traits TestReadback --filter theKmscubeSessionReplaysOnTheDeviceWithoutHostReadbacks` replays it. The path must be under `/tmp`.
 - VM tests need `com.apple.security.virtualization`, so they run in the signed `APKRunTestHost` ([build-system.md](build-system.md) §12.4).
 - For the Android suites, pass `-derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd"` and an `APKRUN_ANDROID_HOME` outside `~/Documents` that holds `platform-tools`: `mkdir -p "${TMPDIR:-/tmp}/apkrun-test-sdk" && cp -R "$ANDROID_HOME/platform-tools" "${TMPDIR:-/tmp}/apkrun-test-sdk/"`. The copy is the same `adb` binary.
-- The Guest Agent, package, and input suites read `APKRUN_GUEST_DIR` (`scripts/build-guest.sh --out /tmp/apkrun-test-guest`) and `APKRUN_FIXTURE_APK` (HelloText). The AndroidPackage suite uses RuntimeAPI for import, install, list, details, and uninstall; its headless activity and force-stop checks still use ADB.
+- The Guest Agent, package, and input suites read `APKRUN_GUEST_DIR` (`scripts/build-guest.sh --out /tmp/apkrun-test-guest`) and staged fixture files. The AndroidPackage suite uses RuntimeAPI for import, install, list, details, and uninstall; its headless activity, force-stop, and installed split-path observations use `AdbClient`.
+
+  ```bash
+  scripts/build-fixtures.sh
+  scripts/build-fixtures.sh --app HelloText --version-code 2
+  scripts/build-fixtures.sh --app HelloSplit
+  Tests/Fixtures/AndroidApps/gradlew -p Tests/Fixtures/AndroidApps :HelloText:assembleDebug
+  mkdir -p /tmp/apkrun-test-fixtures/HelloSplit
+  mkdir -p /tmp/apkrun-test-fixtures
+  cp Tests/Fixtures/AndroidApps/HelloText/build/outputs/apk/debug/HelloText-debug.apk /tmp/apkrun-test-fixtures/HelloText.apk
+  cp Tests/Fixtures/AndroidApps/out/HelloText-v2.apk /tmp/apkrun-test-fixtures/
+  cp Tests/Fixtures/AndroidApps/out/HelloSplit-splits/*.apk /tmp/apkrun-test-fixtures/HelloSplit/
+  ```
+
+  The `AndroidPackage` test-plan configuration reads those files through `APKRUN_FIXTURE_APK`, `APKRUN_FIXTURE_APK_V2`, and `APKRUN_FIXTURE_HELLOSPLIT_DIR`. Use the debug HelloText V1 so the retained-data check can read its persisted counter. HelloText V2 uses the same source and test signer as V1; RuntimeAPI must refuse the downgrade even when `allowDowngrade` is set.
 - `AndroidInputTests` also reads `APKRUN_FIXTURE_COMPOSE_APK` (`scripts/build-fixtures.sh --app HelloCompose`, copied to `/tmp`). It needs the debug HelloText, whose `TEXT` and `DETAILS` broadcasts exist only in the debug manifest: `Tests/Fixtures/AndroidApps/gradlew -p Tests/Fixtures/AndroidApps :HelloText:assembleDebug`, then copy `HelloText/build/outputs/apk/debug/HelloText-debug.apk` to `APKRUN_FIXTURE_APK`. The input configuration also reads the staged `virgl-runtime/`, because a host built outside the checkout cannot find the VirGL libraries from its executable.
 
 ---

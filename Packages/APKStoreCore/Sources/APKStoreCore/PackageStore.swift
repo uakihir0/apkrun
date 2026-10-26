@@ -636,6 +636,7 @@ public actor PackageStore {
         )
         try injectFault(kind: "uninstall", step: "begin")
         try appendStep(transaction, kind: "uninstall", step: "guestUninstallRequested")
+        try injectFault(kind: "uninstall", step: "guestUninstallRequested")
         let boundaryState = GuestUninstallBoundaryState()
         do {
             try await runtimeAccess.withStoreAgent(operation) { channel in
@@ -671,7 +672,7 @@ public actor PackageStore {
             try appendAbort(transaction, reason: "guestUninstallFailed")
             throw uninstallFailure
         }
-        try injectFault(kind: "uninstall", step: "guestUninstallRequested")
+        try injectFault(kind: "uninstall", step: "guestUninstallReplyReceived")
         try appendStep(transaction, kind: "uninstall", step: "guestUninstalled")
         try injectFault(kind: "uninstall", step: "guestUninstalled")
         guard
@@ -1271,6 +1272,7 @@ public actor PackageStore {
             }
             if transactions[transaction]?.lastStep != "filesRemoved" {
                 try appendStep(transaction, kind: "uninstall", step: "filesRemoved")
+                try injectFault(kind: "uninstall", step: "filesRemoved")
             }
             guard var record = currentRecord else {
                 try appendAbort(transaction, reason: "packageRecordMissing")
@@ -1291,6 +1293,7 @@ public actor PackageStore {
             records[packageID] = record
             if transactions[transaction]?.lastStep != "metadataWritten" {
                 try appendStep(transaction, kind: "uninstall", step: "metadataWritten")
+                try injectFault(kind: "uninstall", step: "metadataWritten")
             }
         } else {
             let target = trashDirectory.appendingPathComponent("\(transaction)-package", isDirectory: true)
@@ -1299,15 +1302,17 @@ public actor PackageStore {
             }
             if transactions[transaction]?.lastStep != "filesRemoved" {
                 try appendStep(transaction, kind: "uninstall", step: "filesRemoved")
+                try injectFault(kind: "uninstall", step: "filesRemoved")
             }
             records[packageID] = nil
             directories[packageID] = nil
             if transactions[transaction]?.lastStep != "recordRemoved" {
                 try appendStep(transaction, kind: "uninstall", step: "recordRemoved")
+                try injectFault(kind: "uninstall", step: "recordRemoved")
             }
         }
-        try injectFault(kind: "uninstall", step: "filesRemoved")
         try appendTerminal(transaction, op: "commit")
+        try injectFault(kind: "uninstall", step: "commit")
         do {
             try injectFault(kind: "uninstall", step: "trashCleanup")
             try purgeTrash()

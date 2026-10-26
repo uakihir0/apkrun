@@ -12,6 +12,7 @@ if [[ -f "$repo_root/scripts/check-logging.sh" ]]; then
     checks+=("scripts/check-logging.sh")
 fi
 checks+=(
+    "scripts/check-raw-adb.sh"
     "scripts/check-todos.sh"
     "scripts/check-format.sh"
     "scripts/check-lock.sh"

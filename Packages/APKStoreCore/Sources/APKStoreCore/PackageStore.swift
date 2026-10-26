@@ -922,6 +922,46 @@ public actor PackageStore {
         return snapshot
     }
 
+    /// Persists labels reported by Android for installed managed packages.
+    ///
+    /// Android labels follow the guest locale. Updating only `displayName` and `updatedAt` keeps
+    /// the package's install, signer, artifact, and update-authority metadata intact.
+    @discardableResult
+    public func updateManagedDisplayNames(
+        from packages: [StorePackageSummary]
+    ) async throws -> [PackageID] {
+        try requireOpen()
+        guard !isReadOnly else { return [] }
+
+        var displayNames: [PackageID: String] = [:]
+        for package in packages where package.userInstalled && !package.displayName.isEmpty {
+            displayNames[package.packageID] = package.displayName
+        }
+        guard !displayNames.isEmpty else { return [] }
+
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+
+        var changedPackageIDs: [PackageID] = []
+        for packageID in records.keys.sorted() {
+            guard var record = records[packageID],
+                record.state == .installed,
+                let displayName = displayNames[packageID],
+                record.displayName != displayName
+            else {
+                continue
+            }
+
+            record.displayName = displayName
+            record.updatedAt = clock()
+            try writeRecord(record, directory: directories[packageID] ?? directoryName(for: packageID))
+            records[packageID] = record
+            changedPackageIDs.append(packageID)
+        }
+        return changedPackageIDs
+    }
+
     private var journalURL: URL {
         packagesDirectory.appendingPathComponent("journal.jsonl")
     }

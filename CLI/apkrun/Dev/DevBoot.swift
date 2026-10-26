@@ -18,6 +18,9 @@
         )
         var gpu = DevGPUProfile.none.rawValue
 
+        @Option(name: .long, help: "Loopback TCP port for developer ADB (0 lets the system choose).")
+        var adbHostPort = DevBootOptions.defaultADBHostPort
+
         @Flag(name: .long, help: "Provision a fresh Android instance first (Reset Android).")
         var reset = false
 
@@ -70,6 +73,7 @@
             let gibibyte: UInt64 = 1024 * 1024 * 1024
             var options = DevBootOptions(
                 gpu: profile,
+                adbHostPort: adbHostPort,
                 cpuCount: cpus,
                 memoryBytes: UInt64(memoryGib) * gibibyte,
                 userdataBytes: UInt64(userdataGib) * gibibyte,

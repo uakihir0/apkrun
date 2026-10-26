@@ -6,7 +6,9 @@ struct LanguageRegionSettingsView: View {
     var body: some View {
         Form {
             Section("Language & Region") {
-                if settings.isAvailable {
+                if settings.isLoading {
+                    ProgressView()
+                } else if settings.isAvailable {
                     Toggle("Use the Mac's language in Android", isOn: $settings.syncLocale)
                     Toggle("Use the Mac's time zone", isOn: $settings.syncTimeZone)
                     Toggle("Use the Mac's 12/24-hour setting", isOn: $settings.syncClockFormat)

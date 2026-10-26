@@ -167,6 +167,10 @@ targets:
       - target: BuildStamp
         embed: false
         link: false
+      - package: APKRun
+        product: RuntimeClient
+      - package: APKRun
+        product: RuntimeAPI
     settings:
       base:
         PRODUCT_NAME: APKRunSettingsTests

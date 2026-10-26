@@ -285,6 +285,7 @@ Retention: pull request runs 14 days, nightly runs 30 days, gate evidence and re
 Until #100 is done, one VM runs at a time, and gate runs take the lock `lockf -k /tmp/apkrun-vm.lock`. Two VM runs on one Mac otherwise share the developer ADB port `127.0.0.1:6520`, the artifact directory `/tmp/apkrun-test-linux` (`APKRUN_TEST_LINUX_DIR`), and the default home. After #100, these rules hold:
 
 - Each VM test run has its own APKRun home, `/tmp/apkrun-vm-<UUID>`, created by `VMRunResources`. The instance, logs, image store, and console sockets live under it. The G2 reference capture sits beside it (`/tmp/apkrun-vm-<UUID>-capture`), because it is gate evidence. Teardown removes the home.
+- Android graphics captures live under `$APKRUN_TEST_LINUX_DIR/android-graphics/<run home name>`, so concurrent runs retain separate evidence.
 - The ADB host port of a run comes from `APKRUN_TEST_ADB_PORT` (set through `TEST_RUNNER_APKRUN_TEST_ADB_PORT`). When unset, it is `0`, and the kernel picks a free loopback port, which the supervisor reports as `developmentADBHostPort`. The product default stays `6520` (`BootOptions.adbHostPort`).
 - Console socket names stay `hvc0.sock` and `hvc1.sock`, because the CLI uses them. Their directory is per run. Every socket path stays under the 103-byte limit.
 - Every `xcodebuild` run has its own `-derivedDataPath` and `-resultBundlePath`.

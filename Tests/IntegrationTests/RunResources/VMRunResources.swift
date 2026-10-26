@@ -79,6 +79,13 @@ public struct VMRunResources: Equatable, Sendable {
         URL(fileURLWithPath: home.path + "-capture", isDirectory: true)
     }
 
+    /// The Android graphics evidence directory for this run under the shared artifact root.
+    public func graphicsCaptureDirectory(under artifactRoot: URL) -> URL {
+        artifactRoot
+            .appendingPathComponent("android-graphics", isDirectory: true)
+            .appendingPathComponent(home.lastPathComponent, isDirectory: true)
+    }
+
     /// The paths of the run, derived by the product's own `APKRunPaths` from the home.
     public var paths: APKRunPaths {
         APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": home.path])

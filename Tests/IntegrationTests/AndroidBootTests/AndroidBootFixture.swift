@@ -50,8 +50,13 @@ struct AndroidBootFixture {
     }
 
     /// A new run's private home under `/tmp`, named with the run's UUID (test-strategy §3.10).
+    static func makeRun() throws -> VMRunResources {
+        try VMRunResources.new(environment: ProcessInfo.processInfo.environment)
+    }
+
+    /// A new run's private home under `/tmp`, named with the run's UUID (test-strategy §3.10).
     static func makeHome() throws -> URL {
-        try VMRunResources.new(environment: ProcessInfo.processInfo.environment).home
+        try makeRun().home
     }
 
     /// Provisions a fresh instance, as G2 does before its first boot.

@@ -29,7 +29,8 @@ final class AndroidGraphicsTests: XCTestCase {
     func testVirtioGPUBinds() async throws {
         // The adb lookup skips the test when there is no SDK. It runs before the boot, so a skip never stops a VM.
         let adbExecutable = try AndroidTestEnvironment.adbExecutable()
-        let home = try AndroidBootFixture.makeHome()
+        let run = try AndroidBootFixture.makeRun()
+        let home = run.home
         defer { removeTestHome(home) }
         let bundle = try AndroidBootFixture.bundleDirectory()
         let fixture = try await AndroidBootFixture(home: home, bundle: bundle)
@@ -76,7 +77,7 @@ final class AndroidGraphicsTests: XCTestCase {
         let bootOutcome = await boot.value
         collector.cancel()
 
-        let directory = bundle.deletingLastPathComponent().appendingPathComponent("android-graphics", isDirectory: true)
+        let directory = run.graphicsCaptureDirectory(under: bundle.deletingLastPathComponent())
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try console.text.write(
             to: directory.appendingPathComponent("hvc0-console.log"),

@@ -103,6 +103,18 @@ private enum RunSetupTestError: Error {
     #expect(first.captureDirectory != first.home)
 }
 
+@Test func androidGraphicsCapturesUsePerRunDirectoriesUnderTheArtifactRoot() {
+    let first = VMRunResources(runID: UUID(), adbHostPort: 0)
+    let second = VMRunResources(runID: UUID(), adbHostPort: 0)
+    let artifactRoot = URL(fileURLWithPath: "/tmp/apkrun-test-linux", isDirectory: true)
+
+    let firstCapture = first.graphicsCaptureDirectory(under: artifactRoot)
+    let secondCapture = second.graphicsCaptureDirectory(under: artifactRoot)
+
+    #expect(firstCapture.path == "\(artifactRoot.path)/android-graphics/\(first.home.lastPathComponent)")
+    #expect(firstCapture != secondCapture)
+}
+
 @Test func theSameRunIDGivesTheSameHome() {
     let runID = UUID()
     #expect(

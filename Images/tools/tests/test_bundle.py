@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import zipfile
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
@@ -170,10 +171,15 @@ def _composition_fixture(
     )
     monkeypatch.setattr(bundle_module, "_repository_root", lambda: repository)
     document = json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))
-    document["artifacts"].append({"partition": "vbmeta_system", "size": 7})
+    # The small fixture omits vbmeta_system; reuse its unreferenced EROFS slot.
+    next(artifact for artifact in document["artifacts"] if artifact["id"] == "erofs")[
+        "partition"
+    ] = "vbmeta_system"
+    with zipfile.ZipFile(FIXTURE_ARCHIVE) as archive:
+        stock_super = archive.read("super.img")
     contents = {
-        "super.img": b"composed super",
-        "vbmeta_system_a.img": b"system!",
+        "super.img": stock_super,
+        "vbmeta_system_a.img": b"s" * 4096,
         "vbmeta_a.img": b"v" * 1536,
     }
     for filename, data in contents.items():
@@ -541,6 +547,59 @@ def test_two_builds_are_identical(tmp_path: Path) -> None:
     assert first == second
     for name in ("manifest.json", "manifest.sig", "SHA256SUMS"):
         assert (tmp_path / "first" / name).read_bytes() == (tmp_path / "second" / name).read_bytes()
+
+
+def test_two_composed_builds_are_byte_identical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    composition, document, manifest_path, _metadata_path = _composition_fixture(
+        tmp_path, monkeypatch
+    )
+    repository = bundle_module._repository_root()
+    repository_layout = repository / "Images/tools/layouts" / f"{tmp_path.name}.json"
+    repository_layout.parent.mkdir(parents=True, exist_ok=True)
+    layout_document = json.loads(_layout(tmp_path).read_text(encoding="utf-8"))
+    layout_document["disks"][0]["partitions"].extend(
+        [
+            {"label": "vbmeta_system", "source": "vbmeta_system"},
+            {"label": "vbmeta", "source": "vbmeta"},
+        ]
+    )
+    repository_layout.write_text(json.dumps(layout_document), encoding="utf-8")
+    monkeypatch.setattr(bundle_module, "_tools_revision", lambda: "c" * 40)
+    monkeypatch.setattr(bundle_module, "_lock_commit", lambda _name: "d" * 40)
+
+    def build(output: Path) -> dict[str, Any]:
+        return build_bundle(
+            document,
+            layout_path=repository_layout,
+            reference=None,
+            image_version="2026.10.0",
+            output_directory=output,
+            source=FIXTURE_ARCHIVE,
+            inventory_path=FIXTURE_INVENTORY,
+            sign_key=TEST_KEY,
+            composition_directory=composition,
+            manifest_path=manifest_path,
+        )
+
+    first_output = tmp_path / "composed-first"
+    second_output = tmp_path / "composed-second"
+    first_manifest = build(first_output)
+    second_manifest = build(second_output)
+
+    def bundle_tree(directory: Path) -> dict[str, bytes]:
+        return {
+            path.relative_to(directory).as_posix(): path.read_bytes()
+            for path in directory.rglob("*")
+            if path.is_file()
+        }
+
+    assert first_manifest["kind"] == second_manifest["kind"] == "apkrun"
+    assert first_manifest["provenance"]["composition"] == second_manifest["provenance"][
+        "composition"
+    ]
+    assert bundle_tree(first_output) == bundle_tree(second_output)
 
 
 def test_a_full_image_version_is_refused(tmp_path: Path) -> None:

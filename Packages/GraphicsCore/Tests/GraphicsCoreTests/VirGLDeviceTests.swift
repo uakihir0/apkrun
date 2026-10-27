@@ -306,8 +306,8 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     let sink = RecordingLogSink()
     let logger = APKLogger(category: GraphicsLogCategory.device, sink: sink)
     let harness = try VirGLHarness(logger: logger)
-    let validEntry = VirtioGPUMemoryEntry(address: 0x1000, length: 64)
-    let invalidEntry = VirtioGPUMemoryEntry(address: 0x2000, length: 0)
+    let validEntry = VirtioGPUMemoryEntry(address: 0x1234_5678, length: 73)
+    let invalidEntry = VirtioGPUMemoryEntry(address: 0x2345_6789, length: 0)
     let rejected = harness.send([
         gpuRequest(.resourceCreate3D, body: .resourceCreate3D(resource3D(id: 5))),
         gpuRequest(
@@ -316,18 +316,25 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
         ),
     ])
     try await eventually { rejected.completionCounts == [1, 1] }
-    #expect(try body(rejected.writtenBuffers[0]) == .okNoData)
-    #expect(try body(rejected.writtenBuffers[1]) == .error(.invalidParameter))
+    #expect((try? body(rejected.writtenBuffers[0])) == .okNoData)
+    #expect((try? body(rejected.writtenBuffers[1])) == .error(.invalidParameter))
     #expect(backingCalls(harness.engineRef.engine).isEmpty)
-    let entry = try #require(sink.entries.first { $0.level == .warning })
-    #expect(entry.publicMessage.contains("control_ordinal=2 command=262 context_id=0 resource_id=5"))
-    #expect(entry.publicMessage.contains("rejection_reason=resource_table.entry.length"))
-
+    let entry = sink.entries.first { $0.level == .warning }
+    #expect(entry != nil)
+    if let message = entry?.publicMessage {
+        #expect(message.contains("control_ordinal=2 command=262 context_id=0 resource_id=5"))
+        #expect(message.contains("rejection_reason=resource_table.entry.length"))
+        #expect(!message.contains("305419896"))
+        #expect(!message.contains("591751049"))
+        #expect(!message.lowercased().contains("12345678"))
+        #expect(!message.lowercased().contains("23456789"))
+        #expect(!message.contains("73"))
+    }
     let retried = harness.send([
         gpuRequest(.resourceAttachBacking, body: .resourceAttachBacking(resourceID: 5, entries: [validEntry]))
     ])
     try await eventually { retried.completionCounts == [1] }
-    #expect(try body(retried.writtenBuffers[0]) == .okNoData)
+    #expect((try? body(retried.writtenBuffers[0])) == .okNoData)
     #expect(backingCalls(harness.engineRef.engine) == ["attach 5"])
 }
 

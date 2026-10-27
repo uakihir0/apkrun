@@ -71,6 +71,8 @@ public actor SessionRegistry {
         var displayPool: DisplayPool?
         var displayAcquisitionPending = false
         var stateBeforeClosing: AppSessionState?
+        var stateBeforeRestart: AppSessionState?
+        var taskIDsBeforeRestart: Set<Int32>?
         var launchReplyPending = false
         var vanishedDuringLaunch: Set<Int32> = []
 
@@ -202,12 +204,67 @@ public actor SessionRegistry {
             entry.launchReplyPending = true
             entry.vanishedDuringLaunch.removeAll()
         }
+        if next == .running {
+            entry.stateBeforeRestart = nil
+            entry.taskIDsBeforeRestart = nil
+        }
         let allocationToRelease = Self.takeDisplayAllocationIfEnded(from: &entry)
         entries[id] = entry
         log("session state \(String(describing: previous)) -> \(String(describing: next))", entry: entry)
         if let allocationToRelease {
             await allocationToRelease.pool.release(allocationToRelease.lease)
         }
+        return entry.snapshot
+    }
+
+    /// Moves a running session into its launch phase while retaining its display lease for an app restart.
+    public func beginRestart(_ id: SessionID) -> AppSessionSnapshot? {
+        guard var entry = entries[id],
+            entry.state == .running || entry.state == .backgrounded,
+            !entry.launchReplyPending
+        else {
+            return nil
+        }
+        let previous = entry.state
+        entry.stateBeforeRestart = previous
+        entry.taskIDsBeforeRestart = entry.taskIDs
+        entry.state = .launching
+        entry.launchReplyPending = true
+        entry.vanishedDuringLaunch.removeAll()
+        entries[id] = entry
+        log("app restart started", entry: entry)
+        return entry.snapshot
+    }
+
+    /// Clears tasks stopped by a restart while retaining the session and its display lease.
+    public func restartStopCompleted(_ id: SessionID) -> AppSessionSnapshot? {
+        guard var entry = entries[id], entry.state == .launching, entry.stateBeforeRestart != nil else {
+            return nil
+        }
+        entry.taskIDs.removeAll()
+        entry.vanishedDuringLaunch.removeAll()
+        entries[id] = entry
+        log("app restart stopped old tasks", entry: entry)
+        return entry.snapshot
+    }
+
+    /// Restores the session after a failed restart, retaining old tasks only when Android did not stop them.
+    public func restartFailed(_ id: SessionID, appStopped: Bool) -> AppSessionSnapshot? {
+        guard var entry = entries[id], let previous = entry.stateBeforeRestart else {
+            return nil
+        }
+        entry.state = previous
+        entry.stateBeforeRestart = nil
+        entry.launchReplyPending = false
+        entry.vanishedDuringLaunch.removeAll()
+        if appStopped {
+            entry.taskIDs.removeAll()
+        } else if let originalTaskIDs = entry.taskIDsBeforeRestart {
+            entry.taskIDs = originalTaskIDs
+        }
+        entry.taskIDsBeforeRestart = nil
+        entries[id] = entry
+        log("app restart failed; restored \(String(describing: previous))", entry: entry)
         return entry.snapshot
     }
 

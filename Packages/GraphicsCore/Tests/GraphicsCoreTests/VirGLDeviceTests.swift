@@ -302,6 +302,35 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     #expect(entry.publicMessage.contains("4096") == false)
 }
 
+@Test func rejectedZeroLengthBackingLeavesTheResourceAvailableForRetry() async throws {
+    let sink = RecordingLogSink()
+    let logger = APKLogger(category: GraphicsLogCategory.device, sink: sink)
+    let harness = try VirGLHarness(logger: logger)
+    let validEntry = VirtioGPUMemoryEntry(address: 0x1000, length: 64)
+    let invalidEntry = VirtioGPUMemoryEntry(address: 0x2000, length: 0)
+    let rejected = harness.send([
+        gpuRequest(.resourceCreate3D, body: .resourceCreate3D(resource3D(id: 5))),
+        gpuRequest(
+            .resourceAttachBacking,
+            body: .resourceAttachBacking(resourceID: 5, entries: [validEntry, invalidEntry])
+        ),
+    ])
+    try await eventually { rejected.completionCounts == [1, 1] }
+    #expect(try body(rejected.writtenBuffers[0]) == .okNoData)
+    #expect(try body(rejected.writtenBuffers[1]) == .error(.invalidParameter))
+    #expect(backingCalls(harness.engineRef.engine).isEmpty)
+    let entry = try #require(sink.entries.first { $0.level == .warning })
+    #expect(entry.publicMessage.contains("control_ordinal=2 command=262 context_id=0 resource_id=5"))
+    #expect(entry.publicMessage.contains("rejection_reason=resource_table.entry.length"))
+
+    let retried = harness.send([
+        gpuRequest(.resourceAttachBacking, body: .resourceAttachBacking(resourceID: 5, entries: [validEntry]))
+    ])
+    try await eventually { retried.completionCounts == [1] }
+    #expect(try body(retried.writtenBuffers[0]) == .okNoData)
+    #expect(backingCalls(harness.engineRef.engine) == ["attach 5"])
+}
+
 @Test func backingIsReleasedOnDetachAndUnrefOnlyWhenTheResourceHadIt() async throws {
     let harness = try VirGLHarness()
     let control = harness.send([

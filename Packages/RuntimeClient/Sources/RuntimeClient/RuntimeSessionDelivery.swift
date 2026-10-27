@@ -129,6 +129,8 @@ public final class RuntimeOpenedSession: @unchecked Sendable {
     private let visibilityChangedHandler: @Sendable (VisibilityChanged) -> Void
     private let resizeHandler:
         @Sendable (DisplayGeometry) async throws(RuntimeControlClientError) -> RuntimeSessionResizeResult
+    private let restartAppHandler: @Sendable () async throws(RuntimeControlClientError) -> Void
+    private let closeSessionHandler: @Sendable () async throws(RuntimeControlClientError) -> Void
 
     init(
         descriptor: SessionDescriptor,
@@ -140,6 +142,12 @@ public final class RuntimeOpenedSession: @unchecked Sendable {
         resize:
             @escaping @Sendable (DisplayGeometry) async throws(RuntimeControlClientError)
             -> RuntimeSessionResizeResult,
+        restartApp: @escaping @Sendable () async throws(RuntimeControlClientError) -> Void = {
+            throw .invalidRemoteProxy
+        },
+        closeSession: @escaping @Sendable () async throws(RuntimeControlClientError) -> Void = {
+            throw .invalidRemoteProxy
+        },
         resizeGate: RuntimeSessionResizeGate = RuntimeSessionResizeGate()
     ) {
         descriptorValue = descriptor
@@ -150,6 +158,8 @@ public final class RuntimeOpenedSession: @unchecked Sendable {
         frameDisplayedHandler = frameDisplayed
         visibilityChangedHandler = visibilityChanged
         resizeHandler = resize
+        restartAppHandler = restartApp
+        closeSessionHandler = closeSession
     }
 
     /// Acknowledges a frame after Core Animation commits its IOSurface.
@@ -176,6 +186,16 @@ public final class RuntimeOpenedSession: @unchecked Sendable {
             }
         }
         return result.outcome
+    }
+
+    /// Restarts the app on the session's existing Android display.
+    public func restartApp() async throws(RuntimeControlClientError) {
+        try await restartAppHandler()
+    }
+
+    /// Gracefully stops the app and releases this session's Android display.
+    public func closeSession() async throws(RuntimeControlClientError) {
+        try await closeSessionHandler()
     }
 }
 
@@ -409,4 +429,5 @@ final class RuntimeSessionEventStreamHub: @unchecked Sendable {
             pools = pools.filter { $0.key >= generation }
         }
     }
+
 }

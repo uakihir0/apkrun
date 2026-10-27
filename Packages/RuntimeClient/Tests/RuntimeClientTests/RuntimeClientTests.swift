@@ -3,7 +3,346 @@ import IOSurface
 import RuntimeAPI
 import Testing
 
+import enum DiagnosticsCore.ContinuousClockTimestamp
+
 @testable import RuntimeClient
+
+@Test func wrapperClientUsesCompiledDaemonIdentityAndRequestsItsScopedEndpoint() async throws {
+    let bundleID = "io.apkrun.android.io.apkrun.fixture.hellotext"
+    let development = try RuntimeControlClientConfiguration.wrapper(
+        bundleIdentifier: bundleID,
+        bundlePath: "/Applications/HelloText.app",
+        daemonBuildIdentity: .development
+    )
+    #expect(development.clientKind == .wrapper)
+    #expect(development.claimedIdentity == bundleID)
+    #expect(development.serviceName == "io.apkrun.apkrund.dev.xpc")
+    #expect(development.daemonCodeSigningRequirement == "identifier \"io.apkrun.apkrund.dev\"")
+
+    let production = try RuntimeControlClientConfiguration.wrapper(
+        bundleIdentifier: bundleID,
+        daemonBuildIdentity: .release(teamIdentifier: "ABCDE12345")
+    )
+    #expect(production.serviceName == "io.apkrun.apkrund.xpc")
+    #expect(
+        production.daemonCodeSigningRequirement
+            == "anchor apple generic and certificate leaf[subject.OU] = \"ABCDE12345\" "
+            + "and identifier \"io.apkrun.apkrund\""
+    )
+    let updateTest = try RuntimeControlClientConfiguration.wrapper(
+        bundleIdentifier: bundleID,
+        daemonBuildIdentity: .releaseUpdateTest(teamIdentifier: "ABCDE12345")
+    )
+    #expect(updateTest.serviceName == "io.apkrun.apkrund.updatetest.xpc")
+    #expect(updateTest.daemonCodeSigningRequirement.contains("io.apkrun.apkrund.updatetest"))
+
+    #expect(
+        throws: RuntimeControlClientError.invalidClientIdentity,
+        performing: {
+            try RuntimeControlClientConfiguration.wrapper(
+                bundleIdentifier: "io.apkrun.other",
+                daemonBuildIdentity: .development
+            )
+        }
+    )
+    #expect(
+        throws: RuntimeControlClientError.invalidClientIdentity,
+        performing: {
+            try RuntimeControlClientConfiguration.wrapper(
+                bundleIdentifier: bundleID,
+                daemonBuildIdentity: .release(teamIdentifier: "BAD")
+            )
+        }
+    )
+    #expect(
+        throws: RuntimeControlClientError.invalidClientIdentity,
+        performing: {
+            try RuntimeControlClientConfiguration.current(
+                clientKind: .wrapper,
+                claimedIdentity: bundleID,
+                bundle: .main
+            )
+        }
+    )
+
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let transport = try MockRuntimeTransport(hello: hello, status: nil)
+    let client = RuntimeControlClient(configuration: development, connectionFactory: transport)
+    #expect(try await client.connect() == hello)
+
+    let snapshot = transport.snapshot()
+    #expect(snapshot.serviceName == "io.apkrun.apkrund.dev.xpc")
+    #expect(snapshot.controlConnections == 1)
+    #expect(snapshot.statusRequests.isEmpty)
+    let helloRequest = try JSONDecoder().decode(RuntimeHelloRequest.self, from: snapshot.helloRequests[0])
+    #expect(helloRequest.clientKind == .wrapper)
+    #expect(helloRequest.claimedIdentity == bundleID)
+    let endpointRequest = try JSONDecoder().decode(RuntimeEndpointRequest.self, from: snapshot.endpointRequests[0])
+    #expect(endpointRequest.kind == .wrapper)
+    #expect(endpointRequest.clientKind == .wrapper)
+    #expect(endpointRequest.claimedIdentity == bundleID)
+    #expect(endpointRequest.bundlePath == "/Applications/HelloText.app")
+}
+
+@Test func wrapperAndControlClientsApplyHelloAPIVersionCompatibilityMatrix() async throws {
+    let current = APIVersion.current
+    let scenarios: [(clientKind: RuntimeClientKind, serverVersion: APIVersion, compatible: Bool)] = [
+        (.wrapper, current, true),
+        (.wrapper, APIVersion(major: current.major, minor: current.minor + 1), true),
+        (.wrapper, APIVersion(major: current.major, minor: current.minor - 1), false),
+        (.wrapper, APIVersion(major: current.major + 1, minor: 0), true),
+        (.wrapper, APIVersion(major: current.major + 1, minor: current.minor + 1), true),
+        (.wrapper, APIVersion(major: current.major - 1, minor: current.minor), false),
+        (.wrapper, APIVersion(major: current.major + 2, minor: 0), false),
+        (.wrapper, APIVersion(major: current.major + 1, minor: -1), false),
+        (.wrapper, APIVersion(major: 0, minor: current.minor), false),
+        (.cli, current, true),
+        (.cli, APIVersion(major: current.major, minor: current.minor + 1), true),
+        (.cli, APIVersion(major: current.major, minor: current.minor - 1), false),
+        (.cli, APIVersion(major: current.major + 1, minor: 0), false),
+        (.cli, APIVersion(major: current.major - 1, minor: current.minor), false),
+    ]
+    let status = RuntimeHostStatus(
+        hostState: "running",
+        runtimeState: "ready",
+        bootProgress: nil,
+        startupFailureStep: nil,
+        startupFailureCode: nil,
+        crashLoopActive: false,
+        daemonPID: 42,
+        imageVersion: "test-image"
+    )
+
+    for scenario in scenarios {
+        let configuration: RuntimeControlClientConfiguration
+        if scenario.clientKind == .wrapper {
+            configuration = try RuntimeControlClientConfiguration.wrapper(
+                bundleIdentifier: "io.apkrun.android.io.apkrun.fixture.hellotext",
+                daemonBuildIdentity: .development
+            )
+        } else {
+            configuration = try RuntimeControlClientConfiguration(
+                clientKind: scenario.clientKind,
+                claimedIdentity: "io.apkrun.cli.dev",
+                buildIdentity: .development
+            )
+        }
+        let hello = RuntimeHelloReply(
+            runtimeVersion: "0.1.0",
+            runtimeBuild: 1,
+            apiVersion: scenario.serverVersion,
+            hostState: "running"
+        )
+        let transport = try MockRuntimeTransport(hello: hello, status: status)
+        let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+        if scenario.compatible {
+            #expect(try await client.connect() == hello)
+        } else {
+            do {
+                _ = try await client.connect()
+                Issue.record("The client accepted an incompatible daemon API version: \(scenario).")
+            } catch {
+                #expect(error == .apiVersionMismatch(client: current, server: scenario.serverVersion))
+            }
+        }
+
+        let snapshot = transport.snapshot()
+        #expect(snapshot.endpointRequests.count == (scenario.compatible ? 1 : 0))
+        #expect(snapshot.controlConnections == (scenario.compatible ? 1 : 0))
+    }
+}
+
+@Test func wrapperClientRequestsApprovalThroughTheBroker() async throws {
+    let bundleID = "io.apkrun.android.io.apkrun.fixture.hellotext"
+    let configuration = try RuntimeControlClientConfiguration.wrapper(
+        bundleIdentifier: bundleID,
+        bundlePath: "/Applications/HelloText.app",
+        daemonBuildIdentity: .development
+    )
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let request = try #require(
+        RuntimeWrapperApprovalBrokerRequest(
+            bundlePath: "/Applications/HelloText.app",
+            bundleID: bundleID,
+            packageID: packageID
+        )
+    )
+
+    for outcome: RuntimeWrapperApprovalOutcome in [.approved, .denied, .timedOut] {
+        let hello = RuntimeHelloReply(
+            runtimeVersion: "0.1.0",
+            runtimeBuild: 1,
+            apiVersion: APIVersion.current,
+            hostState: "running"
+        )
+        let transport = try MockRuntimeTransport(
+            hello: hello,
+            status: nil,
+            approvalReply: RuntimeWrapperApprovalBrokerReply(result: outcome)
+        )
+        let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+        #expect(try await client.requestApproval(request) == outcome)
+
+        let snapshot = transport.snapshot()
+        #expect(snapshot.brokerConnections == 1)
+        #expect(snapshot.brokerInvalidations == 1)
+        #expect(snapshot.endpointRequests.isEmpty)
+        #expect(snapshot.controlConnections == 0)
+        #expect(snapshot.approvalEndpointConnections == 1)
+        #expect(snapshot.approvalEndpointInvalidations == 1)
+        #expect(snapshot.approvalEndpointRequirement == configuration.daemonCodeSigningRequirement)
+        #expect(snapshot.approvalRequests.count == 1)
+        let helloRequest = try JSONDecoder().decode(RuntimeHelloRequest.self, from: snapshot.helloRequests[0])
+        #expect(helloRequest.clientKind == .wrapper)
+        #expect(helloRequest.claimedIdentity == bundleID)
+        #expect(helloRequest.apiVersion == APIVersion.current)
+        #expect(
+            try JSONDecoder().decode(
+                RuntimeWrapperApprovalBrokerRequest.self,
+                from: snapshot.approvalRequests[0]
+            ) == request
+        )
+    }
+}
+
+@Test func wrapperApprovalCanBeCancelledWhileAwaitingUserDecision() async throws {
+    let bundleID = "io.apkrun.android.io.apkrun.fixture.hellotext"
+    let configuration = try RuntimeControlClientConfiguration.wrapper(
+        bundleIdentifier: bundleID,
+        bundlePath: "/Applications/HelloText.app",
+        daemonBuildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let request = try #require(
+        RuntimeWrapperApprovalBrokerRequest(
+            bundlePath: "/Applications/HelloText.app",
+            bundleID: bundleID,
+            packageID: packageID
+        )
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        suspendApprovalSubmission: true
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let requestTask = Task {
+        try await client.requestApproval(request)
+    }
+
+    await transport.waitForApprovalSubmission()
+    await client.cancelPendingApproval()
+
+    do {
+        _ = try await requestTask.value
+        Issue.record("The wrapper approval request completed after cancellation.")
+    } catch let error as RuntimeControlClientError {
+        #expect(error == .requestCancelled(operation: "requestApproval"))
+    }
+
+    let snapshot = transport.snapshot()
+    #expect(snapshot.brokerInvalidations == 1)
+    #expect(snapshot.approvalEndpointInvalidations == 1)
+}
+
+@Test func wrapperApprovalRequestRequiresTheMatchingWrapperIdentity() async throws {
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let request = try #require(
+        RuntimeWrapperApprovalBrokerRequest(
+            bundlePath: "/Applications/HelloText.app",
+            bundleID: "io.apkrun.android.io.apkrun.fixture.other",
+            packageID: packageID
+        )
+    )
+    let controlConfiguration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development
+    )
+    let controlTransport = try MockRuntimeTransport(hello: hello, status: nil)
+    let controlClient = RuntimeControlClient(
+        configuration: controlConfiguration,
+        connectionFactory: controlTransport
+    )
+
+    do {
+        _ = try await controlClient.requestApproval(request)
+        Issue.record("A control client made a wrapper approval request.")
+    } catch {
+        #expect(error == .invalidClientIdentity)
+    }
+    #expect(controlTransport.snapshot().brokerConnections == 0)
+
+    let wrapperConfiguration = try RuntimeControlClientConfiguration.wrapper(
+        bundleIdentifier: "io.apkrun.android.io.apkrun.fixture.hellotext",
+        daemonBuildIdentity: .development
+    )
+    let wrapperTransport = try MockRuntimeTransport(hello: hello, status: nil)
+    let wrapperClient = RuntimeControlClient(
+        configuration: wrapperConfiguration,
+        connectionFactory: wrapperTransport
+    )
+
+    do {
+        _ = try await wrapperClient.requestApproval(request)
+        Issue.record("The client submitted an approval request with a different bundle identifier.")
+    } catch {
+        #expect(error == .invalidClientIdentity)
+    }
+    #expect(wrapperTransport.snapshot().brokerConnections == 0)
+}
+
+@Test func wrapperApprovalRequestMustNameTheRunningBundlePath() async throws {
+    let bundleID = "io.apkrun.android.io.apkrun.fixture.hellotext"
+    let configuration = try RuntimeControlClientConfiguration.wrapper(
+        bundleIdentifier: bundleID,
+        bundlePath: "/Applications/HelloText.app",
+        daemonBuildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let request = try #require(
+        RuntimeWrapperApprovalBrokerRequest(
+            bundlePath: "/Applications/AnotherCopy.app",
+            bundleID: bundleID,
+            packageID: packageID
+        )
+    )
+    let transport = try MockRuntimeTransport(hello: hello, status: nil)
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    do {
+        _ = try await client.requestApproval(request)
+        Issue.record("The wrapper requested approval for a different bundle path.")
+    } catch {
+        #expect(error == .invalidClientIdentity)
+    }
+    #expect(transport.snapshot().brokerConnections == 0)
+}
 
 @Test func controlClientAuthenticatesBrokerAndUsesOneControlEndpoint() async throws {
     let configuration = try RuntimeControlClientConfiguration(
@@ -459,6 +798,7 @@ import Testing
         resizeSessionSurfaces: resizedSurfaces
     )
     let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let capturedAtClient = ContinuousClockTimestamp.nowNanoseconds() ?? 1
     let openRequest = OpenSessionRequest(
         header: APIRequestHeader(clientKind: .launcher),
         packageID: packageID,
@@ -467,9 +807,17 @@ import Testing
             backingScale: 2,
             zoom: 1
         ),
-        screenSize: DisplayPointSize(width: 1_440, height: 900)
+        screenSize: DisplayPointSize(width: 1_440, height: 900),
+        launchTiming: LaunchTiming(processStart: capturedAtClient, requestSent: capturedAtClient)
     )
     let session = try await client.openSession(openRequest)
+    let sentOpenRequest = try #require(
+        transport.snapshot().openSessionRequests.first.flatMap {
+            try? JSONDecoder().decode(OpenSessionRequest.self, from: $0)
+        }
+    )
+    #expect(sentOpenRequest.launchTiming?.processStart == capturedAtClient)
+    #expect(sentOpenRequest.launchTiming?.requestSent ?? 0 >= capturedAtClient)
     var messages = session.messages.makeAsyncIterator()
     let geometry = DisplayGeometry(
         pointSize: DisplayPointSize(width: 600, height: 1_000),
@@ -494,6 +842,74 @@ import Testing
     #expect(request.geometry == geometry)
     #expect(request.header.apiVersion == APIVersion.current)
     #expect(request.header.clientKind == .launcher)
+}
+
+@Test func openedSessionRestartSendsItsSessionAndPackageBinding() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .launcher,
+        claimedIdentity: "io.apkrun.APKRunLauncher.dev",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let sessionID = UUID(uuidString: "8C064F7D-1EB1-415C-B2A2-292BA5DB56E5")!
+    let descriptor = SessionDescriptor(
+        sessionID: sessionID,
+        displayID: 3,
+        windowPrefs: WindowPrefs(zoom: 1),
+        inputPrefs: InputPrefs(),
+        windowMode: .secondaryDisplay,
+        state: .running,
+        surfaces: SurfaceSet(
+            generation: 1,
+            pixelSize: PixelSize(width: 960, height: 1_700),
+            densityDpi: 320
+        )
+    )
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        openSessionReply: OpenSessionControlReply(result: descriptor),
+        openSessionSurfaces: try clientSessionTestSurfaces(width: 960, height: 1_700),
+        restartAppReply: RestartAppControlReply(),
+        closeSessionReply: CloseSessionControlReply()
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let openRequest = OpenSessionRequest(
+        header: APIRequestHeader(clientKind: .launcher),
+        packageID: packageID,
+        geometry: DisplayGeometry(
+            pointSize: DisplayPointSize(width: 480, height: 850),
+            backingScale: 2,
+            zoom: 1
+        ),
+        screenSize: DisplayPointSize(width: 1_440, height: 900)
+    )
+    let session = try await client.openSession(openRequest)
+
+    try await session.restartApp()
+    try await session.closeSession()
+
+    let requests = transport.snapshot().restartAppRequests
+    #expect(requests.count == 1)
+    let request = try JSONDecoder().decode(RestartAppRequest.self, from: requests[0])
+    #expect(request.sessionID == sessionID)
+    #expect(request.packageID == packageID)
+    #expect(request.header.apiVersion == APIVersion.current)
+    #expect(request.header.clientKind == .launcher)
+
+    let closeRequests = transport.snapshot().closeSessionRequests
+    #expect(closeRequests.count == 1)
+    let closeRequest = try JSONDecoder().decode(CloseSessionRequest.self, from: closeRequests[0])
+    #expect(closeRequest.sessionID == sessionID)
+    #expect(closeRequest.packageID == packageID)
+    #expect(closeRequest.header.apiVersion == APIVersion.current)
+    #expect(closeRequest.header.clientKind == .launcher)
 }
 
 private func clientSessionTestSurfaces(width: Int, height: Int) throws(RuntimeControlClientError) -> [IOSurface] {
@@ -1416,12 +1832,13 @@ private struct BrokerErrorEnvelope: Encodable {
     let error: RuntimeControlError
 }
 
-private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBrokerChannel, RuntimeControlChannel,
-    @unchecked Sendable
+private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBrokerChannel,
+    RuntimeWrapperApprovalChannel, RuntimeControlChannel, @unchecked Sendable
 {
     private let helloData: Data
     private let endpointData: Data
     private let endpointBusyData: Data
+    private let approvalData: Data
     private let endpoint: RuntimeXPCListenerEndpoint?
     private let statusData: Data
     private let packageListData: Data
@@ -1439,12 +1856,16 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private let openSessionSurfaces: [IOSurface]
     private let resizeSessionData: Data
     private let resizeSessionSurfaces: [IOSurface]
+    private let restartAppData: Data
+    private let closeSessionData: Data
+    private let suspendApprovalSubmission: Bool
     private let lock = NSLock()
     private var serviceNameValue: String?
     private var brokerRequirementValue: String?
     private var controlRequirementValue: String?
     private var helloRequestsValue: [Data] = []
     private var endpointRequestsValue: [Data] = []
+    private var approvalRequestsValue: [Data] = []
     private var statusRequestsValue: [Data] = []
     private var startRequestsValue: [Data] = []
     private var stopRequestsValue: [Data] = []
@@ -1465,10 +1886,19 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var terminateRequestsValue: [Data] = []
     private var openSessionRequestsValue: [Data] = []
     private var resizeSessionRequestsValue: [Data] = []
+    private var restartAppRequestsValue: [Data] = []
+    private var closeSessionRequestsValue: [Data] = []
     private var resetRequestsValue: [Data] = []
     private var brokerConnectionsValue = 0
     private var controlConnectionsValue = 0
     private var brokerInvalidationsValue = 0
+    private var approvalEndpointConnectionsValue = 0
+    private var approvalEndpointInvalidationsValue = 0
+    private var approvalEndpointRequirementValue: String?
+    private var approvalSubmissionStartedValue = false
+    private var approvalSubmissionStartedWaiter: CheckedContinuation<Void, Never>?
+    private var approvalSubmissionContinuation: CheckedContinuation<Data, RuntimeControlClientError>?
+    private var approvalChannelClosedValue = false
     private var failNextStatusValue = false
     private var failNextLaunchValue = false
     private var failNextTerminateValue = false
@@ -1504,7 +1934,12 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         openSessionReply: OpenSessionControlReply? = nil,
         openSessionSurfaces: [IOSurface] = [],
         resizeSessionReply: ResizeSessionControlReply? = nil,
-        resizeSessionSurfaces: [IOSurface] = []
+        resizeSessionSurfaces: [IOSurface] = [],
+        restartAppReply: RestartAppControlReply? = nil,
+        closeSessionReply: CloseSessionControlReply? = nil,
+        approvalReply: RuntimeWrapperApprovalBrokerReply? = nil,
+        approvalReplyData: Data? = nil,
+        suspendApprovalSubmission: Bool = false
     ) throws {
         if let helloFailure {
             helloData = try JSONEncoder().encode(BrokerErrorEnvelope(error: helloFailure))
@@ -1519,6 +1954,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
             endpoint = RuntimeXPCListenerEndpoint(value: NSObject())
         }
         endpointBusyData = try JSONEncoder().encode(RuntimeEndpointReply.rejected(.busy))
+        approvalData =
+            try approvalReplyData
+            ?? JSONEncoder().encode(approvalReply ?? RuntimeWrapperApprovalBrokerReply(result: .timedOut))
+        self.suspendApprovalSubmission = suspendApprovalSubmission
         endpointBusyRejectionsValue = endpointBusyRejections
         if let status {
             statusData = try JSONEncoder().encode(RuntimeControlReply(status: status))
@@ -1608,6 +2047,18 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 )
         )
         self.resizeSessionSurfaces = resizeSessionSurfaces
+        restartAppData = try JSONEncoder().encode(
+            restartAppReply
+                ?? RestartAppControlReply(
+                    error: .runtime("runtime.test", message: "No restart outcome is configured for this test.")
+                )
+        )
+        closeSessionData = try JSONEncoder().encode(
+            closeSessionReply
+                ?? CloseSessionControlReply(
+                    error: .runtime("runtime.test", message: "No close outcome is configured for this test.")
+                )
+        )
     }
 
     func makeBroker(
@@ -1638,6 +2089,20 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return self
     }
 
+    func makeWrapperApproval(
+        endpoint: RuntimeXPCListenerEndpoint,
+        signingRequirement: String
+    ) throws(RuntimeControlClientError) -> any RuntimeWrapperApprovalChannel {
+        guard endpoint.value is NSObject else {
+            throw .malformedReply
+        }
+        lock.withLock {
+            approvalEndpointConnectionsValue += 1
+            approvalEndpointRequirementValue = signingRequirement
+        }
+        return self
+    }
+
     func hello(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         lock.withLock { helloRequestsValue.append(request) }
         return helloData
@@ -1658,8 +2123,58 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         )
     }
 
+    func requestApprovalEndpoint(
+        _ request: Data
+    ) async throws(RuntimeControlClientError) -> RuntimeBrokerEndpointReply {
+        lock.withLock { approvalRequestsValue.append(request) }
+        return RuntimeBrokerEndpointReply(data: endpointData, endpoint: endpoint)
+    }
+
+    func submitApproval() async throws(RuntimeControlClientError) -> Data {
+        let startedWaiter = lock.withLock {
+            approvalSubmissionStartedValue = true
+            defer { approvalSubmissionStartedWaiter = nil }
+            return approvalSubmissionStartedWaiter
+        }
+        startedWaiter?.resume()
+        guard suspendApprovalSubmission else { return approvalData }
+        return try await withCheckedThrowingContinuation { continuation in
+            let wasClosed = lock.withLock {
+                guard !approvalChannelClosedValue else { return true }
+                approvalSubmissionContinuation = continuation
+                return false
+            }
+            if wasClosed {
+                continuation.resume(throwing: .transportFailure(domain: "NSCocoaErrorDomain", code: 4099))
+            }
+        }
+    }
+
+    func close() {
+        let continuation = lock.withLock {
+            approvalEndpointInvalidationsValue += 1
+            approvalChannelClosedValue = true
+            defer { approvalSubmissionContinuation = nil }
+            return approvalSubmissionContinuation
+        }
+        continuation?.resume(throwing: .transportFailure(domain: "NSCocoaErrorDomain", code: 4099))
+    }
+
     func invalidate() {
         lock.withLock { brokerInvalidationsValue += 1 }
+    }
+
+    func waitForApprovalSubmission() async {
+        await withCheckedContinuation { continuation in
+            let alreadyStarted = lock.withLock {
+                guard !approvalSubmissionStartedValue else { return true }
+                approvalSubmissionStartedWaiter = continuation
+                return false
+            }
+            if alreadyStarted {
+                continuation.resume()
+            }
+        }
     }
 
     func runtimeStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
@@ -1863,6 +2378,16 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return RuntimeSessionXPCReply(data: resizeSessionData, surfaces: resizeSessionSurfaces)
     }
 
+    func restartApp(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { restartAppRequestsValue.append(request) }
+        return restartAppData
+    }
+
+    func closeSession(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { closeSessionRequestsValue.append(request) }
+        return closeSessionData
+    }
+
     func snapshot() -> Snapshot {
         lock.withLock {
             Snapshot(
@@ -1871,6 +2396,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 controlRequirement: controlRequirementValue,
                 helloRequests: helloRequestsValue,
                 endpointRequests: endpointRequestsValue,
+                approvalRequests: approvalRequestsValue,
                 statusRequests: statusRequestsValue,
                 startRequests: startRequestsValue,
                 stopRequests: stopRequestsValue,
@@ -1891,10 +2417,15 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 terminateRequests: terminateRequestsValue,
                 openSessionRequests: openSessionRequestsValue,
                 resizeSessionRequests: resizeSessionRequestsValue,
+                restartAppRequests: restartAppRequestsValue,
+                closeSessionRequests: closeSessionRequestsValue,
                 resetRequests: resetRequestsValue,
                 brokerConnections: brokerConnectionsValue,
                 controlConnections: controlConnectionsValue,
-                brokerInvalidations: brokerInvalidationsValue
+                brokerInvalidations: brokerInvalidationsValue,
+                approvalEndpointConnections: approvalEndpointConnectionsValue,
+                approvalEndpointInvalidations: approvalEndpointInvalidationsValue,
+                approvalEndpointRequirement: approvalEndpointRequirementValue
             )
         }
     }
@@ -1956,6 +2487,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let controlRequirement: String?
         let helloRequests: [Data]
         let endpointRequests: [Data]
+        let approvalRequests: [Data]
         let statusRequests: [Data]
         let startRequests: [Data]
         let stopRequests: [Data]
@@ -1976,9 +2508,14 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let terminateRequests: [Data]
         let openSessionRequests: [Data]
         let resizeSessionRequests: [Data]
+        let restartAppRequests: [Data]
+        let closeSessionRequests: [Data]
         let resetRequests: [Data]
         let brokerConnections: Int
         let controlConnections: Int
         let brokerInvalidations: Int
+        let approvalEndpointConnections: Int
+        let approvalEndpointInvalidations: Int
+        let approvalEndpointRequirement: String?
     }
 }

@@ -3,6 +3,8 @@ import IOSurface
 import RuntimeAPI
 import Security
 
+import enum DiagnosticsCore.ContinuousClockTimestamp
+
 /// Errors returned by the first RuntimeAPI control client.
 public enum RuntimeControlClientError: Error, Equatable, Sendable {
     /// The process has no supported APKRun build identity or signing identity.
@@ -84,6 +86,19 @@ extension RuntimeControlClientError {
     }
 }
 
+/// Build identity embedded in the launcher executable that selects the APKRun daemon endpoint.
+///
+/// The caller must supply the value compiled into the shared launcher. A wrapper's Info.plist
+/// is user-controlled input and must not select a daemon identity or signing requirement.
+public enum RuntimeWrapperDaemonBuildIdentity: Equatable, Sendable {
+    /// A development APKRun installation.
+    case development
+    /// A notarized production APKRun installation.
+    case release(teamIdentifier: String)
+    /// A release-update test installation.
+    case releaseUpdateTest(teamIdentifier: String)
+}
+
 /// The first RuntimeAPI control client. It authenticates the daemon, obtains an anonymous control
 /// endpoint through the broker, then reuses that endpoint for status, start, and stop requests.
 public actor RuntimeControlClient {
@@ -102,6 +117,8 @@ public actor RuntimeControlClient {
     private var isOpeningSession = false
     private var hasOpenedSession = false
     private var sessionWasInvalidated = false
+    private var pendingWrapperApproval: PendingWrapperApproval?
+    private var wrapperApprovalCancellationRequested = false
 
     /// Creates a client for the current signed APKRun process.
     ///
@@ -115,6 +132,28 @@ public actor RuntimeControlClient {
         configuration = try RuntimeControlClientConfiguration.current(
             clientKind: clientKind,
             claimedIdentity: claimedIdentity
+        )
+        connectionFactory = SystemRuntimeXPCConnectionFactory()
+        let eventStreamHub = RuntimeEventStreamHub()
+        self.eventStreamHub = eventStreamHub
+        let sessionEventHub = RuntimeSessionEventStreamHub()
+        self.sessionEventHub = sessionEventHub
+        eventSink = RuntimeEventSinkReceiver(streamHub: eventStreamHub, sessionHub: sessionEventHub)
+    }
+
+    /// Creates a package-scoped client for a generated wrapper.
+    ///
+    /// `daemonBuildIdentity` must come from constants compiled into the shared launcher. The
+    /// wrapper bundle identifier is sent to apkrund as an unauthoritative claim; only the daemon's
+    /// registry lookup and the endpoint's code-signing requirement grant access.
+    public init(
+        wrapperDaemonBuildIdentity: RuntimeWrapperDaemonBuildIdentity,
+        bundle: Bundle = .main
+    ) throws(RuntimeControlClientError) {
+        configuration = try RuntimeControlClientConfiguration.wrapper(
+            bundleIdentifier: bundle.bundleIdentifier,
+            bundlePath: bundle.bundleURL.standardizedFileURL.resolvingSymlinksInPath().path,
+            daemonBuildIdentity: wrapperDaemonBuildIdentity
         )
         connectionFactory = SystemRuntimeXPCConnectionFactory()
         let eventStreamHub = RuntimeEventStreamHub()
@@ -141,6 +180,125 @@ public actor RuntimeControlClient {
     @discardableResult
     public func connect() async throws(RuntimeControlClientError) -> RuntimeHelloReply {
         try await ensureControl().hello
+    }
+
+    /// Requests user approval for a wrapper that the daemon does not currently recognize.
+    ///
+    /// The broker returns a one-use endpoint pinned to the bundle's strictly validated identifier
+    /// and cdhash. Only the endpoint connection can create a challenge or trigger a prompt.
+    public func requestApproval(
+        _ request: RuntimeWrapperApprovalBrokerRequest
+    ) async throws(RuntimeControlClientError) -> RuntimeWrapperApprovalOutcome {
+        guard let wrapperBundlePath = configuration.wrapperBundlePath,
+            configuration.clientKind == .wrapper,
+            request.bundleID == configuration.claimedIdentity,
+            Self.canonicalWrapperBundlePath(request.bundlePath) == wrapperBundlePath
+        else {
+            throw .invalidClientIdentity
+        }
+        guard pendingWrapperApproval == nil, !wrapperApprovalCancellationRequested else {
+            throw .requestCancelled(operation: "requestApproval")
+        }
+
+        let broker = try connectionFactory.makeBroker(
+            serviceName: configuration.serviceName,
+            signingRequirement: configuration.daemonCodeSigningRequirement
+        )
+        let operationID = UUID()
+        pendingWrapperApproval = PendingWrapperApproval(
+            id: operationID,
+            broker: broker,
+            approvalChannel: nil,
+            isCancelled: false,
+            brokerInvalidated: false,
+            approvalChannelClosed: false
+        )
+        defer { finishWrapperApproval(operationID: operationID) }
+
+        let helloRequest = RuntimeHelloRequest(
+            clientKind: .wrapper,
+            claimedIdentity: configuration.claimedIdentity,
+            apiVersion: APIVersion.current,
+            clientVersion: configuration.clientVersion,
+            clientBuild: configuration.clientBuild
+        )
+        let helloData = try Self.encode(helloRequest)
+        let helloReplyData = try await broker.hello(helloData)
+        try ensureWrapperApprovalIsActive(operationID: operationID)
+        let helloReply = try Self.decodeHelloReply(from: helloReplyData)
+        guard
+            Self.isHelloAPIVersionCompatible(
+                client: APIVersion.current,
+                server: helloReply.apiVersion,
+                clientKind: .wrapper
+            )
+        else {
+            throw .apiVersionMismatch(client: APIVersion.current, server: helloReply.apiVersion)
+        }
+
+        let endpointReply = try await broker.requestApprovalEndpoint(Self.encode(request))
+        try ensureWrapperApprovalIsActive(operationID: operationID)
+        switch try Self.decode(RuntimeEndpointReply.self, from: endpointReply.data) {
+        case .rejected(let rejection):
+            throw .endpointRejected(rejection)
+        case .granted:
+            break
+        }
+        guard let endpoint = endpointReply.endpoint else {
+            throw .endpointMissing
+        }
+        let approvalChannel = try connectionFactory.makeWrapperApproval(
+            endpoint: endpoint,
+            signingRequirement: configuration.daemonCodeSigningRequirement
+        )
+        guard var activeApproval = pendingWrapperApproval, activeApproval.id == operationID else {
+            approvalChannel.close()
+            throw .requestCancelled(operation: "requestApproval")
+        }
+        activeApproval.approvalChannel = approvalChannel
+        pendingWrapperApproval = activeApproval
+        try ensureWrapperApprovalIsActive(operationID: operationID)
+
+        let replyData: Data
+        do {
+            replyData = try await approvalChannel.submitApproval()
+        } catch {
+            if wrapperApprovalWasCancelled(operationID: operationID) {
+                throw .requestCancelled(operation: "requestApproval")
+            }
+            throw error
+        }
+        try ensureWrapperApprovalIsActive(operationID: operationID)
+        let reply = try Self.decode(RuntimeWrapperApprovalBrokerReply.self, from: replyData)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let error = reply.error {
+            throw .remoteFailure(code: error.code, message: error.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
+    /// Cancels a wrapper startup that is waiting for a user approval decision.
+    ///
+    /// Invalidating both XPC channels resumes the pending request so a launcher can acknowledge
+    /// termination immediately instead of waiting for the approval deadline.
+    public func cancelPendingApproval() {
+        wrapperApprovalCancellationRequested = true
+        guard var activeApproval = pendingWrapperApproval else { return }
+        activeApproval.isCancelled = true
+        if !activeApproval.approvalChannelClosed {
+            activeApproval.approvalChannel?.close()
+            activeApproval.approvalChannelClosed = true
+        }
+        if !activeApproval.brokerInvalidated {
+            activeApproval.broker.invalidate()
+            activeApproval.brokerInvalidated = true
+        }
+        pendingWrapperApproval = activeApproval
     }
 
     /// Returns a daemon and Android runtime status snapshot.
@@ -263,12 +421,18 @@ public actor RuntimeControlClient {
 
         let opened = try await ensureControl()
         do {
+            let launchTiming = request.launchTiming.map { timing in
+                LaunchTiming(
+                    processStart: timing.processStart,
+                    requestSent: ContinuousClockTimestamp.nowNanoseconds() ?? timing.requestSent
+                )
+            }
             let controlRequest = OpenSessionRequest(
                 header: makeHeader(),
                 packageID: request.packageID,
                 geometry: request.geometry,
                 screenSize: request.screenSize,
-                launchTiming: request.launchTiming
+                launchTiming: launchTiming
             )
             let data = try Self.encode(controlRequest)
             let wireReply = try await opened.channel.openSession(data)
@@ -313,6 +477,22 @@ public actor RuntimeControlClient {
                         using: channel,
                         sessionEventHub: sessionEventHub,
                         sessionID: descriptor.sessionID
+                    )
+                },
+                restartApp: {
+                    [self] () async throws(RuntimeControlClientError) -> Void in
+                    try await self.restartApp(
+                        packageID: request.packageID,
+                        sessionID: descriptor.sessionID,
+                        using: channel
+                    )
+                },
+                closeSession: {
+                    [self] () async throws(RuntimeControlClientError) -> Void in
+                    try await self.closeSession(
+                        packageID: request.packageID,
+                        sessionID: descriptor.sessionID,
+                        using: channel
                     )
                 }
             )
@@ -376,6 +556,58 @@ public actor RuntimeControlClient {
             let data = try Self.encode(controlRequest)
             let response = try await opened.channel.packageInfo(data)
             return try Self.decodePackageInfoReply(from: response)
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
+    /// Validates a wrapper bundle and returns the facts that must be shown before approval.
+    public func approveWrapper(
+        at bundleURL: URL
+    ) async throws(RuntimeControlClientError) -> RuntimeWrapperApprovalPrompt {
+        guard configuration.clientKind == .cli || configuration.clientKind == .app else {
+            throw .invalidClientIdentity
+        }
+        let opened = try await ensureControl()
+        guard
+            let request = RuntimeWrapperApprovalPrepareControlRequest(
+                header: makeHeader(),
+                bundlePath: bundleURL.standardizedFileURL.path
+            )
+        else {
+            throw .encodingFailure
+        }
+        do {
+            let data = try Self.encode(request)
+            return try Self.decodeWrapperApprovalPrepareReply(
+                from: await opened.channel.approveWrapper(data)
+            )
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
+    /// Commits the user's decision for a validated wrapper approval prompt.
+    public func decideWrapperApproval(
+        approvalID: ApprovalID,
+        allow: Bool
+    ) async throws(RuntimeControlClientError) {
+        guard configuration.clientKind == .cli || configuration.clientKind == .app else {
+            throw .invalidClientIdentity
+        }
+        let opened = try await ensureControl()
+        do {
+            let request = RuntimeWrapperApprovalDecisionControlRequest(
+                header: makeHeader(),
+                approvalID: approvalID,
+                allow: allow
+            )
+            let data = try Self.encode(request)
+            try Self.decodeWrapperApprovalDecisionReply(
+                from: await opened.channel.decideApproval(data)
+            )
         } catch {
             invalidateAfterTransportFailure(opened.channel, error: error)
             throw error
@@ -637,6 +869,46 @@ public actor RuntimeControlClient {
         APIRequestHeader(clientKind: configuration.clientKind)
     }
 
+    private struct PendingWrapperApproval {
+        let id: UUID
+        let broker: any RuntimeBrokerChannel
+        var approvalChannel: (any RuntimeWrapperApprovalChannel)?
+        var isCancelled: Bool
+        var brokerInvalidated: Bool
+        var approvalChannelClosed: Bool
+    }
+
+    private func ensureWrapperApprovalIsActive(
+        operationID: UUID
+    ) throws(RuntimeControlClientError) {
+        guard let activeApproval = pendingWrapperApproval,
+            activeApproval.id == operationID,
+            !activeApproval.isCancelled
+        else {
+            throw .requestCancelled(operation: "requestApproval")
+        }
+    }
+
+    private func wrapperApprovalWasCancelled(operationID: UUID) -> Bool {
+        guard let activeApproval = pendingWrapperApproval, activeApproval.id == operationID else {
+            return true
+        }
+        return activeApproval.isCancelled
+    }
+
+    private func finishWrapperApproval(operationID: UUID) {
+        guard var activeApproval = pendingWrapperApproval, activeApproval.id == operationID else { return }
+        if !activeApproval.approvalChannelClosed {
+            activeApproval.approvalChannel?.close()
+            activeApproval.approvalChannelClosed = true
+        }
+        if !activeApproval.brokerInvalidated {
+            activeApproval.broker.invalidate()
+            activeApproval.brokerInvalidated = true
+        }
+        pendingWrapperApproval = nil
+    }
+
     private func replayEventSubscriptions(on opened: OpenedControlConnection) async throws {
         for topic in eventStreamHub.activeTopics() {
             try await ensureEventTopicSubscribed(topic, on: opened)
@@ -876,6 +1148,66 @@ public actor RuntimeControlClient {
         }
     }
 
+    private func restartApp(
+        packageID: RuntimePackageID,
+        sessionID: UUID,
+        using channel: any RuntimeControlChannel
+    ) async throws(RuntimeControlClientError) {
+        do {
+            let request = RestartAppRequest(
+                header: makeHeader(),
+                sessionID: sessionID,
+                packageID: packageID
+            )
+            let data = try Self.encode(request)
+            let wireReply = try await channel.restartApp(data)
+            let reply = try Self.decode(RestartAppControlReply.self, from: wireReply)
+            if let error = reply.error {
+                guard reply.result == nil else {
+                    throw RuntimeControlClientError.malformedReply
+                }
+                throw RuntimeControlClientError.remoteFailure(code: error.code, message: error.message)
+            }
+            guard reply.result != nil else {
+                throw RuntimeControlClientError.malformedReply
+            }
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    private func closeSession(
+        packageID: RuntimePackageID,
+        sessionID: UUID,
+        using channel: any RuntimeControlChannel
+    ) async throws(RuntimeControlClientError) {
+        do {
+            let request = CloseSessionRequest(
+                header: makeHeader(),
+                sessionID: sessionID,
+                packageID: packageID
+            )
+            let data = try Self.encode(request)
+            let wireReply = try await channel.closeSession(data)
+            let reply = try Self.decode(CloseSessionControlReply.self, from: wireReply)
+            if let error = reply.error {
+                guard reply.result == nil else {
+                    throw RuntimeControlClientError.malformedReply
+                }
+                throw RuntimeControlClientError.remoteFailure(code: error.code, message: error.message)
+            }
+            guard reply.result != nil else {
+                throw RuntimeControlClientError.malformedReply
+            }
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(channel, error: clientError)
+            throw clientError
+        }
+    }
+
     private static func withTimeout<Value: Sendable>(
         _ timeout: Duration,
         operation: String,
@@ -1007,12 +1339,16 @@ public actor RuntimeControlClient {
                     }
                     lastError = .endpointRejected(rejection)
                 case .opened(let opened):
-                    let probe = RuntimeStatusRequest(header: APIRequestHeader(clientKind: configuration.clientKind))
-                    do {
-                        _ = try await opened.channel.runtimeStatus(Self.encode(probe))
-                    } catch {
-                        opened.channel.invalidate()
-                        throw error
+                    if configuration.clientKind != .wrapper {
+                        let probe = RuntimeStatusRequest(
+                            header: APIRequestHeader(clientKind: configuration.clientKind)
+                        )
+                        do {
+                            _ = try await opened.channel.runtimeStatus(Self.encode(probe))
+                        } catch {
+                            opened.channel.invalidate()
+                            throw error
+                        }
                     }
                     return opened
                 }
@@ -1053,16 +1389,21 @@ public actor RuntimeControlClient {
         )
         let helloData = try Self.encode(helloRequest)
         let helloReply = try Self.decodeHelloReply(from: await broker.hello(helloData))
-        guard helloReply.apiVersion.major == APIVersion.current.major,
-            helloReply.apiVersion.minor >= APIVersion.current.minor
+        guard
+            Self.isHelloAPIVersionCompatible(
+                client: APIVersion.current,
+                server: helloReply.apiVersion,
+                clientKind: configuration.clientKind
+            )
         else {
             throw .apiVersionMismatch(client: APIVersion.current, server: helloReply.apiVersion)
         }
 
         let endpointRequest = RuntimeEndpointRequest(
-            kind: .control,
+            kind: configuration.clientKind == .wrapper ? .wrapper : .control,
             clientKind: configuration.clientKind,
             claimedIdentity: configuration.claimedIdentity,
+            bundlePath: configuration.wrapperBundlePath,
             apiVersion: APIVersion.current
         )
         let endpointReply = try await broker.requestEndpoint(Self.encode(endpointRequest))
@@ -1081,6 +1422,30 @@ public actor RuntimeControlClient {
             )
             return .opened(OpenedControlConnection(hello: helloReply, channel: control))
         }
+    }
+
+    private static func isHelloAPIVersionCompatible(
+        client: APIVersion,
+        server: APIVersion,
+        clientKind: RuntimeClientKind
+    ) -> Bool {
+        guard client.major > 0, client.minor >= 0, server.major > 0, server.minor >= 0 else {
+            return false
+        }
+        if server.major == client.major {
+            return server.minor >= client.minor
+        }
+        return clientKind == .wrapper && server.major == client.major + 1
+    }
+
+    fileprivate static func canonicalWrapperBundlePath(_ path: String) -> String? {
+        guard path.hasPrefix("/"), path.utf8.count <= 1024, path.hasSuffix(".app") else {
+            return nil
+        }
+        return URL(fileURLWithPath: path, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
     }
 
     private static func endpointAdmissionRetryDelay(attempt: Int) -> Duration {
@@ -1295,6 +1660,37 @@ public actor RuntimeControlClient {
         return result
     }
 
+    private static func decodeWrapperApprovalPrepareReply(
+        from data: Data
+    ) throws(RuntimeControlClientError) -> RuntimeWrapperApprovalPrompt {
+        let reply = try Self.decode(RuntimeWrapperApprovalPrepareControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
+    private static func decodeWrapperApprovalDecisionReply(
+        from data: Data
+    ) throws(RuntimeControlClientError) {
+        let reply = try Self.decode(RuntimeWrapperApprovalDecisionControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard reply.result != nil else {
+            throw .malformedReply
+        }
+    }
+
     private static func encode<Value: Encodable>(_ value: Value) throws(RuntimeControlClientError) -> Data {
         do {
             return try JSONEncoder().encode(value)
@@ -1356,6 +1752,7 @@ struct RuntimeControlClientConfiguration: Equatable, Sendable {
 
     let clientKind: RuntimeClientKind
     let claimedIdentity: String
+    let wrapperBundlePath: String?
     let serviceName: String
     let daemonCodeSigningRequirement: String
     let clientVersion: String?
@@ -1366,6 +1763,7 @@ struct RuntimeControlClientConfiguration: Equatable, Sendable {
         clientKind: RuntimeClientKind,
         claimedIdentity: String,
         buildIdentity: BuildIdentity,
+        wrapperBundlePath: String? = nil,
         clientVersion: String? = nil,
         clientBuild: Int? = nil,
         restartRequestTimeout: Duration = Self.maximumRestartRequestTimeout
@@ -1375,6 +1773,7 @@ struct RuntimeControlClientConfiguration: Equatable, Sendable {
         }
         self.clientKind = clientKind
         self.claimedIdentity = claimedIdentity
+        self.wrapperBundlePath = wrapperBundlePath
         self.clientVersion = clientVersion
         self.clientBuild = clientBuild
         self.restartRequestTimeout = restartRequestTimeout
@@ -1383,7 +1782,7 @@ struct RuntimeControlClientConfiguration: Equatable, Sendable {
             serviceName = "io.apkrun.apkrund.dev.xpc"
             daemonCodeSigningRequirement = "identifier \"io.apkrun.apkrund.dev\""
         case .release(let teamIdentifier):
-            guard !teamIdentifier.isEmpty,
+            guard teamIdentifier.utf8.count == 10,
                 teamIdentifier.utf8.allSatisfy({ ($0 >= 65 && $0 <= 90) || ($0 >= 48 && $0 <= 57) })
             else {
                 throw .invalidClientIdentity
@@ -1393,7 +1792,7 @@ struct RuntimeControlClientConfiguration: Equatable, Sendable {
                 "anchor apple generic and certificate leaf[subject.OU] = \"\(teamIdentifier)\" "
                 + "and identifier \"io.apkrun.apkrund\""
         case .releaseUpdateTest(let teamIdentifier):
-            guard !teamIdentifier.isEmpty,
+            guard teamIdentifier.utf8.count == 10,
                 teamIdentifier.utf8.allSatisfy({ ($0 >= 65 && $0 <= 90) || ($0 >= 48 && $0 <= 57) })
             else {
                 throw .invalidClientIdentity
@@ -1410,6 +1809,9 @@ struct RuntimeControlClientConfiguration: Equatable, Sendable {
         claimedIdentity: String?,
         bundle: Bundle = .main
     ) throws(RuntimeControlClientError) -> Self {
+        guard clientKind != .wrapper else {
+            throw .invalidClientIdentity
+        }
         guard let bundleIdentifier = bundle.bundleIdentifier,
             let buildIdentityValue = bundle.object(forInfoDictionaryKey: "APKRunBuildIdentity") as? String
         else {
@@ -1434,6 +1836,53 @@ struct RuntimeControlClientConfiguration: Equatable, Sendable {
             clientVersion: info["CFBundleShortVersionString"] as? String,
             clientBuild: (info["CFBundleVersion"] as? String).flatMap(Int.init)
         )
+    }
+
+    static func wrapper(
+        bundleIdentifier: String?,
+        bundlePath: String? = nil,
+        daemonBuildIdentity: RuntimeWrapperDaemonBuildIdentity
+    ) throws(RuntimeControlClientError) -> Self {
+        guard let bundleIdentifier, Self.isWrapperBundleIdentifier(bundleIdentifier) else {
+            throw .invalidClientIdentity
+        }
+        let canonicalBundlePath: String?
+        if let bundlePath {
+            guard let canonicalPath = RuntimeControlClient.canonicalWrapperBundlePath(bundlePath) else {
+                throw .invalidClientIdentity
+            }
+            canonicalBundlePath = canonicalPath
+        } else {
+            canonicalBundlePath = nil
+        }
+        let buildIdentity: BuildIdentity
+        switch daemonBuildIdentity {
+        case .development:
+            buildIdentity = .development
+        case .release(let teamIdentifier):
+            buildIdentity = .release(teamIdentifier: teamIdentifier)
+        case .releaseUpdateTest(let teamIdentifier):
+            buildIdentity = .releaseUpdateTest(teamIdentifier: teamIdentifier)
+        }
+        return try Self(
+            clientKind: .wrapper,
+            claimedIdentity: bundleIdentifier,
+            buildIdentity: buildIdentity,
+            wrapperBundlePath: canonicalBundlePath
+        )
+    }
+
+    private static func isWrapperBundleIdentifier(_ value: String) -> Bool {
+        let prefix = "io.apkrun.android."
+        guard value.hasPrefix(prefix), value.utf8.count <= 255 else {
+            return false
+        }
+        let suffix = value.dropFirst(prefix.count)
+        return !suffix.isEmpty
+            && suffix.utf8.allSatisfy {
+                (65...90).contains($0) || (97...122).contains($0)
+                    || (48...57).contains($0) || $0 == 45 || $0 == 46
+            }
     }
 
     private static func currentTeamIdentifier() throws(RuntimeControlClientError) -> String {
@@ -1485,7 +1934,13 @@ struct RuntimeBrokerEndpointReply: Sendable {
 protocol RuntimeBrokerChannel: Sendable {
     func hello(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func requestEndpoint(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeBrokerEndpointReply
+    func requestApprovalEndpoint(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeBrokerEndpointReply
     func invalidate()
+}
+
+protocol RuntimeWrapperApprovalChannel: Sendable {
+    func submitApproval() async throws(RuntimeControlClientError) -> Data
+    func close()
 }
 
 protocol RuntimeControlChannel: AnyObject, Sendable {
@@ -1496,6 +1951,8 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func resetRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func listPackages(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func packageInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func approveWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func decideApproval(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func importPackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
     func installImported(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func beginInstallImported(_ request: Data) async throws(RuntimeControlClientError) -> Data
@@ -1509,6 +1966,8 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func terminate(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func openSession(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeSessionXPCReply
     func resizeSession(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeSessionXPCReply
+    func restartApp(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func closeSession(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func frameDisplayed(_ message: FrameDisplayed)
     func visibilityChanged(_ message: VisibilityChanged)
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void)
@@ -1516,11 +1975,27 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
 }
 
 extension RuntimeControlChannel {
+    func approveWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .invalidRemoteProxy
+    }
+
+    func decideApproval(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .invalidRemoteProxy
+    }
+
     func openSession(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeSessionXPCReply {
         throw .invalidRemoteProxy
     }
 
     func resizeSession(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeSessionXPCReply {
+        throw .invalidRemoteProxy
+    }
+
+    func restartApp(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .invalidRemoteProxy
+    }
+
+    func closeSession(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         throw .invalidRemoteProxy
     }
 
@@ -1545,6 +2020,10 @@ protocol RuntimeXPCConnectionFactory: Sendable {
         signingRequirement: String,
         eventSink: RuntimeEventSinkReceiver
     ) throws(RuntimeControlClientError) -> any RuntimeControlChannel
+    func makeWrapperApproval(
+        endpoint: RuntimeXPCListenerEndpoint,
+        signingRequirement: String
+    ) throws(RuntimeControlClientError) -> any RuntimeWrapperApprovalChannel
 }
 
 private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
@@ -1578,6 +2057,21 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
         return XPCControlChannel(connection: connection)
     }
 
+    func makeWrapperApproval(
+        endpoint: RuntimeXPCListenerEndpoint,
+        signingRequirement: String
+    ) throws(RuntimeControlClientError) -> any RuntimeWrapperApprovalChannel {
+        guard let listenerEndpoint = endpoint.value as? NSXPCListenerEndpoint else {
+            throw .malformedReply
+        }
+        let connection = configuredConnection(
+            NSXPCConnection(listenerEndpoint: listenerEndpoint),
+            interface: NSXPCInterface(with: RuntimeWrapperApprovalXPC.self),
+            signingRequirement: signingRequirement
+        )
+        return XPCWrapperApprovalChannel(connection: connection)
+    }
+
     private func configuredConnection(
         _ connection: NSXPCConnection,
         interface: NSXPCInterface,
@@ -1601,6 +2095,12 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
         interface.setClasses(
             endpointClasses,
             for: #selector(RuntimeBrokerXPC.requestEndpoint(_:reply:)),
+            argumentIndex: 1,
+            ofReply: true
+        )
+        interface.setClasses(
+            endpointClasses,
+            for: #selector(RuntimeBrokerXPC.requestApprovalEndpoint(_:reply:)),
             argumentIndex: 1,
             ofReply: true
         )
@@ -1689,7 +2189,57 @@ private final class XPCBrokerChannel: RuntimeBrokerChannel, @unchecked Sendable 
         }
     }
 
+    func requestApprovalEndpoint(
+        _ request: Data
+    ) async throws(RuntimeControlClientError) -> RuntimeBrokerEndpointReply {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeBrokerXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.requestApprovalEndpoint(request) { response, endpoint in
+                let wrappedEndpoint = endpoint.map { RuntimeXPCListenerEndpoint(value: $0) }
+                finish(.success(RuntimeBrokerEndpointReply(data: response, endpoint: wrappedEndpoint)))
+            }
+        }
+    }
+
     func invalidate() {
+        connection.invalidate()
+    }
+
+    private static func transportFailure(_ error: any Error) -> RuntimeControlClientError {
+        let error = error as NSError
+        return .transportFailure(domain: error.domain, code: error.code)
+    }
+}
+
+private final class XPCWrapperApprovalChannel: RuntimeWrapperApprovalChannel, @unchecked Sendable {
+    private let connection: NSXPCConnection
+
+    init(connection: NSXPCConnection) {
+        self.connection = connection
+    }
+
+    func submitApproval() async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeWrapperApprovalXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.submitApproval { response in finish(.success(response)) }
+        }
+    }
+
+    func close() {
         connection.invalidate()
     }
 
@@ -1812,6 +2362,34 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.packageInfo(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func approveWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.approveWrapper(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func decideApproval(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.decideApproval(request) { response in finish(.success(response)) }
         }
     }
 
@@ -1998,6 +2576,34 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
             resizeSession(request) { response, surfaces in
                 finish(.success(RuntimeSessionXPCReply(data: response, surfaces: surfaces ?? [])))
             }
+        }
+    }
+
+    func restartApp(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy, let restartApp = proxy.restartApp else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            restartApp(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func closeSession(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy, let closeSession = proxy.closeSession else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            closeSession(request) { response in finish(.success(response)) }
         }
     }
 

@@ -8,7 +8,9 @@ This document is the wire contract of RuntimeAPI, the XPC interface between apkr
 
 ### 1.1 Scope and modules
 
-Built operations: broker `hello`, `requestEndpoint`; control `runtimeStatus`, `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime`, `listPackages`, `packageInfo`, `importPackage`, `installImported`, `beginInstallImported`, `beginUninstallPackage`, `cancelOperation`, `listOperations`, `operationStatus`, `subscribe`, `unsubscribe`, `launch`, `terminate`; event sink `handshake`, `deliver`. Every other operation and type is target contract.
+Built operations: broker `hello`, `requestEndpoint`, `requestApprovalEndpoint`; wrapper approval endpoint `submitApproval`; control `runtimeStatus`, `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime`, `listPackages`, `packageInfo`, `importPackage`, `installImported`, `beginInstallImported`, `beginUninstallPackage`, `cancelOperation`, `listOperations`, `operationStatus`, `subscribe`, `unsubscribe`, `approveWrapper`, `decideApproval`, `launch`, `terminate`, `openSession`, `resizeSession`, `restartApp`, `closeSession`, `frameDisplayed`, `visibilityChanged`; event sink `handshake`, `deliver`. Wrapper approval is API 1.14 (§3.4, §10.1, §10.6); API 1.15 adds the installed-version prompt field and neutral team-signed facts. Every other operation and type is target contract.
+
+API 1.16 also adds the wrapper bundle path to endpoint requests so a copied or re-signed wrapper can take the existing approval path.
 
 | Part | Module | Role |
 |---|---|---|
@@ -20,12 +22,13 @@ Built operations: broker `hello`, `requestEndpoint`; control `runtimeStatus`, `s
 
 | Endpoint | Reached by | Served to | Protocol | Version rule (§2.2) |
 |---|---|---|---|---|
-| Broker | Mach service `io.apkrun.apkrund.xpc` (dev: `.dev.xpc`; update-test: `io.apkrun.apkrund.updatetest.xpc`) | any process of the user | `RuntimeBrokerXPC` | every revision |
+| Broker | Mach service `io.apkrun.apkrund.xpc` (dev: `.dev.xpc`; update-test: `io.apkrun.apkrund.updatetest.xpc`) | any process of the user | `RuntimeBrokerXPC` | every revision; `requestEndpoint` checks the supplied version |
 | Control | anonymous listener per grant, bound to the client's code requirement | APKRun.app, APKRunMenuBar, apkrun, APKRunLauncher | `RuntimeControlXPC` | same major, minor ≤ server |
+| Wrapper | anonymous listener issued only for an active or refreshing registry entry; one wrapper connection per grant | that registered wrapper's launcher | `RuntimeControlXPC` | same major, minor ≤ server; previous major also accepted |
+| Wrapper approval | one-use anonymous listener, issued after validating the claimed bundle | only code matching the validated wrapper bundle identifier and cdhash | `RuntimeWrapperApprovalXPC` | wrapper compatibility rule |
 | Maintenance (target) | anonymous listener per host client | APKRun.app, APKRunMenuBar, apkrun | `MaintenanceControl` | frozen, additive only |
-| Wrapper (target) | anonymous listener per registered wrapper, dropped 10 min after its last connection | that wrapper's launcher | `RuntimeWrapperXPC` | major N and N−1 |
 
-Clients that subscribe or open sessions export one `RuntimeEventSink` on their endpoint connection (§4.1). The broker exposes no capabilities ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2).
+Clients that subscribe or open sessions export one `RuntimeEventSink` on their endpoint connection (§4.1). The registered-wrapper endpoint uses the control XPC protocol but authorizes only package-scoped information and session operations (§1.4, §10.1). The wrapper approval endpoint exposes only `submitApproval`; it is bound to a strictly validated bundle and does not authorize by PID or audit token. The broker exposes no runtime capabilities ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2).
 
 ### 1.3 Client kinds
 
@@ -35,7 +38,7 @@ Clients that subscribe or open sessions export one `RuntimeEventSink` on their e
 | `menuBar` | APKRunMenuBar | `io.apkrun.APKRunMenuBar` | control |
 | `cli` | apkrun | `io.apkrun.cli` | control |
 | `launcher` | APKRunLauncher (`--package <id>`) | `io.apkrun.APKRunLauncher` | control, restricted (§1.4) |
-| `wrapper` (target) | a wrapper's launcher | `io.apkrun.android.<mapped package>` ([wrapper.md](../02-design/wrapper.md) §4) | wrapper |
+| `wrapper` | a wrapper's launcher | `io.apkrun.android.<mapped package>` ([wrapper.md](../02-design/wrapper.md) §4) | wrapper |
 
 Dev builds append `.dev`; update-test builds append `.updatetest` to host identifiers ([runtime-daemon.md](../02-design/runtime-daemon.md) §2.6). Wrapper identifiers do not change.
 
@@ -46,13 +49,16 @@ Dev builds append `.dev`; update-test builds append `.updatetest` to host identi
 | C | APKRun.app, APKRunMenuBar, apkrun | control |
 | A | APKRun.app only | control |
 | L | the generic launcher | control |
-| W | a wrapper, for its own package only (target) | wrapper |
+| P | APKRun.app and apkrun | control |
+| W | a registered wrapper, for its own package only | wrapper |
 | M | APKRun.app, APKRunMenuBar, apkrun (target) | maintenance |
-| B | any process | broker |
+| B | any process in the user session | broker |
 
-- C is the full control surface. A narrows operations that answer prompts or report Sparkle state.
-- L may call `runtimeStatus`, `packageInfo`, and `subscribe`/`unsubscribe` for topic `runtime`. Target: `packageIcon` and the session operations of §6. Anything else returns `runtime.notAuthorized`.
-- W may call only the operations of §10.1. A request naming another package returns `runtime.notAuthorized` and writes a security log entry ([runtime-daemon.md](../02-design/runtime-daemon.md) §8.2).
+- C may call the built control operations except `approveWrapper` and `decideApproval`; P may call those two approval operations. The menu bar client is not authorized to prepare or decide wrapper approvals.
+- A denotes APKRun.app-only operations in the target contract.
+- L may call `runtimeStatus`, `packageInfo`, `subscribe`/`unsubscribe` for topic `runtime`, and the session operations of §10.1. It cannot query the package list or use wrapper-approval operations. Other requests return `runtime.notAuthorized`.
+- W may call `packageInfo` for its authenticated package and the session operations of §10.1. A request naming another package returns `runtime.notAuthorized` ([runtime-daemon.md](../02-design/runtime-daemon.md) §8.2).
+- B can identify the daemon or request a protected endpoint. It may request a one-use wrapper approval endpoint using untrusted bundle claims, but only the matching validated wrapper code can connect and submit the approval request.
 - The server derives the client kind from the listener that accepted the connection. A header `clientKind` that differs, or an operation the kind may not call, returns `runtime.notAuthorized`.
 
 ### 1.5 Code-signing requirements
@@ -62,18 +68,22 @@ apkrund sets a requirement on each listener with `setConnectionCodeSigningRequir
 | Connection | Release | Development (ad hoc) |
 |---|---|---|
 | control and maintenance listener | `anchor apple generic and certificate leaf[subject.OU] = "<TEAMID>" and identifier "<identifier>"` | `cdhash H"<cdhash>"` of that binary, computed at apkrund start |
-| wrapper listener | `identifier "<bundleID>" and cdhash H"<registered cdhash>"` from `Wrappers/registry.json` | the same |
+| wrapper listener | `identifier "<bundleID>" and cdhash H"<registered cdhash>"` from the active registry entry | the same |
+| wrapper approval listener | `identifier "<validated bundleID>" and cdhash H"<validated cdhash>"` | the same |
 | client → apkrund | `anchor apple generic and certificate leaf[subject.OU] = "<TEAMID>" and identifier "io.apkrun.apkrund"` | `identifier "io.apkrun.apkrund.dev"` |
 
 - A failed requirement invalidates the connection. A claim in `hello` grants nothing.
 - apkrund never authorizes by `auditToken` or `processIdentifier` ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2).
+- While a wrapper is refreshing, the listener accepts the current and pending cdhash for that same bundle ID. Other wrappers cannot use its endpoint.
+- The wrapper approval listener is issued only after strict bundle validation, expires after 5 s if unused, and accepts one matching wrapper connection. The service revalidates the bundle identity and cdhash before creating a prompt.
 - Each wrapper is signed ad hoc with its bundle ID, so each has its own cdhash ([wrapper.md](../02-design/wrapper.md) §7.1).
 
 ### 1.6 Connection model
 
-- A client opens the broker, calls `hello` and `requestEndpoint`, and closes the broker connection. A wrapper keeps it open while it waits for approval (§3.4).
+- A client opens the broker and calls `hello`. A registered wrapper requests its control endpoint with `requestEndpoint`. If that is rejected with `unknownClient`, it asks for a restricted one-use endpoint with `requestApprovalEndpoint`, connects to it, and calls `submitApproval`; the call waits for the decision or timeout (§3.4). The wrapper then closes the broker and approval endpoint connections.
+- The CLI uses the control endpoint's `approveWrapper` to prepare a validated prompt, displays the facts, asks for confirmation, and calls `decideApproval` (§10.6). This direct CLI flow does not depend on the GUI approval event.
 - A client holds at most one endpoint connection of each kind.
-- A connection holds at most one app session. Only launchers open sessions (ADR-0006).
+- A connection holds at most one app session. The generic launcher and registered wrapper launchers open sessions (ADR-0006).
 - Session events go only to the owning connection. Topic events go to every subscriber (§16.1).
 - Long operations outlive their connection (§4.7). A session is orphaned for 3 s after its connection drops (§6.2).
 - Limits: §4.10.
@@ -84,17 +94,17 @@ apkrund sets a requirement on each listener with `setConnectionCodeSigningRequir
 
 ### 2.1 Constants
 
-`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 13}`. Ordering compares `major`, then `minor`.
+`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 18}`. Ordering compares `major`, then `minor`.
 
 ```swift
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
-    public static let current = APIVersion(major: 1, minor: 13)
+    public static let current = APIVersion(major: 1, minor: 18)
     public let major: Int
     public let minor: Int
 }
 ```
 
-Target constants (not in code): `wrapperMajors = [1]` (served on the wrapper endpoint: N and N−1), `brokerRevision = 2`, `maintenanceRevision = 1`. A release's `components.json` records `"runtimeAPI": { "current": "M.m", "wrapperMajors": [N−1, N] }` ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.3).
+The compatibility check accepts the current major on control and registered-wrapper endpoints, with client minor ≤ server minor. Wrapper clients from the immediately previous major are also accepted. `requestApprovalEndpoint` is called only after the wrapper client checks the server version from `hello`; the issued one-use endpoint accepts only the strictly validated wrapper code. Maintenance remains target contract.
 
 | Version | Adds |
 |---|---|
@@ -112,14 +122,20 @@ Target constants (not in code): `wrapperMajors = [1]` (served on the wrapper end
 | 1.11 | `beginUninstallPackage`; `PackageChange.removed`; `OperationSnapshot.requestFingerprint` |
 | 1.12 | `SessionDescriptor`, frame/session channel callbacks, and IOSurface transfer for `openSession` and `surfacesReplaced` |
 | 1.13 | `resizeSession`; authenticated session geometry changes and replacement IOSurface transfer |
+| 1.14 | broker `requestApprovalEndpoint`; restricted wrapper approval endpoint `submitApproval`; control `approveWrapper` and `decideApproval`; wrapper approval DTOs and `wrappers.approvalRequested`/`approvalResolved` events |
+| 1.15 | optional installed Android version in wrapper approval prompts; team-signed signer facts when the certificate class is unknown |
+| 1.16 | optional wrapper bundle path in `requestEndpoint`; a wrapper at a changed location is inspected against the registry cdhash before its endpoint is granted |
+| 1.17 | session-bound `restartApp`, which validates the current session ID and package before stopping and relaunching on the existing display |
+| 1.18 | session-bound `closeSession`, which gracefully stops the package and releases its display before the launcher quits |
 
 ### 2.2 Rules per endpoint
 
 | Endpoint | Accepts | On mismatch |
 |---|---|---|
-| Broker | every revision. `hello` never fails on a version | — |
+| Broker `hello` | every revision; `hello` reports the server version without rejecting a mismatch | — |
 | Control | server's major; minor ≤ server's minor | `runtime.apiVersionMismatch` |
-| Wrapper (target) | server's major and N−1 | `runtime.apiVersionMismatch` |
+| Registered wrapper | server's major; minor ≤ server's minor; or a wrapper client from the immediately previous major | `runtime.apiVersionMismatch` |
+| Wrapper approval | wrapper client checks compatibility from `hello` before asking for the listener; listener accepts only the matching wrapper code | `runtime.apiVersionMismatch` in RuntimeClient |
 | Maintenance (target) | every client | — |
 
 A client newer than the server in minor only is refused on control. That happens only during an APKRun update, which the maintenance endpoint covers ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.6).
@@ -134,8 +150,9 @@ A client newer than the server in minor only is refused on control. That happens
 | making an optional request field required; removing or renaming a field, case, or operation; changing a type, meaning, or encoding | major |
 
 - Reply and event enums are open: an unknown case decodes as `.unknown`.
-- Broker and maintenance accept only minor changes.
-- The wrapper endpoint keeps N−1 DTOs in a versioned namespace (`RuntimeAPI.V<N−1>`) and converts them. Tests decode fixtures of every served major.
+- `hello` reports the server version without rejecting a mismatch. `requestEndpoint` checks the supplied version; RuntimeClient checks `hello` before calling `requestApprovalEndpoint`.
+- API 1.14 clients cannot decode the API 1.15 team-signed signer kind. The event hub omits those approval prompts for API clients older than 1.15, including on replay of a pending prompt.
+- Maintenance remains target contract.
 
 ### 2.4 Wrapper compatibility
 
@@ -146,7 +163,7 @@ The launcher is built against `M.m`, and apkrund serves `N.n` ([wrapper.md](../0
 | `runtimeVersion` < `runtime.minimumVersion` in `wrapper.json` | screen V |
 | `M == N`, `m ≤ n` | OK |
 | `M == N`, `m > n`, or `M > N` | screen V |
-| `M == N − 1` | OK; apkrund marks the wrapper for a launcher refresh (`.launcher` in `refreshReasons`) |
+| `M == N − 1` | OK |
 | `M < N − 1` | screen L |
 
 ---
@@ -160,9 +177,14 @@ client                                     apkrund
   connect io.apkrun.apkrund.xpc         ─▶ broker
   hello(RuntimeHelloRequest)            ─▶ RuntimeHelloReply
   requestEndpoint(RuntimeEndpointRequest) ─▶ RuntimeEndpointReply (.granted + endpoint | .rejected)
-     wrapper, rejected: requestApproval ─▶ ApprovalReply, then requestEndpoint again
-  close the broker connection
-  connect the endpoint (exportedInterface = RuntimeEventSink)
+     wrapper, unknownClient
+       requestApprovalEndpoint(RuntimeWrapperApprovalBrokerRequest)
+                                         ─▶ RuntimeEndpointReply (.granted + endpoint | .rejected)
+       connect one-use endpoint (exportedInterface = RuntimeWrapperApprovalXPC)
+       submitApproval()                   ─▶ RuntimeWrapperApprovalBrokerReply
+       outcome approved: requestEndpoint(kind: wrapper) again
+  close the broker and approval endpoint connections
+  connect the control endpoint (exportedInterface = RuntimeEventSink)
   subscribe(…), other operations
 ```
 
@@ -197,48 +219,75 @@ client                                     apkrund
 
 | Field | Type | Meaning |
 |---|---|---|
-| `kind` | `RuntimeEndpointKind` | `control` in code. Target: `maintenance`, `wrapper(bundleID:)` |
+| `kind` | `RuntimeEndpointKind` | `control` or `wrapper`; maintenance remains target |
 | `clientKind` | `RuntimeClientKind` | must match the listener |
 | `claimedIdentity` | String | must equal this build's identifier for `clientKind`, else `unknownClient` |
+| `bundlePath` | String? | optional absolute `.app` path for a wrapper; when its location differs from the registry entry, the broker inspects the bundle and compares its cdhash |
 | `apiVersion` | `APIVersion` | §2 |
-| `selfCdhash` | String? (target) | wrappers; advisory only |
 
 `RuntimeEndpointReply`: `granted` (the `NSXPCListenerEndpoint` travels in the reply argument) or `rejected(RuntimeEndpointRejection)`.
 
 | `RuntimeEndpointRejection` | Meaning |
 |---|---|
 | `unknownClient` | no listener for the claimed identity |
-| `malformedRequest` | over 16 KiB, undecodable, kind not `control`, major 0, or minor above the server's |
+| `malformedRequest` | over 16 KiB, undecodable, unsupported endpoint/client-kind combination, or incompatible API version |
 | `hostShuttingDown` | apkrund is draining; retry after launchd restarts it |
 | `busy` | grant or control limit reached (§4.10) |
 | `unknown` | decode-only |
 
-- Pending grants: at most 32, each valid 5 s and bound to one broker connection. A grant does not use the 8 live control slots.
-- A rejected control client shows the damaged-app message ([host-ui.md](../02-design/host-ui.md) §3). A rejected wrapper goes to approval (§3.4).
+- Pending control grants: at most 32, each valid 5 s and bound to one broker connection. A grant does not use the 8 live control slots.
+- A rejected control client shows the damaged-app message ([host-ui.md](../02-design/host-ui.md) §3). A wrapper rejection of `unknownClient`, or a transport failure when its changed signature cannot connect to the registered endpoint, enters the approval flow (§3.4); the approval-endpoint preflight can also return `unknownClient` when bundle validation fails.
 - Deadline: 5 s.
 
-### 3.4 `requestApproval` (broker, target)
+### 3.4 `requestApprovalEndpoint` and `submitApproval` (wrapper approval, built in API 1.14)
 
-Flow: [wrapper.md](../02-design/wrapper.md) §7.3. Request: `bundleURL` (URL), `bundleID` (String), `packageID` (`RuntimePackageID`). Reply `ApprovalReply`: `approved`, `denied(until: Date)` (24 h), `timedOut` (10 min).
+The wrapper first requests its registered control endpoint with `requestEndpoint(kind: wrapper)`. If the broker rejects that with `unknownClient`, or package-info reaches a listener that refuses the changed code signature, RuntimeClient may call `requestApprovalEndpoint` only when its wrapper client kind, claimed bundle ID, and canonical bundle path match its own configuration. The request contains claims; matching them locally does not authorize approval.
 
-| Error | When |
+`RuntimeWrapperApprovalBrokerRequest`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `bundlePath` | String | Absolute wrapper `.app` path; bounded to 1024 UTF-8 bytes |
+| `bundleID` | String | Claimed wrapper bundle identifier; bounded to 255 UTF-8 bytes |
+| `packageID` | `RuntimePackageID` | Claimed Android package identifier |
+
+Before issuing an endpoint, apkrund canonicalizes the path and validates the bundle signature, signed and plist bundle identifiers, wrapper manifest, package ID mapping, format and launcher version metadata, cdhash, and signer facts. Any preflight validation failure returns `RuntimeEndpointReply.rejected(.unknownClient)`. Preflight does not create a challenge, consume the five-per-minute approval quota, or query package state. On success, the broker grants a one-use anonymous listener with the code requirement `identifier "<bundleID>" and cdhash H"<cdhash>"`. At most one approval-endpoint reservation may be outstanding per broker connection; it expires after 5 s if unused and accepts one matching wrapper connection (§4.10).
+
+`RuntimeWrapperApprovalXPC` exposes only `submitApproval()` with no request payload. After the wrapper connects, apkrund revalidates its bundle against the identity pinned to that listener. Only then does it admit or coalesce the approval request and read installed-package details. A bundle replaced after endpoint issuance fails validation and cannot reuse the endpoint.
+
+| `requestApprovalEndpoint` rejection | Meaning |
 |---|---|
-| `wrapper.bundleInvalid` | static check failed: signature, identifier ≠ bundle ID, bundle ID ≠ map(package ID), or `wrapper.json` invalid |
-| `runtime.busy` | more than 5 requests in a minute, from all wrappers |
+| `malformedRequest` | Payload exceeds the 16 KiB broker limit or cannot be decoded as `RuntimeWrapperApprovalBrokerRequest` |
+| `unknownClient` | The requested bundle could not be strictly validated |
+| `busy` | Endpoint reservation or broker request limit reached (§4.10) |
+| `hostShuttingDown` | apkrund is draining |
 
-- An unexpired denial for the same cdhash answers `denied` at once. A second request for the same bundle ID joins the pending one.
-- The launcher shows screen A while it waits. It maps `denied` and `timedOut` to `wrapper.approvalDenied` and `wrapper.approvalTimedOut`.
+`submitApproval()` returns `RuntimeWrapperApprovalBrokerReply`, with exactly one of `result` or `error`. `result` is `RuntimeWrapperApprovalOutcome`: `approved`, `denied`, or `timedOut`; `unknown` is decode-only. `error`, when present, is a `RuntimeWireError`.
+
+| `submitApproval()` error | When |
+|---|---|
+| `wrapper.bundleInvalid` | The wrapper fails validation or no longer matches the identity pinned to the endpoint |
+| `runtime.busy` | Endpoint request admission is full, a different validated identity is pending for the same bundle ID, or the five-new-approvals-per-trailing-minute limit is reached |
+| `wrapper.approvalDenied` | The same bundle ID and cdhash was denied during the previous 24 hours |
+| `wrapper.registryUnavailable` | Wrapper registry could not be read |
+| `runtime.hostShuttingDown` | apkrund is draining |
+| `runtime.internal` | Unexpected server failure |
+
+- A prompt expires after 10 minutes. An explicit denial is recorded for 24 hours against the bundle ID and cdhash. A later request in that period returns `wrapper.approvalDenied`, not a `denied` result.
+- Requests for the same canonical bundle path, bundle ID, package ID, and cdhash join one preparation or pending approval and share its `ApprovalID`. Identical callers receive the shared outcome; callers that disconnect cannot receive a reply, but their disconnection does not cancel the shared challenge.
+- After `submitApproval()` creates or joins a challenge, the service publishes `wrappers.approvalRequested` and asks APKRun.app to open its approval UI. The wrapper launcher proceeds only for `approved`.
+- The approval service publishes `wrappers.approvalResolved` when the decision commits or the challenge expires. Event subscribers should process delivery idempotently by `ApprovalID` (§16.1).
 
 ### 3.5 Invalidation and interruption
 
 | Event on the endpoint | Meaning | Client action |
 |---|---|---|
 | `interruptionHandler` | apkrund exited or crashed; launchd restarts it on demand (NFR-REL-02) | reconnect (§3.6) |
-| `invalidationHandler` right after `resume()` | requirement failed | wrapper: `cdhashMismatch` → approval. Control: `runtime.notAuthorized` |
+| `invalidationHandler` right after `resume()` | requirement failed | wrapper: protected connection fails; an unregistered wrapper receives `unknownClient` from the broker and can request approval. Control: `runtime.notAuthorized` |
 | `invalidationHandler` later | apkrund dropped the connection | reconnect |
-| no reply within deadline + 5 s | lost request | `runtime.requestTimedOut(operation:)`; invalidate |
+| no reply within operation deadline + 5 s | lost request | `runtime.requestTimedOut(operation:)`; invalidate |
 
-On the server, an invalidated connection: is removed from all topics (§16.1); orphans its session for 3 s, after which the close policy applies ([display-and-windowing.md](../02-design/display-and-windowing.md) §7.6); does not cancel its operations (§4.7); releases its `hold` activity; ends its relays and streams (§11.3, §16.4).
+On the server, an invalidated endpoint connection: is removed from all topics (§16.1); orphans its session for 3 s, after which the close policy applies ([display-and-windowing.md](../02-design/display-and-windowing.md) §7.6); does not cancel its operations (§4.7); releases its `hold` activity; ends its relays and streams (§11.3, §16.4). Broker approval requests are service-owned: caller disconnect does not cancel the challenge; it resolves on decision or expiry, and the disconnected caller cannot receive its reply (§3.4).
 
 ### 3.6 Reconnect
 
@@ -278,7 +327,7 @@ Target `HostState`: `normal`; `updating(targetBuild: Int)`; `restartPending(bund
 ```swift
 func runtimeStatus(_ request: Data, reply: @escaping (Data) -> Void)
 func importPackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
-// target: IOSurfaces come back next to the JSON
+// built: IOSurfaces come back next to the JSON
 func openSession(_ request: Data, reply: @escaping (Data, [IOSurface]?) -> Void)
 func resizeSession(_ request: Data, reply: @escaping (Data, [IOSurface]?) -> Void)
 // target: one-way messages
@@ -287,7 +336,7 @@ func sendInput(_ batch: Data)
 
 - A built control request is a struct with `header: APIRequestHeader` and its own fields. Most built replies carry `result` and `error`, of which exactly one is set. `ResizeSessionControlReply` carries an outcome; only `.applied` includes a result.
 - `APIRequestHeader`: `apiVersion` (`APIVersion`), `operationID` (`UUID`, for log correlation), `clientKind` (`RuntimeClientKind`).
-- Built `RuntimeEventSink` (client-exported): `handshake(reply:)` confirms the peer exported the sink; `deliver(_:reply:)` receives a JSON array of `EventEnvelope`, and the reply acknowledges it (§16.2). Target: `sessionEvent`, `frameReady`, `surfacesReplaced`, `streamEvent`.
+- Built `RuntimeEventSink` (client-exported): `handshake(reply:)` confirms the peer exported the sink; `deliver(_:reply:)` receives a JSON array of `EventEnvelope`, and the reply acknowledges it (§16.2). Built optional session callbacks are `frameReady`, `sessionCloseRequested`, and `surfacesReplaced`; target callbacks include `streamEvent`.
 - One-way messages carry no header. The `@objc` method names equal the operation names.
 - `RuntimeService` composes `RuntimePackageService` and `RuntimeSessionService`. Target: one protocol per group of §5–§15. Every method is `async throws(RuntimeWireError)`.
 
@@ -322,7 +371,7 @@ func sendInput(_ batch: Data)
 | `ImageVersion` | `YYYY.MM.seq-base-arm64`, for example `2026.11.3-cf12-arm64`; `base` is `cf<digits>` or `ar<6 digits>` |
 | `cdhash` | 40 lowercase hex characters |
 | target: `SessionID` | `{"app": "<uuid>"}` or `{"system": <SystemDisplayUse>}` |
-| target: `ApprovalID`, `PromptID`, `OfferID`, `StreamID`, `StagingToken` | lowercase UUID |
+| `ApprovalID` (built); target: `PromptID`, `OfferID`, `StreamID`, `StagingToken` | lowercase UUID |
 | target: `SharedFolderID` | `shared` for the built-in folder; otherwise a UUID ([configuration.md](configuration.md) §2.8) |
 | target: `RecoveryPointID` | `<timestamp>-<imageVersion>` |
 | target: `HealthCheckID` | dotted string, for example `runtime.boot` |
@@ -375,7 +424,7 @@ func sendInput(_ batch: Data)
 | Operation | Deadline |
 |---|---|
 | `hello`, `requestEndpoint` | 5 s |
-| `requestApproval` | 10 min |
+| `submitApproval` | 10 min |
 | `startRuntime` | `timeoutMs`, default `runtime.bootTimeoutSeconds` + 30 s (first boot: `firstBootTimeoutSeconds` + 30 s) |
 | `restartRuntime` | graceful stop (up to 40 s), then the start deadline. Client cap when unknown: 3675 s (3600 + 30 + 40 + 5) |
 | `openSession` | 30 s after `acquiringDisplay`; waits are session states, not the reply |
@@ -459,7 +508,7 @@ Cancellation points:
 | `operations` | `OperationEvent` | C; W for own operations (target) |
 | `health` | `HealthEvent` (target) | C |
 | `maintenance` | `MaintenanceEvent` (target) | C |
-| `wrappers` | `WrapperChange` (target) | C |
+| `wrappers` | `WrapperChange` approval events are built in API 1.14; signer facts are extended in 1.15; other wrapper-management events are target | C |
 | `integrations` | `IntegrationChange` (target) | C |
 
 API 1.10 publishes `packages.installed` and `packages.updated` after a successful install; `from` is the best pre-install version observed. API 1.11 publishes `packages.removed` after the uninstall commits; `keptData` says whether app data stayed. `uninstall --forget` removes only APKRun's record and publishes no event.
@@ -470,7 +519,7 @@ API 1.10 publishes `packages.installed` and `packages.updated` after a successfu
 |---|---|---|
 | `FileHandle` | client → apkrund | every user-chosen file: imports, update files, image archives, icons, drops, Save to Mac, diagnostics output. The client opens it. Read handles are read with `pread` from offset 0 and the caller's offset is unchanged. Write handles must be empty regular files ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.3) |
 | bookmark `Data` | client → apkrund | folders apkrund must reach later: shared folders, wrapper destinations |
-| `IOSurface` (target) | apkrund → launcher | three per `SurfaceSet`, in `openSession`, applied `resizeSession`, and `surfacesReplaced` ([display-and-windowing.md](../02-design/display-and-windowing.md) §5) |
+| `IOSurface` | apkrund → launcher or wrapper | three per `SurfaceSet`, in `openSession`, applied `resizeSession`, and `surfacesReplaced` ([display-and-windowing.md](../02-design/display-and-windowing.md) §5) |
 | `NSXPCListenerEndpoint` | broker → client | `requestEndpoint` reply |
 
 - File handles travel in a `files:` array; the JSON refers to them by `fileIndex`. An index that does not match returns `runtime.malformedRequest`.
@@ -486,9 +535,9 @@ API 1.10 publishes `packages.installed` and `packages.updated` after a successfu
 | pending control grants | 32, 5 s each, one per broker connection | `busy` |
 | broker connections | 32 | invalidated |
 | request size, control | 1 MiB | `runtime.malformedRequest` |
-| request size, broker | 16 KiB | `malformedRequest` rejection, or `runtime.malformedRequest` for `hello` |
+| request size, broker | 16 KiB | `malformedRequest` rejection for `requestEndpoint`, or `runtime.malformedRequest` for broker requests |
 | file handles per request | 20 for imports, 1 otherwise | `runtime.malformedRequest` |
-| approval requests (target) | 1 per bundle ID; 5 per minute | joins pending / `runtime.busy` |
+| wrapper approval | 1 pending challenge per bundle ID; 5 new requests per trailing minute | exact duplicate joins; conflict or rate limit returns `runtime.busy` (§3.4) |
 | streams per connection (target) | 4 | `runtime.busy` |
 | events queued per subscriber | 1024 | `resyncRequired` (§16.2) |
 | coalesced events | 10 per second per key and subscriber | older values dropped |
@@ -589,11 +638,11 @@ Target `RuntimeStatus` replaces `RuntimeHostStatus` for `runtimeStatus`. Fields:
 |---|---|---|---|---|---|
 | `launch` (built) | `RuntimeLaunchControlRequest` (`packageID`) → `RuntimeLaunchControlReply` (`result`: `RuntimeLaunchResult`) | C | W | `sessions.*` (target) | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.2 |
 | `terminate` (built) | `RuntimeTerminateControlRequest` (`packageID`) → `RuntimeTerminateControlReply` (`result`: `RuntimeTerminateResult`) | C | U | `sessions.ended` (target) | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.2 |
-| `openSession` (target) | `OpenSessionRequest` → `SessionDescriptor` + `[IOSurface]` | W, L | W | session channel, `sessions.opened` | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.1 |
-| `resizeSession` (target) | `ResizeSessionRequest` → `ResizeSessionControlReply` + `[IOSurface]` when applied | W, L | W | session channel | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.1 |
+| `openSession` (built) | `OpenSessionRequest` → `SessionDescriptor` + `[IOSurface]` | W, L | W | session channel | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.1 |
+| `resizeSession` (built) | `ResizeSessionRequest` → `ResizeSessionControlReply` + `[IOSurface]` when applied | W, L | W | session channel | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.1 |
 | `listSessions` (target) | — → `[SessionSummary]` | C | Q | — | [runtime-daemon.md](../02-design/runtime-daemon.md) §8.6 |
 
-APKRun.app and the CLI never open app sessions. They call `launch`, and the launched process opens the session (ADR-0006).
+APKRun.app and the CLI never open app sessions. They call `launch`, and the launched generic launcher or wrapper opens the session (ADR-0006).
 
 - `RuntimeLaunchResult`: `sessionID` (UUID), `packageID`, `state` (`RuntimeSessionPhase`).
 - `RuntimeSessionPhase` (built): `starting`, `booting`, `waitingForPackage`, `launching`, `running`, `ended`, `unknown`.
@@ -601,9 +650,11 @@ APKRun.app and the CLI never open app sessions. They call `launch`, and the laun
 - `launch` opens the registered wrapper when its `WrapperStatus.state` is `valid`, otherwise the generic launcher. A running wrapper is activated. The process must connect within 20 s, or `runtime.launchTimedOut`.
 - `terminate` closes the window and force-stops the app through the Guest Agent. Without a session it force-stops only when Android is `ready`. It never starts Android.
 
-### 6.2 `openSession` (target)
+### 6.2 `openSession` (built)
 
-`OpenSessionRequest`: `packageID`, `geometry` (`DisplayGeometry`: `pointSize` (CGSize), `backingScale` (1.0 or 2.0), `zoom` (0.75…2.0)), `screenSize` (CGSize, points), `launchTiming` (`processStart`, `requestSent`: UInt64 nanoseconds, optional).
+`OpenSessionRequest`: `packageID`, `geometry` (`DisplayGeometry`: `pointSize` (CGSize), `backingScale` (1.0 or 2.0), `zoom` (0.75…2.0)), `screenSize` (CGSize, points), `launchTiming` (`processStart`, `requestSent`: optional UInt64 sleep-inclusive `mach_continuous_time` nanoseconds since this Mac boot).
+
+`LaunchTiming` is diagnostic input only. Both timestamps must come from the same host boot clock; RuntimeHost ignores missing, future, or older-than-10-minute values.
 
 `SessionDescriptor`: `sessionID`, `displayID`, `windowPrefs` (`resizable`, `alwaysOnTop`, `zoom`), `inputPrefs` (§14.2), `windowMode` (`secondaryDisplay` or `primaryDisplayCompatibility`), `state` (`SessionPhase`), `surfaces` (`SurfaceSet`: `generation` UInt32, `surfaceCount` 3, `pixelSize`, `densityDpi`).
 
@@ -621,34 +672,34 @@ Server steps ([runtime-daemon.md](../02-design/runtime-daemon.md) §7.1):
 
 While the reply is pending, `stateChanged` arrives at least every 10 s.
 
-`SessionPhase` (target): `starting`, `booting(BootProgress)`, `waitingForPackage`, `launching`, `running`, `ended(SessionEndReason)`, `unknown`. `SessionEndReason`: `userClosed`, `appExited`, `appCrashed`, `runtimeStopped`, `updating`, `runtimeUpdating`, `packageUninstalled`, `error(WireError)`, `unknown`. `closing` and `backgrounded` are not sent.
+`SessionPhase` (built): `starting`, `booting(BootProgress)`, `waitingForPackage`, `launching`, `running`, `ended(SessionEndReason)`, `unknown`. `SessionEndReason` (built): `userClosed`, `appExited`, `appCrashed`, `runtimeStopped`, `updating`, `runtimeUpdating`, `packageUninstalled`, `error(WireError)`, `unknown`. `closing` and `backgrounded` are not sent.
 
 `SessionSummary` (target): `sessionID`, `packageID`, `displayName`, `state`, `displayID`?, `clientKind` (`wrapper` or `launcher`), `openedAt`, `windowMode`, `recording` (Bool), `pointSize` (CGSize?; for **Use Current Size**, §14.3).
 
-### 6.3 Session channel (target)
+### 6.3 Session channel (partially built)
 
-The session channel needs no session ID: a connection holds at most one session. Before the reply, or after the session ends, one-way messages are dropped and requests return `runtime.invalidTransition`.
+The built session channel is bound to a connection that holds at most one session. `restartApp` and `closeSession` include the session ID and package ID so the daemon can reject stale or mismatched requests. Before the reply, or after the session ends, one-way messages are dropped and requests return `runtime.invalidTransition`. Built operations are `frameDisplayed`, `visibilityChanged`, `resizeSession`, `restartApp`, and `closeSession`; input, clipboard, files, link prompts, and other messages below remain target contract.
 
 Client → apkrund:
 
 | Message | Shape | Kind | Rule |
 |---|---|---|---|
-| `frameDisplayed` | `(generation: UInt32, frameSeq: UInt64)` | 1 | from the Core Animation completion block; frees older buffers |
-| `visibilityChanged` | `(Bool)` | 1 | `false` → `backgrounded`; presents stop |
+| `frameDisplayed` (built) | `(generation: UInt32, frameSeq: UInt64)` | 1 | from the Core Animation completion block; frees older buffers |
+| `visibilityChanged` (built) | `(Bool)` | 1 | `false` → `backgrounded`; presents stop |
 | `focusChanged` | `(Bool)` | 1 | key window; `false` also sends `cancelAll` ([input.md](../02-design/input.md) §7.2) |
 | `sendInput` | `InputBatch` | 1 | §7 |
 | `sendText` | `WireImeTextEvent` | 1 | §7 |
-| `resizeSession` | `ResizeSessionRequest` → outcome; `.applied` returns the updated descriptor and three replacement `IOSurface`s | W | after live resize, backing-scale, or zoom change |
-| `closeSession` | `CloseSessionRequest` (`policy`: `stop`, `keepRunning`, or nil for `window.closeBehavior`) → `RuntimeEmpty` | U | window closed; session goes to `ended(userClosed)` |
+| `resizeSession` (built) | `ResizeSessionRequest` → outcome; `.applied` returns the updated descriptor and three replacement `IOSurface`s | W | after live resize, backing-scale, or zoom change |
+| `closeSession` (built) | `CloseSessionRequest {header, sessionID, packageID, policy?}` → `RuntimeEmpty` | U | window closed; nil or `.stop` calls Guest Agent `StopApplication(FINISH_TASKS)`, then releases the display and ends the session as `userClosed`. `keepRunning` is not implemented |
 | `pushClipboard` | `ClipItem` → `ClipAck` | U (500 ms) | §11.2 |
 | `clipboardWritten` | `ClipboardWritten` | 1 | §11.2 |
 | `importFiles` | `ImportFilesRequest` + files → `ImportResult` | W (10 min) | §11.2 |
 | `acceptExport` | `AcceptExportRequest` + 0 or 1 file → `RuntimeEmpty` | W (10 min) | §11.2 |
 | `resolveLinkPrompt` | `ResolveLinkPromptRequest` → `RuntimeEmpty` | U | §11.2 |
-| `restartApp` | `RuntimeEmpty` → `RuntimeEmpty` | U | force-stop and relaunch on the same display ([wrapper.md](../02-design/wrapper.md) §5.6) |
+| `restartApp` (built) | `RestartAppRequest {header, sessionID, packageID}` → `RuntimeEmpty` | U | `StopApplication`, then `LaunchApplication` on the session's existing display; the session and window stay open |
 | `frameStatistics` | `RuntimeEmpty` → `SessionGraphicsStatistics` | Q | developer mode only; never starts Android |
 
-apkrund → client (`RuntimeEventSink`): `frameReady(generation, surfaceIndex, frameSeq, presentationTime)` (not JSON; `presentationTime` is `mach_absolute_time`); `surfacesReplaced(SurfaceSet, [IOSurface])`; `sessionEvent(SessionEvent)`.
+apkrund → client (`RuntimeEventSink`): built callbacks are `frameReady(generation, surfaceIndex, frameSeq, presentationTime)` (not JSON; `presentationTime` is `mach_absolute_time`) and `surfacesReplaced(SurfaceSet, [IOSurface])`. `sessionEvent(SessionEvent)` remains target.
 
 `SessionEvent`: `stateChanged(SessionPhase)`, `imeStateChanged(EditorState)`, `windowRequest(WindowRequest)` (`activate`, `close`, `setTitle(String)`), `windowPrefsChanged(WindowPrefs)`, `clipboardFromGuest(ClipItem)` (key window only), `exportOffered(ExportOffer)`, `linkPrompt(LinkPrompt)`, `unknown`.
 
@@ -665,11 +716,12 @@ apkrund → client (`RuntimeEventSink`): `frameReady(generation, surfaceIndex, f
 
 | Operation | Errors |
 |---|---|
-| `openSession` (target) | `runtime.packageNotInstalled`, `store.operationInProgress`, `runtime.bootLoop`, `runtime.notProvisioned`, `runtime.displayPoolExhausted`, `runtime.displayAttachFailed`, `runtime.primaryDisplayBusy`, `runtime.launchTimedOut`, `runtime.launchFailed`, `runtime.guestAgentUnavailable`, and the boot errors of §5.5. Later failures arrive as `ended(error(…))` |
+| `openSession` (built) | `runtime.packageNotInstalled`, `store.operationInProgress`, `runtime.bootLoop`, `runtime.notProvisioned`, `runtime.displayPoolExhausted`, `runtime.displayAttachFailed`, `runtime.primaryDisplayBusy`, `runtime.launchTimedOut`, `runtime.launchFailed`, `runtime.guestAgentUnavailable`, and the boot errors of §5.5 |
 | `launch` | `runtime.packageNotInstalled`, `runtime.launchTimedOut` (for example a damaged wrapper, screen D), `runtime.launchFailed`, `wrapper.launcherTemplateInvalid` |
 | `terminate` | `runtime.packageNotInstalled` |
-| `resizeSession` (target) | `runtime.displayReconfigureFailed`, `runtime.displayLost`; an uncertain rollback returns `.stateUncertain` |
-| `restartApp` (target) | `runtime.launchFailed`, `runtime.launchTimedOut`, `runtime.guestAgentUnavailable` |
+| `resizeSession` (built) | `runtime.displayReconfigureFailed`, `runtime.displayLost`; an uncertain rollback returns `.stateUncertain` |
+| `restartApp` (built) | `runtime.guestAgentOperationFailed`, Guest Agent errors, launch errors |
+| `closeSession` (built) | `runtime.guestAgentOperationFailed`, Guest Agent errors |
 | `frameStatistics` (target) | `runtime.developerModeRequired` |
 
 ---
@@ -716,7 +768,7 @@ RuntimeAPI carries wire copies of the InputCore types (`InputWireTypes.swift`), 
 
 ## 8. Packages and store
 
-Store semantics: [package-store.md](../02-design/package-store.md) §11. A wrapper gets `packageInfo` and `packageIcon` for its own package only; the launcher gets both for any package.
+Store semantics: [package-store.md](../02-design/package-store.md) §11. The built wrapper endpoint allows `packageInfo` for its authenticated package only; `packageIcon` remains target contract.
 
 ### 8.1 Operations
 
@@ -727,7 +779,7 @@ Store semantics: [package-store.md](../02-design/package-store.md) §11. A wrapp
 | `beginInstallImported` (built) | `RuntimeBeginInstallImportedControlRequest` → `RuntimeBeginInstallImportedControlReply` (`result`: `OperationHandle`) | C | L | `operations.*` | [package-store.md](../02-design/package-store.md) §6.2 |
 | `beginUninstallPackage` (built) | `RuntimeBeginUninstallPackageControlRequest` (`RuntimeUninstallPackageRequest`) → `RuntimeBeginUninstallPackageControlReply` (`result`: `OperationHandle`) | C | L | `operations.*`, `packages.removed`, `sessions.ended(packageUninstalled)` (target) | [package-store.md](../02-design/package-store.md) §8 |
 | `listPackages` (built) | `RuntimeListPackagesControlRequest` (`filter`) → `RuntimeListPackagesControlReply` (`result`: `RuntimePackageListResult`) | C | Q | — | [package-store.md](../02-design/package-store.md) §9 |
-| `packageInfo` (built) | `RuntimePackageInfoControlRequest` (`packageID`) → `RuntimePackageInfoControlReply` (`result`: `RuntimePackageDetails`) | C, L | Q | — | [package-store.md](../02-design/package-store.md) §11.1 |
+| `packageInfo` (built) | `RuntimePackageInfoControlRequest` (`packageID`) → `RuntimePackageInfoControlReply` (`result`: `RuntimePackageDetails`) | C, L, W (own package) | Q | — | [package-store.md](../02-design/package-store.md) §11.1 |
 | `inspectFile` (target) | `ImportPackageRequest` + files → `OperationHandle` (`inspect`) | C | L | `operations.*` | [package-store.md](../02-design/package-store.md) §4.3 |
 | `cancelImport` (target) | `CancelImportRequest` (`ticket`) → `RuntimeEmpty` | C | U | — | [package-store.md](../02-design/package-store.md) §11.1 |
 | `packageIcon` (target) | `PackageIconRequest` (`packageID`, `sizePx`) → `PackageIcon` | C, L, W | Q | `packages.iconChanged` | [package-store.md](../02-design/package-store.md) §10 |
@@ -892,23 +944,20 @@ Design: [update-system.md](../02-design/update-system.md) §3, §2.3, §7.3, §8
 
 ## 10. Wrappers
 
-Semantics: [wrapper.md](../02-design/wrapper.md). All of §10 is target except as noted. Generation, refresh, removal, verification, and approval are control operations.
+Semantics: [wrapper.md](../02-design/wrapper.md). API 1.14 builds wrapper approval requests and the package-scoped wrapper endpoint (§10.1, §10.6). Generation, refresh, removal, and verification are target control operations.
 
 ### 10.1 Wrapper endpoint
 
-A wrapper's launcher calls exactly these operations, and only for its own package:
+A registered wrapper's launcher has this built API surface, and may request package information only for its own package:
 
 | Endpoint | Operation | Section |
 |---|---|---|
-| broker | `hello`, `requestEndpoint`, `requestApproval` | §3.2–§3.4 |
-| wrapper | `runtimeStatus` (`RuntimeSummary`), `openSession` and the session channel | §5.3, §6.2–§6.3 |
-| wrapper | `packageInfo`, `packageIcon` | §8.3 |
-| wrapper | `importBootstrap` | §10.7 |
-| wrapper | `notificationRelay` (stream), `notificationRelayResponse` | §11.3 |
-| wrapper | `subscribe`, `unsubscribe` (topic `operations`, own operations) | §16.1 |
-| wrapper | `cancelOperation`, `operationStatus` (own operations), `closeStream` | §4.7, §16.4 |
+| broker | `hello`, `requestEndpoint`, `requestApprovalEndpoint` | §3.2–§3.4 |
+| wrapper approval | `submitApproval` on a one-use listener pinned to this wrapper's validated bundle ID and cdhash | §3.4 |
+| wrapper | `packageInfo` (authenticated package only) | §8.1 |
+| wrapper | `openSession`, `resizeSession`, `frameDisplayed`, `visibilityChanged` (session bound to this connection) | §6.2–§6.3 |
 
-The wrapper endpoint serves major N and N−1 (§2.4). Removing an operation from this list is a major change.
+Registered wrapper launchers use `RuntimeControlXPC` on a broker-issued anonymous listener. The listener checks the registered bundle identifier and cdhash; while that registry entry is refreshing, it accepts both the current and pending cdhash. The approval listener accepts only `RuntimeWrapperApprovalXPC.submitApproval` from the matching validated wrapper code and cannot access the registered-wrapper control operations. A registered wrapper cannot call `runtimeStatus`, list packages, subscribe to topics, launch or terminate packages, use approval-control operations, or call target operations such as `packageIcon` or `importBootstrap`. Removing a built operation from either wrapper surface is a major change.
 
 ### 10.2 Operations
 
@@ -922,16 +971,16 @@ The wrapper endpoint serves major N and N−1 (§2.4). Removing an operation fro
 | `refreshAllWrappers` | `RefreshAllWrappersRequest` → `OperationHandle` (`wrapperRefreshAll`) → `WrapperBatchResult` | C | L | `wrappers.refreshed` per wrapper |
 | `removeWrapper` | `RemoveWrapperRequest` → `RuntimeEmpty` | C | U | `wrappers.removed` |
 | `verifyWrapper` | `VerifyWrapperRequest` → `WrapperVerification` | C | Q (5 s; 60 s deep) | `wrappers.statusChanged` |
-| `approveWrapper` | `ApproveWrapperRequest` → `WrapperSummary` | C | U | `wrappers.created` |
+| `approveWrapper` (built, API 1.14) | `RuntimeWrapperApprovalPrepareControlRequest` (`bundlePath`) → `RuntimeWrapperApprovalPrepareControlReply` (`result`: `RuntimeWrapperApprovalPrompt`) | P | U | none; the prompt is returned to the caller |
 | `pendingApprovals` | — → `[ApprovalPrompt]` | A | Q | — |
-| `decideApproval` | `DecideApprovalRequest` → `RuntimeEmpty` | A | U | `wrappers.approvalResolved`, `wrappers.created` on allow |
+| `decideApproval` (built, API 1.14) | `RuntimeWrapperApprovalDecisionControlRequest` (`approvalID`, `allow`) → `RuntimeWrapperApprovalDecisionControlReply` (`result`: `RuntimeEmpty`) | P | U | `wrappers.approvalResolved` |
 | `deniedWrappers` | — → `[DeniedWrapper]` | C | Q | — |
 | `clearWrapperDenial` | `ClearWrapperDenialRequest` → `RuntimeEmpty` | C | U | — |
 | `rescanWrappers` | `RescanWrappersRequest` → `RescanResult` | C | U | `wrappers.created` |
 | `buildDistributionWrapper` | `DistributionWrapperRequest` (+ 0 or 1 icon) → `OperationHandle` (`distributionWrapper`) → `DistributionWrapperResult` | C | L | `operations.*` (M12) |
 | `importBootstrap` | `ImportBootstrapRequest` + files → `OperationHandle` (`bootstrapImport`) → `RuntimePackageSummary` | W | L | `operations.*` (own), `packages.installed` |
 
-- `pendingApprovals` lets APKRun.app show a prompt requested before it connected. `rescanWrappers` with `register = false` only lists candidates.
+- `pendingApprovals` is target contract. API 1.14 approval prompts are delivered on the `wrappers` topic and replayed when an authorized client first subscribes (§10.6, §10.9).
 
 ### 10.3 Generation and placement
 
@@ -981,14 +1030,37 @@ The wrapper endpoint serves major N and N−1 (§2.4). Removing an operation fro
 - If macOS App Management blocks the swap, the refresh fails with `wrapper.refreshBlocked(path, stagingToken:)`. APKRun.app then swaps `Contents` and calls `placeStagedWrapper`. This exists only if #77 finds the block (R-20); otherwise `stagingToken` is removed.
 - `removeWrapper` never deletes; with `trash = true` the bundle goes to the Trash.
 
-### 10.6 Approval (control side)
+### 10.6 Approval (control side, built in API 1.14; signer facts extended in API 1.15)
 
-`ApprovalPrompt`: `approvalID`, `kind` (`wrapper` or `bootstrapInstall(RuntimeImportPreview)`), `bundleURL`, `bundleID`, `packageID`, `displayName`, `signer`, `packageInstalled` (Bool), `installedVersion`, `bundledVersion` (String?), `replacesURL` (URL?), `integrations` (`[IntegrationKind: WireIntegrationDecision]`, capped by this Mac's defaults, [configuration.md](configuration.md) §3.3), `icon` (PNG ≤ 256 px, Data?), `requestedAt`, `expiresAt` (10 min).
+`RuntimeWrapperApprovalPrepareControlRequest` contains an `APIRequestHeader` and an absolute `bundlePath`. `approveWrapper` validates the selected app and returns a `RuntimeWrapperApprovalPrepareControlReply` with exactly one of `result` or `error`; it prepares or retrieves a prompt but does not approve the wrapper.
 
-`DecideApprovalRequest`: `approvalID`, `allow`. `ApproveWrapperRequest`: `bundleURL`. `DeniedWrapper`: `bundleID`, `packageID`?, `cdhash`, `until`. `ClearWrapperDenialRequest`: `bundleID`, `cdhash`. `RescanWrappersRequest`: `register` (Bool). `RescanResult`: `candidates` (`[WrapperVerification]` in `~/Applications` and `/Applications`), `registered` ([RuntimePackageID]).
+`RuntimeWrapperApprovalPrompt` is returned by the CLI's `approveWrapper` control call and carried by `wrappers.approvalRequested` when an interactive wrapper submits through its one-use approval endpoint:
 
-- The first `decideApproval` wins. Later ones, or ones for expired prompts, return `wrapper.approvalNotFound`.
-- `approveWrapper` runs steps 1–3 and 5 of [wrapper.md](../02-design/wrapper.md) §7.3 without a prompt.
+| Field | Type | Meaning |
+|---|---|---|
+| `approvalID` | `ApprovalID` | Canonical lowercase UUID used by `decideApproval` |
+| `bundlePath` | String | Canonical absolute app-bundle path |
+| `bundleID` | String | Validated wrapper bundle identifier |
+| `packageID` | `RuntimePackageID` | Validated Android package identifier |
+| `displayName` | String | Name from the validated wrapper manifest |
+| `signer` | `RuntimeWrapperSignerSummary` | `kind` is `adHoc`, `developerID`, or `teamSigned`; older clients preserve future kinds as `unknown(String)`. `teamSigned` reports only the validated 10-character team identifier because the certificate class is unknown; a known Developer ID signer includes an optional `notarized` Bool |
+| `packageInstalled` | Bool | Whether the package lookup reports it installed; current host code maps lookup failures to `false` |
+| `installedVersion` | String? | Sanitized Android `versionName` and `versionCode` when available |
+| `bundledVersion` | String? | Optional DTO field; currently not populated by the service |
+| `integrations` | `RuntimeWrapperIntegrationSummary` | Manifest settings summarized as Bool flags: `clipboard`, `notifications`, `links`, `files`, `sharedFolders`, `microphone`. `links` is true when a links setting exists; the other flags reflect their corresponding enabled setting. Missing settings are false. |
+| `replacingBundlePath` | String? | Another active registered path for this package, when the approval would replace it |
+
+`RuntimeWrapperApprovalDecisionControlRequest` contains an `APIRequestHeader`, `approvalID`, and `allow` Bool. `decideApproval` commits the authenticated choice to the wrapper registry and returns a `RuntimeWrapperApprovalDecisionControlReply` with exactly one of `result` (`RuntimeEmpty`) or `error`. On allow, the service stores the validated bundle identity and bookmark as a user-approved registry entry. On deny, it records the bundle ID and cdhash for 24 hours.
+
+- The control operations are allowed to APKRun.app and `apkrun` CLI only (P); APKRunMenuBar and wrapper clients are refused with `runtime.notAuthorized`. `apkrun wrapper approve <path>` requires an interactive terminal unless `--yes` is supplied, displays the validated facts, asks for confirmation, and submits `decideApproval` through the control endpoint.
+- The CLI's `approveWrapper` call returns its prompt directly; it does not publish `approvalRequested` or open the GUI. An interactive wrapper's `submitApproval` call publishes `approvalRequested` and asks APKRun.app to open. The GUI subscribes to `wrappers`, and the event hub replays its cached prompts when that topic is first subscribed. If the CLI prepared the same pending challenge first, the wrapper endpoint joins it and publishes the event for the GUI.
+- A repeated `approveWrapper` for the same canonical path and validated identity while its prompt is pending returns the same prompt. An approval event for that `ApprovalID` is de-duplicated by the event hub.
+- A challenge created by `approveWrapper` is not bound to the control connection; if the client closes without deciding, the service expires it after 10 minutes. The approval service publishes `approvalResolved` on decision or expiry; the event hub removes the prompt from its replay cache. Event delivery and replay should be handled idempotently by `ApprovalID`.
+- A decision is committed once. A concurrent decision while its registry write is in progress returns `runtime.busy`; after it resolves or expires, later decisions return `wrapper.approvalNotFound`.
+- `approveWrapper` maps bundle, signature, identity, version, signer, and manifest failures to `wrapper.bundleInvalid`; registry-read failures to `wrapper.registryUnavailable`; a recent denial to `wrapper.approvalDenied`; and pending conflicts or the five-per-minute limit to `runtime.busy`.
+- `decideApproval` maps unknown or expired IDs to `wrapper.approvalNotFound`, a decision already committing to `runtime.busy`, and bookmark or registry-write failures to `wrapper.registryUnavailable`. Admission and malformed-request errors are in §4.5.
+
+The older `ApprovalPrompt`, `DecideApprovalRequest`, `ApproveWrapperRequest`, `DeniedWrapper`, `ClearWrapperDenialRequest`, `RescanWrappersRequest`, and `RescanResult` remain target contract; API 1.14 does not expose those DTOs or operations.
 
 ### 10.7 Portable bootstrap
 
@@ -1012,7 +1084,7 @@ Server steps ([wrapper.md](../02-design/wrapper.md) §10.2):
 
 ### 10.9 Events
 
-`WrapperChange` (topic `wrappers`, [wrapper.md](../02-design/wrapper.md) §12.1): `created(WrapperSummary)`, `refreshed(WrapperSummary)`, `removed(RuntimePackageID)`, `statusChanged(RuntimePackageID, WrapperStatus)` (coalesced per package), `approvalRequested(ApprovalPrompt)`, `approvalResolved(ApprovalID)`, `unknown`.
+`WrapperChange` (topic `wrappers`, [wrapper.md](../02-design/wrapper.md) §12.1): built in API 1.14 are `approvalRequested(RuntimeWrapperApprovalPrompt)` and `approvalResolved(ApprovalID)`; API 1.15 extends signer facts with `teamSigned`. `unknown` preserves future event cases. Target wrapper-management events: `created`, `refreshed`, `removed`, and `statusChanged`.
 
 ### 10.10 Errors
 
@@ -1024,8 +1096,8 @@ Server steps ([wrapper.md](../02-design/wrapper.md) §10.2):
 | `refreshAllWrappers` | per wrapper in `failed`; the operation fails only with `wrapper.registryUnavailable` or `wrapper.launcherTemplateInvalid` |
 | `wrapperInfo`, `removeWrapper`, `clearWrapperDenial` | `wrapper.wrapperNotFound`, `wrapper.registryUnavailable` |
 | `verifyWrapper` | `wrapper.bundleInvalid` |
-| `approveWrapper` | `wrapper.bundleInvalid`, `wrapper.approvalDenied`, `wrapper.registryUnavailable` |
-| `decideApproval` | `wrapper.approvalNotFound` |
+| `approveWrapper` (built) | `wrapper.bundleInvalid`, `runtime.busy`, `wrapper.registryUnavailable` |
+| `decideApproval` (built) | `wrapper.approvalNotFound`, `runtime.busy`, `wrapper.registryUnavailable` |
 | `importBootstrap` | `wrapper.bootstrapNotAllowed`, `wrapper.bootstrapInvalid`, `wrapper.approvalTimedOut`, and the install errors of §8.5 |
 | `buildDistributionWrapper` | as `createWrapper`, plus `wrapper.distributionToolMissing`, `wrapper.identityNotFound`, `wrapper.notarizationFailed` |
 
@@ -1320,13 +1392,14 @@ Topics fan out state changes to every subscriber. Streams deliver a sequence to 
 
 | Operation | Request → Reply | Clients | Kind |
 |---|---|---|---|
-| `subscribe` (built) | `RuntimeSubscribeControlRequest` (`topics`) → `RuntimeSubscribeControlReply` (`result`: `[EventTopic]`) | C; L (`runtime` only); W (`operations`, target) | U |
-| `unsubscribe` (built) | `RuntimeUnsubscribeControlRequest` (`topics`) → `RuntimeUnsubscribeControlReply` (`result`: `RuntimeEmpty`) | C, L, W | U |
+| `subscribe` (built) | `RuntimeSubscribeControlRequest` (`topics`) → `RuntimeSubscribeControlReply` (`result`: `[EventTopic]`) | C; L (`runtime` only) | U |
+| `unsubscribe` (built) | `RuntimeUnsubscribeControlRequest` (`topics`) → `RuntimeUnsubscribeControlReply` (`result`: `RuntimeEmpty`) | C, L | U |
 
 `EventTopic` raw values: `runtime`, `sessions`, `packages`, `updates`, `operations`, `health`, `maintenance`, `wrappers`, `integrations`.
 
 - The connection must export a responsive `RuntimeEventSink`. Otherwise `subscribe` returns `runtime.malformedRequest`. The server confirms the sink with a bounded handshake first.
-- A topic the kind may not have fails the whole request with `runtime.notAuthorized`. Built gates: C (`app`, `menuBar`, `cli`) get all nine topics; L (`launcher`) gets `runtime` only; `wrapper` gets none in the built code.
+- A topic the kind may not have fails the whole request with `runtime.notAuthorized`. Built gates: C (`app`, `menuBar`, `cli`) can subscribe to all nine topics, including `wrappers`; L (`launcher`) gets `runtime` only; W (`wrapper`) gets none.
+- Wrapper approval events are available to C subscribers on `wrappers`. On first subscription to that topic, the event hub replays its cached prompts (up to 64). Repeated `approvalRequested` events for the same `ApprovalID` are not republished; `approvalResolved` removes the prompt from the replay set. The approval service publishes `approvalResolved` when a decision commits or a challenge expires; consumers should process delivery, replay, and resynchronization idempotently.
 - An unknown topic name fails decoding with `runtime.malformedRequest`.
 - `subscribe` and `unsubscribe` are idempotent. Subscriptions end on invalidation (§3.5).
 - Replies and batches of one connection go from one serial queue. Events that arrive before a snapshot reply are older than the snapshot, and the client drops them.
@@ -1335,7 +1408,7 @@ Topics fan out state changes to every subscriber. Streams deliver a sequence to 
 
 `EventEnvelope`: `topic` (`EventTopic`), `seq` (UInt64, per connection from 1, assigned at send), `time` (Date), `operationID` (`OperationID`?), `payload` (`EventPayload`).
 
-`EventPayload`: `runtime(RuntimeChange)`, `sessions(SessionListChange)` (target), `packages(PackageChange)`, `updates(UpdateEvent)` (target), `operations(OperationEvent)`, `health(HealthEvent)` (target), `maintenance(MaintenanceEvent)` (target), `wrappers(WrapperChange)` (target), `integrations(IntegrationChange)` (target), `resyncRequired(EventTopic)`, `unknown`.
+`EventPayload`: built cases are `runtime(RuntimeChange)`, `packages(PackageChange)`, `operations(OperationEvent)`, `wrappers(WrapperChange)` (wrapper-approval cases only), `resyncRequired(EventTopic)`, and `unknown`. `sessions(SessionListChange)`, `updates(UpdateEvent)`, `health(HealthEvent)`, `maintenance(MaintenanceEvent)`, and `integrations(IntegrationChange)` remain target contract.
 
 | Rule | Value |
 |---|---|
@@ -1363,7 +1436,7 @@ Coalescing keys: `runtime.bootProgress` (one key); `operations.progress` and `pa
 
 `PackageChange` (topic `packages`): `installed(RuntimePackageSummary)`, `updated(RuntimePackageSummary, from: RuntimeVersionCode)` (also same-version reinstall; `from` is a best observation), `removed(RuntimePackageID, keptData: Bool)`, `unknown`. Target cases: `rolledBack`, `stateChanged(RuntimePackageID, WirePackageState)`, `operationProgress(RuntimePackageID, OperationID, StoreOperationProgress)`, `iconChanged`, `settingsChanged(RuntimePackageID, keys:)`, `unmanagedChanged([RuntimePackageSummary])` ([package-store.md](../02-design/package-store.md) §11.3). Target `WirePackageState` adds `importing`, `inspecting`, `updating`, `needsReinstall`.
 
-Other target events: `UpdateEvent` (`phaseChanged`, `progress`, `finished`, `summaryChanged(available:waiting:failed:)`) ([update-system.md](../02-design/update-system.md) §11.2); `IntegrationChange` (`statusChanged`, `recordingChanged`, `sharedFoldersChanged`) ([desktop-integration.md](../02-design/desktop-integration.md) §11); `SessionListChange` (`opened`, `stateChanged`, `ended`, each with `SessionSummary`).
+`WrapperChange` (built approval cases): `approvalRequested(RuntimeWrapperApprovalPrompt)` and `approvalResolved(ApprovalID)`; future wrapper cases decode as `unknown`. Other target events: `UpdateEvent` (`phaseChanged`, `progress`, `finished`, `summaryChanged(available:waiting:failed:)`) ([update-system.md](../02-design/update-system.md) §11.2); `IntegrationChange` (`statusChanged`, `recordingChanged`, `sharedFoldersChanged`) ([desktop-integration.md](../02-design/desktop-integration.md) §11); `SessionListChange` (`opened`, `stateChanged`, `ended`, each with `SessionSummary`).
 
 `StoreOperationProgress`: `stage` (`StoreOperationStage`: `copying`, `inspecting`, `receiving`, `verifying`, `committing`, `uninstalling`, `unknown`; target), `fraction` (Double?).
 
@@ -1553,13 +1626,13 @@ Sections refer to [wrapper.md](../02-design/wrapper.md). The launcher (L) uses t
 
 | Surface | Operations | Notes |
 |---|---|---|
-| Start | `hello`, `requestEndpoint(wrapper)`, `requestApproval`, `runtimeStatus`, `packageInfo`, `openSession` | `packageInfo` supplies window defaults (wrapper §14.1). Target except the first four and `packageInfo` |
+| Start | `hello`, `requestEndpoint(wrapper)`, `requestApprovalEndpoint`, `submitApproval`, `runtimeStatus`, `packageInfo`, `openSession` | `packageInfo` supplies window defaults (wrapper §14.1). The approval endpoint flow and `packageInfo` are built; other wrapper launcher operations are target |
 | Window | `frameDisplayed`, `visibilityChanged`, `focusChanged`, `resize` | §6.3 (target) |
 | Input and text | `sendInput`, `sendText` | §7 (target) |
 | Integrations | `pushClipboard`, `clipboardWritten`, `importFiles`, `acceptExport`, `resolveLinkPrompt`, `notificationRelay`, `notificationRelayResponse` | §11 (target) |
 | Screen N **Install from This App** | `importBootstrap` | §10.7 (target) |
 | Screen E **Try Again**, reconnect | `openSession` | target |
-| ⌘W, ⌘Q, logout | `closeSession` | target |
+| ⌘W, ⌘Q, logout | `closeSession` | built |
 | View: zoom, Show Frame Statistics | `resize`, `frameStatistics` | target |
 | Android: Back, Restart ‹App› | `sendInput`, `restartApp` | target |
 | Long wrapper operations | `operationStatus`, `cancelOperation`, topic `operations` | own operations only (§16.3) |
@@ -1599,7 +1672,7 @@ Each operation is defined in the section of its own design document. These opera
 
 | Operations | Owner |
 |---|---|
-| `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime`, `runtimeInfo`, `listSessions`, `restartApp`, `listOperations`, `unsubscribe`, `closeStream` | [runtime-daemon.md](../02-design/runtime-daemon.md) §8.6 |
+| `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime`, `runtimeInfo`, `listSessions`, `restartApp`, `closeSession`, `listOperations`, `unsubscribe`, `closeStream` | [runtime-daemon.md](../02-design/runtime-daemon.md) §8.6 |
 | `refreshAllWrappers`, `rescanWrappers`, `pendingApprovals`, `deniedWrappers`, `clearWrapperDenial` | [wrapper.md](../02-design/wrapper.md) §12.1 |
 | `notificationRelayResponse`, `hostNotifications`, `hostNotificationResponse` | [desktop-integration.md](../02-design/desktop-integration.md) §11, [host-ui.md](../02-design/host-ui.md) §11 |
 | `guestLog` | [diagnostics.md](../02-design/diagnostics.md) §7.6 |

@@ -450,7 +450,8 @@ apkrund's `WrapperApprovalService` asks through `ApprovalCenter` ([wrapper.md](w
 │ Allow “Discord” to open com.discord in APKRun?│
 │                                               │
 │ Location   ~/Downloads/Discord.app            │
-│ Signed by  Developer ID: Example Inc. ✓       │
+│ Signed by  team ABCDE12345                    │
+│            Notarization: unknown               │
 │            (or: “Not signed by a developer”)  │
 │ Android app  installed, version 245.0         │
 │            (or: “not installed. This Mac app  │
@@ -462,6 +463,7 @@ apkrund's `WrapperApprovalService` asks through `ApprovalCenter` ([wrapper.md](w
 ```
 
 - **Allow** is not the default button. Return does not press it, because the prompt comes from a file the user may not have chosen.
+- Show only the signing team when the certificate class is unknown. Show notarization as unknown unless this Mac's OS assessment verified it.
 - Requests queue in arrival order. One prompt is shown at a time. A request that times out (10 minutes) closes its prompt.
 
 ### 10.2 Prompts shown by wrappers

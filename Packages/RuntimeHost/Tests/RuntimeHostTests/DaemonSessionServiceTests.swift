@@ -64,6 +64,255 @@ func daemonSessionOpensWindowAndAcknowledgesFramesOnlyAfterDisplayCommit() async
 }
 
 @Test(.timeLimit(.minutes(1)))
+func daemonSessionRestartUsesItsOwnedDisplayAndKeepsTheSessionOpen() async throws {
+    let fixture = makeSessionServiceFixture()
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let clientToken = SessionConnectionToken()
+    let connectionID = ObjectIdentifier(clientToken)
+    let opened = try await fixture.service.openSession(
+        makeOpenSessionRequest(packageID: package),
+        connectionID: connectionID,
+        frameReady: { _ in },
+        closeRequested: { true }
+    )
+    let originalLease = await fixture.registry.displayLease(.app(opened.descriptor.sessionID))
+    let request = RestartAppRequest(
+        header: APIRequestHeader(clientKind: .wrapper),
+        sessionID: opened.descriptor.sessionID,
+        packageID: package
+    )
+
+    try await fixture.service.restartApp(
+        request,
+        from: connectionID,
+        authorizedPackageID: package
+    )
+
+    let session = await fixture.registry.session(.app(opened.descriptor.sessionID))
+    let restartedLease = await fixture.registry.displayLease(.app(opened.descriptor.sessionID))
+    #expect(session?.state == .running)
+    #expect(session?.displayID == opened.descriptor.displayID)
+    #expect(session?.taskIDs == [41])
+    #expect(restartedLease?.leaseID == originalLease?.leaseID)
+    #expect(await fixture.agent.stoppedPackages == [package.rawValue])
+    #expect(
+        await fixture.agent.sessionCallOrder == [
+            "launch:\(opened.descriptor.displayID)",
+            "stop:\(package.rawValue)",
+            "launch:\(opened.descriptor.displayID)",
+        ])
+    #expect((await fixture.displayPool.snapshot())[0].state == .allocated(.app(opened.descriptor.sessionID)))
+
+    _ = try await fixture.service.terminate(RuntimeTerminateRequest(packageID: package))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonSessionRestartRejectsAnotherSessionPackageOrConnection() async throws {
+    let fixture = makeSessionServiceFixture()
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let anotherPackage = try #require(RuntimePackageID(rawValue: "com.example.other"))
+    let clientToken = SessionConnectionToken()
+    let otherClientToken = SessionConnectionToken()
+    let connectionID = ObjectIdentifier(clientToken)
+    let otherConnectionID = ObjectIdentifier(otherClientToken)
+    let opened = try await fixture.service.openSession(
+        makeOpenSessionRequest(packageID: package),
+        connectionID: connectionID,
+        frameReady: { _ in },
+        closeRequested: { true }
+    )
+    let wrongSession = RestartAppRequest(
+        header: APIRequestHeader(clientKind: .wrapper),
+        sessionID: UUID(),
+        packageID: package
+    )
+    let wrongPackage = RestartAppRequest(
+        header: APIRequestHeader(clientKind: .wrapper),
+        sessionID: opened.descriptor.sessionID,
+        packageID: anotherPackage
+    )
+    let correctRequest = RestartAppRequest(
+        header: APIRequestHeader(clientKind: .wrapper),
+        sessionID: opened.descriptor.sessionID,
+        packageID: package
+    )
+
+    for (request, owner, authorizedPackage) in [
+        (wrongSession, connectionID, Optional(package)),
+        (wrongPackage, connectionID, Optional(package)),
+        (correctRequest, otherConnectionID, Optional(package)),
+        (correctRequest, connectionID, Optional(anotherPackage)),
+    ] {
+        do {
+            try await fixture.service.restartApp(
+                request,
+                from: owner,
+                authorizedPackageID: authorizedPackage
+            )
+            Issue.record("A restart request outside the active session package binding was accepted.")
+        } catch {
+            #expect(error.code == "runtime.notAuthorized")
+        }
+    }
+    #expect(await fixture.agent.stoppedPackages.isEmpty)
+    #expect(await fixture.agent.launchCalls.count == 1)
+    #expect(await fixture.registry.session(.app(opened.descriptor.sessionID))?.state == .running)
+
+    _ = try await fixture.service.terminate(RuntimeTerminateRequest(packageID: package))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonSessionRestartRestoresTheSessionWhenStopDoesNotComplete() async throws {
+    let fixture = makeSessionServiceFixture(stopResults: [false, true])
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let clientToken = SessionConnectionToken()
+    let connectionID = ObjectIdentifier(clientToken)
+    let opened = try await fixture.service.openSession(
+        makeOpenSessionRequest(packageID: package),
+        connectionID: connectionID,
+        frameReady: { _ in },
+        closeRequested: { true }
+    )
+    let request = RestartAppRequest(
+        header: APIRequestHeader(clientKind: .launcher),
+        sessionID: opened.descriptor.sessionID,
+        packageID: package
+    )
+
+    do {
+        try await fixture.service.restartApp(request, from: connectionID, authorizedPackageID: nil)
+        Issue.record("A failed StopApplication should not relaunch the package.")
+    } catch {
+        #expect(error.code == "runtime.guestAgentOperationFailed")
+    }
+    #expect(await fixture.agent.launchCalls.count == 1)
+    #expect(await fixture.registry.session(.app(opened.descriptor.sessionID))?.state == .running)
+    #expect(await fixture.registry.session(.app(opened.descriptor.sessionID))?.taskIDs == [41])
+    #expect(
+        await fixture.registry.displayLease(.app(opened.descriptor.sessionID))?.androidDisplayID
+            == opened.descriptor.displayID)
+
+    _ = try await fixture.service.terminate(RuntimeTerminateRequest(packageID: package))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonSessionCloseGracefullyStopsTheAppAndReleasesItsDisplay() async throws {
+    let fixture = makeSessionServiceFixture()
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let clientToken = SessionConnectionToken()
+    let connectionID = ObjectIdentifier(clientToken)
+    let opened = try await fixture.service.openSession(
+        makeOpenSessionRequest(packageID: package),
+        connectionID: connectionID,
+        frameReady: { _ in },
+        closeRequested: { true }
+    )
+    let request = CloseSessionRequest(
+        header: APIRequestHeader(clientKind: .launcher),
+        sessionID: opened.descriptor.sessionID,
+        packageID: package
+    )
+
+    try await fixture.service.closeSession(request, from: connectionID, authorizedPackageID: nil)
+
+    #expect(
+        await fixture.agent.sessionCallOrder == [
+            "launch:\(opened.descriptor.displayID)",
+            "stop:\(package.rawValue)",
+        ])
+    #expect(await fixture.agent.forceStoppedPackages.isEmpty)
+    #expect(await fixture.registry.session(.app(opened.descriptor.sessionID))?.state == .ended(.userClosed))
+    #expect((await fixture.displayPool.snapshot())[0].state == .free)
+    await fixture.service.sessionClientDisconnected(connectionID)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonSessionCloseRejectsRequestsOutsideTheSessionBinding() async throws {
+    let fixture = makeSessionServiceFixture()
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let anotherPackage = try #require(RuntimePackageID(rawValue: "com.example.other"))
+    let clientToken = SessionConnectionToken()
+    let otherClientToken = SessionConnectionToken()
+    let connectionID = ObjectIdentifier(clientToken)
+    let otherConnectionID = ObjectIdentifier(otherClientToken)
+    let opened = try await fixture.service.openSession(
+        makeOpenSessionRequest(packageID: package),
+        connectionID: connectionID,
+        frameReady: { _ in },
+        closeRequested: { true }
+    )
+    let wrongSession = CloseSessionRequest(
+        header: APIRequestHeader(clientKind: .wrapper),
+        sessionID: UUID(),
+        packageID: package
+    )
+    let wrongPackage = CloseSessionRequest(
+        header: APIRequestHeader(clientKind: .wrapper),
+        sessionID: opened.descriptor.sessionID,
+        packageID: anotherPackage
+    )
+    let correctRequest = CloseSessionRequest(
+        header: APIRequestHeader(clientKind: .wrapper),
+        sessionID: opened.descriptor.sessionID,
+        packageID: package
+    )
+
+    for (request, owner, authorizedPackage) in [
+        (wrongSession, connectionID, Optional(package)),
+        (wrongPackage, connectionID, Optional(package)),
+        (correctRequest, otherConnectionID, Optional(package)),
+        (correctRequest, connectionID, Optional(anotherPackage)),
+    ] {
+        do {
+            try await fixture.service.closeSession(
+                request,
+                from: owner,
+                authorizedPackageID: authorizedPackage
+            )
+            Issue.record("A close request outside the active session package binding was accepted.")
+        } catch {
+            #expect(error.code == "runtime.notAuthorized")
+        }
+    }
+
+    #expect(await fixture.agent.stoppedPackages.isEmpty)
+    #expect(await fixture.registry.session(.app(opened.descriptor.sessionID))?.state == .running)
+
+    _ = try await fixture.service.terminate(RuntimeTerminateRequest(packageID: package))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonSessionCloseKeepsTheDisplayWhenStopDoesNotComplete() async throws {
+    let fixture = makeSessionServiceFixture(stopResults: [false, true])
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let clientToken = SessionConnectionToken()
+    let connectionID = ObjectIdentifier(clientToken)
+    let opened = try await fixture.service.openSession(
+        makeOpenSessionRequest(packageID: package),
+        connectionID: connectionID,
+        frameReady: { _ in },
+        closeRequested: { true }
+    )
+    let request = CloseSessionRequest(
+        header: APIRequestHeader(clientKind: .launcher),
+        sessionID: opened.descriptor.sessionID,
+        packageID: package
+    )
+
+    do {
+        try await fixture.service.closeSession(request, from: connectionID, authorizedPackageID: nil)
+        Issue.record("A close must wait for the Guest Agent to finish app tasks.")
+    } catch {
+        #expect(error.code == "runtime.guestAgentOperationFailed")
+    }
+    #expect(await fixture.registry.session(.app(opened.descriptor.sessionID))?.state == .running)
+    #expect(await fixture.registry.session(.app(opened.descriptor.sessionID))?.taskIDs == [41])
+    #expect((await fixture.displayPool.snapshot())[0].state == .allocated(.app(opened.descriptor.sessionID)))
+
+    _ = try await fixture.service.terminate(RuntimeTerminateRequest(packageID: package))
+}
+
+@Test(.timeLimit(.minutes(1)))
 func daemonSessionResizeReplacesTheLeaseAndRelaysTheNewGeneration() async throws {
     let fixture = makeSessionServiceFixture()
     let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
@@ -457,6 +706,7 @@ private actor FakeDaemonSessionGuestAgent: DaemonSessionGuestAgent {
     private(set) var launchCalls: [SessionLaunchCall] = []
     private(set) var stoppedPackages: [String] = []
     private(set) var forceStoppedPackages: [String] = []
+    private(set) var sessionCallOrder: [String] = []
     private let taskEventContinuation: AsyncStream<DevelopmentGuestTaskEvent>.Continuation
     private var resynchronizationHandlerID: UUID?
     private var resynchronizationHandler: (@Sendable (GuestSnapshotState) async -> Void)?
@@ -484,6 +734,7 @@ private actor FakeDaemonSessionGuestAgent: DaemonSessionGuestAgent {
 
     func launch(package: String, displayID: Int32) async throws(GuestAgentFailure) -> GuestLaunchReport {
         launchCalls.append(SessionLaunchCall(packageID: package, displayID: displayID))
+        sessionCallOrder.append("launch:\(displayID)")
         return GuestLaunchReport(
             taskID: 41,
             component: "\(package)/.MainActivity",
@@ -493,6 +744,7 @@ private actor FakeDaemonSessionGuestAgent: DaemonSessionGuestAgent {
 
     func stopApplication(package: String) async throws(GuestAgentFailure) -> Bool {
         stoppedPackages.append(package)
+        sessionCallOrder.append("stop:\(package)")
         return stopResults.isEmpty ? true : stopResults.removeFirst()
     }
 

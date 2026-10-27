@@ -503,6 +503,13 @@ public actor RuntimeHost {
         frameReady: @escaping @Sendable (FrameReady) -> Void,
         closeRequested: @escaping @Sendable () async -> Bool
     ) async throws(RuntimeWireError) -> DaemonOpenedSession {
+        if let diagnostics {
+            WrapperLaunchTimingRecorder.record(
+                request.launchTiming,
+                clientKind: request.header.clientKind,
+                timeline: diagnostics.perfTimeline
+            )
+        }
         try beginPackageLaunch(request.packageID)
         defer { finishPackageLaunch(request.packageID) }
         do {
@@ -529,6 +536,48 @@ public actor RuntimeHost {
             throw .runtime("notAuthorized", message: "This launcher does not own an active app window.")
         }
         return try await sessionService.resizeSession(request, from: connectionID)
+    }
+
+    func restartApp(
+        _ request: RestartAppRequest,
+        connectionID: ObjectIdentifier,
+        authorizedPackageID: RuntimePackageID?
+    ) async throws(RuntimeWireError) {
+        guard authorizedPackageID == nil || authorizedPackageID == request.packageID else {
+            throw .runtime("notAuthorized", message: safeMessage(for: "runtime.notAuthorized"))
+        }
+        guard let sessionService else {
+            throw .runtime(
+                "notAuthorized",
+                message: "This launcher does not own an active app window."
+            )
+        }
+        try await sessionService.restartApp(
+            request,
+            from: connectionID,
+            authorizedPackageID: authorizedPackageID
+        )
+    }
+
+    func closeSession(
+        _ request: CloseSessionRequest,
+        connectionID: ObjectIdentifier,
+        authorizedPackageID: RuntimePackageID?
+    ) async throws(RuntimeWireError) {
+        guard authorizedPackageID == nil || authorizedPackageID == request.packageID else {
+            throw .runtime("notAuthorized", message: safeMessage(for: "runtime.notAuthorized"))
+        }
+        guard let sessionService else {
+            throw .runtime(
+                "notAuthorized",
+                message: "This launcher does not own an active app window."
+            )
+        }
+        try await sessionService.closeSession(
+            request,
+            from: connectionID,
+            authorizedPackageID: authorizedPackageID
+        )
     }
 
     func frameDisplayed(_ message: FrameDisplayed, from connectionID: ObjectIdentifier) async {

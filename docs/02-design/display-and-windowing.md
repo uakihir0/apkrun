@@ -359,6 +359,8 @@ The chosen fallback is recorded in R-04.
 | `ended(.error(...))` | Error panel: message, remediation, "Try Again", "Open APKRun" ([error-catalog.md](../03-reference/error-catalog.md)) |
 | `ended(.appCrashed)` | "‹App› stopped unexpectedly" and "Reopen" |
 
+The window stays hidden until the first frame commits to Core Animation or 400 ms elapses. The fallback orders the window front with its placeholder still visible; only a committed first frame removes it. A descriptor already in `booting(progress)` orders the window front immediately with the placeholder, so a VM boot does not delay startup feedback. This keeps warm launches free of a placeholder flash while giving slow launches visible feedback.
+
 On the embedded path, `launching → running` follows the window's Core Animation transaction completion (`frameDisplayed`). The GPU `framesPresented` counter counts completed blits, which does not prove the window committed the frame.
 
 `apkrun dev launch` updates its placeholder as Android boots, the APK installs, and the app starts. The window title is the package's Android label. On failure, the window stays open with the catalog message, remediation, and a **Close** button, and the CLI prints the full error. Rerunning the command retries. The development command offers neither **Try Again** nor **Open APKRun**. A failure before the Android display attaches shows the same message in a failure-only window.
@@ -387,6 +389,8 @@ A wrapper has one window. **Closing the window ends the session and quits the wr
 |---|---|---|
 | `stop` | yes | The Guest Agent removes the session's tasks (`IActivityTaskManager.removeTask`). Android may keep the process cached, which speeds up the next launch |
 | `keepRunning` | no (per app; useful for music or messaging apps) | The Guest Agent moves the root task to display 0 behind the launcher (`moveRootTaskToDisplay(taskId, 0)`, then to back). Audio and notifications continue. The next launch moves the task to a new display |
+
+The current session API supports an omitted policy or `stop`; both use graceful stop. `keepRunning` remains a target behavior until the per-app setting and Guest Agent task migration are implemented.
 
 Embedded development mode differs. `apkrun dev launch` owns the VM and its display-0 window in one process. Closing the window sends `StopApplication(FINISH_TASKS)`. The Guest Agent removes the package's tasks and publishes `TaskVanished` before it replies. The host waits for the task snapshot to clear, stops the runtime, and exits. If the active task exits on its own, the CLI closes the window and stops the runtime. Task removal is bounded to 4 s within a 5 s deadline. On failure or timeout the CLI prints a warning and still shuts down. `FORCE_STOP` is not used. Closing during boot stops it without installing or launching the APK. Closing during installation waits for PackageInstaller, skips `LaunchApplication`, and stops Android. Once launch begins, the Guest Agent stays available until package tasks finish. Ctrl-C stops the runtime without stopping the app. `--no-window` keeps its one-shot behavior.
 

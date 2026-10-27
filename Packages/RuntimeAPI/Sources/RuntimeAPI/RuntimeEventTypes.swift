@@ -223,6 +223,8 @@ public enum EventPayload: Codable, Equatable, Sendable {
     case runtime(RuntimeChange)
     /// Package install and store changes.
     case packages(PackageChange)
+    /// Wrapper status and approval changes.
+    case wrappers(WrapperChange)
     /// An operation started, progressed, or finished.
     case operations(OperationEvent)
     /// Events for the topic were dropped; fetch a fresh snapshot.
@@ -233,6 +235,7 @@ public enum EventPayload: Codable, Equatable, Sendable {
     private enum CaseKey: String, CodingKey {
         case runtime
         case packages
+        case wrappers
         case operations
         case resyncRequired
     }
@@ -256,6 +259,9 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case "packages":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .packages(try payload.decode(PackageChange.self, forKey: .first))
+        case "wrappers":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .wrappers(try payload.decode(WrapperChange.self, forKey: .first))
         case "operations":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .operations(try payload.decode(OperationEvent.self, forKey: .first))
@@ -276,6 +282,9 @@ public enum EventPayload: Codable, Equatable, Sendable {
             try payload.encode(event, forKey: .first)
         case .packages(let change):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .packages)
+            try payload.encode(change, forKey: .first)
+        case .wrappers(let change):
+            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .wrappers)
             try payload.encode(change, forKey: .first)
         case .operations(let event):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .operations)

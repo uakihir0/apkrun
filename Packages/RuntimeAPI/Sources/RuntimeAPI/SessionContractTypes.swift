@@ -33,9 +33,9 @@ public struct DisplayGeometry: Codable, Equatable, Sendable {
 
 /// Host timing markers captured while launching an app window.
 public struct LaunchTiming: Codable, Equatable, Sendable {
-    /// Host monotonic nanoseconds when the launcher process started.
+    /// Host `mach_continuous_time` nanoseconds when the launcher process started.
     public var processStart: UInt64
-    /// Host monotonic nanoseconds immediately before the open-session request.
+    /// Host `mach_continuous_time` nanoseconds immediately before the open-session request.
     public var requestSent: UInt64
 
     /// Creates launch timing markers.
@@ -143,6 +143,94 @@ public struct ResizeSessionControlReply: Codable, Equatable, Sendable {
     /// Creates a typed failure reply.
     public init(error: RuntimeWireError) {
         outcome = nil
+        result = nil
+        self.error = error
+    }
+}
+
+/// Restarts the package bound to the authenticated app session without replacing its display.
+public struct RestartAppRequest: Codable, Equatable, Sendable {
+    /// Request identity and protocol version.
+    public var header: APIRequestHeader
+    /// Session whose current window and display must remain open.
+    public var sessionID: UUID
+    /// Package to restart; the daemon verifies it against the authenticated session.
+    public var packageID: RuntimePackageID
+
+    /// Creates a session-scoped restart request.
+    public init(header: APIRequestHeader, sessionID: UUID, packageID: RuntimePackageID) {
+        self.header = header
+        self.sessionID = sessionID
+        self.packageID = packageID
+    }
+}
+
+/// Result of restarting an app session's Android package.
+public struct RestartAppControlReply: Codable, Equatable, Sendable {
+    /// Present when Android accepted the relaunch.
+    public var result: RuntimeEmpty?
+    /// Catalog-backed request failure.
+    public var error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: RuntimeEmpty = RuntimeEmpty()) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// Policy for closing an app session.
+public enum SessionClosePolicy: String, Codable, Equatable, Sendable {
+    /// Ask the Guest Agent to finish the package's tasks before releasing the display.
+    case stop
+}
+
+/// Gracefully closes the package bound to the authenticated app session.
+public struct CloseSessionRequest: Codable, Equatable, Sendable {
+    /// Request identity and protocol version.
+    public var header: APIRequestHeader
+    /// Session to close.
+    public var sessionID: UUID
+    /// Package bound to the session; the daemon verifies both values.
+    public var packageID: RuntimePackageID
+    /// Explicit close preference. `nil` and `.stop` use graceful stop; keep-running is not yet available.
+    public var policy: SessionClosePolicy?
+
+    /// Creates a session-scoped close request. Closing always uses Guest Agent `StopApplication`.
+    public init(
+        header: APIRequestHeader,
+        sessionID: UUID,
+        packageID: RuntimePackageID,
+        policy: SessionClosePolicy? = nil
+    ) {
+        self.header = header
+        self.sessionID = sessionID
+        self.packageID = packageID
+        self.policy = policy
+    }
+}
+
+/// Result of closing an app session and releasing its display.
+public struct CloseSessionControlReply: Codable, Equatable, Sendable {
+    /// Present when Android accepted the graceful stop and the session was closed.
+    public var result: RuntimeEmpty?
+    /// Catalog-backed request failure.
+    public var error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: RuntimeEmpty = RuntimeEmpty()) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a typed failure reply.
+    public init(error: RuntimeWireError) {
         result = nil
         self.error = error
     }

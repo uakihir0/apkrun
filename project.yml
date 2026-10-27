@@ -178,11 +178,58 @@ targets:
       - package: APKRun
         product: DiagnosticsCore
 
+  APKRunLauncherTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Apps/APKRunLauncher/LauncherProcessTiming.swift
+      - path: Apps/APKRunLauncher/LauncherIdentity.swift
+      - path: Apps/APKRunLauncher/LauncherCompatibility.swift
+      - path: Apps/APKRunLauncher/LauncherScreen.swift
+      - path: Apps/APKRunLauncher/LauncherStatusWindowController.swift
+      - path: Apps/APKRunLauncher/LauncherAboutWindowController.swift
+      - path: Apps/APKRunLauncher/LauncherMenus.swift
+      - path: Apps/APKRunLauncher/LauncherStrings.generated.swift
+      - path: Tests/IntegrationTests/LauncherTests/LauncherIdentityTests.swift
+      - path: Tests/IntegrationTests/LauncherTests/LauncherProcessTimingTests.swift
+      - path: Tests/IntegrationTests/LauncherTests/LauncherMenusTests.swift
+      - path: Tests/IntegrationTests/LauncherTests/LauncherAboutWindowControllerTests.swift
+      - path: Tests/IntegrationTests/LauncherTests/LauncherPresentationTests.swift
+    settings:
+      base:
+        PRODUCT_NAME: APKRunLauncherTests
+        PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.launcher-tests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - package: APKRun
+        product: RuntimeAPI
+      - package: APKRun
+        product: DiagnosticsCore
+      - package: APKRun
+        product: WindowingCore
+
   APKRunLauncher:
     type: application
     platform: macOS
     sources:
       - path: Apps/APKRunLauncher
+    preBuildScripts:
+      - name: Generate launcher strings
+        basedOnDependencyAnalysis: true
+        script: 'python3 "$SRCROOT/scripts/build/generate-launcher-strings.py"'
+        inputFiles:
+          - "$(SRCROOT)/Apps/APKRunLauncher/Localizable.xcstrings"
+          - "$(SRCROOT)/scripts/build/generate-launcher-strings.py"
+        outputFiles:
+          - "$(SRCROOT)/Apps/APKRunLauncher/LauncherStrings.generated.swift"
+      - name: Generate launcher build identity
+        basedOnDependencyAnalysis: false
+        script: 'python3 "$SRCROOT/scripts/build/generate-launcher-build.py"'
+        inputFiles:
+          - "$(SRCROOT)/Packages/RuntimeAPI/Sources/RuntimeAPI/RuntimeAPI.swift"
+          - "$(SRCROOT)/scripts/build/generate-launcher-build.py"
+        outputFiles:
+          - "$(SRCROOT)/Apps/APKRunLauncher/LauncherBuild.$(CONFIGURATION).generated.swift"
     settings:
       base:
         PRODUCT_NAME: APKRunLauncher
@@ -191,8 +238,10 @@ targets:
       configs:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.APKRunLauncher.dev
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) APKRUN_LAUNCHER_DEBUG"
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.APKRunLauncher
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) APKRUN_LAUNCHER_RELEASE"
     dependencies:
       - target: BuildStamp
         embed: false

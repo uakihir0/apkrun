@@ -216,7 +216,7 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
         listRequest.header,
         statusRequest.header,
     ] {
-        #expect(requestHeader.apiVersion == APIVersion(major: 1, minor: 13))
+        #expect(requestHeader.apiVersion == APIVersion(major: 1, minor: 18))
         #expect(requestHeader.clientKind == .cli)
     }
 }

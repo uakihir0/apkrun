@@ -30,6 +30,15 @@ import Testing
     #expect((runtimeInfo as? PackageInfoCommand)?.runtime == true)
 }
 
+@Test func rootCommandRegistersWrapperApproval() async throws {
+    let command = try await APKRunCommand.asyncParseAsRoot([
+        "wrapper", "approve", "/Applications/Discord.app", "--yes",
+    ])
+
+    #expect((command as? WrapperApproveCommand)?.path == "/Applications/Discord.app")
+    #expect((command as? WrapperApproveCommand)?.yes == true)
+}
+
 #if !APKRUN_EMBEDDED_RUNTIME
     @Test func daemonInstallCommandParsesConfirmationAndJSONFlags() async throws {
         let command = try await APKRunCommand.asyncParseAsRoot([

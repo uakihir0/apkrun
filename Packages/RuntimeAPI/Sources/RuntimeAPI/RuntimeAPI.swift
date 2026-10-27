@@ -9,8 +9,10 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.7 adds daemon-backed package import and install; 1.8 adds asynchronous install handles
     /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
     /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
-    /// 1.12 adds the IOSurface app-session channel; 1.13 adds session geometry changes.
-    public static let current = APIVersion(major: 1, minor: 13)
+    /// 1.12 adds the IOSurface app-session channel; 1.13 adds session geometry changes;
+    /// 1.14 adds wrapper approval requests and decisions; 1.15 adds neutral team-signer facts;
+    /// 1.16 adds wrapper paths; 1.17 adds app-session restart; 1.18 adds explicit app-session close.
+    public static let current = APIVersion(major: 1, minor: 18)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -92,10 +94,12 @@ public struct RuntimeHelloReply: Codable, Equatable, Sendable {
     }
 }
 
-/// The first daemon version exposes only the authenticated control endpoint.
+/// The authenticated endpoint requested from the broker.
 public enum RuntimeEndpointKind: String, Codable, Equatable, Sendable {
     /// APKRun.app, menu bar, CLI, and launcher control surface.
     case control
+    /// A wrapper's package-scoped session and package-info surface.
+    case wrapper
 }
 
 /// Requests one authenticated endpoint from the broker.
@@ -106,6 +110,8 @@ public struct RuntimeEndpointRequest: Codable, Equatable, Sendable {
     public let clientKind: RuntimeClientKind
     /// The client's code identifier, used only to select an allowed endpoint.
     public let claimedIdentity: String
+    /// The wrapper bundle path, used to route a moved or copied wrapper through approval.
+    public let bundlePath: String?
     /// The client's RuntimeAPI version.
     public let apiVersion: APIVersion
 
@@ -114,11 +120,13 @@ public struct RuntimeEndpointRequest: Codable, Equatable, Sendable {
         kind: RuntimeEndpointKind = .control,
         clientKind: RuntimeClientKind,
         claimedIdentity: String,
+        bundlePath: String? = nil,
         apiVersion: APIVersion
     ) {
         self.kind = kind
         self.clientKind = clientKind
         self.claimedIdentity = claimedIdentity
+        self.bundlePath = bundlePath
         self.apiVersion = apiVersion
     }
 }
@@ -565,6 +573,14 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func hello(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns only an anonymous endpoint protected by a code-signing requirement.
     func requestEndpoint(_ request: Data, reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void)
+    /// Returns a one-use endpoint pinned to the strictly validated wrapper identifier and cdhash.
+    func requestApprovalEndpoint(_ request: Data, reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void)
+}
+
+/// The narrow interface exported only by a code-signing-restricted wrapper approval endpoint.
+@objc public protocol RuntimeWrapperApprovalXPC {
+    /// Starts approval for the wrapper identity bound to this endpoint.
+    func submitApproval(reply: @escaping (Data) -> Void)
 }
 
 /// Authenticated control endpoint operations implemented by apkrund.
@@ -599,6 +615,10 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func subscribe(_ request: Data, reply: @escaping (Data) -> Void)
     /// Removes this connection's subscriptions to the requested topics.
     func unsubscribe(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Validates a wrapper bundle and returns the prompt facts for user confirmation.
+    func approveWrapper(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Submits the user's decision for a pending wrapper approval.
+    func decideApproval(_ request: Data, reply: @escaping (Data) -> Void)
     /// Installs a previously inspected import synchronously.
     func installImported(_ request: Data, reply: @escaping (Data) -> Void)
     /// Launches an installed package session.
@@ -609,6 +629,10 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     @objc optional func openSession(_ request: Data, reply: @escaping (Data, [IOSurface]?) -> Void)
     /// Changes display geometry for the session bound to this connection and returns replacement IOSurfaces.
     @objc optional func resizeSession(_ request: Data, reply: @escaping (Data, [IOSurface]?) -> Void)
+    /// Restarts the package bound to this session on its existing Android display.
+    @objc optional func restartApp(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Gracefully stops the package bound to this session and releases its Android display.
+    @objc optional func closeSession(_ request: Data, reply: @escaping (Data) -> Void)
     /// Reports that a frame was committed by Core Animation.
     @objc optional func frameDisplayed(_ generation: UInt32, frameSeq: UInt64)
     /// Reports whether the app window is visible.

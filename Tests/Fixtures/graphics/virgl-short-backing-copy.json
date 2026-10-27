@@ -1,0 +1,52 @@
+{
+  "source": {
+    "resourceID": 118,
+    "target": 2,
+    "format": 67,
+    "bind": 2,
+    "width": 64,
+    "height": 64,
+    "depth": 1,
+    "arraySize": 1,
+    "lastLevel": 0,
+    "sampleCount": 0,
+    "flags": 0
+  },
+  "sourceBacking": [
+    {
+      "address": 268435456,
+      "length": 4096
+    }
+  ],
+  "destination": {
+    "resourceID": 119,
+    "target": 2,
+    "format": 67,
+    "bind": 2,
+    "width": 64,
+    "height": 64,
+    "depth": 1,
+    "arraySize": 1,
+    "lastLevel": 0,
+    "sampleCount": 0,
+    "flags": 0
+  },
+  "contextID": 11,
+  "copyTransferWords": [
+    917549,
+    119,
+    0,
+    0,
+    64,
+    0,
+    0,
+    0,
+    0,
+    16,
+    16,
+    1,
+    118,
+    0,
+    1
+  ]
+}

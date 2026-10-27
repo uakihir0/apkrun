@@ -104,7 +104,11 @@ final class GuestGPUSession {
     }
 
     /// Answers a 2D or 3D request, or an error for a command this path does not implement.
-    func reply(to request: VirtioGPURequest, context: VirtioDeviceContext) -> GPUCommandReply {
+    func reply(
+        to request: VirtioGPURequest,
+        context: VirtioDeviceContext,
+        diagnostic: VirGLCommandDiagnostic?
+    ) -> GPUCommandReply {
         let header = request.header
         switch request.body {
         case .resourceCreate2D(let resourceID, let format, let width, let height):
@@ -136,9 +140,9 @@ final class GuestGPUSession {
         case .resourceCreate3D(let arguments):
             return createResource3D(arguments)
         case .transferToHost3D(let transfer):
-            return transfer3D(transfer, header: header, context: context, direction: .toHost)
+            return transfer3D(transfer, header: header, context: context, direction: .toHost, diagnostic: diagnostic)
         case .transferFromHost3D(let transfer):
-            return transfer3D(transfer, header: header, context: context, direction: .fromHost)
+            return transfer3D(transfer, header: header, context: context, direction: .fromHost, diagnostic: diagnostic)
         case .submit3D(let commandStream):
             return submit(commandStream, context: header.contextID)
         default:
@@ -564,7 +568,8 @@ final class GuestGPUSession {
         _ transfer: VirtioGPUTransfer3D,
         header: VirtioGPUControlHeader,
         context: VirtioDeviceContext,
-        direction: TransferDirection
+        direction: TransferDirection,
+        diagnostic: VirGLCommandDiagnostic?
     ) -> GPUCommandReply {
         guard path == .virgl else { return failed(.unspec) }
         if header.contextID != 0, !contexts.contains(header.contextID) {
@@ -618,7 +623,7 @@ final class GuestGPUSession {
                     try engine.transferWrite(renderTransfer, data: &data)
                 })
         case .fromHost:
-            return readBack(renderTransfer, geometry: geometry, target: target)
+            return readBack(renderTransfer, geometry: geometry, target: target, diagnostic: diagnostic)
         }
     }
 
@@ -627,7 +632,8 @@ final class GuestGPUSession {
     private func readBack(
         _ transfer: VirGLTransfer,
         geometry: TransferGeometry,
-        target: GPUResource
+        target: GPUResource,
+        diagnostic: VirGLCommandDiagnostic?
     ) -> GPUCommandReply {
         let extent: UInt64
         do {
@@ -645,7 +651,7 @@ final class GuestGPUSession {
             return failed(.invalidParameter)
         }
         let count = Int(extent)
-        let outcome: ReadBackOutcome? = backend?.sync { engine in
+        let outcome: ReadBackOutcome? = backend?.sync(diagnostic: diagnostic) { engine in
             var data = [UInt8](repeating: 0, count: count)
             do throws(GraphicsFailure) {
                 try engine.transferRead(transfer, into: &data)

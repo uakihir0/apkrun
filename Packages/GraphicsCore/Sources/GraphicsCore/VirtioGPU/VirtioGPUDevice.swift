@@ -722,7 +722,7 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
             )
             return Reply(bytes: errorReply(.unspec, answering: header), work: nil, diagnostic: diagnostic)
         }
-        let answer = session.reply(to: decoded, context: context)
+        let answer = session.reply(to: decoded, context: context, diagnostic: diagnostic)
         if case .error(let code) = answer.response {
             reportGuestError(
                 "command was rejected",

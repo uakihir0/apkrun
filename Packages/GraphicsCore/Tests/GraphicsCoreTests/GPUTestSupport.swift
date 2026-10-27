@@ -1,4 +1,6 @@
+import DiagnosticsCore
 import Foundation
+import GraphicsBridge
 import IOSurface
 import Testing
 import VirtioDeviceCore
@@ -74,11 +76,13 @@ final class FakeVirGLEngine: VirGLEngine, VirGLCommandDiagnosticScope, @unchecke
     private var failing: Set<String> = []
     private var activeCommandDiagnostic: VirGLCommandDiagnostic?
     private var recordedFailureCommandDiagnostics: [VirGLCommandDiagnostic] = []
+    private let callbackContext: GraphicsRendererCallbackContext?
     /// The byte that `transferRead` writes into every byte of the box.
     private var readFill: UInt8 = 0x5A
 
-    init(onFence: @escaping @Sendable (UInt32) -> Void) {
+    init(onFence: @escaping @Sendable (UInt32) -> Void, callbackLogger: APKLogger? = nil) {
         self.onFence = onFence
+        callbackContext = callbackLogger.map { GraphicsRendererCallbackContext(onFenceCompleted: onFence, logger: $0) }
     }
 
     /// The calls so far, in order.
@@ -100,7 +104,8 @@ final class FakeVirGLEngine: VirGLEngine, VirGLCommandDiagnosticScope, @unchecke
         defer {
             lock.withLock { activeCommandDiagnostic = previous }
         }
-        return perform()
+        guard let callbackContext else { return perform() }
+        return callbackContext.withCommandDiagnostic(diagnostic, perform: perform)
     }
 
     /// Makes the named operation fail with a renderer error. Operations are named by the case, for example `submit`.
@@ -242,6 +247,7 @@ final class FakeVirGLEngine: VirGLEngine, VirGLCommandDiagnosticScope, @unchecke
     }
 
     func transferRead(_ transfer: VirGLTransfer, into data: inout [UInt8]) throws(GraphicsFailure) {
+        callbackContext?.logCorrelation(for: Int32(GB_LOG_ERROR))
         try record(.transferRead(transfer), operation: "transferRead")
         let fill = lock.withLock { readFill }
         for index in data.indices {

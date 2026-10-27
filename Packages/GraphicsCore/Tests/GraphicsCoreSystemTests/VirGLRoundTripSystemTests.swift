@@ -102,6 +102,63 @@ private func syntheticFixtureURL() -> URL {
     return root.appendingPathComponent("Tests/Fixtures/graphics/synthetic-virgl-session.json")
 }
 
+private struct VirGLShortBackingCopyFixture: Decodable {
+    struct Resource: Decodable {
+        let resourceID: UInt32
+        let target: UInt32
+        let format: UInt32
+        let bind: UInt32
+        let width: UInt32
+        let height: UInt32
+        let depth: UInt32
+        let arraySize: UInt32
+        let lastLevel: UInt32
+        let sampleCount: UInt32
+        let flags: UInt32
+
+        var request: VirtioGPUResourceCreate3D {
+            VirtioGPUResourceCreate3D(
+                resourceID: resourceID,
+                target: target,
+                format: format,
+                bind: bind,
+                width: width,
+                height: height,
+                depth: depth,
+                arraySize: arraySize,
+                lastLevel: lastLevel,
+                sampleCount: sampleCount,
+                flags: flags
+            )
+        }
+    }
+
+    struct BackingEntry: Decodable {
+        let address: UInt64
+        let length: UInt32
+
+        var request: VirtioGPUMemoryEntry {
+            VirtioGPUMemoryEntry(address: address, length: length)
+        }
+    }
+
+    let source: Resource
+    let sourceBacking: [BackingEntry]
+    let destination: Resource
+    let contextID: UInt32
+    let copyTransferWords: [UInt32]
+}
+
+/// A compact reconstruction of the retained pre-fix failure pattern. The raw command capture is unavailable, but its
+/// resource IDs, dimensions, 4 KiB backing, context, and bounded COPY_TRANSFER3D request were retained.
+private func shortBackingCopyFixtureURL() -> URL {
+    var root = URL(fileURLWithPath: #filePath)
+    for _ in 0..<5 {
+        root.deleteLastPathComponent()
+    }
+    return root.appendingPathComponent("Tests/Fixtures/graphics/virgl-short-backing-copy.json")
+}
+
 /// The renderer calls of the synthetic session, recorded on `engine`. It uses only the calls of the existing helpers.
 private func recordSyntheticSession(on engine: any VirGLEngine) throws -> VirGLRecording {
     let recorder = VirGLRecorder()
@@ -353,52 +410,33 @@ extension VirGLRendererSuite {
         }
         #expect(setenv("APKRUN_VIRGL_RUNTIME_PATH", runtime, 1) == 0)
 
-        let sourceID: UInt32 = 118
-        let destinationID: UInt32 = 119
-        let contextID: UInt32 = 11
-        func texture(_ resourceID: UInt32) -> VirtioGPUResourceCreate3D {
-            VirtioGPUResourceCreate3D(
-                resourceID: resourceID,
-                target: 2,
-                format: 67,
-                bind: 2,
-                width: 64,
-                height: 64,
-                depth: 1,
-                arraySize: 1,
-                lastLevel: 0,
-                sampleCount: 0,
-                flags: 0
-            )
-        }
-        // COPY_TRANSFER3D (command 45): a 16 × 16 RGBA copy with a 64-byte row stride.
-        let copyTransfer = littleEndianBytes([
-            0x000E_002D,
-            destinationID,
-            0,  // level
-            0,  // usage
-            64,  // stride
-            0,  // layer stride
-            0,  // x
-            0,  // y
-            0,  // z
-            16,  // width
-            16,  // height
-            1,  // depth
-            sourceID,
-            0,  // source offset
-            1,  // synchronized upload
-        ])
+        let fixture = try JSONDecoder().decode(
+            VirGLShortBackingCopyFixture.self,
+            from: Data(contentsOf: shortBackingCopyFixtureURL())
+        )
+        let sourceID = fixture.source.resourceID
+        let destinationID = fixture.destination.resourceID
+        let contextID = fixture.contextID
+        let copyTransfer = littleEndianBytes(fixture.copyTransferWords)
+        #expect(sourceID == 118)
+        #expect(destinationID == 119)
+        #expect(fixture.source.width == 64)
+        #expect(fixture.source.height == 64)
+        #expect(fixture.sourceBacking.map(\.length) == [4096])
+        #expect(contextID == 11)
+        #expect(fixture.copyTransferWords[0] == 0x000E_002D)
+        #expect(fixture.copyTransferWords[1] == destinationID)
+        #expect(fixture.copyTransferWords[12] == sourceID)
         let requests = [
-            controlRequest(.resourceCreate3D, body: .resourceCreate3D(texture(sourceID))),
+            controlRequest(.resourceCreate3D, body: .resourceCreate3D(fixture.source.request)),
             controlRequest(
                 .resourceAttachBacking,
                 body: .resourceAttachBacking(
                     resourceID: sourceID,
-                    entries: [VirtioGPUMemoryEntry(address: 0x1000_0000, length: 4096)]
+                    entries: fixture.sourceBacking.map(\.request)
                 )
             ),
-            controlRequest(.resourceCreate3D, body: .resourceCreate3D(texture(destinationID))),
+            controlRequest(.resourceCreate3D, body: .resourceCreate3D(fixture.destination.request)),
             controlRequest(
                 .ctxCreate,
                 body: .ctxCreate(contextInit: 0, debugName: Array("short-backing".utf8)),

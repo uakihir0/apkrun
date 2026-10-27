@@ -66,6 +66,38 @@ public actor WrapperRegistry {
         try result.get()
     }
 
+    /// Applies a registry update against the latest file contents and writes it atomically.
+    ///
+    /// The read, transform, and write run as one operation on the registry's serial I/O queue.
+    /// Callers use this when concurrent updates must not overwrite each other.
+    public func updateAtomically(
+        now: Date = Date(),
+        transform: @escaping @Sendable (WrapperRegistryFile) throws(Failure) -> WrapperRegistryFile
+    ) async throws(Failure) {
+        let fileURL = self.fileURL
+        let ioQueue = self.ioQueue
+        let result = await withCheckedContinuation {
+            (continuation: CheckedContinuation<Result<Void, Failure>, Never>) in
+            ioQueue.async {
+                do {
+                    let current = try Self.readFile(at: fileURL)
+                    let updated = try transform(current)
+                    let canonical = try WrapperRegistryFile(
+                        wrappers: updated.wrappers,
+                        denied: updated.denied.filter { $0.until > now }
+                    )
+                    try Self.writeFile(canonical, to: fileURL)
+                    continuation.resume(returning: .success(()))
+                } catch let failure as Failure {
+                    continuation.resume(returning: .failure(failure))
+                } catch {
+                    continuation.resume(returning: .failure(Self.ioFailure(error)))
+                }
+            }
+        }
+        try result.get()
+    }
+
     private static func readFile(at fileURL: URL) throws(Failure) -> WrapperRegistryFile {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             return try WrapperRegistryFile()

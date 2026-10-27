@@ -95,7 +95,10 @@ import Testing
     try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
     let registryURL = rootURL.appendingPathComponent("registry.json")
     let registry = WrapperRegistry(fileURL: registryURL)
-    let offsetDateDocument = #"{"schemaVersion":1,"wrappers":[],"denied":[{"bundleId":"io.apkrun.android.com.example","cdhash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","until":"2026-10-01T09:12:00.125+00:00"}]}"#
+    let offsetDateDocument =
+        #"""
+        {"schemaVersion":1,"wrappers":[],"denied":[{"bundleId":"io.apkrun.android.com.example","cdhash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","until":"2026-10-01T09:12:00.125+00:00"}]}
+        """#
     try Data(offsetDateDocument.utf8).write(to: registryURL, options: .atomic)
 
     await #expect(throws: WrapperRegistry.Failure.invalidDocument) {
@@ -119,7 +122,10 @@ import Testing
     try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
     let registryURL = rootURL.appendingPathComponent("registry.json")
     let registry = WrapperRegistry(fileURL: registryURL)
-    let document = #"{"schemaVersion":1,"wrappers":[],"denied":[{"bundleId":"io.apkrun.android.com.example","cdhash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","until":"2026-10-01T09:12:00.123456789Z"}]}"#
+    let document =
+        #"""
+        {"schemaVersion":1,"wrappers":[],"denied":[{"bundleId":"io.apkrun.android.com.example","cdhash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","until":"2026-10-01T09:12:00.123456789Z"}]}
+        """#
     try Data(document.utf8).write(to: registryURL, options: .atomic)
 
     let decoded = try await registry.read()

@@ -9,8 +9,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.7 adds daemon-backed package import and install; 1.8 adds asynchronous install handles
     /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
     /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
-    /// 1.12 adds the IOSurface app-session channel; 1.13 adds session geometry changes.
-    public static let current = APIVersion(major: 1, minor: 13)
+    /// 1.12 adds the IOSurface app-session channel; 1.13 adds session geometry changes;
+    /// 1.14 adds wrapper approval requests and decisions.
+    public static let current = APIVersion(major: 1, minor: 14)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -565,6 +566,8 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func hello(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns only an anonymous endpoint protected by a code-signing requirement.
     func requestEndpoint(_ request: Data, reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void)
+    /// Requests approval for a wrapper and replies after approval, denial, timeout, or rejection.
+    func requestApproval(_ request: Data, reply: @escaping (Data) -> Void)
 }
 
 /// Authenticated control endpoint operations implemented by apkrund.
@@ -599,6 +602,8 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func subscribe(_ request: Data, reply: @escaping (Data) -> Void)
     /// Removes this connection's subscriptions to the requested topics.
     func unsubscribe(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Submits the user's decision for a pending wrapper approval.
+    func decideApproval(_ request: Data, reply: @escaping (Data) -> Void)
     /// Installs a previously inspected import synchronously.
     func installImported(_ request: Data, reply: @escaping (Data) -> Void)
     /// Launches an installed package session.

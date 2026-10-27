@@ -13,6 +13,16 @@ private func wrapperApprovalRoundTrip<Value: Codable & Equatable>(_ value: Value
     let signer = try #require(
         RuntimeWrapperSignerSummary(kind: .developerID, teamIdentifier: "ABCDE12345", notarized: true)
     )
+    let teamSignedSigner = try #require(
+        RuntimeWrapperSignerSummary(kind: .teamSigned, teamIdentifier: "ABCDE12345")
+    )
+    let futureSigner = try #require(
+        RuntimeWrapperSignerSummary(
+            kind: .unknown("futureCertificateClass"),
+            teamIdentifier: "ABCDE12345",
+            notarized: true
+        )
+    )
     let integrations = RuntimeWrapperIntegrationSummary(
         clipboard: true,
         notifications: false,
@@ -31,6 +41,7 @@ private func wrapperApprovalRoundTrip<Value: Codable & Equatable>(_ value: Value
             displayName: "Hello Text",
             signer: signer,
             packageInstalled: true,
+            installedVersion: "2.3 (203)",
             bundledVersion: "1.2.3",
             integrations: integrations,
             replacingBundlePath: "/Users/me/Applications/Hello Text.app"
@@ -54,8 +65,11 @@ private func wrapperApprovalRoundTrip<Value: Codable & Equatable>(_ value: Value
     #expect(try wrapperApprovalRoundTrip(brokerRequest) == brokerRequest)
     #expect(try wrapperApprovalRoundTrip(approvalID) == approvalID)
     #expect(try wrapperApprovalRoundTrip(signer) == signer)
+    #expect(try wrapperApprovalRoundTrip(teamSignedSigner) == teamSignedSigner)
+    #expect(try wrapperApprovalRoundTrip(futureSigner) == futureSigner)
     #expect(try wrapperApprovalRoundTrip(integrations) == integrations)
     #expect(try wrapperApprovalRoundTrip(prompt) == prompt)
+    #expect(prompt.installedVersion == "2.3 (203)")
     #expect(try wrapperApprovalRoundTrip(decision) == decision)
     #expect(try wrapperApprovalRoundTrip(brokerReply) == brokerReply)
     #expect(try wrapperApprovalRoundTrip(decisionReply) == decisionReply)
@@ -140,6 +154,12 @@ private func wrapperApprovalRoundTrip<Value: Codable & Equatable>(_ value: Value
         ) == nil
     )
     #expect(RuntimeWrapperSignerSummary(kind: .developerID, teamIdentifier: "lowercase", notarized: true) == nil)
+    #expect(RuntimeWrapperSignerSummary(kind: .developerID, teamIdentifier: "SHORT", notarized: nil) == nil)
+    #expect(RuntimeWrapperSignerSummary(kind: .developerID, teamIdentifier: "ABCDE12345", notarized: nil) == nil)
+    #expect(RuntimeWrapperSignerSummary(kind: .teamSigned, teamIdentifier: "ABCDE12345") != nil)
+    #expect(RuntimeWrapperSignerSummary(kind: .teamSigned, teamIdentifier: "ABCDE12345", notarized: false) == nil)
+    #expect(RuntimeWrapperSignerSummary(kind: .unknown("futureCertificateClass")) != nil)
+    #expect(RuntimeWrapperSignerSummary(kind: .unknown("futureCertificateClass"), teamIdentifier: "invalid") == nil)
     #expect(RuntimeWrapperSignerSummary(kind: .adHoc, teamIdentifier: "ABCDE12345") == nil)
     #expect(
         RuntimeWrapperApprovalPrompt(

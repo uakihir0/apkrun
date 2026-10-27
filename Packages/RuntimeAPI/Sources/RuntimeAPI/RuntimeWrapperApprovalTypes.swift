@@ -93,18 +93,53 @@ public struct RuntimeWrapperApprovalBrokerRequest: Codable, Equatable, Sendable 
 /// The signing facts for a wrapper shown in an approval prompt.
 public struct RuntimeWrapperSignerSummary: Codable, Equatable, Sendable {
     /// The signature type.
-    public enum Kind: String, Codable, Equatable, Sendable {
+    public enum Kind: Codable, Equatable, Sendable {
         /// The wrapper uses an ad-hoc signature.
         case adHoc
-        /// The wrapper uses a Developer ID signature.
+        /// The wrapper has a verified Developer ID signature.
         case developerID
+        /// The wrapper is signed by a team, but the certificate class is not established.
+        case teamSigned
+        /// A signer kind introduced by a newer RuntimeAPI minor version.
+        case unknown(String)
+
+        /// Decodes known signer kinds and preserves a future wire value.
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            let value = try container.decode(String.self)
+            switch value {
+            case "adHoc":
+                self = .adHoc
+            case "developerID":
+                self = .developerID
+            case "teamSigned":
+                self = .teamSigned
+            default:
+                self = .unknown(value)
+            }
+        }
+
+        /// Encodes the stable wire value for this signer kind.
+        public func encode(to encoder: any Encoder) throws {
+            var container = encoder.singleValueContainer()
+            switch self {
+            case .adHoc:
+                try container.encode("adHoc")
+            case .developerID:
+                try container.encode("developerID")
+            case .teamSigned:
+                try container.encode("teamSigned")
+            case .unknown(let value):
+                try container.encode(value)
+            }
+        }
     }
 
     /// The signature type.
     public let kind: Kind
-    /// The Developer ID team identifier, when `kind` is `developerID`.
+    /// The signing team identifier, when the signature is team-signed.
     public let teamIdentifier: String?
-    /// Whether the Developer ID wrapper is notarized.
+    /// Whether a Developer ID wrapper is notarized, or `nil` when the host has not assessed it.
     public let notarized: Bool?
 
     /// Creates a signer summary when its fields are consistent.
@@ -119,6 +154,17 @@ public struct RuntimeWrapperSignerSummary: Codable, Equatable, Sendable {
                 RuntimeWrapperApprovalValidation.isTeamIdentifier(teamIdentifier),
                 notarized != nil
             else {
+                return nil
+            }
+        case .teamSigned:
+            guard let teamIdentifier,
+                RuntimeWrapperApprovalValidation.isTeamIdentifier(teamIdentifier),
+                notarized == nil
+            else {
+                return nil
+            }
+        case .unknown:
+            guard teamIdentifier.map({ RuntimeWrapperApprovalValidation.isTeamIdentifier($0) }) ?? true else {
                 return nil
             }
         }
@@ -193,6 +239,8 @@ public struct RuntimeWrapperApprovalPrompt: Codable, Equatable, Sendable {
     public let signer: RuntimeWrapperSignerSummary
     /// Whether the Android package is already installed.
     public let packageInstalled: Bool
+    /// The installed Android version, when package metadata is available.
+    public let installedVersion: String?
     /// The bundled app version, when the wrapper embeds one.
     public let bundledVersion: String?
     /// The effective integrations permitted by this Mac's settings.
@@ -209,6 +257,7 @@ public struct RuntimeWrapperApprovalPrompt: Codable, Equatable, Sendable {
         displayName: String,
         signer: RuntimeWrapperSignerSummary,
         packageInstalled: Bool,
+        installedVersion: String? = nil,
         bundledVersion: String? = nil,
         integrations: RuntimeWrapperIntegrationSummary,
         replacingBundlePath: String? = nil
@@ -216,6 +265,7 @@ public struct RuntimeWrapperApprovalPrompt: Codable, Equatable, Sendable {
         guard RuntimeWrapperApprovalValidation.isAbsolutePath(bundlePath),
             RuntimeWrapperApprovalValidation.isBundleID(bundleID),
             RuntimeWrapperApprovalValidation.isDisplayName(displayName),
+            RuntimeWrapperApprovalValidation.isOptionalVersion(installedVersion),
             RuntimeWrapperApprovalValidation.isOptionalVersion(bundledVersion),
             RuntimeWrapperApprovalValidation.isOptionalAbsolutePath(replacingBundlePath)
         else {
@@ -228,6 +278,7 @@ public struct RuntimeWrapperApprovalPrompt: Codable, Equatable, Sendable {
         self.displayName = displayName
         self.signer = signer
         self.packageInstalled = packageInstalled
+        self.installedVersion = installedVersion
         self.bundledVersion = bundledVersion
         self.integrations = integrations
         self.replacingBundlePath = replacingBundlePath
@@ -242,6 +293,7 @@ public struct RuntimeWrapperApprovalPrompt: Codable, Equatable, Sendable {
         let displayName = try container.decode(String.self, forKey: .displayName)
         let signer = try container.decode(RuntimeWrapperSignerSummary.self, forKey: .signer)
         let packageInstalled = try container.decode(Bool.self, forKey: .packageInstalled)
+        let installedVersion = try container.decodeIfPresent(String.self, forKey: .installedVersion)
         let bundledVersion = try container.decodeIfPresent(String.self, forKey: .bundledVersion)
         let integrations = try container.decode(RuntimeWrapperIntegrationSummary.self, forKey: .integrations)
         let replacingBundlePath = try container.decodeIfPresent(String.self, forKey: .replacingBundlePath)
@@ -254,6 +306,7 @@ public struct RuntimeWrapperApprovalPrompt: Codable, Equatable, Sendable {
                 displayName: displayName,
                 signer: signer,
                 packageInstalled: packageInstalled,
+                installedVersion: installedVersion,
                 bundledVersion: bundledVersion,
                 integrations: integrations,
                 replacingBundlePath: replacingBundlePath
@@ -337,6 +390,63 @@ public struct RuntimeWrapperApprovalDecisionControlRequest: Codable, Equatable, 
         self.header = header
         self.approvalID = approvalID
         self.allow = allow
+    }
+}
+
+/// A control-endpoint request to prepare or retrieve a wrapper approval challenge.
+public struct RuntimeWrapperApprovalPrepareControlRequest: Codable, Equatable, Sendable {
+    /// The authenticated control request metadata.
+    public let header: APIRequestHeader
+    /// The absolute path to the wrapper bundle the user chose to approve.
+    public let bundlePath: String
+
+    /// Creates a request for a bounded absolute bundle path.
+    public init?(header: APIRequestHeader, bundlePath: String) {
+        guard RuntimeWrapperApprovalValidation.isAbsolutePath(bundlePath) else {
+            return nil
+        }
+        self.header = header
+        self.bundlePath = bundlePath
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case header
+        case bundlePath
+    }
+
+    /// Decodes and validates the bounded bundle path.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let header = try container.decode(APIRequestHeader.self, forKey: .header)
+        let bundlePath = try container.decode(String.self, forKey: .bundlePath)
+        guard let request = Self(header: header, bundlePath: bundlePath) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .bundlePath,
+                in: container,
+                debugDescription: "Invalid wrapper bundle path."
+            )
+        }
+        self = request
+    }
+}
+
+/// The validated prompt or typed error returned while preparing wrapper approval.
+public struct RuntimeWrapperApprovalPrepareControlReply: Codable, Equatable, Sendable {
+    /// The validated prompt, present when approval can be confirmed.
+    public let result: RuntimeWrapperApprovalPrompt?
+    /// The structured failure, present when the request was rejected.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: RuntimeWrapperApprovalPrompt) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
     }
 }
 
@@ -458,8 +568,7 @@ private enum RuntimeWrapperApprovalValidation {
     }
 
     static func isTeamIdentifier(_ teamIdentifier: String) -> Bool {
-        !teamIdentifier.isEmpty
-            && teamIdentifier.utf8.count <= 64
+        teamIdentifier.utf8.count == 10
             && teamIdentifier.utf8.allSatisfy {
                 (65...90).contains($0) || (48...57).contains($0)
             }

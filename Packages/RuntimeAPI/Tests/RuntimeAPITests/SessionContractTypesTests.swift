@@ -83,6 +83,48 @@ private func sessionRoundTrip<Value: Codable & Equatable>(_ value: Value) throws
     #expect(try sessionRoundTrip(typedFailure) == typedFailure)
 }
 
+@Test func restartAppRequestAndControlRepliesRoundTrip() throws {
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let sessionID = UUID(uuidString: "f5e0ec04-c077-442e-b633-a737ad4fced5")!
+    let request = RestartAppRequest(
+        header: APIRequestHeader(clientKind: .wrapper),
+        sessionID: sessionID,
+        packageID: packageID
+    )
+    let success = RestartAppControlReply()
+    let failure = RestartAppControlReply(
+        error: .runtime("launchFailed", message: "Android could not restart the app.")
+    )
+
+    #expect(try sessionRoundTrip(request) == request)
+    #expect(try sessionRoundTrip(success) == success)
+    #expect(try sessionRoundTrip(failure) == failure)
+}
+
+@Test func closeSessionRequestAndControlRepliesRoundTrip() throws {
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let request = CloseSessionRequest(
+        header: APIRequestHeader(clientKind: .wrapper),
+        sessionID: UUID(uuidString: "2A7782D8-E0EA-4A33-AF55-EA82A20B886A")!,
+        packageID: packageID
+    )
+    let success = CloseSessionControlReply()
+    let stopRequest = CloseSessionRequest(
+        header: request.header,
+        sessionID: request.sessionID,
+        packageID: request.packageID,
+        policy: .stop
+    )
+    let failure = CloseSessionControlReply(
+        error: .runtime("guestAgentOperationFailed", message: "Android still reports tasks for this app.")
+    )
+
+    #expect(try sessionRoundTrip(request) == request)
+    #expect(try sessionRoundTrip(stopRequest) == stopRequest)
+    #expect(try sessionRoundTrip(success) == success)
+    #expect(try sessionRoundTrip(failure) == failure)
+}
+
 @Test func sessionDescriptorAndSurfaceMetadataRoundTrip() throws {
     let pixelSize = PixelSize(width: 960, height: 1_700)
     let surfaces = SurfaceSet(generation: 7, pixelSize: pixelSize, densityDpi: 320)

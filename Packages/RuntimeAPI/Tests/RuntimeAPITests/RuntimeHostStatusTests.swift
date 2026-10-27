@@ -3,8 +3,32 @@ import Testing
 
 @testable import RuntimeAPI
 
+@Test func wrapperEndpointKindHasDistinctWireValue() throws {
+    let data = try JSONEncoder().encode(RuntimeEndpointKind.wrapper)
+    #expect(String(decoding: data, as: UTF8.self) == "\"wrapper\"")
+    #expect(try JSONDecoder().decode(RuntimeEndpointKind.self, from: data) == .wrapper)
+
+    let request = RuntimeEndpointRequest(
+        kind: .wrapper,
+        clientKind: .wrapper,
+        claimedIdentity: "io.apkrun.android.io.apkrun.fixture.hellotext",
+        bundlePath: "/Applications/HelloText.app",
+        apiVersion: .current
+    )
+    #expect(try JSONDecoder().decode(RuntimeEndpointRequest.self, from: JSONEncoder().encode(request)) == request)
+}
+
+@Test func wrapperEndpointRequestDecodesWithoutTheOptionalPathAddedInAPIVersion116() throws {
+    let legacyRequest = Data(
+        #"{"kind":"wrapper","clientKind":"wrapper","claimedIdentity":"io.apkrun.android.io.apkrun.fixture.hellotext","apiVersion":{"major":1,"minor":15}}"#
+            .utf8
+    )
+    let decoded = try JSONDecoder().decode(RuntimeEndpointRequest.self, from: legacyRequest)
+    #expect(decoded.bundlePath == nil)
+}
+
 @Test func runtimeTrackedUninstallAdvancesAPIMinorVersion() {
-    #expect(APIVersion.current == APIVersion(major: 1, minor: 14))
+    #expect(APIVersion.current == APIVersion(major: 1, minor: 18))
 }
 
 @Test func runtimeRestartRequestRoundTripsVersionedHeader() throws {

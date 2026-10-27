@@ -57,7 +57,7 @@ func eventHubDeliversSequencedOperationEventsToSubscribedConnections() async thr
                 ))),
         operationID: operationID
     )
-    try await Task.sleep(for: .milliseconds(60))
+    await sink.waitForEnvelopeCount(2)
 
     let delivered = try sink.envelopes()
     #expect(delivered.map(\.seq) == [1, 2])
@@ -76,7 +76,6 @@ func eventHubDeliversSequencedOperationEventsToSubscribedConnections() async thr
 
     try hub.unsubscribe(connectionID: connectionID, clientKind: .cli, topics: [.operations])
     hub.publishOperationEvent(.started(snapshot), operationID: operationID)
-    try await Task.sleep(for: .milliseconds(40))
     #expect(try sink.envelopes().count == 2)
     hub.remove(connectionID: connectionID)
 }
@@ -182,7 +181,7 @@ func runtimeHostStateBridgeKeepsSnapshotAndEventStateConsistent() async throws {
 
     await host.consumeSupervisorState(RuntimeStateSnapshot(revision: 1, state: .stopping(.reset)))
     #expect(await host.status().runtimeState == "stopping")
-    try await Task.sleep(for: .milliseconds(40))
+    await sink.waitForEnvelopeCount(1)
 
     let envelopes = try sink.envelopes()
     #expect(envelopes.count == 1)
@@ -213,7 +212,7 @@ func runtimeHostPreservesDelayedStateEventsAfterNewerStatusSnapshot() async thro
     )
     await host.consumeSupervisorState(RuntimeStateSnapshot(revision: 2, state: .ready))
     #expect(await host.status().runtimeState == "ready")
-    try await Task.sleep(for: .milliseconds(40))
+    await sink.waitForEnvelopeCount(2)
 
     let envelopes = try sink.envelopes()
     #expect(envelopes.count == 2)
@@ -318,6 +317,125 @@ func eventHubDropsQueuedTopicEventsWhenUnsubscribed() async throws {
 
     #expect(try sink.envelopes().isEmpty)
     hub.remove(connectionID: connectionID)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func eventHubReplaysPendingWrapperApprovalsToANewSubscriber() async throws {
+    let hub = RuntimeEventHub()
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let signer = try #require(RuntimeWrapperSignerSummary(kind: .adHoc))
+    let prompt = try #require(
+        RuntimeWrapperApprovalPrompt(
+            approvalID: ApprovalID(),
+            bundlePath: "/Applications/HelloText.app",
+            bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+            packageID: packageID,
+            displayName: "HelloText",
+            signer: signer,
+            packageInstalled: true,
+            integrations: RuntimeWrapperIntegrationSummary(
+                clipboard: false,
+                notifications: false,
+                links: false,
+                files: false,
+                sharedFolders: false,
+                microphone: false
+            )
+        )
+    )
+    hub.publishWrapperChange(.approvalRequested(prompt))
+    // CLI and GUI paths can join the same in-memory challenge. The interactive path may publish
+    // after joining even if another GUI connection already announced this ApprovalID.
+    hub.publishWrapperChange(.approvalRequested(prompt))
+
+    let sink = RecordingRuntimeEventSink()
+    let connectionID = ObjectIdentifier(sink)
+    _ = try hub.subscribe(
+        connectionID: connectionID,
+        clientKind: .cli,
+        topics: [.wrappers],
+        sink: RuntimeEventSinkReference(value: sink),
+        outputQueue: DispatchQueue(label: "RuntimeEventHubTests.wrapperReplay"),
+        isConnectionOpen: { true }
+    )
+    await sink.waitForEnvelopeCount(1)
+
+    let envelopes = try sink.envelopes()
+    #expect(envelopes.count == 1)
+    #expect(envelopes.first?.topic == .wrappers)
+    guard case .wrappers(.approvalRequested(let replayedPrompt)) = envelopes.first?.payload else {
+        Issue.record("Expected the pending approval event to replay to the new subscriber.")
+        return
+    }
+    #expect(replayedPrompt == prompt)
+    hub.remove(connectionID: connectionID)
+
+    hub.publishWrapperChange(.approvalResolved(prompt.approvalID))
+    let nextPrompt = try #require(
+        RuntimeWrapperApprovalPrompt(
+            approvalID: ApprovalID(),
+            bundlePath: prompt.bundlePath,
+            bundleID: prompt.bundleID,
+            packageID: prompt.packageID,
+            displayName: prompt.displayName,
+            signer: prompt.signer,
+            packageInstalled: prompt.packageInstalled,
+            integrations: prompt.integrations
+        )
+    )
+    hub.publishWrapperChange(.approvalRequested(nextPrompt))
+    let lateSink = RecordingRuntimeEventSink()
+    let lateConnectionID = ObjectIdentifier(lateSink)
+    _ = try hub.subscribe(
+        connectionID: lateConnectionID,
+        clientKind: .cli,
+        topics: [.wrappers],
+        sink: RuntimeEventSinkReference(value: lateSink),
+        outputQueue: DispatchQueue(label: "RuntimeEventHubTests.resolvedWrapperReplay"),
+        isConnectionOpen: { true }
+    )
+    await lateSink.waitForEnvelopeCount(1)
+    let lateEnvelopes = try lateSink.envelopes()
+    #expect(lateEnvelopes.count == 1)
+    guard case .wrappers(.approvalRequested(let replayedNextPrompt)) = lateEnvelopes.first?.payload else {
+        Issue.record("Expected only the newly pending approval to replay.")
+        return
+    }
+    #expect(replayedNextPrompt == nextPrompt)
+    hub.remove(connectionID: lateConnectionID)
+}
+
+@Test func wrapperApprovalEventsKeepLegacyClientsOnDecodableSignerKinds() throws {
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let signer = try #require(
+        RuntimeWrapperSignerSummary(
+            kind: .teamSigned,
+            teamIdentifier: "ABCDE12345"
+        )
+    )
+    let prompt = try #require(
+        RuntimeWrapperApprovalPrompt(
+            approvalID: ApprovalID(),
+            bundlePath: "/Applications/HelloText.app",
+            bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+            packageID: packageID,
+            displayName: "HelloText",
+            signer: signer,
+            packageInstalled: true,
+            integrations: RuntimeWrapperIntegrationSummary(
+                clipboard: false,
+                notifications: false,
+                links: false,
+                files: false,
+                sharedFolders: false,
+                microphone: false
+            )
+        )
+    )
+
+    #expect(!wrapperApprovalPromptIsCompatible(prompt, with: APIVersion(major: 1, minor: 14)))
+    #expect(wrapperApprovalPromptIsCompatible(prompt, with: APIVersion(major: 1, minor: 15)))
+    #expect(wrapperApprovalPromptIsCompatible(prompt, with: .current))
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -509,7 +627,9 @@ private final class SnapshotReplyRecorder: @unchecked Sendable {
 private final class RecordingRuntimeEventSink: NSObject, RuntimeEventSink, @unchecked Sendable {
     private let lock = NSLock()
     private var batches: [Data] = []
+    private var envelopeCount = 0
     private var acknowledgementHandlers: [() -> Void] = []
+    private var envelopeWaiters: [Int: [CheckedContinuation<Void, Never>]] = [:]
     private let acknowledgesImmediately: Bool
 
     init(acknowledgesImmediately: Bool = true) {
@@ -523,12 +643,33 @@ private final class RecordingRuntimeEventSink: NSObject, RuntimeEventSink, @unch
     func deliver(_ batch: Data, reply: @escaping () -> Void) {
         lock.lock()
         batches.append(batch)
+        envelopeCount += (try? JSONDecoder().decode([EventEnvelope].self, from: batch).count) ?? 0
+        let readyEnvelopeWaiterCounts = envelopeWaiters.keys.filter { $0 <= envelopeCount }
+        let readyEnvelopeWaiters = readyEnvelopeWaiterCounts.flatMap {
+            envelopeWaiters.removeValue(forKey: $0) ?? []
+        }
         if !acknowledgesImmediately {
             acknowledgementHandlers.append(reply)
         }
         lock.unlock()
+        for waiter in readyEnvelopeWaiters {
+            waiter.resume()
+        }
         if acknowledgesImmediately {
             reply()
+        }
+    }
+
+    func waitForEnvelopeCount(_ count: Int) async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if envelopeCount >= count {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                envelopeWaiters[count, default: []].append(continuation)
+                lock.unlock()
+            }
         }
     }
 

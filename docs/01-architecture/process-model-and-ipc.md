@@ -64,19 +64,23 @@ The main Mach service is reachable by every process of the logged-in user, so it
 ```text
 client ──(1) connect io.apkrun.apkrund.xpc──▶ BrokerService
         hello(clientKind, claimedIdentity, apiVersion) → HelloReply(runtimeVersion, runtimeBuild, apiVersion, hostState)
-        requestEndpoint(kind) → one-use NSXPCListenerEndpoint
+        requestEndpoint(kind, wrapperBundlePath?) → one-use NSXPCListenerEndpoint
               kind = .control    → requirement: APKRun's own signing identity
               kind = .maintenance → same requirement as .control; version-stable (runtime-maintenance.md §8.1)
               kind = .wrapper(bundleID) → requirement: identifier "<bundleID>" and cdhash H"<registered cdhash>"
+        requestApprovalEndpoint(bundlePath, bundleID, packageID) → one-use NSXPCListenerEndpoint
+              unknown or changed wrapper → requirement: identifier "<bundleID>" and cdhash H"<inspected cdhash>"
 client ──(2) connect to endpoint──▶ (system enforces the requirement; mismatch ⇒ invalidated)
 ```
+
+When a wrapper supplies a bundle path that differs from its registry location, the broker performs a read-only signature inspection first. A copy with the registered cdhash remains usable; a changed cdhash is rejected so the launcher can request approval. The registered path stays on the no-inspection fast path.
 
 | Client | Endpoint | Requirement (release) | Requirement (dev, ad-hoc) | Capabilities |
 |---|---|---|---|---|
 | APKRun.app, APKRunMenuBar, `apkrun` CLI | `.control` | `anchor apple generic and certificate leaf[subject.OU] = "<TEAMID>" and identifier "io.apkrun.*"` (one per identifier) | `cdhash H"…"` of the binaries in the same APKRun.app, computed at apkrund start | Full `RuntimeService` |
 | Same clients | `.maintenance` | As `.control` | As `.control` | Host update coordination only: status, prepare, abort, complete, restart. Served in every host state ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §8.1). |
-| Wrapper | `.wrapper(bundleID)` | `identifier` and `cdhash` from the wrapper registry | Same | Sessions; `packageInfo` and `packageIcon` for its own package only; `importBootstrap` (portable wrappers); notification relay; `runtimeStatus` ([wrapper.md](../02-design/wrapper.md) §12.1) |
-| Unknown wrapper (not in the registry) | None | — | — | `requestApproval` on the broker only. Approval registers the current cdhash ([wrapper.md](../02-design/wrapper.md) §7.3). |
+| Wrapper | `.wrapper(bundleID)` | `identifier` and `cdhash` from the wrapper registry | Same | Sessions and `packageInfo` for its own package only; `importBootstrap` (portable wrappers); notification relay ([wrapper.md](../02-design/wrapper.md) §12.1) |
+| Unknown or changed wrapper | One-use wrapper approval endpoint | `identifier` and current `cdhash` after strict bundle inspection | Same | `submitApproval` only. The wrapper then reconnects through its registered `.wrapper(bundleID)` endpoint after approval ([wrapper.md](../02-design/wrapper.md) §7.3). |
 
 - Each wrapper launcher is re-signed ad hoc with the wrapper's bundle ID as identifier, so each wrapper has its own cdhash. WrapperCore records it in `Wrappers/registry.json` ([wrapper.md](../02-design/wrapper.md) §7).
 - Do not authorize with the private `auditToken` of `NSXPCConnection`, or with `processIdentifier`. PIDs can be reused in a race.
@@ -118,7 +122,7 @@ openSession(OpenSessionRequest{ packageID, geometry: DisplayGeometry{ pointSize,
 | Control listener at its eight-connection limit | RuntimeClient probes each new endpoint with the idempotent `runtimeStatus`, and retries rejected connections with bounded backoff before a side-effecting request. |
 | API major mismatch | Actionable error dialog. The wrapper never continues. |
 | APKRun or Android updating (`HelloReply.hostState == updating`, `RuntimeFailure.hostUpdating`, or `ended(.runtimeUpdating)`) | The wrapper shows screen U and retries `openSession` every 2 s for up to 10 minutes ([wrapper.md](../02-design/wrapper.md) §5.4). The menu bar relaunches when `hello` reports another build ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.7). |
-| Endpoint rejected (requirement mismatch) | The wrapper calls `requestApproval`. The user approves in APKRun.app. |
+| Endpoint rejected (unknown or changed wrapper) | The wrapper calls `requestApprovalEndpoint`, connects to the restricted endpoint, and submits an approval request. The user approves in APKRun.app or with the CLI; approval registers the inspected cdhash. |
 
 ---
 

@@ -1,6 +1,21 @@
 import Foundation
 import RuntimeAPI
 
+func wrapperApprovalPromptIsCompatible(
+    _ prompt: RuntimeWrapperApprovalPrompt,
+    with apiVersion: APIVersion
+) -> Bool {
+    guard apiVersion.major == 1, apiVersion.minor < 15 else {
+        return true
+    }
+    switch prompt.signer.kind {
+    case .adHoc, .developerID:
+        return true
+    case .teamSigned, .unknown:
+        return false
+    }
+}
+
 struct RuntimeEventSinkReference: @unchecked Sendable {
     let value: any RuntimeEventSink
 }
@@ -19,10 +34,13 @@ final class RuntimeEventHub: @unchecked Sendable {
     private let queue = DispatchQueue(label: "io.apkrun.RuntimeHost.eventHub")
     private var subscribers: [ObjectIdentifier: Subscriber] = [:]
     private var replyBarriers: [ObjectIdentifier: Int] = [:]
+    private var pendingWrapperApprovals: [ApprovalID: (prompt: RuntimeWrapperApprovalPrompt, time: Date)] = [:]
+    private var pendingWrapperApprovalOrder: [ApprovalID] = []
 
     func subscribe(
         connectionID: ObjectIdentifier,
         clientKind: RuntimeClientKind,
+        apiVersion: APIVersion = .current,
         topics: [EventTopic],
         sink: RuntimeEventSinkReference?,
         outputQueue: DispatchQueue,
@@ -44,15 +62,37 @@ final class RuntimeEventHub: @unchecked Sendable {
                 return
             }
 
+            let existingSubscriber = subscribers[connectionID]
+            let shouldReplayWrapperApprovals =
+                requestedTopics.contains(.wrappers) && existingSubscriber?.topics.contains(.wrappers) != true
             var subscriber =
-                subscribers[connectionID]
+                existingSubscriber
                 ?? Subscriber(
                     clientKind: clientKind,
+                    apiVersion: apiVersion,
                     sink: sink,
                     outputQueue: outputQueue,
                     isConnectionOpen: isConnectionOpen
                 )
+            subscriber.apiVersion = apiVersion
             subscriber.topics.formUnion(requestedTopics)
+            subscriber.pending.removeAll { !Self.event($0, isCompatibleWith: apiVersion) }
+            if shouldReplayWrapperApprovals {
+                for approvalID in pendingWrapperApprovalOrder {
+                    guard let pending = pendingWrapperApprovals[approvalID] else { continue }
+                    let event = QueuedEvent(
+                        topic: .wrappers,
+                        time: pending.time,
+                        operationID: nil,
+                        payload: .wrappers(.approvalRequested(pending.prompt))
+                    )
+                    if Self.event(event, isCompatibleWith: apiVersion) {
+                        subscriber.pending.append(event)
+                    }
+                }
+            }
+            subscribers[connectionID] = subscriber
+            scheduleDelivery(for: connectionID, subscriber: &subscriber)
             subscribers[connectionID] = subscriber
             result = .success(subscriber.topics.sorted { $0.rawValue < $1.rawValue })
         }
@@ -180,24 +220,61 @@ final class RuntimeEventHub: @unchecked Sendable {
         )
     }
 
+    func publishWrapperChange(_ change: WrapperChange) {
+        queue.sync {
+            switch change {
+            case .approvalRequested(let prompt):
+                guard pendingWrapperApprovals[prompt.approvalID] == nil else {
+                    return
+                }
+                pendingWrapperApprovals[prompt.approvalID] = (prompt, Date())
+                if !pendingWrapperApprovalOrder.contains(prompt.approvalID) {
+                    pendingWrapperApprovalOrder.append(prompt.approvalID)
+                }
+                while pendingWrapperApprovalOrder.count > 64 {
+                    let expired = pendingWrapperApprovalOrder.removeFirst()
+                    pendingWrapperApprovals.removeValue(forKey: expired)
+                }
+            case .approvalResolved(let approvalID):
+                pendingWrapperApprovals.removeValue(forKey: approvalID)
+                pendingWrapperApprovalOrder.removeAll { $0 == approvalID }
+            default:
+                break
+            }
+            publishOnQueue(
+                QueuedEvent(
+                    topic: .wrappers,
+                    time: Date(),
+                    operationID: nil,
+                    payload: .wrappers(change)
+                )
+            )
+        }
+    }
+
     private func publish(_ event: QueuedEvent) {
         queue.sync {
-            for connectionID in Array(subscribers.keys) {
-                guard var subscriber = subscribers[connectionID],
-                    subscriber.topics.contains(event.topic),
-                    subscriber.isConnectionOpen()
-                else {
-                    subscribers[connectionID] = nil
-                    continue
-                }
-                if case .operations(.finished(let finishedID, _)) = event.payload {
-                    subscriber.lastProgressDelivery[Self.operationProgressKey(finishedID)] = nil
-                }
-                enqueue(event, for: &subscriber)
-                subscribers[connectionID] = subscriber
-                scheduleDelivery(for: connectionID, subscriber: &subscriber)
-                subscribers[connectionID] = subscriber
+            publishOnQueue(event)
+        }
+    }
+
+    private func publishOnQueue(_ event: QueuedEvent) {
+        for connectionID in Array(subscribers.keys) {
+            guard var subscriber = subscribers[connectionID],
+                subscriber.topics.contains(event.topic),
+                Self.event(event, isCompatibleWith: subscriber.apiVersion),
+                subscriber.isConnectionOpen()
+            else {
+                subscribers[connectionID] = nil
+                continue
             }
+            if case .operations(.finished(let finishedID, _)) = event.payload {
+                subscriber.lastProgressDelivery[Self.operationProgressKey(finishedID)] = nil
+            }
+            enqueue(event, for: &subscriber)
+            subscribers[connectionID] = subscriber
+            scheduleDelivery(for: connectionID, subscriber: &subscriber)
+            subscribers[connectionID] = subscriber
         }
     }
 
@@ -213,6 +290,13 @@ final class RuntimeEventHub: @unchecked Sendable {
         "notAuthorized",
         message: "This client is not allowed to subscribe to one or more requested topics."
     )
+
+    private static func event(_ event: QueuedEvent, isCompatibleWith apiVersion: APIVersion) -> Bool {
+        guard case .wrappers(.approvalRequested(let prompt)) = event.payload else {
+            return true
+        }
+        return wrapperApprovalPromptIsCompatible(prompt, with: apiVersion)
+    }
 
     private static func allowedTopics(for clientKind: RuntimeClientKind) -> Set<EventTopic> {
         switch clientKind {
@@ -446,6 +530,7 @@ final class RuntimeEventHub: @unchecked Sendable {
 
     private struct Subscriber {
         let clientKind: RuntimeClientKind
+        var apiVersion: APIVersion
         let sink: RuntimeEventSinkReference
         let outputQueue: DispatchQueue
         let isConnectionOpen: @Sendable () -> Bool

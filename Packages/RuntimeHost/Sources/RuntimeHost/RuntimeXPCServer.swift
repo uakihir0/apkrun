@@ -3,12 +3,83 @@ import DiagnosticsCore
 import IOSurface
 import RuntimeAPI
 import RuntimeCore
+import WrapperCore
 
 #if canImport(Security)
     import Security
 #endif
 
 private let runtimeAPIVersion = APIVersion.current
+
+private func isRuntimeAPICompatible(
+    clientVersion: APIVersion,
+    clientKind: RuntimeClientKind
+) -> Bool {
+    if clientVersion.major == runtimeAPIVersion.major {
+        return clientVersion.minor <= runtimeAPIVersion.minor
+    }
+    return clientKind == .wrapper
+        && clientVersion.major < runtimeAPIVersion.major
+        && runtimeAPIVersion.major - clientVersion.major == 1
+}
+
+private func wrapperApprovalWireError(_ failure: WrapperApprovalService.Failure) -> RuntimeWireError {
+    let code: String
+    switch failure {
+    case .invalidBundle, .invalidSignature, .identityMismatch, .invalidVersion, .signerVerificationUnavailable,
+        .invalidManifest:
+        code = "wrapper.bundleInvalid"
+    case .alreadyPending, .rateLimited, .decisionInProgress:
+        code = "runtime.busy"
+    case .recentlyDenied:
+        code = "wrapper.approvalDenied"
+    case .unknownApproval:
+        code = "wrapper.approvalNotFound"
+    case .bookmarkUnavailable, .registry:
+        code = "wrapper.registryUnavailable"
+    }
+    return RuntimeWireError(
+        domain: String(code.split(separator: ".", maxSplits: 1).first ?? "runtime"),
+        code: code,
+        message: safeMessage(for: code)
+    )
+}
+
+private func wrapperApprovalInstalledVersion(_ summary: RuntimePackageSummary) -> String? {
+    let versionName = summary.versionName?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let versionCode = summary.versionCode.map(String.init)
+    let value: String
+    if let versionName, !versionName.isEmpty, let versionCode {
+        value = "\(versionName) (\(versionCode))"
+    } else if let versionName, !versionName.isEmpty {
+        value = versionName
+    } else if let versionCode {
+        value = versionCode
+    } else {
+        return nil
+    }
+    let sanitized = value.unicodeScalars
+        .filter { !CharacterSet.controlCharacters.contains($0) }
+        .prefix(128)
+        .reduce(into: "") { $0.unicodeScalars.append($1) }
+    return sanitized.isEmpty ? nil : sanitized
+}
+
+func wrapperPackageAccessAllowed(
+    clientKind: RuntimeClientKind,
+    authorizedPackageID: RuntimePackageID?,
+    requestedPackageID: RuntimePackageID
+) -> Bool {
+    clientKind != .wrapper || authorizedPackageID == requestedPackageID
+}
+
+func wrapperCodeHashIsRegistered(
+    _ observed: String,
+    active: String,
+    pending: String?
+) -> Bool {
+    observed == active || observed == pending
+}
 
 /// Errors that prevent the daemon from establishing a protected XPC endpoint.
 public enum RuntimeXPCServerError: Error, Equatable, Sendable {
@@ -41,6 +112,8 @@ public final class RuntimeXPCServer: @unchecked Sendable {
     private let brokerDelegate: BrokerListenerDelegate
     private let connectionRegistry: RuntimeXPCConnectionRegistry
     private let workspaceOpener: WorkspaceOpener
+    private let wrapperRegistry: WrapperRegistry
+    private let wrapperApprovalService: WrapperApprovalService
     private let startLock = NSLock()
     private var hasStarted = false
     private var hasInvalidated = false
@@ -52,7 +125,8 @@ public final class RuntimeXPCServer: @unchecked Sendable {
     public init(
         host: RuntimeHost,
         appBundleURL: URL,
-        buildInfo: BuildInfo = .current
+        buildInfo: BuildInfo = .current,
+        wrapperRegistry: WrapperRegistry? = nil
     ) throws {
         let identity = try RuntimeXPCServerIdentity(buildInfo: buildInfo)
         guard Self.isExpectedAppBundle(appBundleURL, identifier: identity.appIdentifier) else {
@@ -83,7 +157,12 @@ public final class RuntimeXPCServer: @unchecked Sendable {
         }
 
         let connectionRegistry = RuntimeXPCConnectionRegistry(eventHub: host.eventHub)
+        let wrapperRegistry = wrapperRegistry ?? WrapperRegistry(fileURL: APKRunPaths().wrapperRegistryFile)
+        let wrapperApprovalService = WrapperApprovalService(registry: wrapperRegistry) { approvalID in
+            host.eventHub.publishWrapperChange(.approvalResolved(approvalID))
+        }
         let workspaceOpener = WorkspaceOpener(
+            appBundleURL: appBundleURL,
             launcherBundleURL: appBundleURL.appendingPathComponent(
                 "Contents/Helpers/APKRunLauncher.app",
                 isDirectory: true
@@ -94,7 +173,9 @@ public final class RuntimeXPCServer: @unchecked Sendable {
             buildInfo: buildInfo,
             clientRequirements: clientRequirements,
             connectionRegistry: connectionRegistry,
-            workspaceOpener: workspaceOpener
+            workspaceOpener: workspaceOpener,
+            wrapperRegistry: wrapperRegistry,
+            wrapperApprovalService: wrapperApprovalService
         )
         let brokerListener = NSXPCListener(machServiceName: identity.machServiceName)
         brokerListener.delegate = brokerDelegate
@@ -104,6 +185,8 @@ public final class RuntimeXPCServer: @unchecked Sendable {
         self.brokerDelegate = brokerDelegate
         self.connectionRegistry = connectionRegistry
         self.workspaceOpener = workspaceOpener
+        self.wrapperRegistry = wrapperRegistry
+        self.wrapperApprovalService = wrapperApprovalService
     }
 
     private static func isExpectedAppBundle(_ url: URL, identifier: String) -> Bool {
@@ -220,14 +303,22 @@ private final class RuntimeXPCControlListener: @unchecked Sendable {
         requirement: String,
         reservationID: UUID,
         connectionRegistry: RuntimeXPCConnectionRegistry,
-        workspaceOpener: WorkspaceOpener
+        workspaceOpener: WorkspaceOpener,
+        wrapperApprovalService: WrapperApprovalService,
+        authorizedPackageID: RuntimePackageID? = nil,
+        approvalRequest: RuntimeWrapperApprovalBrokerRequest? = nil,
+        approvalIdentity: WrapperApprovalEndpointIdentity? = nil
     ) {
         delegate = ControlListenerDelegate(
             host: host,
             clientKind: clientKind,
             reservationID: reservationID,
             connectionRegistry: connectionRegistry,
-            workspaceOpener: workspaceOpener
+            workspaceOpener: workspaceOpener,
+            wrapperApprovalService: wrapperApprovalService,
+            authorizedPackageID: authorizedPackageID,
+            approvalRequest: approvalRequest,
+            approvalIdentity: approvalIdentity
         )
         listener = NSXPCListener.anonymous()
         listener.setConnectionCodeSigningRequirement(requirement)
@@ -366,9 +457,9 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         controlListener: RuntimeXPCControlListener
     ) -> Bool {
         lock.lock()
-        defer { lock.unlock() }
         expireControlReservations()
         guard acceptingNewConnections, !closed else {
+            lock.unlock()
             return false
         }
         guard
@@ -376,21 +467,44 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
                 reservations.values.contains { $0.brokerConnectionID == brokerConnectionID }
             })
         else {
+            lock.unlock()
             return false
         }
         let reserved = reservedControlConnections.values.reduce(0) { $0 + $1.count }
         // Endpoint grants do not consume the eight live-control-connection slots. Bound their
         // temporary listener state by the independent broker-connection limit instead.
         guard reserved < 32 else {
+            lock.unlock()
             return false
         }
+        let expiresAt = ContinuousClock.now.advanced(by: .seconds(5))
         reservedControlConnections[clientKind.rawValue, default: [:]][reservationID] = RuntimeXPCControlReservation(
             brokerConnectionID: brokerConnectionID,
             controlListener: controlListener,
-            expiresAt: ContinuousClock.now.advanced(by: .seconds(5))
+            expiresAt: expiresAt
         )
         lastActivity = ContinuousClock.now
+        lock.unlock()
+
+        // Reservations are also removed proactively when a caller never connects. The lazy
+        // expiry checks remain as a backstop for busy/closing paths.
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(5)) { [weak self] in
+            self?.expireControlReservation(for: clientKind, reservationID: reservationID)
+        }
         return true
+    }
+
+    private func expireControlReservation(
+        for clientKind: RuntimeClientKind,
+        reservationID: UUID
+    ) {
+        lock.lock()
+        let reservation = reservedControlConnections[clientKind.rawValue]?.removeValue(forKey: reservationID)
+        if reservedControlConnections[clientKind.rawValue]?.isEmpty == true {
+            reservedControlConnections[clientKind.rawValue] = nil
+        }
+        lock.unlock()
+        reservation?.controlListener.listener.invalidate()
     }
 
     private func expireControlReservations() {
@@ -788,23 +902,36 @@ private final class BrokerListenerDelegate: NSObject, NSXPCListenerDelegate, @un
     private let clientRequirements: [String: String]
     private let connectionRegistry: RuntimeXPCConnectionRegistry
     private let workspaceOpener: WorkspaceOpener
+    private let wrapperRegistry: WrapperRegistry
+    private let wrapperApprovalService: WrapperApprovalService
 
     init(
         host: RuntimeHost,
         buildInfo: BuildInfo,
         clientRequirements: [String: String],
         connectionRegistry: RuntimeXPCConnectionRegistry,
-        workspaceOpener: WorkspaceOpener
+        workspaceOpener: WorkspaceOpener,
+        wrapperRegistry: WrapperRegistry,
+        wrapperApprovalService: WrapperApprovalService
     ) {
         self.host = host
         self.buildInfo = buildInfo
         self.clientRequirements = clientRequirements
         self.connectionRegistry = connectionRegistry
         self.workspaceOpener = workspaceOpener
+        self.wrapperRegistry = wrapperRegistry
+        self.wrapperApprovalService = wrapperApprovalService
     }
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
-        guard connectionRegistry.register(connection, kind: .broker) else { return false }
+        guard
+            connectionRegistry.register(
+                connection,
+                kind: .broker
+            )
+        else {
+            return false
+        }
         let connectionID = ObjectIdentifier(connection)
         let interface = NSXPCInterface(with: RuntimeBrokerXPC.self)
         guard let endpointClasses = NSSet(object: NSXPCListenerEndpoint.self) as? Set<AnyHashable> else {
@@ -816,6 +943,12 @@ private final class BrokerListenerDelegate: NSObject, NSXPCListenerDelegate, @un
             argumentIndex: 1,
             ofReply: true
         )
+        interface.setClasses(
+            endpointClasses,
+            for: #selector(RuntimeBrokerXPC.requestApprovalEndpoint(_:reply:)),
+            argumentIndex: 1,
+            ofReply: true
+        )
         connection.exportedInterface = interface
         connection.exportedObject = BrokerService(
             host: host,
@@ -823,7 +956,9 @@ private final class BrokerListenerDelegate: NSObject, NSXPCListenerDelegate, @un
             clientRequirements: clientRequirements,
             connectionRegistry: connectionRegistry,
             connectionID: connectionID,
-            workspaceOpener: workspaceOpener
+            workspaceOpener: workspaceOpener,
+            wrapperRegistry: wrapperRegistry,
+            wrapperApprovalService: wrapperApprovalService
         )
         connection.resume()
         return true
@@ -836,6 +971,8 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
     private let clientRequirements: [String: String]
     private let connectionRegistry: RuntimeXPCConnectionRegistry
     private let workspaceOpener: WorkspaceOpener
+    private let wrapperRegistry: WrapperRegistry
+    private let wrapperApprovalService: WrapperApprovalService
     private let connectionID: ObjectIdentifier
 
     init(
@@ -844,7 +981,9 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
         clientRequirements: [String: String],
         connectionRegistry: RuntimeXPCConnectionRegistry,
         connectionID: ObjectIdentifier,
-        workspaceOpener: WorkspaceOpener
+        workspaceOpener: WorkspaceOpener,
+        wrapperRegistry: WrapperRegistry,
+        wrapperApprovalService: WrapperApprovalService
     ) {
         self.host = host
         self.buildInfo = buildInfo
@@ -852,6 +991,8 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
         self.connectionRegistry = connectionRegistry
         self.connectionID = connectionID
         self.workspaceOpener = workspaceOpener
+        self.wrapperRegistry = wrapperRegistry
+        self.wrapperApprovalService = wrapperApprovalService
     }
 
     func hello(_ request: Data, reply: @escaping (Data) -> Void) {
@@ -892,10 +1033,11 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
     }
 
     func requestEndpoint(_ request: Data, reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void) {
+        let replyHandler = XPCListenerEndpointReply(reply)
         let admission = connectionRegistry.beginRequest(on: connectionID)
         guard case .accepted(let pending) = admission else {
             let rejection = Self.rejection(for: admission)
-            reply(
+            replyHandler.send(
                 Self.encode(
                     RuntimeEndpointReply.rejected(
                         Self.endpointRejection(rejection.endpointRejection, compatibleWithRequest: request)
@@ -905,30 +1047,56 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
             )
             return
         }
-        defer { pending.finish() }
         guard
             request.count <= Self.maximumRequestSize,
             let endpointRequest = try? JSONDecoder().decode(RuntimeEndpointRequest.self, from: request),
+            endpointRequest.bundlePath.map(Self.isValidWrapperBundlePath) ?? true,
             endpointRequest.apiVersion.major > 0,
             endpointRequest.apiVersion.minor >= 0,
-            endpointRequest.kind == .control,
-            endpointRequest.apiVersion.major == runtimeAPIVersion.major,
-            endpointRequest.apiVersion.minor <= runtimeAPIVersion.minor
+            isRuntimeAPICompatible(
+                clientVersion: endpointRequest.apiVersion,
+                clientKind: endpointRequest.clientKind
+            )
         else {
-            reply(Self.encode(RuntimeEndpointReply.rejected(.malformedRequest)), nil)
+            replyHandler.send(Self.encode(RuntimeEndpointReply.rejected(.malformedRequest)), nil)
+            pending.finish()
+            return
+        }
+
+        if endpointRequest.kind == .wrapper {
+            guard
+                endpointRequest.clientKind == .wrapper,
+                Self.isValidWrapperBundleID(endpointRequest.claimedIdentity)
+            else {
+                replyHandler.send(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
+                pending.finish()
+                return
+            }
+            Task {
+                defer { pending.finish() }
+                await issueWrapperEndpoint(
+                    bundleID: endpointRequest.claimedIdentity,
+                    bundlePath: endpointRequest.bundlePath,
+                    reply: replyHandler
+                )
+            }
             return
         }
 
         guard
+            endpointRequest.kind == .control,
+            endpointRequest.clientKind != .wrapper,
             let identifier = Self.expectedIdentifier(
                 for: endpointRequest.clientKind,
                 buildIdentity: buildInfo.buildIdentity
             ), endpointRequest.claimedIdentity == identifier,
             let requirement = clientRequirements[endpointRequest.clientKind.rawValue]
         else {
-            reply(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
+            replyHandler.send(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
+            pending.finish()
             return
         }
+        defer { pending.finish() }
         let reservationID = UUID()
         let controlListener = RuntimeXPCControlListener(
             host: host,
@@ -936,7 +1104,8 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
             requirement: requirement,
             reservationID: reservationID,
             connectionRegistry: connectionRegistry,
-            workspaceOpener: workspaceOpener
+            workspaceOpener: workspaceOpener,
+            wrapperApprovalService: wrapperApprovalService
         )
         guard
             connectionRegistry.reserveControlConnection(
@@ -947,7 +1116,7 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
             )
         else {
             controlListener.listener.invalidate()
-            reply(
+            replyHandler.send(
                 Self.encode(
                     RuntimeEndpointReply.rejected(
                         Self.endpointRejection(.busy, requestedVersion: endpointRequest.apiVersion)
@@ -957,7 +1126,176 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
             )
             return
         }
-        reply(Self.encode(RuntimeEndpointReply.granted), controlListener.listener.endpoint)
+        replyHandler.send(Self.encode(RuntimeEndpointReply.granted), controlListener.listener.endpoint)
+    }
+
+    func requestApprovalEndpoint(
+        _ request: Data,
+        reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void
+    ) {
+        let replyHandler = XPCListenerEndpointReply(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            let rejection = Self.rejection(for: admission)
+            replyHandler.send(Self.encode(RuntimeEndpointReply.rejected(rejection.endpointRejection)), nil)
+            return
+        }
+        guard
+            request.count <= Self.maximumRequestSize,
+            let approvalRequest = try? JSONDecoder().decode(RuntimeWrapperApprovalBrokerRequest.self, from: request)
+        else {
+            replyHandler.send(Self.encode(RuntimeEndpointReply.rejected(.malformedRequest)), nil)
+            pending.finish()
+            return
+        }
+
+        Task {
+            defer { pending.finish() }
+            do {
+                // Inspection is read-only: quotas, package lookups, pending challenges, and prompts
+                // remain behind the restricted one-use connection.
+                let identity = try await wrapperApprovalService.approvalEndpointIdentity(for: approvalRequest)
+                let reservationID = UUID()
+                let controlListener = RuntimeXPCControlListener(
+                    host: host,
+                    clientKind: .wrapper,
+                    requirement: Self.wrapperApprovalCodeRequirement(for: identity),
+                    reservationID: reservationID,
+                    connectionRegistry: connectionRegistry,
+                    workspaceOpener: workspaceOpener,
+                    wrapperApprovalService: wrapperApprovalService,
+                    approvalRequest: approvalRequest,
+                    approvalIdentity: identity
+                )
+                guard
+                    connectionRegistry.reserveControlConnection(
+                        for: .wrapper,
+                        on: connectionID,
+                        reservationID: reservationID,
+                        controlListener: controlListener
+                    )
+                else {
+                    controlListener.listener.invalidate()
+                    replyHandler.send(Self.encode(RuntimeEndpointReply.rejected(.busy)), nil)
+                    return
+                }
+                replyHandler.send(Self.encode(RuntimeEndpointReply.granted), controlListener.listener.endpoint)
+            } catch {
+                replyHandler.send(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
+            }
+        }
+    }
+
+    private func issueWrapperEndpoint(
+        bundleID: String,
+        bundlePath: String?,
+        reply: XPCListenerEndpointReply
+    ) async {
+        let registry: WrapperRegistryFile
+        do {
+            registry = try await wrapperRegistry.read()
+        } catch {
+            reply.send(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
+            return
+        }
+        guard let entry = registry.wrappers.first(where: { $0.bundleID == bundleID }),
+            entry.state == .active || entry.state == .refreshing
+        else {
+            reply.send(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
+            return
+        }
+
+        if let bundlePath, bundlePath != entry.path {
+            guard
+                let approvalRequest = RuntimeWrapperApprovalBrokerRequest(
+                    bundlePath: bundlePath,
+                    bundleID: bundleID,
+                    packageID: entry.packageID
+                )
+            else {
+                reply.send(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
+                return
+            }
+            do {
+                let identity = try await wrapperApprovalService.approvalEndpointIdentity(for: approvalRequest)
+                guard
+                    identity.bundlePath == bundlePath,
+                    wrapperCodeHashIsRegistered(
+                        identity.cdhash,
+                        active: entry.cdhash,
+                        pending: entry.pendingCdhash
+                    )
+                else {
+                    reply.send(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
+                    return
+                }
+            } catch {
+                reply.send(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
+                return
+            }
+        }
+
+        let requirement = Self.wrapperCodeRequirement(for: entry)
+        let reservationID = UUID()
+        let controlListener = RuntimeXPCControlListener(
+            host: host,
+            clientKind: .wrapper,
+            requirement: requirement,
+            reservationID: reservationID,
+            connectionRegistry: connectionRegistry,
+            workspaceOpener: workspaceOpener,
+            wrapperApprovalService: wrapperApprovalService,
+            authorizedPackageID: entry.packageID
+        )
+        guard
+            connectionRegistry.reserveControlConnection(
+                for: .wrapper,
+                on: connectionID,
+                reservationID: reservationID,
+                controlListener: controlListener
+            )
+        else {
+            controlListener.listener.invalidate()
+            reply.send(Self.encode(RuntimeEndpointReply.rejected(.busy)), nil)
+            return
+        }
+        reply.send(Self.encode(RuntimeEndpointReply.granted), controlListener.listener.endpoint)
+    }
+
+    private static func wrapperCodeRequirement(for entry: WrapperRegistryFile.Entry) -> String {
+        let primary = "cdhash H\"\(entry.cdhash)\""
+        guard entry.state == .refreshing, let pendingCdhash = entry.pendingCdhash else {
+            return "identifier \"\(entry.bundleID)\" and \(primary)"
+        }
+        let pending = "cdhash H\"\(pendingCdhash)\""
+        return "identifier \"\(entry.bundleID)\" and (\(primary) or \(pending))"
+    }
+
+    private static func wrapperApprovalCodeRequirement(
+        for identity: WrapperApprovalEndpointIdentity
+    ) -> String {
+        "identifier \"\(identity.bundleID)\" and cdhash H\"\(identity.cdhash)\""
+    }
+
+    private static func isValidWrapperBundleID(_ value: String) -> Bool {
+        let prefix = "io.apkrun.android."
+        guard value.hasPrefix(prefix), value.utf8.count <= 255 else {
+            return false
+        }
+        return value.dropFirst(prefix.count).unicodeScalars.allSatisfy { scalar in
+            (65...90).contains(scalar.value)
+                || (97...122).contains(scalar.value)
+                || (48...57).contains(scalar.value)
+                || scalar.value == 45
+                || scalar.value == 46
+        }
+    }
+
+    private static func isValidWrapperBundlePath(_ value: String) -> Bool {
+        value.hasPrefix("/")
+            && value.utf8.count <= 1024
+            && value.hasSuffix(".app")
+            && !value.utf8.contains(0)
     }
 
     private static let maximumRequestSize = 16 * 1024
@@ -1032,32 +1370,56 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
     private let reservationID: UUID
     private let connectionRegistry: RuntimeXPCConnectionRegistry
     private let workspaceOpener: WorkspaceOpener
+    private let wrapperApprovalService: WrapperApprovalService
+    private let authorizedPackageID: RuntimePackageID?
+    private let approvalRequest: RuntimeWrapperApprovalBrokerRequest?
+    private let approvalIdentity: WrapperApprovalEndpointIdentity?
 
     init(
         host: RuntimeHost,
         clientKind: RuntimeClientKind,
         reservationID: UUID,
         connectionRegistry: RuntimeXPCConnectionRegistry,
-        workspaceOpener: WorkspaceOpener
+        workspaceOpener: WorkspaceOpener,
+        wrapperApprovalService: WrapperApprovalService,
+        authorizedPackageID: RuntimePackageID?,
+        approvalRequest: RuntimeWrapperApprovalBrokerRequest?,
+        approvalIdentity: WrapperApprovalEndpointIdentity?
     ) {
         self.host = host
         self.clientKind = clientKind
         self.reservationID = reservationID
         self.connectionRegistry = connectionRegistry
         self.workspaceOpener = workspaceOpener
+        self.wrapperApprovalService = wrapperApprovalService
+        self.authorizedPackageID = authorizedPackageID
+        self.approvalRequest = approvalRequest
+        self.approvalIdentity = approvalIdentity
     }
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
         let connectionID = ObjectIdentifier(connection)
         let onInvalidated: (@Sendable () -> Void)?
-        if clientKind == .launcher {
-            onInvalidated = { [host] in
-                Task {
-                    await host.sessionClientDisconnected(connectionID)
-                }
+        let approvalTaskCancellation: RuntimeXPCConnectionTaskCancellation?
+        if approvalRequest != nil, approvalIdentity != nil {
+            let cancellation = RuntimeXPCConnectionTaskCancellation()
+            approvalTaskCancellation = cancellation
+            onInvalidated = {
+                cancellation.cancel()
             }
         } else {
-            onInvalidated = nil
+            approvalTaskCancellation = nil
+            if approvalRequest == nil, approvalIdentity == nil,
+                clientKind == .launcher || clientKind == .wrapper
+            {
+                onInvalidated = { [host] in
+                    Task {
+                        await host.sessionClientDisconnected(connectionID)
+                    }
+                }
+            } else {
+                onInvalidated = nil
+            }
         }
         guard
             connectionRegistry.register(
@@ -1068,6 +1430,26 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
                 onInvalidated: onInvalidated
             )
         else {
+            listener.invalidate()
+            return false
+        }
+        if let approvalRequest, let approvalIdentity, let approvalTaskCancellation {
+            connection.exportedInterface = NSXPCInterface(with: RuntimeWrapperApprovalXPC.self)
+            connection.exportedObject = WrapperApprovalEndpointService(
+                host: host,
+                connectionRegistry: connectionRegistry,
+                connectionID: connectionID,
+                workspaceOpener: workspaceOpener,
+                wrapperApprovalService: wrapperApprovalService,
+                request: approvalRequest,
+                identity: approvalIdentity,
+                taskCancellation: approvalTaskCancellation
+            )
+            connection.resume()
+            listener.invalidate()
+            return true
+        }
+        guard approvalRequest == nil, approvalIdentity == nil else {
             listener.invalidate()
             return false
         }
@@ -1118,11 +1500,195 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
             connectionRegistry: connectionRegistry,
             connectionID: connectionID,
             eventSink: remoteSink.map(RuntimeEventSinkReference.init(value:)),
-            workspaceOpener: workspaceOpener
+            workspaceOpener: workspaceOpener,
+            wrapperApprovalService: wrapperApprovalService,
+            authorizedPackageID: authorizedPackageID
         )
         connection.resume()
         listener.invalidate()
         return true
+    }
+}
+
+private final class WrapperApprovalEndpointService: NSObject, RuntimeWrapperApprovalXPC, @unchecked Sendable {
+    private let host: RuntimeHost
+    private let connectionRegistry: RuntimeXPCConnectionRegistry
+    private let connectionID: ObjectIdentifier
+    private let workspaceOpener: WorkspaceOpener
+    private let wrapperApprovalService: WrapperApprovalService
+    private let request: RuntimeWrapperApprovalBrokerRequest
+    private let identity: WrapperApprovalEndpointIdentity
+    private let taskCancellation: RuntimeXPCConnectionTaskCancellation
+
+    init(
+        host: RuntimeHost,
+        connectionRegistry: RuntimeXPCConnectionRegistry,
+        connectionID: ObjectIdentifier,
+        workspaceOpener: WorkspaceOpener,
+        wrapperApprovalService: WrapperApprovalService,
+        request: RuntimeWrapperApprovalBrokerRequest,
+        identity: WrapperApprovalEndpointIdentity,
+        taskCancellation: RuntimeXPCConnectionTaskCancellation
+    ) {
+        self.host = host
+        self.connectionRegistry = connectionRegistry
+        self.connectionID = connectionID
+        self.workspaceOpener = workspaceOpener
+        self.wrapperApprovalService = wrapperApprovalService
+        self.request = request
+        self.identity = identity
+        self.taskCancellation = taskCancellation
+    }
+
+    func submitApproval(reply: @escaping (Data) -> Void) {
+        let replyHandler = XPCDataReply(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            let wireError: RuntimeWireError
+            if case .rejected(let rejection) = admission {
+                wireError = rejection.wireError
+            } else {
+                wireError = .runtime("internal", message: safeMessage(for: "runtime.internal"))
+            }
+            replyHandler.send(
+                Self.encode(
+                    RuntimeWrapperApprovalBrokerReply(error: wireError)
+                )
+            )
+            return
+        }
+
+        let taskHandle = taskCancellation.makeHandle()
+        let task = Task {
+            defer {
+                taskHandle.finish()
+                taskCancellation.remove(taskHandle)
+                pending.finish()
+            }
+            do {
+                if await wrapperApprovalService.isAlreadyApproved(
+                    request,
+                    expectedIdentity: identity
+                ) {
+                    replyHandler.send(
+                        Self.encode(RuntimeWrapperApprovalBrokerReply(result: .approved))
+                    )
+                    return
+                }
+                let challenge = try await wrapperApprovalService.prepareApproval(
+                    request,
+                    expectedIdentity: identity,
+                    packageStatus: { [host] packageID in
+                        guard let details = try? await host.packageInfo(RuntimePackageRequest(packageID: packageID))
+                        else {
+                            return WrapperApprovalPackageStatus(isInstalled: false)
+                        }
+                        return WrapperApprovalPackageStatus(
+                            isInstalled: true,
+                            installedVersion: wrapperApprovalInstalledVersion(details.summary)
+                        )
+                    }
+                )
+                if Task.isCancelled {
+                    let outcome = await wrapperApprovalService.waitForDecision(
+                        approvalID: challenge.approvalID
+                    )
+                    replyHandler.send(Self.encode(RuntimeWrapperApprovalBrokerReply(result: outcome)))
+                    return
+                }
+                let outcome = await waitForWrapperApproval(
+                    publishApprovalRequested: {
+                        // Always let an interactive wrapper connection announce the challenge it joined.
+                        // RuntimeEventHub deduplicates the same ApprovalID if another GUI connection
+                        // already published it, while this also supports CLI-first approval preparation.
+                        self.host.eventHub.publishWrapperChange(.approvalRequested(challenge.prompt))
+                    },
+                    openApprovalUI: {
+                        _ = try? await self.workspaceOpener.openForWrapperApproval()
+                    },
+                    waitForDecision: { onWaiterRegistered in
+                        await self.wrapperApprovalService.waitForDecision(
+                            approvalID: challenge.approvalID,
+                            onWaiterRegistered: onWaiterRegistered
+                        )
+                    }
+                )
+                replyHandler.send(Self.encode(RuntimeWrapperApprovalBrokerReply(result: outcome)))
+            } catch let failure as WrapperApprovalService.Failure {
+                replyHandler.send(
+                    Self.encode(RuntimeWrapperApprovalBrokerReply(error: wrapperApprovalWireError(failure)))
+                )
+            } catch {
+                replyHandler.send(
+                    Self.encode(
+                        RuntimeWrapperApprovalBrokerReply(
+                            error: .runtime("internal", message: safeMessage(for: "runtime.internal"))
+                        )
+                    )
+                )
+            }
+        }
+        taskHandle.install(task)
+    }
+
+    private static func encode<T: Encodable>(_ value: T) -> Data {
+        (try? JSONEncoder().encode(value)) ?? Data()
+    }
+}
+
+private final class WrapperApprovalUIOpenTask: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<Void, Never>?
+    private var isCancelled = false
+
+    func start(
+        publishApprovalRequested: @escaping @Sendable () -> Void,
+        openApprovalUI: @escaping @Sendable () async -> Void
+    ) {
+        lock.lock()
+        guard !isCancelled else {
+            lock.unlock()
+            return
+        }
+        publishApprovalRequested()
+        task = Task {
+            guard !Task.isCancelled else {
+                return
+            }
+            await openApprovalUI()
+        }
+        lock.unlock()
+    }
+
+    func cancel() {
+        lock.lock()
+        isCancelled = true
+        let task = self.task
+        self.task = nil
+        lock.unlock()
+        task?.cancel()
+    }
+}
+
+func waitForWrapperApproval(
+    publishApprovalRequested: @escaping @Sendable () -> Void,
+    openApprovalUI: @escaping @Sendable () async -> Void,
+    waitForDecision:
+        @escaping @Sendable (
+            @escaping @Sendable () -> Void
+        ) async -> RuntimeWrapperApprovalOutcome
+) async -> RuntimeWrapperApprovalOutcome {
+    let openingTask = WrapperApprovalUIOpenTask()
+    defer { openingTask.cancel() }
+    return await withTaskCancellationHandler {
+        await waitForDecision {
+            openingTask.start(
+                publishApprovalRequested: publishApprovalRequested,
+                openApprovalUI: openApprovalUI
+            )
+        }
+    } onCancel: {
+        openingTask.cancel()
     }
 }
 
@@ -1148,8 +1714,12 @@ extension RuntimeListOperationsControlRequest: VersionedControlRequest {}
 extension RuntimeOperationStatusControlRequest: VersionedControlRequest {}
 extension RuntimeSubscribeControlRequest: VersionedControlRequest {}
 extension RuntimeUnsubscribeControlRequest: VersionedControlRequest {}
+extension RuntimeWrapperApprovalPrepareControlRequest: VersionedControlRequest {}
+extension RuntimeWrapperApprovalDecisionControlRequest: VersionedControlRequest {}
 extension OpenSessionRequest: VersionedControlRequest {}
 extension ResizeSessionRequest: VersionedControlRequest {}
+extension RestartAppRequest: VersionedControlRequest {}
+extension CloseSessionRequest: VersionedControlRequest {}
 
 enum RuntimeControlOperation {
     case runtimeStatus
@@ -1161,6 +1731,8 @@ enum RuntimeControlOperation {
     case packageInfo
     case openSession
     case resizeSession
+    case restartApp
+    case closeSession
     case frameDisplayed
     case visibilityChanged
     case launch
@@ -1174,6 +1746,8 @@ enum RuntimeControlOperation {
     case operationStatus
     case subscribe
     case unsubscribe
+    case approveWrapper
+    case decideApproval
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1201,8 +1775,8 @@ enum RuntimeControlOperation {
             case .wrapper:
                 false
             }
-        case .openSession, .resizeSession, .frameDisplayed, .visibilityChanged:
-            clientKind == .launcher
+        case .openSession, .resizeSession, .restartApp, .closeSession, .frameDisplayed, .visibilityChanged:
+            clientKind == .launcher || clientKind == .wrapper
         case .listPackages:
             switch clientKind {
             case .app, .menuBar, .cli:
@@ -1212,10 +1786,8 @@ enum RuntimeControlOperation {
             }
         case .packageInfo:
             switch clientKind {
-            case .app, .menuBar, .cli, .launcher:
+            case .app, .menuBar, .cli, .launcher, .wrapper:
                 true
-            case .wrapper:
-                false
             }
         case .launch, .terminate:
             switch clientKind {
@@ -1224,6 +1796,8 @@ enum RuntimeControlOperation {
             case .launcher, .wrapper:
                 false
             }
+        case .approveWrapper, .decideApproval:
+            clientKind == .app || clientKind == .cli
         }
     }
 }
@@ -1235,6 +1809,8 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     private let connectionID: ObjectIdentifier
     private let eventSink: RuntimeEventSinkReference?
     private let workspaceOpener: WorkspaceOpener
+    private let wrapperApprovalService: WrapperApprovalService
+    private let authorizedPackageID: RuntimePackageID?
     private let outputQueue: DispatchQueue
     private let sessionFrameGateLock = NSLock()
     private var sessionFrameGate: XPCFrameDeliveryGate?
@@ -1245,7 +1821,9 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         connectionRegistry: RuntimeXPCConnectionRegistry,
         connectionID: ObjectIdentifier,
         eventSink: RuntimeEventSinkReference?,
-        workspaceOpener: WorkspaceOpener
+        workspaceOpener: WorkspaceOpener,
+        wrapperApprovalService: WrapperApprovalService,
+        authorizedPackageID: RuntimePackageID?
     ) {
         self.host = host
         self.clientKind = clientKind
@@ -1253,6 +1831,8 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         self.connectionID = connectionID
         self.eventSink = eventSink
         self.workspaceOpener = workspaceOpener
+        self.wrapperApprovalService = wrapperApprovalService
+        self.authorizedPackageID = authorizedPackageID
         outputQueue =
             connectionRegistry.outputQueue(for: connectionID)
             ?? DispatchQueue(label: "io.apkrun.RuntimeHost.xpc-output-fallback.\(UUID().uuidString)")
@@ -1458,6 +2038,25 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 )
                 return
             }
+            guard
+                wrapperPackageAccessAllowed(
+                    clientKind: clientKind,
+                    authorizedPackageID: authorizedPackageID,
+                    requestedPackageID: decoded.packageID
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimePackageInfoControlReply(
+                            error: .runtime(
+                                "notAuthorized",
+                                message: safeMessage(for: "runtime.notAuthorized")
+                            )
+                        )
+                    )
+                )
+                return
+            }
             do {
                 response.beginSnapshotBarrier()
                 let details = try await host.packageInfo(
@@ -1467,6 +2066,136 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimePackageInfoControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func approveWrapper(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeWrapperApprovalPrepareControlReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .approveWrapper,
+                as: RuntimeWrapperApprovalPrepareControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeWrapperApprovalPrepareControlReply(error: Self.wireError(for: failure))
+                    )
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(RuntimeWrapperApprovalPrepareControlRequest.self, from: request)
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeWrapperApprovalPrepareControlReply(error: Self.malformedWireError)
+                    )
+                )
+                return
+            }
+
+            do {
+                let challenge = try await wrapperApprovalService.prepareApproval(
+                    bundlePath: decoded.bundlePath,
+                    packageStatus: { [host] packageID in
+                        guard let details = try? await host.packageInfo(RuntimePackageRequest(packageID: packageID))
+                        else {
+                            return WrapperApprovalPackageStatus(isInstalled: false)
+                        }
+                        return WrapperApprovalPackageStatus(
+                            isInstalled: true,
+                            installedVersion: wrapperApprovalInstalledVersion(details.summary)
+                        )
+                    }
+                )
+                response.send(
+                    Self.encode(RuntimeWrapperApprovalPrepareControlReply(result: challenge.prompt))
+                )
+            } catch let failure as WrapperApprovalService.Failure {
+                response.send(
+                    Self.encode(
+                        RuntimeWrapperApprovalPrepareControlReply(error: wrapperApprovalWireError(failure))
+                    )
+                )
+            } catch {
+                response.send(
+                    Self.encode(
+                        RuntimeWrapperApprovalPrepareControlReply(
+                            error: .runtime("internal", message: safeMessage(for: "runtime.internal"))
+                        )
+                    )
+                )
+            }
+        }
+    }
+
+    func decideApproval(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeWrapperApprovalDecisionControlReply(error: Self.rejection(for: admission).wireError)
+                )
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .decideApproval,
+                as: RuntimeWrapperApprovalDecisionControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeWrapperApprovalDecisionControlReply(error: Self.wireError(for: failure))
+                    )
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeWrapperApprovalDecisionControlRequest.self, from: request)
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeWrapperApprovalDecisionControlReply(error: Self.malformedWireError)
+                    )
+                )
+                return
+            }
+            do {
+                try await wrapperApprovalService.decide(
+                    approvalID: decoded.approvalID,
+                    allow: decoded.allow
+                )
+                response.send(Self.encode(RuntimeWrapperApprovalDecisionControlReply()))
+            } catch let failure as WrapperApprovalService.Failure {
+                response.send(
+                    Self.encode(
+                        RuntimeWrapperApprovalDecisionControlReply(error: wrapperApprovalWireError(failure))
+                    )
+                )
+            } catch {
+                response.send(
+                    Self.encode(
+                        RuntimeWrapperApprovalDecisionControlReply(
+                            error: .runtime("internal", message: safeMessage(for: "runtime.internal"))
+                        )
+                    )
+                )
             }
         }
     }
@@ -1834,6 +2563,7 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 let topics = try host.eventHub.subscribe(
                     connectionID: connectionID,
                     clientKind: clientKind,
+                    apiVersion: decoded.header.apiVersion,
                     topics: decoded.topics,
                     sink: eventSink,
                     outputQueue: outputQueue,
@@ -1877,6 +2607,26 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             guard let decoded = try? JSONDecoder().decode(OpenSessionRequest.self, from: request) else {
                 response.send(
                     Self.encode(OpenSessionControlReply(error: Self.malformedWireError)),
+                    surfaces: nil
+                )
+                return
+            }
+            guard
+                wrapperPackageAccessAllowed(
+                    clientKind: clientKind,
+                    authorizedPackageID: authorizedPackageID,
+                    requestedPackageID: decoded.packageID
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        OpenSessionControlReply(
+                            error: .runtime(
+                                "notAuthorized",
+                                message: safeMessage(for: "runtime.notAuthorized")
+                            )
+                        )
+                    ),
                     surfaces: nil
                 )
                 return
@@ -1992,6 +2742,116 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                     surfaces: nil,
                     afterSend: resumeFrameDelivery
                 )
+            }
+        }
+    }
+
+    func restartApp(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(Self.encode(RestartAppControlReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .restartApp,
+                as: RestartAppRequest.self
+            ) {
+                response.send(Self.encode(RestartAppControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RestartAppRequest.self, from: request) else {
+                response.send(Self.encode(RestartAppControlReply(error: Self.malformedWireError)))
+                return
+            }
+            guard
+                wrapperPackageAccessAllowed(
+                    clientKind: clientKind,
+                    authorizedPackageID: authorizedPackageID,
+                    requestedPackageID: decoded.packageID
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RestartAppControlReply(
+                            error: .runtime(
+                                "notAuthorized",
+                                message: safeMessage(for: "runtime.notAuthorized")
+                            )
+                        )
+                    )
+                )
+                return
+            }
+            do {
+                try await host.restartApp(
+                    decoded,
+                    connectionID: connectionID,
+                    authorizedPackageID: authorizedPackageID
+                )
+                response.send(Self.encode(RestartAppControlReply()))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RestartAppControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func closeSession(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(Self.encode(CloseSessionControlReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .closeSession,
+                as: CloseSessionRequest.self
+            ) {
+                response.send(Self.encode(CloseSessionControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(CloseSessionRequest.self, from: request) else {
+                response.send(Self.encode(CloseSessionControlReply(error: Self.malformedWireError)))
+                return
+            }
+            guard
+                wrapperPackageAccessAllowed(
+                    clientKind: clientKind,
+                    authorizedPackageID: authorizedPackageID,
+                    requestedPackageID: decoded.packageID
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        CloseSessionControlReply(
+                            error: .runtime(
+                                "notAuthorized",
+                                message: safeMessage(for: "runtime.notAuthorized")
+                            )
+                        )
+                    )
+                )
+                return
+            }
+            do {
+                try await host.closeSession(
+                    decoded,
+                    connectionID: connectionID,
+                    authorizedPackageID: authorizedPackageID
+                )
+                response.send(Self.encode(CloseSessionControlReply()))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(CloseSessionControlReply(error: wireError)))
             }
         }
     }
@@ -2252,8 +3112,11 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 message: "APKRun's background service couldn't read the request."
             )
         }
-        guard request.header.apiVersion.major == runtimeAPIVersion.major,
-            request.header.apiVersion.minor <= runtimeAPIVersion.minor
+        guard
+            isRuntimeAPICompatible(
+                clientVersion: request.header.apiVersion,
+                clientKind: clientKind
+            )
         else {
             return RuntimeControlError(
                 code: "runtime.apiVersionMismatch",
@@ -2320,6 +3183,35 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
 
     private static func encode<T: Encodable>(_ value: T) -> Data {
         (try? JSONEncoder().encode(value)) ?? Data()
+    }
+}
+
+private final class XPCListenerEndpointReply: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handler: EndpointReplyHandler?
+
+    init(_ handler: @escaping (Data, NSXPCListenerEndpoint?) -> Void) {
+        self.handler = EndpointReplyHandler(handler)
+    }
+
+    func send(_ data: Data, _ endpoint: NSXPCListenerEndpoint?) {
+        lock.lock()
+        let handler = self.handler
+        self.handler = nil
+        lock.unlock()
+        handler?.send(data, endpoint)
+    }
+
+    private final class EndpointReplyHandler: @unchecked Sendable {
+        private let handler: (Data, NSXPCListenerEndpoint?) -> Void
+
+        init(_ handler: @escaping (Data, NSXPCListenerEndpoint?) -> Void) {
+            self.handler = handler
+        }
+
+        func send(_ data: Data, _ endpoint: NSXPCListenerEndpoint?) {
+            handler(data, endpoint)
+        }
     }
 }
 
@@ -2534,7 +3426,7 @@ private final class XPCEventSinkHandshakeGate: @unchecked Sendable {
     }
 }
 
-private func safeMessage(for code: String) -> String {
+func safeMessage(for code: String) -> String {
     switch code {
     case "runtime.apiVersionMismatch":
         "APKRun needs to be restarted."

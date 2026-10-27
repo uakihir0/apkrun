@@ -470,9 +470,9 @@ Control clients (GUI, menu bar, CLI) do not own windows, so they call:
 
 | Component | Serves | Notes |
 |---|---|---|
-| `XPCBrokerListener` | Mach service `io.apkrun.apkrund.xpc` | `hello`, `requestEndpoint`, `requestApproval` only ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2) |
+| `XPCBrokerListener` | Mach service `io.apkrun.apkrund.xpc` | `hello`, `requestEndpoint`, and `requestApprovalEndpoint` only ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2) |
 | `ControlEndpoint` | One-use anonymous listener per grant, with the signing requirement of the selected APKRun client | Full `RuntimeService` |
-| `WrapperEndpoint(bundleID)` | One anonymous listener per registered wrapper, created lazily, with `identifier` and `cdhash` requirements | Session API for its own package, and `runtimeStatus` |
+| `WrapperEndpoint(bundleID)` | One anonymous listener per registered wrapper, created lazily, with `identifier` and `cdhash` requirements | Session API for its own package only |
 | `EventHub` | All endpoints | Fan-out of `RuntimeEvent` topics to subscribers (§8.4) |
 | `XPCRuntimeExporter` | — | Adapts the `RuntimeService` Swift protocol to the `@objc` protocols of RuntimeAPI. The same `EmbeddedRuntimeService` instance serves XPC and embedded mode |
 
@@ -521,6 +521,7 @@ The request and reply types are in [runtime-api.md](../03-reference/runtime-api.
 | `runtimeInfo` | `apkrun info` without a package: versions, state, resource use, and display pool size ([cli.md](cli.md) §4.1) | #33, #29 |
 | `listSessions` | Open sessions (§7) with package, display, phase, and point size. Used by `apkrun status`, the menu bar, and **Use Current Size** | #33 |
 | `restartApp` | Session channel request for Android → Restart ‹App› ([wrapper.md](wrapper.md) §5.6): `StopApplication`, then `LaunchApplication` on the same display. The session stays open | #45 |
+| `closeSession` | Session channel request for ⌘W/⌘Q and window close ([wrapper.md](wrapper.md) §5.5): `StopApplication(FINISH_TASKS)`, then release the display and end the session as `userClosed`. Nil policy defaults to `stop`; `keepRunning` is not implemented | #45 |
 | `listOperations` | Running operations and the last 50 finished ones (§8.3). Used by `apkrun operations list` | #33 |
 | `unsubscribe`, `closeStream` | Counterparts of `subscribe` and of the stream operations (§8.4) | #33 |
 

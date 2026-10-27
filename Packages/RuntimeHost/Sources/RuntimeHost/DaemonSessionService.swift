@@ -27,6 +27,7 @@ public actor DaemonSessionService: RuntimeSessionService, PackageMutationSession
     private var frameReadyBySession: [SessionID: @Sendable (FrameReady) -> Void] = [:]
     private var connectionBySession: [SessionID: ObjectIdentifier] = [:]
     private var sessionByConnection: [ObjectIdentifier: SessionID] = [:]
+    private var restartingSessionIDs = Set<SessionID>()
     private var closeRequestByConnection: [ObjectIdentifier: @Sendable () async -> Bool] = [:]
     private var orphanTasks: [SessionID: Task<Void, Never>] = [:]
     private var orphanTokens: [SessionID: UUID] = [:]
@@ -474,6 +475,151 @@ public actor DaemonSessionService: RuntimeSessionService, PackageMutationSession
         return .applied(DaemonOpenedSession(descriptor: descriptor, surfaces: replacement.sessionPool.surfaces))
     }
 
+    func restartApp(
+        _ request: RestartAppRequest,
+        from connectionID: ObjectIdentifier,
+        authorizedPackageID: RuntimePackageID?
+    ) async throws(RuntimeWireError) {
+        guard await acquireOperation() else {
+            throw Self.shuttingDownError
+        }
+        defer { releaseOperation() }
+
+        guard let sessionID = sessionByConnection[connectionID],
+            connectionBySession[sessionID] == connectionID,
+            case .app(let sessionUUID) = sessionID,
+            sessionUUID == request.sessionID,
+            let session = await registry.session(sessionID),
+            session.packageID == request.packageID.rawValue,
+            authorizedPackageID == nil || authorizedPackageID?.rawValue == session.packageID,
+            session.state == .running || session.state == .backgrounded,
+            await registry.displayLease(sessionID) != nil
+        else {
+            throw Self.sessionNotAuthorizedError
+        }
+
+        guard let restarting = await registry.beginRestart(sessionID) else {
+            throw Self.sessionNotAuthorizedError
+        }
+        restartingSessionIDs.insert(sessionID)
+        defer { restartingSessionIDs.remove(sessionID) }
+
+        let stopped: Bool
+        do throws(GuestAgentFailure) {
+            stopped = try await guestAgent.stopApplication(package: restarting.packageID)
+        } catch {
+            _ = await registry.restartFailed(sessionID, appStopped: false)
+            throw Self.wireError(for: error)
+        }
+        guard stopped else {
+            _ = await registry.restartFailed(sessionID, appStopped: false)
+            throw Self.guestTasksStillRunningError
+        }
+        guard let readyToLaunch = await registry.restartStopCompleted(sessionID) else {
+            _ = await registry.restartFailed(sessionID, appStopped: true)
+            throw .runtime("internal", message: "APKRun could not prepare the app session for restart.")
+        }
+
+        let report: GuestLaunchReport
+        do throws(GuestAgentFailure) {
+            report = try await guestAgent.launch(
+                package: readyToLaunch.packageID,
+                displayID: readyToLaunch.displayID
+            )
+        } catch {
+            _ = await registry.restartFailed(sessionID, appStopped: true)
+            throw Self.wireError(for: error)
+        }
+
+        let completed = await registry.launchCompleted(packageID: readyToLaunch.packageID, taskID: report.taskID)
+        let latest: AppSessionSnapshot
+        if let completed {
+            latest = completed
+        } else if let current = await registry.session(sessionID) {
+            latest = current
+        } else {
+            throw .runtime("internal", message: "The app session disappeared while it was restarting.")
+        }
+        guard !Self.isEnded(latest.state) else {
+            await stopDrainingFrames(for: sessionID)
+            forgetSession(packageID: readyToLaunch.packageID, sessionID: sessionID)
+            throw .runtime(
+                "launchFailed",
+                message: "Android could not keep the app running after it restarted.",
+                remediation: "Try restarting the app again."
+            )
+        }
+        if latest.state == .launching {
+            do throws(SessionRegistryFailure) {
+                _ = try await registry.transition(sessionID, to: .running)
+            } catch {
+                if let current = await registry.session(sessionID), Self.isEnded(current.state) {
+                    await stopDrainingFrames(for: sessionID)
+                    forgetSession(packageID: readyToLaunch.packageID, sessionID: sessionID)
+                }
+                throw Self.wireError(for: error)
+            }
+        }
+    }
+
+    func closeSession(
+        _ request: CloseSessionRequest,
+        from connectionID: ObjectIdentifier,
+        authorizedPackageID: RuntimePackageID?
+    ) async throws(RuntimeWireError) {
+        guard await acquireOperation() else {
+            throw Self.shuttingDownError
+        }
+        defer { releaseOperation() }
+
+        guard let sessionID = sessionByConnection[connectionID],
+            connectionBySession[sessionID] == connectionID,
+            case .app(let sessionUUID) = sessionID,
+            sessionUUID == request.sessionID,
+            let session = await registry.session(sessionID),
+            session.packageID == request.packageID.rawValue,
+            authorizedPackageID == nil || authorizedPackageID?.rawValue == session.packageID,
+            session.state == .running || session.state == .backgrounded || session.state == .launching,
+            await registry.displayLease(sessionID) != nil
+        else {
+            throw Self.sessionNotAuthorizedError
+        }
+
+        do throws(SessionRegistryFailure) {
+            _ = try await registry.transition(sessionID, to: .closing)
+        } catch {
+            guard let latest = await registry.session(sessionID), latest.state == .ended(.userClosed) else {
+                throw Self.wireError(for: error)
+            }
+            await stopDrainingFrames(for: sessionID)
+            forgetSession(packageID: session.packageID, sessionID: sessionID)
+            return
+        }
+
+        let stopped: Bool
+        do throws(GuestAgentFailure) {
+            stopped = try await guestAgent.stopApplication(package: session.packageID)
+        } catch {
+            _ = await registry.stopFailed(packageID: session.packageID)
+            throw Self.wireError(for: error)
+        }
+        guard stopped else {
+            _ = await registry.stopFailed(packageID: session.packageID)
+            throw Self.guestTasksStillRunningError
+        }
+
+        await stopDrainingFrames(for: sessionID)
+        let completed = await registry.stopCompleted(sessionID: sessionID, endReason: .userClosed)
+        let latest = await registry.session(sessionID)
+        guard completed != nil || latest?.state == .ended(.userClosed) else {
+            throw .runtime(
+                "internal",
+                message: "APKRun could not finish closing the Android app session."
+            )
+        }
+        forgetSession(packageID: session.packageID, sessionID: sessionID)
+    }
+
     func frameDisplayed(_ message: FrameDisplayed, from connectionID: ObjectIdentifier) async {
         guard let sessionID = sessionByConnection[connectionID],
             connectionBySession[sessionID] == connectionID,
@@ -829,6 +975,9 @@ public actor DaemonSessionService: RuntimeSessionService, PackageMutationSession
             guard !isShuttingDown, await registry.session(sessionID) != nil else {
                 continue
             }
+            guard !restartingSessionIDs.contains(sessionID) else {
+                continue
+            }
             let result: SessionReconciliationResult
             do throws(SessionRegistryFailure) {
                 result = try await registry.reconcile(sessionID: sessionID, against: guestSnapshot)
@@ -1068,6 +1217,10 @@ public actor DaemonSessionService: RuntimeSessionService, PackageMutationSession
     private static let sessionAlreadyConnectedError = RuntimeWireError.runtime(
         "busy",
         message: "This Android app is already open in another window."
+    )
+    private static let sessionNotAuthorizedError = RuntimeWireError.runtime(
+        "notAuthorized",
+        message: "This launcher does not own the requested app window."
     )
 
     private static func launchResult(for session: AppSessionSnapshot) throws(RuntimeWireError) -> RuntimeLaunchResult {

@@ -11,6 +11,8 @@ import Dispatch
 public final class SessionWindowController: NSObject, NSWindowDelegate {
     /// Runs when the user closes the window. The owner stops the runtime, which is the close action of the window.
     public var onClose: (@MainActor () -> Void)?
+    /// Lets the owner finish the runtime session before AppKit closes the window.
+    public var onShouldClose: (@MainActor () -> Bool)?
 
     private let window: NSWindow
     private let layerView: IOSurfaceLayerView
@@ -22,6 +24,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     private let source: any FrameSource
     private var gate: LayerFrameGate
     private var consumer: Task<Void, Never>?
+    private var startupFallbackTask: Task<Void, Never>?
     private var presentationState = SessionWindowPresentationState()
     private let onGeometryChanged:
         ((CGSize, CGFloat, Double, @escaping @MainActor (DisplayResizeOutcome) -> Void) -> Void)?
@@ -29,6 +32,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     private var geometryRequests = SessionWindowGeometryRequests()
     private var generationCommits = SessionWindowGenerationCommits()
     private var isShown = false
+    private var hasOrderedWindowFront = false
     private var isVisible = false
 
     /// Creates the window for `source`, titled `title`, at the points of the source's pixel size divided by `backingScale`.
@@ -39,7 +43,9 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         backingScale: CGFloat,
         inputSink: PointerInputSink? = nil,
         allowsResize: Bool = true,
+        frameAutosaveName: String? = nil,
         appIcon: NSImage? = nil,
+        existingWindow: NSWindow? = nil,
         onFocusChanged: (@MainActor (Bool) -> Void)? = nil,
         onGeometryChanged:
             ((CGSize, CGFloat, Double, @escaping @MainActor (DisplayResizeOutcome) -> Void) -> Void)? = nil
@@ -65,12 +71,14 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         if allowsResize {
             styleMask.insert(.resizable)
         }
-        window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: size),
-            styleMask: styleMask,
-            backing: .buffered,
-            defer: false
-        )
+        window =
+            existingWindow
+            ?? NSWindow(
+                contentRect: NSRect(origin: .zero, size: size),
+                styleMask: styleMask,
+                backing: .buffered,
+                defer: false
+            )
         super.init()
         layerView.update(
             pixelWidth: surfaceSet.pixelWidth,
@@ -80,6 +88,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
             contentsScale: surfaceSet.contentsScale
         )
         window.title = title
+        window.styleMask = styleMask
         window.contentMinSize = NSSize(width: 320 * surfaceSet.zoom, height: 400 * surfaceSet.zoom)
         window.isReleasedWhenClosed = false
         let contentView = NSView(frame: NSRect(origin: .zero, size: size))
@@ -111,7 +120,14 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         // Pointer moves without a button are hover events, so the window needs them (input.md §4.1).
         window.acceptsMouseMovedEvents = true
         window.setContentSize(size)
-        window.center()
+        if let frameAutosaveName {
+            window.setFrameAutosaveName(frameAutosaveName)
+            if !window.setFrameUsingName(frameAutosaveName) {
+                window.center()
+            }
+        } else {
+            window.center()
+        }
         if allowsResize {
             layerView.onZoomChanged = { [weak self] zoom in
                 self?.window.contentMinSize = NSSize(width: 320 * zoom, height: 400 * zoom)
@@ -122,11 +138,22 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     }
 
     /// Shows the window, and starts applying the frames of the source.
-    public func show() {
+    public func show(placeholderImmediately: Bool = false) {
         isShown = true
-        window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(layerView)
-        updateVisibility()
+        if placeholderImmediately {
+            presentationState.requestImmediatePresentation()
+            revealWindowIfReady()
+        } else {
+            startupFallbackTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(400))
+                guard let self, !Task.isCancelled, self.isShown else {
+                    return
+                }
+                self.startupFallbackTask = nil
+                self.presentationState.markStartupFallbackElapsed()
+                self.revealWindowIfReady()
+            }
+        }
         consumer = Task { [source] in
             for await event in source.frames {
                 self.apply(event)
@@ -181,6 +208,16 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     /// Closes the window without asking. The owner calls it when the boot ends.
     public func close() {
         window.close()
+    }
+
+    /// Closes the window through its delegate, allowing the owner to close the session first.
+    public func performClose() {
+        window.performClose(nil)
+    }
+
+    /// The user requested a close, so the owner may need to finish session cleanup first.
+    public func windowShouldClose(_ sender: NSWindow) -> Bool {
+        onShouldClose?() ?? true
     }
 
     /// The window lost key status, so the open gesture ends on the guest (input.md §4.2).
@@ -244,6 +281,8 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         geometryDebounce?.cancel()
         geometryDebounce = nil
         isShown = false
+        startupFallbackTask?.cancel()
+        startupFallbackTask = nil
         geometryRequests.discardPending()
         consumer?.cancel()
         consumer = nil
@@ -257,6 +296,16 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         guard visible != isVisible else { return }
         isVisible = visible
         source.visibilityChanged(visible)
+    }
+
+    private func revealWindowIfReady() {
+        guard isShown, !hasOrderedWindowFront, presentationState.shouldOrderWindowFront else {
+            return
+        }
+        hasOrderedWindowFront = true
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(layerView)
+        updateVisibility()
     }
 
     private func apply(_ event: FrameSourceEvent) {
@@ -303,15 +352,21 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
                 presentationState.markGeometrySynchronized(generation: generation)
                 generationCommits.commit(generation)
                 presentationState.markFramePresented()
-                guard !presentationState.showsPlaceholder else {
-                    updateInputAvailability()
-                    return
-                }
-                placeholderView?.removeFromSuperview()
-                placeholderView = nil
+                startupFallbackTask?.cancel()
+                startupFallbackTask = nil
+                revealWindowIfReady()
+                removePlaceholderIfReady()
                 updateInputAvailability()
             }
         }
+    }
+
+    private func removePlaceholderIfReady() {
+        guard !presentationState.showsPlaceholder else {
+            return
+        }
+        placeholderView?.removeFromSuperview()
+        placeholderView = nil
     }
 
     private func requestGeometryUpdate(zoom: Double? = nil) {
@@ -503,11 +558,17 @@ struct SessionWindowGenerationCommits: Equatable, Sendable {
 /// The placeholder remains visible until a current-generation frame has been committed to the window.
 struct SessionWindowPresentationState: Equatable {
     private(set) var hasPresentedFrame = false
+    private(set) var startupFallbackElapsed = false
+    private(set) var immediatePresentationRequested = false
     private(set) var hasFailed = false
     private(set) var uncertainAfterGeneration: UInt64?
 
     var showsPlaceholder: Bool {
         !hasPresentedFrame
+    }
+
+    var shouldOrderWindowFront: Bool {
+        hasPresentedFrame || startupFallbackElapsed || immediatePresentationRequested
     }
 
     var acceptsInput: Bool {
@@ -520,6 +581,14 @@ struct SessionWindowPresentationState: Equatable {
 
     mutating func markFramePresented() {
         hasPresentedFrame = true
+    }
+
+    mutating func markStartupFallbackElapsed() {
+        startupFallbackElapsed = true
+    }
+
+    mutating func requestImmediatePresentation() {
+        immediatePresentationRequested = true
     }
 
     mutating func markGeometryUncertain(after generation: UInt64) {

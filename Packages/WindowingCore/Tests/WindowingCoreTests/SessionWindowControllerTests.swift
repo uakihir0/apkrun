@@ -1,17 +1,80 @@
+import AppKit
+import IOSurface
 import Testing
 
 @testable import WindowingCore
+
+@MainActor
+@Test func sessionWindowDelegatesUserCloseToItsOwner() {
+    let controller = SessionWindowController(
+        source: EmptyFrameSource(),
+        title: "HelloText",
+        backingScale: 1
+    )
+    var closeRequests = 0
+    controller.onShouldClose = {
+        closeRequests += 1
+        return false
+    }
+
+    controller.performClose()
+    #expect(closeRequests == 1)
+}
 
 @Test func sessionWindowKeepsPlaceholderUntilTheFirstFrameIsPresented() {
     var state = SessionWindowPresentationState()
 
     #expect(state.showsPlaceholder)
+    #expect(!state.shouldOrderWindowFront)
     #expect(!state.acceptsInput)
 
     state.markFramePresented()
 
     #expect(!state.showsPlaceholder)
+    #expect(state.shouldOrderWindowFront)
     #expect(state.acceptsInput)
+}
+
+@Test func startupFallbackRevealsTheSessionSurfaceWithoutEnablingInput() {
+    var state = SessionWindowPresentationState()
+
+    state.markStartupFallbackElapsed()
+
+    #expect(state.showsPlaceholder)
+    #expect(state.shouldOrderWindowFront)
+    #expect(!state.acceptsInput)
+}
+
+@Test func fastFirstFrameRemainsVisibleWhenTheStartupFallbackWouldExpireLater() {
+    var state = SessionWindowPresentationState()
+    state.markFramePresented()
+
+    state.markStartupFallbackElapsed()
+
+    #expect(!state.showsPlaceholder)
+    #expect(state.shouldOrderWindowFront)
+    #expect(state.acceptsInput)
+}
+
+@Test func firstFrameAfterStartupFallbackEnablesInputWithoutRestoringPlaceholder() {
+    var state = SessionWindowPresentationState()
+    state.markStartupFallbackElapsed()
+
+    state.markFramePresented()
+
+    #expect(!state.showsPlaceholder)
+    #expect(state.shouldOrderWindowFront)
+    #expect(state.acceptsInput)
+}
+
+@Test func bootingSessionRequestsImmediatePresentationWithThePlaceholder() {
+    var state = SessionWindowPresentationState()
+
+    state.requestImmediatePresentation()
+
+    #expect(state.shouldOrderWindowFront)
+    #expect(state.showsPlaceholder)
+    #expect(!state.acceptsInput)
 }
 
 @Test func presentingAnotherFrameKeepsThePlaceholderHidden() {
@@ -98,4 +161,29 @@ import Testing
     commits.commit(5)
     #expect(!commits.isAwaitingCommit)
     #expect(commits.hasCommitted(5))
+}
+
+private final class EmptyFrameSource: FrameSource, @unchecked Sendable {
+    private let surfaceSet = FrameSurfaceSet(
+        generation: 1,
+        surfaces: [],
+        pixelWidth: 320,
+        pixelHeight: 400,
+        contentSize: CGSize(width: 320, height: 400),
+        contentsScale: 1,
+        zoom: 1
+    )
+    let frames = AsyncStream<FrameSourceEvent> { $0.finish() }
+
+    var currentSurfaceSet: FrameSurfaceSet { surfaceSet }
+    var surfaces: [IOSurface] { surfaceSet.surfaces }
+    var generation: UInt64 { surfaceSet.generation }
+    var pixelWidth: Int { surfaceSet.pixelWidth }
+    var pixelHeight: Int { surfaceSet.pixelHeight }
+
+    func surfaceSet(generation: UInt64) -> FrameSurfaceSet? {
+        generation == surfaceSet.generation ? surfaceSet : nil
+    }
+
+    func frameDisplayed(generation: UInt64, sequence: UInt64) {}
 }

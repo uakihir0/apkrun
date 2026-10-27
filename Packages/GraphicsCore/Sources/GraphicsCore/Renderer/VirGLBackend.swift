@@ -273,7 +273,7 @@ final class VirGLBackend: @unchecked Sendable {
                         if let failure = Self.withCommandDiagnostic(
                             diagnostic,
                             engine: engine,
-                            operation: { engine in
+                            operation: { engine -> GraphicsFailure? in
                                 do throws(GraphicsFailure) {
                                     try engine.createFence(id: fence, context: context)
                                     return nil
@@ -301,11 +301,11 @@ final class VirGLBackend: @unchecked Sendable {
     }
 
     /// Runs renderer work with its guest request metadata available to synchronous callbacks.
-    private static func withCommandDiagnostic(
+    private static func withCommandDiagnostic<T>(
         _ diagnostic: VirGLCommandDiagnostic?,
         engine: any VirGLEngine,
-        operation: @Sendable (any VirGLEngine) -> GraphicsFailure?
-    ) -> GraphicsFailure? {
+        operation: @Sendable (any VirGLEngine) -> T
+    ) -> T {
         guard let diagnosticScope = engine as? any VirGLCommandDiagnosticScope else {
             return operation(engine)
         }
@@ -315,11 +315,15 @@ final class VirGLBackend: @unchecked Sendable {
     }
 
     /// Runs `body` on the render thread and waits for its result. Returns `nil` once the engine is gone.
-    func sync<T: Sendable>(_ body: @escaping @Sendable (any VirGLEngine) -> T) -> T? {
+    func sync<T: Sendable>(
+        diagnostic: VirGLCommandDiagnostic? = nil,
+        _ body: @escaping @Sendable (any VirGLEngine) -> T
+    ) -> T? {
         let engineBox = self.engineBox
         let result: T?? = renderThread.sync { () -> T? in
             guard let engine = engineBox.engine else { return nil }
-            return body(engine)
+            guard let diagnostic else { return body(engine) }
+            return Self.withCommandDiagnostic(diagnostic, engine: engine, operation: body)
         }
         return result ?? nil
     }

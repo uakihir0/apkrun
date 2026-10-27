@@ -1,0 +1,348 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "launcher.about.androidVersion" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Android version: %@" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "Android バージョン: %@" } }
+      }
+    },
+    "launcher.about.androidVersionUnknown" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Android version unavailable" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "Android バージョンは不明です" } }
+      }
+    },
+    "launcher.about.launcherVersion" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Launcher version %@" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "ランチャーバージョン %@" } }
+      }
+    },
+    "launcher.about.packageID" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Package ID: %@" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "パッケージ ID: %@" } }
+      }
+    },
+    "launcher.about.runsWith" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Runs with APKRun %@" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "APKRun %@ で動作" } }
+      }
+    },
+    "launcher.action.checkForUpdates" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Check for Updates" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "アップデートを確認" } }
+      }
+    },
+    "launcher.action.getAPKRun" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Get APKRun" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "APKRun を入手" } }
+      }
+    },
+    "launcher.action.ok" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "OK" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "OK" } }
+      }
+    },
+    "launcher.action.openAPKRun" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Open APKRun" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "APKRun を開く" } }
+      }
+    },
+    "launcher.action.quit" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Quit" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "終了" } }
+      }
+    },
+    "launcher.action.tryAgain" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Try Again" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "再試行" } }
+      }
+    },
+    "launcher.action.updateMacApp" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Update Mac App" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "Mac アプリを更新" } }
+      }
+    },
+    "launcher.approvalDenied.message" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "APKRun did not allow %@ to open." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "APKRun は %@ の起動を許可しませんでした。" } }
+      }
+    },
+    "launcher.approvalPending.message" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Waiting for approval in APKRun…" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "APKRun での許可を待っています…" } }
+      }
+    },
+    "launcher.starting.detail" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Starting Android…" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "Android を起動しています…" } }
+      }
+    },
+    "launcher.starting.message" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Starting %@…" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "%@ を起動しています…" } }
+      }
+    },
+    "launcher.damaged.message" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "%@ is damaged. Create it again in APKRun." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "%@ は破損しています。APKRun で作り直してください。" } }
+      }
+    },
+    "launcher.menu.about" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "About %@" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "%@について" } }
+      }
+    },
+    "launcher.menu.apkrunHelp" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "APKRun Help" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "APKRun ヘルプ" } }
+      }
+    },
+    "launcher.menu.actualSize" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Actual Size" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "実際のサイズ" } }
+      }
+    },
+    "launcher.menu.android" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Android" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "Android" } }
+      }
+    },
+    "launcher.menu.back" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Back" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "戻る" } }
+      }
+    },
+    "launcher.menu.bringAllToFront" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Bring All to Front" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "すべてを手前に移動" } }
+      }
+    },
+    "launcher.menu.closeWindow" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Close Window" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "ウインドウを閉じる" } }
+      }
+    },
+    "launcher.menu.copy" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Copy" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "コピー" } }
+      }
+    },
+    "launcher.menu.cut" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Cut" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "カット" } }
+      }
+    },
+    "launcher.menu.edit" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Edit" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "編集" } }
+      }
+    },
+    "launcher.menu.file" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "File" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "ファイル" } }
+      }
+    },
+    "launcher.menu.fullScreen" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Enter Full Screen" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "フルスクリーンにする" } }
+      }
+    },
+    "launcher.menu.help" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Help" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "ヘルプ" } }
+      }
+    },
+    "launcher.menu.hide" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Hide" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "隠す" } }
+      }
+    },
+    "launcher.menu.hideOthers" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Hide Others" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "ほかを隠す" } }
+      }
+    },
+    "launcher.menu.minimize" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Minimize" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "しまう" } }
+      }
+    },
+    "launcher.menu.paste" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Paste" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "ペースト" } }
+      }
+    },
+    "launcher.menu.reportProblem" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Report a Problem…" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "問題を報告…" } }
+      }
+    },
+    "launcher.menu.restartApp" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Restart App" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "アプリを再起動" } }
+      }
+    },
+    "launcher.restart.failed.message" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "APKRun could not restart %@. Open APKRun and try again." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "%@ を再起動できませんでした。APKRun を開いて、もう一度お試しください。" } }
+      }
+    },
+    "launcher.restart.failed.title" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn’t Restart App" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "アプリを再起動できませんでした" } }
+      }
+    },
+    "launcher.menu.quit" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Quit %@" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "%@を終了" } }
+      }
+    },
+    "launcher.menu.redo" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Redo" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "やり直す" } }
+      }
+    },
+    "launcher.menu.selectAll" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Select All" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "すべてを選択" } }
+      }
+    },
+    "launcher.menu.services" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Services" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "サービス" } }
+      }
+    },
+    "launcher.menu.settings" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Settings…" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "設定…" } }
+      }
+    },
+    "launcher.menu.showAll" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Show All" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "すべてを表示" } }
+      }
+    },
+    "launcher.menu.showInAPKRun" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Show in APKRun" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "APKRun で表示" } }
+      }
+    },
+    "launcher.menu.undo" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Undo" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "取り消す" } }
+      }
+    },
+    "launcher.menu.view" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "View" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "表示" } }
+      }
+    },
+    "launcher.menu.window" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Window" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "ウインドウ" } }
+      }
+    },
+    "launcher.menu.zoom" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Zoom" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "拡大／縮小" } }
+      }
+    },
+    "launcher.menu.zoomIn" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Zoom In" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "拡大" } }
+      }
+    },
+    "launcher.menu.zoomOut" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Zoom Out" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "縮小" } }
+      }
+    },
+    "launcher.minimumRuntime.message" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "%@ needs APKRun %@ or later." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "%@ を開くには APKRun %@ 以降が必要です。" } }
+      }
+    },
+    "launcher.notInstalled.message" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "%@ isn't installed in APKRun." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "APKRun に %@ はインストールされていません。" } }
+      }
+    },
+    "launcher.required.message" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "APKRun is required to open %@." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "%@ を開くには APKRun が必要です。" } }
+      }
+    },
+    "launcher.setup.message" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "APKRun needs to finish setup." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "APKRun のセットアップを完了してください。" } }
+      }
+    },
+    "launcher.tooOld.message" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "This Mac app was made by an older APKRun and needs to be updated." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "この Mac アプリは古い APKRun で作成されました。更新してください。" } }
+      }
+    },
+    "launcher.translocated.message" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Move %@ to your Applications folder, then open it again." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "%@ を「アプリケーション」フォルダに移動してから、もう一度開いてください。" } }
+      }
+    }
+  },
+  "version" : "1.0"
+}

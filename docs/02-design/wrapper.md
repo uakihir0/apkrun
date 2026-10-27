@@ -198,7 +198,7 @@ The wrapper copy is a byte copy of the generic launcher's executable (`APKRunLau
 ### 5.2 Startup
 
 ```text
-main()                                                      launchTiming.processStart = kernel start time (WRAPPER_PROCESS_START)
+main()                                                      launchTiming.processStart = continuous-clock equivalent of kernel start time (WRAPPER_PROCESS_START)
  1. identity = WrapperIdentity.load(Bundle.main)
       Info.plist APKRunPackageID + APKRunWrapperFormat, Resources/wrapper.json (schema check),
       application.packageId == APKRunPackageID                 else → screen D (§5.4)
@@ -210,7 +210,7 @@ main()                                                      launchTiming.process
  4. RuntimeClient.connect(.wrapper(bundleID))
       broker hello → HelloReply(runtimeVersion, runtimeBuild, apiVersion, hostState)    compatibility (§5.3);
       hostState == updating → screen U (§5.4)
-      requestEndpoint(.wrapper(bundleID))
+      requestEndpoint(.wrapper(bundleID, bundlePath))
          rejected (not in the registry, or cdhash differs)      → approval (§7.3)
       no autosaved frame → packageInfo(packageID): size the hidden window from the package settings
          window.defaultWidth/defaultHeight (wrapper.json stays the fallback when the package has no record yet)
@@ -223,7 +223,8 @@ main()                                                      launchTiming.process
 ```
 
 - The package settings win over `wrapper.json`, which holds only the initial values (§3). The extra `packageInfo` call happens only on a launch without an autosaved frame, normally the first one.
-- Steps 1–5 have a budget of 150 ms p50 ([display-and-windowing.md](display-and-windowing.md) §9). The launcher does no network, disk scan, or signature check on this path. It reads two small files and connects.
+- Steps 1–5 have a budget of 150 ms p50 ([display-and-windowing.md](display-and-windowing.md) §9). The normal registered path does no network, disk scan, or signature check. API 1.16 sends the canonical bundle path; only when it differs from the registry location does the broker inspect the signature to distinguish a Finder copy with the registered cdhash from a modified or re-signed copy.
+- `LaunchTiming.processStart` and `requestSent` are sleep-inclusive `mach_continuous_time` nanoseconds since this Mac boot. RuntimeHost uses them only to add host performance markers and discards missing, future, or older-than-10-minute values.
 - The 400 ms rule: a warm launch shows no placeholder flash, and a slow launch still gives feedback at once.
 - The launcher never starts the VM itself and never needs a terminal. The runtime runs as apkrund, a LaunchAgent.
 
@@ -265,7 +266,7 @@ The launcher shows its screens in the session window. Each screen has a message,
 
 | Event | Launcher |
 |---|---|
-| ⌘W, ⌘Q, red close button, Dock "Quit" | `closeSession(policy)` with the package's `window.closeBehavior`, then quits after the reply or 5 s ([display-and-windowing.md](display-and-windowing.md) §7.6) |
+| ⌘W, ⌘Q, red close button, Dock "Quit" | `closeSession(nil)` (graceful stop by default), then quits after the reply or 5 s ([display-and-windowing.md](display-and-windowing.md) §7.6) |
 | `ended(.userClosed)`, `ended(.appExited)` | quits |
 | `ended(.updating)` | closes the window and quits. APKRun reopens the app after the update ([update-system.md](update-system.md) §7.3) |
 | `ended(.runtimeStopped)` | quits. The user stopped Android, and the menu bar already confirmed that apps will close |
@@ -289,7 +290,7 @@ Built in code by `LauncherMenus`. The shortcuts come from [input.md](input.md) �
 | File | Close Window (⌘W) |
 | Edit | Undo (⌘Z) · Redo (⇧⌘Z) · Cut (⌘X) · Copy (⌘C) · Paste (⌘V) · Select All (⌘A). AppKit adds Emoji & Symbols and Dictation. The actions follow input.md §6 (editor mode or key mode) |
 | View | Actual Size (⌘0) · Zoom In (⌘=) · Zoom Out (⌘−) · Enter Full Screen (⌃⌘F) · Show Frame Statistics (developer mode only) |
-| Android | Back (⌘[, Esc per `input.escapeKey`) · Restart ‹App› (force-stop, then a new launch on the same display: the session channel request `restartApp`, [runtime-daemon.md](runtime-daemon.md) §8.6) · Show in APKRun |
+| Android | Back (⌘[, Esc per `input.escapeKey`) · Restart ‹App› (finish its tasks, then launch again on the same display: the session channel request `restartApp`, [runtime-daemon.md](runtime-daemon.md) §8.6) · Show in APKRun |
 | Window | Minimize (⌘M) · Zoom · Bring All to Front · the window list. ⌘` is handled by AppKit |
 | Help | APKRun Help · Report a Problem… (opens `apkrun://report?package=<id>`, [diagnostics.md](diagnostics.md) §8.5) |
 
@@ -503,29 +504,40 @@ Authorization uses the registry only. A wrapper connection may open sessions for
 A wrapper is unknown when its bundle ID is not in the registry or its cdhash differs. Examples: a wrapper copied from another Mac, a portable or distribution wrapper, or a wrapper that was modified.
 
 ```text
-launcher: requestEndpoint(.wrapper(bundleID)) → .notRegistered | .cdhashMismatch
-launcher: requestApproval(ApprovalRequest{bundleURL, bundleID, packageID})          (broker)
+launcher: requestEndpoint(.wrapper(bundleID)) → .unknownClient
+launcher: requestApprovalEndpoint({bundlePath, bundleID, packageID})                (broker)
+apkrund: read-only inspection of bundlePath:
+     strict signature checks and a valid signer summary (ad-hoc, or team-signed with a valid
+  10-character Team ID; the certificate class and notarization are unknown unless an OS assessment
+  establishes them);
+  verify signed/plist bundle IDs, APKRun package ID,
+  mapped bundle ID, wrapper.json, format/launcher version, and cdhash
+  invalid bundle → RuntimeEndpointReply.rejected(.unknownClient)
+apkrund: grant one-use anonymous endpoint requiring identifier + validated cdhash
+  reservation expires after 5 s; it does not create a prompt or look up the Android package
+launcher: connect to endpoint; submitApproval()
 apkrund WrapperApprovalService:
-  1. static checks of the bundle at bundleURL:
-       signature valid (strict), identifier == bundleID, bundleID == map(APKRunPackageID),
-       wrapper.json valid, packageID == APKRunPackageID        else reject: bundleInvalid
-  2. cdhash and signer summary: ad-hoc | Developer ID ‹Team› (notarized: yes/no)
-  3. limits: one pending request per bundle ID, 5 per minute in total; a "denied" entry for the
-     same cdhash that has not expired → reject at once
-  4. ask the user in APKRun.app (connected UI client, or open it with activates = true):
-       "Allow “Discord” to open com.discord in APKRun?"
-       details: location, signer, whether com.discord is installed, the bundled version (portable),
-                and the integrations the app gets (wrapper.json values capped by this Mac's defaults,
-                configuration.md §3.3)
-  5. Allow → registry entry {approval: user, cdhash} → reply .approved; the launcher repeats requestEndpoint
+  1. revalidate the bundle and require the same path, IDs, and cdhash as the endpoint grant
+  2. join an identical pending request or apply limits: one pending identity per bundle ID,
+     5 new approvals per minute; a denial for the same cdhash within 24 h rejects at once
+  3. obtain installed state and Android version from the package store (a lookup failure is
+     currently shown as not installed), then prepare or reuse
+     the prompt with location, signer, installed version (when available), integrations
+     (wrapper.json values capped by this Mac's defaults, configuration.md §3.3), and any
+     wrapper it would replace; the optional bundledVersion field is currently not populated
+  4. publish approvalRequested to the wrappers topic and open APKRun.app with activates = true
+  5. Allow → registry entry {approval: user, cdhash} → reply .approved; launcher repeats requestEndpoint
      Don't Allow → "denied" entry for 24 h (Settings → Privacy can clear it) → reply .denied
      no answer in 10 min → .timedOut
 ```
 
 - The dialog layout and buttons are in [host-ui.md](host-ui.md) §10.1.
-- The endpoint requirement contains the cdhash computed in step 2 from the bundle on disk. A process that only claims to be that bundle cannot pass it, because the system checks the connecting process's code.
+- The endpoint requirement contains the bundle ID and cdhash computed from the bundle on disk. A process that only claims to be that bundle cannot pass it, because the system checks the connecting code. apkrund does not authorize the caller by PID or audit token.
+- Endpoint inspection is read-only. Quota admission, package lookup, challenge creation, event publication, and UI launch occur only after the matching wrapper code connects and calls `submitApproval`.
+- Before creating a challenge, `submitApproval` checks whether the validated bundle ID, package ID, and cdhash are already active (or are either accepted hash during refresh). It returns `.approved` without a prompt for that exact authorization, so a transient XPC transport failure cannot create a duplicate approval prompt.
+- Coalesced callers share one challenge and outcome. Closing a wrapper connection cancels its wait; the challenge is removed when no wrapper connection remains unless the CLI prepared it for independent confirmation. A retained challenge resolves on a user decision or the 10-minute deadline.
 - Approving a wrapper whose bundle ID already has an active entry replaces that entry. The dialog then says so and names the location of the current one.
-- `apkrun wrapper approve <path>` performs the same flow with a terminal confirmation.
+- `apkrun wrapper approve <path>` uses the authenticated `.control` endpoint to prepare or retrieve the same validated challenge, displays its facts, asks for terminal confirmation, and submits the decision. This direct CLI preparation returns the prompt to the CLI and does not publish a GUI event or open APKRun.app. An interactive wrapper that joins the CLI-prepared challenge publishes the deduplicated `approvalRequested` event and opens the GUI.
 - A modified local wrapper (`signatureInvalid`, §9.1) is not approvable. The static check in step 1 fails, and the user is offered regeneration instead.
 
 ### 7.4 App Translocation
@@ -787,7 +799,7 @@ apkrun wrap <package> --distribution --identity "Developer ID Application: Name 
 
 ### 12.1 Operations
 
-The DTOs are in [runtime-api.md](../03-reference/runtime-api.md): `WrapperSummary` and `WrapperInfo` in [runtime-api.md](../03-reference/runtime-api.md) §10.4, and `ApprovalPrompt` in [runtime-api.md](../03-reference/runtime-api.md) §10.6.
+The DTOs are in [runtime-api.md](../03-reference/runtime-api.md): `WrapperSummary` and `WrapperInfo` in [runtime-api.md](../03-reference/runtime-api.md) §10.4; `RuntimeWrapperApprovalPrompt` (built in API 1.14; signer facts extended in 1.15) and target `ApprovalPrompt` in [runtime-api.md](../03-reference/runtime-api.md) §10.6.
 
 | Endpoint | Operation | Behavior | Long |
 |---|---|---|---|
@@ -800,12 +812,12 @@ The DTOs are in [runtime-api.md](../03-reference/runtime-api.md): `WrapperSummar
 | `.control` | `removeWrapper(packageID, RemoveWrapperOptions{trash})` | §9.5 | no |
 | `.control` | `rescanWrappers(register)` | **Re-register Mac Apps** (§7.2): finds bundles with `APKRunPackageID` in `~/Applications` and `/Applications` and validates them. With `register`, registers them after the client's one confirmation | no |
 | `.control` | `verifyWrapper(url, deep)` | §9.1 checks for any bundle, registered or not | no |
-| `.control` | `decideApproval(approvalID, allow)` | APKRun.app's answer to §7.3 | no |
-| `.control` | `pendingApprovals()` → `[ApprovalPrompt]` | the prompts that were requested before APKRun.app connected (§7.3 step 4) | no |
+| `.control` | `decideApproval(approvalID, allow)` (built, API 1.14) | APKRun.app or the CLI commits the user's decision for §7.3 | no |
+| `.control` | `pendingApprovals()` → `[ApprovalPrompt]` | target: prompts requested before APKRun.app connected (§7.3 step 4) | no |
 | `.control` | `deniedWrappers()`, `clearWrapperDenial(bundleID)` | Settings → Privacy → **Mac apps you didn't allow** and its **Remove** (§7.3 step 5, [host-ui.md](host-ui.md) §9.4) | no |
-| `.control` | `approveWrapper(url)` | §7.3 steps 1–3 and 5 without the UI prompt; the CLI has already confirmed (`apkrun wrapper approve`) | no |
+| `.control` | `approveWrapper(bundlePath)` (built, API 1.14) | prepares or retrieves the validated prompt for the caller; the CLI displays it, confirms, and calls `decideApproval` | no |
 | `.control` | `buildDistributionWrapper(DistributionWrapperRequest)` | §11. Not placed and not registered; the client places the files when apkrund may not write to the output folder ([runtime-api.md](../03-reference/runtime-api.md) §10.8) | yes |
-| broker | `requestApproval(ApprovalRequest)` | §7.3 | waits |
+| broker | `requestApprovalEndpoint(bundlePath, bundleID, packageID)` → one-use endpoint; endpoint `submitApproval()` | §7.3 | waits |
 | `.wrapper` | `openSession` and the session channel | [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.3 | — |
 | `.wrapper` | `packageInfo`, `packageIcon` (own package) | [package-store.md](package-store.md) §11.2 | no |
 | `.wrapper` | `importBootstrap(bootstrapJSON, [FileHandle])` | §10.2 | yes |
@@ -815,14 +827,16 @@ Events on topic `wrappers`:
 
 ```swift
 public enum WrapperChange: Codable, Sendable {
+    case approvalRequested(RuntimeWrapperApprovalPrompt) // built: wrapper endpoint opens APKRun.app
+    case approvalResolved(ApprovalID)                    // built: decision or timeout
     case created(WrapperSummary)
     case refreshed(WrapperSummary)
     case removed(PackageID)
     case statusChanged(PackageID, WrapperStatus)
-    case approvalRequested(ApprovalPrompt)       // APKRun.app shows the dialog
-    case approvalResolved(ApprovalID)
 }
 ```
+
+The CLI's direct `approveWrapper` control call returns the prompt to the CLI and does not publish `approvalRequested`. A wrapper that connects to the one-use approval endpoint publishes the challenge for APKRun.app; the event hub de-duplicates and replays pending prompts.
 
 ### 12.2 CLI
 

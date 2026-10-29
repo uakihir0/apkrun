@@ -149,6 +149,16 @@ private struct VirGLShortBackingCopyFixture: Decodable {
     let copyTransferWords: [UInt32]
 }
 
+private struct VirGLMinimizedCandidateCopyFixture: Decodable {
+    let provenance: String
+    let buffer: VirGLShortBackingCopyFixture.Resource
+    let bufferBacking: [VirGLShortBackingCopyFixture.BackingEntry]
+    let texture: VirGLShortBackingCopyFixture.Resource
+    let textureBacking: [VirGLShortBackingCopyFixture.BackingEntry]
+    let contextID: UInt32
+    let copyTransferWords: [UInt32]
+}
+
 /// A compact reconstruction of the retained pre-fix failure pattern. The raw command capture is unavailable, but its
 /// resource IDs, dimensions, 4 KiB backing, context, and bounded COPY_TRANSFER3D request were retained.
 private func shortBackingCopyFixtureURL() -> URL {
@@ -457,6 +467,93 @@ extension VirGLRendererSuite {
             queueCount: 2,
             queues: [controlQueue, FakeVirtioQueue(elements: [])]
         )
+        fakeContext.setReady(true)
+
+        let device = try VirtioGPUDevice.virgl()
+        defer {
+            device.deviceWillInvalidateGuestMemory()
+            device.deviceWillStop()
+            fakeContext.reset()
+        }
+        let context = fakeContext.context
+        device.deviceDidStart(context: context, negotiatedFeatures: device.descriptor.optionalFeatures)
+        device.queueNotified(index: VirtioGPUProtocol.controlQueueIndex, context: context)
+        device.deviceWillPause()
+
+        #expect(controlQueue.completionCounts == Array(repeating: 1, count: requests.count))
+        let responses = try controlQueue.writtenBuffers.map { try VirtioGPUProtocol.decodeResponse($0).body }
+        #expect(responses == Array(repeating: .okNoData, count: requests.count))
+        #expect(device.statistics.rendererFailures == 0)
+    }
+
+    @Test(
+        .enabled(
+            if: MTLCreateSystemDefaultDevice() != nil,
+            "This host does not provide a Metal device."
+        )
+    )
+    func minimizedCandidateTextureToBufferCopyWithSyntheticBackingReplaysOnMetal() throws {
+        guard let runtime = runtimeDirectory() else {
+            Issue.record("The built VirGL runtime cache is unavailable.")
+            return
+        }
+        #expect(setenv("APKRUN_VIRGL_RUNTIME_PATH", runtime, 1) == 0)
+
+        let fixtureURL = shortBackingCopyFixtureURL().deletingLastPathComponent()
+            .appendingPathComponent("virgl-captured-copy-minimized.json")
+        let fixture = try JSONDecoder().decode(
+            VirGLMinimizedCandidateCopyFixture.self,
+            from: Data(contentsOf: fixtureURL)
+        )
+        #expect(fixture.provenance.contains("MINIMIZED reconstruction"))
+        #expect(fixture.buffer.resourceID == 18)
+        #expect(fixture.texture.resourceID == 179)
+        #expect(fixture.contextID == 10)
+        #expect(fixture.bufferBacking.map(\.length) == [1_048_576])
+        #expect(fixture.textureBacking.map(\.length) == [4096])
+        #expect(fixture.copyTransferWords == [917549, 179, 0, 1, 448, 50176, 0, 0, 0, 112, 112, 1, 18, 392512, 3])
+
+        let contextID = fixture.contextID
+        let requests = [
+            controlRequest(
+                .ctxCreate,
+                body: .ctxCreate(contextInit: 0, debugName: Array("minimized-copy".utf8)),
+                contextID: contextID
+            ),
+            controlRequest(.resourceCreate3D, body: .resourceCreate3D(fixture.buffer.request)),
+            controlRequest(
+                .resourceAttachBacking,
+                body: .resourceAttachBacking(
+                    resourceID: fixture.buffer.resourceID,
+                    entries: fixture.bufferBacking.map(\.request)
+                )
+            ),
+            controlRequest(
+                .ctxAttachResource,
+                body: .ctxAttachResource(resourceID: fixture.buffer.resourceID),
+                contextID: contextID
+            ),
+            controlRequest(.resourceCreate3D, body: .resourceCreate3D(fixture.texture.request)),
+            controlRequest(
+                .resourceAttachBacking,
+                body: .resourceAttachBacking(
+                    resourceID: fixture.texture.resourceID,
+                    entries: fixture.textureBacking.map(\.request)
+                )
+            ),
+            controlRequest(
+                .ctxAttachResource,
+                body: .ctxAttachResource(resourceID: fixture.texture.resourceID),
+                contextID: contextID
+            ),
+            controlRequest(
+                .submit3D,
+                body: .submit3D(commandStream: littleEndianBytes(fixture.copyTransferWords)),
+                contextID: contextID
+            ),
+        ]
+        let controlQueue = FakeVirtioQueue(elements: requests.map { (readable: $0, writableByteCount: 64) })
+        let fakeContext = FakeVirtioDeviceContext(queueCount: 2, queues: [controlQueue, FakeVirtioQueue(elements: [])])
         fakeContext.setReady(true)
 
         let device = try VirtioGPUDevice.virgl()

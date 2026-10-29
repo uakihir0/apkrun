@@ -651,16 +651,12 @@ final class GuestGPUSession {
             return failed(.invalidParameter)
         }
         let count = Int(extent)
-        let outcome: ReadBackOutcome? = backend?.sync(diagnostic: diagnostic) { engine in
+        let bytes: [UInt8]? = backend?.syncRecordingFailures(diagnostic: diagnostic) { engine throws(GraphicsFailure) in
             var data = [UInt8](repeating: 0, count: count)
-            do throws(GraphicsFailure) {
-                try engine.transferRead(transfer, into: &data)
-                return ReadBackOutcome(bytes: data, failed: false)
-            } catch {
-                return ReadBackOutcome(bytes: [], failed: true)
-            }
+            try engine.transferRead(transfer, into: &data)
+            return data
         }
-        guard let outcome, !outcome.failed else {
+        guard let bytes else {
             return failed(.unspec)
         }
         var copied: UInt64 = 0
@@ -668,12 +664,12 @@ final class GuestGPUSession {
         geometry.forEachRun { run in
             let start = Int(run.offset)
             let end = start + run.length
-            guard end <= outcome.bytes.count else {
+            guard end <= bytes.count else {
                 writeFailed = true
                 return
             }
             do {
-                try backing.write(outcome.bytes[start..<end], at: run.offset + geometry.offset)
+                try backing.write(bytes[start..<end], at: run.offset + geometry.offset)
             } catch {
                 writeFailed = true
                 return
@@ -722,10 +718,4 @@ final class GuestGPUSession {
         let (bottom, bottomOverflow) = rect.y.addingReportingOverflow(rect.height)
         return !rightOverflow && !bottomOverflow && right <= width && bottom <= height
     }
-}
-
-/// The bytes that a render-thread readback returned, or the fact that it failed.
-private struct ReadBackOutcome: Sendable {
-    let bytes: [UInt8]
-    let failed: Bool
 }

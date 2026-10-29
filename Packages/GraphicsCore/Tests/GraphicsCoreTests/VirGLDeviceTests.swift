@@ -234,6 +234,7 @@ private func transfer(
     #expect(statistics.guestReadbacks == 1)
     #expect(statistics.guestReadbackBytes == 16)
     #expect(statistics.hostReadbacks == 0)
+    #expect(statistics.rendererFailures == 0)
 }
 
 @Test func readbackCallbackCarriesItsControlCommandDiagnostic() async throws {
@@ -298,6 +299,43 @@ private func transfer(
             == "VirGL renderer callback level=error control_ordinal=4 command=518 context_id=17 resource_id=5"
     )
     #expect(sink.entries.count == 1)
+}
+
+@Test func failedReadbacksAreCountedAndLoggedWithoutExposingDetail() async throws {
+    let sink = RecordingLogSink()
+    let harness = try VirGLHarness(logger: APKLogger(category: GraphicsLogCategory.device, sink: sink))
+    harness.guest.seed(address: 0x1000, bytes: [UInt8](repeating: 0xAA, count: 64))
+    harness.engineRef.engine.fail("transferRead")
+    let request = gpuRequest(
+        .transferFromHost3D,
+        body: .transferFromHost3D(transfer(resource: 5, box: gpuBox(width: 4, height: 4))),
+        contextID: 17
+    )
+    let control = harness.send([
+        gpuRequest(.ctxCreate, body: .ctxCreate(contextInit: 0, debugName: []), contextID: 17),
+        gpuRequest(.resourceCreate3D, body: .resourceCreate3D(resource3D(id: 5))),
+        gpuRequest(
+            .resourceAttachBacking,
+            body: .resourceAttachBacking(resourceID: 5, entries: [VirtioGPUMemoryEntry(address: 0x1000, length: 64)])
+        ),
+        request,
+        request,
+    ])
+    try await eventually { control.completionCounts == [1, 1, 1, 1, 1] }
+    #expect(gpuResponseType(control.writtenBuffers[3]) == VirtioGPUErrorCode.unspec.rawValue)
+    #expect(gpuResponseType(control.writtenBuffers[4]) == VirtioGPUErrorCode.unspec.rawValue)
+    let guest = try #require(harness.guest.memory(at: 0x1000))
+    #expect(try guest.copyBytes(at: 0, count: 64) == [UInt8](repeating: 0xAA, count: 64))
+    #expect(harness.device.statistics.rendererFailures == 2)
+    let entries = sink.entries.filter { $0.errorCode == "graphics.rendererOperationFailed" }
+    #expect(entries.count == 2)
+    #expect(
+        entries.map(\.publicMessage) == [
+            "virtio-gpu renderer operation failed: rendererOperationFailed operation=transferRead control_ordinal=4 command=518 context_id=17 resource_id=5",
+            "virtio-gpu renderer operation failed: rendererOperationFailed operation=transferRead control_ordinal=5 command=518 context_id=17 resource_id=5",
+        ]
+    )
+    #expect(entries.allSatisfy { $0.level == .error && !$0.publicMessage.contains("injected failure") })
 }
 
 /// The backing calls that reach the engine, as "attach 5", "detach 5", or "unref 5", in order.

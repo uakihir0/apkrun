@@ -328,6 +328,22 @@ final class VirGLBackend: @unchecked Sendable {
         return result ?? nil
     }
 
+    func syncRecordingFailures<T: Sendable>(
+        diagnostic: VirGLCommandDiagnostic?,
+        _ body: @escaping @Sendable (any VirGLEngine) throws(GraphicsFailure) -> T
+    ) -> T? {
+        let failures = self.failures
+        let result: T?? = sync(diagnostic: diagnostic) { engine in
+            do throws(GraphicsFailure) {
+                return try body(engine)
+            } catch {
+                failures.record(error, diagnostic: diagnostic)
+                return nil
+            }
+        }
+        return result ?? nil
+    }
+
     /// Waits until the render thread has run the work queued before this call. A renderer work item can read guest
     /// pages, so the device calls this before the guest memory is invalidated (IR-850).
     func drain() {

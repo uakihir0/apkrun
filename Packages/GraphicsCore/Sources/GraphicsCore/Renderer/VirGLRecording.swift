@@ -194,7 +194,7 @@ public final class VirGLRecorder: @unchecked Sendable {
 ///
 /// Capsets and polls are not recorded, because they change no renderer state. Teardown is not
 /// recorded either: a replay starts from a fresh renderer and ends with its own teardown.
-final class RecordingVirGLEngine: VirGLEngine {
+final class RecordingVirGLEngine: VirGLEngine, VirGLCommandDiagnosticScope {
     private let inner: any VirGLEngine
     private let recorder: VirGLRecorder
     /// Accessed only on the render thread.
@@ -205,6 +205,13 @@ final class RecordingVirGLEngine: VirGLEngine {
     init(wrapping inner: any VirGLEngine, recorder: VirGLRecorder) {
         self.inner = inner
         self.recorder = recorder
+    }
+
+    func withCommandDiagnostic<T>(_ diagnostic: VirGLCommandDiagnostic?, perform: () -> T) -> T {
+        guard let diagnosticScope = inner as? any VirGLCommandDiagnosticScope else {
+            return perform()
+        }
+        return diagnosticScope.withCommandDiagnostic(diagnostic, perform: perform)
     }
 
     func capsetInfo(id: UInt32) throws(GraphicsFailure) -> GraphicsCapsetInfo {

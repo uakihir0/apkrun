@@ -1,4 +1,6 @@
+import DiagnosticsCore
 import Foundation
+import GraphicsBridge
 import IOSurface
 import Testing
 import VirtioDeviceCore
@@ -44,7 +46,7 @@ final class FakePresentFence: PresentFence, @unchecked Sendable {
 ///
 /// The engine runs on the render thread, so its calls are recorded under a lock. Tests read
 /// the record from their own thread.
-final class FakeVirGLEngine: VirGLEngine, @unchecked Sendable {
+final class FakeVirGLEngine: VirGLEngine, VirGLCommandDiagnosticScope, @unchecked Sendable {
     enum Call: Equatable {
         case capset(UInt32)
         case createContext(UInt32, String)
@@ -72,16 +74,38 @@ final class FakeVirGLEngine: VirGLEngine, @unchecked Sendable {
     private var recorded: [Call] = []
     private var pendingFences: [UInt32] = []
     private var failing: Set<String> = []
+    private var activeCommandDiagnostic: VirGLCommandDiagnostic?
+    private var recordedFailureCommandDiagnostics: [VirGLCommandDiagnostic] = []
+    private let callbackContext: GraphicsRendererCallbackContext?
     /// The byte that `transferRead` writes into every byte of the box.
     private var readFill: UInt8 = 0x5A
 
-    init(onFence: @escaping @Sendable (UInt32) -> Void) {
+    init(onFence: @escaping @Sendable (UInt32) -> Void, callbackLogger: APKLogger? = nil) {
         self.onFence = onFence
+        callbackContext = callbackLogger.map { GraphicsRendererCallbackContext(onFenceCompleted: onFence, logger: $0) }
     }
 
     /// The calls so far, in order.
     var calls: [Call] {
         lock.withLock { recorded }
+    }
+
+    /// Guest request metadata active when an injected failure was raised.
+    var failedCommandDiagnostics: [VirGLCommandDiagnostic] {
+        lock.withLock { recordedFailureCommandDiagnostics }
+    }
+
+    func withCommandDiagnostic<T>(_ diagnostic: VirGLCommandDiagnostic?, perform: () -> T) -> T {
+        let previous = lock.withLock { () -> VirGLCommandDiagnostic? in
+            let previous = activeCommandDiagnostic
+            activeCommandDiagnostic = diagnostic
+            return previous
+        }
+        defer {
+            lock.withLock { activeCommandDiagnostic = previous }
+        }
+        guard let callbackContext else { return perform() }
+        return callbackContext.withCommandDiagnostic(diagnostic, perform: perform)
     }
 
     /// Makes the named operation fail with a renderer error. Operations are named by the case, for example `submit`.
@@ -109,7 +133,11 @@ final class FakeVirGLEngine: VirGLEngine, @unchecked Sendable {
     private func record(_ call: Call, operation: String) throws(GraphicsFailure) {
         let shouldFail = lock.withLock { () -> Bool in
             recorded.append(call)
-            return failing.contains(operation)
+            let shouldFail = failing.contains(operation)
+            if shouldFail, let activeCommandDiagnostic {
+                recordedFailureCommandDiagnostics.append(activeCommandDiagnostic)
+            }
+            return shouldFail
         }
         if shouldFail {
             throw GraphicsFailure.rendererOperationFailed(operation: operation, detail: "injected failure")
@@ -219,6 +247,7 @@ final class FakeVirGLEngine: VirGLEngine, @unchecked Sendable {
     }
 
     func transferRead(_ transfer: VirGLTransfer, into data: inout [UInt8]) throws(GraphicsFailure) {
+        callbackContext?.logCorrelation(for: Int32(GB_LOG_ERROR))
         try record(.transferRead(transfer), operation: "transferRead")
         let fill = lock.withLock { readFill }
         for index in data.indices {
@@ -248,6 +277,7 @@ final class FakeVirGLEngine: VirGLEngine, @unchecked Sendable {
 final class SeededGuestBackend: VirtioDeviceContextBackend, @unchecked Sendable {
     private let lock = NSLock()
     private var seeds: [UInt64: [UInt8]] = [:]
+    private var unmappedAddresses: Set<UInt64> = []
     private var views: [UInt64: FakeGuestMemory] = [:]
     private var queues: [FakeVirtioQueue]
 
@@ -263,6 +293,11 @@ final class SeededGuestBackend: VirtioDeviceContextBackend, @unchecked Sendable 
     /// Sets the bytes that the range starting at `address` holds when the device maps it.
     func seed(address: UInt64, bytes: [UInt8]) {
         lock.withLock { seeds[address] = bytes }
+    }
+
+    /// Makes mapping the range at `address` fail as if it were outside guest memory.
+    func failMapping(address: UInt64) {
+        lock.withLock { unmappedAddresses.insert(address) }
     }
 
     /// The view of the range at `address`, as the device mapped it.
@@ -285,12 +320,15 @@ final class SeededGuestBackend: VirtioDeviceContextBackend, @unchecked Sendable 
         generation: UInt64
     ) throws(VirtioFailure) -> GuestMemory {
         _ = try range.validatedEndAddress()
-        let fake = lock.withLock { () -> FakeGuestMemory in
-            let bytes = seeds[range.address] ?? [UInt8](repeating: 0, count: Int(range.length))
-            let fake = FakeGuestMemory(range: range, bytes: bytes)
-            views[range.address] = fake
-            return fake
+        let (isUnmapped, bytes) = lock.withLock {
+            (
+                unmappedAddresses.contains(range.address),
+                seeds[range.address] ?? [UInt8](repeating: 0, count: Int(range.length))
+            )
         }
+        guard !isUnmapped else { throw .guestMemoryRangeInvalid }
+        let fake = FakeGuestMemory(range: range, bytes: bytes)
+        lock.withLock { views[range.address] = fake }
         return fake.memory
     }
 

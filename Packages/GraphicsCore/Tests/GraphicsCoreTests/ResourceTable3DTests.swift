@@ -142,3 +142,16 @@ private func create(
     #expect(resource.kind == .virgl(target: 2))
     #expect(resource.byteEstimate == 8 * 8 * 4)
 }
+
+@Test func virglResourcesAcceptMappedTransferBackingSmallerThanTheirEstimate() throws {
+    var table = ResourceTable()
+    try table.create3D(create(id: 9, format: rgba8, width: 64, height: 64))
+    let entry = VirtioGPUMemoryEntry(address: 0x8000_0000, length: 4096)
+
+    try table.attachBacking(id: 9, entries: [entry]) { _ in true }
+
+    let resource = try #require(table.resource(id: 9))
+    #expect(resource.byteEstimate == 64 * 64 * 4)
+    #expect(resource.backing == [entry])
+    #expect(table.estimatedByteCount == 64 * 64 * 4)
+}

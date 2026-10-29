@@ -8,6 +8,7 @@ typealias VirGLRenderWork = @Sendable (any VirGLEngine) -> GraphicsFailure?
 struct GPUCommandReply: Sendable {
     var response: VirtioGPUResponseBody
     var renderWork: VirGLRenderWork?
+    var rejectionReason: String?
 }
 
 /// The guest's 2D and 3D state, kept on the device queue (graphics.md §4.2 to §4.4, §5.4).
@@ -103,7 +104,11 @@ final class GuestGPUSession {
     }
 
     /// Answers a 2D or 3D request, or an error for a command this path does not implement.
-    func reply(to request: VirtioGPURequest, context: VirtioDeviceContext) -> GPUCommandReply {
+    func reply(
+        to request: VirtioGPURequest,
+        context: VirtioDeviceContext,
+        diagnostic: VirGLCommandDiagnostic?
+    ) -> GPUCommandReply {
         let header = request.header
         switch request.body {
         case .resourceCreate2D(let resourceID, let format, let width, let height):
@@ -135,9 +140,9 @@ final class GuestGPUSession {
         case .resourceCreate3D(let arguments):
             return createResource3D(arguments)
         case .transferToHost3D(let transfer):
-            return transfer3D(transfer, header: header, context: context, direction: .toHost)
+            return transfer3D(transfer, header: header, context: context, direction: .toHost, diagnostic: diagnostic)
         case .transferFromHost3D(let transfer):
-            return transfer3D(transfer, header: header, context: context, direction: .fromHost)
+            return transfer3D(transfer, header: header, context: context, direction: .fromHost, diagnostic: diagnostic)
         case .submit3D(let commandStream):
             return submit(commandStream, context: header.contextID)
         default:
@@ -147,12 +152,12 @@ final class GuestGPUSession {
 
     // MARK: - Helpers
 
-    private func failed(_ code: VirtioGPUErrorCode) -> GPUCommandReply {
-        GPUCommandReply(response: .error(code), renderWork: nil)
+    private func failed(_ code: VirtioGPUErrorCode, rejectionReason: String? = nil) -> GPUCommandReply {
+        GPUCommandReply(response: .error(code), renderWork: nil, rejectionReason: rejectionReason)
     }
 
     private func succeeded(renderWork: VirGLRenderWork? = nil) -> GPUCommandReply {
-        GPUCommandReply(response: .okNoData, renderWork: renderWork)
+        GPUCommandReply(response: .okNoData, renderWork: renderWork, rejectionReason: nil)
     }
 
     /// Wraps a renderer call that may throw. Its failure is returned to the render thread's logger.
@@ -412,10 +417,11 @@ final class GuestGPUSession {
                 }
             }
         } catch {
-            return failed(error.errorCode)
+            let rejectionReason = mappingFailed ? "guest_memory_mapping" : error.diagnosticReason
+            return failed(error.errorCode, rejectionReason: rejectionReason)
         }
         guard !mappingFailed, views.count == entries.count else {
-            return failed(.invalidParameter)
+            return failed(.invalidParameter, rejectionReason: "guest_memory_mapping")
         }
         backings[resource] = GuestBacking(entries: entries, views: views)
         guard path == .virgl else { return succeeded() }
@@ -454,7 +460,8 @@ final class GuestGPUSession {
                 maxVersion: capset.version,
                 maxSize: UInt32(capset.bytes.count)
             ),
-            renderWork: nil
+            renderWork: nil,
+            rejectionReason: nil
         )
     }
 
@@ -466,7 +473,7 @@ final class GuestGPUSession {
         guard let capset = capsets.first(where: { $0.id == id }), version <= capset.version else {
             return failed(.invalidParameter)
         }
-        return GPUCommandReply(response: .okCapset(data: capset.bytes), renderWork: nil)
+        return GPUCommandReply(response: .okCapset(data: capset.bytes), renderWork: nil, rejectionReason: nil)
     }
 
     // MARK: - Contexts
@@ -561,7 +568,8 @@ final class GuestGPUSession {
         _ transfer: VirtioGPUTransfer3D,
         header: VirtioGPUControlHeader,
         context: VirtioDeviceContext,
-        direction: TransferDirection
+        direction: TransferDirection,
+        diagnostic: VirGLCommandDiagnostic?
     ) -> GPUCommandReply {
         guard path == .virgl else { return failed(.unspec) }
         if header.contextID != 0, !contexts.contains(header.contextID) {
@@ -615,7 +623,7 @@ final class GuestGPUSession {
                     try engine.transferWrite(renderTransfer, data: &data)
                 })
         case .fromHost:
-            return readBack(renderTransfer, geometry: geometry, target: target)
+            return readBack(renderTransfer, geometry: geometry, target: target, diagnostic: diagnostic)
         }
     }
 
@@ -624,7 +632,8 @@ final class GuestGPUSession {
     private func readBack(
         _ transfer: VirGLTransfer,
         geometry: TransferGeometry,
-        target: GPUResource
+        target: GPUResource,
+        diagnostic: VirGLCommandDiagnostic?
     ) -> GPUCommandReply {
         let extent: UInt64
         do {
@@ -642,16 +651,12 @@ final class GuestGPUSession {
             return failed(.invalidParameter)
         }
         let count = Int(extent)
-        let outcome: ReadBackOutcome? = backend?.sync { engine in
+        let bytes: [UInt8]? = backend?.syncRecordingFailures(diagnostic: diagnostic) { engine throws(GraphicsFailure) in
             var data = [UInt8](repeating: 0, count: count)
-            do throws(GraphicsFailure) {
-                try engine.transferRead(transfer, into: &data)
-                return ReadBackOutcome(bytes: data, failed: false)
-            } catch {
-                return ReadBackOutcome(bytes: [], failed: true)
-            }
+            try engine.transferRead(transfer, into: &data)
+            return data
         }
-        guard let outcome, !outcome.failed else {
+        guard let bytes else {
             return failed(.unspec)
         }
         var copied: UInt64 = 0
@@ -659,12 +664,12 @@ final class GuestGPUSession {
         geometry.forEachRun { run in
             let start = Int(run.offset)
             let end = start + run.length
-            guard end <= outcome.bytes.count else {
+            guard end <= bytes.count else {
                 writeFailed = true
                 return
             }
             do {
-                try backing.write(outcome.bytes[start..<end], at: run.offset + geometry.offset)
+                try backing.write(bytes[start..<end], at: run.offset + geometry.offset)
             } catch {
                 writeFailed = true
                 return
@@ -713,10 +718,4 @@ final class GuestGPUSession {
         let (bottom, bottomOverflow) = rect.y.addingReportingOverflow(rect.height)
         return !rightOverflow && !bottomOverflow && right <= width && bottom <= height
     }
-}
-
-/// The bytes that a render-thread readback returned, or the fact that it failed.
-private struct ReadBackOutcome: Sendable {
-    let bytes: [UInt8]
-    let failed: Bool
 }

@@ -1,3 +1,4 @@
+import Darwin
 import DiagnosticsCore
 import GraphicsBridge
 import IOSurface
@@ -18,6 +19,8 @@ public final class VirGLRenderer {
     #if APKRUN_TEST_READBACK
         /// The submits that virglrenderer rejected, in order, with the value and messages of each (IR-830).
         private(set) var submitRejections: [VirGLSubmitRejection] = []
+        /// Number of submit calls made by this renderer, including accepted calls.
+        private var submitOrdinal: UInt64 = 0
 
         /// The message sink of the callback context. It is nil after `destroy()`.
         private var messageSink: VirGLMessageSink? {
@@ -90,6 +93,18 @@ public final class VirGLRenderer {
             )
         }
         return device
+    }
+
+    /// Makes guest request identifiers available to log callbacks raised synchronously on the owner thread.
+    ///
+    /// Engine calls and fence callbacks run on this renderer's owner thread. Log callbacks may also arrive from
+    /// another thread; those callbacks are recorded without command attribution.
+    func withCommandDiagnostic<T>(_ diagnostic: VirGLCommandDiagnostic?, perform: () -> T) -> T {
+        guard let retainedCallbackContext else { return perform() }
+        let context = Unmanaged<GraphicsRendererCallbackContext>
+            .fromOpaque(retainedCallbackContext)
+            .takeUnretainedValue()
+        return context.withCommandDiagnostic(diagnostic, perform: perform)
     }
 
     /// Returns the maximum version and buffer size for an available capset.
@@ -180,7 +195,7 @@ public final class VirGLRenderer {
 }
 
 // UNCHECKED-SENDABLE: the renderer is confined to its render thread. The engine protocol carries the calls.
-extension VirGLRenderer: VirGLEngine, @unchecked Sendable {
+extension VirGLRenderer: VirGLEngine, VirGLCommandDiagnosticScope, @unchecked Sendable {
     func createResource(_ arguments: VirGLResourceArguments) throws(GraphicsFailure) {
         let renderer = try live(operation: "resourceCreate")
         var args = arguments.bridgeArguments
@@ -224,6 +239,8 @@ extension VirGLRenderer: VirGLEngine, @unchecked Sendable {
     func submit(context: UInt32, commands: [UInt8]) throws(GraphicsFailure) {
         let renderer = try live(operation: "submit")
         #if APKRUN_TEST_READBACK
+            submitOrdinal &+= 1
+            let ordinal = submitOrdinal
             let sink = messageSink
             _ = sink?.takeMessages()
             var virglResult = Int32.min
@@ -232,7 +249,12 @@ extension VirGLRenderer: VirGLEngine, @unchecked Sendable {
             }
             if status != GB_OK {
                 submitRejections.append(
-                    VirGLSubmitRejection(virglResult: virglResult, messages: sink?.takeMessages() ?? [])
+                    VirGLSubmitRejection(
+                        contextID: context,
+                        ordinal: ordinal,
+                        virglResult: virglResult,
+                        messages: sink?.takeMessages() ?? []
+                    )
                 )
             }
         #else
@@ -348,16 +370,60 @@ extension VirGLRenderer: VirGLEngine, @unchecked Sendable {
     #endif
 }
 
-/// The renderer's callback context. Callbacks run on the render thread.
-private final class GraphicsRendererCallbackContext: Sendable {
-    let logger = APKLogger(category: .renderer)
+/// The renderer's callback context. Only callbacks delivered on the renderer's owner thread may be correlated.
+// UNCHECKED-SENDABLE: active-command updates and reads are confined to the renderer's owner thread. Off-thread
+// callbacks check their pthread identity before reading the active command.
+final class GraphicsRendererCallbackContext: @unchecked Sendable {
+    let logger: APKLogger
     let onFenceCompleted: @Sendable (UInt32) -> Void
+    private let ownerThread: pthread_t
+    var activeCommandDiagnostic: VirGLCommandDiagnostic?
     #if APKRUN_TEST_READBACK
         let messageSink = VirGLMessageSink()
     #endif
 
-    init(onFenceCompleted: @escaping @Sendable (UInt32) -> Void) {
+    init(
+        onFenceCompleted: @escaping @Sendable (UInt32) -> Void,
+        logger: APKLogger = APKLogger(category: .renderer)
+    ) {
         self.onFenceCompleted = onFenceCompleted
+        self.logger = logger
+        ownerThread = pthread_self()
+    }
+
+    func withCommandDiagnostic<T>(_ diagnostic: VirGLCommandDiagnostic?, perform: () -> T) -> T {
+        let previous = activeCommandDiagnostic
+        activeCommandDiagnostic = diagnostic
+        defer { activeCommandDiagnostic = previous }
+        return perform()
+    }
+
+    func logCorrelation(for level: Int32) {
+        let severity: String
+        switch Int(level) {
+        case GB_LOG_ERROR: severity = "error"
+        case GB_LOG_WARNING: severity = "warning"
+        case GB_LOG_INFO: severity = "info"
+        default: return
+        }
+        let fields: String
+        if pthread_equal(ownerThread, pthread_self()) != 0 {
+            guard let activeCommandDiagnostic else { return }
+            fields = activeCommandDiagnostic.logFields
+        } else {
+            // Off-thread callbacks cannot safely inherit the render thread's active command.
+            guard Int(level) != GB_LOG_INFO else { return }
+            fields =
+                "control_ordinal=unattributed command=unattributed context_id=unattributed resource_id=unattributed"
+        }
+        let message = "VirGL renderer callback level=\(severity) \(fields)"
+        if Int(level) == GB_LOG_ERROR {
+            logger.error("\(message, .public)")
+        } else if Int(level) == GB_LOG_WARNING {
+            logger.warning("\(message, .public)")
+        } else {
+            logger.info("\(message, .public)")
+        }
     }
 }
 
@@ -383,6 +449,7 @@ private let graphicsRendererLog:
         let context = Unmanaged<GraphicsRendererCallbackContext>
             .fromOpaque(contextPointer)
             .takeUnretainedValue()
+        context.logCorrelation(for: level)
         let message = String(cString: messagePointer)
         #if APKRUN_TEST_READBACK
             context.messageSink.record(message)

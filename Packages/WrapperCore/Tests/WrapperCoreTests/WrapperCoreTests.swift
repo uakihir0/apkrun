@@ -147,7 +147,7 @@ private struct Fixture {
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         registryFile = root.appendingPathComponent("registry.json")
         registry = WrapperRegistry(
-            fileURL: registryFile, stagingRoot: staging)
+            fileURL: registryFile, stagingRoot: root)
         let executable = try makeLauncherStub(at: root)
         launcher = LauncherBuild(
             launcherAPI: "1.0", launcherVersion: "0.1.0", executableURL: executable)

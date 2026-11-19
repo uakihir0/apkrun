@@ -132,6 +132,18 @@ public struct WrapperDeniedEntry: Codable, Sendable, Equatable {
     }
 }
 
+/// Decodes one array element, dropping an entry that fails to decode so one
+/// malformed row cannot take down the whole registry (wrapper-json.md §5.3:
+/// entries that break §4.2 are ignored and dropped at the next write).
+private struct LossyRegistryElement<Element: Decodable>: Decodable {
+    /// The decoded element; `nil` when it failed.
+    let element: Element?
+
+    init(from decoder: any Decoder) throws {
+        element = try? Element(from: decoder)
+    }
+}
+
 /// The `registry.json` document (wrapper-json.md §4).
 public struct WrapperRegistryFile: Codable, Sendable, Equatable {
     /// The file schema version; `1` in v1.
@@ -150,6 +162,26 @@ public struct WrapperRegistryFile: Codable, Sendable, Equatable {
         self.schemaVersion = schemaVersion
         self.wrappers = wrappers
         self.denied = denied
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case wrappers
+        case denied
+    }
+
+    /// Decodes the file; entries that fail to decode are dropped individually.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        wrappers =
+            (try? container.decode(
+                [LossyRegistryElement<WrapperRegistryEntry>].self, forKey: .wrappers))?
+            .compactMap(\.element) ?? []
+        denied =
+            (try? container.decode(
+                [LossyRegistryElement<WrapperDeniedEntry>].self, forKey: .denied))?
+            .compactMap(\.element) ?? []
     }
 
     /// An empty registry.
@@ -243,6 +275,15 @@ public actor WrapperRegistry {
     @discardableResult
     public func load() -> LoadOutcome {
         guard let data = try? Data(contentsOf: fileURL, options: .mappedIfSafe) else {
+            if fileManager.fileExists(atPath: fileURL.path) {
+                // The file exists but cannot be read; keep it aside like a
+                // corrupt file instead of overwriting the unreadable entries
+                // at the next save.
+                keepAsideAsCorrupt()
+                document = .empty
+                outcome = .corrupt
+                return outcome
+            }
             document = .empty
             outcome = .ready
             return outcome
@@ -408,10 +449,7 @@ public actor WrapperRegistry {
                     upsert(updated)
                 } else {
                     if let stagingPath = entry.stagingPath {
-                        try? fileManager.removeItem(
-                            at: URL(fileURLWithPath: stagingPath)
-                                .deletingLastPathComponent()
-                        )
+                        removeStagingDirectory(at: stagingPath)
                     }
                     removeLeftovers(near: finalURL)
                     document.wrappers.removeAll { $0.bundleId == entry.bundleId }
@@ -432,7 +470,9 @@ public actor WrapperRegistry {
                     updated.refreshedAt = Date()
                     upsert(updated)
                 } else {
-                    if let stagingPath = entry.stagingPath {
+                    if let stagingPath = entry.stagingPath,
+                        isInsideStaging(URL(fileURLWithPath: stagingPath))
+                    {
                         try? fileManager.removeItem(
                             at: URL(fileURLWithPath: stagingPath)
                         )
@@ -460,7 +500,9 @@ public actor WrapperRegistry {
 
     /// Persists the document atomically (write, fsync, rename).
     public func save() throws {
-        guard outcome != .newerVersion else { return }
+        guard outcome != .newerVersion else {
+            throw WrapperFailure.registryUnavailable
+        }
         pruneExpiredDenials()
         sortDocument()
         let data = try WrapperRegistryCodec.encode(document)
@@ -560,6 +602,26 @@ public actor WrapperRegistry {
         document.denied.removeAll { $0.until <= date }
     }
 
+    /// Deletes a staged bundle directory, but only when it sits inside the
+    /// registry's staging root; a `stagingPath` pointing elsewhere is never
+    /// followed for deletion.
+    private func removeStagingDirectory(at stagingPath: String) {
+        let stagingDirectory = URL(fileURLWithPath: stagingPath)
+            .deletingLastPathComponent()
+        guard isInsideStaging(stagingDirectory) else { return }
+        try? fileManager.removeItem(at: stagingDirectory)
+    }
+
+    /// Whether `url` lies inside `stagingRoot/staging/`.
+    private func isInsideStaging(_ url: URL) -> Bool {
+        let root =
+            stagingRoot.appendingPathComponent("staging", isDirectory: true)
+            .standardizedFileURL.path + "/"
+        return url.standardizedFileURL.path.hasPrefix(root)
+    }
+
+    /// Deletes this generation's own cross-volume staging leftovers at the
+    /// destination: `.<name>.apkrun-<uuid>` items beside `destination` only.
     private func removeLeftovers(near destination: URL) {
         let directory = destination.deletingLastPathComponent()
         guard
@@ -568,7 +630,8 @@ public actor WrapperRegistry {
                 includingPropertiesForKeys: nil
             )
         else { return }
-        for item in items where item.lastPathComponent.contains(".apkrun-") {
+        let prefix = ".\(destination.lastPathComponent).apkrun-"
+        for item in items where item.lastPathComponent.hasPrefix(prefix) {
             try? fileManager.removeItem(at: item)
         }
     }

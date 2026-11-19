@@ -180,14 +180,34 @@ public actor AppWrapperGenerator {
             request.destination, stagingToken: stagingID)
         let finalURL = destination.appendingPathComponent("\(fileName).app", isDirectory: true)
         let existing = await environment.registry.entry(bundleID: bundleID)
-        // Only an existing bundle blocks `never`: a registry row whose bundle
-        // was deleted in Finder is stale and the wrapper is regenerated.
-        if let existing, fileManager.fileExists(atPath: existing.path) {
+        // The security bookmark tracks the bundle across a move in Finder,
+        // so a resolvable location — the recorded path or the bookmark —
+        // still counts as this package's wrapper. A row whose bundle is
+        // gone or holds a foreign app is stale and regenerates.
+        var existingURL = existing.map { URL(fileURLWithPath: $0.path) }
+        if let existing, let url = existingURL,
+            !fileManager.fileExists(atPath: url.path),
+            let bookmark = existing.bookmark,
+            let bookmarkData = Data(base64Encoded: bookmark)
+        {
+            var bookmarkIsStale = false
+            if let resolved = try? URL(
+                resolvingBookmarkData: bookmarkData,
+                options: .withoutUI,
+                relativeTo: nil,
+                bookmarkDataIsStale: &bookmarkIsStale)
+            {
+                existingURL = resolved
+            }
+        }
+        let existingIsLive =
+            existingURL.map {
+                fileManager.fileExists(atPath: $0.path)
+                    && environment.installer.isWrapperOf(configuration.packageID, at: $0)
+            } ?? false
+        if existingIsLive, let existingURL {
             guard request.replace == .sameWrapper else {
-                throw .wrapperExists(
-                    configuration.packageID,
-                    URL(fileURLWithPath: existing.path)
-                )
+                throw .wrapperExists(configuration.packageID, existingURL)
             }
         }
         if fileManager.fileExists(atPath: finalURL.path) {
@@ -257,14 +277,10 @@ public actor AppWrapperGenerator {
         }
 
         // On a `sameWrapper` replace under a new file name, remove the
-        // replaced bundle so only one wrapper of the package remains — but
-        // only when the path still holds this package's wrapper: a user who
-        // moved the old app and put something else there keeps that app.
-        if let existing, existing.path != finalURL.path,
-            environment.installer.isWrapperOf(
-                configuration.packageID, at: URL(fileURLWithPath: existing.path))
-        {
-            try? fileManager.removeItem(at: URL(fileURLWithPath: existing.path))
+        // replaced bundle — at its recorded path or wherever the bookmark
+        // resolved — so only one wrapper of the package remains.
+        if existingIsLive, let existingURL, existingURL.path != finalURL.path {
+            try? fileManager.removeItem(at: existingURL)
         }
 
         return GeneratedWrapper(

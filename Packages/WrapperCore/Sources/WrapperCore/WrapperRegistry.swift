@@ -198,6 +198,11 @@ public struct WrapperRegistryFile: Codable, Sendable, Equatable {
     public static let empty = WrapperRegistryFile(wrappers: [], denied: [])
 }
 
+/// The version probe `load()` decodes before the full registry body.
+private struct WrapperRegistryVersionProbe: Decodable {
+    let schemaVersion: Int?
+}
+
 /// Encodes `registry.json` deterministically: sorted keys, pretty printed,
 /// unescaped slashes, trailing newline (wrapper-json.md §1.2, §4).
 public enum WrapperRegistryCodec {
@@ -298,23 +303,32 @@ public actor WrapperRegistry {
             outcome = .ready
             return outcome
         }
-        let decoded: WrapperRegistryFile? = {
-            guard data.count <= WrapperRegistryCodec.maximumBytes else { return nil }
-            guard
-                let file = try? WrapperRegistryCodec.makeDecoder()
-                    .decode(WrapperRegistryFile.self, from: data)
-            else { return nil }
-            return Self.sanitized(file)
-        }()
-        guard var file = decoded, file.schemaVersion >= 1 else {
+        let decoder = WrapperRegistryCodec.makeDecoder()
+        // The format version is probed before the body: a newer-version file
+        // can use a different shape and still keeps its entries, while a file
+        // that fails to decode is kept aside as corrupt.
+        guard data.count <= WrapperRegistryCodec.maximumBytes,
+            let probe = try? decoder.decode(
+                WrapperRegistryVersionProbe.self, from: data),
+            let schemaVersion = probe.schemaVersion, schemaVersion >= 1
+        else {
             keepAsideAsCorrupt()
             document = .empty
             outcome = .corrupt
             return outcome
         }
-        if file.schemaVersion > 1 {
-            document = file
+        let decoded: WrapperRegistryFile? =
+            (try? decoder.decode(WrapperRegistryFile.self, from: data))
+            .flatMap(Self.sanitized)
+        guard schemaVersion <= 1 else {
+            document = decoded ?? .empty
             outcome = .newerVersion
+            return outcome
+        }
+        guard var file = decoded else {
+            keepAsideAsCorrupt()
+            document = .empty
+            outcome = .corrupt
             return outcome
         }
         file.schemaVersion = 1

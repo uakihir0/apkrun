@@ -152,8 +152,13 @@ public struct WrapperInstaller: Sendable {
     /// outside typed throws to work around a Swift 6.4 SILGen crash).
     private func moveIntoPlace(_ staged: URL, to finalURL: URL) -> WrapperFailure? {
         do {
+            let destinationExists = FileManager.default.fileExists(atPath: finalURL.path)
             if sameVolume(staged, finalURL) {
-                _ = try FileManager.default.replaceItemAt(finalURL, withItemAt: staged)
+                if destinationExists {
+                    _ = try FileManager.default.replaceItemAt(finalURL, withItemAt: staged)
+                } else {
+                    try FileManager.default.moveItem(at: staged, to: finalURL)
+                }
             } else {
                 let temp = finalURL.deletingLastPathComponent()
                     .appendingPathComponent(
@@ -162,7 +167,11 @@ public struct WrapperInstaller: Sendable {
                     )
                 do {
                     try FileManager.default.copyItem(at: staged, to: temp)
-                    _ = try FileManager.default.replaceItemAt(finalURL, withItemAt: temp)
+                    if destinationExists {
+                        _ = try FileManager.default.replaceItemAt(finalURL, withItemAt: temp)
+                    } else {
+                        try FileManager.default.moveItem(at: temp, to: finalURL)
+                    }
                 } catch {
                     try? FileManager.default.removeItem(at: temp)
                     throw error

@@ -200,9 +200,11 @@ public actor AppWrapperGenerator {
                 existingURL = resolved
             }
         }
+        // A bundle in the Trash counts as missing (wrapper.md §9.1).
         let existingIsLive =
             existingURL.map {
                 fileManager.fileExists(atPath: $0.path)
+                    && !$0.path.contains("/.Trash/")
                     && environment.installer.isWrapperOf(configuration.packageID, at: $0)
             } ?? false
         if existingIsLive, let existingURL {

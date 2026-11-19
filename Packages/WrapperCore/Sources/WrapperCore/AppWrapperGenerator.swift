@@ -165,8 +165,10 @@ public actor AppWrapperGenerator {
         guard WrapperCodeSign.isARM64(template) else {
             throw .launcherTemplateInvalid("not an arm64 executable")
         }
-        guard WrapperCodeSign.cdhash(of: template) != nil else {
-            throw .launcherTemplateInvalid("unsigned")
+        guard WrapperCodeSign.signatureIsValid(bundleURL: template),
+            WrapperCodeSign.cdhash(of: template) != nil
+        else {
+            throw .launcherTemplateInvalid("unsigned or invalid signature")
         }
 
         // 2. bundleID; a registered active wrapper of this package blocks.
@@ -178,14 +180,15 @@ public actor AppWrapperGenerator {
             request.destination, stagingToken: stagingID)
         let finalURL = destination.appendingPathComponent("\(fileName).app", isDirectory: true)
         let existing = await environment.registry.entry(bundleID: bundleID)
-        if let existing, existing.state == .active,
-            fileManager.fileExists(atPath: finalURL.path),
-            environment.installer.isWrapperOf(configuration.packageID, at: finalURL)
-        {
+        if let existing {
             guard request.replace == .sameWrapper else {
-                throw .wrapperExists(configuration.packageID, finalURL)
+                throw .wrapperExists(
+                    configuration.packageID,
+                    URL(fileURLWithPath: existing.path)
+                )
             }
-        } else if fileManager.fileExists(atPath: finalURL.path) {
+        }
+        if fileManager.fileExists(atPath: finalURL.path) {
             if environment.installer.isWrapperOf(configuration.packageID, at: finalURL) {
                 guard request.replace == .sameWrapper else {
                     throw .wrapperExists(configuration.packageID, finalURL)
@@ -249,6 +252,12 @@ public actor AppWrapperGenerator {
                 bundleID: bundleID, path: finalURL, bookmark: bookmark)
         } catch {
             throw .registryUnavailable
+        }
+
+        // On a `sameWrapper` replace under a new file name, remove the
+        // replaced bundle so only one wrapper of the package remains.
+        if let existing, existing.path != finalURL.path {
+            try? fileManager.removeItem(at: URL(fileURLWithPath: existing.path))
         }
 
         return GeneratedWrapper(

@@ -20,6 +20,21 @@ public enum WrapperCodeSign {
         return unique.map { String(format: "%02x", $0) }.joined()
     }
 
+    /// The identifier recorded in the bundle's code signature, or `nil` when
+    /// it is unsigned. Used by the quick verification path; `deep` runs the
+    /// strict check instead (wrapper.md §9.1).
+    public static func signatureIdentifier(of bundleURL: URL) -> String? {
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(bundleURL as CFURL, [], &staticCode) == errSecSuccess,
+            let code = staticCode
+        else { return nil }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(code, [], &info) == errSecSuccess,
+            let dictionary = info as? [String: Any]
+        else { return nil }
+        return dictionary[kSecCodeInfoIdentifier as String] as? String
+    }
+
     /// Whether the code signature of a bundle is strictly valid and names the
     /// expected identifier (`SecStaticCodeCheckValidity`, strict, all
     /// architectures, `identifier "<bundleID>"`).

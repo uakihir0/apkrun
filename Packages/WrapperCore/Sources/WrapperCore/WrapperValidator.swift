@@ -161,13 +161,14 @@ public struct WrapperValidator: Sendable {
         let entry = await registry.entry(bundleID: bundleID)
         result.registered = entry != nil
 
-        // Check 3 + X6: signature validity and cdhash (strict check only in
-        // `deep`; the identifier check always runs).
+        // Check 3 + X6: the signature's identifier equals `map(packageId)` on
+        // every check (wrapper-json.md §2.3 X6); `deep` additionally runs the
+        // strict all-architecture validity check (wrapper.md §9.1 check 4).
         let signatureOK: Bool
         if deep {
             signatureOK = WrapperCodeSign.signatureIsValid(bundleURL: url, identifier: bundleID)
         } else {
-            signatureOK = WrapperCodeSign.signatureIsValid(bundleURL: url)
+            signatureOK = WrapperCodeSign.signatureIdentifier(of: url) == bundleID
         }
         if !signatureOK {
             problems.append(.signatureInvalid)

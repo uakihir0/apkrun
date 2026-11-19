@@ -2530,7 +2530,7 @@
         "case": "stopped",
         "when": "Android is stopped while the agent is starting, so the start ends without a connection",
         "raisedBy": "DevelopmentGuestAgent",
-        "ref": "[../02-design/guest-components.md](../02-design/guest-components.md) \u00a73.3"
+        "ref": "[../02-design/guest-components.md](../02-design/guest-components.md) §3.3"
       }
     },
     {
@@ -2586,9 +2586,9 @@
       "cliExit": 1,
       "doc": {
         "case": "requiredAgentUnavailable(agent:)",
-          "when": "a required agent misses its 30 s readiness deadline after boot or remains unavailable for more than 30 s while ready, its restart budget is exhausted, or repeated protocol violations stop reconnection",
+        "when": "a required agent misses its 30 s readiness deadline after boot or remains unavailable for more than 30 s while ready, its restart budget is exhausted, or repeated protocol violations stop reconnection",
         "raisedBy": "agent supervisor",
-          "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2, §4.3; [../02-design/guest-components.md](../02-design/guest-components.md) §3.3; [../02-design/guest-protocol.md](../02-design/guest-protocol.md) §12.2"
+        "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2, §4.3; [../02-design/guest-components.md](../02-design/guest-components.md) §3.3; [../02-design/guest-protocol.md](../02-design/guest-protocol.md) §12.2"
       }
     },
     {
@@ -2645,6 +2645,307 @@
         "when": "after Android is ready, the window's input cannot be bound to the Guest Agent's input channel because the channel fails. The binding is tried again, and the boot goes on without input until it succeeds",
         "raisedBy": "RuntimeHost, `apkrun dev boot --window`, `apkrun dev launch`",
         "ref": "[../02-design/input.md](../02-design/input.md) §7.1, §11"
+      }
+    },
+    {
+      "code": "wrapper.packageNotInstalled",
+      "parameters": [
+        "app"
+      ],
+      "message": {
+        "en": "{app} isn't installed in APKRun."
+      },
+      "remediation": {
+        "en": "Install {app} first. apkrun wrap installs it too when you add --install."
+      },
+      "action": "none",
+      "cliExit": 4,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "packageNotInstalled(PackageID)",
+        "when": "createWrapper for a package that is not installed, or apkrun wrap <file> without --install and without a terminal for the question",
+        "raisedBy": "AppWrapperGenerator, CLI",
+        "ref": "wrapper.md §6.2, §12.2"
+      }
+    },
+    {
+      "code": "wrapper.invalidName",
+      "parameters": [],
+      "message": {
+        "en": "This name can't be used for a Mac app."
+      },
+      "remediation": {
+        "en": "Choose a name that contains letters or digits."
+      },
+      "action": "none",
+      "cliExit": 64,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "invalidName(String)",
+        "when": "a user-chosen name is empty after the rules of wrapper.md §4.3",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §4.3, §6.2 step 1"
+      }
+    },
+    {
+      "code": "wrapper.customIconInvalid",
+      "parameters": [],
+      "message": {
+        "en": "This image can't be used as an icon."
+      },
+      "remediation": {
+        "en": "Choose a PNG, JPEG, HEIC, or .icns file of at least 512 × 512 pixels."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "customIconInvalid(IconInputProblem)",
+        "when": "a chosen icon file fails the input rules of wrapper.md §8.2",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §8.2"
+      }
+    },
+    {
+      "code": "wrapper.iconConversionFailed",
+      "parameters": [],
+      "message": {
+        "en": "APKRun couldn't create the icon of the Mac app."
+      },
+      "remediation": {
+        "en": "Try again. If it fails again, choose another icon or report the problem."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "iconConversionFailed(String)",
+        "when": "iconutil fails; its status and message are logged",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §8.3"
+      }
+    },
+    {
+      "code": "wrapper.launcherTemplateInvalid",
+      "parameters": [],
+      "message": {
+        "en": "APKRun's template for Mac apps is damaged."
+      },
+      "remediation": {
+        "en": "Download APKRun again and replace it in the Applications folder."
+      },
+      "action": "openDownloadsPage",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "launcherTemplateInvalid(String)",
+        "when": "the generic launcher in APKRun.app is missing, is not arm64, or has an invalid signature (health wrappers.template)",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §6.2 step 1, §14"
+      }
+    },
+    {
+      "code": "wrapper.destinationNotWritable",
+      "parameters": [
+        "file"
+      ],
+      "message": {
+        "en": "APKRun can't save the Mac app in the folder {file}."
+      },
+      "remediation": {
+        "en": "Choose another location, for example Applications (for me)."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "destinationNotWritable(URL)",
+        "when": "the destination can't be written, for example /Applications for a user who is not an administrator",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §6.3"
+      }
+    },
+    {
+      "code": "wrapper.destinationNotAccessible",
+      "parameters": [
+        "file"
+      ],
+      "message": {
+        "en": "APKRun's background service can't access the folder {file}."
+      },
+      "remediation": {
+        "en": "Choose Another Location… and select the folder, so APKRun can save the Mac app there."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "destinationNotAccessible(URL, stagingToken:)",
+        "when": "the probe gets EPERM from macOS privacy controls; the bundle waits in staging",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §6.3; host-ui.md §6.2"
+      }
+    },
+    {
+      "code": "wrapper.nameConflict",
+      "parameters": [
+        "file"
+      ],
+      "message": {
+        "en": "An item named {file} already exists there."
+      },
+      "remediation": {
+        "en": "Choose another name or location. APKRun never replaces it."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "nameConflict(URL, existing:)",
+        "when": "an item of the same name exists at the destination and is never replaced",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §6.4"
+      }
+    },
+    {
+      "code": "wrapper.wrapperExists",
+      "parameters": [
+        "app",
+        "file",
+        "package"
+      ],
+      "message": {
+        "en": "{app} already has a Mac app ({file})."
+      },
+      "remediation": {
+        "en": "Use Update Mac App, or run: apkrun wrap {package} --replace"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "wrapperExists(PackageID, URL)",
+        "when": "a valid registered wrapper exists, and replace == .never",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §6.2 step 2, §6.4"
+      }
+    },
+    {
+      "code": "wrapper.wrapperNotFound",
+      "parameters": [
+        "app"
+      ],
+      "message": {
+        "en": "{app} has no Mac app."
+      },
+      "remediation": {
+        "en": "Create one with Create Mac App."
+      },
+      "action": "createMacApp",
+      "cliExit": 4,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "wrapperNotFound(PackageID)",
+        "when": "wrapperInfo, refreshWrapper, or removeWrapper for a package without a registry entry",
+        "raisedBy": "WrapperRegistry",
+        "ref": "wrapper.md §12.1"
+      }
+    },
+    {
+      "code": "wrapper.verificationFailed",
+      "parameters": [],
+      "message": {
+        "en": "The new Mac app didn't pass its signature check."
+      },
+      "remediation": {
+        "en": "Try again. If it fails again, report the problem."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "verificationFailed(String)",
+        "when": "the strict verification after signing fails",
+        "raisedBy": "WrapperSigner",
+        "ref": "wrapper.md §7.1"
+      }
+    },
+    {
+      "code": "wrapper.registrationFailed",
+      "parameters": [],
+      "message": {
+        "en": "The Mac app was created, but macOS hasn't registered it yet."
+      },
+      "remediation": {
+        "en": "Finder registers it when it shows the folder. To register it now, run: apkrun doctor --fix"
+      },
+      "action": "none",
+      "cliExit": 0,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "registrationFailed(OSStatus)",
+        "when": "LSRegisterURL returns an error; a warning: the wrapper was created",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §6.2"
+      }
+    },
+    {
+      "code": "wrapper.registryUnavailable",
+      "parameters": [],
+      "message": {
+        "en": "APKRun can't read its list of Mac apps, so they can't open."
+      },
+      "remediation": {
+        "en": "Choose Re-register Mac Apps on the APKRun home screen."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "registryUnavailable",
+        "when": "registry.json can't be read; it is kept as registry.json.corrupt-<time>, and no wrapper is authorized",
+        "raisedBy": "WrapperRegistry",
+        "ref": "wrapper.md §7.2"
+      }
+    },
+    {
+      "code": "wrapper.stagingExpired",
+      "parameters": [],
+      "message": {
+        "en": "The prepared Mac app is no longer available."
+      },
+      "remediation": {
+        "en": "Create or update the Mac app again."
+      },
+      "action": "none",
+      "cliExit": 4,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "stagingExpired",
+        "when": "placeStagedWrapper with a staging token that is unknown, older than 60 minutes, or from before apkrund restarted",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §6.3, §9.3; runtime-api.md §10.3"
+      }
+    },
+    {
+      "code": "wrapper.bundleInvalid",
+      "parameters": [
+        "file"
+      ],
+      "message": {
+        "en": "{file} isn't a valid APKRun Mac app."
+      },
+      "remediation": {
+        "en": "Get a new copy from where it came from, or create the Mac app again in APKRun."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "bundleInvalid(URL, reason:)",
+        "when": "a static check of wrapper.md §7.3 step 1 fails (approval or verifyWrapper)",
+        "raisedBy": "WrapperApprovalService, WrapperValidator",
+        "ref": "wrapper.md §7.3 step 1"
       }
     }
   ]

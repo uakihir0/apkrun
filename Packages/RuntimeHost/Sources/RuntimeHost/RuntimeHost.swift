@@ -146,6 +146,10 @@ public actor RuntimeHost {
             BootRecordLog.read(from: paths.bootPerformanceFile).map(\.operationID)
         )
 
+        // Load the wrapper registry and recover pending/refreshing entries at
+        // daemon start (wrapper.md §6.2), independent of the first verify call.
+        Task { _ = await self.wrapperRegistryInstance() }
+
         // Startup step 2: the kernel releases this lock automatically after a crash.
         do {
             instanceLock = try InstanceLock.acquire(

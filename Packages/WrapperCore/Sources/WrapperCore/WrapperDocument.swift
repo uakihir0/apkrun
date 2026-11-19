@@ -48,16 +48,19 @@ public struct WrapperDocument: Codable, Sendable, Equatable {
         }
     }
 
-    /// The `window` object.
+    /// The `window` object. Every key is optional at read time: the spec
+    /// validates each key alone and ignores a bad one, so a partial or partly
+    /// invalid block decodes with the keys that are present
+    /// (wrapper-json.md §2.2).
     public struct Window: Codable, Sendable, Equatable {
-        /// `standard` or `compatibility`.
-        public var mode: WrapperWindowMode
+        /// `standard` or `compatibility`; `nil` when absent or invalid.
+        public var mode: WrapperWindowMode?
         /// The default window width in points (320–8192).
-        public var defaultWidth: Int
+        public var defaultWidth: Int?
         /// The default window height in points (400–8192).
-        public var defaultHeight: Int
+        public var defaultHeight: Int?
         /// Whether the window can be resized.
-        public var resizable: Bool
+        public var resizable: Bool?
 
         /// Creates the window block.
         public init(mode: WrapperWindowMode, defaultWidth: Int, defaultHeight: Int, resizable: Bool) {
@@ -66,14 +69,24 @@ public struct WrapperDocument: Codable, Sendable, Equatable {
             self.defaultHeight = defaultHeight
             self.resizable = resizable
         }
+
+        /// Decodes the block, ignoring keys that are absent or invalid.
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            mode = try? container.decode(WrapperWindowMode.self, forKey: .mode)
+            defaultWidth = try? container.decode(Int.self, forKey: .defaultWidth)
+            defaultHeight = try? container.decode(Int.self, forKey: .defaultHeight)
+            resizable = try? container.decode(Bool.self, forKey: .resizable)
+        }
     }
 
-    /// The `updates` object.
+    /// The `updates` object. Every key is optional at read time, like
+    /// `window` (wrapper-json.md §2.2).
     public struct Updates: Codable, Sendable, Equatable {
-        /// `apkrun` or `manual`.
-        public var authority: WrapperUpdateAuthority
-        /// `automatic` or `notifyOnly`.
-        public var mode: WrapperUpdateMode
+        /// `apkrun` or `manual`; `nil` when absent or invalid.
+        public var authority: WrapperUpdateAuthority?
+        /// `automatic` or `notifyOnly`; `nil` when absent or invalid.
+        public var mode: WrapperUpdateMode?
         /// The provider; `null` for `local` providers.
         public var provider: WrapperUpdateProvider?
 
@@ -82,6 +95,14 @@ public struct WrapperDocument: Codable, Sendable, Equatable {
             self.authority = authority
             self.mode = mode
             self.provider = provider
+        }
+
+        /// Decodes the block, ignoring keys that are absent or invalid.
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            authority = try? container.decode(WrapperUpdateAuthority.self, forKey: .authority)
+            mode = try? container.decode(WrapperUpdateMode.self, forKey: .mode)
+            provider = try? container.decode(WrapperUpdateProvider?.self, forKey: .provider)
         }
     }
 

@@ -174,14 +174,24 @@ public struct WrapperRegistryFile: Codable, Sendable, Equatable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
-        wrappers =
-            (try? container.decode(
-                [LossyRegistryElement<WrapperRegistryEntry>].self, forKey: .wrappers))?
-            .compactMap(\.element) ?? []
-        denied =
-            (try? container.decode(
-                [LossyRegistryElement<WrapperDeniedEntry>].self, forKey: .denied))?
-            .compactMap(\.element) ?? []
+        // A key present with a non-array value fails decoding so the file is
+        // kept aside as corrupt; only a well-formed array decodes leniently.
+        if container.contains(.wrappers) {
+            wrappers = try container.decode(
+                [LossyRegistryElement<WrapperRegistryEntry>].self, forKey: .wrappers
+            )
+            .compactMap(\.element)
+        } else {
+            wrappers = []
+        }
+        if container.contains(.denied) {
+            denied = try container.decode(
+                [LossyRegistryElement<WrapperDeniedEntry>].self, forKey: .denied
+            )
+            .compactMap(\.element)
+        } else {
+            denied = []
+        }
     }
 
     /// An empty registry.

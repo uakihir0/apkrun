@@ -180,7 +180,9 @@ public actor AppWrapperGenerator {
             request.destination, stagingToken: stagingID)
         let finalURL = destination.appendingPathComponent("\(fileName).app", isDirectory: true)
         let existing = await environment.registry.entry(bundleID: bundleID)
-        if let existing {
+        // Only an existing bundle blocks `never`: a registry row whose bundle
+        // was deleted in Finder is stale and the wrapper is regenerated.
+        if let existing, fileManager.fileExists(atPath: existing.path) {
             guard request.replace == .sameWrapper else {
                 throw .wrapperExists(
                     configuration.packageID,
@@ -255,8 +257,13 @@ public actor AppWrapperGenerator {
         }
 
         // On a `sameWrapper` replace under a new file name, remove the
-        // replaced bundle so only one wrapper of the package remains.
-        if let existing, existing.path != finalURL.path {
+        // replaced bundle so only one wrapper of the package remains — but
+        // only when the path still holds this package's wrapper: a user who
+        // moved the old app and put something else there keeps that app.
+        if let existing, existing.path != finalURL.path,
+            environment.installer.isWrapperOf(
+                configuration.packageID, at: URL(fileURLWithPath: existing.path))
+        {
             try? fileManager.removeItem(at: URL(fileURLWithPath: existing.path))
         }
 

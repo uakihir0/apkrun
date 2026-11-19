@@ -3,6 +3,7 @@ import Foundation
 import ImageCore
 import RuntimeAPI
 import RuntimeCore
+import WrapperCore
 
 typealias WireOperationID = RuntimeAPI.OperationID
 
@@ -62,6 +63,8 @@ public actor RuntimeHost {
     private var supervisor: RuntimeSupervisor?
     private var supervisorEventsTask: Task<Void, Never>?
     private var packageQueryService: EmbeddedPackageService?
+    private var wrapperRegistry: WrapperRegistry?
+    private var wrapperHealthChecksRegistered = false
     private var headlessSessionService: (any RuntimeSessionService)?
     private var runtimeSessionGeneration: UInt64 = 0
     private var bootProgressEstimator: BootProgressEstimator?
@@ -1184,6 +1187,137 @@ public actor RuntimeHost {
         try await service.open()
         try await attachPackageQueriesIfRuntimeIsReady(to: service)
         return try await service.packageInfo(request)
+    }
+
+    /// Verifies a wrapper bundle against the registry and the package store (runtime-api.md §10.4).
+    ///
+    /// The check never starts Android and never reads the store beyond one package list. When the
+    /// store is unreadable the package-presence check is skipped rather than reported wrong.
+    public func verifyWrapper(
+        _ request: VerifyWrapperRequest
+    ) async throws(RuntimeWireError) -> WrapperVerification {
+        let registry = await wrapperRegistryInstance()
+        let service = packageQueryServiceInstance()
+        let knownPackages: Set<String>?
+        do {
+            try await service.open()
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+            let list = try await service.listPackages(RuntimeListPackagesRequest(filter: .all))
+            knownPackages = Set(list.packages.map(\.packageID.rawValue))
+        } catch {
+            knownPackages = nil
+        }
+        let validator = WrapperValidator(
+            registry: registry,
+            currentLauncher: launcherBuild(),
+            packageExists: { knownPackages?.contains($0) ?? true },
+            sink: diagnostics?.logSink
+        )
+        do {
+            let verification = try await validator.verify(
+                url: request.bundleURL, deep: request.deep)
+            return WrapperVerification(
+                bundleURL: verification.bundleURL,
+                bundleID: verification.bundleID,
+                packageID: verification.packageID,
+                kind: verification.kind.map {
+                    WrapperKindTag(rawValue: $0.rawValue) ?? .local
+                },
+                registered: verification.registered,
+                state: verification.state,
+                problems: verification.problems,
+                signer: verification.signer.map { $0 == "adHoc" ? .adHoc : .unknown },
+                cdhash: verification.cdhash,
+                launcherVersion: verification.launcherVersion,
+                launcherAPI: verification.launcherAPI.flatMap(Self.launcherAPIVersion(_:)),
+                bundledVersion: nil
+            )
+        } catch {
+            guard let failure = error as? WrapperFailure else {
+                throw .runtime("internal", message: "APKRun couldn't verify the Mac app.")
+            }
+            throw Self.wrapperWireError(for: failure)
+        }
+    }
+
+    /// The daemon's wrapper registry, created on first use with startup
+    /// `recover()` applied (wrapper-json.md §4.4).
+    private func wrapperRegistryInstance() async -> WrapperRegistry {
+        if let wrapperRegistry {
+            return wrapperRegistry
+        }
+        let registry = WrapperRegistry(paths: paths, sink: diagnostics?.logSink)
+        _ = await registry.load()
+        await registry.recover { WrapperCodeSign.cdhash(of: $0) }
+        wrapperRegistry = registry
+        registerWrapperHealthChecks(registry: registry)
+        return registry
+    }
+
+    /// Registers the `wrappers.*` health checks once (wrapper.md §14).
+    private func registerWrapperHealthChecks(registry: WrapperRegistry) {
+        guard !wrapperHealthChecksRegistered, let checks = diagnostics?.healthChecks else { return }
+        wrapperHealthChecksRegistered = true
+        Task {
+            try? await checks.register(WrapperHealthChecks.registry(registry))
+            if let build = launcherBuild() {
+                try? await checks.register(
+                    WrapperHealthChecks.template(executableURL: build.executableURL))
+            }
+        }
+    }
+
+    /// The launcher template inside this APKRun.app, derived from the daemon's
+    /// own location inside the bundle. `nil` outside an `.app` (development
+    /// runs), which skips the template check and refresh reason 6.
+    private func launcherBuild() -> LauncherBuild? {
+        var url = executableURL.deletingLastPathComponent()
+        while url.path != "/", url.pathExtension != "app" {
+            url.deleteLastPathComponent()
+        }
+        guard url.pathExtension == "app" else { return nil }
+        let templateApp = url.appendingPathComponent("Contents/Helpers/APKRunLauncher.app")
+        let executable = templateApp.appendingPathComponent("Contents/MacOS/APKRunLauncher")
+        guard FileManager.default.fileExists(atPath: executable.path) else { return nil }
+        let plist =
+            (try? Data(contentsOf: templateApp.appendingPathComponent("Contents/Info.plist")))
+            .flatMap {
+                try? PropertyListSerialization.propertyList(from: $0, format: nil)
+            } as? [String: Any] ?? [:]
+        return LauncherBuild(
+            launcherAPI: plist["APKRunLauncherAPI"] as? String ?? "1.0",
+            launcherVersion: plist["CFBundleShortVersionString"] as? String ?? "0.1.0",
+            executableURL: executable
+        )
+    }
+
+    /// Parses a `major.minor` launcher API string (a missing minor is 0).
+    private static func launcherAPIVersion(_ string: String) -> APIVersion? {
+        let parts = string.split(separator: ".", maxSplits: 1).map(String.init)
+        guard let major = Int(parts.first ?? "") else { return nil }
+        let minor = parts.count > 1 ? (Int(parts[1]) ?? 0) : 0
+        return APIVersion(major: major, minor: minor)
+    }
+
+    /// Maps a wrapper failure to the wire error type of the control endpoint.
+    private static func wrapperWireError(for failure: WrapperFailure) -> RuntimeWireError {
+        let remediation: String?
+        switch failure {
+        case .bundleInvalid:
+            remediation = "Create the Mac app again."
+        case .registryUnavailable:
+            remediation = "Re-register Mac apps from the home screen."
+        case .destinationNotAccessible, .destinationNotWritable:
+            remediation = "Pick a different destination or grant access in System Settings."
+        default:
+            remediation = nil
+        }
+        return RuntimeWireError(
+            domain: "wrapper",
+            code: failure.qualifiedCode,
+            message: failure.code,
+            remediation: remediation
+        )
     }
 
     /// Returns a point-in-time view for the control endpoint.

@@ -238,6 +238,38 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Verifies a wrapper bundle against the daemon's registry and package store.
+    public func verifyWrapper(
+        bundleURL: URL,
+        deep: Bool = false
+    ) async throws(RuntimeControlClientError) -> WrapperVerification {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeVerifyWrapperControlRequest(
+                header: makeHeader(),
+                bundleURL: bundleURL,
+                deep: deep
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.verifyWrapper(data)
+            let reply = try Self.decode(RuntimeVerifyWrapperControlReply.self, from: response)
+            guard (reply.result != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let result = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return result
+        } catch {
+            let failure = error as? RuntimeControlClientError ?? .malformedReply
+            invalidateAfterTransportFailure(opened.channel, error: failure)
+            throw failure
+        }
+    }
+
     /// Lists managed packages or the Android inventory already known to the daemon.
     public func listPackages(
         filter: RuntimePackageFilter = .managed
@@ -1345,6 +1377,7 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func unsubscribe(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func terminate(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func verifyWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void)
     func invalidate()
 }
@@ -1756,6 +1789,20 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.terminate(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func verifyWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.verifyWrapper(request) { response in finish(.success(response)) }
         }
     }
 

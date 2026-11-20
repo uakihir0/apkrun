@@ -205,14 +205,24 @@ public struct UpdateValidator: Sendable {
                 let installedSigner = installedSigners.first,
                 let candidateSigner = candidateSigners.first
             {
-                // Rule 2: a rotation the installed signer consented to.
-                let rotation = preview.artifactSet.lineageNodes
+                // Rule 2: a rotation the installed signer consented to. The
+                // consent is only real when the lineage's newest node is the
+                // candidate signer — the strict verifier already requires
+                // this, but a preview that reaches V3 through another path
+                // must not extend consent past the lineage's end.
+                let lineageNodes = preview.artifactSet.lineageNodes
+                let rotation = lineageNodes
                     .first(where: { $0.certificateDigest == installedSigner })
-                if let rotation, rotation.capabilities.contains(.installedData) {
+                if let rotation,
+                    lineageNodes.last?.certificateDigest == candidateSigner,
+                    rotation.capabilities.contains(.installedData)
+                {
                     accepted = true
                     notes.append(
                         "signer rotation accepted: installed signer granted installedData")
-                } else if rotation != nil {
+                } else if rotation != nil,
+                    lineageNodes.last?.certificateDigest == candidateSigner
+                {
                     missingCapability = true
                 }
                 // Rule 3: the installed package's own lineage lets the
@@ -258,18 +268,47 @@ public struct UpdateValidator: Sendable {
         // streaming and are skipped here.
         var v4Checked: [String] = []
         var v4Refusal: (file: String, declared: String, actual: String)?
+        // `sourceFileNames` enumerates the downloads; `files` enumerates the
+        // stored artifacts. Their indexes do not correspond: a container
+        // source expands into several stored files, and the stored files are
+        // re-sorted. Match a declared artifact to its staged content by
+        // stored name, then by content digest, and skip only the declared
+        // archives whose own bytes were hashed while downloading.
+        let stagedByName = Dictionary(
+            preview.artifactSet.files.map { ($0.name, $0) },
+            uniquingKeysWith: { first, _ in first })
+        let stagedDigests = Set(preview.artifactSet.files.map(\.sha256))
+        let containerExtensions: Set<String> = ["apks", "xapk", "apkm", "zip"]
+        let expanded =
+            preview.artifactSet.files.count != preview.sourceFileNames.count
         for declared in candidate.artifacts {
             guard let declaredDigest = declared.sha256 else { continue }
             let declaredName = declared.url.lastPathComponent
-            guard let index = preview.sourceFileNames.firstIndex(of: declaredName),
-                index < preview.artifactSet.files.count
-            else {
+            if let file = stagedByName[declaredName] {
+                v4Checked.append(file.name)
+                if file.sha256 != declaredDigest {
+                    v4Refusal = (file.name, declaredDigest.rawValue, file.sha256.rawValue)
+                    break
+                }
+            } else if stagedDigests.contains(declaredDigest) {
+                // Staged under a derived name (a source "app.apk" lands as
+                // "base.apk"); the content is what the provider declared.
+                v4Checked.append(declaredName)
+            } else if expanded,
+                preview.sourceFileNames.contains(declaredName)
+            {
+                // The archive was verified while streaming; its members are
+                // the staged files, not the archive itself.
                 continue
-            }
-            let file = preview.artifactSet.files[index]
-            v4Checked.append(file.name)
-            if file.sha256 != declaredDigest {
-                v4Refusal = (file.name, declaredDigest.rawValue, file.sha256.rawValue)
+            } else if containerExtensions.contains(
+                declared.url.pathExtension.lowercased())
+            {
+                // A one-member container keeps the counts equal, so `expanded`
+                // misses it; its declared digest still belongs to the archive.
+                continue
+            } else {
+                // A plain source must land in the staged set byte-for-byte.
+                v4Refusal = (declaredName, declaredDigest.rawValue, "not in the staged set")
                 break
             }
         }

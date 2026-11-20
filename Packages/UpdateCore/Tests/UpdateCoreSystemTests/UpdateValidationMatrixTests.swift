@@ -503,8 +503,11 @@ private func primitiveValidate(
     recordSigners: [SHA256Digest],
     previewSigners: [SHA256Digest],
     previewLineage: [SignerLineageNode] = [],
+    previewFiles: [ArtifactFile]? = nil,
+    sourceNames: [String]? = nil,
     warnings: [ImportWarning] = [],
-    installedLineage: [SignerLineageNode] = []
+    installedLineage: [SignerLineageNode] = [],
+    declaredArtifacts: [RemoteArtifact]? = nil
 ) async throws -> ValidationReport {
     let knobs = MatrixKnobs()
     let store = makeMatrixStore(at: root, knobs: knobs)
@@ -522,6 +525,7 @@ private func primitiveValidate(
     var set = inspected.artifactSet
     set.signerDigests = previewSigners
     set.lineageNodes = previewLineage
+    if let previewFiles { set.files = previewFiles }
     let mutated = PackageImportPreview(
         ticket: inspected.ticket,
         packageID: inspected.packageID,
@@ -529,7 +533,7 @@ private func primitiveValidate(
         versionCode: inspected.versionCode,
         versionName: inspected.versionName,
         artifactSet: set,
-        sourceFileNames: inspected.sourceFileNames,
+        sourceFileNames: sourceNames ?? inspected.sourceFileNames,
         excludedSplits: inspected.excludedSplits,
         warnings: warnings,
         relation: inspected.relation)
@@ -537,10 +541,12 @@ private func primitiveValidate(
     var installedSet = set
     installedSet.signerDigests = recordSigners
     installedSet.lineageNodes = installedLineage
+    var candidate = try matrixCandidate(record: record)
+    if let declaredArtifacts { candidate.artifacts = declaredArtifacts }
     return try UpdateValidator().validate(
         preview: mutated,
         installed: record,
-        candidate: matrixCandidate(record: record),
+        candidate: candidate,
         installedSet: installedSet)
 }
 
@@ -605,5 +611,98 @@ private func primitiveValidate(
     } catch let refusal as ValidationRefusal {
         #expect(refusal.checkID == "V3")
         #expect(refusal.failure == .validation(detail: "signerMismatch(installed:2,candidate:1)"))
+    }
+}
+
+private func fakeArtifact(_ name: String, split: String?, _ byte: UInt8) -> ArtifactFile {
+    ArtifactFile(
+        name: name, splitName: split, size: 10, sha256: fakeDigest(byte))
+}
+
+@Test func forgedLineageTailDoesNotConsent() async throws {
+    let root = try makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let a = fakeDigest(0xAA), b = fakeDigest(0xBB)
+    // The lineage grants the installed signer INSTALLED_DATA but ends at A:
+    // a signer B carrying it did not earn the rotation (SEC finding on #144).
+    do {
+        _ = try await primitiveValidate(
+            at: root, recordSigners: [a], previewSigners: [b],
+            previewLineage: [
+                SignerLineageNode(
+                    certificateDigest: a, capabilities: [.installedData])
+            ])
+        Issue.record("expected ValidationRefusal")
+    } catch let refusal as ValidationRefusal {
+        #expect(refusal.checkID == "V3")
+        #expect(
+            refusal.failure
+                == .validation(detail: "signerMismatch(installed:1,candidate:1)"))
+    }
+}
+
+@Test func providerContainerHashDoesNotMatchMembers() async throws {
+    let root = try makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let a = fakeDigest(0xAA)
+    // The provider declares the archive's own digest; the staged set holds
+    // the expanded members, so V4 must not compare them against it.
+    let report = try await primitiveValidate(
+        at: root, recordSigners: [a], previewSigners: [a],
+        previewFiles: [
+            fakeArtifact("base.apk", split: nil, 0x01),
+            fakeArtifact("split_config.ja.apk", split: "config.ja", 0x02),
+            fakeArtifact("split_feature.apk", split: "feature", 0x03),
+        ],
+        sourceNames: ["HelloSplit.apks"],
+        declaredArtifacts: [
+            RemoteArtifact(
+                url: URL(fileURLWithPath: "/repo/HelloSplit.apks"),
+                kind: .apk, sha256: fakeDigest(0x99))
+        ])
+    #expect(report.outcome == "accepted")
+}
+
+@Test func providerHashMatchesStoredContentNotPositions() async throws {
+    let root = try makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let a = fakeDigest(0xAA)
+    // Sources downloaded as "b.apk" then "a.apk"; the stored set is sorted,
+    // so a positional compare would hash the wrong file.
+    let report = try await primitiveValidate(
+        at: root, recordSigners: [a], previewSigners: [a],
+        previewFiles: [
+            fakeArtifact("base.apk", split: nil, 0x01),
+            fakeArtifact("split_config.arm64_v8a.apk", split: "config.arm64_v8a", 0x02),
+        ],
+        sourceNames: ["b.apk", "a.apk"],
+        declaredArtifacts: [
+            RemoteArtifact(
+                url: URL(fileURLWithPath: "/repo/a.apk"),
+                kind: .apk, sha256: fakeDigest(0x01)),
+            RemoteArtifact(
+                url: URL(fileURLWithPath: "/repo/b.apk"),
+                kind: .apk, sha256: fakeDigest(0x02)),
+        ])
+    #expect(report.outcome == "accepted")
+}
+
+@Test func providerWrongHashOnPlainSourceRefused() async throws {
+    let root = try makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let a = fakeDigest(0xAA)
+    do {
+        _ = try await primitiveValidate(
+            at: root, recordSigners: [a], previewSigners: [a],
+            previewFiles: [fakeArtifact("base.apk", split: nil, 0x01)],
+            sourceNames: ["a.apk"],
+            declaredArtifacts: [
+                RemoteArtifact(
+                    url: URL(fileURLWithPath: "/repo/a.apk"),
+                    kind: .apk, sha256: fakeDigest(0xEE))
+            ])
+        Issue.record("expected ValidationRefusal")
+    } catch let refusal as ValidationRefusal {
+        #expect(refusal.checkID == "V4")
     }
 }

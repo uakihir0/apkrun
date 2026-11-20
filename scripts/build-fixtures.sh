@@ -153,7 +153,7 @@ verify_hello_split() {
 build_hello_update() {
     # The local update repo of #38: <root>/<packageId>/<versionCode>/app.apk,
     # committed so the T0/T1 checks and the T2 image tests share the same sets.
-    local repo="$repo_root/Tests/Fixtures/update-repos/local/io.apkrun.fixture.helloupdate"
+    local repo="${APKRUN_FIXTURE_REPO:-$repo_root/Tests/Fixtures/update-repos/local/io.apkrun.fixture.helloupdate}"
     local hello_apk="$fixtures/HelloUpdate/build/outputs/apk/release/HelloUpdate-release.apk"
     local version
     for version in 1 2; do
@@ -163,6 +163,126 @@ build_hello_update() {
         cp "$hello_apk" "$repo/$version/app.apk"
         printf 'build-fixtures: wrote %s\n' "$repo/$version/app.apk"
     done
+    build_derived_helloupdate "$repo"
+}
+
+# The derived packages of test-strategy.md §4.3 (#42): the committed APKs the
+# T0 validation matrix reads under Tests/Fixtures/apks/ (NFR-DEV-02), signed
+# with pinned `apksigner rotate`/`sign --lineage` invocations.
+build_derived_helloupdate() {
+    local repo="$1"
+    local out_dir="${APKRUN_DERIVED_DIR:-$repo_root/Tests/Fixtures/apks}"
+    local key_a="$repo_root/Tests/Fixtures/signing/test-fixture-a.jks"
+    local key_b="$repo_root/Tests/Fixtures/signing/test-fixture-b.jks"
+    local pass="pass:apkrun-test-fixture"
+    local work
+    work="$(mktemp -d "${TMPDIR:-/tmp}/apkrun-derived.XXXXXX")"
+    mkdir -p "$out_dir"
+
+    cp "$repo/1/app.apk" "$out_dir/HelloUpdate-v1.apk"
+    cp "$repo/2/app.apk" "$out_dir/HelloUpdate-v2.apk"
+
+    # V2 signed by key B only: the "other signer" and signerMismatch input.
+    "$apksigner" sign --ks "$key_b" --ks-key-alias fixture-b \
+        --ks-pass "$pass" --key-pass "$pass" \
+        --v4-signing-enabled false \
+        --out "$out_dir/HelloUpdate-v2-other-signer.apk" "$repo/2/app.apk"
+
+    # Lineage A → B variants. The flags land on node A and say what the
+    # rotated-away certificate may still do (update-system.md §6 V3).
+    local rotate_args=(
+        --old-signer --ks "$key_a" --ks-key-alias fixture-a
+        --ks-pass "$pass" --key-pass "$pass"
+    )
+    "$apksigner" rotate "${rotate_args[@]}" --set-installed-data true \
+        --set-rollback false \
+        --new-signer --ks "$key_b" --ks-key-alias fixture-b \
+        --ks-pass "$pass" --key-pass "$pass" \
+        --out "$work/lineage-a-b-installed-data.bin"
+    "$apksigner" rotate "${rotate_args[@]}" --set-installed-data false \
+        --set-rollback false \
+        --new-signer --ks "$key_b" --ks-key-alias fixture-b \
+        --ks-pass "$pass" --key-pass "$pass" \
+        --out "$work/lineage-a-b-plain.bin"
+    "$apksigner" rotate "${rotate_args[@]}" --set-installed-data true \
+        --set-rollback true \
+        --new-signer --ks "$key_b" --ks-key-alias fixture-b \
+        --ks-pass "$pass" --key-pass "$pass" \
+        --out "$work/lineage-a-b-rollback.bin"
+    "$apksigner" rotate \
+        --old-signer --ks "$key_b" --ks-key-alias fixture-b \
+        --ks-pass "$pass" --key-pass "$pass" \
+        --new-signer --ks "$key_a" --ks-key-alias fixture-a \
+        --ks-pass "$pass" --key-pass "$pass" \
+        --out "$work/lineage-b-a.bin"
+
+    # v3-only: the v1 and v2 schemes would require the oldest lineage signer;
+    # the proof-of-rotation attribute lives in the v3 signer block, which is
+    # what the host verifier reads.
+    local scheme_args=(
+        --v1-signing-enabled false --v2-signing-enabled false
+        --v4-signing-enabled false
+        --rotation-min-sdk-version 29
+    )
+    local signed_by_b=(
+        --ks "$key_b" --ks-key-alias fixture-b
+        --ks-pass "$pass" --key-pass "$pass"
+        "${scheme_args[@]}"
+    )
+    "$apksigner" sign "${signed_by_b[@]}" \
+        --lineage "$work/lineage-a-b-installed-data.bin" \
+        --out "$out_dir/HelloUpdate-v2-rotate-installed-data.apk" "$repo/2/app.apk"
+    "$apksigner" sign "${signed_by_b[@]}" \
+        --lineage "$work/lineage-a-b-plain.bin" \
+        --out "$out_dir/HelloUpdate-v2-rotate-no-installed-data.apk" "$repo/2/app.apk"
+    "$apksigner" sign "${signed_by_b[@]}" \
+        --lineage "$work/lineage-a-b-rollback.bin" \
+        --out "$out_dir/HelloUpdate-v2-rotate-rollback.apk" "$repo/2/app.apk"
+    "$apksigner" sign --ks "$key_a" --ks-key-alias fixture-a \
+        --ks-pass "$pass" --key-pass "$pass" \
+        "${scheme_args[@]}" \
+        --lineage "$work/lineage-b-a.bin" \
+        --out "$out_dir/HelloUpdate-v2-rotate-back.apk" "$repo/2/app.apk"
+
+    # One flipped byte inside classes.dex → the v2 content digest fails. The
+    # flip happens in place: the archive and the signing block stay intact, so
+    # the failure is a digest mismatch, not a truncated container.
+    python3 - "$repo/2/app.apk" "$out_dir/HelloUpdate-v2-corrupted.apk" <<'PY'
+import shutil
+import struct
+import sys
+
+source, target = sys.argv[1], sys.argv[2]
+shutil.copyfile(source, target)
+with open(target, "r+b") as fh:
+    data = fh.read()
+
+# classes.dex's byte range comes from its central-directory record, so the
+# flip always lands inside the signed content.
+eocd = data.rfind(b"PK\x05\x06")
+if eocd < 0:
+    sys.exit("check-fixtures: no EOCD record")
+cd = struct.unpack_from("<I", data, eocd + 16)[0]
+while data[cd : cd + 4] == b"PK\x01\x02":
+    compressed = struct.unpack_from("<I", data, cd + 20)[0]
+    name_length, extra_length, comment_length = struct.unpack_from("<HHH", data, cd + 28)
+    local_offset = struct.unpack_from("<I", data, cd + 42)[0]
+    name = data[cd + 46 : cd + 46 + name_length]
+    if name == b"classes.dex":
+        local_name, local_extra = struct.unpack_from("<HH", data, local_offset + 26)
+        start = local_offset + 30 + local_name + local_extra
+        middle = start + compressed // 2
+        break
+    cd += 46 + name_length + extra_length + comment_length
+else:
+    sys.exit("check-fixtures: classes.dex not found")
+with open(target, "r+b") as out:
+    out.seek(middle)
+    out.write(bytes([data[middle] ^ 0xFF]))
+PY
+
+    rm -rf "$work"
+    printf 'build-fixtures: wrote the derived set to %s\n' "$out_dir"
 }
 
 if [[ "$mode" == "build" ]]; then

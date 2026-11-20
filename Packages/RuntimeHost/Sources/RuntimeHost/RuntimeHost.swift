@@ -1383,15 +1383,16 @@ public actor RuntimeHost {
         let service = packageQueryServiceInstance()
         try await service.open()
         try await attachPackageQueriesIfRuntimeIsReady(to: service)
-        let details = try await service.packageInfo(
-            RuntimePackageRequest(packageID: request.packageID))
+        let details: RuntimePackageDetails
+        do {
+            details = try await service.packageInfo(
+                RuntimePackageRequest(packageID: request.packageID))
+        } catch {
+            guard error.code == "store.packageNotFound" else { throw error }
+            throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
+        }
         guard details.summary.managed, details.summary.state == .installed else {
-            throw RuntimeWireError(
-                domain: "wrapper",
-                code: "wrapper.packageNotInstalled",
-                message: "\(request.packageID.rawValue) isn't installed in APKRun.",
-                remediation: "Install the package first."
-            )
+            throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
         }
 
         let iconSource: WrapperIconSource

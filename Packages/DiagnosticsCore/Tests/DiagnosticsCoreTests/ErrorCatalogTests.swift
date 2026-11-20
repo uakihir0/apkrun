@@ -103,6 +103,7 @@ import Testing
                 || entry.code.hasPrefix("graphics.")
                 || entry.code.hasPrefix("image.")
                 || entry.code.hasPrefix("wrapper.")
+                || entry.code.hasPrefix("integration.")
         )
         for text in entry.message?.values ?? [String: String]().values {
             #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

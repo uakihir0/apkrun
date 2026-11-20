@@ -8,7 +8,6 @@ import SwiftUI
 /// because the prompt comes from a file the user may not have chosen.
 struct ApprovalPromptView: View {
     @EnvironmentObject private var center: ApprovalCenter
-    @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
         Group {
@@ -18,11 +17,6 @@ struct ApprovalPromptView: View {
                 Text("No pending requests.")
                     .foregroundStyle(.secondary)
                     .frame(width: 420, height: 160)
-            }
-        }
-        .onChange(of: center.current == nil) { _, resolved in
-            if resolved {
-                dismissWindow(id: "approval")
             }
         }
     }

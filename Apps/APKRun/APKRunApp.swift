@@ -1,3 +1,5 @@
+import AppKit
+import Combine
 import CryptoKit
 import Darwin
 import ServiceManagement
@@ -5,6 +7,7 @@ import SwiftUI
 
 @main
 struct APKRunApp: App {
+    @NSApplicationDelegateAdaptor(ApprovalWindowDelegate.self) private var appDelegate
     @State private var registrationTitle = "Background service setup failed"
     @State private var registrationMessage: String?
     @State private var isRegistrationErrorPresented = false
@@ -41,52 +44,61 @@ struct APKRunApp: App {
 
     var body: some Scene {
         WindowGroup("APKRun") {
-            ApprovalWindowOpener(center: approvalCenter) {
-                Text("APKRun")
-                    .frame(minWidth: 480, minHeight: 320)
-                    .alert(registrationTitle, isPresented: $isRegistrationErrorPresented) {
-                        Button("Open Login Items Settings") {
-                            SMAppService.openSystemSettingsLoginItems()
-                        }
-                        Button("Later", role: .cancel) {}
-                    } message: {
-                        Text(
-                            registrationMessage
-                                ?? "Move APKRun.app to Applications and reopen it."
-                        )
+            Text("APKRun")
+                .frame(minWidth: 480, minHeight: 320)
+                .alert(registrationTitle, isPresented: $isRegistrationErrorPresented) {
+                    Button("Open Login Items Settings") {
+                        SMAppService.openSystemSettingsLoginItems()
                     }
-            }
+                    Button("Later", role: .cancel) {}
+                } message: {
+                    Text(
+                        registrationMessage
+                            ?? "Move APKRun.app to Applications and reopen it."
+                    )
+                }
         }
         .windowResizability(.contentSize)
         .defaultLaunchBehavior(approvalOnly ? .suppressed : .automatic)
-
-        // The wrapper approval prompt (host-ui.md §10.1).
-        Window("Approval Required", id: "approval") {
-            ApprovalPromptView()
-                .environmentObject(approvalCenter)
-        }
-        .windowResizability(.contentSize)
-        .defaultLaunchBehavior(approvalOnly ? .presented : .automatic)
 
         settingsScene
     }
 }
 
-/// Opens the approval window when a prompt arrives while the app is running
-/// (host-ui.md §10.1).
-private struct ApprovalWindowOpener<Content: View>: View {
-    @Environment(\.openWindow) private var openWindow
-    @ObservedObject var center: ApprovalCenter
-    @ViewBuilder var content: () -> Content
+/// Opens and closes the wrapper approval window (host-ui.md §10.1).
+///
+/// A plain `NSWindowController`, not a SwiftUI `Window` scene: a scene's view
+/// tree dies with its last window, so a prompt arriving while every window is
+/// closed would never open. The delegate lives as long as the app.
+@MainActor
+private final class ApprovalWindowDelegate: NSObject, NSApplicationDelegate {
+    private var windowController: NSWindowController?
+    private var cancellable: AnyCancellable?
 
-    var body: some View {
-        content()
-            .onReceive(center.$current) { prompt in
-                if prompt != nil {
-                    openWindow(id: "approval")
-                    NSApp.activate(ignoringOtherApps: true)
-                }
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        cancellable = ApprovalCenter.shared.$current.sink { [weak self] prompt in
+            if prompt != nil {
+                self?.showApprovalWindow()
+            } else {
+                self?.windowController?.close()
             }
+        }
+    }
+
+    private func showApprovalWindow() {
+        if windowController == nil {
+            let rootView = ApprovalPromptView()
+                .environmentObject(ApprovalCenter.shared)
+            let window = NSWindow(
+                contentViewController: NSHostingController(rootView: rootView))
+            window.title = "Approval Required"
+            window.styleMask = [.titled, .closable]
+            window.isReleasedWhenClosed = false
+            window.center()
+            windowController = NSWindowController(window: window)
+        }
+        windowController?.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 

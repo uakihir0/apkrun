@@ -130,16 +130,19 @@ internal class ClipboardBridge(
 
     private fun truncate(text: String, byteLimit: Int): String {
         var bytes = 0
-        val end = StringBuilder()
-        for (character in text) {
-            val next = bytes + character.toString().toByteArray(Charsets.UTF_8).size
+        var index = 0
+        // Iterating Char by Char splits surrogate pairs: an emoji is then cut in half or
+        // undercounted. Code points keep the boundary whole and the byte count exact.
+        while (index < text.length) {
+            val point = Character.codePointAt(text, index)
+            val next = bytes + String(Character.toChars(point)).toByteArray(Charsets.UTF_8).size
             if (next > byteLimit) {
                 break
             }
             bytes = next
-            end.append(character)
+            index += Character.charCount(point)
         }
-        return end.toString()
+        return text.substring(0, index)
     }
 
     /**
@@ -180,7 +183,7 @@ internal class ClipboardBridge(
                 }
             if (sensitive) {
                 val extras = PersistableBundle()
-                extras.putInt(ClipDescription.EXTRA_IS_SENSITIVE, 1)
+                extras.putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
                 item.description.extras = extras
             }
             clipboard.setPrimaryClip(item)

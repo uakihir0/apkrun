@@ -146,6 +146,13 @@ public struct LocalProvider: UpdateProvider {
             guard name.first?.isNumber == true, let code = VersionCode(name), code > 0 else {
                 return nil
             }
+            var entryIsDirectory = ObjCBool(false)
+            guard FileManager.default.fileExists(
+                atPath: packageDirectory.appendingPathComponent(name).path,
+                isDirectory: &entryIsDirectory
+            ), entryIsDirectory.boolValue else {
+                return nil
+            }
             return (code, name)
         }
         guard

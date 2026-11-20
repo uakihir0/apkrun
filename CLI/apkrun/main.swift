@@ -22,6 +22,7 @@ struct APKRunCommand: AsyncParsableCommand {
                     LaunchCommand.self,
                     StopCommand.self,
                     IntegrationsCommand.self,
+                    UpdateCommand.self,
                     DevCommand.self,
                 ]
             )
@@ -44,6 +45,7 @@ struct APKRunCommand: AsyncParsableCommand {
                     LaunchCommand.self,
                     StopCommand.self,
                     IntegrationsCommand.self,
+                    UpdateCommand.self,
                     OperationsCommand.self,
                     WrapCommand.self,
                 ]
@@ -93,6 +95,8 @@ struct APKRunCommand: AsyncParsableCommand {
             }
         } catch let cleanExit as CleanExit {
             Self.exit(withError: cleanExit)
+        } catch let exitCode as ExitCode {
+            Self.exit(withError: exitCode)
         } catch {
             if Self.isBuiltInOutputRequest(arguments) {
                 Self.exit(withError: error)

@@ -717,6 +717,14 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func focusChanged(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns the per-kind integration status of a package (runtime-api.md §11).
     func integrationStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Checks packages for updates (runtime-api.md §9.1).
+    func checkForUpdates(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Lists per-package update state (runtime-api.md §9.1).
+    func listUpdates(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Reads update history (runtime-api.md §9.1, update-system.md §10.2).
+    func updateHistory(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Sets a package's update mode and provider (runtime-api.md §9.1).
+    func setUpdatePolicy(_ request: Data, reply: @escaping (Data) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.

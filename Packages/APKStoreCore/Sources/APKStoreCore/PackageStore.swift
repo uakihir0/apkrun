@@ -97,6 +97,8 @@ public enum PackageStoreFailure: Error, Equatable, Sendable {
     case metadataUnreadable(PackageID, detail: String)
     case androidInventoryUnreadable
     case unreadablePackageRecord
+    /// `authority == .apkrun` requires a configured update provider.
+    case providerNotConfigured
     case io
 }
 
@@ -374,6 +376,9 @@ public actor PackageStore {
         var keepData: Bool?
         var step: String?
         var reason: String?
+        /// The staged candidate's provenance, journaled on `stage` begins so
+        /// recovery can rewrite `artifacts.staged` after a crash.
+        var origin: ArtifactOrigin? = nil
     }
 
     private struct JournalTransaction: Sendable {
@@ -441,6 +446,8 @@ public actor PackageStore {
 
     /// Loads records, recovers host-only operations, and restores unexpired import tickets.
     public func open() async throws {
+        // Idempotent: the shared store is opened by whichever service runs first.
+        guard !opened else { return }
         try createDirectory(packagesDirectory)
 
         let importsLock = try await acquireLock(at: importsLockURL)
@@ -939,6 +946,207 @@ public actor PackageStore {
             try injectFault(kind: "forget", step: "uninstallOutcomesResolved")
         }
         try finishForget(transaction: transaction, packageID: packageID, directory: directory, injectFaults: true)
+    }
+
+    /// Stages a verified update's incoming ticket as the package's `staged/` set
+    /// (package-store.md §5.2, §7.1). Host-only: it skips the Android commit queue.
+    ///
+    /// The candidate must describe the ticket's artifact set: a mismatch means the
+    /// caller validated a different set than the one on disk.
+    public func stage(ticket: UUID, candidate: StagedUpdateInfo) async throws {
+        try requireWritable()
+        guard let manifest = try verifiedTicket(ticket) else {
+            throw PackageStoreFailure.importTicketNotFound
+        }
+        let packageID = manifest.preview.packageID
+        guard manifest.preview.versionCode == candidate.versionCode,
+            manifest.preview.artifactSet.setDigest == candidate.setDigest
+        else {
+            throw PackageStoreFailure.guestVersionMismatch
+        }
+        guard operationsInProgress.insert(packageID).inserted else {
+            throw PackageStoreFailure.operationInProgress
+        }
+        defer { operationsInProgress.remove(packageID) }
+
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadJournalState()
+        guard !isReadOnly else { throw PackageStoreFailure.journalUnreadable }
+        try reloadRecordsPreservingImportDirectories()
+        if let detail = unreadableRecords[packageID] {
+            throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
+        }
+        guard records[packageID] != nil else { throw PackageStoreFailure.packageNotFound }
+
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        let incoming = incomingDirectory(packageID: packageID, directory: directory, ticket: ticket)
+        guard fileManager.fileExists(atPath: incoming.appendingPathComponent("artifact.json").path) else {
+            throw PackageStoreFailure.importTicketNotFound
+        }
+
+        let transaction = Self.makeTransactionID(at: clock())
+        try append(
+            JournalEntry(
+                v: 1,
+                seq: 0,
+                txn: transaction,
+                at: clock(),
+                op: "begin",
+                kind: "stage",
+                package: packageID.rawValue,
+                dir: directory,
+                from: records[packageID]?.versionCode,
+                to: candidate.versionCode,
+                setDigest: candidate.setDigest.rawValue,
+                ticket: ticket.uuidString,
+                keepData: nil,
+                step: nil,
+                reason: nil,
+                origin: candidate.origin
+            )
+        )
+        try injectFault(kind: "stage", step: "begin")
+        try finishStage(
+            transaction: transaction,
+            packageID: packageID,
+            directory: directory,
+            candidate: candidate,
+            injectFaults: true
+        )
+        tickets[ticket] = nil
+        activeTickets.remove(ticket)
+        try purgeTrash()
+    }
+
+    /// Discards the package's staged update: the `staged/` set moves to `.trash`
+    /// and `artifacts.staged` clears (package-store.md §5.2). UpdateCore calls it
+    /// when a candidate is withdrawn, the authority changes, or the user skips it.
+    public func discardStaged(packageID: PackageID) async throws {
+        try requireWritable()
+        guard operationsInProgress.insert(packageID).inserted else {
+            throw PackageStoreFailure.operationInProgress
+        }
+        defer { operationsInProgress.remove(packageID) }
+
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadJournalState()
+        guard !isReadOnly else { throw PackageStoreFailure.journalUnreadable }
+        try reloadRecordsPreservingImportDirectories()
+        if let detail = unreadableRecords[packageID] {
+            throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
+        }
+        guard records[packageID] != nil else { throw PackageStoreFailure.packageNotFound }
+
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        let transaction = Self.makeTransactionID(at: clock())
+        try append(
+            JournalEntry(
+                v: 1,
+                seq: 0,
+                txn: transaction,
+                at: clock(),
+                op: "begin",
+                kind: "discardStaged",
+                package: packageID.rawValue,
+                dir: directory,
+                from: nil,
+                to: nil,
+                setDigest: nil,
+                ticket: nil,
+                keepData: nil,
+                step: nil,
+                reason: nil
+            )
+        )
+        try injectFault(kind: "discardStaged", step: "begin")
+        try finishDiscardStaged(
+            transaction: transaction,
+            packageID: packageID,
+            directory: directory,
+            injectFaults: true
+        )
+        try purgeTrash()
+    }
+
+    /// Sets the package's update policy — authority and/or provider — as
+    /// separate record fields (update-system.md §3.1). Not a journal
+    /// transaction: the record update is a single atomic metadata write
+    /// (package-store.md §5.2).
+    ///
+    /// A nil argument leaves the field unchanged; `removeProvider` clears the
+    /// provider. Authority and provider stay independent on the record.
+    public func setUpdatePolicy(
+        for packageID: PackageID,
+        authority: UpdateAuthority? = nil,
+        provider: UpdateProviderRef? = nil,
+        removeProvider: Bool = false,
+        requireProvider: Bool = false
+    ) async throws {
+        try requireWritable()
+        guard operationsInProgress.insert(packageID).inserted else {
+            throw PackageStoreFailure.operationInProgress
+        }
+        defer { operationsInProgress.remove(packageID) }
+
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        if let detail = unreadableRecords[packageID] {
+            throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
+        }
+        guard var record = records[packageID] else { throw PackageStoreFailure.packageNotFound }
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        if let authority { record.updateAuthority = authority }
+        if removeProvider {
+            record.updateProvider = nil
+        } else if let provider {
+            record.updateProvider = provider
+        }
+        // Checked inside the mutation lock so a concurrent provider removal
+        // cannot leave `apkrun` authority without a provider.
+        if requireProvider, record.updateAuthority == .apkrun,
+            record.updateProvider == nil
+        {
+            throw PackageStoreFailure.providerNotConfigured
+        }
+        record.updatedAt = clock()
+        try writeRecord(record, directory: directory)
+        records[packageID] = record
+    }
+
+    /// Writes `update.mode` to the package's `settings.json` (update-system.md
+    /// §2.3). The caller writes this before `setUpdatePolicy` so a crash never
+    /// turns on automatic updates without the record change.
+    public func setUpdateMode(for packageID: PackageID, mode: String) async throws {
+        try requireWritable()
+        guard operationsInProgress.insert(packageID).inserted else {
+            throw PackageStoreFailure.operationInProgress
+        }
+        defer { operationsInProgress.remove(packageID) }
+
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        if let detail = unreadableRecords[packageID] {
+            throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
+        }
+        guard records[packageID] != nil else { throw PackageStoreFailure.packageNotFound }
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        let url = packagesDirectory.appendingPathComponent(directory, isDirectory: true)
+            .appendingPathComponent("settings.json")
+        var settings: PackageSettings
+        if fileManager.fileExists(atPath: url.path),
+            let data = try? Data(contentsOf: url),
+            let decoded = try? Self.decoder().decode(PackageSettings.self, from: data)
+        {
+            settings = decoded
+        } else {
+            settings = PackageSettings()
+        }
+        settings.update["mode"] = mode
+        try writeJSON(settings, to: url)
     }
 
     /// Adopts a package Android has but APKRun does not manage (package-store.md §9.3).
@@ -1834,6 +2042,28 @@ public actor PackageStore {
             let metadataURL = child.appendingPathComponent("metadata.json")
             let directoryName = child.lastPathComponent
             let directoryPackageID = Self.packageID(fromDirectoryName: directoryName)
+            if !fileManager.fileExists(atPath: metadataURL.path) {
+                // A crash inside `moveReplacing` can leave only the `.old-*`
+                // backup of metadata.json; restore the newest one so the
+                // record survives without rolling back a later write.
+                let backups =
+                    (try? fileManager.contentsOfDirectory(atPath: child.path))?
+                    .filter { $0.hasPrefix(".metadata.json.old-") } ?? []
+                let newest = backups.max { lhs, rhs in
+                    let lhsDate =
+                        (try? fileManager.attributesOfItem(
+                            atPath: child.appendingPathComponent(lhs).path))?[.modificationDate] as? Date
+                    let rhsDate =
+                        (try? fileManager.attributesOfItem(
+                            atPath: child.appendingPathComponent(rhs).path))?[.modificationDate] as? Date
+                    return (lhsDate ?? .distantPast, lhs) < (rhsDate ?? .distantPast, rhs)
+                }
+                if let newest {
+                    try? fileManager.moveItem(
+                        atPath: child.appendingPathComponent(newest).path,
+                        toPath: metadataURL.path)
+                }
+            }
             guard fileManager.fileExists(atPath: metadataURL.path) else {
                 if let packageID = directoryPackageID, Self.hasPersistedPackageData(in: child, fileManager: fileManager)
                 {
@@ -1983,6 +2213,63 @@ public actor PackageStore {
                 } else if kind != "uninstall", state.lastStep == "metadataWritten" {
                     try appendTerminal(transaction, op: "commit")
                 }
+            case "stage":
+                // package-store.md §5.5: roll forward when `staged/` already
+                // holds the new digest or a step was journaled; otherwise abort
+                // and delete the `incoming/` set.
+                let staged =
+                    packagesDirectory
+                    .appendingPathComponent(directory, isDirectory: true)
+                    .appendingPathComponent("staged", isDirectory: true)
+                let rolledToStaged =
+                    state.begin.setDigest != nil
+                    && stagedSetDigest(in: staged)?.rawValue == state.begin.setDigest
+                if state.lastStep != nil || rolledToStaged {
+                    guard
+                        let candidate = recoveredStageCandidate(in: staged, begin: state.begin)
+                    else {
+                        throw PackageStoreFailure.io
+                    }
+                    try finishStage(
+                        transaction: transaction,
+                        packageID: packageID,
+                        directory: directory,
+                        candidate: candidate,
+                        injectFaults: false
+                    )
+                } else {
+                    if let ticketString = state.begin.ticket,
+                        let ticket = UUID(uuidString: ticketString)
+                    {
+                        try? fileManager.removeItem(
+                            at: incomingDirectory(
+                                packageID: packageID, directory: directory, ticket: ticket))
+                    }
+                    try appendAbort(transaction, reason: "interruptedBeforeFileMove")
+                }
+            case "discardStaged":
+                let staged =
+                    packagesDirectory
+                    .appendingPathComponent(directory, isDirectory: true)
+                    .appendingPathComponent("staged", isDirectory: true)
+                if state.lastStep != nil
+                    || !fileManager.fileExists(atPath: staged.path)
+                    || fileManager.fileExists(
+                        atPath:
+                            trashDirectory
+                            .appendingPathComponent("\(transaction)-staged", isDirectory: true).path)
+                {
+                    // A file step rolls forward; an already-moved set is a
+                    // partial move worth finishing so the record clears.
+                    try finishDiscardStaged(
+                        transaction: transaction,
+                        packageID: packageID,
+                        directory: directory,
+                        injectFaults: false
+                    )
+                } else {
+                    try appendAbort(transaction, reason: "interruptedBeforeFileMove")
+                }
             case "forget":
                 if state.begin.reason == Self.forgetResolutionIntent {
                     // The durable begin records the user's host-side choice before earlier
@@ -2066,6 +2353,133 @@ public actor PackageStore {
         }
         try appendTerminal(transaction, op: "commit")
         try purgeTrash()
+    }
+
+    /// Rolls the `stage` transaction forward (§5.2, §5.5). Idempotent across a
+    /// crash: an already-trashed old staged set or an already-moved incoming set
+    /// is recognized and skipped.
+    private func finishStage(
+        transaction: String,
+        packageID: PackageID,
+        directory: String,
+        candidate: StagedUpdateInfo,
+        injectFaults: Bool
+    ) throws {
+        let packageDirectory = packagesDirectory.appendingPathComponent(directory, isDirectory: true)
+        let staged = packageDirectory.appendingPathComponent("staged", isDirectory: true)
+        let trashedStaged = trashDirectory.appendingPathComponent("\(transaction)-staged", isDirectory: true)
+        let stagedDigest = stagedSetDigest(in: staged)
+
+        if fileManager.fileExists(atPath: staged.path), stagedDigest != candidate.setDigest {
+            // The old staged set goes to .trash once per transaction.
+            if fileManager.fileExists(atPath: trashedStaged.path) {
+                throw PackageStoreFailure.io
+            }
+            try moveItem(staged, to: trashedStaged)
+        }
+        if stagedSetDigest(in: staged) != candidate.setDigest {
+            guard let ticketString = transactions[transaction]?.begin.ticket,
+                let ticket = UUID(uuidString: ticketString)
+            else {
+                throw PackageStoreFailure.importTicketNotFound
+            }
+            let incoming = incomingDirectory(
+                packageID: packageID, directory: directory, ticket: ticket)
+            guard fileManager.fileExists(atPath: incoming.path) else {
+                throw PackageStoreFailure.importTicketNotFound
+            }
+            try moveItem(incoming, to: staged)
+        }
+        if transactions[transaction]?.lastStep != "filesStaged" {
+            try appendStep(transaction, kind: "stage", step: "filesStaged")
+            if injectFaults {
+                try injectFault(kind: "stage", step: "filesStaged")
+            }
+        }
+        if transactions[transaction]?.lastStep != "metadataWritten" {
+            guard var record = records[packageID] else {
+                throw PackageStoreFailure.packageNotFound
+            }
+            record.artifacts.staged = candidate.slotSummary
+            record.updatedAt = clock()
+            try writeRecord(record, directory: directory)
+            records[packageID] = record
+            try appendStep(transaction, kind: "stage", step: "metadataWritten")
+            if injectFaults {
+                try injectFault(kind: "stage", step: "metadataWritten")
+            }
+        }
+        try appendTerminal(transaction, op: "commit")
+    }
+
+    /// The `setDigest` recorded in a slot's `artifact.json`, or nil when the slot
+    /// is absent or unreadable.
+    private func stagedSetDigest(in slot: URL) -> SHA256Digest? {
+        let artifactURL = slot.appendingPathComponent("artifact.json")
+        guard let data = try? Data(contentsOf: artifactURL),
+            let set = try? Self.decoder().decode(ArtifactSet.self, from: data)
+        else {
+            return nil
+        }
+        return set.setDigest
+    }
+
+    /// Rebuilds the stage candidate from `staged/artifact.json` after a crash;
+    /// the provenance comes from the journaled begin entry.
+    private func recoveredStageCandidate(in staged: URL, begin: JournalEntry) -> StagedUpdateInfo? {
+        let artifactURL = staged.appendingPathComponent("artifact.json")
+        guard let data = try? Data(contentsOf: artifactURL),
+            let set = try? Self.decoder().decode(ArtifactSet.self, from: data)
+        else {
+            return nil
+        }
+        return StagedUpdateInfo(
+            versionCode: set.versionCode,
+            versionName: set.versionName,
+            setDigest: set.setDigest,
+            size: set.files.reduce(0) { $0 + $1.size },
+            fileCount: set.files.count,
+            origin: begin.origin ?? ArtifactOrigin(type: .manualFile)
+        )
+    }
+
+    /// Rolls the `discardStaged` transaction forward (§5.2, §5.5). Idempotent:
+    /// an already-trashed staged set and an already-cleared record are skipped.
+    private func finishDiscardStaged(
+        transaction: String,
+        packageID: PackageID,
+        directory: String,
+        injectFaults: Bool
+    ) throws {
+        let packageDirectory = packagesDirectory.appendingPathComponent(directory, isDirectory: true)
+        let staged = packageDirectory.appendingPathComponent("staged", isDirectory: true)
+        let target = trashDirectory.appendingPathComponent("\(transaction)-staged", isDirectory: true)
+        if fileManager.fileExists(atPath: staged.path) {
+            guard !fileManager.fileExists(atPath: target.path) else {
+                throw PackageStoreFailure.io
+            }
+            try moveItem(staged, to: target)
+        }
+        if transactions[transaction]?.lastStep != "filesRemoved" {
+            try appendStep(transaction, kind: "discardStaged", step: "filesRemoved")
+            if injectFaults {
+                try injectFault(kind: "discardStaged", step: "filesRemoved")
+            }
+        }
+        if transactions[transaction]?.lastStep != "metadataWritten" {
+            guard var record = records[packageID] else {
+                throw PackageStoreFailure.packageNotFound
+            }
+            record.artifacts.staged = nil
+            record.updatedAt = clock()
+            try writeRecord(record, directory: directory)
+            records[packageID] = record
+            try appendStep(transaction, kind: "discardStaged", step: "metadataWritten")
+            if injectFaults {
+                try injectFault(kind: "discardStaged", step: "metadataWritten")
+            }
+        }
+        try appendTerminal(transaction, op: "commit")
     }
 
     private func readJournal() throws -> JournalReadResult {
@@ -2294,7 +2708,8 @@ public actor PackageStore {
                 ticket: begin?.ticket,
                 keepData: begin?.keepData,
                 step: step,
-                reason: nil
+                reason: nil,
+                origin: begin?.origin
             )
         )
     }

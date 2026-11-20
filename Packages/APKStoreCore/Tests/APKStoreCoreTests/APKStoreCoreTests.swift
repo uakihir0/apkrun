@@ -167,6 +167,13 @@ import Testing
     #expect(record.updateAuthority == .manual)
 }
 
+@Test func updateAuthorityClaimsOwnershipOnlyForApkrunAndManual() {
+    #expect(UpdateAuthority.apkrun.claimsUpdateOwnership)
+    #expect(UpdateAuthority.manual.claimsUpdateOwnership)
+    #expect(UpdateAuthority.googlePlay.claimsUpdateOwnership == false)
+    #expect(UpdateAuthority.external.claimsUpdateOwnership == false)
+}
+
 @Test func splitSelectorKeepsFeatureConfigSplitForGuestABI() throws {
     let base = SplitCandidate(name: "base.apk", splitName: nil)
     let feature = SplitCandidate(

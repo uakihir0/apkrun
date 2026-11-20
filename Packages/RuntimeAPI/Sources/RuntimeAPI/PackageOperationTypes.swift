@@ -515,18 +515,53 @@ public struct RuntimePackageDetails: Codable, Sendable, Equatable {
     public var artifactBytes: Int64
     /// The last known Android app-data size, in bytes.
     public var androidDataBytes: Int64?
+    /// A verified update waiting for installation, when one is staged
+    /// (package-store.md §7.1).
+    public var staged: RuntimeStagedArtifact?
 
     /// Creates package details.
     public init(
         summary: RuntimePackageSummary,
         files: [RuntimeArtifactFile],
         artifactBytes: Int64,
-        androidDataBytes: Int64? = nil
+        androidDataBytes: Int64? = nil,
+        staged: RuntimeStagedArtifact? = nil
     ) {
         self.summary = summary
         self.files = files
         self.artifactBytes = artifactBytes
         self.androidDataBytes = androidDataBytes
+        self.staged = staged
+    }
+}
+
+/// The staged artifact set `packageInfo` reports (package-store.md §7.1).
+public struct RuntimeStagedArtifact: Codable, Sendable, Equatable {
+    /// Android's long version code of the staged set.
+    public var versionCode: RuntimeVersionCode
+    /// The display-only Android version name, when present.
+    public var versionName: String?
+    /// The combined size of the staged APK files in bytes.
+    public var size: Int64
+    /// The number of APK files in the staged set.
+    public var fileCount: Int
+    /// The source that supplied the set (`local`, `direct`, `fdroid`,
+    /// `github`, or `manualFile`).
+    public var origin: String
+
+    /// Creates a staged-artifact summary.
+    public init(
+        versionCode: RuntimeVersionCode,
+        versionName: String? = nil,
+        size: Int64,
+        fileCount: Int,
+        origin: String
+    ) {
+        self.versionCode = versionCode
+        self.versionName = versionName
+        self.size = size
+        self.fileCount = fileCount
+        self.origin = origin
     }
 }
 

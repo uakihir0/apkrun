@@ -155,6 +155,12 @@ struct PackageInfoCommand: AsyncParsableCommand {
                 if let androidDataBytes = details.androidDataBytes {
                     Output.write("Android data: \(androidDataBytes) bytes")
                 }
+                if let staged = details.staged {
+                    Output.write(
+                        "Staged update: "
+                            + "\(staged.versionName.map(PackageQueryOutput.safeTerminalText) ?? "unknown") "
+                            + "(\(staged.versionCode)), \(staged.size) bytes")
+                }
             }
         } catch let failure as RuntimeWireError {
             throw failure

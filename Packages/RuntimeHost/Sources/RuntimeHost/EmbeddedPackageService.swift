@@ -42,7 +42,8 @@ public actor EmbeddedPackageService: RuntimeService {
     private let fileManager = FileManager.default
     private let inspector: PackageStore.Inspector
     private let runtimeAccess: AttachedStoreRuntimeAccess
-    private let store: PackageStore
+    /// Shared with `EmbeddedUpdateService` so a single store owns ticket cleanup.
+    let store: PackageStore
     private var sessionService: any RuntimeSessionService
     private let hostFreeSpace: @Sendable (URL) -> Int64
 
@@ -610,7 +611,15 @@ public actor EmbeddedPackageService: RuntimeService {
             return RuntimePackageDetails(
                 summary: try Self.summary(from: record),
                 files: files,
-                artifactBytes: bytes
+                artifactBytes: bytes,
+                staged: record.artifacts.staged.map {
+                    RuntimeStagedArtifact(
+                        versionCode: $0.versionCode,
+                        versionName: $0.versionName,
+                        size: $0.size,
+                        fileCount: $0.fileCount,
+                        origin: $0.origin.type.rawValue)
+                }
             )
         } catch {
             throw Self.wireError(for: error)
@@ -1093,6 +1102,12 @@ public actor EmbeddedPackageService: RuntimeService {
                 return .store(
                     "operationInProgress", message: "Another package operation is already running for this app.",
                     remediation: "Wait for it to finish, then retry.")
+            case .providerNotConfigured:
+                return RuntimeWireError(
+                    domain: "update",
+                    code: "update.providerNotConfigured",
+                    message: "Automatic updates need a configured update provider.",
+                    remediation: "Set a provider with `apkrun update policy <package> --provider <spec>`.")
             case .importTicketNotFound, .importTicketExpired, .importTicketChanged:
                 return .store(
                     "importTicketExpired", message: "The APK preview is no longer valid.",

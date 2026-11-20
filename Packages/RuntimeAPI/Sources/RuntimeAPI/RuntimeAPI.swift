@@ -641,6 +641,14 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func perfStatistics(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns per-session graphics statistics; developer mode only; never starts Android.
     func frameStatistics(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Pushes a Mac clip toward Android; the reply carries the acknowledged seq (runtime-api.md §11.2).
+    func pushClipboard(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Reports that the window wrote a guest clip to the Mac pasteboard (runtime-api.md §11.2).
+    func clipboardWritten(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Reports whether the session's window is the key window (desktop-integration.md §4.1).
+    func focusChanged(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns the per-kind integration status of a package (runtime-api.md §11).
+    func integrationStatus(_ request: Data, reply: @escaping (Data) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.

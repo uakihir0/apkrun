@@ -1132,6 +1132,10 @@ extension RuntimeDeniedWrappersControlRequest: VersionedControlRequest {}
 extension RuntimeClearWrapperDenialControlRequest: VersionedControlRequest {}
 extension RuntimePerfStatisticsControlRequest: VersionedControlRequest {}
 extension RuntimeFrameStatisticsControlRequest: VersionedControlRequest {}
+extension RuntimePushClipboardControlRequest: VersionedControlRequest {}
+extension RuntimeClipboardWrittenControlRequest: VersionedControlRequest {}
+extension RuntimeFocusChangedControlRequest: VersionedControlRequest {}
+extension RuntimeIntegrationStatusControlRequest: VersionedControlRequest {}
 
 enum RuntimeControlOperation {
     case runtimeStatus
@@ -1162,6 +1166,10 @@ enum RuntimeControlOperation {
     case clearWrapperDenial
     case perfStatistics
     case frameStatistics
+    case pushClipboard
+    case clipboardWritten
+    case focusChanged
+    case integrationStatus
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1236,6 +1244,22 @@ enum RuntimeControlOperation {
             // Developer-mode reads; the developer.enabled gate is enforced in
             // RuntimeHost (diagnostics.md §9.3, runtime-api.md §13.1).
             true
+        case .pushClipboard, .clipboardWritten, .focusChanged:
+            // Session-channel messages of desktop-integration.md §3.3: the
+            // window process reports for its own session.
+            switch clientKind {
+            case .wrapper, .launcher:
+                true
+            case .app, .menuBar, .cli:
+                false
+            }
+        case .integrationStatus:
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
+                false
+            }
         }
     }
 }
@@ -2416,6 +2440,193 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         }
     }
 
+    func pushClipboard(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimePushClipboardControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .pushClipboard,
+                as: RuntimePushClipboardControlRequest.self,
+                byteLimit: Self.maximumClipboardRequestSize
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimePushClipboardControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimePushClipboardControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimePushClipboardControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let ack = try await host.pushClipboard(
+                    sessionID: decoded.sessionID, item: decoded.item)
+                response.send(Self.encode(RuntimePushClipboardControlReply(ack: ack)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimePushClipboardControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func clipboardWritten(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeClipboardWrittenControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .clipboardWritten,
+                as: RuntimeClipboardWrittenControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeClipboardWrittenControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeClipboardWrittenControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeClipboardWrittenControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try await host.clipboardWritten(
+                    sessionID: decoded.sessionID, written: decoded.written)
+                response.send(Self.encode(RuntimeClipboardWrittenControlReply()))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeClipboardWrittenControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func focusChanged(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeFocusChangedControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .focusChanged,
+                as: RuntimeFocusChangedControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeFocusChangedControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeFocusChangedControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeFocusChangedControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try await host.focusChanged(sessionID: decoded.sessionID, isKey: decoded.isKey)
+                response.send(Self.encode(RuntimeFocusChangedControlReply()))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeFocusChangedControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func integrationStatus(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeIntegrationStatusControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .integrationStatus,
+                as: RuntimeIntegrationStatusControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeIntegrationStatusControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeIntegrationStatusControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeIntegrationStatusControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let status = try await host.integrationStatus(packageID: decoded.packageID)
+                response.send(Self.encode(RuntimeIntegrationStatusControlReply(status: status)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeIntegrationStatusControlReply(error: wireError)))
+            }
+        }
+    }
+
     private func makeReplyHandler(
         _ reply: @escaping (Data) -> Void,
         snapshotBarrier: Bool = false
@@ -2460,6 +2671,11 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
 
     private static let maximumRequestSize = 1024 * 1024
 
+    /// The bound of a clipboard request: 1 MiB text + 1 MiB HTML + a 16 MiB
+    /// PNG (which JSON-encodes to base64, ~1.34x), plus envelope overhead
+    /// (runtime-api.md §11.4).
+    private static let maximumClipboardRequestSize = 24 * 1024 * 1024
+
     private static let malformedWireError = RuntimeWireError.runtime(
         "malformedRequest",
         message: safeMessage(for: "runtime.malformedRequest")
@@ -2480,9 +2696,10 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         _ data: Data,
         clientKind: RuntimeClientKind,
         operation: RuntimeControlOperation,
-        as requestType: Request.Type
+        as requestType: Request.Type,
+        byteLimit: Int = maximumRequestSize
     ) -> RuntimeControlError? {
-        guard data.count <= maximumRequestSize,
+        guard data.count <= byteLimit,
             let request = try? JSONDecoder().decode(requestType, from: data)
         else {
             return RuntimeControlError(

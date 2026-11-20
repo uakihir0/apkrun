@@ -68,6 +68,9 @@ import Testing
                 "stagingExpired", "bundleInvalid",
                 "approvalDenied", "approvalTimedOut", "approvalNotFound",
             ].map { "wrapper.\($0)" }
+            + [
+                "disabled", "notSupportedOnImage", "guestUnavailable", "clipboardTooLarge",
+            ].map { "integration.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)
     #expect(
@@ -100,6 +103,7 @@ import Testing
                 || entry.code.hasPrefix("graphics.")
                 || entry.code.hasPrefix("image.")
                 || entry.code.hasPrefix("wrapper.")
+                || entry.code.hasPrefix("integration.")
         )
         for text in entry.message?.values ?? [String: String]().values {
             #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

@@ -200,6 +200,18 @@ final class RuntimeEventHub: @unchecked Sendable {
         )
     }
 
+    /// Publishes an integration event on the `integrations` topic (§16.2).
+    func publishIntegrationChange(_ change: IntegrationChange) {
+        publish(
+            QueuedEvent(
+                topic: .integrations,
+                time: Date(),
+                operationID: nil,
+                payload: .integrations(change)
+            )
+        )
+    }
+
     private func publish(_ event: QueuedEvent) {
         queue.sync {
             for connectionID in Array(subscribers.keys) {
@@ -242,9 +254,11 @@ final class RuntimeEventHub: @unchecked Sendable {
                 .wrappers, .integrations,
             ]
         case .launcher:
-            [.runtime]
+            // TODO(#83): `integrations` rides the control channel until the
+            // session channel exists; the session ID in each event scopes it.
+            [.runtime, .integrations]
         case .wrapper:
-            []
+            [.integrations]
         }
     }
 

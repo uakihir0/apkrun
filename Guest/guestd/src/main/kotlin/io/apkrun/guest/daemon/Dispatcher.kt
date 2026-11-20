@@ -181,6 +181,10 @@ class Dispatcher(
                 withDisplayLock(displayId) { operations.focusDisplay(displayId) }
                 Response.newBuilder().setFocusDisplay(Empty.getDefaultInstance()).build()
             }
+            Request.OpCase.SET_CLIPBOARD -> {
+                operations.setClipboard(request.setClipboard)
+                Response.newBuilder().setSetClipboard(Empty.getDefaultInstance()).build()
+            }
             else ->
                 failure(
                     GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
@@ -225,6 +229,7 @@ class Dispatcher(
                 Request.OpCase.QUERY_PACKAGE,
                 Request.OpCase.LIST_PACKAGES -> GuestCapability.PACKAGES
                 Request.OpCase.COLLECT_DIAGNOSTICS -> GuestCapability.DIAGNOSTICS
+                Request.OpCase.SET_CLIPBOARD -> GuestCapability.CLIPBOARD_TEXT
                 else -> null
             }
 

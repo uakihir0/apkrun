@@ -3161,6 +3161,180 @@
     "raisedBy": "WrapperApprovalService",
     "ref": "wrapper.md §7.3 step 5"
    }
+  },
+  {
+   "code": "integration.disabled",
+   "parameters": [
+    "integration",
+    "app"
+   ],
+   "message": {
+    "en": "{integration} is turned off for {app}.",
+    "ja": "{app} の {integration} はオフになっています。"
+   },
+   "remediation": {
+    "en": "Turn it on in the app's settings in APKRun.",
+    "ja": "APKRun のアプリ設定でオンにしてください。"
+   },
+   "action": "none",
+   "cliExit": 5,
+   "doc": {
+    "table": "integration",
+    "case": "disabled(IntegrationKind, IntegrationDenial)",
+    "when": "`IntegrationPolicy` denies the request. Shown for a refused drop and in `apkrun integrations status`",
+    "raisedBy": "IntegrationPolicy",
+    "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §2.3"
+   },
+   "variants": {
+    "globallyOff": {
+     "message": {
+      "en": "{integration} is turned off for all apps.",
+      "ja": "{integration} はすべてのアプリでオフになっています。"
+     },
+     "remediation": {
+      "en": "Turn it on in Settings → Privacy.",
+      "ja": "設定 → プライバシーでオンにしてください。"
+     },
+     "action": "openPrivacySettings",
+     "doc": {
+      "when": "the global switch `integrations.enabled.<name>` is off",
+      "raisedBy": "IntegrationPolicy",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §2.2"
+     }
+    },
+    "notFocused": {
+     "message": {
+      "en": "{app} can use {integration} only while you use its window.",
+      "ja": "{app} が {integration} を使えるのは、そのウィンドウを使用中だけです。"
+     },
+     "remediation": {
+      "en": "Click the app's window, then try again.",
+      "ja": "アプリのウィンドウをクリックしてから、もう一度お試しください。"
+     },
+     "action": "none",
+     "doc": {
+      "when": "the app's window is not key, or had no user input in the last 5 s (links)",
+      "raisedBy": "IntegrationPolicy",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §4.1, §7.2"
+     }
+    },
+    "noSession": {
+     "message": {
+      "en": "{app} isn't open.",
+      "ja": "{app} は開いていません。"
+     },
+     "remediation": {
+      "en": "Open {app}, then try again.",
+      "ja": "{app} を開いてから、もう一度お試しください。"
+     },
+     "action": "none",
+     "doc": {
+      "when": "the package has no session",
+      "raisedBy": "IntegrationPolicy",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §2.3"
+     }
+    },
+    "notSupported": {
+     "message": {
+      "en": "This version of Android doesn't support {integration}.",
+      "ja": "このバージョンの Android は {integration} に対応していません。"
+     },
+     "remediation": {
+      "en": "Update Android.",
+      "ja": "Android を更新してください。"
+     },
+     "action": "updateAndroid",
+     "doc": {
+      "when": "the running image lacks the capability",
+      "raisedBy": "IntegrationPolicy",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §2.4"
+     }
+    },
+    "rateLimited": {
+     "message": {
+      "en": "{app} is doing this too often.",
+      "ja": "{app} の実行が頻繁すぎます。"
+     },
+     "remediation": {
+      "en": "Wait a moment, then try again.",
+      "ja": "しばらく待ってから、もう一度お試しください。"
+     },
+     "action": "retry",
+     "doc": {
+      "when": "a rate limit, for example more than 3 links in 10 s",
+      "raisedBy": "IntegrationPolicy",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §7.2"
+     }
+    }
+   }
+  },
+  {
+   "code": "integration.notSupportedOnImage",
+   "parameters": [
+    "capability"
+   ],
+   "message": {
+    "en": "This version of Android doesn't support this ({capability}).",
+    "ja": "このバージョンの Android はこれに対応していません（{capability}）。"
+   },
+   "remediation": {
+    "en": "Update Android.",
+    "ja": "Android を更新してください。"
+   },
+   "action": "updateAndroid",
+   "cliExit": 1,
+   "doc": {
+    "table": "integration",
+    "case": "notSupportedOnImage(capability:)",
+    "when": "an operation needs a Guest Agent capability that the running image does not report",
+    "raisedBy": "IntegrationChannel",
+    "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §2.4, §13"
+   }
+  },
+  {
+   "code": "integration.guestUnavailable",
+   "parameters": [],
+   "message": {
+    "en": "The Guest Agent in Android isn't connected.",
+    "ja": "Android 内のゲストエージェントが接続されていません。"
+   },
+   "remediation": {
+    "en": "APKRun reconnects automatically. Try again in a moment.",
+    "ja": "APKRun は自動的に再接続します。しばらくしてからもう一度お試しください。"
+   },
+   "action": "retry",
+   "cliExit": 75,
+   "doc": {
+    "table": "integration",
+    "case": "guestUnavailable",
+    "when": "the Guest Agent is not connected. The operation is not queued",
+    "raisedBy": "IntegrationChannel",
+    "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §12"
+   }
+  },
+  {
+   "code": "integration.clipboardTooLarge",
+   "parameters": [
+    "bytes",
+    "limit"
+   ],
+   "message": {
+    "en": "The copied item is too large for Android ({bytes}; the limit is {limit}).",
+    "ja": "コピーした項目は Android には大きすぎます（{bytes}、上限は {limit}）。"
+   },
+   "remediation": {
+    "en": "Copy a smaller item.",
+    "ja": "小さい項目をコピーしてください。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "integration",
+    "case": "clipboardTooLarge(bytes:limit:)",
+    "when": "an image or HTML clip above its limit. Long text is truncated instead",
+    "raisedBy": "ClipboardCoordinator",
+    "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §4.4"
+   }
   }
  ]
 }

@@ -136,6 +136,9 @@ private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
         window.contentView = NSView()
         window.makeKeyAndOrderFront(nil)
         self.window = window
+        // TODO(#45): install a ClipboardController once the launcher owns a
+        // session window (WrapperIdentity + openSession); the session window is
+        // built by #45.
     }
 
     @objc private func toggleFrameStatistics(_ sender: NSMenuItem) {

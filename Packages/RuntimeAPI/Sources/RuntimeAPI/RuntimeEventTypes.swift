@@ -227,6 +227,8 @@ public enum EventPayload: Codable, Equatable, Sendable {
     case operations(OperationEvent)
     /// A wrapper was created, refreshed, removed, or changed state.
     case wrappers(WrapperChange)
+    /// A Mac ↔ Android integration event, such as a guest clip for the key window.
+    case integrations(IntegrationChange)
     /// Events for the topic were dropped; fetch a fresh snapshot.
     case resyncRequired(EventTopic)
     /// The daemon reported an event kind added by a newer API version.
@@ -238,6 +240,7 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case operations
         case resyncRequired
         case wrappers
+        case integrations
     }
 
     private enum AssociatedKey: String, CodingKey {
@@ -268,6 +271,9 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case "resyncRequired":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .resyncRequired(try payload.decode(EventTopic.self, forKey: .first))
+        case "integrations":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .integrations(try payload.decode(IntegrationChange.self, forKey: .first))
         default:
             self = .unknown
         }
@@ -288,6 +294,9 @@ public enum EventPayload: Codable, Equatable, Sendable {
             try payload.encode(event, forKey: .first)
         case .wrappers(let change):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .wrappers)
+            try payload.encode(change, forKey: .first)
+        case .integrations(let change):
+            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .integrations)
             try payload.encode(change, forKey: .first)
         case .resyncRequired(let topic):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .resyncRequired)

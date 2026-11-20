@@ -2,5 +2,17 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.FORCE_STOP_PACKAGES" />
 
-    <application android:label="APKRun Guest Agent" android:hasCode="true" />
+    <application android:label="APKRun Guest Agent" android:hasCode="true">
+        <!-- The development IME (input.md §5.6): no input view, driven over @apkrun-guest-ime. -->
+        <service
+            android:name=".ime.ApkRunInputMethodService"
+            android:label="APKRun IME"
+            android:permission="android.permission.BIND_INPUT_METHOD"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data android:name="android.view.im" android:resource="@xml/method" />
+        </service>
+    </application>
 </manifest>

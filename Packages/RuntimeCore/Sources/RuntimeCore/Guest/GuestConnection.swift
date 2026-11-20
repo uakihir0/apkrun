@@ -52,6 +52,9 @@ public actor GuestConnection {
     /// The bulk transfer frames of the agent (guest-protocol.md §10). Only the bulk endpoint has them; on any other
     /// channel a bulk frame is a protocol violation. The stream finishes when the connection closes.
     public nonisolated let bulkFrames: AsyncStream<GPBulkFrame>
+    /// The editor state reports of the IME (input.md §5.1). Only the development IME endpoint carries them; on any
+    /// other channel a report is a protocol violation. The stream finishes when the connection closes.
+    public nonisolated let imeStates: AsyncStream<GPImeState>
 
     /// The number of requests that may be in flight at once (guest-protocol.md §6).
     public static let maximumInFlight = 64
@@ -68,6 +71,7 @@ public actor GuestConnection {
     private let eventContinuation: AsyncStream<GPEvent>.Continuation
     private let inputAckContinuation: AsyncStream<GPInputAck>.Continuation
     private let bulkFrameContinuation: AsyncStream<GPBulkFrame>.Continuation
+    private let imeStateContinuation: AsyncStream<GPImeState>.Continuation
     private var outbound: AsyncStream<Data>.Continuation?
     /// The bytes that the frames yielded to `outbound` hold, until the transport has written them.
     private var outboundBacklog = 0
@@ -118,6 +122,9 @@ public actor GuestConnection {
         let bulk = AsyncStream.makeStream(of: GPBulkFrame.self, bufferingPolicy: .unbounded)
         bulkFrames = bulk.stream
         bulkFrameContinuation = bulk.continuation
+        let ime = AsyncStream.makeStream(of: GPImeState.self, bufferingPolicy: .bufferingNewest(64))
+        imeStates = ime.stream
+        imeStateContinuation = ime.continuation
     }
 
     /// Whether the connection can carry requests: the handshake completed and the connection is still open.
@@ -300,6 +307,20 @@ public actor GuestConnection {
         yieldFrame(frame)
     }
 
+    /// Sends one IME command on the development IME endpoint, as an `ImeCommand` envelope (input.md §5.1). It fails
+    /// with the connection's failure when the connection is not usable. Only the IME endpoint carries commands.
+    public func sendImeCommand(_ command: GPImeCommand) throws(GuestProtocolFailure) {
+        precondition(endpoint == .developmentIME, "IME commands go only to the IME endpoint (input.md §5.1)")
+        guard isUsable else {
+            throw failure ?? .disconnected
+        }
+        var envelope = GPEnvelope()
+        envelope.id = allocateEnvelopeID()
+        envelope.body = .imeCommand(command)
+        let frame = try FrameCodec.encode(envelope)
+        yieldFrame(frame)
+    }
+
     // MARK: - Reading
 
     private func readLoop(_ opened: any GuestByteStream) async {
@@ -367,6 +388,12 @@ public actor GuestConnection {
                 throw .malformedFrame
             }
             bulkFrameContinuation.yield(frame)
+        case .imeState(let state):
+            // Editor reports leave on the development IME channel only (input.md §5.1).
+            guard endpoint == .developmentIME else {
+                throw .malformedFrame
+            }
+            imeStateContinuation.yield(state)
         default:
             throw .malformedFrame
         }
@@ -535,6 +562,8 @@ public actor GuestConnection {
         slotWaiters.removeAll()
         eventContinuation.finish()
         inputAckContinuation.finish()
+        bulkFrameContinuation.finish()
+        imeStateContinuation.finish()
         outbound?.finish()
     }
 

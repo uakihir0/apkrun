@@ -117,14 +117,18 @@ private func sampleRecord(packageID: String = "io.apkrun.fixture.hellotext") -> 
     let host = RuntimeHost(paths: paths)
 
     InputLatencyRecorder.shared.reset()
-    InputLatencyRecorder.shared.record(segment: "input.route", microseconds: 2_000)
+    // A unique segment name keeps the counts exact while other tests
+    // record their own input histograms in parallel.
+    InputLatencyRecorder.shared.record(segment: "input.reset.test", microseconds: 2_000)
     let first = try await host.perfStatistics(PerfStatisticsRequest())
-    #expect(first.input.contains { $0.segment == "input.route" && $0.counts.reduce(0, +) == 1 })
+    #expect(first.input.contains { $0.segment == "input.reset.test" && $0.counts.reduce(0, +) == 1 })
 
+    // The reset read still reports what was collected; the read after it
+    // has the segment cleared.
     let second = try await host.perfStatistics(PerfStatisticsRequest(reset: true))
-    #expect(second.input.allSatisfy { $0.counts.reduce(0, +) == 0 })
+    #expect(second.input.contains { $0.segment == "input.reset.test" && $0.counts.reduce(0, +) == 1 })
 
     let third = try await host.perfStatistics(PerfStatisticsRequest())
-    #expect(third.input.allSatisfy { $0.counts.reduce(0, +) == 0 })
+    #expect(third.input.allSatisfy { $0.segment != "input.reset.test" })
     InputLatencyRecorder.shared.reset()
 }

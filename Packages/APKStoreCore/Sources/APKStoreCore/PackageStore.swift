@@ -1684,6 +1684,86 @@ public actor PackageStore {
         try writeJSON(settings, to: url)
     }
 
+    /// Moves a package to a different update authority (package-store.md §6.3).
+    ///
+    /// Leaving an authority that claims ownership (`apkrun`, `manual`) for one that
+    /// does not (`googlePlay`, `external`) asks Android to relinquish update
+    /// ownership before the record write. When the runtime is not `ready` — or the
+    /// guest call cannot be made — the journaled `relinquishOwnership` transaction
+    /// stays pending as a post-boot task; an authority change never starts Android.
+    /// `FAILED_PRECONDITION` (APKRun is not the owner) is not an error.
+    public func setUpdateAuthority(
+        id packageID: PackageID,
+        authority: UpdateAuthority,
+        provider: UpdateProviderRef? = nil
+    ) async throws {
+        try requireWritable()
+        guard operationsInProgress.insert(packageID).inserted else {
+            throw PackageStoreFailure.operationInProgress
+        }
+        defer { operationsInProgress.remove(packageID) }
+
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        if let detail = unreadableRecords[packageID] {
+            throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
+        }
+        guard var record = records[packageID] else { throw PackageStoreFailure.packageNotFound }
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+
+        if record.updateAuthority.claimsUpdateOwnership, !authority.claimsUpdateOwnership {
+            // The transaction is journaled before the guest call so a crash between
+            // the relinquish and the record write leaves a pending post-boot task —
+            // the old authority has no owner until recovery replays the call (§5.5).
+            let transaction = Self.makeTransactionID(at: clock())
+            try append(
+                JournalEntry(
+                    v: 1,
+                    seq: 0,
+                    txn: transaction,
+                    at: clock(),
+                    op: "begin",
+                    kind: "relinquishOwnership",
+                    package: packageID.rawValue,
+                    dir: directory,
+                    from: nil,
+                    to: nil,
+                    setDigest: nil,
+                    ticket: nil,
+                    keepData: nil,
+                    step: nil,
+                    reason: nil
+                )
+            )
+            try appendStep(transaction, kind: "relinquishOwnership", step: "guestRelinquishRequested")
+            try injectFault(kind: "relinquishOwnership", step: "guestRelinquishRequested")
+            if let runtimeAccess {
+                do {
+                    try await runtimeAccess.withStoreAgent(UUID()) { channel in
+                        if channel.capabilities.contains(.updateOwnership) {
+                            try await channel.relinquishUpdateOwnership(packageID)
+                        }
+                    }
+                    try appendTerminal(transaction, op: "commit")
+                } catch StoreChannelFailure.updateOwnershipNotHeld(_) {
+                    try appendTerminal(transaction, op: "commit")
+                } catch {
+                    // Android could not answer: leave the transaction pending as the
+                    // post-boot task of §5.5; the record change still lands now.
+                }
+            }
+        }
+
+        record.updateAuthority = authority
+        if let provider {
+            record.updateProvider = provider
+        }
+        record.updatedAt = clock()
+        try writeRecord(record, directory: directory)
+        records[packageID] = record
+    }
+
     /// Adopts a package Android has but APKRun does not manage (package-store.md §9.3).
     ///
     /// The record gets `installer: external`, `updateAuthority: external`, no artifact, and
@@ -1863,6 +1943,23 @@ public actor PackageStore {
                     directory: directory,
                     keepData: transaction.begin.keepData ?? false
                 )
+
+            case ("relinquishOwnership", _):
+                // Post-boot task (§5.5, §6.3): replay the relinquish. The record
+                // already carries the new authority; a failure re-queues the task
+                // for the next boot and FAILED_PRECONDITION commits it.
+                do {
+                    try await runtimeAccess.withStoreAgent(UUID()) { channel in
+                        if channel.capabilities.contains(.updateOwnership) {
+                            try await channel.relinquishUpdateOwnership(packageID)
+                        }
+                    }
+                    try appendTerminal(transactionID, op: "commit")
+                } catch StoreChannelFailure.updateOwnershipNotHeld(_) {
+                    try appendTerminal(transactionID, op: "commit")
+                } catch {
+                    continue
+                }
 
             case ("firstInstall", "metadataWritten"), ("reinstall", "metadataWritten"):
                 try appendTerminal(transactionID, op: "commit")
@@ -4081,7 +4178,8 @@ public actor PackageStore {
             ("reinstall", "guestInstalled"), ("reinstall", "filesPromoted"),
             ("update", "guestCommitRequested"), ("update", "guestInstalled"),
             ("update", "filesPromoted"),
-            ("uninstall", "guestUninstallRequested"), ("uninstall", "guestUninstalled"):
+            ("uninstall", "guestUninstallRequested"), ("uninstall", "guestUninstalled"),
+            ("relinquishOwnership", _):
             return true
         default:
             return false

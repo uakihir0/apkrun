@@ -12,11 +12,27 @@ private actor OwnershipChannel: StoreAgentChannel {
     nonisolated let capabilities: StoreCapabilities
     private var packages: [PackageID: StorePackageInfo] = [:]
     private(set) var requests: [StoreInstallRequest] = []
+    private(set) var relinquishCalls: [PackageID] = []
     private let reportedOwner: PackageID?
+    /// Observes the store record's authority while the relinquish call is in flight,
+    /// proving the guest call precedes the record write.
+    private var authorityDuringRelinquish: (@Sendable () async -> UpdateAuthority?)?
+    private(set) var relinquishSawAuthority: UpdateAuthority?
 
     init(capabilities: StoreCapabilities, reportedOwner: PackageID? = nil) {
         self.capabilities = capabilities
         self.reportedOwner = reportedOwner
+    }
+
+    func onRelinquish(_ probe: @escaping @Sendable () async -> UpdateAuthority?) {
+        authorityDuringRelinquish = probe
+    }
+
+    func relinquishUpdateOwnership(_ package: PackageID) async throws {
+        relinquishCalls.append(package)
+        if let authorityDuringRelinquish {
+            relinquishSawAuthority = await authorityDuringRelinquish()
+        }
     }
 
     func install(_ request: StoreInstallRequest, files _: [URL]) async throws -> StorePackageInfo {
@@ -232,4 +248,87 @@ func reinstallSkipsOwnershipForNonClaimingAuthorities(authority: UpdateAuthority
     // `external` does not claim ownership, so the missing owner is not a finding.
     try await store.setUpdatePolicy(for: record.packageId, authority: .external)
     #expect(try await store.updateOwnerMissingPackages().isEmpty)
+}
+
+@Test func authorityChangeRelinquishesBeforeRecordWrite() async throws {
+    let (root, v1, _) = try ownershipRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let channel = OwnershipChannel(capabilities: [.install, .metadata, .updateOwnership])
+    let store = ownershipStore(
+        at: root.appendingPathComponent("Packages", isDirectory: true), channel: channel)
+    try await store.open()
+
+    let record = try await installV1(store: store, v1: v1)
+    await channel.onRelinquish {
+        // Read the record on disk directly — the store's mutation lock is held
+        // during setUpdateAuthority, so asking the store would deadlock.
+        let packages = root.appendingPathComponent("Packages", isDirectory: true)
+        let metadata = URL(fileURLWithPath: packages.path)
+            .appendingPathComponent("\(record.packageId.rawValue)/metadata.json")
+        guard let data = try? Data(contentsOf: metadata) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(PackageRecord.self, from: data).updateAuthority
+    }
+
+    try await store.setUpdateAuthority(id: record.packageId, authority: .external)
+
+    // The guest call saw the old authority: it ran before the record write.
+    #expect(await channel.relinquishCalls == [record.packageId])
+    #expect(await channel.relinquishSawAuthority == .manual)
+    #expect(try await store.listManagedPackages().first?.updateAuthority == .external)
+}
+
+@Test func authorityChangeWithinClaimingSetSkipsRelinquish() async throws {
+    let (root, v1, _) = try ownershipRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let channel = OwnershipChannel(capabilities: [.install, .metadata, .updateOwnership])
+    let store = ownershipStore(
+        at: root.appendingPathComponent("Packages", isDirectory: true), channel: channel)
+    try await store.open()
+
+    let record = try await installV1(store: store, v1: v1)
+    try await store.setUpdateAuthority(id: record.packageId, authority: .apkrun)
+
+    #expect(await channel.relinquishCalls.isEmpty)
+    #expect(try await store.listManagedPackages().first?.updateAuthority == .apkrun)
+}
+
+@Test func authorityChangeWithoutRuntimeBecomesPostBootTask() async throws {
+    let (root, v1, _) = try ownershipRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let packages = root.appendingPathComponent("Packages", isDirectory: true)
+
+    // Install once with a channel, then reopen without a runtime.
+    let seedChannel = OwnershipChannel(capabilities: [.install, .metadata])
+    let seedStore = ownershipStore(at: packages, channel: seedChannel)
+    try await seedStore.open()
+    let record = try await installV1(store: seedStore, v1: v1)
+
+    let offlineStore = PackageStore(
+        packagesDirectory: packages,
+        runtimeAccess: nil,
+        inspector: { _ in
+            APKFacts(
+                packageID: PackageID(rawValue: "io.apkrun.fixture.helloupdate")!,
+                versionCode: 1,
+                versionName: "1.0",
+                splitName: nil,
+                displayName: "HelloUpdate",
+                minSDK: 29,
+                targetSDK: 37,
+                nativeABIs: ["arm64-v8a"])
+        },
+        importVerifier: PackageStore.legacyImportVerifier)
+    try await offlineStore.open()
+    try await offlineStore.setUpdateAuthority(id: record.packageId, authority: .external)
+    #expect(try await offlineStore.listManagedPackages().first?.updateAuthority == .external)
+
+    // The deferred relinquish replays when a runtime attaches (§5.5 post-boot task).
+    let channel = OwnershipChannel(capabilities: [.install, .metadata, .updateOwnership])
+    let recoveredStore = ownershipStore(at: packages, channel: channel)
+    try await recoveredStore.open()
+    #expect(await channel.relinquishCalls == [])
+    try await recoveredStore.recoverPendingTransactions()
+    #expect(await channel.relinquishCalls == [record.packageId])
 }

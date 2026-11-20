@@ -240,8 +240,14 @@ public actor AppWrapperGenerator {
             throw error
         }
 
-        // cdhash of the staged bundle (from the cloned launcher signature).
-        let cdhash = WrapperCodeSign.cdhash(of: stagedBundle) ?? ""
+        // 9. sign ad-hoc, verify strictly, read the cdhash (wrapper.md §7.1).
+        let cdhash: String
+        do {
+            cdhash = try WrapperSigner.sign(bundleURL: stagedBundle, bundleID: bundleID)
+        } catch {
+            try? fileManager.removeItem(at: staging)
+            throw error
+        }
 
         // 10. registry pending entry before placement.
         var entry = WrapperRegistryEntry(

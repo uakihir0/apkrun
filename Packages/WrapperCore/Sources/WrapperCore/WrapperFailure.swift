@@ -50,6 +50,9 @@ public enum WrapperFailure: APKRunError, Equatable {
     /// The package has no registered wrapper.
     case wrapperNotFound(RuntimePackageID)
 
+    /// `codesign` exited non-zero. Status and message are logged.
+    case signingFailed(status: Int32, message: String)
+
     /// Validation of a generated bundle failed.
     case verificationFailed(String)
 
@@ -81,6 +84,7 @@ public enum WrapperFailure: APKRunError, Equatable {
         case .nameConflict: "nameConflict"
         case .wrapperExists: "wrapperExists"
         case .wrapperNotFound: "wrapperNotFound"
+        case .signingFailed: "signingFailed"
         case .verificationFailed: "verificationFailed"
         case .registrationFailed: "registrationFailed"
         case .registryUnavailable: "registryUnavailable"
@@ -116,6 +120,11 @@ public enum WrapperFailure: APKRunError, Equatable {
             ]
         case .wrapperNotFound(let packageID):
             ["app": .text(packageID.rawValue)]
+        case .signingFailed(let status, let message):
+            [
+                "status": .count(Int(status)),
+                "reason": .text(message),
+            ]
         case .verificationFailed(let reason):
             ["reason": .text(reason)]
         case .registrationFailed(let status):

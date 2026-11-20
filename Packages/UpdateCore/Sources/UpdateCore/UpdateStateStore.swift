@@ -76,6 +76,20 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
             self.cursor = cursor
             self.reopenAfterInstall = reopenAfterInstall
         }
+
+        /// Decodes a summary, tolerating rows written before
+        /// `reopenAfterInstall` existed (§7.3, added later).
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            versionCode = try container.decodeIfPresent(VersionCode.self, forKey: .versionCode)
+            versionName = try container.decodeIfPresent(String.self, forKey: .versionName)
+            provider = try container.decode(ProviderType.self, forKey: .provider)
+            signerDigests = try container.decodeIfPresent(
+                [SHA256Digest].self, forKey: .signerDigests)
+            cursor = try container.decodeIfPresent(ProviderCursor.self, forKey: .cursor)
+            reopenAfterInstall =
+                try container.decodeIfPresent(Bool.self, forKey: .reopenAfterInstall) ?? false
+        }
     }
 
     /// Creates an empty state row.

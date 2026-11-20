@@ -658,6 +658,11 @@ public actor UpdateCoordinator {
         // §7.1–§7.2: the gentle gate admits the install or queues it as
         // `staged`; user-initiated runs jump ahead of automatic ones.
         let userInitiated = trigger == .userInitiated || trigger == .manual
+        // §7.3: a user-initiated update brings Android up before the gate
+        // evaluates GU1; an automatic run waits for a ready runtime.
+        if userInitiated, await runtime.runtimeState != .ready {
+            try? await runtime.ensureReady(.user)
+        }
         guard await gate.requestInstall(packageID, userInitiated: userInitiated) else {
             return .staged
         }
@@ -754,7 +759,8 @@ public actor UpdateCoordinator {
         do {
             try await runtime.ensureReady(.update)
         } catch {
-            await gate.finishInstall(packageID)
+            await pumpQueuedInstalls(
+                after: packageID, trigger: trigger, runtime: runtime, gate: gate)
             return await finishFailedInstall(
                 packageID, record: record, cursor: cursor,
                 candidateVersionCode: expectedVersionCode, provider: provider,
@@ -762,31 +768,61 @@ public actor UpdateCoordinator {
                 trigger: trigger, started: started)
         }
 
-        // §7.2: the install runs under a `storeOperation` assertion.
-        let assertion = await runtime.assertStoreOperation()
-        // §7.2 race boundary: past `requestCommit` the Android commit is
-        // requested. A session that opened while the update streamed
-        // cancelled the install; it returns to `staged` and the gate slot
-        // frees for the next queued package.
-        guard await gate.requestCommit(packageID) else {
-            assertion.release()
-            await gate.finishInstall(packageID)
-            setPhase(packageID, .staged)
-            return .staged
+        // §7.2: the install runs under a `storeOperation` assertion, which
+        // also holds the host's package-mutation guard so a stop or restart
+        // waits for the install.
+        let assertion: UpdateActivityAssertion
+        do {
+            assertion = try await runtime.assertStoreOperation()
+        } catch {
+            await pumpQueuedInstalls(
+                after: packageID, trigger: trigger, runtime: runtime, gate: gate)
+            return await finishFailedInstall(
+                packageID, record: record, cursor: cursor,
+                candidateVersionCode: expectedVersionCode, provider: provider,
+                failure: .installFailed(detail: "assertStoreOperation(\(error))"),
+                trigger: trigger, started: started)
         }
+        // §7.2 race boundary: the install stays `preCommit` while it
+        // streams, so a session that opens cancels it back to `staged`;
+        // `installStaged` runs `requestCommit` at the real commit point,
+        // after which a session waits up to 30 s (runtime-daemon.md §7.1).
         let outcome = await performGatedInstall(
             packageID, record: record,
             expectedVersionCode: expectedVersionCode,
             expectedSigners: expectedSigners, provider: provider,
             cursor: cursor, trigger: trigger, runtime: runtime,
-            started: started)
+            gate: gate, started: started)
         assertion.release()
-        await gate.finishInstall(packageID)
+        await pumpQueuedInstalls(
+            after: packageID, trigger: trigger, runtime: runtime, gate: gate)
         // §7.3: "Update Now" reopens the app after a successful update.
         if case .installed = outcome, reopenAfterInstall {
             await runtime.reopen(packageID)
         }
         return outcome
+    }
+
+    /// Frees the finished install's gate slot, then admits and runs each
+    /// queued install until the queue drains or an install resumes (the
+    /// resumed install continues the chain itself).
+    private func pumpQueuedInstalls(
+        after packageID: PackageID,
+        trigger: UpdateTrigger,
+        runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate
+    ) async {
+        var next = await gate.finishInstall(packageID)
+        while let admitted = next {
+            if await resumeStagedInstall(
+                admitted, trigger: trigger, runtime: runtime, gate: gate
+            ) != nil {
+                return
+            }
+            // No staged row for the admitted package: free its slot and
+            // try the one after it.
+            next = await gate.finishInstall(admitted)
+        }
     }
 
     /// `installStaged` plus the H1 confirmation, called with the gate's
@@ -800,6 +836,7 @@ public actor UpdateCoordinator {
         cursor: ProviderCursor?,
         trigger: UpdateTrigger,
         runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate,
         started: Date
     ) async -> UpdateInstallOutcome {
 
@@ -808,7 +845,8 @@ public actor UpdateCoordinator {
         do {
             updated = try await store.installStaged(
                 for: packageID, enableRollback: true,
-                hasOpenSession: { await runtime.hasActiveUse(packageID) })
+                hasOpenSession: { await runtime.hasActiveUse(packageID) },
+                commitGate: { await gate.requestCommit(packageID) })
         } catch PackageStoreFailure.packageInUse {
             // The gate closed between the check and the call: stay staged.
             setPhase(packageID, .staged)

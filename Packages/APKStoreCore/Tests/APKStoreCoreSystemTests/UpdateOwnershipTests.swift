@@ -196,7 +196,7 @@ func reinstallSkipsOwnershipForNonClaimingAuthorities(authority: UpdateAuthority
     #expect(request.requestUpdateOwnership)
 }
 
-@Test func updateSkipsOwnershipForExternalAuthority() async throws {
+@Test func updateRefusesInstallUnderExternalAuthority() async throws {
     let (root, v1, v2) = try ownershipRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     let channel = OwnershipChannel(capabilities: [.install, .metadata, .updateOwnership])
@@ -205,14 +205,17 @@ func reinstallSkipsOwnershipForNonClaimingAuthorities(authority: UpdateAuthority
     try await store.open()
 
     let record = try await installV1(store: store, v1: v1)
-    try await store.setUpdatePolicy(for: record.packageId, authority: .external)
     try await stageV2(store: store, v2: v2)
+    try await store.setUpdatePolicy(for: record.packageId, authority: .external)
 
-    _ = try await store.installStaged(for: record.packageId, enableRollback: false) { false }
-
-    let request = try #require(await channel.requests.last)
-    #expect(request.mode == .update)
-    #expect(!request.requestUpdateOwnership)
+    // §2.1: an externally-owned package's staged update never reaches the
+    // Android commit.
+    do {
+        _ = try await store.installStaged(for: record.packageId, enableRollback: false) { false }
+        Issue.record("expected authorityDoesNotAllowUpdates")
+    } catch PackageStoreFailure.authorityDoesNotAllowUpdates {
+    }
+    #expect(await channel.requests.last?.mode != .update)
 }
 
 @Test func recordStoresAndroidUpdateOwner() async throws {

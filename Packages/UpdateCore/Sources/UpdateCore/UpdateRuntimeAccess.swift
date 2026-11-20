@@ -85,8 +85,9 @@ public protocol UpdateRuntimeAccess: Sendable {
     /// Reopens the package after Update Now (§7.3).
     func reopen(_ package: PackageID) async
     /// Holds a `storeOperation` activity assertion for an install's
-    /// duration (§7.2; runtime-daemon.md §5.1).
-    func assertStoreOperation() async -> UpdateActivityAssertion
+    /// duration (§7.2; runtime-daemon.md §5.1). Throws when the runtime is
+    /// already stopping — the install fails instead of racing shutdown.
+    func assertStoreOperation() async throws -> UpdateActivityAssertion
 }
 
 extension UpdateRuntimeAccess {

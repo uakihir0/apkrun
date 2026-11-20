@@ -1440,7 +1440,8 @@ public actor PackageStore {
     public func installStaged(
         for packageID: PackageID,
         enableRollback: Bool,
-        hasOpenSession: @Sendable () async -> Bool
+        hasOpenSession: @Sendable () async -> Bool,
+        commitGate: (@Sendable () async -> Bool)? = nil
     ) async throws -> PackageRecord {
         try requireWritable()
         guard let runtimeAccess else { throw PackageStoreFailure.runtimeUnavailable }
@@ -1515,6 +1516,13 @@ public actor PackageStore {
             )
         )
         try injectFault(kind: "update", step: "begin")
+
+        // §7.2 race boundary: the last moment a pre-commit install can be
+        // cancelled back to `staged` before the guest commit is requested.
+        if let commitGate, await !commitGate() {
+            try appendAbort(transaction, reason: "installCancelled")
+            throw PackageStoreFailure.packageInUse(packageID)
+        }
         try appendStep(transaction, kind: "update", step: "guestCommitRequested")
         try injectFault(kind: "update", step: "guestCommitRequested")
 

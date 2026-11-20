@@ -100,9 +100,13 @@ class DiagnosticsService(
                     }
                     output.write(buffer, 0, read)
                 } else if (!process.isAlive) {
-                    if (reader.read() < 0) {
+                    // The dead process left no writer: drain what it wrote and
+                    // stop at end of stream. A single-byte peek would drop it.
+                    val read = reader.read(buffer)
+                    if (read < 0) {
                         break
                     }
+                    output.write(buffer, 0, read)
                 } else if (System.nanoTime() > deadlineNanos) {
                     process.destroyForcibly()
                     throw IllegalStateException(

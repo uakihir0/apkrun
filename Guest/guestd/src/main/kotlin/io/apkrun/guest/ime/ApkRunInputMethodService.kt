@@ -180,13 +180,15 @@ class ApkRunInputMethodService : InputMethodService() {
                             .setBuildType(Build.TYPE)
                             .build(),
                     runtimeImageVersion = "",
-                ) { command ->
-                    // The InputConnection belongs to the main thread (input.md §5.6).
-                    handler.post { apply(command) }
-                }
+                    onBound = { handler.post { publish() } },
+                    onCommand = { command ->
+                        // The InputConnection belongs to the main thread (input.md §5.6).
+                        handler.post { apply(command) }
+                    },
+                )
             channel = imeChannel
             // The host reads the editor state right after the handshake: a focused editor
-            // announces itself (input.md §5.1).
+            // announces itself (input.md §5.1). onBound fires once the handshake is accepted.
             imeChannel.serve()
         } catch (error: GuestProtocolFailure) {
             AgentLog.warning("the IME channel closed: ${error::class.java.simpleName}")
@@ -206,6 +208,11 @@ class ApkRunInputMethodService : InputMethodService() {
 
     /** Applies a command to the bound editor, main thread. */
     private fun apply(command: io.apkrun.guest.protocol.v1.ImeCommand) {
+        // Only the connection for the display that hosts the bound editor may type into it:
+        // commands for another display are dropped (input.md §5.1, R-05).
+        if (command.displayId != tracker.boundDisplayId) {
+            return
+        }
         val connection = currentInputConnection?.let(::AndroidEditorConnection)
         applier.apply(command, connection)
     }

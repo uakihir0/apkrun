@@ -156,9 +156,12 @@ class ImeStateTracker {
     private var composingEnd = -1
     private var cursorRect: Rect? = null
 
-    /** An editor bound: `onStartInput` (input.md §5.6). */
+    /**
+     * An editor bound: `onStartInput` (input.md §5.6). A `TYPE_NULL` start is a non-text view, so
+     * it is not an editor for the host (input.md §5.1).
+     */
     fun editorStarted(displayId: Int, packageName: String, inputType: Int, imeOptions: Int) {
-        focused = true
+        focused = (inputType and TYPE_MASK_CLASS) != TYPE_NULL
         this.displayId = displayId
         this.packageName = packageName
         this.inputType = inputType
@@ -189,6 +192,16 @@ class ImeStateTracker {
     /** `onUpdateCursorAnchorInfo`: the insertion marker rect in display pixels. */
     fun cursorRect(rect: Rect?) {
         cursorRect = rect
+    }
+
+    /** The display of the bound editor, for the command display check (input.md §5.1). */
+    val boundDisplayId: Int
+        get() = displayId
+
+    /** `EditorInfo.inputType` masks; the constants are inlined so the JVM tests need no stubs. */
+    private companion object {
+        const val TYPE_MASK_CLASS = 0xF
+        const val TYPE_NULL = 0
     }
 
     /** The wire message. */

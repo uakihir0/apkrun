@@ -51,6 +51,7 @@ class SessionManager(now: () -> Long) {
         }
         handshaking = null
         sessions.openControl(token)
+        ActiveControlToken.set(token)
         control = connection
         return true
     }
@@ -89,6 +90,7 @@ class SessionManager(now: () -> Long) {
         }
         control = null
         sessions.close()
+        ActiveControlToken.set(null)
         closeSecondaries()
         return true
     }
@@ -100,6 +102,7 @@ class SessionManager(now: () -> Long) {
         val previous = control
         control = null
         sessions.close()
+        ActiveControlToken.set(null)
         closeSecondaries()
         previous?.let { runCatching { it.close() } }
     }

@@ -55,9 +55,9 @@ final class SplitInstallTests: XCTestCase {
             }
 
             let packageID = try Self.packageID()
-            let record = try Self.record(for: packageID, in: session.paths)
+            let artifactSet = try await service.store.installedArtifactSet(for: packageID)
             XCTAssertEqual(
-                record.artifactSet.files.map(\.name).sorted(),
+                artifactSet?.files.map(\.name).sorted(),
                 [
                     "base.apk",
                     "split_config.arm64_v8a.apk",

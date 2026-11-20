@@ -376,7 +376,8 @@ struct APKSignatureVerifier: Sendable {
         flushSection()
         feed(data[layout.cdOffset..<layout.cdOffset + layout.cdSize])
         flushSection()
-        var eocd = data[layout.eocdOffset..<data.count]
+        // subdata re-bases indices at 0; a Data slice keeps the file's offsets.
+        var eocd = data.subdata(in: layout.eocdOffset..<data.count)
         var le = UInt32(sigBlockOffset).littleEndian
         Swift.withUnsafeBytes(of: &le) { bytes in
             eocd.replaceSubrange(16..<20, with: bytes)

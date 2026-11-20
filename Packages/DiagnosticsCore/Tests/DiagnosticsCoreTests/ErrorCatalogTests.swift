@@ -78,7 +78,15 @@ import Testing
                 "unsupportedABI", "minSdkTooHigh", "targetSdkTooLow", "expansionFilesNotSupported",
                 "reservedPackage", "tooLarge", "resourcesArscNotAligned", "signerMismatch",
                 "alreadyInstalled", "downgradeRefused", "packageAlreadyManaged",
+                "packageInUse", "stagedUpdateMissing",
             ].map { "store.\($0)" }
+            + [
+                "providerNotConfigured", "providerMetadataInvalid", "providerHTTPStatus",
+                "providerRateLimited", "providerSignatureInvalid", "providerUnreachable",
+                "ambiguousAsset", "noCompatibleArtifact", "downloadFailed", "hashMismatch",
+                "validation", "installFailed", "healthCheckFailed", "rollbackFailed",
+                "tooLarge", "cancelled", "authorityDoesNotAllowUpdates",
+            ].map { "update.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)
     #expect(
@@ -113,6 +121,7 @@ import Testing
                 || entry.code.hasPrefix("wrapper.")
                 || entry.code.hasPrefix("integration.")
                 || entry.code.hasPrefix("store.")
+                || entry.code.hasPrefix("update.")
         )
         for text in entry.message?.values ?? [String: String]().values {
             #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

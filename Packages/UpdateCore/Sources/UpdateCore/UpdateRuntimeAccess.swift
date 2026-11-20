@@ -88,6 +88,14 @@ public protocol UpdateRuntimeAccess: Sendable {
     /// duration (§7.2; runtime-daemon.md §5.1). Throws when the runtime is
     /// already stopping — the install fails instead of racing shutdown.
     func assertStoreOperation() async throws -> UpdateActivityAssertion
+    /// Launches the package on the health-check display for H2–H4
+    /// (§8.2): a system-session DisplayPool lease, no window, no
+    /// force-stop afterwards.
+    func healthCheckLaunch(_ package: PackageID, timeouts: UpdateHealthCheckTimeouts) async
+        -> HealthLaunchResult
+    /// Whether the package has ever produced a first frame in an APKRun
+    /// session (§8.1 `processOnly` level choice).
+    func hasDrawnFrame(_ package: PackageID) async -> Bool
 }
 
 extension UpdateRuntimeAccess {
@@ -105,4 +113,13 @@ extension UpdateRuntimeAccess {
     public func assertStoreOperation() async -> UpdateActivityAssertion {
         UpdateActivityAssertion()
     }
+    /// A channel that cannot launch answers like a missing launcher: the
+    /// H2–H4 steps then fail as a launch failure.
+    public func healthCheckLaunch(_ package: PackageID, timeouts: UpdateHealthCheckTimeouts) async
+        -> HealthLaunchResult
+    {
+        .launchFailed(detail: "no session channel")
+    }
+    /// A channel without session history cannot prove a frame ever drew.
+    public func hasDrawnFrame(_ package: PackageID) async -> Bool { false }
 }

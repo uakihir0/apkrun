@@ -183,6 +183,8 @@ public actor EmbeddedUpdateService {
             {
             case .installed(let from, let to):
                 return .updated(from: from, to: to)
+            case .rolledBack(let failure):
+                return .rolledBack(reason: failure.errorCode)
             case .keptAfterFailedHealthCheck(let failure):
                 return .keptAfterFailedHealthCheck(reason: failure.errorCode)
             case .staged:
@@ -205,8 +207,9 @@ public actor EmbeddedUpdateService {
             storeBusy: { [store] packageID in
                 await store.packageMutationInProgress(packageID)
             },
-            // TODO(#42): launch health checks need a DisplayPool slot; v1's
-            // H1 is `versionOnly` for every package.
+            // §8.2: the health launch reuses the session's display lease; a
+            // pool with no free scanout answers `.launchFailed` rather than
+            // blocking the install queue on a display slot.
             requiresDisplaySlot: { _ in false },
             displaySlotFree: { true })
         serviceGate = gate
@@ -949,6 +952,8 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
     private let reopenPackage: @Sendable (PackageID) async throws -> Void
     private let ready: @Sendable (UpdateStartReason) async throws -> Void
     private let assertOperation: @Sendable () async throws -> UpdateActivityAssertion
+    private let healthLaunch: @Sendable (PackageID, UpdateHealthCheckTimeouts) async -> HealthLaunchResult
+    private let drawnFrame: @Sendable (PackageID) async -> Bool
 
     init(
         stateOf: @escaping @Sendable () async -> WireRuntimeState,
@@ -959,7 +964,9 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         endAll: @escaping @Sendable (PackageID) async -> Void,
         reopenPackage: @escaping @Sendable (PackageID) async throws -> Void,
         ready: @escaping @Sendable (UpdateStartReason) async throws -> Void,
-        assertOperation: @escaping @Sendable () async throws -> UpdateActivityAssertion
+        assertOperation: @escaping @Sendable () async throws -> UpdateActivityAssertion,
+        healthLaunch: @escaping @Sendable (PackageID, UpdateHealthCheckTimeouts) async -> UpdateCore.HealthLaunchResult,
+        drawnFrame: @escaping @Sendable (PackageID) async -> Bool
     ) {
         self.stateOf = stateOf
         self.inUse = inUse
@@ -970,6 +977,8 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         self.reopenPackage = reopenPackage
         self.ready = ready
         self.assertOperation = assertOperation
+        self.healthLaunch = healthLaunch
+        self.drawnFrame = drawnFrame
     }
 
     var runtimeState: WireRuntimeState {
@@ -1006,6 +1015,19 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
 
     func assertStoreOperation() async throws -> UpdateActivityAssertion {
         try await assertOperation()
+    }
+
+    /// §8.2: the session service runs the health launch when it knows how;
+    /// a service without health-launch support answers `.launchFailed`, the
+    /// same as no channel.
+    func healthCheckLaunch(_ packageID: PackageID, timeouts: UpdateHealthCheckTimeouts) async
+        -> HealthLaunchResult
+    {
+        await healthLaunch(packageID, timeouts)
+    }
+
+    func hasDrawnFrame(_ packageID: PackageID) async -> Bool {
+        await drawnFrame(packageID)
     }
 }
 
@@ -1214,6 +1236,30 @@ extension RuntimeHost {
                     inner.release()
                     Task { await self.finishPackageMutation() }
                 }
+            },
+            // §8.2: the session service runs the health-check launch; a
+            // service without it answers `.launchFailed`, the same as no
+            // channel.
+            healthLaunch: { [weak self] packageID, timeouts in
+                guard let self,
+                    let service = await self.headlessSessionService
+                        as? DaemonHeadlessSessionService,
+                    let wireID = RuntimePackageID(rawValue: packageID.rawValue)
+                else {
+                    return .launchFailed(detail: "noSessionService")
+                }
+                return await service.healthCheckLaunch(
+                    packageID: wireID, timeouts: timeouts)
+            },
+            drawnFrame: { [weak self] packageID in
+                guard let self,
+                    let service = await self.headlessSessionService
+                        as? DaemonHeadlessSessionService,
+                    let wireID = RuntimePackageID(rawValue: packageID.rawValue)
+                else {
+                    return false
+                }
+                return await service.hasDrawnFrame(packageID: wireID)
             })
     }
 
@@ -1228,8 +1274,9 @@ extension RuntimeHost {
                 return await self.packageQueryServiceInstance().store
                     .packageMutationInProgress(packageID)
             },
-            // TODO(#42): launch health checks need a DisplayPool slot; v1's
-            // H1 is `versionOnly` for every package.
+            // §8.2: the health launch reuses the session's display lease; a
+            // pool with no free scanout answers `.launchFailed` rather than
+            // blocking the install queue on a display slot.
             requiresDisplaySlot: { _ in false },
             displaySlotFree: { true })
         updateGate = gate

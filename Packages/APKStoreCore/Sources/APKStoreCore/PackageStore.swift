@@ -1929,6 +1929,38 @@ public actor PackageStore {
         try writeJSON(settings, to: url)
     }
 
+    /// Records the outcome of the post-update health check on the package's
+    /// last operation (package-store.md §7): clears `healthPending` and sets
+    /// `healthResult`.
+    public func recordHealth(_ packageID: PackageID, result: HealthResult) async throws {
+        try requireWritable()
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard var record = records[packageID] else { throw PackageStoreFailure.packageNotFound }
+        record.lastOperation?.healthPending = false
+        record.lastOperation?.healthResult = result
+        record.updatedAt = clock()
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        try writeRecord(record, directory: directory)
+        records[packageID] = record
+    }
+
+    /// Marks an installed package `broken` (update-system.md §8.3): a failed
+    /// rollback leaves the failed update installed and unusable.
+    public func markBroken(_ packageID: PackageID, reason: BrokenReason) async throws {
+        try requireWritable()
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard var record = records[packageID] else { throw PackageStoreFailure.packageNotFound }
+        record.state = .broken(reason)
+        record.updatedAt = clock()
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        try writeRecord(record, directory: directory)
+        records[packageID] = record
+    }
+
     /// Moves a package to a different update authority (package-store.md §6.3).
     ///
     /// Leaving an authority that claims ownership (`apkrun`, `manual`) for one that
@@ -2732,7 +2764,7 @@ public actor PackageStore {
         case .needsReinstall, .broken(.reinstallFailed):
             return true
         case .installed, .uninstalledKeepingData, .broken(.removedInAndroid),
-            .broken(.artifactMissing), .broken(.signerChanged):
+            .broken(.artifactMissing), .broken(.signerChanged), .broken(.rollbackFailed):
             return false
         }
     }
@@ -2743,7 +2775,7 @@ public actor PackageStore {
             return true
         case .broken(.removedInAndroid), .broken(.artifactMissing), .broken(.reinstallFailed):
             return true
-        case .uninstalledKeepingData, .broken(.signerChanged):
+        case .uninstalledKeepingData, .broken(.signerChanged), .broken(.rollbackFailed):
             return false
         }
     }
@@ -4055,7 +4087,8 @@ public actor PackageStore {
             startedAt: startedAt,
             finishedAt: clock(),
             fromVersionCode: old.versionCode,
-            result: .succeeded
+            result: .succeeded,
+            healthPending: true
         )
         record.updatedAt = clock()
         return record

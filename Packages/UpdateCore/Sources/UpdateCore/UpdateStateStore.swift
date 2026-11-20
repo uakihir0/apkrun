@@ -237,6 +237,26 @@ public actor UpdateStateStore {
         scheduleWrite()
     }
 
+    /// §8.4: adds a version to the package's skip list; V6 refuses it until
+    /// `unskipVersion` removes it.
+    public func skipVersion(_ packageID: PackageID, versionCode: VersionCode) async {
+        await update(packageID) { state in
+            if !state.skippedVersions.contains(versionCode) {
+                state.skippedVersions.append(versionCode)
+            }
+        }
+        await flush()
+    }
+
+    /// §8.4: removes a version from the package's skip list ("Try Again" in
+    /// the history; `apkrun update unskip`).
+    public func unskipVersion(_ packageID: PackageID, versionCode: VersionCode) async {
+        await update(packageID) { state in
+            state.skippedVersions.removeAll { $0 == versionCode }
+        }
+        await flush()
+    }
+
     /// Writes pending changes now (at most every `writeInterval` normally).
     public func flush() async {
         writeTask?.cancel()

@@ -1023,6 +1023,7 @@ public actor EmbeddedPackageService: RuntimeService {
             case .signerChanged: .broken("signerChanged")
             case .artifactMissing: .broken("artifactMissing")
             case .reinstallFailed(let error): .broken("\(error.domain).\(error.code)")
+            case .rollbackFailed: .broken("rollbackFailed")
             }
         }
     }

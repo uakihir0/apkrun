@@ -39,6 +39,20 @@ public protocol HostNotificationSink: Sendable {
     /// update-system.md §6 — a candidate whose signer or provider metadata
     /// does not match is the case the user needs to see.
     func notifyUpdateRefused(_ notification: UpdateNotification) async
+    /// Posts the §8.3 "rolled back" notification — the failed version was
+    /// reverted and will not be offered again; app data is untouched.
+    func notifyUpdateRolledBack(_ notification: UpdateNotification) async
+    /// Posts the §8.3 "update kept after a failed health check"
+    /// notification: the user chooses Keep <new>, Roll Back, or
+    /// Restore <old> (erases data) when no rollback mechanism exists.
+    func notifyUpdateKeptAfterFailedHealthCheck(_ notification: UpdateNotification) async
+}
+
+extension HostNotificationSink {
+    /// Sinks that cannot render the §8.3 notices may drop them; the phases
+    /// and history still record the outcome.
+    public func notifyUpdateRolledBack(_ notification: UpdateNotification) async {}
+    public func notifyUpdateKeptAfterFailedHealthCheck(_ notification: UpdateNotification) async {}
 }
 
 /// The result of one coordinator check run.
@@ -604,8 +618,11 @@ public actor UpdateCoordinator {
         case staged
         /// Installed and H1 confirmed.
         case installed(from: VersionCode, to: VersionCode)
-        /// H1 did not confirm within its 30 s budget; the new version is kept
-        /// until #44's rollback or the user's choice (§8.3).
+        /// Rolled back to the previous set after a failed health check; the
+        /// failed versionCode was skipped (§8.3–§8.4). App data is untouched.
+        case rolledBack(UpdateFailure)
+        /// The health check failed but no rollback ran — autoRollback is off
+        /// or no mechanism exists; the new version stays installed (§8.3).
         case keptAfterFailedHealthCheck(UpdateFailure)
         /// The run ended with an install failure.
         case failed(UpdateFailure)
@@ -919,43 +936,38 @@ public actor UpdateCoordinator {
                 trigger: trigger, started: started)
         }
 
-        // H1 (§8.1): Android reports the staged versionCode and signer set
-        // within 30 s.
+        // §8.1 health check (H1–H4 at the level of §8.1), then §8.3 outcomes.
         setPhase(packageID, .healthChecking)
-        let deadline = ContinuousClock.now + healthCheckBudget
-        var confirmed = false
-        var found: VersionCode?
-        while true {
-            if let info = try? await store.installedPackageInfo(packageID) {
-                found = info.versionCode
-                if info.versionCode == expectedVersionCode,
-                    Set(info.signingDigests) == expectedSigners
-                {
-                    confirmed = true
-                    break
-                }
-            }
-            guard ContinuousClock.now < deadline else { break }
-            await healthCheckTickSleep()
-        }
-        guard confirmed else {
-            let failure = UpdateFailure.healthCheckFailed(
-                detail: "versionNotConfirmed(found: \(found.map(String.init) ?? "none"))")
-            let reason = RollbackReason.healthCheckFailed(failure)
-            await stateStore.update(packageID) { state in
-                state.cursor = cursor
-                state.phase = nil
-                state.candidate = nil
-                state.stagedAt = nil
-            }
-            setPhase(packageID, .completed(.keptAfterFailedHealthCheck(reason: reason)))
-            await appendHistory(
-                record: record, to: expectedVersionCode,
+        let settings = try? await store.packageSettings(for: packageID)
+        let launchEnabled = settings?.update["healthCheckLaunch"] != "false"
+        let autoRollback = settings?.update["autoRollback"] != "false"
+        let hasLauncher =
+            ((try? await store.installedPackageInfo(packageID))?.launchableComponent) != nil
+        let level = HealthCheckLevel.level(
+            hasLauncherActivity: hasLauncher,
+            healthCheckLaunchEnabled: launchEnabled,
+            hasProducedFrame: await runtime.hasDrawnFrame(packageID))
+        let checker = UpdateHealthChecker(
+            installedInfo: { packageID in
+                try await self.store.installedPackageInfo(packageID)
+            },
+            launch: { packageID, timeouts in
+                await runtime.healthCheckLaunch(packageID, timeouts: timeouts)
+            },
+            sleep: { _ in await self.healthCheckTickSleep() })
+        if let healthFailure = await checker.run(
+            packageID,
+            expectedVersionCode: expectedVersionCode,
+            expectedSigners: expectedSigners,
+            level: level,
+            timeouts: UpdateHealthCheckTimeouts(metadata: healthCheckBudget))
+        {
+            return await finishFailedHealthCheck(
+                packageID, record: record, cursor: cursor,
+                expectedVersionCode: expectedVersionCode,
                 provider: provider, trigger: trigger,
-                outcome: "keptAfterFailedHealthCheck", failure: failure.errorCode,
-                started: started)
-            await stateStore.flush()
-            return .keptAfterFailedHealthCheck(failure)
+                healthFailure: healthFailure,
+                autoRollback: autoRollback, started: started)
         }
 
         await stateStore.update(packageID) { state in
@@ -973,6 +985,158 @@ public actor UpdateCoordinator {
             outcome: "updated", failure: nil, started: started)
         await stateStore.flush()
         return .installed(from: record.versionCode, to: updated.versionCode)
+    }
+
+    /// §8.3: the health check failed after a successful install. With
+    /// `update.autoRollback` on (the default) the store rolls back to the
+    /// previous set and the failed versionCode is skipped. A rollback that
+    /// cannot run — no mechanism or no previous set — keeps the update and
+    /// notifies the user; one that runs and fails marks the package
+    /// `broken`. With autoRollback off the update stays installed and the
+    /// user gets the kept notification. App data is never rolled back.
+    private func finishFailedHealthCheck(
+        _ packageID: PackageID,
+        record: PackageRecord,
+        cursor: ProviderCursor?,
+        expectedVersionCode: VersionCode,
+        provider: ProviderType?,
+        trigger: UpdateTrigger,
+        healthFailure: HealthCheckFailure,
+        autoRollback: Bool,
+        started: Date
+    ) async -> UpdateInstallOutcome {
+        let failure = UpdateFailure.healthCheckFailed(detail: healthFailure.detail)
+        let reason = RollbackReason.healthCheckFailed(failure)
+        await stateStore.update(packageID) { state in
+            state.cursor = cursor
+            state.phase = nil
+            state.candidate = nil
+            state.stagedAt = nil
+        }
+        if autoRollback {
+            setPhase(packageID, .rollingBack(reason))
+            do {
+                _ = try await store.rollback(
+                    packageID: packageID, allowDataLoss: false,
+                    reason: "healthCheck.\(healthFailure.step)")
+                try? await store.recordHealth(packageID, result: .failed)
+                await stateStore.update(packageID) { state in
+                    if !state.skippedVersions.contains(expectedVersionCode) {
+                        state.skippedVersions.append(expectedVersionCode)
+                    }
+                }
+                setPhase(packageID, .completed(.rolledBack(reason: reason)))
+                await appendHistory(
+                    record: record, to: expectedVersionCode,
+                    provider: provider, trigger: trigger,
+                    outcome: "rolledBack", failure: failure.errorCode,
+                    started: started)
+                await notifier?.notifyUpdateRolledBack(
+                    UpdateNotification(
+                        packageID: packageID, displayName: record.displayName,
+                        versionCode: expectedVersionCode, versionName: nil))
+                await stateStore.flush()
+                return .rolledBack(failure)
+            } catch PackageStoreFailure.rollbackUnavailable {
+                // §8.3: no mechanism or no previous set — keep the update;
+                // the notification offers Keep <new> / Restore <old> (erases
+                // data).
+            } catch PackageStoreFailure.rollbackFailed(let detail) {
+                try? await store.markBroken(packageID, reason: .rollbackFailed)
+                return await finishFailedInstall(
+                    packageID, record: record, cursor: cursor,
+                    candidateVersionCode: expectedVersionCode, provider: provider,
+                    failure: .rollbackFailed(detail: detail),
+                    trigger: trigger, started: started)
+            } catch {
+                try? await store.markBroken(packageID, reason: .rollbackFailed)
+                return await finishFailedInstall(
+                    packageID, record: record, cursor: cursor,
+                    candidateVersionCode: expectedVersionCode, provider: provider,
+                    failure: .rollbackFailed(detail: "\(error)"),
+                    trigger: trigger, started: started)
+            }
+        }
+        // Kept: autoRollback off, or rollback unavailable (§8.3). The user
+        // rolls back manually (`apkrun rollback`, §8.5) or restores the old
+        // version accepting data loss.
+        try? await store.recordHealth(packageID, result: .failed)
+        setPhase(packageID, .completed(.keptAfterFailedHealthCheck(reason: reason)))
+        await appendHistory(
+            record: record, to: expectedVersionCode,
+            provider: provider, trigger: trigger,
+            outcome: "keptAfterFailedHealthCheck", failure: failure.errorCode,
+            started: started)
+        await notifier?.notifyUpdateKeptAfterFailedHealthCheck(
+            UpdateNotification(
+                packageID: packageID, displayName: record.displayName,
+                versionCode: expectedVersionCode, versionName: nil))
+        await stateStore.flush()
+        return .keptAfterFailedHealthCheck(failure)
+    }
+
+    /// The result of a §8.5 user-initiated rollback.
+    public enum UpdateRollbackOutcome: Sendable, Equatable {
+        /// Rolled back to the given version; the current one was skipped.
+        case rolledBack(to: VersionCode)
+        /// No `previous/` set or no rollback mechanism (§7.3).
+        case unavailable
+        /// The rollback ran and failed; the package is `broken`.
+        case failed(UpdateFailure)
+    }
+
+    /// §8.5: the user asked to roll back to `previous/`
+    /// (`apkrun rollback <package>`). Runs the same `rollingBack` phase and
+    /// store operation as a health-check rollback with `.userRequested` as
+    /// the reason, and skips the rolled-back version. `allowDataLoss`
+    /// permits the §7.3 uninstall + first-install fallback; only the
+    /// confirmed "Restore (erases data)" path may pass true.
+    public func rollbackPackage(
+        _ packageID: PackageID,
+        allowDataLoss: Bool = false
+    ) async throws -> UpdateRollbackOutcome {
+        let records = (try? await store.listManagedPackages()) ?? []
+        guard let record = records.first(where: { $0.packageId == packageID }) else {
+            throw PackageStoreFailure.packageNotFound
+        }
+        let started = Date()
+        let reason = RollbackReason.userRequested
+        setPhase(packageID, .rollingBack(reason))
+        do {
+            let restored = try await store.rollback(
+                packageID: packageID, allowDataLoss: allowDataLoss,
+                reason: "userRequested")
+            await stateStore.skipVersion(packageID, versionCode: record.versionCode)
+            setPhase(packageID, .completed(.rolledBack(reason: reason)))
+            await appendHistory(
+                record: record, to: record.versionCode,
+                provider: record.updateProvider?.type, trigger: .manual,
+                outcome: "rolledBack", failure: nil, started: started)
+            await notifier?.notifyUpdateRolledBack(
+                UpdateNotification(
+                    packageID: packageID, displayName: record.displayName,
+                    versionCode: record.versionCode, versionName: record.versionName))
+            await stateStore.flush()
+            return .rolledBack(to: restored.versionCode)
+        } catch PackageStoreFailure.rollbackUnavailable {
+            setPhase(packageID, .completed(.keptAfterFailedHealthCheck(reason: reason)))
+            await appendHistory(
+                record: record, to: record.versionCode,
+                provider: record.updateProvider?.type, trigger: .manual,
+                outcome: "rollbackUnavailable", failure: nil, started: started)
+            await stateStore.flush()
+            return .unavailable
+        } catch PackageStoreFailure.rollbackFailed(let detail) {
+            try? await store.markBroken(packageID, reason: .rollbackFailed)
+            let failure = UpdateFailure.rollbackFailed(detail: detail)
+            setPhase(packageID, .completed(.skipped(.installFailed(failure))))
+            await appendHistory(
+                record: record, to: record.versionCode,
+                provider: record.updateProvider?.type, trigger: .manual,
+                outcome: "rollbackFailed", failure: failure.errorCode, started: started)
+            await stateStore.flush()
+            return .failed(failure)
+        }
     }
 
     /// Closes a failed install: saves the cursor and reports

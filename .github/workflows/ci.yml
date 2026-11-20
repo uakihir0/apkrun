@@ -114,6 +114,7 @@ jobs:
         run: rm -rf build/DebugDerivedData
       - name: Build Release products
         run: >-
+          APKRUN_GUEST_EMBED=off
           xcodebuild -project APKRun.xcodeproj -scheme APKRun
           -configuration Release -jobs 2 -derivedDataPath build/ReleaseDerivedData
           -resultBundlePath build/ci/APKRun-Release.xcresult

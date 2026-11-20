@@ -122,7 +122,7 @@ struct APKSignatureVerifier: Sendable {
             var input = Data([0xA5])
             input.appendUInt32LE(UInt32(chunks.count))
             for chunk in chunks {
-                input.append(hashChunk(chunk))
+                input.append(chunk)
             }
             return hash(input)
         }
@@ -187,9 +187,10 @@ struct APKSignatureVerifier: Sendable {
         if cdOffset >= 32, cdOffset <= data.count {
             let magicStart = cdOffset - 16
             if data.count >= magicStart + 16,
-                data[magicStart..<(magicStart + 16)] == sigBlockMagic
+                data[magicStart..<(magicStart + 16)] == sigBlockMagic,
+                let blockSize = Int(exactly: data.readUInt64LE(at: cdOffset - 24))
             {
-                sigBlockOffset = cdOffset - Int(data.readUInt64LE(at: cdOffset - 24)) - 8
+                sigBlockOffset = cdOffset - blockSize - 8
             }
         }
         return ZIPLayout(eocdOffset: eocdOffset, cdOffset: cdOffset, cdSize: cdSize, sigBlockOffset: sigBlockOffset)
@@ -197,14 +198,15 @@ struct APKSignatureVerifier: Sendable {
 
     /// Parses the signing block's ID-value pairs.
     private static func signingBlock(in data: Data, layout: ZIPLayout) -> [UInt32: Data]? {
-        guard let sigBlockOffset = layout.sigBlockOffset, sigBlockOffset >= 0 else { return nil }
-        let declaredSize = Int(data.readUInt64LE(at: sigBlockOffset))
-        guard sigBlockOffset + 8 + declaredSize <= data.count else { return nil }
+        guard let sigBlockOffset = layout.sigBlockOffset, sigBlockOffset >= 0,
+            let declaredSize = Int(exactly: data.readUInt64LE(at: sigBlockOffset))
+        else { return nil }
+        guard declaredSize >= 24, sigBlockOffset + 8 + declaredSize <= data.count else { return nil }
         var pairs: [UInt32: Data] = [:]
         var offset = sigBlockOffset + 8
         let end = sigBlockOffset + 8 + declaredSize - 24
         while offset + 8 <= end {
-            let pairSize = Int(data.readUInt64LE(at: offset))
+            guard let pairSize = Int(exactly: data.readUInt64LE(at: offset)) else { break }
             guard pairSize >= 4, offset + 8 + pairSize <= data.count else { break }
             let id = data.readUInt32LE(at: offset + 8)
             let value = data[(offset + 12)..<(offset + 8 + pairSize)]
@@ -252,7 +254,9 @@ struct APKSignatureVerifier: Sendable {
         let level: SignatureLevel = .verified
         var sawSigner = false
 
-        for signer in Self.lengthPrefixed(block) {
+        // The block value is `signers`: a length-prefixed sequence of length-prefixed
+        // signer records, so flatten the two nesting levels before iterating signers.
+        for signer in Self.lengthPrefixed(block).flatMap(Self.lengthPrefixed) {
             sawSigner = true
             let parts = Self.lengthPrefixed(signer)
             guard parts.count >= 3 else {
@@ -360,15 +364,25 @@ struct APKSignatureVerifier: Sendable {
                 }
             }
         }
+        func flushSection() {
+            if !pending.isEmpty {
+                chunks.append(variant.hashChunk(pending))
+                pending.removeAll(keepingCapacity: true)
+            }
+        }
+        // apksig chunks each of the three ZIP sections separately: a chunk never
+        // spans a section boundary.
         feed(data[0..<sigBlockOffset])
+        flushSection()
         feed(data[layout.cdOffset..<layout.cdOffset + layout.cdSize])
+        flushSection()
         var eocd = data[layout.eocdOffset..<data.count]
         var le = UInt32(sigBlockOffset).littleEndian
         Swift.withUnsafeBytes(of: &le) { bytes in
             eocd.replaceSubrange(16..<20, with: bytes)
         }
         feed(eocd)
-        if !pending.isEmpty { chunks.append(variant.hashChunk(pending)) }
+        flushSection()
         return variant.contentDigest(chunks: chunks)
     }
 
@@ -393,7 +407,7 @@ struct APKSignatureVerifier: Sendable {
                     }
                 }
             }
-            index += 4
+            index += 1
         }
         if !hasJarSignature {
             throw .unsignedAPK(file: file)

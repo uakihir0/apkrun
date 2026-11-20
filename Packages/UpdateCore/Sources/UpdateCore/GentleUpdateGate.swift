@@ -225,9 +225,11 @@ public actor GentleUpdateGate {
         return await nextReadyPackage()
     }
 
-    /// Whether an install currently holds the gate's slot.
+    /// Whether the gate's install slot is claimed or an admission is
+    /// mid-flight — the evaluate-then-claim section counts, since its
+    /// caller drives the queue when it finishes.
     public var installInFlight: Bool {
-        installing != nil
+        installing != nil || admitting
     }
 
     /// The §7.2 phase of the package's in-flight install, if any.

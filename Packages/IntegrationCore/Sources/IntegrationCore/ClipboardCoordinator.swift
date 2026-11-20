@@ -159,6 +159,10 @@ public actor ClipboardCoordinator {
         guard let item = Self.item(for: clip), item.digest != lastHostDigest else {
             return
         }
+        // The accepted guest clip becomes the pasteboard's content; forgetting
+        // the older pushed digest keeps a later re-copy of it from being
+        // swallowed as an echo (§4.4).
+        lastHostDigest = item.digest
         await onGuestClip(key.sessionID, key.packageID, item)
     }
 

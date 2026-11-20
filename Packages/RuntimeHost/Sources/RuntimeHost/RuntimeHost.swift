@@ -53,6 +53,11 @@ public actor RuntimeHost {
     private let environment: [String: String]
     private let executableURL: URL
     private let uncleanExitRecoveryOverride: (any DaemonUncleanExitRecovering)?
+    /// When true, Android-bound operations fail with `runtime.notProvisioned` until `setup`
+    /// completes (runtime-daemon.md §9.2). The daemon enforces it; dev and test hosts do not.
+    private let enforceProvisioning: Bool
+    private var provisioningState: WireProvisioningState = .notStarted
+    private var imageStore: ImageStore?
     private var diagnostics: DiagnosticsContext?
     private var logger: APKLogger?
     private var instanceLock: InstanceLock?
@@ -104,13 +109,15 @@ public actor RuntimeHost {
         buildInfo: BuildInfo = .current,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         executableURL: URL = URL(fileURLWithPath: CommandLine.arguments.first ?? "apkrund"),
-        uncleanExitRecovery: (any DaemonUncleanExitRecovering)? = nil
+        uncleanExitRecovery: (any DaemonUncleanExitRecovering)? = nil,
+        enforceProvisioning: Bool = false
     ) {
         self.paths = paths
         self.buildInfo = buildInfo
         self.environment = environment
         self.executableURL = executableURL
         uncleanExitRecoveryOverride = uncleanExitRecovery
+        self.enforceProvisioning = enforceProvisioning
     }
 
     /// Performs daemon startup. The LaunchAgent listener is published after the instance lock and
@@ -215,6 +222,7 @@ public actor RuntimeHost {
         // Startup step 5: only the instance-lock owner may recover or mutate the image store.
         if instanceLock != nil {
             let images = ImageStore(paths: paths, trust: .standard(), diagnostics: diagnostics)
+            imageStore = images
             do {
                 try await images.removeOrphanedInstalls()
                 let currentImage = try await images.current()
@@ -223,6 +231,13 @@ public actor RuntimeHost {
                 instanceStore = InstanceStore(paths: paths, diagnostics: diagnostics)
             } catch {
                 recordDegradedStartup(step: 5, code: error.qualifiedCode)
+            }
+        }
+
+        // Startup step 7: the provisioning record feeds status and the notProvisioned gate.
+        if instanceLock != nil, let record = try? await provisioningStore.load() {
+            if record.provisioned {
+                provisioningState = .complete
             }
         }
 
@@ -320,6 +335,9 @@ public actor RuntimeHost {
     ) async throws(RuntimeHostError) {
         if let startupFailure {
             throw .startupFailed(step: startupFailure.step, code: startupFailure.code)
+        }
+        if enforceProvisioning, provisioningState != .complete {
+            throw .runtimeFailure(.notProvisioned)
         }
         let crashLoopActive: Bool
         do {
@@ -1839,7 +1857,8 @@ public actor RuntimeHost {
             daemonPID: Int32(getpid()),
             imageVersion: image?.version.description,
             guestAgentState: guestAgentStateName,
-            guestAgentProtocolVersion: guestAgentStatus?.protocolVersion?.description
+            guestAgentProtocolVersion: guestAgentStatus?.protocolVersion?.description,
+            provisioning: provisioningState
         )
     }
 
@@ -2321,6 +2340,608 @@ public actor RuntimeHost {
         )
         headlessSessionService = service
         return service
+    }
+
+    // MARK: - First-run provisioning and Reset Android (#67)
+
+    /// The `state.json` provisioning record under the data root.
+    private var provisioningStore: RuntimeStateStore {
+        RuntimeStateStore(fileURL: paths.stateFile)
+    }
+
+    /// Records and publishes a provisioning state (runtime-daemon.md §9.2).
+    private func setProvisioningState(_ state: WireProvisioningState) {
+        provisioningState = state
+        eventHub.publishRuntimeChange(.provisioningChanged(state))
+    }
+
+    /// The provisioning step matching the part of `performSetup` currently running.
+    private func provisioningStep(for state: WireProvisioningState) -> ProvisioningStep {
+        switch state {
+        case .checkingHost: .checkingHost
+        case .installingImage: .installingImage
+        case .creatingInstance: .creatingInstance
+        case .firstBoot: .firstBoot
+        case .installingAgents: .installingAgents
+        case .verifying: .verifying
+        default: .checkingHost
+        }
+    }
+
+    /// Begins or resumes first-run provisioning and returns its operation handle.
+    func beginSetup(
+        _ request: SetupRequest,
+        files: [FileHandle],
+        operationID requestedID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) async throws(RuntimeWireError) -> OperationHandle {
+        guard !isShuttingDown else {
+            throw RuntimeWireError.runtime(
+                "hostShuttingDown",
+                message: "APKRun's background service is shutting down.",
+                remediation: "Start APKRun again."
+            )
+        }
+        let requestPayload: Data
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            requestPayload = try encoder.encode(request)
+        } catch {
+            throw .runtime(
+                "malformedRequest",
+                message: "APKRun's background service couldn't read the request."
+            )
+        }
+        if let existing = trackedOperations[requestedID] {
+            guard existing.handle.kind == .setup, existing.requestPayload == requestPayload else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The operation ID is already being used for a different request."
+                )
+            }
+            return existing.handle
+        }
+        if let running = trackedOperations.values.first(where: {
+            $0.handle.kind == .setup && $0.snapshot.result == nil
+        }) {
+            return running.handle
+        }
+        do {
+            try beginLifecycleOperation()
+        } catch {
+            throw Self.sessionWireError(for: error)
+        }
+        let handle = OperationHandle(operationID: requestedID, kind: .setup)
+        let snapshot = OperationSnapshot(
+            operationID: requestedID,
+            kind: .setup,
+            requestFingerprint: RuntimeOperationRequestFingerprint.make(from: requestPayload),
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(stage: "checkingHost", message: "Checking this Mac…")
+        )
+        trackedOperations[requestedID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: requestPayload,
+            snapshot: snapshot,
+            isCancellable: false,
+            task: nil
+        )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: requestedID)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runSetupOperation(request, files: files, operationID: requestedID)
+        }
+        trackedOperations[requestedID]?.task = task
+        return handle
+    }
+
+    /// Begins a Reset Android operation and returns its handle (runtime-daemon.md §9.5).
+    func beginResetAndroid(
+        _ request: ResetAndroidRequest,
+        operationID requestedID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) async throws(RuntimeWireError) -> OperationHandle {
+        guard request.confirmed else {
+            throw .runtime(
+                "malformedRequest",
+                message: "Reset Android needs an explicit confirmation."
+            )
+        }
+        guard !isShuttingDown else {
+            throw RuntimeWireError.runtime(
+                "hostShuttingDown",
+                message: "APKRun's background service is shutting down.",
+                remediation: "Start APKRun again."
+            )
+        }
+        let requestPayload: Data
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            requestPayload = try encoder.encode(request)
+        } catch {
+            throw .runtime(
+                "malformedRequest",
+                message: "APKRun's background service couldn't read the request."
+            )
+        }
+        if let existing = trackedOperations[requestedID] {
+            guard existing.handle.kind == .resetAndroid,
+                existing.requestPayload == requestPayload
+            else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The operation ID is already being used for a different request."
+                )
+            }
+            return existing.handle
+        }
+        if let running = trackedOperations.values.first(where: {
+            $0.handle.kind == .resetAndroid && $0.snapshot.result == nil
+        }) {
+            return running.handle
+        }
+        do {
+            try beginLifecycleOperation()
+        } catch {
+            throw Self.sessionWireError(for: error)
+        }
+        let handle = OperationHandle(operationID: requestedID, kind: .resetAndroid)
+        let snapshot = OperationSnapshot(
+            operationID: requestedID,
+            kind: .resetAndroid,
+            requestFingerprint: RuntimeOperationRequestFingerprint.make(from: requestPayload),
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(stage: "resetting", message: "Resetting Android…")
+        )
+        trackedOperations[requestedID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: requestPayload,
+            snapshot: snapshot,
+            isCancellable: false,
+            task: nil
+        )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: requestedID)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runResetAndroidOperation(request, operationID: requestedID)
+        }
+        trackedOperations[requestedID]?.task = task
+        return handle
+    }
+
+    private func runSetupOperation(
+        _ request: SetupRequest,
+        files: [FileHandle],
+        operationID: WireOperationID
+    ) async {
+        defer { finishLifecycleOperation() }
+        do {
+            try await performSetup(request, files: files, operationID: operationID)
+            finishOperation(operationID, result: .succeeded(.none))
+        } catch {
+            if case .firstBoot = error.step, let record = try? await provisioningStore.load() {
+                var record = record
+                record.failedFirstBoots += 1
+                try? await provisioningStore.save(record)
+            }
+            setProvisioningState(.failed(step: error.step, error: error.stateError))
+            finishOperation(operationID, result: .failed(error.wireError))
+            logger?.error("Provisioning failed at \(error.step.rawValue, .public)", errorCode: error.wireError.code)
+        }
+    }
+
+    private func runResetAndroidOperation(
+        _ request: ResetAndroidRequest,
+        operationID: WireOperationID
+    ) async {
+        defer { finishLifecycleOperation() }
+        do {
+            try await performResetAndroid(request, operationID: operationID)
+            finishOperation(operationID, result: .succeeded(.none))
+        } catch {
+            let wireError = Self.operationWireError(for: error)
+            finishOperation(operationID, result: .failed(wireError))
+            logger?.error("Reset Android failed", errorCode: wireError.code)
+        }
+    }
+
+    /// A provisioning step's error: the operation-result wire error and the richer
+    /// `WireError` carried by the `.failed` provisioning state.
+    private struct ProvisioningStepFailure: Error {
+        let step: ProvisioningStep
+        let wireError: RuntimeWireError
+        let stateError: RuntimeAPI.WireError
+
+        init(step: ProvisioningStep, wireError: RuntimeWireError) {
+            self.step = step
+            self.wireError = wireError
+            stateError = RuntimeAPI.WireError(domain: wireError.domain, code: wireError.code)
+        }
+
+        init(step: ProvisioningStep, wireError: RuntimeWireError, stateError: RuntimeAPI.WireError) {
+            self.step = step
+            self.wireError = wireError
+            self.stateError = stateError
+        }
+    }
+
+    /// Runs the §9.2 step machine; already-finished steps are skipped so a quit mid-setup resumes.
+    private func performSetup(
+        _ request: SetupRequest,
+        files: [FileHandle],
+        operationID: WireOperationID
+    ) async throws(ProvisioningStepFailure) {
+        let store = self.provisioningStore
+        var record: ProvisioningRecord
+        do {
+            record = try await store.load()
+        } catch {
+            throw ProvisioningStepFailure(
+                step: .checkingHost,
+                wireError: Self.operationWireError(for: error)
+            )
+        }
+        if record.provisioned, request.recreateInstance != true {
+            setProvisioningState(.complete)
+            return
+        }
+        if request.recreateInstance == true {
+            // Start Over after repeated failed first boots (§9.2): redo everything after the
+            // image install; the instance is re-created so a corrupt userdata is dropped.
+            record.failedFirstBoots = 0
+            record.completedSteps = record.completedSteps.filter {
+                $0 == ProvisioningStep.checkingHost.rawValue
+                    || $0 == ProvisioningStep.installingImage.rawValue
+            }
+            try? await store.save(record)
+        }
+        func step(
+            _ name: ProvisioningStep,
+            _ record: ProvisioningRecord,
+            _ body: () async throws -> Void
+        ) async throws(ProvisioningStepFailure) -> ProvisioningRecord {
+            guard !record.completedSteps.contains(name.rawValue) else { return record }
+            do {
+                try await body()
+            } catch let failure as ProvisioningStepFailure {
+                throw failure
+            } catch {
+                throw ProvisioningStepFailure(
+                    step: name,
+                    wireError: Self.operationWireError(for: error)
+                )
+            }
+            var record = record
+            record.completedSteps.append(name.rawValue)
+            do {
+                try await store.save(record)
+            } catch {
+                throw ProvisioningStepFailure(
+                    step: name,
+                    wireError: Self.operationWireError(for: error)
+                )
+            }
+            return record
+        }
+        func fail(_ step: ProvisioningStep, _ error: some Error) -> ProvisioningStepFailure {
+            ProvisioningStepFailure(
+                step: step,
+                wireError: Self.operationWireError(for: error)
+            )
+        }
+
+        record = try await step(.checkingHost, record) {
+            setProvisioningState(.checkingHost)
+            let check = HostRequirementsCheck(
+                probe: SystemHostProbe(),
+                dataRoot: paths.dataRoot,
+                requiredFreeBytes: await requiredFreeBytesForSetup(request: request, files: files)
+            )
+            let unmet = await check.unmetRequirements()
+            guard unmet.isEmpty else {
+                let failure = RuntimeFailure.hostRequirementsNotMet(unmet)
+                throw ProvisioningStepFailure(
+                    step: .checkingHost,
+                    wireError: Self.sessionWireError(for: .runtimeFailure(failure)),
+                    stateError: Self.wireError(for: failure)
+                )
+            }
+        }
+        record = try await step(.installingImage, record) {
+            setProvisioningState(.installingImage(fraction: 0))
+            switch request.image {
+            case .directory(let bookmark):
+                var stale = false
+                guard
+                    let url = try? URL(
+                        resolvingBookmarkData: bookmark,
+                        options: .withSecurityScope,
+                        bookmarkDataIsStale: &stale
+                    )
+                else {
+                    throw ProvisioningStepFailure(
+                        step: .installingImage,
+                        wireError: .runtime(
+                            "malformedRequest",
+                            message: "The image folder couldn't be opened."
+                        )
+                    )
+                }
+                let accessed = url.startAccessingSecurityScopedResource()
+                defer {
+                    if accessed { url.stopAccessingSecurityScopedResource() }
+                }
+                let images =
+                    imageStore
+                    ?? ImageStore(
+                        paths: paths,
+                        trust: .standard(),
+                        diagnostics: diagnostics ?? .live(paths: paths)
+                    )
+                imageStore = images
+                do {
+                    let installed = try await images.install(from: .directory(url))
+                    image = installed
+                    if instanceStore == nil, let diagnostics {
+                        instanceStore = InstanceStore(paths: paths, diagnostics: diagnostics)
+                    }
+                } catch {
+                    throw fail(.installingImage, error)
+                }
+                setProvisioningState(.installingImage(fraction: 1))
+            case .feed, .archive, .unknown:
+                // The release feed and .aar archives arrive with #59; setup needs a local image
+                // bundle until then (apkrun setup --image <dir>).
+                throw ProvisioningStepFailure(
+                    step: .installingImage,
+                    wireError: .runtime(
+                        "serviceUnavailable",
+                        message: "Image downloads are not available yet.",
+                        remediation: "Install a local image bundle with `apkrun setup --image <folder>`."
+                    )
+                )
+            }
+        }
+        record = try await step(.creatingInstance, record) {
+            setProvisioningState(.creatingInstance)
+            guard let image, let instanceStore else {
+                throw fail(.creatingInstance, RuntimeHostError.image(.noCurrentImage))
+            }
+            var sizing = InstanceSizing.default
+            let physical = await SystemHostProbe().physicalMemoryBytes()
+            // NFR-RES-01: the VM's memory stays at or under half of physical memory.
+            sizing.memoryBytes = min(sizing.memoryBytes, physical / 2)
+            do {
+                if try await instanceStore.load(image: image) == nil {
+                    _ = try await instanceStore.provision(image: image, sizing: sizing)
+                }
+            } catch {
+                throw fail(.creatingInstance, error)
+            }
+        }
+        record = try await step(.firstBoot, record) {
+            setProvisioningState(.firstBoot(.kernel, fraction: 0))
+            let bootSupervisor: RuntimeSupervisor
+            do {
+                bootSupervisor = try supervisorInstance()
+            } catch {
+                throw fail(.firstBoot, error)
+            }
+            do {
+                try await bootSupervisor.ensureReady(.user)
+            } catch {
+                throw fail(.firstBoot, error)
+            }
+        }
+        record = try await step(.installingAgents, record) {
+            setProvisioningState(.installingAgents)
+            // The supervisor installs and launches the Guest Agent during ensureReady; nothing
+            // remains here beyond marking the step for resume.
+        }
+        record = try await step(.verifying, record) {
+            setProvisioningState(.verifying)
+            guard let supervisor, await supervisor.state == .ready else {
+                throw ProvisioningStepFailure(
+                    step: .verifying,
+                    wireError: .runtime(
+                        "serviceUnavailable",
+                        message: "Android did not finish starting.",
+                        remediation: "Run setup again."
+                    )
+                )
+            }
+        }
+        if let image, let instanceStore,
+            let instance = try? await instanceStore.load(image: image)
+        {
+            record.userdataGeneration = instance.userdataGeneration
+        }
+        record.provisioned = true
+        record.lastRuntimeVersion = buildInfo.marketingVersion
+        record.lastRuntimeBuild = "\(buildInfo.buildNumber)"
+        do {
+            try await store.save(record)
+        } catch {
+            throw ProvisioningStepFailure(
+                step: .verifying,
+                wireError: Self.operationWireError(for: error)
+            )
+        }
+        setProvisioningState(.complete)
+    }
+
+    /// Deletes Android userdata and re-provisions (runtime-daemon.md §9.5).
+    private func performResetAndroid(
+        _ request: ResetAndroidRequest,
+        operationID: WireOperationID
+    ) async throws {
+        guard let image, let instanceStore else {
+            throw RuntimeHostError.image(.noCurrentImage)
+        }
+        await supervisor?.stop(reason: .reset)
+        await packageQueryService?.detachRuntime()
+        headlessSessionService = nil
+        if request.keepBackup {
+            _ = try await instanceStore.createRecoveryPoint(image: image)
+        }
+        let instance = try await instanceStore.resetAndroid(
+            image: image,
+            sizing: .default
+        )
+        var record = try await provisioningStore.load()
+        record.userdataGeneration = instance.userdataGeneration
+        try await provisioningStore.save(record)
+        let bootSupervisor = try supervisorInstance()
+        try await bootSupervisor.ensureReady(.user)
+        // Mark every managed package as needing a reinstall on the new generation, then reinstall
+        // it from its retained artifact under the store's operation assertion (§9.5).
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        try await attachPackageQueriesIfRuntimeIsReady(to: service)
+        let marked = try await service.markForUserdataReset()
+        for packageID in marked {
+            do {
+                try await reinstallManagedPackage(
+                    packageID: packageID,
+                    service: service
+                )
+            } catch {
+                logger?.warning(
+                    "Reinstall after Reset Android failed for \(packageID.rawValue, .public)"
+                )
+            }
+        }
+        setProvisioningState(.complete)
+    }
+
+    /// Reinstalls one managed package from `Packages/<id>/current/` after a userdata reset.
+    private func reinstallManagedPackage(
+        packageID: RuntimePackageID,
+        service: EmbeddedPackageService
+    ) async throws {
+        let current = paths.packageCurrentDirectory(packageID: packageID.rawValue)
+        guard
+            let names = try? FileManager.default.contentsOfDirectory(atPath: current.path)
+                .filter({ $0.hasSuffix(".apk") }).sorted(),
+            !names.isEmpty
+        else {
+            return
+        }
+        var handles: [FileHandle] = []
+        var sourceFiles: [RuntimeImportSourceFile] = []
+        for (index, name) in names.enumerated() {
+            guard
+                let handle = try? FileHandle(
+                    forReadingFrom: current.appendingPathComponent(name)
+                )
+            else {
+                for handle in handles {
+                    try? handle.close()
+                }
+                return
+            }
+            handles.append(handle)
+            sourceFiles.append(RuntimeImportSourceFile(fileIndex: index, name: name))
+        }
+        defer {
+            for handle in handles {
+                try? handle.close()
+            }
+        }
+        let preview = try await service.importPackage(
+            RuntimeImportPackageRequest(files: sourceFiles, origin: .cli),
+            files: handles
+        )
+        _ = try await service.installImportedWithChange(
+            RuntimeInstallImportedRequest(ticket: preview.ticket)
+        )
+    }
+
+    /// The free space §9.1 requires: the expanded image plus userdata and a 10 GiB margin.
+    /// A directory source is measured on disk; an unknown source assumes the feed's typical size.
+    private func requiredFreeBytesForSetup(
+        request: SetupRequest,
+        files: [FileHandle]
+    ) async -> Int64 {
+        var imageBytes: Int64 = 12 * 1024 * 1024 * 1024
+        var stale = false
+        if case .directory(let bookmark) = request.image,
+            let url = try? URL(
+                resolvingBookmarkData: bookmark,
+                options: .withSecurityScope,
+                bookmarkDataIsStale: &stale
+            ),
+            let allocated = directoryAllocatedBytes(at: url)
+        {
+            imageBytes = allocated
+        }
+        return HostRequirementsCheck.requiredFreeBytes(
+            expandedImageBytes: imageBytes,
+            userdataBytes: Int64(InstanceSizing.default.userdataBytes)
+        )
+    }
+
+    /// The total allocated size of a directory tree, or nil when it cannot be measured.
+    private func directoryAllocatedBytes(at url: URL) -> Int64? {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessed { url.stopAccessingSecurityScopedResource() }
+        }
+        guard
+            let enumerator = FileManager.default.enumerator(
+                at: url,
+                includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey]
+            )
+        else {
+            return nil
+        }
+        var total: Int64 = 0
+        for case let file as URL in enumerator {
+            if let values = try? file.resourceValues(
+                forKeys: [.isRegularFileKey, .totalFileAllocatedSizeKey]
+            ),
+                values.isRegularFile == true
+            {
+                total += Int64(values.totalFileAllocatedSize ?? 0)
+            }
+        }
+        return total
+    }
+
+    /// The runtime supervisor, creating it when provisioning installed the first image after
+    /// the daemon started without one.
+    private func supervisorInstance() throws -> RuntimeSupervisor {
+        if let supervisor {
+            return supervisor
+        }
+        guard let image, let instanceStore, let diagnostics else {
+            throw RuntimeHostError.image(.noCurrentImage)
+        }
+        let guestDirectory = DevGuestAgentLocation.directory(
+            guestDir: nil,
+            environment: environment,
+            executable: executableURL
+        )
+        let bundle = try GuestAgentBundle.load(directory: guestDirectory)
+        let runtimeSupervisor = RuntimeSupervisor(
+            image: image,
+            instanceStore: instanceStore,
+            options: BootOptions(
+                gpuProfile: .drmVirgl,
+                developerMode: buildInfo.configuration == .debug,
+                captureLogcat: false
+            ),
+            diagnostics: diagnostics,
+            guestAgentBundle: bundle,
+            guestAgentTimeout: .seconds(30)
+        )
+        supervisor = runtimeSupervisor
+        observeSupervisorEvents(from: runtimeSupervisor)
+        return runtimeSupervisor
     }
 
     private func packageQueryServiceInstance() -> EmbeddedPackageService {

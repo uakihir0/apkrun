@@ -1594,3 +1594,30 @@ private func makeTemporaryDirectory() throws -> URL {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     return directory
 }
+
+// MARK: - Reset Android reconciliation (runtime-daemon.md §9.5)
+
+@Test func packageStoreMarksManagedInstalledPackagesForUserdataReset() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+
+    let channel = FakeStoreChannel()
+    let runtime = FakeStoreRuntime(channel: channel)
+    let store = PackageStore(
+        packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
+        runtimeAccess: runtime,
+        inspector: { _ in facts() }
+    )
+    try await store.open()
+    let preview = try await store.importPackage(files: [input])
+    let installed = try await store.installImported(ticket: preview.ticket)
+
+    let marked = try await store.markForUserdataReset()
+
+    #expect(marked == [installed.packageId])
+    let record = try #require(
+        await store.listManagedPackages().first { $0.packageId == installed.packageId })
+    #expect(record.state == .needsReinstall(.userdataReset))
+}

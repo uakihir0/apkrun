@@ -1056,6 +1056,101 @@
    }
   },
   {
+   "code": "runtime.notProvisioned",
+   "parameters": [],
+   "message": {
+    "en": "APKRun needs to finish setup.",
+    "ja": "APKRun のセットアップを完了する必要があります。"
+   },
+   "remediation": {
+    "en": "Open APKRun to finish setup, or run: apkrun setup",
+    "ja": "APKRun を開いてセットアップを完了するか、apkrun setup を実行してください。"
+   },
+   "action": "none",
+   "cliExit": 69,
+   "doc": {
+    "case": "notProvisioned",
+    "when": "Android is not set up yet: first-run provisioning is incomplete",
+    "raisedBy": "RuntimeSupervisor",
+    "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 step 0, §9.2"
+   }
+  },
+  {
+   "code": "runtime.hostRequirementsNotMet",
+   "parameters": [
+    "items",
+    "needed"
+   ],
+   "message": {
+    "en": "APKRun can't run on this Mac.",
+    "ja": "この Mac では APKRun を実行できません。"
+   },
+   "remediation": {
+    "en": "Follow the instructions for each reported requirement.",
+    "ja": "表示された各要件の指示に従ってください。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "case": "hostRequirementsNotMet([HostRequirement])",
+    "when": "HostRequirementsCheck finds one or more failed requirements. One item per failure; item texts are localized per §7.5",
+    "raisedBy": "HostRequirementsCheck",
+    "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §9.1"
+   },
+   "variants": {
+    "appleSilicon": {
+     "message": {
+      "en": "APKRun needs a Mac with Apple silicon.",
+      "ja": "APKRun には Apple silicon 搭載の Mac が必要です。"
+     },
+     "action": "none",
+     "doc": {
+      "when": "the host is not an Apple silicon Mac"
+     }
+    },
+    "macOSVersion": {
+     "message": {
+      "en": "APKRun needs macOS 27 or later. Update macOS.",
+      "ja": "APKRun には macOS 27 以降が必要です。macOS をアップデートしてください。"
+     },
+     "action": "none",
+     "doc": {
+      "when": "the host runs macOS older than 27"
+     }
+    },
+    "virtualization": {
+     "message": {
+      "en": "Virtualization is not available on this Mac (APKRun can't run inside a virtual machine).",
+      "ja": "この Mac では仮想化を利用できません（APKRun は仮想マシン内では実行できません）。"
+     },
+     "action": "none",
+     "doc": {
+      "when": "the hypervisor entitlement or hardware support is missing"
+     }
+    },
+    "apfsVolume": {
+     "message": {
+      "en": "Move APKRun's data to an APFS volume.",
+      "ja": "APKRun のデータを APFS ボリュームに移動してください。"
+     },
+     "action": "openStorageSettings",
+     "doc": {
+      "when": "APKRun's data volume is not APFS"
+     }
+    },
+    "freeDiskSpace": {
+     "message": {
+      "en": "Free up {needed}.",
+      "ja": "{needed} の空き容量を確保してください。"
+     },
+     "action": "openStorageSettings",
+     "doc": {
+      "when": "the data volume has less free space than provisioning needs"
+     }
+    }
+   }
+  },
+  {
    "code": "runtime.serviceUnavailable",
    "parameters": [],
    "message": {

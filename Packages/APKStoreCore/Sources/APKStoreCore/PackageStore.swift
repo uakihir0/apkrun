@@ -855,6 +855,54 @@ public actor PackageStore {
         return records.values.sorted { $0.packageId < $1.packageId }
     }
 
+    /// Marks every managed package as missing from a new userdata generation (package-store.md §9.2,
+    /// runtime-daemon.md §9.5): `installed` becomes `needsReinstall(.userdataReset)`, and adopted
+    /// packages without a host artifact become `broken(.removedInAndroid)`.
+    ///
+    /// Called by `resetAndroid` after the new instance's userdata generation exists, before the
+    /// daemon reinstalls managed packages from `Packages/<id>/current/`.
+    public func markForUserdataReset() async throws -> [PackageID] {
+        try requireOpen()
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        var marked: [PackageID] = []
+        for (packageID, var record) in records {
+            guard record.installer == .apkrun else { continue }
+            switch record.state {
+            case .installed:
+                record.state = .needsReinstall(.userdataReset)
+                record.updatedAt = Date()
+                try writeRecord(record, directory: packageID.rawValue)
+                records[packageID] = record
+                marked.append(packageID)
+            case .needsReinstall(.userdataReset), .needsReinstall(.userdataRestored),
+                .broken(.reinstallFailed):
+                marked.append(packageID)
+            case .uninstalledKeepingData, .broken:
+                break
+            }
+        }
+        // Adopted packages have no host artifact to reinstall from.
+        for (packageID, var record) in records {
+            guard record.source.kind == .adopted else { continue }
+            let current =
+                packagesDirectory
+                .appendingPathComponent(packageID.rawValue, isDirectory: true)
+                .appendingPathComponent("current", isDirectory: true)
+            let hasArtifact =
+                (try? fileManager.contentsOfDirectory(atPath: current.path))?
+                .contains { $0.hasSuffix(".apk") } ?? false
+            if !hasArtifact, record.state == .installed {
+                record.state = .broken(.removedInAndroid)
+                record.updatedAt = Date()
+                try writeRecord(record, directory: packageID.rawValue)
+                records[packageID] = record
+            }
+        }
+        return marked
+    }
+
     /// Returns unreadable package metadata without making healthy records unavailable.
     public func listPackageRecordIssues() async throws -> [PackageRecordIssue] {
         try requireOpen()

@@ -12,6 +12,7 @@ struct APKRunApp: App {
     @State private var registrationMessage: String?
     @State private var isRegistrationErrorPresented = false
     @StateObject private var approvalCenter = ApprovalCenter.shared
+    @State private var runtimeStatus = RuntimeStatusModel()
 
     /// Whether apkrund opened the app for a wrapper approval (host-ui.md §3.3).
     /// Only the approval window is shown then.
@@ -46,6 +47,15 @@ struct APKRunApp: App {
         WindowGroup("APKRun") {
             Text("APKRun")
                 .frame(minWidth: 480, minHeight: 320)
+                .environment(runtimeStatus)
+                .task { runtimeStatus.start() }
+                // First-run provisioning (host-ui.md §4): the sheet reopens
+                // whenever setup is not `complete`; apkrund resumes at the
+                // first incomplete step.
+                .sheet(isPresented: onboardingPresented) {
+                    OnboardingView()
+                        .environment(runtimeStatus)
+                }
                 .alert(registrationTitle, isPresented: $isRegistrationErrorPresented) {
                     Button("Open Login Items Settings") {
                         SMAppService.openSystemSettingsLoginItems()
@@ -62,6 +72,15 @@ struct APKRunApp: App {
         .defaultLaunchBehavior(approvalOnly ? .suppressed : .automatic)
 
         settingsScene
+    }
+
+    /// The onboarding sheet opens until setup completes; it never opens on an
+    /// approval-only launch (host-ui.md §3.3).
+    private var onboardingPresented: Binding<Bool> {
+        Binding(
+            get: { !approvalOnly && !runtimeStatus.setupComplete },
+            set: { _ in }
+        )
     }
 }
 

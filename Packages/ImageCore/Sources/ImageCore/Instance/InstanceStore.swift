@@ -2,10 +2,8 @@ import DiagnosticsCore
 import Foundation
 import VirtualMachineCore
 
-/// Owns `Runtime/instance/`: provisioning, loading, and Reset Android (android-image.md §5).
-///
-/// This first cut (#13) covers `load`, `provision`, `resetAndroid`, and the
-/// first-boot settings flag. Recovery points arrive with #59.
+/// Owns `Runtime/instance/`: provisioning, loading, Reset Android, and its 7-day recovery points
+/// (android-image.md §5, runtime-daemon.md §9.5).
 public actor InstanceStore {
     private let paths: APKRunPaths
     private let provisioner: InstanceDiskProvisioner
@@ -110,6 +108,53 @@ public actor InstanceStore {
         try provision(image: image, sizing: sizing)
     }
 
+    /// Copies the current userdata disk and instance metadata into a recovery point named
+    /// `<timestamp>-<imageVersion>` under `Runtime/instance/recovery-points/` (runtime-daemon.md §9.5).
+    /// Listing and restoring recovery points arrive with #59.
+    @discardableResult
+    public func createRecoveryPoint(image: InstalledImage) throws(ImageFailure) -> URL {
+        let timestamp = Self.recoveryTimestamp(Date())
+        let imageVersion = image.version.description
+        let destination = paths.recoveryPointDirectory(
+            timestamp: timestamp,
+            imageVersion: imageVersion
+        )
+        do {
+            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        } catch {
+            throw .cloneFailed(
+                underlying: UnderlyingError(domain: "NSCocoaErrorDomain", code: (error as NSError).code)
+            )
+        }
+        for (source, target) in [
+            (
+                paths.userDataDiskFile,
+                paths.recoveryPointUserDataDiskFile(
+                    timestamp: timestamp, imageVersion: imageVersion
+                )
+            ),
+            (
+                paths.instanceInfoFile,
+                paths.recoveryPointInstanceInfoFile(
+                    timestamp: timestamp, imageVersion: imageVersion
+                )
+            ),
+        ] where FileManager.default.fileExists(atPath: source.path) {
+            do {
+                try FileCloner.clone(source, target)
+            } catch {
+                try? FileManager.default.removeItem(at: destination)
+                throw .cloneFailed(
+                    underlying: UnderlyingError(domain: "NSCocoaErrorDomain", code: (error as NSError).code)
+                )
+            }
+        }
+        logger.notice(
+            "Created a recovery point at \(destination.lastPathComponent, .public)"
+        )
+        return destination
+    }
+
     /// Records that the first-boot settings ran (android-image.md §7.6).
     public func markFirstBootSettingsApplied() throws(ImageFailure) {
         guard
@@ -149,5 +194,23 @@ public actor InstanceStore {
 
     private static func userdataSchemaVersion(of image: InstalledImage) -> Int {
         image.manifest.userdata.schemaVersion
+    }
+
+    private static func recoveryTimestamp(_ date: Date) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC") ?? .current
+        let components = calendar.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second],
+            from: date
+        )
+        return String(
+            format: "%04d%02d%02dT%02d%02d%02dZ",
+            components.year ?? 0,
+            components.month ?? 0,
+            components.day ?? 0,
+            components.hour ?? 0,
+            components.minute ?? 0,
+            components.second ?? 0
+        )
     }
 }

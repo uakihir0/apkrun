@@ -173,6 +173,19 @@ public actor EmbeddedPackageService: RuntimeService {
         }
     }
 
+    /// Marks every managed package as needing a reinstall on a new userdata generation
+    /// (package-store.md §9.2, runtime-daemon.md §9.5). Returns the managed package IDs that
+    /// must be reinstalled from their retained artifacts.
+    public func markForUserdataReset() async throws(RuntimeWireError) -> [RuntimePackageID] {
+        do {
+            try await ensureOpen()
+            return try await store.markForUserdataReset()
+                .compactMap { RuntimePackageID(rawValue: $0.rawValue) }
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
     /// Installs a new import, restores a retained-data package, or updates a managed package.
     public func installImported(
         _ request: RuntimeInstallImportedRequest

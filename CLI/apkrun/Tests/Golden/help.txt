@@ -17,6 +17,7 @@ SUBCOMMANDS:
   info                    Show runtime status or details for one Android app.
   launch                  Launch an installed Android app.
   stop                    Stop an Android app session.
+  integrations            Inspect desktop integrations of an Android app.
   operations              Inspect or cancel long-running APKRun operations.
   wrap                    Create the Mac app of an installed Android app.
 

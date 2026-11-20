@@ -68,6 +68,9 @@ import Testing
                 "stagingExpired", "bundleInvalid",
                 "approvalDenied", "approvalTimedOut", "approvalNotFound",
             ].map { "wrapper.\($0)" }
+            + [
+                "disabled", "notSupportedOnImage", "guestUnavailable", "clipboardTooLarge",
+            ].map { "integration.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)
     #expect(

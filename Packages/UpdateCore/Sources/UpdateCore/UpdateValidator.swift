@@ -282,10 +282,12 @@ public struct UpdateValidator: Sendable {
         let containerExtensions: Set<String> = ["apks", "xapk", "apkm", "zip"]
         let expanded =
             preview.artifactSet.files.count != preview.sourceFileNames.count
-        for declared in candidate.artifacts {
+        for (index, declared) in candidate.artifacts.enumerated() {
             guard let declaredDigest = declared.sha256 else { continue }
             let declaredName = declared.url.lastPathComponent
-            if let file = stagedByName[declaredName] {
+            let storedName = declared.storedFileName(
+                index: index, in: candidate.artifacts)
+            if let file = stagedByName[storedName] ?? stagedByName[declaredName] {
                 v4Checked.append(file.name)
                 if file.sha256 != declaredDigest {
                     v4Refusal = (file.name, declaredDigest.rawValue, file.sha256.rawValue)

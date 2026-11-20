@@ -45,11 +45,9 @@ struct ContainerReader: Sendable {
 
         var names: [String] = []
         var entryCount = 0
+        var sawManifest = false
         for entry in archive {
             entryCount += 1
-            guard entryCount <= Self.maxEntries else {
-                throw StoreFailure.archiveLimitExceeded(.entryCount)
-            }
             if entry.type == .symlink {
                 throw StoreFailure.archiveLimitExceeded(.unsafeName)
             }
@@ -59,7 +57,17 @@ struct ContainerReader: Sendable {
             else {
                 throw StoreFailure.archiveLimitExceeded(.unsafeName)
             }
-            names.append(name)
+            if name == "AndroidManifest.xml" { sawManifest = true }
+            if names.count < Self.maxEntries { names.append(name) }
+        }
+
+        // A top-level AndroidManifest.xml means a lone APK: it is never expanded, so
+        // the extraction entry cap (and the container checks below) do not apply.
+        if sawManifest {
+            return .apk
+        }
+        guard entryCount <= Self.maxEntries else {
+            throw StoreFailure.archiveLimitExceeded(.entryCount)
         }
 
         if names.contains(where: { $0.lowercased().hasSuffix(".obb") }) {
@@ -88,9 +96,6 @@ struct ContainerReader: Sendable {
             info["apkm_version"] != nil
         {
             return .apkm
-        }
-        if names.contains("AndroidManifest.xml") {
-            return .apk
         }
         if !names.isEmpty, names.allSatisfy({ $0.hasSuffix(".apk") || $0.hasSuffix("/") }) {
             return .zipOfAPKs
@@ -154,8 +159,7 @@ struct ContainerReader: Sendable {
             guard entry.uncompressedSize <= Self.maxFileBytes else {
                 throw StoreFailure.archiveLimitExceeded(.fileSize)
             }
-            total += Int64(entry.uncompressedSize)
-            guard total <= Self.maxTotalBytes else {
+            guard total + Int64(entry.uncompressedSize) <= Self.maxTotalBytes else {
                 throw StoreFailure.archiveLimitExceeded(.totalSize)
             }
             if entry.compressedSize > 0,
@@ -165,9 +169,29 @@ struct ContainerReader: Sendable {
             }
             let target = destination.appendingPathComponent(
                 String(format: "split%02d.apk", written.count + 1))
+            // The declared sizes above can lie, so the actual decompressed bytes are
+            // capped too while streaming the entry to disk (package-store.md §4.2).
             do {
-                _ = try archive.extract(entry, to: target)
+                try FileManager.default.createFile(atPath: target.path, contents: nil)
+                let handle = try FileHandle(forWritingTo: target)
+                var entryBytes: Int64 = 0
+                _ = try archive.extract(entry) { chunk in
+                    entryBytes += Int64(chunk.count)
+                    guard entryBytes <= Self.maxFileBytes else {
+                        throw StoreFailure.archiveLimitExceeded(.fileSize)
+                    }
+                    guard total + entryBytes <= Self.maxTotalBytes else {
+                        throw StoreFailure.archiveLimitExceeded(.totalSize)
+                    }
+                    try handle.write(contentsOf: chunk)
+                }
+                try handle.close()
+                total += entryBytes
+            } catch let failure as StoreFailure {
+                try? FileManager.default.removeItem(at: target)
+                throw failure
             } catch {
+                try? FileManager.default.removeItem(at: target)
                 throw .io
             }
             written.append(target)

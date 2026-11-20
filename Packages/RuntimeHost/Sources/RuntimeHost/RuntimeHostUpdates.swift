@@ -499,12 +499,14 @@ public actor EmbeddedUpdateService {
     }
 
     /// §8.4: adds (`skipped` true) or removes a version on the skip list.
+    /// Skipping discards any staged set (update-system.md §8.4).
     public func setSkippedVersion(
         packageID: PackageID,
         versionCode: VersionCode,
         skipped: Bool
-    ) async {
+    ) async throws {
         if skipped {
+            try await store.discardStaged(packageID: packageID)
             await stateStore.skipVersion(packageID, versionCode: versionCode)
         } else {
             await stateStore.unskipVersion(packageID, versionCode: versionCode)
@@ -977,6 +979,14 @@ extension RuntimeHost {
                 message: "The package is not managed by APKRun.",
                 remediation: "Use `apkrun list` to see managed packages.")
         }
+        // A rollback is a package mutation: it blocks stop/restart/reset
+        // like installs and uninstalls do (update-system.md §8.5).
+        do {
+            try beginPackageMutation()
+        } catch {
+            throw Self.sessionWireError(for: error)
+        }
+        defer { finishPackageMutation() }
         do {
             switch try await service.rollbackPackage(
                 packageID: packageID, allowDataLoss: allowDataLoss)
@@ -1013,8 +1023,14 @@ extension RuntimeHost {
                 message: "The package is not managed by APKRun.",
                 remediation: "Use `apkrun list` to see managed packages.")
         }
-        await service.setSkippedVersion(
-            packageID: packageID, versionCode: versionCode, skipped: skipped)
+        do {
+            try await service.setSkippedVersion(
+                packageID: packageID, versionCode: versionCode, skipped: skipped)
+        } catch let error as RuntimeWireError {
+            throw error
+        } catch {
+            throw EmbeddedUpdateService.wireError(for: error)
+        }
     }
 }
 
@@ -1331,14 +1347,19 @@ extension RuntimeHost {
                     packageID: wireID, timeouts: timeouts)
             },
             drawnFrame: { [weak self] packageID in
-                guard let self,
-                    let service = await self.headlessSessionService
-                        as? DaemonHeadlessSessionService,
-                    let wireID = RuntimePackageID(rawValue: packageID.rawValue)
-                else {
-                    return false
+                guard let self else { return false }
+                if let service = await self.headlessSessionService
+                    as? DaemonHeadlessSessionService,
+                    let wireID = RuntimePackageID(rawValue: packageID.rawValue),
+                    await service.hasDrawnFrame(packageID: wireID)
+                {
+                    return true
                 }
-                return await service.hasDrawnFrame(packageID: wireID)
+                // §8.1: any earlier session that drew a frame — a FIRST_FRAME
+                // marker persisted in perf/launches.jsonl — also proves the
+                // app can draw, including across daemon restarts.
+                return PerfRecordWriter.read(from: self.paths.launchPerformanceFile)
+                    .contains { $0.packageID == packageID.rawValue && $0.outcome == "shown" }
             })
     }
 

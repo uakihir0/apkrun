@@ -37,7 +37,7 @@
                     case .focusChanged(let focused, let generation):
                         await route.focusChanged(focused, generation: generation)
                     case .text(let event):
-                        await route.sendText(wire(event))
+                        await route.sendText(Self.wire(event))
                     }
                 }
             }
@@ -63,7 +63,9 @@
                 return .commit(text)
             case .setComposing(let text, let selection):
                 return .setComposing(
-                    text, selection: RuntimeAPI.TextRange(start: selection.start, end: selection.end))
+                    text,
+                    selection: RuntimeAPI.TextRange(
+                        start: Int(selection.start), end: Int(selection.end)))
             case .finishComposing:
                 return .finishComposing
             case .key(let key):
@@ -77,13 +79,14 @@
             case .editorAction(let action):
                 return .editorAction(action)
             case .contextMenuAction(let action):
-                return .contextMenuAction(
+                let wireAction: RuntimeAPI.ContextMenuAction =
                     switch action {
                     case .copy: .copy
                     case .cut: .cut
                     case .paste: .paste
                     case .selectAll: .selectAll
-                    })
+                    }
+                return .contextMenuAction(wireAction)
             }
         }
 

@@ -44,7 +44,8 @@ import Testing
                 "guestAgent", "adb",
                 "guestAgentBundleMissing", "guestAgentInstallFailed", "guestAgentStartFailed", "guestAgentStopped",
                 "guestAgentConnectTimedOut", "guestAgentHandshakeFailed", "requiredAgentUnavailable",
-                "guestAgentOperationFailed", "inputNotBound", "operationNotFound", "busy",
+                "guestAgentOperationFailed", "inputNotBound",
+                "busy", "operationNotFound", "notProvisioned", "hostRequirementsNotMet",
             ].map { "runtime.\($0)" }
             + [
                 "rendererInitFailed", "rendererOperationFailed", "rendererLost", "libraryMissing",

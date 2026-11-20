@@ -527,7 +527,8 @@ public actor PackageStore {
     /// Installs a new package or retained-data package and reports its committed prior state.
     public func installImportedWithOutcome(
         ticket: UUID,
-        beforeGuestInstall: BeforeGuestInstall? = nil
+        beforeGuestInstall: BeforeGuestInstall? = nil,
+        requiresReinstallMark: Bool = false
     ) async throws -> PackageInstallOutcome {
         try requireWritable()
         guard let manifest = try verifiedTicket(ticket) else {
@@ -541,14 +542,16 @@ public actor PackageStore {
                 manifest,
                 kind: "reinstall",
                 from: existing.versionCode,
-                beforeGuestInstall: beforeGuestInstall
+                beforeGuestInstall: beforeGuestInstall,
+                requiresReinstallMark: requiresReinstallMark
             )
         }
         return try await performInstall(
             manifest,
             kind: "firstInstall",
             from: nil,
-            beforeGuestInstall: beforeGuestInstall
+            beforeGuestInstall: beforeGuestInstall,
+            requiresReinstallMark: requiresReinstallMark
         )
     }
 
@@ -560,7 +563,8 @@ public actor PackageStore {
     /// Reinstalls a package and reports the prior state validated by its install transaction.
     public func reinstallWithOutcome(
         ticket: UUID,
-        beforeGuestInstall: BeforeGuestInstall? = nil
+        beforeGuestInstall: BeforeGuestInstall? = nil,
+        requiresReinstallMark: Bool = false
     ) async throws -> PackageInstallOutcome {
         try requireWritable()
         guard let manifest = try verifiedTicket(ticket) else {
@@ -576,7 +580,8 @@ public actor PackageStore {
             manifest,
             kind: "reinstall",
             from: existing.versionCode,
-            beforeGuestInstall: beforeGuestInstall
+            beforeGuestInstall: beforeGuestInstall,
+            requiresReinstallMark: requiresReinstallMark
         )
     }
 
@@ -855,6 +860,67 @@ public actor PackageStore {
         return records.values.sorted { $0.packageId < $1.packageId }
     }
 
+    /// Marks every managed package as missing from a new userdata generation (package-store.md §9.2,
+    /// runtime-daemon.md §9.5): `installed` becomes `needsReinstall(.userdataReset)`, and adopted
+    /// packages without a host artifact become `broken(.removedInAndroid)`.
+    ///
+    /// Called by `resetAndroid` after the new instance's userdata generation exists, before the
+    /// daemon reinstalls managed packages from `Packages/<id>/current/`.
+    public func markForUserdataReset() async throws -> [PackageID] {
+        try requireOpen()
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        var marked: [PackageID] = []
+        for (packageID, var record) in records {
+            guard record.installer == .apkrun else { continue }
+            switch record.state {
+            case .installed:
+                record.state = .needsReinstall(.userdataReset)
+                record.updatedAt = Date()
+                try writeRecord(
+                    record, directory: directories[packageID] ?? directoryName(for: packageID))
+                records[packageID] = record
+                marked.append(packageID)
+            case .needsReinstall(.userdataReset), .needsReinstall(.userdataRestored),
+                .broken(.reinstallFailed):
+                marked.append(packageID)
+            case .uninstalledKeepingData, .broken:
+                break
+            }
+        }
+        // Adopted packages have no host artifact to reinstall from.
+        for (packageID, var record) in records {
+            guard record.source.kind == .adopted else { continue }
+            let directory = directories[packageID] ?? directoryName(for: packageID)
+            let current =
+                packagesDirectory
+                .appendingPathComponent(directory, isDirectory: true)
+                .appendingPathComponent("current", isDirectory: true)
+            let hasArtifact =
+                (try? fileManager.contentsOfDirectory(atPath: current.path))?
+                .contains { $0.hasSuffix(".apk") } ?? false
+            if !hasArtifact, record.state == .installed {
+                record.state = .broken(.removedInAndroid)
+                record.updatedAt = Date()
+                try writeRecord(record, directory: directory)
+                records[packageID] = record
+            }
+        }
+        return marked
+    }
+
+    /// The `current/` artifact directory of a managed package, honoring the collision-resolved
+    /// directory name (`<id>~<digest>`) on case-insensitive volumes.
+    public func artifactCurrentDirectory(packageID: PackageID) async throws -> URL {
+        try requireOpen()
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        return
+            packagesDirectory
+            .appendingPathComponent(directory, isDirectory: true)
+            .appendingPathComponent("current", isDirectory: true)
+    }
+
     /// Returns unreadable package metadata without making healthy records unavailable.
     public func listPackageRecordIssues() async throws -> [PackageRecordIssue] {
         try requireOpen()
@@ -942,7 +1008,8 @@ public actor PackageStore {
         _ manifest: TicketManifest,
         kind: String,
         from: VersionCode?,
-        beforeGuestInstall: BeforeGuestInstall?
+        beforeGuestInstall: BeforeGuestInstall?,
+        requiresReinstallMark: Bool = false
     ) async throws -> PackageInstallOutcome {
         guard let runtimeAccess else { throw PackageStoreFailure.runtimeUnavailable }
         let preview = manifest.preview
@@ -956,6 +1023,14 @@ public actor PackageStore {
         try reloadRecordsPreservingImportDirectories()
         if let detail = unreadableRecords[packageID] {
             throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
+        }
+        // Checked inside the mutation lock so an uninstall or forget committed between
+        // the caller's pending-reinstall snapshot and this install cannot resurrect a
+        // removed package (package-store.md §9.2).
+        if requiresReinstallMark {
+            guard let record = records[packageID], Self.isReinstallPending(record.state) else {
+                throw PackageStoreFailure.packageNotFound
+            }
         }
         let directory = directories[packageID] ?? directoryName(for: packageID)
         let incoming = incomingDirectory(packageID: packageID, directory: directory, ticket: preview.ticket)
@@ -1157,6 +1232,18 @@ public actor PackageStore {
                 && previouslyInstalled == nil,
             cleanupDeferred: cleanupDeferred
         )
+    }
+
+    /// Whether the record still waits on the pending-reinstall reconcile: the same set
+    /// `pendingReinstalls()` reports (`needsReinstall` and a failed earlier reinstall).
+    private static func isReinstallPending(_ state: PackageState) -> Bool {
+        switch state {
+        case .needsReinstall, .broken(.reinstallFailed):
+            return true
+        case .installed, .uninstalledKeepingData, .broken(.removedInAndroid),
+            .broken(.artifactMissing), .broken(.signerChanged):
+            return false
+        }
     }
 
     private static func canReinstall(_ state: PackageState) -> Bool {

@@ -31,6 +31,7 @@ struct APKRunCommand: AsyncParsableCommand {
                 version: Output.versionFlag(BuildInfo.current),
                 subcommands: [
                     VersionCommand.self,
+                    SetupCommand.self,
                     RuntimeCommand.self,
                     LogsCommand.self,
                     InstallCommand.self,

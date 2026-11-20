@@ -1640,6 +1640,37 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return beginUninstallPackageData
     }
 
+    func setup(
+        _ request: Data,
+        files: [FileHandle]
+    ) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { resetRequestsValue.append(request) }
+        do {
+            return try JSONEncoder().encode(
+                RuntimeSetupControlReply(
+                    result: OperationHandle(
+                        operationID: OperationID(wire: "b4a90e78-5e1f-4d5a-9ba1-0b691f180032")!,
+                        kind: .setup
+                    )))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func resetAndroid(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { resetRequestsValue.append(request) }
+        do {
+            return try JSONEncoder().encode(
+                RuntimeResetAndroidControlReply(
+                    result: OperationHandle(
+                        operationID: OperationID(wire: "b4a90e78-5e1f-4d5a-9ba1-0b691f180032")!,
+                        kind: .resetAndroid
+                    )))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
     func operationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         let shouldFail = lock.withLock {
             operationStatusRequestsValue.append(request)

@@ -173,6 +173,52 @@ public actor EmbeddedPackageService: RuntimeService {
         }
     }
 
+    /// Marks every managed package as needing a reinstall on a new userdata generation
+    /// (package-store.md §9.2, runtime-daemon.md §9.5). Returns the managed package IDs that
+    /// must be reinstalled from their retained artifacts.
+    public func markForUserdataReset() async throws(RuntimeWireError) -> [RuntimePackageID] {
+        do {
+            try await ensureOpen()
+            return try await store.markForUserdataReset()
+                .compactMap { RuntimePackageID(rawValue: $0.rawValue) }
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
+    /// Managed packages still waiting for a reinstall after a userdata reset or restore.
+    /// The records stay marked when a reinstall could not run, so a later boot retries them.
+    public func pendingReinstalls() async throws(RuntimeWireError) -> [RuntimePackageID] {
+        do {
+            try await ensureOpen()
+            return try await store.listManagedPackages().compactMap { record in
+                switch record.state {
+                case .needsReinstall, .broken(.reinstallFailed):
+                    return RuntimePackageID(rawValue: record.packageId.rawValue)
+                default:
+                    return nil
+                }
+            }
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
+    /// The `current/` artifact directory of a managed package (collision-aware; §9.5).
+    public func artifactCurrentDirectory(
+        for packageID: RuntimePackageID
+    ) async throws(RuntimeWireError) -> URL {
+        do {
+            try await ensureOpen()
+            guard let id = PackageID(rawValue: packageID.rawValue) else {
+                throw PackageStoreFailure.packageNotFound
+            }
+            return try await store.artifactCurrentDirectory(packageID: id)
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
     /// Installs a new import, restores a retained-data package, or updates a managed package.
     public func installImported(
         _ request: RuntimeInstallImportedRequest
@@ -202,7 +248,8 @@ public actor EmbeddedPackageService: RuntimeService {
     /// Installs an import and reports the store change that occurred.
     func installImportedWithChange(
         _ request: RuntimeInstallImportedRequest,
-        beforeStoreMutation: PackageMutationBoundary? = nil
+        beforeStoreMutation: PackageMutationBoundary? = nil,
+        requiresReinstallMark: Bool = false
     ) async throws(RuntimeWireError) -> RuntimePackageInstallResult {
         do {
             try await ensureOpen()
@@ -240,17 +287,20 @@ public actor EmbeddedPackageService: RuntimeService {
                 if case .uninstalledWithData = preview.relation {
                     outcome = try await store.installImportedWithOutcome(
                         ticket: ticket,
-                        beforeGuestInstall: beforeStoreMutation
+                        beforeGuestInstall: beforeStoreMutation,
+                        requiresReinstallMark: requiresReinstallMark
                     )
                 } else if case .newPackage = preview.relation {
                     outcome = try await store.installImportedWithOutcome(
                         ticket: ticket,
-                        beforeGuestInstall: beforeStoreMutation
+                        beforeGuestInstall: beforeStoreMutation,
+                        requiresReinstallMark: requiresReinstallMark
                     )
                 } else {
                     outcome = try await store.reinstallWithOutcome(
                         ticket: ticket,
-                        beforeGuestInstall: beforeStoreMutation
+                        beforeGuestInstall: beforeStoreMutation,
+                        requiresReinstallMark: requiresReinstallMark
                     )
                 }
             } else {
@@ -258,7 +308,8 @@ public actor EmbeddedPackageService: RuntimeService {
                 // safely permits first installs and retained-data reinstalls in this case.
                 outcome = try await store.installImportedWithOutcome(
                     ticket: ticket,
-                    beforeGuestInstall: beforeStoreMutation
+                    beforeGuestInstall: beforeStoreMutation,
+                    requiresReinstallMark: requiresReinstallMark
                 )
             }
             importPreviews[ticket] = nil

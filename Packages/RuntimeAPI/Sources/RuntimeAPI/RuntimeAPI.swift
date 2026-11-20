@@ -218,6 +218,9 @@ public struct RuntimeHostStatus: Codable, Equatable, Sendable {
     public let guestAgentState: GuestAgentConnectionState?
     /// The Guest Agent protocol version from its latest handshake, when available.
     public let guestAgentProtocolVersion: String?
+    /// The first-run provisioning state (runtime-daemon.md §9.2). Decoding an older
+    /// daemon's reply leaves this nil; clients treat nil as `.notStarted`.
+    public let provisioning: WireProvisioningState?
 
     /// Creates a status snapshot.
     public init(
@@ -230,7 +233,8 @@ public struct RuntimeHostStatus: Codable, Equatable, Sendable {
         daemonPID: Int32,
         imageVersion: String?,
         guestAgentState: GuestAgentConnectionState? = nil,
-        guestAgentProtocolVersion: String? = nil
+        guestAgentProtocolVersion: String? = nil,
+        provisioning: WireProvisioningState? = nil
     ) {
         self.hostState = hostState
         self.runtimeState = runtimeState
@@ -242,6 +246,7 @@ public struct RuntimeHostStatus: Codable, Equatable, Sendable {
         self.imageVersion = imageVersion
         self.guestAgentState = guestAgentState
         self.guestAgentProtocolVersion = guestAgentProtocolVersion
+        self.provisioning = provisioning
     }
 }
 
@@ -581,6 +586,10 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func restartRuntime(_ request: Data, reply: @escaping (Data) -> Void)
     /// Clears a runtime failure and boot-loop guard without deleting Android data.
     func resetRuntime(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Starts or resumes first-run provisioning and returns its operation handle.
+    func setup(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
+    /// Resets Android data: backup, delete, re-provision, reinstall managed packages.
+    func resetAndroid(_ request: Data, reply: @escaping (Data) -> Void)
     /// Lists managed or all known packages.
     func listPackages(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns details for one package.

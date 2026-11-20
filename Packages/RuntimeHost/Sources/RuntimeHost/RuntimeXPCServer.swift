@@ -1109,6 +1109,8 @@ extension StartRuntimeRequest: VersionedControlRequest {}
 extension StopRuntimeRequest: VersionedControlRequest {}
 extension RestartRuntimeRequest: VersionedControlRequest {}
 extension RuntimeResetControlRequest: VersionedControlRequest {}
+extension RuntimeSetupControlRequest: VersionedControlRequest {}
+extension RuntimeResetAndroidControlRequest: VersionedControlRequest {}
 extension RuntimeListPackagesControlRequest: VersionedControlRequest {}
 extension RuntimePackageInfoControlRequest: VersionedControlRequest {}
 extension RuntimeLaunchControlRequest: VersionedControlRequest {}
@@ -1135,6 +1137,8 @@ enum RuntimeControlOperation {
     case stopRuntime
     case restartRuntime
     case resetRuntime
+    case setup
+    case resetAndroid
     case listPackages
     case packageInfo
     case launch
@@ -1165,6 +1169,7 @@ enum RuntimeControlOperation {
                 false
             }
         case .startRuntime, .stopRuntime, .restartRuntime, .resetRuntime,
+            .setup, .resetAndroid,
             .importPackage, .installImported, .beginInstallImported,
             .beginUninstallPackage,
             .cancelOperation, .listOperations, .operationStatus:
@@ -1379,6 +1384,96 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 response.send(Self.encode(RuntimeControlReply(status: status)))
             } catch {
                 response.send(Self.errorReply(for: Self.controlError(for: error)))
+            }
+        }
+    }
+
+    func setup(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeSetupControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .setup,
+                as: RuntimeSetupControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeSetupControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(RuntimeSetupControlRequest.self, from: request),
+                let operationID = RuntimeAPI.OperationID(rawValue: decoded.header.operationID)
+            else {
+                response.send(Self.encode(RuntimeSetupControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let handle = try await host.beginSetup(
+                    decoded.request,
+                    files: files,
+                    operationID: operationID,
+                    clientKind: clientKind
+                )
+                response.send(Self.encode(RuntimeSetupControlReply(result: handle)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeSetupControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func resetAndroid(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeResetAndroidControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .resetAndroid,
+                as: RuntimeResetAndroidControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeResetAndroidControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeResetAndroidControlRequest.self,
+                    from: request
+                ),
+                let operationID = RuntimeAPI.OperationID(rawValue: decoded.header.operationID)
+            else {
+                response.send(Self.encode(RuntimeResetAndroidControlReply(error: Self.malformedWireError)))
+                return
+            }
+            guard decoded.request.confirmed else {
+                response.send(Self.encode(RuntimeResetAndroidControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let handle = try await host.beginResetAndroid(
+                    decoded.request,
+                    operationID: operationID,
+                    clientKind: clientKind
+                )
+                response.send(Self.encode(RuntimeResetAndroidControlReply(result: handle)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeResetAndroidControlReply(error: wireError)))
             }
         }
     }

@@ -196,6 +196,128 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Starts first-run provisioning and returns a handle that can be polled.
+    ///
+    /// The supplied operation ID makes an ambiguous begin reply recoverable: if the request may
+    /// have reached the daemon but its reply is lost, the client checks that ID once instead of
+    /// resending (runtime-daemon.md §9.2).
+    public func setup(
+        _ request: SetupRequest,
+        operationID: OperationID,
+        files: [FileHandle] = []
+    ) async throws(RuntimeControlClientError) -> OperationHandle {
+        let requestFingerprint: String
+        do {
+            requestFingerprint = try RuntimeOperationRequestFingerprint.make(for: request)
+        } catch {
+            throw .encodingFailure
+        }
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeSetupControlRequest(
+                header: APIRequestHeader(
+                    operationID: operationID.rawValue,
+                    clientKind: configuration.clientKind
+                ),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.setup(data, files: files)
+            let handle = try Self.decodeSetupReply(from: response)
+            guard handle.operationID == operationID, handle.kind == .setup else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return handle
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            switch clientError {
+            case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply, .invalidRemoteProxy:
+                do {
+                    let snapshot = try await operationStatus(operationID)
+                    guard snapshot.operationID == operationID,
+                        snapshot.kind == .setup,
+                        snapshot.requestFingerprint == requestFingerprint
+                    else {
+                        throw RuntimeControlClientError.operationResultUnknown(
+                            operation: "setup"
+                        )
+                    }
+                    return OperationHandle(
+                        operationID: snapshot.operationID,
+                        parent: snapshot.parent,
+                        kind: snapshot.kind
+                    )
+                } catch {
+                    throw RuntimeControlClientError.operationResultUnknown(
+                        operation: "setup"
+                    )
+                }
+            default:
+                throw clientError
+            }
+        }
+    }
+
+    /// Starts a Reset Android operation and returns a handle that can be polled
+    /// (runtime-daemon.md §9.5).
+    public func resetAndroid(
+        _ request: ResetAndroidRequest,
+        operationID: OperationID
+    ) async throws(RuntimeControlClientError) -> OperationHandle {
+        let requestFingerprint: String
+        do {
+            requestFingerprint = try RuntimeOperationRequestFingerprint.make(for: request)
+        } catch {
+            throw .encodingFailure
+        }
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeResetAndroidControlRequest(
+                header: APIRequestHeader(
+                    operationID: operationID.rawValue,
+                    clientKind: configuration.clientKind
+                ),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.resetAndroid(data)
+            let handle = try Self.decodeResetAndroidReply(from: response)
+            guard handle.operationID == operationID, handle.kind == .resetAndroid else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return handle
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            switch clientError {
+            case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply, .invalidRemoteProxy:
+                do {
+                    let snapshot = try await operationStatus(operationID)
+                    guard snapshot.operationID == operationID,
+                        snapshot.kind == .resetAndroid,
+                        snapshot.requestFingerprint == requestFingerprint
+                    else {
+                        throw RuntimeControlClientError.operationResultUnknown(
+                            operation: "resetAndroid"
+                        )
+                    }
+                    return OperationHandle(
+                        operationID: snapshot.operationID,
+                        parent: snapshot.parent,
+                        kind: snapshot.kind
+                    )
+                } catch {
+                    throw RuntimeControlClientError.operationResultUnknown(
+                        operation: "resetAndroid"
+                    )
+                }
+            default:
+                throw clientError
+            }
+        }
+    }
+
     /// Launches the requested package once and returns the session result.
     ///
     /// A transport failure is returned to the caller without replaying this side-effecting request.
@@ -1205,6 +1327,38 @@ public actor RuntimeControlClient {
         return result
     }
 
+    private static func decodeSetupReply(from data: Data) throws(RuntimeControlClientError)
+        -> OperationHandle
+    {
+        let reply = try Self.decode(RuntimeSetupControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
+    private static func decodeResetAndroidReply(from data: Data) throws(RuntimeControlClientError)
+        -> OperationHandle
+    {
+        let reply = try Self.decode(RuntimeResetAndroidControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
     private static func decodeBeginUninstallPackageReply(from data: Data) throws(RuntimeControlClientError)
         -> OperationHandle
     {
@@ -1536,6 +1690,8 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func stopRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func restartRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func resetRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func setup(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
+    func resetAndroid(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func listPackages(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func packageInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func importPackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
@@ -1804,6 +1960,34 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.resetRuntime(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func setup(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.setup(request, files: files) { response in finish(.success(response)) }
+        }
+    }
+
+    func resetAndroid(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.resetAndroid(request) { response in finish(.success(response)) }
         }
     }
 

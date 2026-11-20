@@ -332,6 +332,41 @@ import Testing
     #expect(command is RuntimeResetCommand)
 }
 
+#if !APKRUN_EMBEDDED_RUNTIME
+    @Test func setupCommandParsesImageAndConfirmation() async throws {
+        let command = try await APKRunCommand.asyncParseAsRoot(["setup", "--image", "/tmp/bundle", "--yes"])
+        guard let setup = command as? SetupCommand else {
+            Issue.record("setup did not parse as SetupCommand")
+            return
+        }
+        #expect(setup.image == "/tmp/bundle")
+        #expect(setup.yes == true)
+    }
+
+    @Test func setupCommandDefaultsToFeedImage() async throws {
+        let command = try await APKRunCommand.asyncParseAsRoot(["setup"])
+        guard let setup = command as? SetupCommand else {
+            Issue.record("setup did not parse as SetupCommand")
+            return
+        }
+        #expect(setup.image == nil)
+        #expect(setup.yes == false)
+    }
+
+    @Test func runtimeResetCommandParsesEraseFlags() async throws {
+        let command = try await APKRunCommand.asyncParseAsRoot([
+            "runtime", "reset", "--erase", "--no-backup", "--yes",
+        ])
+        guard let reset = command as? RuntimeResetCommand else {
+            Issue.record("runtime reset did not parse as RuntimeResetCommand")
+            return
+        }
+        #expect(reset.erase == true)
+        #expect(reset.noBackup == true)
+        #expect(reset.yes == true)
+    }
+#endif
+
 @Test func packageInfoRejectsTheDisplayOptionWithAnActionableCatalogError() async throws {
     let command = try await APKRunCommand.asyncParseAsRoot(["info", "--displays"])
     guard var infoCommand = command as? PackageInfoCommand else {

@@ -66,7 +66,7 @@ public actor RuntimeHost {
     private var startupAssessment: DaemonStartupAssessment?
     private var image: InstalledImage?
     private var instanceStore: InstanceStore?
-    private var supervisor: RuntimeSupervisor?
+    var supervisor: RuntimeSupervisor?
     private var supervisorEventsTask: Task<Void, Never>?
     private var packageQueryService: EmbeddedPackageService?
     private var wrapperRegistry: WrapperRegistry?
@@ -74,7 +74,7 @@ public actor RuntimeHost {
     private var wrapperHealthChecksRegistered = false
     /// Package IDs with a `wrapperCreate` operation in flight.
     private var wrapperCreationsInFlight: Set<String> = []
-    private var headlessSessionService: (any RuntimeSessionService)?
+    var headlessSessionService: (any RuntimeSessionService)?
     private var runtimeSessionGeneration: UInt64 = 0
     private var bootProgressEstimator: BootProgressEstimator?
     private var bootStartedAt: ContinuousClock.Instant?
@@ -2236,7 +2236,7 @@ public actor RuntimeHost {
         }
     }
 
-    private func beginPackageMutation() throws(RuntimeHostError) {
+    func beginPackageMutation() throws(RuntimeHostError) {
         guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
             throw .invalidTransition
         }
@@ -2244,7 +2244,7 @@ public actor RuntimeHost {
         activePackageMutations += 1
     }
 
-    private func finishPackageMutation() {
+    func finishPackageMutation() {
         activePackageMutations -= 1
         if activePackageMutations == 0 {
             let waiters = packageMutationWaiters
@@ -3473,7 +3473,7 @@ public actor RuntimeHost {
         return service
     }
 
-    private func attachPackageQueriesIfRuntimeIsReady(
+    func attachPackageQueriesIfRuntimeIsReady(
         to service: EmbeddedPackageService
     ) async throws(RuntimeWireError) {
         guard let supervisor, await supervisor.state == .ready else {
@@ -3513,7 +3513,7 @@ public actor RuntimeHost {
         remediation: "Start Android and try again."
     )
 
-    private static func sessionWireError(for error: RuntimeHostError) -> RuntimeWireError {
+    static func sessionWireError(for error: RuntimeHostError) -> RuntimeWireError {
         let code: String
         switch error {
         case .notStarted, .alreadyStarted, .crashLoopActive, .stateStore:

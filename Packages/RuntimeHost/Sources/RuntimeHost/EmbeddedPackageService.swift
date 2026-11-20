@@ -877,33 +877,24 @@ public actor EmbeddedPackageService: RuntimeService {
         }
     }
 
+    /// Maps the store's §4.7 classification onto the wire enum.
     private func relation(for preview: PackageImportPreview) async throws -> RuntimeImportRelation {
-        let records = try await store.listManagedPackages()
-        guard let record = records.first(where: { $0.packageId == preview.packageID }) else {
+        switch preview.relation {
+        case .newPackage:
             return .newPackage
-        }
-        if record.state == .uninstalledKeepingData {
-            return .uninstalledWithData(record.versionCode)
-        }
-        if !preview.artifactSet.signerDigests.isEmpty,
-            !record.signingCertificates.isEmpty,
-            preview.artifactSet.signerDigests != record.signingCertificates
-        {
-            return .otherSigner
-        }
-        if preview.versionCode < record.versionCode {
-            return .downgrade(from: record.versionCode)
-        }
-        if preview.versionCode > record.versionCode {
-            return .update(from: record.versionCode)
-        }
-        if preview.artifactSet.setDigest == record.artifacts.current?.setDigest {
-            if record.state == .installed {
-                return .sameAsInstalled
-            }
+        case .sameAsInstalled:
+            return .sameAsInstalled
+        case .reinstallSameVersion:
             return .reinstallSameVersion
+        case .update(let from):
+            return .update(from: from)
+        case .downgrade(let from):
+            return .downgrade(from: from)
+        case .otherSigner:
+            return .otherSigner
+        case .uninstalledWithData(let versionCode):
+            return .uninstalledWithData(versionCode)
         }
-        return .reinstallSameVersion
     }
 
     private func currentArtifactSet(for packageID: PackageID) throws -> ArtifactSet? {
@@ -1128,6 +1119,14 @@ public actor EmbeddedPackageService: RuntimeService {
                         "Version \(candidate) is older than installed version \(installed).",
                     remediation: "Choose a newer APK, or uninstall the app first."
                 )
+            case .signerMismatch(let packageID):
+                return .store(
+                    "signerMismatch",
+                    message:
+                        "The APK for \(packageID.rawValue) is signed by a different key than the installed app.",
+                    remediation:
+                        "Install the APK signed by the same key, or uninstall the app first (its data is removed)."
+                )
             case .downgradeReinstallUnavailable:
                 return .store(
                     "downgradeUnavailable", message: "This Android image does not support package downgrades.")
@@ -1157,6 +1156,14 @@ public actor EmbeddedPackageService: RuntimeService {
                 return .store(
                     "unreadablePackageRecord", message: "A package record could not be read.",
                     remediation: "Run `apkrun doctor` for details.")
+            case .packageInUse(let packageID):
+                return .store(
+                    "packageInUse", message: "\(packageID.rawValue) is in use.",
+                    remediation: "Close the app's windows and try the update again.")
+            case .stagedUpdateMissing:
+                return .store(
+                    "stagedUpdateMissing", message: "No verified update is staged for this package.",
+                    remediation: "Run `apkrun update check` to download and stage an update first.")
             case .io:
                 return .store(
                     "storageIO", message: "APKRun could not read or write package data.",

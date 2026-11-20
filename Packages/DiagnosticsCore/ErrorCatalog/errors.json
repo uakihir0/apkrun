@@ -2658,6 +2658,29 @@
    }
   },
   {
+   "code": "store.packageInUse",
+   "parameters": [
+    "app"
+   ],
+   "message": {
+    "en": "{app} is in use.",
+    "ja": "{app} は使用中です。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeUpdate",
+    "case": "packageInUse(PackageID)",
+    "when": "an update install starts while the package has an open session",
+    "raisedBy": "PackageStore",
+    "ref": "package-store.md §5.2"
+   },
+   "remediation": {
+    "en": "Close the app's windows and try the update again.",
+    "ja": "アプリのウインドウを閉じてから、もう一度更新をお試しください。"
+   }
+  },
+  {
    "code": "store.reservedPackage",
    "parameters": [
     "package"
@@ -2724,6 +2747,27 @@
    "remediation": {
     "en": "Install updates of {app} from its original developer, or uninstall {app} first.",
     "ja": "{app} の更新は元の開発者からインストールするか、先に {app} をアンインストールしてください。"
+   }
+  },
+  {
+   "code": "store.stagedUpdateMissing",
+   "parameters": [],
+   "message": {
+    "en": "No verified update is staged for this package.",
+    "ja": "このパッケージにはステージ済みの更新がありません。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeUpdate",
+    "case": "stagedUpdateMissing",
+    "when": "an update install is requested but the package has no staged set",
+    "raisedBy": "PackageStore",
+    "ref": "package-store.md §5.2"
+   },
+   "remediation": {
+    "en": "Run `apkrun update check` to download and stage an update first.",
+    "ja": "先に `apkrun update check` で更新をダウンロードしてステージしてください。"
    }
   },
   {

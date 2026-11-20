@@ -22,6 +22,8 @@ public struct PackageImportPreview: Codable, Sendable, Equatable {
     public let excludedSplits: [String]
     /// Non-blocking observations of the intrinsic checks (§4.6).
     public let warnings: [ImportWarning]
+    /// How this import relates to the managed record (package-store.md §4.7).
+    public let relation: ImportRelation
 
     /// Creates an import preview.
     public init(
@@ -33,7 +35,8 @@ public struct PackageImportPreview: Codable, Sendable, Equatable {
         artifactSet: ArtifactSet,
         sourceFileNames: [String],
         excludedSplits: [String] = [],
-        warnings: [ImportWarning] = []
+        warnings: [ImportWarning] = [],
+        relation: ImportRelation = .newPackage
     ) {
         self.ticket = ticket
         self.packageID = packageID
@@ -44,11 +47,12 @@ public struct PackageImportPreview: Codable, Sendable, Equatable {
         self.sourceFileNames = sourceFileNames
         self.excludedSplits = excludedSplits
         self.warnings = warnings
+        self.relation = relation
     }
 
     private enum CodingKeys: String, CodingKey {
         case ticket, packageID, displayName, versionCode, versionName
-        case artifactSet, sourceFileNames, excludedSplits, warnings
+        case artifactSet, sourceFileNames, excludedSplits, warnings, relation
     }
 
     /// Decodes an import preview, defaulting fields absent in older manifests.
@@ -63,7 +67,27 @@ public struct PackageImportPreview: Codable, Sendable, Equatable {
         sourceFileNames = try container.decode([String].self, forKey: .sourceFileNames)
         excludedSplits = try container.decodeIfPresent([String].self, forKey: .excludedSplits) ?? []
         warnings = try container.decodeIfPresent([ImportWarning].self, forKey: .warnings) ?? []
+        relation = try container.decodeIfPresent(ImportRelation.self, forKey: .relation) ?? .newPackage
     }
+}
+
+/// How an import relates to the managed record of its package
+/// (package-store.md §4.7).
+public enum ImportRelation: Codable, Sendable, Equatable {
+    /// No managed record exists for the package.
+    case newPackage
+    /// The same artifact set as the managed record.
+    case sameAsInstalled
+    /// The same versionCode, different files.
+    case reinstallSameVersion
+    /// A newer versionCode; UpdateCore takes it as a manual update.
+    case update(from: VersionCode)
+    /// A lower versionCode; refused with store.downgradeRefused.
+    case downgrade(from: VersionCode)
+    /// A different signer; refused with store.signerMismatch.
+    case otherSigner
+    /// The package was uninstalled keeping its data; installing restores it.
+    case uninstalledWithData(VersionCode)
 }
 
 /// Failures detected by the package store itself.
@@ -91,6 +115,9 @@ public enum PackageStoreFailure: Error, Equatable, Sendable {
     case guestPackageMismatch
     case guestVersionMismatch
     case downgradeRefused(installed: VersionCode, candidate: VersionCode)
+    /// The import is signed by a different key than the managed record
+    /// (package-store.md §4.7 `otherSigner`).
+    case signerMismatch(PackageID)
     case downgradeReinstallUnavailable
     case unsupportedJournalVersion(Int)
     case journalUnreadable
@@ -99,6 +126,10 @@ public enum PackageStoreFailure: Error, Equatable, Sendable {
     case unreadablePackageRecord
     /// `authority == .apkrun` requires a configured update provider.
     case providerNotConfigured
+    /// The package has an open runtime session; an update cannot start.
+    case packageInUse(PackageID)
+    /// The package has no staged update to install.
+    case stagedUpdateMissing
     case io
 }
 
@@ -414,6 +445,9 @@ public actor PackageStore {
     private var unreadableRecords: [PackageID: String] = [:]
     private var tickets: [UUID: TicketManifest] = [:]
     private var activeTickets = Set<UUID>()
+    /// Download tickets handed to providers, before `inspect(ticket:)` verifies
+    /// them into regular tickets. Maps the ticket to its package's directory.
+    private var downloadTickets: [UUID: (packageID: PackageID, directory: String)] = [:]
     private var transactions: [String: JournalTransaction] = [:]
     private var operationsInProgress = Set<PackageID>()
     private var sequence: Int64 = 0
@@ -663,7 +697,13 @@ public actor PackageStore {
             artifactSet: artifactSet,
             sourceFileNames: sourceNames,
             excludedSplits: verifiedImport.excludedSplits,
-            warnings: verifiedImport.warnings
+            warnings: verifiedImport.warnings,
+            relation: classifyRelation(
+                packageID: baseFacts.packageID,
+                versionCode: baseFacts.versionCode,
+                setDigest: artifactSet.setDigest,
+                signerDigests: artifactSet.signerDigests
+            )
         )
         let manifest = TicketManifest(
             preview: preview,
@@ -712,6 +752,281 @@ public actor PackageStore {
         activeTickets.remove(ticket)
     }
 
+    /// Opens a download ticket for an update (package-store.md §4,
+    /// update-system.md §5). The provider streams artifacts into
+    /// `incoming/<ticket>/`; `inspect(ticket:)` verifies them in place. The
+    /// directory is scratch space: no journal entries reference it, `open()`
+    /// deletes it if the run dies before `inspect`, and `discardDownload`
+    /// removes it after a failed or refused download.
+    ///
+    /// - Returns: the ticket and the directory the provider writes into.
+    public func beginDownloadTicket(for packageID: PackageID) async throws -> (
+        ticket: UUID, directory: URL
+    ) {
+        try requireWritable()
+        let importsLock = try await acquireLock(at: importsLockURL)
+        defer { _ = Darwin.close(importsLock) }
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard records[packageID] != nil else {
+            throw PackageStoreFailure.packageNotFound
+        }
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        let ticket = UUID()
+        let incoming = incomingDirectory(
+            packageID: packageID, directory: directory, ticket: ticket)
+        try createDirectory(incoming)
+        downloadTickets[ticket] = (packageID, directory)
+        return (ticket, incoming)
+    }
+
+    /// Writes a JSON sidecar into a verified ticket's `incoming/` set — the
+    /// coordinator's `validation.json` (update-system.md §6), which `stage`
+    /// then carries into `staged/` alongside the artifact set.
+    public func writeTicketFile(ticket: UUID, name: String, contents: Data) async throws {
+        try requireWritable()
+        guard Self.isSafeTicketSidecarName(name) else {
+            throw PackageStoreFailure.invalidImport
+        }
+        let importsLock = try await acquireLock(at: importsLockURL)
+        defer { _ = Darwin.close(importsLock) }
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard let preview = tickets[ticket]?.preview else {
+            throw PackageStoreFailure.importTicketNotFound
+        }
+        let directory = directories[preview.packageID] ?? directoryName(for: preview.packageID)
+        let target = try incomingDirectory(
+            packageID: preview.packageID, directory: directory, ticket: ticket
+        )
+        .appendingPathComponent(name)
+        try contents.write(to: target, options: .atomic)
+    }
+
+    /// The sidecar names `writeTicketFile` accepts: `*.json` files that are
+    /// neither the manifest (`ticket.json`) nor the artifact set
+    /// (`artifact.json`), made of filename-safe characters only.
+    private static func isSafeTicketSidecarName(_ name: String) -> Bool {
+        name.hasSuffix(".json")
+            && name != "ticket.json" && name != "artifact.json"
+            && name.count <= 64
+            && name.allSatisfy {
+                $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "_" || $0 == "-")
+            }
+    }
+
+    /// Discards an unverified download ticket's `incoming/` set (§5): a failed
+    /// download, a hash mismatch, or a refused validation. The ticket may also
+    /// be a verified one whose `inspect` manifest exists; either way the set
+    /// goes to `.trash`'s purge path by plain removal.
+    public func discardDownload(ticket: UUID) async throws {
+        try requireWritable()
+        let importsLock = try await acquireLock(at: importsLockURL)
+        defer { _ = Darwin.close(importsLock) }
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        let packageID = downloadTickets[ticket]?.packageID ?? tickets[ticket]?.preview.packageID
+        guard let packageID else { return }
+        removeIncoming(ticket: ticket, packageID: packageID)
+        downloadTickets[ticket] = nil
+    }
+
+    /// Verifies a download ticket's `incoming/` set in place (package-store.md
+    /// §4.6, update-system.md §5). The files the provider wrote are run through
+    /// the same verifier as imports — containers expand, signatures and the
+    /// intrinsic checks I1–I12 run, splits are selected — then canonicalized as
+    /// `base.apk`/`split_<name>.apk` beside a `ticket.json` and `artifact.json`.
+    /// Afterwards the ticket is an ordinary verified ticket: `stage` or
+    /// `installStaged`'s callers consume it like an import ticket.
+    public func inspect(ticket: UUID) async throws -> PackageImportPreview {
+        try requireWritable()
+        let importsLock = try await acquireLock(at: importsLockURL)
+        defer { _ = Darwin.close(importsLock) }
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard let ticketInfo = downloadTickets[ticket] else {
+            // A verified import ticket needs no second inspect: its preview is
+            // the manifest written by `importPackage` (update-system.md §7.1
+            // runs the `--file` path through `validate` with such a ticket).
+            if let preview = tickets[ticket]?.preview {
+                return preview
+            }
+            throw PackageStoreFailure.importTicketNotFound
+        }
+        let packageID = ticketInfo.packageID
+        guard !operationsInProgress.contains(packageID) else {
+            throw PackageStoreFailure.operationInProgress
+        }
+        let incoming = incomingDirectory(
+            packageID: packageID, directory: ticketInfo.directory, ticket: ticket)
+        guard fileManager.fileExists(atPath: incoming.path) else {
+            throw PackageStoreFailure.importTicketNotFound
+        }
+
+        let rawFiles =
+            ((try? fileManager.contentsOfDirectory(
+                at: incoming,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )) ?? []).filter { !$0.hasDirectoryPath }
+        guard !rawFiles.isEmpty else {
+            try? fileManager.removeItem(at: incoming)
+            downloadTickets[ticket] = nil
+            throw PackageStoreFailure.invalidImport
+        }
+        let sourceNames = rawFiles.map(\.lastPathComponent)
+        let scratch = incoming.appendingPathComponent(".inspect", isDirectory: true)
+        try createDirectory(scratch)
+        let verifiedImport = try await importVerifier(rawFiles, scratch, inspector)
+        let facts = verifiedImport.facts
+        let baseFacts = try Self.validateSplitFacts(facts)
+        guard baseFacts.packageID == packageID else {
+            try? fileManager.removeItem(at: incoming)
+            downloadTickets[ticket] = nil
+            throw PackageStoreFailure.importPackageMismatch
+        }
+
+        var artifactFiles: [ArtifactFile] = []
+        let ordered = zip(verifiedImport.files, facts).sorted { lhs, rhs in
+            switch (lhs.1.splitName, rhs.1.splitName) {
+            case (nil, .some): return true
+            case (.some, nil): return false
+            case (nil, nil): return false
+            case (.some(let lhs), .some(let rhs)): return lhs < rhs
+            }
+        }
+        do {
+            for (sourceURL, itemFacts) in ordered {
+                let name: String
+                if let splitName = itemFacts.splitName {
+                    guard Self.isSafeSplitName(splitName) else {
+                        throw PackageStoreFailure.unsafeSplitName
+                    }
+                    name = "split_\(splitName).apk"
+                } else {
+                    name = "base.apk"
+                }
+                let destination = incoming.appendingPathComponent(name)
+                // A downloaded file may already sit at its canonical name.
+                if sourceURL.standardizedFileURL != destination.standardizedFileURL {
+                    try copyBoundedFile(
+                        from: sourceURL,
+                        to: destination,
+                        maximumBytes: Self.maximumAPKFileSize,
+                        totalBytesAlreadyCopied: artifactFiles.reduce(Int64(0)) { $0 + $1.size },
+                        totalBytesLimit: Self.maximumImportSetSize,
+                        requiredFreeSpaceAfterWrite: { _ in 0 }
+                    )
+                }
+                try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
+                let (size, digest) = try Self.hashFile(at: destination)
+                artifactFiles.append(
+                    ArtifactFile(name: name, splitName: itemFacts.splitName, size: size, sha256: digest)
+                )
+            }
+        } catch let failure as PackageStoreFailure {
+            try? fileManager.removeItem(at: incoming)
+            downloadTickets[ticket] = nil
+            throw failure
+        } catch {
+            try? fileManager.removeItem(at: incoming)
+            downloadTickets[ticket] = nil
+            throw PackageStoreFailure.io
+        }
+        artifactFiles.sort {
+            if $0.splitName == nil { return true }
+            if $1.splitName == nil { return false }
+            return ($0.splitName ?? "") < ($1.splitName ?? "")
+        }
+
+        let digest: SHA256Digest
+        do {
+            digest = try ArtifactSet.computeSetDigest(for: artifactFiles)
+        } catch {
+            try? fileManager.removeItem(at: incoming)
+            downloadTickets[ticket] = nil
+            throw PackageStoreFailure.invalidSplitSet
+        }
+        let artifactSet = ArtifactSet(
+            packageID: baseFacts.packageID,
+            versionCode: baseFacts.versionCode,
+            versionName: baseFacts.versionName,
+            files: artifactFiles,
+            setDigest: digest,
+            signerDigests: verifiedImport.signerDigests,
+            lineage: verifiedImport.lineage,
+            inspection: InspectionProvenance(
+                aapt2Version: "unknown",
+                verifierVersion: "host-inspection-v1",
+                inspectedAt: clock(),
+                hostChecksPerformed: [
+                    "packageMetadata",
+                    "versionCode",
+                    "splitSet",
+                    "sha256",
+                    "signature:verified",
+                    "intrinsicChecks",
+                ]
+            )
+        )
+        let preview = PackageImportPreview(
+            ticket: ticket,
+            packageID: baseFacts.packageID,
+            displayName: baseFacts.displayName,
+            versionCode: baseFacts.versionCode,
+            versionName: baseFacts.versionName,
+            artifactSet: artifactSet,
+            sourceFileNames: sourceNames,
+            excludedSplits: verifiedImport.excludedSplits,
+            warnings: verifiedImport.warnings,
+            relation: classifyRelation(
+                packageID: baseFacts.packageID,
+                versionCode: baseFacts.versionCode,
+                setDigest: artifactSet.setDigest,
+                signerDigests: artifactSet.signerDigests
+            )
+        )
+        let manifest = TicketManifest(
+            preview: preview,
+            createdAt: clock(),
+            facts: facts.map(PersistedAPKFacts.init),
+            origin: nil
+        )
+        do {
+            try writeJSON(manifest, to: incoming.appendingPathComponent("ticket.json"))
+            try writeJSON(artifactSet, to: incoming.appendingPathComponent("artifact.json"))
+        } catch {
+            try? fileManager.removeItem(at: incoming)
+            downloadTickets[ticket] = nil
+            throw PackageStoreFailure.io
+        }
+        // Drop the provider's raw file names and the inspection scratch; only
+        // the canonical set and its metadata remain.
+        for item
+            in (try? fileManager.contentsOfDirectory(
+                at: incoming,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )) ?? []
+        {
+            let name = item.lastPathComponent
+            if name != "ticket.json", name != "artifact.json",
+                !artifactFiles.contains(where: { $0.name == name })
+            {
+                try? fileManager.removeItem(at: item)
+            }
+        }
+        try? fileManager.removeItem(at: scratch)
+        tickets[ticket] = manifest
+        activeTickets.insert(ticket)
+        downloadTickets[ticket] = nil
+        return preview
+    }
+
     /// Returns the package identity of an open import ticket without starting Android.
     public func packageIDForImportTicket(_ ticket: UUID) throws -> PackageID {
         try requireOpen()
@@ -737,8 +1052,23 @@ public actor PackageStore {
             throw PackageStoreFailure.importTicketNotFound
         }
         if let existing = records[manifest.preview.packageID] {
-            guard existing.state == .uninstalledKeepingData else {
-                throw PackageStoreFailure.packageAlreadyInstalled
+            if existing.state != .uninstalledKeepingData {
+                // Route refusals through the §4.7 relation so a signer
+                // mismatch or a versionCode regression names its real cause.
+                switch classifyRelation(
+                    packageID: manifest.preview.packageID,
+                    versionCode: manifest.preview.versionCode,
+                    setDigest: manifest.preview.artifactSet.setDigest,
+                    signerDigests: manifest.preview.artifactSet.signerDigests
+                ) {
+                case .otherSigner:
+                    throw PackageStoreFailure.signerMismatch(manifest.preview.packageID)
+                case .downgrade(let from):
+                    throw PackageStoreFailure.downgradeRefused(
+                        installed: from, candidate: manifest.preview.versionCode)
+                default:
+                    throw PackageStoreFailure.packageAlreadyInstalled
+                }
             }
             return try await performInstall(
                 manifest,
@@ -1070,6 +1400,170 @@ public actor PackageStore {
         try purgeTrash()
     }
 
+    /// Installs the package's staged update through PackageInstaller and promotes
+    /// the `staged/` set to `current/`, retaining the previous set for rollback
+    /// (package-store.md §5.2 `update`, §5.5 recovery).
+    ///
+    /// `hasOpenSession` must report whether the package currently has an open
+    /// runtime session. It is consulted before the journal begins, so a busy
+    /// package fails with `packageInUse` without touching the store.
+    ///
+    /// `enableRollback` is forwarded to the channel only when the channel
+    /// advertises the `rollback` capability; otherwise it is dropped.
+    public func installStaged(
+        for packageID: PackageID,
+        enableRollback: Bool,
+        hasOpenSession: @Sendable () async -> Bool
+    ) async throws -> PackageRecord {
+        try requireWritable()
+        guard let runtimeAccess else { throw PackageStoreFailure.runtimeUnavailable }
+        if await hasOpenSession() {
+            throw PackageStoreFailure.packageInUse(packageID)
+        }
+        guard operationsInProgress.insert(packageID).inserted else {
+            throw PackageStoreFailure.operationInProgress
+        }
+        defer { operationsInProgress.remove(packageID) }
+
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadJournalState()
+        guard !isReadOnly else { throw PackageStoreFailure.journalUnreadable }
+        try reloadRecordsPreservingImportDirectories()
+        if let detail = unreadableRecords[packageID] {
+            throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
+        }
+        guard let existing = records[packageID] else { throw PackageStoreFailure.packageNotFound }
+        guard existing.state == .installed else { throw PackageStoreFailure.packageNotFound }
+
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        let packageDirectory = packagesDirectory.appendingPathComponent(directory, isDirectory: true)
+        let staged = packageDirectory.appendingPathComponent("staged", isDirectory: true)
+        let current = packageDirectory.appendingPathComponent("current", isDirectory: true)
+        let previous = packageDirectory.appendingPathComponent("previous", isDirectory: true)
+        guard fileManager.fileExists(atPath: staged.appendingPathComponent("artifact.json").path) else {
+            throw PackageStoreFailure.stagedUpdateMissing
+        }
+        guard let stagedDigest = stagedSetDigest(in: staged) else {
+            throw PackageStoreFailure.stagedUpdateMissing
+        }
+        guard let stagedSet = try artifactSet(in: staged) else {
+            throw PackageStoreFailure.stagedUpdateMissing
+        }
+        guard stagedSet.packageID == packageID else {
+            throw PackageStoreFailure.guestPackageMismatch
+        }
+        guard stagedSet.versionCode > existing.versionCode else {
+            throw PackageStoreFailure.downgradeRefused(
+                installed: existing.versionCode,
+                candidate: stagedSet.versionCode
+            )
+        }
+
+        let transaction = Self.makeTransactionID(at: clock())
+        let startedAt = clock()
+        let operationID = UUID()
+        try append(
+            JournalEntry(
+                v: 1,
+                seq: 0,
+                txn: transaction,
+                at: startedAt,
+                op: "begin",
+                kind: "update",
+                package: packageID.rawValue,
+                dir: directory,
+                from: existing.versionCode,
+                to: stagedSet.versionCode,
+                setDigest: stagedDigest.rawValue,
+                ticket: nil,
+                keepData: nil,
+                step: nil,
+                reason: nil
+            )
+        )
+        try injectFault(kind: "update", step: "begin")
+        try appendStep(transaction, kind: "update", step: "guestCommitRequested")
+        try injectFault(kind: "update", step: "guestCommitRequested")
+
+        let info: StorePackageInfo
+        let boundaryState = GuestInstallBoundaryState()
+        do {
+            info = try await runtimeAccess.withStoreAgent(operationID) { channel in
+                boundaryState.markPassed()
+                return try await channel.install(
+                    StoreInstallRequest(
+                        packageID: packageID,
+                        versionCode: stagedSet.versionCode,
+                        allowDowngrade: false,
+                        mode: .update,
+                        signerDigests: stagedSet.signerDigests,
+                        enableRollback: enableRollback && channel.capabilities.contains(.rollback)
+                    ),
+                    files: Self.artifactURLs(in: staged, set: stagedSet)
+                )
+            }
+        } catch {
+            guard boundaryState.didPass() else {
+                try appendAbort(transaction, reason: "guestInstallNotStarted")
+                throw error
+            }
+            var committedInfo: StorePackageInfo?
+            do {
+                committedInfo = try await queryPackage(packageID, through: runtimeAccess)
+            } catch {
+                throw error
+            }
+            if let committedInfo,
+                committedInfo.packageID == packageID,
+                committedInfo.versionCode == stagedSet.versionCode
+            {
+                info = committedInfo
+            } else {
+                // The update did not commit; `staged/` stays staged so the
+                // caller can retry once the package is inspected again.
+                try appendAbort(transaction, reason: "guestInstallFailed")
+                throw error
+            }
+        }
+        guard info.packageID == packageID else {
+            try appendAbort(transaction, reason: "guestPackageMismatch")
+            throw PackageStoreFailure.guestPackageMismatch
+        }
+        guard info.versionCode == stagedSet.versionCode else {
+            try appendAbort(transaction, reason: "guestVersionMismatch")
+            throw PackageStoreFailure.guestVersionMismatch
+        }
+        try appendStep(transaction, kind: "update", step: "guestInstalled", versionCode: info.versionCode)
+        try injectFault(kind: "update", step: "guestInstalled")
+
+        try finishUpdatePromotion(
+            transaction: transaction,
+            toDigest: stagedDigest,
+            fromDigest: existing.artifacts.current?.setDigest,
+            staged: staged,
+            current: current,
+            previous: previous
+        )
+        try appendStep(transaction, kind: "update", step: "filesPromoted")
+        try injectFault(kind: "update", step: "filesPromoted")
+
+        let record = recordAfterUpdate(
+            existing,
+            info: info,
+            generation: await runtimeAccess.userdataGeneration() ?? UUID(),
+            operationID: operationID,
+            startedAt: startedAt
+        )
+        try writeRecord(record, directory: directory)
+        try appendStep(transaction, kind: "update", step: "metadataWritten")
+        try injectFault(kind: "update", step: "metadataWritten")
+        try appendTerminal(transaction, op: "commit")
+        records[packageID] = record
+        try purgeTrash()
+        return record
+    }
+
     /// Sets the package's update policy — authority and/or provider — as
     /// separate record fields (update-system.md §3.1). Not a journal
     /// transaction: the record update is a single atomic metadata write
@@ -1281,6 +1775,29 @@ public actor PackageStore {
                     directory: directory,
                     info: info,
                     ticket: transaction.begin.ticket.flatMap(UUID.init(uuidString:)),
+                    userdataGeneration: await runtimeAccess.userdataGeneration() ?? UUID()
+                )
+
+            case ("update", "guestCommitRequested"), ("update", "guestInstalled"),
+                ("update", "filesPromoted"):
+                let info = try await queryPackage(packageID, through: runtimeAccess)
+                guard let info, info.packageID == packageID, info.versionCode == transaction.begin.to else {
+                    // The update did not commit in Android. Keep `staged/` so
+                    // the candidate can be retried; files stay unpromoted.
+                    if transaction.lastStep == "guestInstalled" || transaction.lastStep == "filesPromoted" {
+                        continue
+                    }
+                    try appendAbort(transactionID, reason: "guestVersionDidNotCommit")
+                    continue
+                }
+                if transaction.lastStep == "guestCommitRequested" {
+                    try appendStep(transactionID, kind: kind, step: "guestInstalled", versionCode: info.versionCode)
+                }
+                try finishUpdateRecovery(
+                    transaction: transactionID,
+                    packageID: packageID,
+                    directory: directory,
+                    info: info,
                     userdataGeneration: await runtimeAccess.userdataGeneration() ?? UUID()
                 )
 
@@ -1541,6 +2058,24 @@ public actor PackageStore {
                 throw PackageStoreFailure.guestVersionMismatch
             }
         }
+        // Refuse signer mismatches before any Android call (package-store.md §4.7).
+        // The relation is re-derived here: the record may have changed since the
+        // preview was built. A versionCode regression is refused again below against
+        // the guest-reported version.
+        switch classifyRelation(
+            packageID: packageID,
+            versionCode: preview.versionCode,
+            setDigest: preview.artifactSet.setDigest,
+            signerDigests: preview.artifactSet.signerDigests
+        ) {
+        case .otherSigner:
+            throw PackageStoreFailure.signerMismatch(packageID)
+        case .downgrade(let from):
+            throw PackageStoreFailure.downgradeRefused(
+                installed: from, candidate: preview.versionCode)
+        default:
+            break
+        }
         let operationID = UUID()
         let previouslyInstalled = try await runtimeAccess.withStoreAgent(operationID) { channel in
             try await channel.packageInfo(packageID)
@@ -1604,7 +2139,9 @@ public actor PackageStore {
                     StoreInstallRequest(
                         packageID: packageID,
                         versionCode: preview.versionCode,
-                        allowDowngrade: false
+                        allowDowngrade: false,
+                        mode: kind == "reinstall" ? .reinstall : .new,
+                        signerDigests: preview.artifactSet.signerDigests
                     ),
                     files: Self.artifactURLs(in: incoming, set: preview.artifactSet)
                 )
@@ -2191,7 +2728,7 @@ public actor PackageStore {
                 continue
             }
             switch kind {
-            case "firstInstall", "reinstall", "uninstall":
+            case "firstInstall", "reinstall", "uninstall", "update":
                 if state.lastStep == nil {
                     try appendAbort(transaction, reason: "interruptedBeforeGuestRequest")
                 } else if kind == "uninstall", state.lastStep == "guestUninstalled" {
@@ -2760,6 +3297,220 @@ public actor PackageStore {
         )
     }
 
+    /// Rolls an `update` transaction forward after a crash (package-store.md
+    /// §5.5). Slots are identified by `setDigest`, never by directory name:
+    /// the `to` digest belongs in `current/`, the `from` digest in `previous/`,
+    /// and any other set goes to `.trash`.
+    private func finishUpdateRecovery(
+        transaction: String,
+        packageID: PackageID,
+        directory: String,
+        info: StorePackageInfo,
+        userdataGeneration: UUID
+    ) throws {
+        let packageDirectory = packagesDirectory.appendingPathComponent(directory, isDirectory: true)
+        let staged = packageDirectory.appendingPathComponent("staged", isDirectory: true)
+        let current = packageDirectory.appendingPathComponent("current", isDirectory: true)
+        let previous = packageDirectory.appendingPathComponent("previous", isDirectory: true)
+        guard
+            let toDigest = transactions[transaction]?.begin.setDigest
+                .flatMap(SHA256Digest.init(rawValue:))
+        else {
+            try appendAbort(transaction, reason: "updateSetDigestMissing")
+            return
+        }
+        let fromDigest = records[packageID]?.artifacts.current?.setDigest
+        if transactions[transaction]?.lastStep != "filesPromoted" {
+            try finishUpdatePromotion(
+                transaction: transaction,
+                toDigest: toDigest,
+                fromDigest: fromDigest,
+                staged: staged,
+                current: current,
+                previous: previous
+            )
+            try appendStep(transaction, kind: "update", step: "filesPromoted")
+        }
+        guard let old = records[packageID] else {
+            try appendAbort(transaction, reason: "packageRecordMissing")
+            return
+        }
+        // Idempotent record conversion: a crash between `writeRecord` and the
+        // `metadataWritten` step replays this function with an already-updated
+        // record, whose `staged` slot is nil — reconverting it would erase
+        // `current` and alias `previous` to the new set.
+        let record =
+            old.artifacts.current?.setDigest == toDigest
+            ? old
+            : recordAfterUpdate(
+                old,
+                info: info,
+                generation: userdataGeneration,
+                operationID: UUID(),
+                startedAt: transactions[transaction]?.begin.at ?? clock()
+            )
+        if record != old {
+            try writeRecord(record, directory: directory)
+        }
+        try appendStep(transaction, kind: "update", step: "metadataWritten")
+        try appendTerminal(transaction, op: "commit")
+        records[packageID] = record
+        try purgeTrash()
+    }
+
+    /// Decodes a slot's `artifact.json`, or nil when the file is absent.
+    private func artifactSet(in slot: URL) throws -> ArtifactSet? {
+        let artifactURL = slot.appendingPathComponent("artifact.json")
+        guard fileManager.fileExists(atPath: artifactURL.path),
+            let data = try? Data(contentsOf: artifactURL)
+        else {
+            return nil
+        }
+        return try? Self.decoder().decode(ArtifactSet.self, from: data)
+    }
+
+    /// Promotes `staged/` to `current/` for the `update` transaction
+    /// (package-store.md §5.2, §5.5):
+    ///
+    /// 1. the old `previous/` set moves to `.trash`;
+    /// 2. `staged/` and `current/` swap via `renamex_np(RENAME_SWAP)`;
+    /// 3. `staged/` — now holding the old current set — moves to `previous/`.
+    ///
+    /// Idempotent by `setDigest` (never by directory name): the set with
+    /// `toDigest` ends in `current/`, the set with `fromDigest` in `previous/`,
+    /// and any other set in these slots goes to `.trash`.
+    private func finishUpdatePromotion(
+        transaction: String,
+        toDigest: SHA256Digest,
+        fromDigest: SHA256Digest?,
+        staged: URL,
+        current: URL,
+        previous: URL
+    ) throws {
+        // Only a *stale* previous set goes to `.trash`: after a crash between
+        // the staged→previous move and the `filesPromoted` step, `previous/`
+        // already holds the `from` set and must stay (package-store.md §5.5).
+        if fileManager.fileExists(atPath: previous.path),
+            stagedSetDigest(in: previous) != fromDigest
+        {
+            var trashedPrevious =
+                trashDirectory
+                .appendingPathComponent("\(transaction)-previous", isDirectory: true)
+            var suffix = 1
+            while fileManager.fileExists(atPath: trashedPrevious.path) {
+                suffix += 1
+                trashedPrevious =
+                    trashDirectory
+                    .appendingPathComponent(
+                        "\(transaction)-previous-\(suffix)", isDirectory: true)
+            }
+            try moveItem(previous, to: trashedPrevious)
+        }
+        let stagedDigest = stagedSetDigest(in: staged)
+        let currentDigest = stagedSetDigest(in: current)
+        if stagedDigest == toDigest {
+            // Swap not done yet (or crash before it): exchange staged/current,
+            // unless current already holds the new set.
+            if currentDigest != toDigest {
+                guard !fileManager.fileExists(atPath: previous.path) else {
+                    throw PackageStoreFailure.io
+                }
+                if fileManager.fileExists(atPath: current.path) {
+                    try swapDirectories(staged, current)
+                } else {
+                    try moveItem(staged, to: current)
+                }
+            }
+        }
+        // `staged/` now holds the old current set (or a foreign set): anything
+        // that is not the new set and remains in `staged/` goes to `previous/`
+        // when it matches `fromDigest`, otherwise to `.trash`.
+        if fileManager.fileExists(atPath: staged.path) {
+            let remaining = stagedSetDigest(in: staged)
+            if remaining == fromDigest, !fileManager.fileExists(atPath: previous.path) {
+                try moveItem(staged, to: previous)
+            } else {
+                let trashed =
+                    trashDirectory
+                    .appendingPathComponent("\(transaction)-staged", isDirectory: true)
+                guard !fileManager.fileExists(atPath: trashed.path) else {
+                    throw PackageStoreFailure.io
+                }
+                try moveItem(staged, to: trashed)
+            }
+        }
+        guard stagedSetDigest(in: current) == toDigest else {
+            throw PackageStoreFailure.io
+        }
+    }
+
+    /// Atomically exchanges two directories via `renamex_np(RENAME_SWAP)`
+    /// (package-store.md §5.2). Both paths must exist.
+    private func swapDirectories(_ lhs: URL, _ rhs: URL) throws {
+        var status: Int32 = -1
+        lhs.path.withCString { lhsPath in
+            rhs.path.withCString { rhsPath in
+                status = renamex_np(lhsPath, rhsPath, UInt32(RENAME_SWAP))
+            }
+        }
+        guard status == 0 else {
+            throw PackageStoreFailure.io
+        }
+        try syncDirectory(lhs.deletingLastPathComponent())
+    }
+
+    /// The record after an `update` transaction commits: `current/` is the
+    /// staged set, `previous/` retains the old current set, `staged/` clears.
+    private func recordAfterUpdate(
+        _ old: PackageRecord,
+        info: StorePackageInfo,
+        generation: UUID,
+        operationID: UUID,
+        startedAt: Date
+    ) -> PackageRecord {
+        var record = old
+        record.displayName = info.displayName
+        record.versionCode = info.versionCode
+        record.versionName = info.versionName
+        record.signingCertificates = info.signingDigests
+        record.state = .installed
+        let newCurrent = record.artifacts.staged.map {
+            ArtifactSlotSummary(
+                versionCode: $0.versionCode,
+                versionName: $0.versionName,
+                setDigest: $0.setDigest,
+                size: $0.size,
+                fileCount: $0.fileCount
+            )
+        }
+        record.artifacts = ArtifactSlots(
+            current: newCurrent,
+            previous: old.artifacts.current,
+            staged: nil,
+            currentMatchesAndroid: true
+        )
+        record.android = AndroidPackageFacts(
+            installerOfRecord: info.installerPackage,
+            firstInstallTime: info.firstInstallTime,
+            lastUpdateTime: info.lastUpdateTime,
+            minSdk: info.minSDK,
+            targetSdk: info.targetSDK,
+            nativeAbis: old.android.nativeAbis,
+            userdataGeneration: generation,
+            lastSyncedAt: clock()
+        )
+        record.lastOperation = OperationSummary(
+            kind: .update,
+            operationID: operationID,
+            startedAt: startedAt,
+            finishedAt: clock(),
+            fromVersionCode: old.versionCode,
+            result: .succeeded
+        )
+        record.updatedAt = clock()
+        return record
+    }
+
     private func promoteIncoming(incoming: URL, current: URL, transaction: String, kind: String) throws {
         try createDirectory(current.deletingLastPathComponent())
         let oldCurrent = trashDirectory.appendingPathComponent("\(transaction)-current", isDirectory: true)
@@ -2893,6 +3644,40 @@ public actor PackageStore {
         activeTickets.remove(ticket)
     }
 
+    /// Classifies an import against the managed record (package-store.md §4.7).
+    /// `uninstalledKeepingData` takes precedence over the signer and version
+    /// checks: a reinstall that restores kept data is legal with any signer.
+    private func classifyRelation(
+        packageID: PackageID,
+        versionCode: VersionCode,
+        setDigest: SHA256Digest,
+        signerDigests: [SHA256Digest]
+    ) -> ImportRelation {
+        guard let record = records[packageID] else { return .newPackage }
+        if record.state == .uninstalledKeepingData {
+            return .uninstalledWithData(record.versionCode)
+        }
+        let candidateSigners = Set(signerDigests)
+        let installedSigners = Set(record.signingCertificates)
+        if !candidateSigners.isEmpty, !installedSigners.isEmpty,
+            candidateSigners != installedSigners
+        {
+            return .otherSigner
+        }
+        if versionCode < record.versionCode {
+            return .downgrade(from: record.versionCode)
+        }
+        if versionCode > record.versionCode {
+            return .update(from: record.versionCode)
+        }
+        if setDigest == record.artifacts.current?.setDigest,
+            record.state == .installed
+        {
+            return .sameAsInstalled
+        }
+        return .reinstallSameVersion
+    }
+
     private func directoryName(for packageID: PackageID) -> String {
         if let existing = directories[packageID] { return existing }
         let rawName = packageID.rawValue
@@ -2920,6 +3705,15 @@ public actor PackageStore {
 
     private func injectFault(kind: String, step: String) throws {
         try faultInjector(kind, step)
+    }
+
+    /// Queries Android for the package's installed metadata through the store
+    /// agent (update-system.md §8.1 H1). Nil when Android reports no such
+    /// package.
+    public func installedPackageInfo(_ packageID: PackageID) async throws -> StorePackageInfo? {
+        try requireOpen()
+        guard let runtimeAccess else { throw PackageStoreFailure.runtimeUnavailable }
+        return try await queryPackage(packageID, through: runtimeAccess)
     }
 
     private func queryPackage(
@@ -3231,6 +4025,8 @@ public actor PackageStore {
         case ("firstInstall", "guestCommitRequested"), ("firstInstall", "guestInstalled"),
             ("firstInstall", "filesPromoted"), ("reinstall", "guestCommitRequested"),
             ("reinstall", "guestInstalled"), ("reinstall", "filesPromoted"),
+            ("update", "guestCommitRequested"), ("update", "guestInstalled"),
+            ("update", "filesPromoted"),
             ("uninstall", "guestUninstallRequested"), ("uninstall", "guestUninstalled"):
             return true
         default:

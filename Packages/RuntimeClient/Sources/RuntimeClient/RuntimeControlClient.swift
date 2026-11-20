@@ -1102,6 +1102,37 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Checks and installs a package update now (runtime-api.md §9.1).
+    /// `options.files` turns the request into a manual file update; the
+    /// matching file handles travel like `importPackage`'s.
+    /// `outcome` is nil while the run still waits (a staged update gated by
+    /// an open session, update-system.md §7.3).
+    public func updatePackage(
+        packageID: RuntimePackageID,
+        options: UpdateNowOptions = UpdateNowOptions(),
+        files: [FileHandle] = []
+    ) async throws(RuntimeControlClientError) -> (operation: OperationHandle, outcome: WireUpdateOutcome?) {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeUpdatePackageControlRequest(
+                header: makeHeader(), packageID: packageID, options: options)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.updatePackage(data, files: files)
+            let reply = try Self.decode(RuntimeUpdatePackageControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let operation = reply.operation else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return (operation, reply.outcome)
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
     /// Returns the latest state for an operation.
     public func operationStatus(
         _ operationID: OperationID
@@ -2069,6 +2100,8 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func updateHistory(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Sets a package's update mode and provider (runtime-api.md §9.1).
     func setUpdatePolicy(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Checks and installs a package update now, optionally from files (runtime-api.md §9.1).
+    func updatePackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void)
     func invalidate()
 }
@@ -2158,6 +2191,12 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
         interface.setClasses(
             fileClasses,
             for: #selector(RuntimeControlXPC.importPackage(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
+        interface.setClasses(
+            fileClasses,
+            for: #selector(RuntimeControlXPC.updatePackage(_:files:reply:)),
             argumentIndex: 1,
             ofReply: false
         )
@@ -2775,6 +2814,20 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.setUpdatePolicy(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func updatePackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.updatePackage(request, files: files) { response in finish(.success(response)) }
         }
     }
 

@@ -1080,6 +1080,15 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
             argumentIndex: 1,
             ofReply: false
         )
+        // `updatePackage` carries the same FileHandle array as `importPackage`
+        // for a manual `--file` update; without the whitelist NSXPC refuses
+        // the call before it reaches the handler.
+        controlInterface.setClasses(
+            fileHandleClasses,
+            for: #selector(RuntimeControlXPC.updatePackage(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
         connection.remoteObjectInterface = NSXPCInterface(with: RuntimeEventSink.self)
         let eventHub = host.eventHub
         let remoteSink =
@@ -1142,6 +1151,7 @@ extension RuntimeCheckForUpdatesControlRequest: VersionedControlRequest {}
 extension RuntimeListUpdatesControlRequest: VersionedControlRequest {}
 extension RuntimeUpdateHistoryControlRequest: VersionedControlRequest {}
 extension RuntimeSetUpdatePolicyControlRequest: VersionedControlRequest {}
+extension RuntimeUpdatePackageControlRequest: VersionedControlRequest {}
 
 enum RuntimeControlOperation {
     case runtimeStatus
@@ -1182,6 +1192,7 @@ enum RuntimeControlOperation {
     case listUpdates
     case updateHistory
     case setUpdatePolicy
+    case updatePackage
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1272,7 +1283,7 @@ enum RuntimeControlOperation {
             case .launcher, .wrapper:
                 false
             }
-        case .checkForUpdates, .listUpdates, .updateHistory, .setUpdatePolicy:
+        case .checkForUpdates, .listUpdates, .updateHistory, .setUpdatePolicy, .updatePackage:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -1656,6 +1667,79 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeImportPackageControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func updatePackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeUpdatePackageControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .updatePackage,
+                as: RuntimeUpdatePackageControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeUpdatePackageControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeUpdatePackageControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeUpdatePackageControlReply(error: Self.malformedWireError)))
+                return
+            }
+            if let sources = decoded.options.files,
+                sources.isEmpty || sources.count > 20 || sources.count != files.count
+            {
+                response.send(
+                    Self.encode(
+                        RuntimeUpdatePackageControlReply(
+                            error: .store("invalidImport", message: "Choose between 1 and 20 APK files.")
+                        )
+                    )
+                )
+                return
+            }
+            if decoded.options.files == nil, !files.isEmpty {
+                response.send(
+                    Self.encode(
+                        RuntimeUpdatePackageControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let (operation, outcome) = try await host.updatePackage(
+                    packageID: decoded.packageID,
+                    options: decoded.options,
+                    files: files,
+                    operationID: OperationID(rawValue: decoded.header.operationID)
+                        ?? OperationID(),
+                    requestPayload: request,
+                    clientKind: clientKind
+                )
+                response.send(
+                    Self.encode(
+                        RuntimeUpdatePackageControlReply(
+                            operation: operation, outcome: outcome)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeUpdatePackageControlReply(error: wireError)))
             }
         }
     }

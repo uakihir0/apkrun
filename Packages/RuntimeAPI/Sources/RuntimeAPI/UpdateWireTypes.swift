@@ -602,6 +602,64 @@ public struct RuntimeCheckForUpdatesControlReply: Codable, Sendable {
     }
 }
 
+/// The `updatePackage` options (runtime-api.md §9.2).
+public struct UpdateNowOptions: Codable, Sendable, Equatable {
+    /// End the package's open session before installing (`--now`).
+    public var closeRunningApp: Bool
+    /// Manual update files (`apkrun update --file`); when set, the request
+    /// carries file handles like `importPackage` does.
+    public var files: [RuntimeImportSourceFile]?
+
+    /// Creates update options.
+    public init(closeRunningApp: Bool = false, files: [RuntimeImportSourceFile]? = nil) {
+        self.closeRunningApp = closeRunningApp
+        self.files = files
+    }
+}
+
+/// An `updatePackage` control request (runtime-api.md §9.1).
+public struct RuntimeUpdatePackageControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The package to check and update now.
+    public var packageID: RuntimePackageID
+    /// The run options.
+    public var options: UpdateNowOptions
+
+    /// Creates a control request.
+    public init(
+        header: APIRequestHeader, packageID: RuntimePackageID,
+        options: UpdateNowOptions = UpdateNowOptions()
+    ) {
+        self.header = header
+        self.packageID = packageID
+        self.options = options
+    }
+}
+
+/// The `updatePackage` reply: the accepted operation plus the run's outcome.
+/// `outcome` is nil while the run still waits (for example the app is in use
+/// and the update is staged, update-system.md §7.3).
+public struct RuntimeUpdatePackageControlReply: Codable, Sendable {
+    /// The long-running update operation.
+    public var operation: OperationHandle?
+    /// The terminal outcome, nil while the run waits.
+    public var outcome: WireUpdateOutcome?
+    /// The failure on error, for example `store.signerMismatch`.
+    public var error: RuntimeWireError?
+
+    /// Creates a control reply.
+    public init(
+        operation: OperationHandle? = nil,
+        outcome: WireUpdateOutcome? = nil,
+        error: RuntimeWireError? = nil
+    ) {
+        self.operation = operation
+        self.outcome = outcome
+        self.error = error
+    }
+}
+
 /// A `listUpdates` control request.
 public struct RuntimeListUpdatesControlRequest: Codable, Sendable {
     /// The common request header.

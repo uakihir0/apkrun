@@ -35,6 +35,10 @@ public protocol HostNotificationSink: Sendable {
     func notifyUpdateAvailable(_ notification: UpdateNotification) async
     /// Posts the §7.4 "ready to install; quit to update" notification.
     func notifyUpdateWaiting(_ notification: UpdateNotification) async
+    /// Posts an "Update refused" notification for the V3 and V5 refusals of
+    /// update-system.md §6 — a candidate whose signer or provider metadata
+    /// does not match is the case the user needs to see.
+    func notifyUpdateRefused(_ notification: UpdateNotification) async
 }
 
 /// The result of one coordinator check run.
@@ -487,12 +491,15 @@ public actor UpdateCoordinator {
     /// it into `staged/`. A refusal discards the ticket, saves the cursor, and
     /// closes the run `completed(.skipped(.validationFailed))` with one
     /// history line.
+    /// - `explicitSelection`: true when the user picked this candidate itself
+    ///   (a manual file update or `--from`); it lifts the V6 skip refusal.
     public func validate(
         _ packageID: PackageID,
         ticket: UUID,
         candidate: UpdateCandidate,
         trigger: UpdateTrigger,
-        started: Date = Date()
+        started: Date = Date(),
+        explicitSelection: Bool = false
     ) async -> UpdateValidationOutcome {
         setPhase(packageID, .validating)
         let records = (try? await store.listManagedPackages()) ?? []
@@ -515,15 +522,22 @@ public actor UpdateCoordinator {
                 failure: failure, trigger: trigger, started: started)
         }
 
-        // V1–V3 — identity, ordering, signer continuity.
+        // V1–V6 — identity, ordering, signer continuity, provider hash and
+        // metadata, and the skip list. The installed artifact set supplies
+        // the lineage, permission, and target-SDK inputs.
+        let installedSet = try? await store.installedArtifactSet(for: packageID)
+        let skippedVersions = await stateStore.state(for: packageID)?.skippedVersions ?? []
         let report: ValidationReport
         do {
             report = try validator.validate(
-                preview: preview, installed: record, candidate: candidate)
+                preview: preview, installed: record, candidate: candidate,
+                installedSet: installedSet, skippedVersions: skippedVersions,
+                explicitSelection: explicitSelection)
         } catch let refusal {
             return await finishFailedValidation(
                 packageID, ticket: ticket, record: record, candidate: candidate,
-                failure: refusal.failure, trigger: trigger, started: started)
+                failure: refusal.failure, trigger: trigger, started: started,
+                refusedCheck: refusal.checkID)
         }
 
         // The report rides the ticket set into staged/.
@@ -554,7 +568,8 @@ public actor UpdateCoordinator {
         candidate: UpdateCandidate,
         failure: UpdateFailure,
         trigger: UpdateTrigger,
-        started: Date
+        started: Date,
+        refusedCheck: String? = nil
     ) async -> UpdateValidationOutcome {
         try? await store.discardDownload(ticket: ticket)
         await stateStore.update(packageID) { state in
@@ -569,6 +584,15 @@ public actor UpdateCoordinator {
                 provider: candidate.provider.type, trigger: trigger,
                 outcome: "skipped.validationFailed", failure: failure.errorCode,
                 started: started)
+            // "Update refused" posts only for the V3 and V5 refusals (§9).
+            if refusedCheck == "V3" || refusedCheck == "V5" {
+                await notifier?.notifyUpdateRefused(
+                    UpdateNotification(
+                        packageID: packageID,
+                        displayName: record.displayName,
+                        versionCode: candidate.declaredVersionCode,
+                        versionName: candidate.declaredVersionName))
+            }
         }
         await stateStore.flush()
         return .failed(failure)

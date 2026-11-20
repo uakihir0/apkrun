@@ -165,9 +165,14 @@ public actor EmbeddedUpdateService {
         origin: ArtifactOrigin? = nil,
         closeRunningApp: Bool = false
     ) async -> WireUpdateOutcome? {
+        // A manual file update or an explicit `update --from` counts as the
+        // user selecting the version (V6, update-system.md §6).
+        let explicitSelection =
+            origin?.type == .manualFile || trigger == .manual
         switch await coordinator.validate(
             packageID, ticket: ticket, candidate: candidate,
-            trigger: trigger, started: started)
+            trigger: trigger, started: started,
+            explicitSelection: explicitSelection)
         {
         case .validated(let validated):
             switch await coordinator.install(

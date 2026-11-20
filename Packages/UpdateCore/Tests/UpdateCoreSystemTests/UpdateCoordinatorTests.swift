@@ -80,12 +80,17 @@ private struct NoCredentials: ProviderCredentials {
 private actor RecordingNotifier: HostNotificationSink {
     private(set) var sent: [UpdateNotification] = []
     private(set) var waitingSent: [UpdateNotification] = []
+    private(set) var refusedSent: [UpdateNotification] = []
     func notifyUpdateAvailable(_ notification: UpdateNotification) async {
         sent.append(notification)
     }
 
     func notifyUpdateWaiting(_ notification: UpdateNotification) async {
         waitingSent.append(notification)
+    }
+
+    func notifyUpdateRefused(_ notification: UpdateNotification) async {
+        refusedSent.append(notification)
     }
 }
 

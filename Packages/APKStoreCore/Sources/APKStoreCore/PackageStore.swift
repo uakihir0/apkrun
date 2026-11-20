@@ -849,6 +849,12 @@ public actor PackageStore {
         defer { _ = Darwin.close(mutationLock) }
         try reloadRecordsPreservingImportDirectories()
         guard let ticketInfo = downloadTickets[ticket] else {
+            // A verified import ticket needs no second inspect: its preview is
+            // the manifest written by `importPackage` (update-system.md §7.1
+            // runs the `--file` path through `validate` with such a ticket).
+            if let preview = tickets[ticket]?.preview {
+                return preview
+            }
             throw PackageStoreFailure.importTicketNotFound
         }
         let packageID = ticketInfo.packageID
@@ -3329,14 +3335,23 @@ public actor PackageStore {
             try appendAbort(transaction, reason: "packageRecordMissing")
             return
         }
-        let record = recordAfterUpdate(
-            old,
-            info: info,
-            generation: userdataGeneration,
-            operationID: UUID(),
-            startedAt: transactions[transaction]?.begin.at ?? clock()
-        )
-        try writeRecord(record, directory: directory)
+        // Idempotent record conversion: a crash between `writeRecord` and the
+        // `metadataWritten` step replays this function with an already-updated
+        // record, whose `staged` slot is nil — reconverting it would erase
+        // `current` and alias `previous` to the new set.
+        let record =
+            old.artifacts.current?.setDigest == toDigest
+            ? old
+            : recordAfterUpdate(
+                old,
+                info: info,
+                generation: userdataGeneration,
+                operationID: UUID(),
+                startedAt: transactions[transaction]?.begin.at ?? clock()
+            )
+        if record != old {
+            try writeRecord(record, directory: directory)
+        }
         try appendStep(transaction, kind: "update", step: "metadataWritten")
         try appendTerminal(transaction, op: "commit")
         records[packageID] = record
@@ -3372,12 +3387,23 @@ public actor PackageStore {
         current: URL,
         previous: URL
     ) throws {
-        let trashedPrevious =
-            trashDirectory
-            .appendingPathComponent("\(transaction)-previous", isDirectory: true)
+        // Only a *stale* previous set goes to `.trash`: after a crash between
+        // the staged→previous move and the `filesPromoted` step, `previous/`
+        // already holds the `from` set and must stay (package-store.md §5.5).
         if fileManager.fileExists(atPath: previous.path),
-            !fileManager.fileExists(atPath: trashedPrevious.path)
+            stagedSetDigest(in: previous) != fromDigest
         {
+            var trashedPrevious =
+                trashDirectory
+                .appendingPathComponent("\(transaction)-previous", isDirectory: true)
+            var suffix = 1
+            while fileManager.fileExists(atPath: trashedPrevious.path) {
+                suffix += 1
+                trashedPrevious =
+                    trashDirectory
+                    .appendingPathComponent(
+                        "\(transaction)-previous-\(suffix)", isDirectory: true)
+            }
             try moveItem(previous, to: trashedPrevious)
         }
         let stagedDigest = stagedSetDigest(in: staged)

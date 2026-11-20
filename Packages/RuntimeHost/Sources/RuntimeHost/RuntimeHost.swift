@@ -2236,7 +2236,7 @@ public actor RuntimeHost {
         }
     }
 
-    private func beginPackageMutation() throws(RuntimeHostError) {
+    func beginPackageMutation() throws(RuntimeHostError) {
         guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
             throw .invalidTransition
         }
@@ -2244,7 +2244,7 @@ public actor RuntimeHost {
         activePackageMutations += 1
     }
 
-    private func finishPackageMutation() {
+    func finishPackageMutation() {
         activePackageMutations -= 1
         if activePackageMutations == 0 {
             let waiters = packageMutationWaiters
@@ -3473,7 +3473,7 @@ public actor RuntimeHost {
         return service
     }
 
-    private func attachPackageQueriesIfRuntimeIsReady(
+    func attachPackageQueriesIfRuntimeIsReady(
         to service: EmbeddedPackageService
     ) async throws(RuntimeWireError) {
         guard let supervisor, await supervisor.state == .ready else {
@@ -3513,7 +3513,7 @@ public actor RuntimeHost {
         remediation: "Start Android and try again."
     )
 
-    private static func sessionWireError(for error: RuntimeHostError) -> RuntimeWireError {
+    static func sessionWireError(for error: RuntimeHostError) -> RuntimeWireError {
         let code: String
         switch error {
         case .notStarted, .alreadyStarted, .crashLoopActive, .stateStore:

@@ -1080,6 +1080,15 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
             argumentIndex: 1,
             ofReply: false
         )
+        // `updatePackage` carries the same FileHandle array as `importPackage`
+        // for a manual `--file` update; without the whitelist NSXPC refuses
+        // the call before it reaches the handler.
+        controlInterface.setClasses(
+            fileHandleClasses,
+            for: #selector(RuntimeControlXPC.updatePackage(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
         connection.remoteObjectInterface = NSXPCInterface(with: RuntimeEventSink.self)
         let eventHub = host.eventHub
         let remoteSink =

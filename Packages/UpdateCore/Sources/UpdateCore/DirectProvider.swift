@@ -88,10 +88,19 @@ public struct DirectProvider: UpdateProvider {
         context: ProviderContext
     ) async throws(UpdateFailure) -> UpdateCandidate? {
         var headers: [String: String] = [:]
-        if let cursor = package.lastCursor, cursor.type == .direct {
-            headers["If-None-Match"] = cursor.value
+        // The cursor scopes its ETag to the manifest URL: a provider spec
+        // pointing at a different URL never sends the old URL's ETag
+        // (a 304 there would hide the new source's release). A
+        // user-initiated check refetches in full so a candidate that was
+        // only shown can still be applied.
+        if !context.userInitiated, let cursor = package.lastCursor, cursor.type == .direct,
+            let separator = cursor.value.firstIndex(of: "\t"),
+            String(cursor.value[..<separator]) == manifestURL.absoluteString
+        {
+            headers["If-None-Match"] = String(cursor.value[cursor.value.index(after: separator)...])
         }
-        let response = try await context.http.get(manifestURL, headers: headers)
+        let response = try await context.http.get(
+            manifestURL, headers: headers, byteLimit: Int64(Self.manifestByteLimit))
         if response.status == 304 { return nil }
         guard (200...299).contains(response.status) else {
             throw Self.statusFailure(response.status, retryAfter: response.retryAfter)
@@ -184,11 +193,12 @@ public struct DirectProvider: UpdateProvider {
         }
         // §4: exactly one artifact shape is valid.
         let kinds = manifest.artifacts.map(\.type)
+        // The schema orders nothing: one `apk` plus `split` artifacts in
+        // any order, or a single `apks` container.
         let shapeOK =
             kinds == ["apk"]
             || (kinds.filter { $0 == "apk" }.count == 1
-                && kinds.first == "apk"
-                && kinds.dropFirst().allSatisfy { $0 == "split" })
+                && kinds.allSatisfy { $0 == "apk" || $0 == "split" })
             || kinds == ["apks"]
         guard shapeOK else {
             throw .providerMetadataInvalid(
@@ -230,6 +240,14 @@ public struct DirectProvider: UpdateProvider {
         guard Set(resolved).count == resolved.count else {
             throw .providerMetadataInvalid(detail: "artifacts: duplicate url")
         }
+        // The download stores every artifact under its URL's last path
+        // component, so two artifacts that end in the same name could
+        // never both land (and the coordinator could never find both).
+        let fileNames = resolved.map(\.lastPathComponent)
+        guard Set(fileNames).count == fileNames.count else {
+            throw .providerMetadataInvalid(
+                detail: "artifacts: duplicate file name across urls")
+        }
 
         // D7: declared sizes sum to at most 8 GiB.
         let declaredTotal = manifest.artifacts.reduce(Int64(0)) { $0 + ($1.size ?? 0) }
@@ -249,8 +267,10 @@ public struct DirectProvider: UpdateProvider {
 
         let cursor = ProviderCursor(
             type: .direct,
-            value: response.etag ?? "sha256:\(SHA256Digest(data: response.body).hexValue)")
-        if package.lastCursor == cursor {
+            value:
+                "\(manifestURL.absoluteString)\t\(response.etag ?? "sha256:\(SHA256Digest(data: response.body).hexValue)")"
+        )
+        if !context.userInitiated, package.lastCursor == cursor {
             return nil
         }
 
@@ -258,7 +278,7 @@ public struct DirectProvider: UpdateProvider {
             packageID: package.id,
             provider: ref,
             declaredVersionCode: manifest.versionCode,
-            declaredVersionName: manifest.versionName,
+            declaredVersionName: manifest.versionName.map(Self.sanitizedDisplay),
             declaredSignerDigests: manifest.signingCertificates?
                 .compactMap { SHA256Digest(rawValue: $0.lowercased()) },
             artifacts: zip(manifest.artifacts, resolved).map { artifact, url in
@@ -336,14 +356,28 @@ public struct DirectProvider: UpdateProvider {
         return .splitSet(base: base.url, splits: splits)
     }
 
-    /// The on-disk name (package-store.md §3.1): `base.apk`,
-    /// `split_<splitName>.apk`, or `container.apks`.
+    /// The on-disk name is the artifact URL's last path component, the same
+    /// name the coordinator's hash check looks up (LocalProvider does the
+    /// same). A URL ending without a usable name falls back per kind.
     private func fileName(of artifact: RemoteArtifact) -> String {
-        switch artifact.kind {
-        case .apk: "base.apk"
-        case .split(let name): "split_\(name).apk"
-        case .container: "container.apks"
+        let name = artifact.url.lastPathComponent
+        guard !name.isEmpty, name != ".", name != "..", !name.contains("/") else {
+            switch artifact.kind {
+            case .apk: return "base.apk"
+            case .split(let name): return "split_\(name).apk"
+            case .container: return "container.apks"
+            }
         }
+        return name
+    }
+
+    /// Strips terminal-affecting characters from a manifest string before
+    /// it reaches `apkrun update` output (control and format categories).
+    private static func sanitizedDisplay(_ value: String) -> String {
+        String(
+            value.unicodeScalars.filter {
+                ![.control, .format].contains($0.properties.generalCategory)
+            })
     }
 
     /// Maps a status to its failure (§5.1).

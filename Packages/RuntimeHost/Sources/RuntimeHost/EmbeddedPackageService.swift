@@ -265,6 +265,16 @@ public actor EmbeddedPackageService: RuntimeService {
             guard let ticket = UUID(uuidString: request.ticket.rawValue) else {
                 throw EmbeddedPackageServiceFailure.invalidTicket
             }
+            // An invalid `--provider` spec fails before anything installs
+            // (cli.md §4.2): parsing it later would leave the APK installed
+            // while the command reports an error.
+            let requestedProviderRef: UpdateProviderRef?
+            do {
+                requestedProviderRef = try request.options.provider.map(
+                    UpdatePolicyRules.providerRef(for:))
+            } catch {
+                throw Self.wireError(for: error)
+            }
             let packageID = try await store.packageIDForImportTicket(ticket)
             guard let runtimePackageID = RuntimePackageID(rawValue: packageID.rawValue) else {
                 throw EmbeddedPackageServiceFailure.invalidTicket
@@ -296,6 +306,16 @@ public actor EmbeddedPackageService: RuntimeService {
             }
             guard let ticket = UUID(uuidString: request.ticket.rawValue) else {
                 throw EmbeddedPackageServiceFailure.invalidTicket
+            }
+            // An invalid `--provider` spec fails before anything installs
+            // (cli.md §4.2): parsing it later would leave the APK installed
+            // while the command reports an error.
+            let requestedProviderRef: UpdateProviderRef?
+            do {
+                requestedProviderRef = try request.options.provider.map(
+                    UpdatePolicyRules.providerRef(for:))
+            } catch {
+                throw Self.wireError(for: error)
             }
             let packageID = try await store.packageIDForImportTicket(ticket)
             guard let runtimePackageID = RuntimePackageID(rawValue: packageID.rawValue) else {
@@ -348,17 +368,30 @@ public actor EmbeddedPackageService: RuntimeService {
                 )
             }
             importPreviews[ticket] = nil
-            if let spec = request.options.provider {
-                // §2.4: the install flags land on the record. `--updates
-                // manual` keeps authority `manual` and the provider unused.
-                let ref = try UpdatePolicyRules.providerRef(for: spec)
+            // §2.4: the install flags land on the record whenever the user
+            // asked for them — a provider spec or a `--updates` mode. With
+            // no provider, the stored one is kept; `--updates manual` keeps
+            // authority `manual` and the provider stored unused.
+            if requestedProviderRef != nil || request.options.updateMode != nil {
                 let mode = UpdatePolicyRules.settingsMode(
                     for: request.options.updateMode ?? .automatic)
+                // `--updates manual` demotes to manual; a provider spec
+                // promotes to apkrun. A mode-only flag leaves the stored
+                // authority alone, so reinstalling `--updates notify` on a
+                // package with a configured provider keeps APKRun checking.
+                let authority: UpdateAuthority? =
+                    if request.options.updateMode == .manual {
+                        .manual
+                    } else if requestedProviderRef != nil {
+                        .apkrun
+                    } else {
+                        nil
+                    }
                 try await store.setUpdateMode(for: packageID, mode: mode)
                 try await store.setUpdatePolicy(
                     for: packageID,
-                    authority: request.options.authority == .apkrun ? .apkrun : .manual,
-                    provider: ref,
+                    authority: authority,
+                    provider: requestedProviderRef,
                     requireProvider: request.options.authority == .apkrun)
             }
             try? await refreshAndroidInventory()

@@ -70,7 +70,7 @@ struct CoordinatorRuntime: StoreRuntimeAccess {
 }
 
 private struct FailingHTTP: UpdateHTTPClient {
-    func get(_: URL, headers _: [String: String]) async throws(UpdateFailure) -> HTTPResponse {
+    func get(_: URL, headers _: [String: String], byteLimit _: Int64?) async throws(UpdateFailure) -> HTTPResponse {
         throw UpdateFailure.providerUnreachable(reason: "no network in tests")
     }
 }

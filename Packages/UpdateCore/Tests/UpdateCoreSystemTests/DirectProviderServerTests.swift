@@ -110,12 +110,12 @@ private struct DirectNoCredentials: ProviderCredentials {
     func setToken(_: String?, for _: String) throws {}
 }
 
-private func context(root: URL) -> ProviderContext {
+private func context(root: URL, userInitiated: Bool = false) -> ProviderContext {
     ProviderContext(
         http: URLSessionUpdateHTTPClient(),
         cache: DirectMemoryCache(root: root),
         credentials: DirectNoCredentials(),
-        userInitiated: true)
+        userInitiated: userInitiated)
 }
 
 private func makeProvider(_ url: String) throws -> DirectProvider {
@@ -206,6 +206,43 @@ private func makeProvider(_ url: String) throws -> DirectProvider {
             return
         }
     }
+}
+
+/// The downloaded file lands under its URL's last path component — the
+/// same name the coordinator's hash check looks up — and the transport
+/// reports the file's real sha256.
+@Test func directDownloadStoresFileUnderURLName() async throws {
+    let server = try UpdateServer.start()
+    let bytes = Data("real apk payload".utf8)
+    let sha = SHA256Digest(data: bytes).hexValue
+    let directory = server.root.appendingPathComponent("direct")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try bytes.write(to: directory.appendingPathComponent("release-2.apk"))
+    let manifest = """
+        {"schemaVersion":1,"packageId":"com.example.app","versionCode":2,\
+        "versionName":"2.0","artifacts":[{"type":"apk","url":\
+        "\(server.baseURL.absoluteString)/direct/release-2.apk",\
+        "size":\(bytes.count),\
+        "sha256":"\(sha)"}]}
+        """
+    try manifest.write(
+        to: directory.appendingPathComponent("good.json"),
+        atomically: true, encoding: .utf8)
+    let url = "\(server.baseURL.absoluteString)/direct/good.json"
+    let provider = try makeProvider(url)
+    let candidate = try #require(
+        try await provider.check(
+            try makePackage(), context: context(root: server.root)))
+    let destination = DownloadDestination(
+        ticket: UUID(), directory: server.root.appendingPathComponent("download2"))
+    let artifact = try await provider.download(
+        candidate, to: destination, context: context(root: server.root), progress: { _ in })
+    guard case .apk(let file) = artifact else {
+        Issue.record("expected .apk, got \(artifact)")
+        return
+    }
+    #expect(file.lastPathComponent == "release-2.apk")
+    #expect(try Data(contentsOf: file) == bytes)
 }
 
 /// §5.1: artifact URLs resolve against the final manifest URL after

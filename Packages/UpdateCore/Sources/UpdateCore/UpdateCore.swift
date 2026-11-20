@@ -142,7 +142,10 @@ public struct UpdateCandidate: Codable, Sendable, Hashable {
 /// The shared HTTP session of update-system.md §3.4.
 public protocol UpdateHTTPClient: Sendable {
     /// Performs a GET request and returns the body and response metadata.
-    func get(_ url: URL, headers: [String: String]) async throws(UpdateFailure) -> HTTPResponse
+    /// Reading stops once `byteLimit` + 1 bytes have arrived, so a body
+    /// longer than the limit can never be buffered in full.
+    func get(_ url: URL, headers: [String: String], byteLimit: Int64?) async throws(UpdateFailure)
+        -> HTTPResponse
 
     /// Streams a GET request into `file`, hashing the bytes while they
     /// arrive. Writing stops after `byteLimit` bytes (`limitHit` in the

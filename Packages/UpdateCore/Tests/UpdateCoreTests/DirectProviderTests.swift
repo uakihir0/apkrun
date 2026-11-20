@@ -20,7 +20,9 @@ private struct ScriptedHTTP: UpdateHTTPClient {
         var ifNoneMatch: [String] = []
     }
 
-    func get(_ url: URL, headers: [String: String]) async throws(UpdateFailure) -> HTTPResponse {
+    func get(
+        _ url: URL, headers: [String: String], byteLimit: Int64?
+    ) async throws(UpdateFailure) -> HTTPResponse {
         if let etag = headers["If-None-Match"] {
             seen.ifNoneMatch.append(etag)
         }
@@ -109,12 +111,14 @@ private func fixture(_ name: String) throws -> Data {
     return try Data(contentsOf: url)
 }
 
-private func context(_ http: ScriptedHTTP, root: URL) -> ProviderContext {
+private func context(
+    _ http: ScriptedHTTP, root: URL, userInitiated: Bool = false
+) -> ProviderContext {
     ProviderContext(
         http: http,
         cache: MemoryCache(root: root),
         credentials: NoCredentials(),
-        userInitiated: true)
+        userInitiated: userInitiated)
 }
 
 private func respond(_ name: String, etag: String? = nil, status: Int = 200) throws
@@ -145,7 +149,7 @@ private func respond(_ name: String, etag: String? = nil, status: Int = 200) thr
     #expect(candidate2.declaredVersionCode == 2)
     #expect(candidate2.declaredVersionName == "1.1")
     #expect(candidate2.releaseNotes == "Bug fixes.")
-    #expect(candidate2.cursor == ProviderCursor(type: .direct, value: "\"v2\""))
+    #expect(candidate2.cursor == ProviderCursor(type: .direct, value: "\(url)\t\"v2\""))
     #expect(candidate2.declaredSignerDigests?.count == 1)
     #expect(candidate2.artifacts.count == 1)
     #expect(candidate2.artifacts[0].kind == .apk)
@@ -200,7 +204,7 @@ private func respond(_ name: String, etag: String? = nil, status: Int = 200) thr
     http.manifests[url] = HTTPResponse(status: 304, body: Data())
 
     let provider = try makeProvider()
-    let cursor = ProviderCursor(type: .direct, value: "\"v1\"")
+    let cursor = ProviderCursor(type: .direct, value: "\(url)\t\"v1\"")
     let candidate = try await provider.check(
         makePackage(cursor: cursor), context: context(http, root: root))
     #expect(candidate == nil)
@@ -217,9 +221,42 @@ private func respond(_ name: String, etag: String? = nil, status: Int = 200) thr
 
     let provider = try makeProvider()
     let candidate = try await provider.check(
-        makePackage(cursor: ProviderCursor(type: .direct, value: "\"v2\"")),
+        makePackage(cursor: ProviderCursor(type: .direct, value: "\(url)\t\"v2\"")),
         context: context(http, root: root))
     #expect(candidate == nil)
+}
+
+@Test func directProviderUserInitiatedCheckRefetchesAndIgnoresCursor() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-direct-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let url = "https://updates.example.com/app.json"
+    var http = ScriptedHTTP(manifests: [:])
+    http.manifests[url] = try respond("single-apk", etag: "\"v2\"")
+
+    let provider = try makeProvider()
+    let candidate = try await provider.check(
+        makePackage(cursor: ProviderCursor(type: .direct, value: "\(url)\t\"v2\"")),
+        context: context(http, root: root, userInitiated: true))
+    #expect(candidate != nil)
+    #expect(http.seen.ifNoneMatch.isEmpty)
+}
+
+@Test func directProviderCursorDoesNotLeakAcrossManifestURLs() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-direct-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let oldURL = "https://updates.example.com/app.json"
+    let newURL = "https://updates.example.com/new-app.json"
+    var http = ScriptedHTTP(manifests: [:])
+    http.manifests[newURL] = try respond("single-apk", etag: "\"v9\"")
+
+    let provider = try makeProvider(manifestURL: newURL)
+    let candidate = try await provider.check(
+        makePackage(cursor: ProviderCursor(type: .direct, value: "\(oldURL)\t\"v1\"")),
+        context: context(http, root: root))
+    #expect(candidate != nil)
+    #expect(http.seen.ifNoneMatch.isEmpty)
 }
 
 @Test func directProviderCursorFallsBackToBodyHash() async throws {
@@ -235,7 +272,7 @@ private func respond(_ name: String, etag: String? = nil, status: Int = 200) thr
         makePackage(), context: context(http, root: root))
     let body = try fixture("valid/single-apk")
     let digest = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
-    #expect(candidate?.cursor.value == "sha256:\(digest)")
+    #expect(candidate?.cursor.value == "\(url)\tsha256:\(digest)")
 }
 
 // MARK: - status mapping
@@ -289,7 +326,7 @@ private func respond(_ name: String, etag: String? = nil, status: Int = 200) thr
     for file in [
         "schema-version", "package-mismatch", "bad-sha", "mixed-shapes",
         "http-artifact", "user-info-url", "duplicate-split", "split-no-name",
-        "oversize-total", "not-json", "not-utf8",
+        "oversize-total", "not-json", "not-utf8", "duplicate-file-name",
     ] {
         var http = ScriptedHTTP(manifests: [:])
         http.manifests[url] = HTTPResponse(
@@ -375,8 +412,8 @@ private func respond(_ name: String, etag: String? = nil, status: Int = 200) thr
 
     let checked = try #require(
         await provider.check(makePackage(), context: context(http, root: root)))
-    #expect(checked.cursor.value.hasPrefix("sha256:"))
-    #expect(candidate.cursor.value.hasPrefix("sha256:"))
+    #expect(checked.cursor.value.hasPrefix("\(url)\tsha256:"))
+    #expect(candidate.cursor.value.hasPrefix("\(url)\tsha256:"))
 
     final class Samples: @unchecked Sendable { var values: [DownloadProgress] = [] }
     let samples = Samples()

@@ -133,6 +133,16 @@ public struct StoreCapabilities: OptionSet, Sendable, Hashable {
     public static let downgradeReinstall = Self(rawValue: 1 << 6)
 }
 
+/// The install mode of a `StoreInstallRequest` (guest-protocol.md §11.3).
+public enum StoreInstallMode: String, Sendable, Equatable {
+    /// First install of a package the store does not manage yet.
+    case new
+    /// Reinstall of an existing set (same or lower version).
+    case reinstall
+    /// PackageInstaller update: the guest must reject mismatched signers.
+    case update
+}
+
 /// The install facts a channel must check before passing artifacts to Android.
 public struct StoreInstallRequest: Sendable, Equatable {
     /// The package name expected from the APK artifacts.
@@ -141,12 +151,34 @@ public struct StoreInstallRequest: Sendable, Equatable {
     public var versionCode: VersionCode
     /// Whether this operation has explicit approval to install a lower version.
     public var allowDowngrade: Bool
+    /// The install mode; `.update` requires signer equality in the guest.
+    public var mode: StoreInstallMode
+    /// Signing digests the installed set must keep for `.update`.
+    public var signerDigests: [SHA256Digest]
+    /// Keep the previous APK set for rollback (UPDATE only; masked by the
+    /// channel's `rollback` capability).
+    public var enableRollback: Bool
+    /// Ask the guest to record APKRun as this package's update owner
+    /// (UPDATE only; masked by the channel's `updateOwnership` capability).
+    public var requestUpdateOwnership: Bool
 
     /// Creates the package identity and version constraints for an install.
-    public init(packageID: PackageID, versionCode: VersionCode, allowDowngrade: Bool = false) {
+    public init(
+        packageID: PackageID,
+        versionCode: VersionCode,
+        allowDowngrade: Bool = false,
+        mode: StoreInstallMode = .new,
+        signerDigests: [SHA256Digest] = [],
+        enableRollback: Bool = false,
+        requestUpdateOwnership: Bool = false
+    ) {
         self.packageID = packageID
         self.versionCode = versionCode
         self.allowDowngrade = allowDowngrade
+        self.mode = mode
+        self.signerDigests = signerDigests
+        self.enableRollback = enableRollback
+        self.requestUpdateOwnership = requestUpdateOwnership
     }
 }
 

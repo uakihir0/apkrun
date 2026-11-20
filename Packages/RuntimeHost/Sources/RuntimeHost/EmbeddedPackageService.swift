@@ -1157,6 +1157,14 @@ public actor EmbeddedPackageService: RuntimeService {
                 return .store(
                     "unreadablePackageRecord", message: "A package record could not be read.",
                     remediation: "Run `apkrun doctor` for details.")
+            case .packageInUse(let packageID):
+                return .store(
+                    "packageInUse", message: "\(packageID.rawValue) is in use.",
+                    remediation: "Close the app's windows and try the update again.")
+            case .stagedUpdateMissing:
+                return .store(
+                    "stagedUpdateMissing", message: "No verified update is staged for this package.",
+                    remediation: "Run `apkrun update check` to download and stage an update first.")
             case .io:
                 return .store(
                     "storageIO", message: "APKRun could not read or write package data.",

@@ -58,6 +58,25 @@
         ],
         "maximumTestExecutionTimeAllowance" : 3600
       }
+    },
+    {
+      "id" : "00300001-0000-4000-8000-000000000008",
+      "name" : "G8",
+      "options" : {
+        "environmentVariableEntries" : [
+          {
+            "key" : "APKRUN_ACCEPTANCE_SUITE",
+            "value" : "g8",
+            "enabled" : true
+          },
+          {
+            "key" : "APKRUN_G8_REQUIRED",
+            "value" : "1",
+            "enabled" : true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance" : 3600
+      }
     }
   ],
   "defaultOptions" : {

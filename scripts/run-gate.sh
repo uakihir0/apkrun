@@ -2,12 +2,12 @@
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-    printf 'usage: scripts/run-gate.sh G1|G2|G3\n' >&2
+    printf 'usage: scripts/run-gate.sh G1|G2|G3|G8\n' >&2
     exit 64
 fi
 
 gate="$1"
-if [[ "$gate" != G1 && "$gate" != G2 && "$gate" != G3 ]]; then
+if [[ "$gate" != G1 && "$gate" != G2 && "$gate" != G3 && "$gate" != G8 ]]; then
     printf 'run-gate: unsupported gate: %s\n' "$gate" >&2
     exit 64
 fi
@@ -22,8 +22,9 @@ signing_arguments=(
     "CODE_SIGN_STYLE=Manual"
     "CODE_SIGN_IDENTITY=$APKRUN_TEST_CODE_SIGN_IDENTITY"
 )
-# The G3 inputs, set once the G3 artifacts are staged. Empty for G1 and G2.
+# The G3 and G8 inputs, set once their artifacts are staged. Empty for G1 and G2.
 g3_build_settings=()
+g8_build_settings=()
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
@@ -71,6 +72,32 @@ if [[ "$gate" == G3 ]]; then
     g3_virgl="$repo_root/ThirdParty/out/virgl-runtime/current"
     if [[ ! -f "$g3_virgl/libvirglrenderer.1.dylib" ]]; then
         printf 'run-gate: G3 needs the virgl runtime at %s (ThirdParty, #21)\n' "$g3_virgl" >&2
+        exit 78
+    fi
+    rm -rf "$gate_dir/artifacts" "$gate_dir/products" "$gate_dir/screen-recording.mov" "$gate_dir/screen-recording.mp4"
+fi
+
+if [[ "$gate" == G8 ]]; then
+    # G8 wraps HelloText and double-clicks the result, so it needs the Android
+    # bundle the app installs, adb for the fixture's logcat markers, and the
+    # virgl runtime the app embeds (as for G3).
+    g8_bundle="${APKRUN_G8_ANDROID_BUNDLE:-}"
+    if [[ "$g8_bundle" != /* || ! -f "$g8_bundle/manifest.json" || ! -f "$g8_bundle/SHA256SUMS" ]]; then
+        printf 'run-gate: G8 needs APKRUN_G8_ANDROID_BUNDLE, the absolute path of the Android bundle\n' >&2
+        exit 78
+    fi
+    if ! (cd "$g8_bundle" && shasum -a 256 -c SHA256SUMS > /dev/null); then
+        printf 'run-gate: the checksums of %s do not match SHA256SUMS\n' "$g8_bundle" >&2
+        exit 1
+    fi
+    g8_android_home="${ANDROID_HOME:-$repo_root/build/android-sdk}"
+    if [[ ! -x "$g8_android_home/platform-tools/adb" ]]; then
+        printf 'run-gate: G8 needs adb at %s/platform-tools/adb (environment-setup.md §2.5)\n' "$g8_android_home" >&2
+        exit 78
+    fi
+    g8_virgl="$repo_root/ThirdParty/out/virgl-runtime/current"
+    if [[ ! -f "$g8_virgl/libvirglrenderer.1.dylib" ]]; then
+        printf 'run-gate: G8 needs the virgl runtime at %s (ThirdParty, #21)\n' "$g8_virgl" >&2
         exit 78
     fi
     rm -rf "$gate_dir/artifacts" "$gate_dir/products" "$gate_dir/screen-recording.mov" "$gate_dir/screen-recording.mp4"
@@ -173,6 +200,45 @@ if [[ "$gate" == G3 ]]; then
         printf 'android_sdk: %s\n' "$g3_android_home"
     } >> "$report"
 fi
+
+if [[ "$gate" == G8 ]]; then
+    # The Guest Agent bundle, the HelloText fixture, and the Debug app with its
+    # embedded helpers (apkrund, the launcher, the CLI). Everything the test
+    # host reads is staged under the shared test directory (IR-376).
+    export ANDROID_HOME="$g8_android_home"
+    scripts/build-guest.sh
+    scripts/build-fixtures.sh --app HelloText
+    SRCROOT="$repo_root" scripts/build/stamp-commit.sh
+    xcodebuild build \
+        -project APKRun.xcodeproj \
+        -scheme APKRun \
+        -configuration Debug \
+        -jobs 1 \
+        -derivedDataPath "$gate_dir/DerivedData" \
+        "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
+        "APKRUN_CI=1" \
+        "${signing_arguments[@]}"
+    g8_app="$gate_dir/DerivedData/Build/Products/Debug/APKRun.app"
+    staging="$APKRUN_TEST_LINUX_DIR/g8-staging"
+    rm -rf "$staging"
+    mkdir -p "$staging"
+    cp -R "$g8_app" "$staging/APKRun.app"
+    cp Tests/Fixtures/AndroidApps/out/HelloText.apk "$staging/HelloText.apk"
+    artifacts="$APKRUN_TEST_LINUX_DIR/g8-artifacts"
+    g8_build_settings=(
+        "APKRUN_G8_APP=$staging/APKRun.app"
+        "APKRUN_G8_CLI=$staging/APKRun.app/Contents/Resources/bin/apkrun"
+        "APKRUN_G8_APK=$staging/HelloText.apk"
+        "APKRUN_G8_ARTIFACTS=$artifacts"
+        "APKRUN_G8_ADB=$g8_android_home/platform-tools/adb"
+    )
+    {
+        printf 'bundle: %s\n' "$g8_bundle"
+        printf 'app: %s\n' "$staging/APKRun.app"
+        printf 'hellotext_apk_sha256: %s\n' "$(shasum -a 256 "$staging/HelloText.apk" | awk '{ print $1 }')"
+        printf 'android_sdk: %s\n' "$g8_android_home"
+    } >> "$report"
+fi
 scripts/tools/verify-gate-artifacts.sh "$APKRUN_TEST_LINUX_DIR" "$gate"
 # Build the test host before any test runs, then check the directory it will read (IR-376).
 xcodebuild build-for-testing \
@@ -259,6 +325,56 @@ if [[ "$gate" == G3 ]]; then
     } >> "$report"
     gate_status=$g3_status
     if [[ $gate_status -eq 0 ]]; then gate_status=$check_status; fi
+    if [[ $gate_status -eq 0 ]]; then gate_status=$recorder_status; fi
+    exit "$gate_status"
+fi
+if [[ "$gate" == G8 ]]; then
+    # The G8 check runs like G3: serialised with other VM runs by lockf, with a
+    # screen recording kept as evidence (test-strategy §5).
+    artifacts="$APKRUN_TEST_LINUX_DIR/g8-artifacts"
+    rm -rf "$artifacts"
+    recording="$gate_dir/screen-recording.mov"
+    screencapture -v -V 1800 "$recording" &
+    recording_pid=$!
+    g8_status=0
+    lockf -k /tmp/apkrun-vm.lock xcodebuild test \
+        -project APKRun.xcodeproj \
+        -scheme AcceptanceTests \
+        -testPlan AcceptanceTests \
+        -configuration Debug \
+        -only-test-configuration G8 \
+        -only-testing:AcceptanceTests/G8WrapperTests \
+        -test-timeouts-enabled NO \
+        -jobs 1 \
+        -derivedDataPath "$gate_dir/DerivedData" \
+        -resultBundlePath "$gate_dir/$gate.xcresult" \
+        "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
+        "APKRUN_CI=1" \
+        "${signing_arguments[@]}" \
+        ${g8_build_settings[@]+"${g8_build_settings[@]}"} || g8_status=$?
+    recorder_status=0
+    wait "$recording_pid" || recorder_status=$?
+    if [[ -d "$artifacts" ]]; then
+        rm -rf "$gate_dir/artifacts"
+        cp -R "$artifacts" "$gate_dir/artifacts"
+    fi
+    if [[ -f "$recording" ]]; then
+        if avconvert --preset PresetMediumQuality --source "$recording" --output "$gate_dir/screen-recording.mp4"; then
+            rm -f "$recording"
+        else
+            recorder_status=1
+        fi
+    fi
+    if [[ ! -s "$gate_dir/screen-recording.mp4" ]]; then
+        recorder_status=1
+    fi
+    {
+        printf 'artifacts: %s\n' "$gate_dir/artifacts"
+        printf 'screen_recording: %s\n' "$gate_dir/screen-recording.mp4"
+        printf 'recorder_exit: %s\n' "$recorder_status"
+        printf 'test_exit: %s\n' "$g8_status"
+    } >> "$report"
+    gate_status=$g8_status
     if [[ $gate_status -eq 0 ]]; then gate_status=$recorder_status; fi
     exit "$gate_status"
 fi

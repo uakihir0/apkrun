@@ -1,5 +1,6 @@
 import APKStoreCore
 import Foundation
+import RuntimeAPI
 import Testing
 
 @testable import UpdateCore
@@ -10,6 +11,9 @@ import Testing
 
 private actor CoordinatorChannel: StoreAgentChannel {
     nonisolated let capabilities: StoreCapabilities = [.install, .metadata]
+    /// When set, `packageInfo` reports this versionCode instead of the
+    /// installed one — an Android that has not caught up, for H1 tests.
+    var reportedVersionCode: VersionCode?
     private var packages: [PackageID: StorePackageInfo] = [:]
 
     func install(_ request: StoreInstallRequest, files _: [URL]) async throws -> StorePackageInfo {
@@ -30,7 +34,9 @@ private actor CoordinatorChannel: StoreAgentChannel {
     }
 
     func packageInfo(_ package: PackageID) async throws -> StorePackageInfo? {
-        packages[package]
+        guard var info = packages[package] else { return nil }
+        if let reportedVersionCode { info.versionCode = reportedVersionCode }
+        return info
     }
 
     func listPackages(_: StorePackageFilter) async throws -> [StorePackageSummary] {
@@ -454,10 +460,13 @@ private final class InspectKnobs: @unchecked Sendable {
     var signerDigests: [SHA256Digest] = []
 }
 
-private func makeKnobbedStore(at root: URL, knobs: InspectKnobs) -> PackageStore {
+private func makeKnobbedStore(
+    at root: URL, knobs: InspectKnobs,
+    channel: CoordinatorChannel = CoordinatorChannel()
+) -> PackageStore {
     PackageStore(
         packagesDirectory: root.appendingPathComponent("Packages", isDirectory: true),
-        runtimeAccess: CoordinatorRuntime(channel: CoordinatorChannel()),
+        runtimeAccess: CoordinatorRuntime(channel: channel),
         inspector: { _ in
             APKFacts(
                 packageID: helloUpdateID,
@@ -526,10 +535,11 @@ private func v2Provider(for record: PackageRecord) throws -> ScriptedProvider {
     let outcome = await coordinator.validate(
         record.packageId, ticket: downloaded.ticket, candidate: candidate,
         trigger: .userInitiated)
-    guard case .validated(let report) = outcome else {
+    guard case .validated(let validated) = outcome else {
         Issue.record("expected .validated, got \(outcome)")
         return
     }
+    let report = validated.report
     #expect(report.outcome == "accepted")
     #expect(report.checks.map(\.id) == ["V0", "V1", "V2", "V3"])
     #expect(report.checks.allSatisfy { $0.verdict == "passed" })
@@ -616,4 +626,179 @@ private func v2Provider(for record: PackageRecord) throws -> ScriptedProvider {
         return
     }
     #expect(failure == .validation(detail: "signerMismatch"))
+}
+
+// MARK: - #39 step 4: stage → install → H1
+
+/// A fake §7.5 runtime: reports whether the package is in use and counts the
+/// times the coordinator brought the runtime up for an update.
+private final class FakeUpdateRuntime: UpdateRuntimeAccess, @unchecked Sendable {
+    var inUse = false
+    var ensureReadyCalls = 0
+    var ensureReadyError: Error?
+
+    var runtimeState: WireRuntimeState { .ready }
+    func hasActiveUse(_: PackageID) async -> Bool { inUse }
+    func ensureReadyForUpdate() async throws {
+        ensureReadyCalls += 1
+        if let ensureReadyError { throw ensureReadyError }
+    }
+}
+
+/// Runs download → validate and returns the `Validated` payload plus the
+/// candidate.
+private func validatedV2(
+    coordinator: UpdateCoordinator, record: PackageRecord
+) async throws -> (UpdateCoordinator.UpdateValidationOutcome.Validated, UpdateCandidate) {
+    let candidate = try makeV2Candidate(record: record, repo: fixtureRepo())
+    let downloaded = try await downloadV2(coordinator: coordinator, record: record)
+    let outcome = await coordinator.validate(
+        record.packageId, ticket: downloaded.ticket, candidate: candidate,
+        trigger: .userInitiated)
+    guard case .validated(let validated) = outcome else {
+        throw UpdateFailure.downloadFailed(reason: "expected .validated, got \(outcome)")
+    }
+    return (validated, candidate)
+}
+
+private extension CoordinatorChannel {
+    func set(reportedVersionCode: VersionCode) {
+        self.reportedVersionCode = reportedVersionCode
+    }
+}
+
+@Test func installStagesInstallsAndConfirmsH1() async throws {
+    let root = try makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let knobs = InspectKnobs()
+    let store = makeKnobbedStore(at: root, knobs: knobs)
+    try await store.open()
+    let record = try await installV1(store: store, repo: fixtureRepo())
+    knobs.versionCode = 2
+    let coordinator = makeV2Coordinator(
+        store: store, root: root, provider: try v2Provider(for: record))
+    let (validated, candidate) = try await validatedV2(
+        coordinator: coordinator, record: record)
+    let runtime = FakeUpdateRuntime()
+
+    let outcome = await coordinator.install(
+        record.packageId, validated: validated, candidate: candidate,
+        trigger: .userInitiated, runtime: runtime)
+    guard case .installed(let from, let to) = outcome else {
+        Issue.record("expected .installed, got \(outcome)")
+        return
+    }
+    #expect(from == 1 && to == 2)
+    #expect(runtime.ensureReadyCalls == 1)
+    #expect(
+        await coordinator.phase(for: record.packageId)
+            == .completed(.updated(from: 1, to: 2)))
+    let stateStore = UpdateStateStore(directory: root.appendingPathComponent("Updates"))
+    let history = try await stateStore.history(packageID: record.packageId)
+    #expect(history.last?.outcome == "updated")
+    // The promotion emptied staged/ and the record moved to versionCode 2.
+    let staged = root.appendingPathComponent(
+        "Packages/io.apkrun.fixture.helloupdate/staged/artifact.json")
+    #expect(!FileManager.default.fileExists(atPath: staged.path))
+    let current = root.appendingPathComponent(
+        "Packages/io.apkrun.fixture.helloupdate/current/artifact.json")
+    #expect(FileManager.default.fileExists(atPath: current.path))
+    let records = try await store.listManagedPackages()
+    #expect(records.first?.versionCode == 2)
+    #expect(records.first?.artifacts.previous?.versionCode == 1)
+}
+
+@Test func installStaysStagedWhileInUse() async throws {
+    let root = try makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let knobs = InspectKnobs()
+    let store = makeKnobbedStore(at: root, knobs: knobs)
+    try await store.open()
+    let record = try await installV1(store: store, repo: fixtureRepo())
+    knobs.versionCode = 2
+    let coordinator = makeV2Coordinator(
+        store: store, root: root, provider: try v2Provider(for: record))
+    let (validated, candidate) = try await validatedV2(
+        coordinator: coordinator, record: record)
+    let runtime = FakeUpdateRuntime()
+    runtime.inUse = true
+
+    let outcome = await coordinator.install(
+        record.packageId, validated: validated, candidate: candidate,
+        trigger: .userInitiated, runtime: runtime)
+    guard case .staged = outcome else {
+        Issue.record("expected .staged, got \(outcome)")
+        return
+    }
+    #expect(runtime.ensureReadyCalls == 0)
+    #expect(await coordinator.phase(for: record.packageId) == .staged)
+    // The set stays in staged/, validation.json riding along.
+    let staged = root.appendingPathComponent(
+        "Packages/io.apkrun.fixture.helloupdate/staged")
+    #expect(
+        FileManager.default.fileExists(
+            atPath: staged.appendingPathComponent("artifact.json").path))
+    #expect(
+        FileManager.default.fileExists(
+            atPath: staged.appendingPathComponent("validation.json").path))
+    #expect(
+        FileManager.default.fileExists(
+            atPath: staged.appendingPathComponent("base.apk").path))
+    try await store.discardStaged(packageID: record.packageId)
+}
+
+@Test func installH1TimeoutKeepsUpdate() async throws {
+    let root = try makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let knobs = InspectKnobs()
+    let channel = CoordinatorChannel()
+    let store = makeKnobbedStore(at: root, knobs: knobs, channel: channel)
+    try await store.open()
+    let record = try await installV1(store: store, repo: fixtureRepo())
+    knobs.versionCode = 2
+    let coordinator = UpdateCoordinator(
+        store: store,
+        stateStore: UpdateStateStore(directory: root.appendingPathComponent("Updates")),
+        developerModeEnabled: { true },
+        downloadRetrySleep: { _ in },
+        providerFactory: { ref in ScriptedProvider(ref: ref, steps: []) },
+        healthCheckBudget: .milliseconds(1),
+        healthCheckTickSleep: {})
+    // The provider download goes through the coordinator's download only in
+    // the helper; drive the ticket by hand here to keep Android's report stale.
+    let (validated, candidate) = try await {
+        let ticket = try await store.beginDownloadTicket(for: record.packageId)
+        let v2 = fixtureRepo().appendingPathComponent(
+            "io.apkrun.fixture.helloupdate/2/app.apk")
+        try FileManager.default.copyItem(
+            at: v2,
+            to: ticket.directory.appendingPathComponent("app.apk"))
+        let outcome = await coordinator.validate(
+            record.packageId, ticket: ticket.ticket,
+            candidate: try makeV2Candidate(record: record, repo: fixtureRepo()),
+            trigger: .userInitiated)
+        guard case .validated(let validated) = outcome else {
+            throw UpdateFailure.downloadFailed(
+                reason: "expected .validated, got \(outcome)")
+        }
+        return (validated, try makeV2Candidate(record: record, repo: fixtureRepo()))
+    }()
+    // Android keeps reporting the old versionCode (a lagging PackageManager).
+    await channel.set(reportedVersionCode: 1)
+
+    let outcome = await coordinator.install(
+        record.packageId, validated: validated, candidate: candidate,
+        trigger: .userInitiated, runtime: FakeUpdateRuntime())
+    guard case .keptAfterFailedHealthCheck(let failure) = outcome else {
+        Issue.record("expected .keptAfterFailedHealthCheck, got \(outcome)")
+        return
+    }
+    #expect(failure.errorCode == "update.healthCheckFailed")
+    #expect(
+        await coordinator.phase(for: record.packageId)
+            == .completed(
+                .keptAfterFailedHealthCheck(reason: .healthCheckFailed(failure))))
+    let stateStore = UpdateStateStore(directory: root.appendingPathComponent("Updates"))
+    let history = try await stateStore.history(packageID: record.packageId)
+    #expect(history.last?.outcome == "keptAfterFailedHealthCheck")
 }

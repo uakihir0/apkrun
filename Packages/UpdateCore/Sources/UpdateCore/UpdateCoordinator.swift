@@ -84,6 +84,10 @@ public actor UpdateCoordinator {
         (@Sendable (UpdateProviderRef) throws(UpdateFailure) -> any UpdateProvider)?
     /// V1–V3 of §6; stateless, injectable for tests.
     private let validator: UpdateValidator
+    /// H1's budget (§8.1): 30 s for Android to report the staged set.
+    private let healthCheckBudget: Duration
+    /// Injected for tests: the poll tick between H1 queries.
+    private let healthCheckTickSleep: @Sendable () async -> Void
     /// The hard size cap of one downloaded set (§5); 8 GiB.
     private static let downloadSizeLimit: Int64 = 8 * 1_024 * 1_024 * 1_024
     /// The in-memory phase per package (transient phases are not persisted).
@@ -105,7 +109,11 @@ public actor UpdateCoordinator {
         providerFactory:
             (@Sendable (UpdateProviderRef) throws(UpdateFailure) -> any UpdateProvider)?
         = nil,
-        validator: UpdateValidator = UpdateValidator()
+        validator: UpdateValidator = UpdateValidator(),
+        healthCheckBudget: Duration = .seconds(30),
+        healthCheckTickSleep: @escaping @Sendable () async -> Void = {
+            try? await Task.sleep(for: .seconds(1))
+        }
     ) {
         self.store = store
         self.stateStore = stateStore
@@ -116,6 +124,8 @@ public actor UpdateCoordinator {
         self.downloadRetrySleep = downloadRetrySleep
         self.providerFactory = providerFactory
         self.validator = validator
+        self.healthCheckBudget = healthCheckBudget
+        self.healthCheckTickSleep = healthCheckTickSleep
     }
 
     /// The current phase of a package, restoring a persisted `available` or
@@ -449,8 +459,18 @@ public actor UpdateCoordinator {
 
     /// The result of `validate`: the accepted report, or the refusing failure.
     public enum UpdateValidationOutcome: Sendable {
+        /// The payload `install` consumes.
+        public struct Validated: Sendable {
+            /// The verified ticket the report and set belong to.
+            public var ticket: UUID
+            /// The preview `inspect(ticket:)` produced.
+            public var preview: PackageImportPreview
+            /// The accepted report, written to `staged/validation.json`.
+            public var report: ValidationReport
+        }
+
         /// The set passed V0–V3; the report was written into the ticket's set.
-        case validated(ValidationReport)
+        case validated(Validated)
         /// A check refused; the ticket was discarded and the run closed
         /// `completed(.skipped(.validationFailed))`.
         case failed(UpdateFailure)
@@ -515,7 +535,8 @@ public actor UpdateCoordinator {
                 packageID, ticket: ticket, record: record, candidate: candidate,
                 failure: failure, trigger: trigger, started: started)
         }
-        return .validated(report)
+        return .validated(
+            .init(ticket: ticket, preview: preview, report: report))
     }
 
     /// Closes a refused validation: discards the ticket set, saves the cursor,
@@ -542,6 +563,183 @@ public actor UpdateCoordinator {
                 record: record, to: candidate.declaredVersionCode,
                 provider: candidate.provider.type, trigger: trigger,
                 outcome: "skipped.validationFailed", failure: failure.errorCode,
+                started: started)
+        }
+        await stateStore.flush()
+        return .failed(failure)
+    }
+
+    /// The result of `install` (§7–§8).
+    public enum UpdateInstallOutcome: Sendable {
+        /// Staged; the gate deferred the install while the app is in use (§7).
+        case staged
+        /// Installed and H1 confirmed.
+        case installed(from: VersionCode, to: VersionCode)
+        /// H1 did not confirm within its 30 s budget; the new version is kept
+        /// until #44's rollback or the user's choice (§8.3).
+        case keptAfterFailedHealthCheck(UpdateFailure)
+        /// The run ended with an install failure.
+        case failed(UpdateFailure)
+    }
+
+    /// §7–§8 install: stage the validated ticket, wait out the
+    /// not-in-use gate, `installStaged`, then H1 — Android reporting the
+    /// staged versionCode and signer set within the health-check budget.
+    /// A gated run stays `.staged`; H1's timeout lands in
+    /// `keptAfterFailedHealthCheck` until #44 wires rollback.
+    public func install(
+        _ packageID: PackageID,
+        validated: UpdateValidationOutcome.Validated,
+        candidate: UpdateCandidate,
+        trigger: UpdateTrigger,
+        runtime: any UpdateRuntimeAccess,
+        started: Date = Date()
+    ) async -> UpdateInstallOutcome {
+        let records = (try? await store.listManagedPackages()) ?? []
+        guard let record = records.first(where: { $0.packageId == packageID }) else {
+            return await finishFailedInstall(
+                packageID, record: nil, candidate: candidate,
+                failure: .providerMetadataInvalid(
+                    detail: "package is not managed"),
+                trigger: trigger, started: started)
+        }
+        let preview = validated.preview
+        let staged = StagedUpdateInfo(
+            versionCode: preview.versionCode,
+            versionName: preview.versionName,
+            setDigest: preview.artifactSet.setDigest,
+            size: preview.artifactSet.files.reduce(Int64(0)) { $0 + $1.size },
+            fileCount: preview.artifactSet.files.count,
+            origin: ArtifactOrigin(
+                type: ArtifactOriginType(rawValue: candidate.provider.type.rawValue) ?? .local,
+                url: candidate.artifacts.first?.url.absoluteString,
+                declaredDigests: candidate.artifacts.compactMap(\.sha256)))
+        do {
+            try await store.stage(ticket: validated.ticket, candidate: staged)
+        } catch {
+            return await finishFailedInstall(
+                packageID, record: record, candidate: candidate,
+                failure: .installFailed(detail: "stage(\(error))"),
+                trigger: trigger, started: started)
+        }
+        setPhase(packageID, .staged)
+        await stateStore.update(packageID) { state in
+            state.phase = "staged"
+            state.candidate = PackageUpdateState.CandidateSummary(
+                versionCode: preview.versionCode,
+                versionName: preview.versionName,
+                provider: candidate.provider.type)
+        }
+        await stateStore.flush()
+
+        // §7: the install waits until the app is not in use; a package with a
+        // session stays staged.
+        if await runtime.hasActiveUse(packageID) {
+            return .staged
+        }
+
+        // Automatic runs need a ready runtime (§3.5).
+        do {
+            try await runtime.ensureReadyForUpdate()
+        } catch {
+            return await finishFailedInstall(
+                packageID, record: record, candidate: candidate,
+                failure: .installFailed(detail: "runtimeUnavailable(\(error))"),
+                trigger: trigger, started: started)
+        }
+
+        setPhase(packageID, .installing)
+        let updated: PackageRecord
+        do {
+            updated = try await store.installStaged(
+                for: packageID, enableRollback: true,
+                hasOpenSession: { await runtime.hasActiveUse(packageID) })
+        } catch PackageStoreFailure.packageInUse {
+            // The gate closed between the check and the call: stay staged.
+            setPhase(packageID, .staged)
+            return .staged
+        } catch {
+            return await finishFailedInstall(
+                packageID, record: record, candidate: candidate,
+                failure: .installFailed(detail: "\(error)"),
+                trigger: trigger, started: started)
+        }
+
+        // H1 (§8.1): Android reports the staged versionCode and signer set
+        // within 30 s.
+        setPhase(packageID, .healthChecking)
+        let deadline = ContinuousClock.now + healthCheckBudget
+        var confirmed = false
+        var found: VersionCode?
+        while true {
+            if let info = try? await store.installedPackageInfo(packageID) {
+                found = info.versionCode
+                if info.versionCode == preview.versionCode,
+                    Set(info.signingDigests) == Set(preview.artifactSet.signerDigests)
+                {
+                    confirmed = true
+                    break
+                }
+            }
+            guard ContinuousClock.now < deadline else { break }
+            await healthCheckTickSleep()
+        }
+        guard confirmed else {
+            let failure = UpdateFailure.healthCheckFailed(
+                detail: "versionNotConfirmed(found: \(found.map(String.init) ?? "none"))")
+            let reason = RollbackReason.healthCheckFailed(failure)
+            await stateStore.update(packageID) { state in
+                state.cursor = candidate.cursor
+                state.phase = nil
+                state.candidate = nil
+            }
+            setPhase(packageID, .completed(.keptAfterFailedHealthCheck(reason: reason)))
+            await appendHistory(
+                record: record, to: preview.versionCode,
+                provider: candidate.provider.type, trigger: trigger,
+                outcome: "keptAfterFailedHealthCheck", failure: failure.errorCode,
+                started: started)
+            await stateStore.flush()
+            return .keptAfterFailedHealthCheck(failure)
+        }
+
+        await stateStore.update(packageID) { state in
+            state.cursor = candidate.cursor
+            state.phase = nil
+            state.candidate = nil
+        }
+        let outcome = UpdateOutcome.updated(
+            from: record.versionCode, to: updated.versionCode)
+        setPhase(packageID, .completed(outcome))
+        await appendHistory(
+            record: record, to: updated.versionCode,
+            provider: candidate.provider.type, trigger: trigger,
+            outcome: "updated", failure: nil, started: started)
+        await stateStore.flush()
+        return .installed(from: record.versionCode, to: updated.versionCode)
+    }
+
+    /// Closes a failed install: saves the cursor and reports
+    /// `completed(.skipped(.installFailed))` with one history line.
+    private func finishFailedInstall(
+        _ packageID: PackageID,
+        record: PackageRecord?,
+        candidate: UpdateCandidate,
+        failure: UpdateFailure,
+        trigger: UpdateTrigger,
+        started: Date
+    ) async -> UpdateInstallOutcome {
+        await stateStore.update(packageID) { state in
+            state.cursor = candidate.cursor
+            state.phase = nil
+            state.candidate = nil
+        }
+        setPhase(packageID, .completed(.skipped(.installFailed(failure))))
+        if let record {
+            await appendHistory(
+                record: record, to: candidate.declaredVersionCode,
+                provider: candidate.provider.type, trigger: trigger,
+                outcome: "skipped.installFailed", failure: failure.errorCode,
                 started: started)
         }
         await stateStore.flush()

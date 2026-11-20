@@ -3565,6 +3565,15 @@ public actor PackageStore {
         try faultInjector(kind, step)
     }
 
+    /// Queries Android for the package's installed metadata through the store
+    /// agent (update-system.md §8.1 H1). Nil when Android reports no such
+    /// package.
+    public func installedPackageInfo(_ packageID: PackageID) async throws -> StorePackageInfo? {
+        try requireOpen()
+        guard let runtimeAccess else { throw PackageStoreFailure.runtimeUnavailable }
+        return try await queryPackage(packageID, through: runtimeAccess)
+    }
+
     private func queryPackage(
         _ packageID: PackageID,
         through runtime: any StoreRuntimeAccess

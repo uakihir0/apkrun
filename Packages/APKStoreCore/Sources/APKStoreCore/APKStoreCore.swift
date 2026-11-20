@@ -492,6 +492,54 @@ public struct StagedArtifactSlotSummary: Codable, Sendable, Hashable {
     }
 }
 
+/// A verified update candidate the store is asked to stage (package-store.md §7.1).
+///
+/// The ticket's incoming set has passed §4.6 and UpdateCore's relational checks;
+/// the store records it as `artifacts.staged` with this candidate's source.
+public struct StagedUpdateInfo: Codable, Sendable, Hashable {
+    /// Android's long version code of the staged set.
+    public var versionCode: VersionCode
+    /// The display-only Android version name, when present.
+    public var versionName: String?
+    /// The digest of all APK files in the staged set.
+    public var setDigest: SHA256Digest
+    /// The combined size of the staged APK files in bytes.
+    public var size: Int64
+    /// The number of APK files in the staged set.
+    public var fileCount: Int
+    /// The provider or local source that supplied the set.
+    public var origin: ArtifactOrigin
+
+    /// Creates a staged-update description.
+    public init(
+        versionCode: VersionCode,
+        versionName: String? = nil,
+        setDigest: SHA256Digest,
+        size: Int64,
+        fileCount: Int,
+        origin: ArtifactOrigin
+    ) {
+        self.versionCode = versionCode
+        self.versionName = versionName
+        self.setDigest = setDigest
+        self.size = size
+        self.fileCount = fileCount
+        self.origin = origin
+    }
+
+    /// The staged slot summary this candidate records.
+    var slotSummary: StagedArtifactSlotSummary {
+        StagedArtifactSlotSummary(
+            versionCode: versionCode,
+            versionName: versionName,
+            setDigest: setDigest,
+            size: size,
+            fileCount: fileCount,
+            origin: origin
+        )
+    }
+}
+
 /// Summaries of the current, previous, and staged package artifact slots.
 public struct ArtifactSlots: Codable, Sendable, Hashable {
     /// The set Android should currently have installed.

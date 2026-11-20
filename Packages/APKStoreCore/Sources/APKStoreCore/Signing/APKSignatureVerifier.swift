@@ -60,7 +60,7 @@ struct APKSignatureVerifier: Sendable {
     private static let verityBlockID: UInt32 = 0x2146_444E
     private static let stampBlockID: UInt32 = 0x6DFF_800D
     private static let stampBlockID2: UInt32 = 0x6DFF_800E
-    private static let proofOfRotationAttrID: UInt32 = 0x9D63_03F3
+    private static let proofOfRotationAttrID: UInt32 = 0x3BA0_6F8C
     private static let rotationMinSdkReleaseAttrID: UInt32 = 0x559F_8B02
 
     private enum SignatureAlgorithm: UInt32 {
@@ -117,14 +117,14 @@ struct APKSignatureVerifier: Sendable {
 
         /// One-step `Insecure` digest for the content-digest tree (chunked per apksig §3.1.3).
         func hashChunk(_ chunk: Data) -> Data {
-            var prefixed = Data([0x5A])
+            var prefixed = Data([0xA5])
             prefixed.appendUInt32LE(UInt32(chunk.count))
             prefixed.append(chunk)
             return hash(prefixed)
         }
 
         func contentDigest(chunks: [Data]) -> Data {
-            var input = Data([0xA5])
+            var input = Data([0x5A])
             input.appendUInt32LE(UInt32(chunks.count))
             for chunk in chunks {
                 input.append(chunk)
@@ -264,20 +264,58 @@ struct APKSignatureVerifier: Sendable {
         // signer records, so flatten the two nesting levels before iterating signers.
         for signer in Self.lengthPrefixed(block).flatMap(Self.lengthPrefixed) {
             sawSigner = true
-            let parts = Self.lengthPrefixed(signer)
-            guard parts.count >= 3 else {
-                throw .invalidSignature(file: file, reason: "malformed signer block")
+            // v2 signer records are all length-prefixed fields; v3/v3.1 insert
+            // raw minSdk/maxSdkVersion uint32s after the signed data and after
+            // the certificate list inside it.
+            let signedData: Data
+            let signaturesBlob: Data
+            let publicKeyBlob: Data
+            let digestsBlob: Data
+            let certificatesBlob: Data
+            let attributesBlob: Data
+            if scheme == .v3 || scheme == .v31 {
+                var cursor = 0
+                guard let sd = Self.takeLengthPrefixed(signer, at: &cursor),
+                    cursor + 8 <= signer.count
+                else {
+                    throw .invalidSignature(file: file, reason: "malformed signer block")
+                }
+                cursor += 8  // minSdkVersion, maxSdkVersion
+                guard let sigs = Self.takeLengthPrefixed(signer, at: &cursor),
+                    let key = Self.takeLengthPrefixed(signer, at: &cursor)
+                else {
+                    throw .invalidSignature(file: file, reason: "malformed signer block")
+                }
+                signedData = sd
+                signaturesBlob = sigs
+                publicKeyBlob = key
+                var sdCursor = 0
+                guard let digs = Self.takeLengthPrefixed(signedData, at: &sdCursor),
+                    let certs = Self.takeLengthPrefixed(signedData, at: &sdCursor),
+                    sdCursor + 8 <= signedData.count
+                else {
+                    throw .invalidSignature(file: file, reason: "malformed signed data")
+                }
+                sdCursor += 8  // minSdkVersion, maxSdkVersion
+                digestsBlob = digs
+                certificatesBlob = certs
+                attributesBlob = signedData.subdata(in: sdCursor..<signedData.count)
+            } else {
+                let parts = Self.lengthPrefixed(signer)
+                guard parts.count >= 3 else {
+                    throw .invalidSignature(file: file, reason: "malformed signer block")
+                }
+                signedData = parts[0]
+                signaturesBlob = parts[1]
+                publicKeyBlob = parts[2]
+                let sdParts = Self.lengthPrefixed(signedData)
+                guard sdParts.count >= 2 else {
+                    throw .invalidSignature(file: file, reason: "malformed signed data")
+                }
+                digestsBlob = sdParts[0]
+                certificatesBlob = sdParts[1]
+                attributesBlob = sdParts.count > 2 ? sdParts[2] : Data()
             }
-            let signedData = parts[0]
-            let signaturesBlob = parts[1]
-            let publicKeyBlob = parts[2]
-            let sdParts = Self.lengthPrefixed(signedData)
-            guard sdParts.count >= 2 else {
-                throw .invalidSignature(file: file, reason: "malformed signed data")
-            }
-            let digestsBlob = sdParts[0]
-            let certificatesBlob = sdParts[1]
-            let attributesBlob = sdParts.count > 2 ? sdParts[2] : Data()
 
             // The signer certificate is the first X.509 cert in the list.
             guard let certificateDER = Self.lengthPrefixed(certificatesBlob).first else {
@@ -289,7 +327,9 @@ struct APKSignatureVerifier: Sendable {
             var sawAnyDigest = false
             for record in Self.lengthPrefixed(digestsBlob) where record.count >= 4 {
                 let algorithmID = record.readUInt32LE(at: 0)
-                let digestValue = record.subdata(in: 4..<record.count)
+                // The digest value is itself length-prefixed within the record.
+                guard let digestValue = Self.lengthPrefixed(record.subdata(in: 4..<record.count)).first
+                else { continue }
                 guard let algorithm = SignatureAlgorithm(rawValue: algorithmID) else { continue }
                 if algorithm == .veritySHA256 { continue }
                 sawAnyDigest = true
@@ -313,7 +353,9 @@ struct APKSignatureVerifier: Sendable {
                     let secAlgorithm = algorithm.secAlgorithm
                 else { continue }
                 sawSignature = true
-                let signature = record.subdata(in: 4..<record.count)
+                // The signature bytes are length-prefixed within the record.
+                guard let signature = Self.lengthPrefixed(record.subdata(in: 4..<record.count)).first
+                else { continue }
                 var error: Unmanaged<CFError>?
                 if SecKeyVerifySignature(key, secAlgorithm, signedData as CFData, signature as CFData, &error) {
                     signatureOK = true
@@ -334,16 +376,16 @@ struct APKSignatureVerifier: Sendable {
 
             digests.append(SHA256Digest(data: certificateDER))
 
-            // Rotation attribute → lineage, oldest → newest.
-            for attribute in Self.lengthPrefixed(attributesBlob) where attribute.count >= 8 {
+            // Rotation attribute → lineage, oldest → newest. The v3 tail of the
+            // signed data is one more length-prefixed level than v2's field.
+            let parsed = Self.lengthPrefixed(attributesBlob)
+            let attributes =
+                parsed.count == 1 ? Self.lengthPrefixed(parsed[0]) : parsed
+            for attribute in attributes where attribute.count >= 8 {
                 if attribute.readUInt32LE(at: 0) == Self.proofOfRotationAttrID {
-                    let valueLength = Int(attribute.readUInt32LE(at: 4))
-                    guard 8 + valueLength <= attribute.count else {
-                        throw .invalidSignature(
-                            file: file, reason: "truncated proof-of-rotation attribute")
-                    }
+                    // Attribute = id (uint32) + value; the item itself carries the length.
                     lineageNodes = try Self.parseLineage(
-                        attribute.subdata(in: 8..<8 + valueLength), file: file)
+                        attribute.subdata(in: 4..<attribute.count), file: file)
                     lineage = lineageNodes.map(\.certificateDigest)
                 }
             }
@@ -541,8 +583,9 @@ struct APKSignatureVerifier: Sendable {
                         reason: "unsupported signing-lineage signature algorithm")
                 }
                 var error: Unmanaged<CFError>?
-                guard SecKeyVerifySignature(
-                    key, secAlgorithm, signedData as CFData, signature as CFData, &error)
+                guard
+                    SecKeyVerifySignature(
+                        key, secAlgorithm, signedData as CFData, signature as CFData, &error)
                 else {
                     throw .invalidSignature(
                         file: file,
@@ -595,6 +638,16 @@ struct APKSignatureVerifier: Sendable {
             offset += 4 + length
         }
         return parts
+    }
+
+    /// Reads one length-prefixed (UInt32 LE) field at `offset` and advances it.
+    static func takeLengthPrefixed(_ blob: Data, at offset: inout Int) -> Data? {
+        guard offset + 4 <= blob.count else { return nil }
+        let length = Int(blob.readUInt32LE(at: offset))
+        guard length >= 0, offset + 4 + length <= blob.count else { return nil }
+        let part = blob.subdata(in: offset + 4..<offset + 4 + length)
+        offset += 4 + length
+        return part
     }
 }
 

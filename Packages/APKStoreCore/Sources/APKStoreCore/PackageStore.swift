@@ -3580,7 +3580,8 @@ public actor PackageStore {
         guard let directory = directories[packageID] else {
             return nil
         }
-        let current = packagesDirectory
+        let current =
+            packagesDirectory
             .appendingPathComponent(directory, isDirectory: true)
             .appendingPathComponent("current", isDirectory: true)
         return try artifactSet(in: current)

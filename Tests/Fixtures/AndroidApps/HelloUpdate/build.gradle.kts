@@ -26,6 +26,14 @@ android {
             keyAlias = "fixture-a"
             keyPassword = "apkrun-test-fixture"
         }
+        create("fixtureB") {
+            // Second test-only key. Not applied to a build type: scripts/build-fixtures.sh
+            // re-signs the rotation variants with it through apksigner.
+            storeFile = file("../../signing/test-fixture-b.jks")
+            storePassword = "apkrun-test-fixture"
+            keyAlias = "fixture-b"
+            keyPassword = "apkrun-test-fixture"
+        }
     }
 
     buildTypes {

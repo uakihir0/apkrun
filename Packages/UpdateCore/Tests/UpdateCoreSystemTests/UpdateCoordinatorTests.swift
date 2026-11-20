@@ -9,7 +9,7 @@ import Testing
 // (update-system.md §4.2, §5, §10; "up to date" with only 1, 0 never a
 // candidate, notifyOnly posts once, state survives a restart).
 
-private actor CoordinatorChannel: StoreAgentChannel {
+actor CoordinatorChannel: StoreAgentChannel {
     nonisolated let capabilities: StoreCapabilities = [.install, .metadata]
     /// When set, `packageInfo` reports this versionCode instead of the
     /// installed one — an Android that has not caught up, for H1 tests.
@@ -44,7 +44,7 @@ private actor CoordinatorChannel: StoreAgentChannel {
     }
 }
 
-private struct CoordinatorRuntime: StoreRuntimeAccess {
+struct CoordinatorRuntime: StoreRuntimeAccess {
     let channel: CoordinatorChannel
 
     func withStoreAgent<T: Sendable>(
@@ -77,7 +77,7 @@ private struct NoCredentials: ProviderCredentials {
     func setToken(_: String?, for _: String) throws {}
 }
 
-private actor RecordingNotifier: HostNotificationSink {
+actor RecordingNotifier: HostNotificationSink {
     private(set) var sent: [UpdateNotification] = []
     private(set) var waitingSent: [UpdateNotification] = []
     private(set) var refusedSent: [UpdateNotification] = []
@@ -94,9 +94,9 @@ private actor RecordingNotifier: HostNotificationSink {
     }
 }
 
-private let helloUpdateID = PackageID(rawValue: "io.apkrun.fixture.helloupdate")!
+let helloUpdateID = PackageID(rawValue: "io.apkrun.fixture.helloupdate")!
 
-private func fixtureRepo() -> URL {
+func fixtureRepo() -> URL {
     URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()  // UpdateCoreSystemTests
         .deletingLastPathComponent()  // Tests
@@ -132,7 +132,7 @@ private func makeStore(at root: URL, versionCode: VersionCode) -> PackageStore {
         importVerifier: PackageStore.legacyImportVerifier)
 }
 
-private func makeTemporaryRoot() throws -> URL {
+func makeTemporaryRoot() throws -> URL {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("UpdateCoordinatorTests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -248,7 +248,7 @@ private func installV1(store: PackageStore, repo: URL) async throws -> PackageRe
 // MARK: - #39 step 2: downloading
 
 /// A provider whose `download` plays back a canned script, for retry tests.
-private actor ScriptedProvider: UpdateProvider {
+actor ScriptedProvider: UpdateProvider {
     enum Step: Sendable {
         case copy(URL)
         case fail(UpdateFailure)
@@ -556,7 +556,7 @@ private func v2Provider(for record: PackageRecord) throws -> ScriptedProvider {
     }
     let report = validated.report
     #expect(report.outcome == "accepted")
-    #expect(report.checks.map(\.id) == ["V0", "V1", "V2", "V3"])
+    #expect(report.checks.map(\.id) == ["V0", "V1", "V2", "V3", "V4", "V5", "V6"])
     #expect(report.checks.allSatisfy { $0.verdict == "passed" })
     // validation.json sits in the ticket's incoming set so `stage` carries it.
     let incoming = root.appendingPathComponent(
@@ -640,7 +640,7 @@ private func v2Provider(for record: PackageRecord) throws -> ScriptedProvider {
         Issue.record("expected .failed, got \(outcome)")
         return
     }
-    #expect(failure == .validation(detail: "signerMismatch"))
+    #expect(failure == .validation(detail: "signerMismatch(installed:1,candidate:1)"))
 }
 
 // MARK: - #39 step 4: stage → install → H1

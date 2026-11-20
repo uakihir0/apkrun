@@ -205,23 +205,25 @@ public struct UpdateValidator: Sendable {
                 let installedSigner = installedSigners.first,
                 let candidateSigner = candidateSigners.first
             {
-                if let node = preview.artifactSet.lineageNodes
+                // Rule 2: a rotation the installed signer consented to.
+                let rotation = preview.artifactSet.lineageNodes
                     .first(where: { $0.certificateDigest == installedSigner })
+                if let rotation, rotation.capabilities.contains(.installedData) {
+                    accepted = true
+                    notes.append(
+                        "signer rotation accepted: installed signer granted installedData")
+                } else if rotation != nil {
+                    missingCapability = true
+                }
+                // Rule 3: the installed package's own lineage lets the
+                // candidate's signer take the package back (a rotation being
+                // undone). It is tried whether or not rule 2's node existed —
+                // a plain candidate carries no lineage at all.
+                if !accepted,
+                    let undo = installedSet?.lineageNodes
+                        .first(where: { $0.certificateDigest == candidateSigner })
                 {
-                    // Rule 2: a rotation the installed signer consented to.
-                    if node.capabilities.contains(.installedData) {
-                        accepted = true
-                        notes.append(
-                            "signer rotation accepted: installed signer granted installedData")
-                    } else {
-                        missingCapability = true
-                    }
-                } else if let node = installedSet?.lineageNodes
-                    .first(where: { $0.certificateDigest == candidateSigner })
-                {
-                    // Rule 3: the installed package's own lineage lets this
-                    // signer take the package back (a rotation being undone).
-                    if node.capabilities.contains(.rollback) {
+                    if undo.capabilities.contains(.rollback) {
                         accepted = true
                         notes.append(
                             "signer rotation undone: installed lineage granted rollback")

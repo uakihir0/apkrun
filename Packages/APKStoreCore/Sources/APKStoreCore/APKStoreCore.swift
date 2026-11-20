@@ -125,6 +125,9 @@ public struct SHA256Digest: RawRepresentable, Codable, Sendable, Hashable {
 public enum PackageArtifact: Sendable, Hashable {
     case apk(URL)
     case splitSet(base: URL, splits: [URL])
+    /// A downloaded container (`.apks`, `.xapk`, `.apkm`); extraction and split
+    /// selection run as for a file import (update-system.md §4.1).
+    case container(URL)
 }
 
 /// One file of an inspected APK set.

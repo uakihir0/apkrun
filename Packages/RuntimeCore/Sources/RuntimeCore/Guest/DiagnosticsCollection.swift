@@ -99,42 +99,66 @@ extension DevelopmentGuestAgent {
                 ordered.append(GuestDiagnosticsItem(item: answer.item, status: status))
             }
         }
-        // Items are appended in reply order once their transfer completes.
+        // Items are appended in reply order once their transfer completes. A
+        // collect with nothing pending returns here instead of waiting on a
+        // channel that carries no frames.
         var completions: [(index: Int, item: GuestDiagnosticsItem)] = []
-        let deadline = ContinuousClock.now + .seconds(70)
-        for try await frame in bulk.bulkFrames {
-            if ContinuousClock.now > deadline {
-                break
+        if !pendingTransfers.isEmpty {
+            // The host enforces the same per-item cap the agent does: a chunk
+            // past `min(maxBytes, 16 MiB)` is a protocol violation, not a bigger
+            // payload (diagnostics.md §6).
+            let itemCap = Int(min(maxBytes, 16 * 1024 * 1024))
+            // The deadline applies even while no frame arrives: it ends the
+            // stream by closing the connection.
+            let watchdog = Task {
+                try? await Task.sleep(for: .seconds(70))
+                await bulk.close()
             }
-            switch frame.kind {
-            case .chunk(let bytes):
-                pendingTransfers[frame.transferID]?.bytes.append(bytes)
-            case .end:
-                if let transfer = pendingTransfers.removeValue(forKey: frame.transferID) {
-                    completions.append(
-                        (
-                            ordered.count,
-                            GuestDiagnosticsItem(
-                                item: transfer.item,
-                                status: .ok,
-                                payload: transfer.bytes,
-                                truncated: transfer.truncated
-                            )
-                        ))
+            defer { watchdog.cancel() }
+            for try await frame in bulk.bulkFrames {
+                switch frame.kind {
+                case .chunk(let bytes):
+                    if var transfer = pendingTransfers[frame.transferID] {
+                        transfer.bytes.append(bytes)
+                        if transfer.bytes.count > itemCap {
+                            pendingTransfers.removeValue(forKey: frame.transferID)
+                            completions.append(
+                                (
+                                    ordered.count,
+                                    GuestDiagnosticsItem(
+                                        item: transfer.item, status: .failed)
+                                ))
+                        } else {
+                            pendingTransfers[frame.transferID] = transfer
+                        }
+                    }
+                case .end:
+                    if let transfer = pendingTransfers.removeValue(forKey: frame.transferID) {
+                        completions.append(
+                            (
+                                ordered.count,
+                                GuestDiagnosticsItem(
+                                    item: transfer.item,
+                                    status: .ok,
+                                    payload: transfer.bytes,
+                                    truncated: transfer.truncated
+                                )
+                            ))
+                    }
+                case .abort:
+                    if let transfer = pendingTransfers.removeValue(forKey: frame.transferID) {
+                        completions.append(
+                            (
+                                ordered.count,
+                                GuestDiagnosticsItem(item: transfer.item, status: .failed)
+                            ))
+                    }
+                default:
+                    continue
                 }
-            case .abort:
-                if let transfer = pendingTransfers.removeValue(forKey: frame.transferID) {
-                    completions.append(
-                        (
-                            ordered.count,
-                            GuestDiagnosticsItem(item: transfer.item, status: .failed)
-                        ))
+                if pendingTransfers.isEmpty {
+                    break
                 }
-            default:
-                continue
-            }
-            if pendingTransfers.isEmpty {
-                break
             }
         }
         // A transfer that never completed is a failed item.

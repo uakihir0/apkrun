@@ -45,6 +45,7 @@ import Testing
                 "guestAgentBundleMissing", "guestAgentInstallFailed", "guestAgentStartFailed", "guestAgentStopped",
                 "guestAgentConnectTimedOut", "guestAgentHandshakeFailed", "requiredAgentUnavailable",
                 "guestAgentOperationFailed", "inputNotBound",
+                "busy", "operationNotFound", "notProvisioned", "hostRequirementsNotMet",
             ].map { "runtime.\($0)" }
             + [
                 "rendererInitFailed", "rendererOperationFailed", "rendererLost", "libraryMissing",
@@ -58,6 +59,14 @@ import Testing
                 "untrustedKey", "signatureInvalid", "unexpectedFile", "downgradeRejected",
                 "imageNotInstalled", "noCurrentImage",
             ].map { "image.\($0)" }
+            + [
+                "packageNotInstalled", "invalidName", "customIconInvalid", "iconConversionFailed",
+                "launcherTemplateInvalid", "destinationNotWritable", "destinationNotAccessible",
+                "nameConflict", "wrapperExists", "wrapperNotFound", "signingFailed",
+                "verificationFailed", "registrationFailed", "registryUnavailable",
+                "stagingExpired", "bundleInvalid",
+                "approvalDenied", "approvalTimedOut", "approvalNotFound",
+            ].map { "wrapper.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)
     #expect(
@@ -89,6 +98,7 @@ import Testing
                 || entry.code.hasPrefix("runtime.")
                 || entry.code.hasPrefix("graphics.")
                 || entry.code.hasPrefix("image.")
+                || entry.code.hasPrefix("wrapper.")
         )
         for text in entry.message?.values ?? [String: String]().values {
             #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

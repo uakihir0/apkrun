@@ -59,6 +59,8 @@ public enum IconsetWriter {
                 throw WrapperFailure.iconConversionFailed(
                     "iconset write failed: \(error.localizedDescription)")
             }
+            // §8.3 step 3: the iconset goes away whether iconutil succeeds.
+            defer { try? fileManager.removeItem(at: iconset) }
             for entry in pngs {
                 do {
                     try entry.png.write(to: iconset.appendingPathComponent(entry.slot.fileName))
@@ -76,13 +78,10 @@ public enum IconsetWriter {
                 return data
             }
         } catch let failure as WrapperFailure {
-            try? fileManager.removeItem(at: iconset)
             throw failure
         } catch {
-            try? fileManager.removeItem(at: iconset)
             throw .iconConversionFailed("iconset write failed: \(error.localizedDescription)")
         }
-        try? fileManager.removeItem(at: iconset)
         // §8.4: write the container without iconutil.
         return try ICNSWriter.icnsData(pngs: pngs)
     }

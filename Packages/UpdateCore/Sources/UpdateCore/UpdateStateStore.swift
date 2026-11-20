@@ -259,7 +259,7 @@ public actor UpdateStateStore {
             else { continue }
             entries.append(entry)
         }
-        return Array(entries.suffix(min(limit, 1_000)))
+        return Array(entries.suffix(min(max(limit, 0), 1_000)))
     }
 
     private func pruneHistory(_ historyFile: URL) throws {

@@ -452,12 +452,10 @@ func embeddedRuntimeServiceFinishesLaunchWhenSnapshotAlreadyContainsItsTask() as
     await service.attachGuestAgent(guest)
     let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
 
-    do {
-        _ = try await service.launch(RuntimeLaunchRequest(packageID: package))
-        Issue.record("the first Guest Agent launch should report its simulated lost reply")
-    } catch {
-        #expect(error.code == "runtime.guestAgentOperationFailed")
-    }
+    // A transient Guest Agent launch failure keeps the session in
+    // `launching`: the reconnect reconcile finishes the transition.
+    let launch = try await service.launch(RuntimeLaunchRequest(packageID: package))
+    #expect(launch.state == .launching)
     #expect(await service.currentSession()?.state == .launching)
 
     await guest.resynchronize(

@@ -2316,7 +2316,7 @@ public actor RuntimeHost {
         }
     }
 
-    private func waitForStartupCompletion(
+    func waitForStartupCompletion(
         allowingReservedPackageMutation: Bool = false
     ) async throws(RuntimeHostError) {
         guard hasStarted else {

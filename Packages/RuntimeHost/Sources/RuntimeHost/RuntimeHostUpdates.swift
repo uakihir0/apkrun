@@ -1289,6 +1289,7 @@ extension RuntimeHost {
     /// installs once no update work, mutation, or session keeps it.
     private func stopUpdateBootedRuntimeIfIdle() async {
         guard updateBootedForInstall, activePackageMutations == 0 else { return }
+        if let gate = updateGate, await gate.hasPendingInstalls { return }
         if let service = headlessSessionService as? DaemonHeadlessSessionService,
             await service.hasLiveSessions
         {
@@ -1417,6 +1418,10 @@ extension RuntimeHost {
                 try await handling.reopenPackageSession(packageID: wireID)
             },
             ready: { [weak self] reason in
+                // Daemon startup creates the supervisor asynchronously; an
+                // install admitted before that must not fail on a nil
+                // supervisor and drop the staged request.
+                try? await self?.waitForStartupCompletion()
                 guard let self, let supervisor = await self.supervisor else {
                     throw UpdateFailure.providerUnreachable(reason: "runtime is not running")
                 }

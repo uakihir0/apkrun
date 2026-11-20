@@ -249,12 +249,20 @@ struct OnboardingView: View {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.message = "Choose the Android image bundle folder"
-        guard panel.runModal() == .OK, let url = panel.url,
-            let bookmark = try? url.bookmarkData(
-                options: .withSecurityScope,
-                includingResourceValuesForKeys: nil,
-                relativeTo: nil
-            )
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        // APKRun.app is not sandboxed, so a security-scoped bookmark cannot be
+        // created; fall back to a plain bookmark that still survives renames.
+        guard
+            let bookmark =
+                (try? url.bookmarkData(
+                    options: .withSecurityScope,
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
+                ))
+                ?? (try? url.bookmarkData(
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
+                ))
         else { return }
         Task {
             _ = try? await model.beginSetup(

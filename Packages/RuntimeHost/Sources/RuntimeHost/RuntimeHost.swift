@@ -2667,14 +2667,7 @@ public actor RuntimeHost {
             setProvisioningState(.installingImage(fraction: 0))
             switch request.image {
             case .directory(let bookmark):
-                var stale = false
-                guard
-                    let url = try? URL(
-                        resolvingBookmarkData: bookmark,
-                        options: .withSecurityScope,
-                        bookmarkDataIsStale: &stale
-                    )
-                else {
+                guard let url = Self.resolveImageBookmark(bookmark) else {
                     throw ProvisioningStepFailure(
                         step: .installingImage,
                         wireError: .runtime(
@@ -2936,13 +2929,8 @@ public actor RuntimeHost {
         files: [FileHandle]
     ) async -> Int64 {
         var imageBytes: Int64 = 12 * 1024 * 1024 * 1024
-        var stale = false
         if case .directory(let bookmark) = request.image,
-            let url = try? URL(
-                resolvingBookmarkData: bookmark,
-                options: .withSecurityScope,
-                bookmarkDataIsStale: &stale
-            ),
+            let url = Self.resolveImageBookmark(bookmark),
             let allocated = directoryAllocatedBytes(at: url)
         {
             imageBytes = allocated
@@ -2950,6 +2938,23 @@ public actor RuntimeHost {
         return HostRequirementsCheck.requiredFreeBytes(
             expandedImageBytes: imageBytes,
             userdataBytes: Int64(InstanceSizing.default.userdataBytes)
+        )
+    }
+
+    /// Resolves an image-folder bookmark the client sent. Sandbox-less builds create plain
+    /// bookmarks, so a scoped resolution failure falls back to a plain resolve.
+    static func resolveImageBookmark(_ bookmark: Data) -> URL? {
+        var stale = false
+        if let url = try? URL(
+            resolvingBookmarkData: bookmark,
+            options: .withSecurityScope,
+            bookmarkDataIsStale: &stale
+        ) {
+            return url
+        }
+        return try? URL(
+            resolvingBookmarkData: bookmark,
+            bookmarkDataIsStale: &stale
         )
     }
 

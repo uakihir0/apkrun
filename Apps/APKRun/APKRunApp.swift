@@ -8,10 +8,20 @@ struct APKRunApp: App {
     @State private var registrationTitle = "Background service setup failed"
     @State private var registrationMessage: String?
     @State private var isRegistrationErrorPresented = false
+    @StateObject private var approvalCenter = ApprovalCenter.shared
+
+    /// Whether apkrund opened the app for a wrapper approval (host-ui.md §3.3).
+    /// Only the approval window is shown then.
+    private let approvalOnly: Bool
 
     init() {
+        approvalOnly = CommandLine.arguments.dropFirst().contains("--approve")
+        _approvalCenter = StateObject(wrappedValue: .shared)
         if CommandLine.arguments.dropFirst().contains("--register-runtime") {
             RuntimeRegistrationCommand.run()
+        }
+        Task { @MainActor in
+            ApprovalCenter.shared.start()
         }
 
         do {
@@ -31,21 +41,52 @@ struct APKRunApp: App {
 
     var body: some Scene {
         WindowGroup("APKRun") {
-            Text("APKRun")
-                .frame(minWidth: 480, minHeight: 320)
-                .alert(registrationTitle, isPresented: $isRegistrationErrorPresented) {
-                    Button("Open Login Items Settings") {
-                        SMAppService.openSystemSettingsLoginItems()
+            ApprovalWindowOpener(center: approvalCenter) {
+                Text("APKRun")
+                    .frame(minWidth: 480, minHeight: 320)
+                    .alert(registrationTitle, isPresented: $isRegistrationErrorPresented) {
+                        Button("Open Login Items Settings") {
+                            SMAppService.openSystemSettingsLoginItems()
+                        }
+                        Button("Later", role: .cancel) {}
+                    } message: {
+                        Text(
+                            registrationMessage
+                                ?? "Move APKRun.app to Applications and reopen it."
+                        )
                     }
-                    Button("Later", role: .cancel) {}
-                } message: {
-                    Text(
-                        registrationMessage
-                            ?? "Move APKRun.app to Applications and reopen it."
-                    )
-                }
+            }
         }
         .windowResizability(.contentSize)
+        .defaultLaunchBehavior(approvalOnly ? .suppressed : .automatic)
+
+        // The wrapper approval prompt (host-ui.md §10.1).
+        Window("Approval Required", id: "approval") {
+            ApprovalPromptView()
+                .environmentObject(approvalCenter)
+        }
+        .windowResizability(.contentSize)
+        .defaultLaunchBehavior(approvalOnly ? .presented : .automatic)
+
+        settingsScene
+    }
+}
+
+/// Opens the approval window when a prompt arrives while the app is running
+/// (host-ui.md §10.1).
+private struct ApprovalWindowOpener<Content: View>: View {
+    @Environment(\.openWindow) private var openWindow
+    @ObservedObject var center: ApprovalCenter
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        content()
+            .onReceive(center.$current) { prompt in
+                if prompt != nil {
+                    openWindow(id: "approval")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+            }
     }
 }
 

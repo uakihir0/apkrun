@@ -8,7 +8,9 @@ import io.apkrun.guest.runtime.AgentLog
  * so Android keeps it running and its sockets stay bound. The agent never shows UI.
  */
 class StoreAgentApplication : Application() {
-    internal val daemon = StoreDaemon(this)
+    // Created lazily: the base Context is not attached until attachBaseContext, and StoreDaemon's
+    // initializers read packageManager and cacheDir.
+    internal val daemon by lazy { StoreDaemon(this) }
 
     override fun onCreate() {
         super.onCreate()

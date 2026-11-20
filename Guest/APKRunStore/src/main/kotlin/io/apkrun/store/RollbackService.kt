@@ -57,15 +57,11 @@ class RollbackService(private val context: Context) {
         fromVersionCode: Long,
         toVersionCode: Long,
     ): RollbackResult {
-        val manager =
-            runCatching {
-                context.packageManager.javaClass
-                    .getMethod("getRollbackManager")
-                    .invoke(context.packageManager)
-            }
-                .getOrNull() ?: return failure("this image has no RollbackManager")
         val managerClass =
             HiddenApi.classOrNull("android.content.rollback.RollbackManager")
+                ?: return failure("this image has no RollbackManager")
+        val manager =
+            runCatching { context.getSystemService(managerClass) }.getOrNull()
                 ?: return failure("this image has no RollbackManager")
 
         val rollbacks = runCatching {
@@ -105,14 +101,31 @@ class RollbackService(private val context: Context) {
             val rollbackInfoClass =
                 HiddenApi.classOrNull("android.content.rollback.RollbackInfo")
                     ?: return failure("this image has no RollbackInfo")
+            val rollbackId = rollbackInfoClass.getMethod("getRollbackId").invoke(match) as Int
+            // commitRollback(int, ParceledListSlice, PendingIntent): the
+            // slice lists the packages whose update caused the rollback.
+            val versionedPackageClass =
+                HiddenApi.classOrNull("android.content.pm.VersionedPackage")
+                    ?: return failure("this image has no VersionedPackage")
+            val cause =
+                versionedPackageClass
+                    .getConstructor(
+                        String::class.java,
+                        Long::class.javaPrimitiveType,
+                    )
+                    .newInstance(packageName, fromVersionCode)
+            val sliceClass =
+                HiddenApi.classOrNull("android.content.pm.ParceledListSlice")
+                    ?: return failure("this image has no ParceledListSlice")
+            val slice = sliceClass.getConstructor(List::class.java).newInstance(listOf(cause))
             managerClass
                 .getMethod(
                     "commitRollback",
-                    String::class.java,
-                    rollbackInfoClass,
-                    android.content.IntentSender::class.java,
+                    Int::class.javaPrimitiveType,
+                    sliceClass,
+                    PendingIntent::class.java,
                 )
-                .invoke(manager, packageName, match, status.intentSender)
+                .invoke(manager, rollbackId, slice, status)
         } catch (error: Exception) {
             pending.remove(requestCode)
             return failure(error.message ?: "commitRollback denied")
@@ -149,9 +162,13 @@ class RollbackService(private val context: Context) {
     }
         .getOrDefault("")
 
-    /** `PackageRollbackInfo.getVersionRolledBackFrom/To()`. */
+    /**
+     * `PackageRollbackInfo.getVersionRolledBackFrom/To()` returns a `VersionedPackage`; its
+     * `getLongVersionCode()` is the compared value.
+     */
     private fun versionOf(pkg: Any, getter: String): Long = runCatching {
-        (pkg.javaClass.getMethod(getter).invoke(pkg) as Long)
+        val versioned = pkg.javaClass.getMethod(getter).invoke(pkg)
+        versioned.javaClass.getMethod("getLongVersionCode").invoke(versioned) as Long
     }
         .getOrDefault(-1L)
 

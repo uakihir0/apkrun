@@ -207,11 +207,13 @@ public struct DirectProvider: UpdateProvider {
         var resolved: [URL] = []
         resolved.reserveCapacity(manifest.artifacts.count)
         for (index, artifact) in manifest.artifacts.enumerated() {
-            guard let url = URL(string: artifact.url, relativeTo: base)?.absoluteURL,
-                Self.isAllowed(url)
-            else {
+            guard let url = URL(string: artifact.url, relativeTo: base)?.absoluteURL else {
                 throw .providerMetadataInvalid(
-                    detail: "artifacts[\(index)].url: https is required")
+                    detail: "artifacts[\(index)].url: not a URL")
+            }
+            guard Self.isAllowed(url) else {
+                throw .providerMetadataInvalid(
+                    detail: "artifacts[\(index)].url: \(url.scheme ?? "none") is not allowed")
             }
             guard url.user == nil, url.password == nil else {
                 throw .providerMetadataInvalid(

@@ -2788,6 +2788,10 @@ public actor RuntimeHost {
                 wireError: Self.operationWireError(for: error)
             )
         }
+        // Provisioning verified that Android boots and the agents are up, so any degraded
+        // startup (e.g. a missing image recorded before setup ran) is obsolete.
+        startupFailure = nil
+        hostState = "running"
         setProvisioningState(.complete)
     }
 

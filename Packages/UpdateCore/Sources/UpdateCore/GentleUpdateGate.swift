@@ -169,6 +169,12 @@ public actor GentleUpdateGate {
         return GentleGateEvaluation(packageID: packageID, blocks: blocks)
     }
 
+    /// Whether an install is in flight or queued — the §3.5 idle stop
+    /// must not stop the runtime while more updates wait behind it.
+    public var hasPendingInstalls: Bool {
+        installing != nil || !queue.isEmpty || admitting
+    }
+
     /// Requests admission for a staged install. When nothing is
     /// installing and the gate is open the package installs immediately
     /// and `true` is returned; otherwise the request waits in the queue.

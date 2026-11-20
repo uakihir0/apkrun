@@ -106,18 +106,35 @@ public actor UpdateScheduler {
     /// including the >24 h headless boot — does not wait for the next check.
     private func resumeStagedInstalls() async {
         try? await store.open()
-        let staged = await stateStore.allStates()
-            .filter { $0.value.phase == "staged" }
+        let managed = Set(
+            ((try? await store.listManagedPackages()) ?? []).map(\.packageId))
+        var staged = await stateStore.allStates()
+            .filter { $0.value.phase == "staged" && managed.contains($0.key) }
             .map(\.key)
+        // §2.2: a package switched to notifyOnly after staging must never
+        // auto-install — the staged row stays for the user's "Update".
+        var automatic: [PackageID] = []
+        for packageID in staged {
+            let mode = (try? await store.packageSettings(for: packageID))?.updateMode
+            if mode != "notifyOnly" {
+                automatic.append(packageID)
+            }
+        }
+        staged = automatic
         guard !staged.isEmpty else { return }
         guard let runtime = await runtimeProvider(),
             let gate = await gateProvider()
         else { return }
         for packageID in staged {
             if await gate.requestInstall(packageID) {
-                _ = await coordinator.resumeStagedInstall(
-                    packageID, trigger: .scheduled, runtime: runtime, gate: gate)
-                return
+                if await coordinator.resumeStagedInstall(
+                    packageID, trigger: .scheduled, runtime: runtime, gate: gate
+                ) != nil {
+                    return
+                }
+                // An admitted row that cannot resume (no candidate summary)
+                // must free the shared install slot.
+                _ = await gate.finishInstall(packageID)
             }
         }
     }

@@ -55,6 +55,10 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
         public var signerDigests: [SHA256Digest]?
         /// The provider cursor to save once the install completes.
         public var cursor: ProviderCursor?
+        /// §7.3 "Update Now" ended the package's session; a successful
+        /// install reopens it (persists so a gate-resumed install
+        /// reopens too).
+        public var reopenAfterInstall: Bool
 
         /// Creates a summary.
         public init(
@@ -62,13 +66,15 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
             versionName: String?,
             provider: ProviderType,
             signerDigests: [SHA256Digest]? = nil,
-            cursor: ProviderCursor? = nil
+            cursor: ProviderCursor? = nil,
+            reopenAfterInstall: Bool = false
         ) {
             self.versionCode = versionCode
             self.versionName = versionName
             self.provider = provider
             self.signerDigests = signerDigests
             self.cursor = cursor
+            self.reopenAfterInstall = reopenAfterInstall
         }
     }
 

@@ -33,6 +33,8 @@ public struct UpdateNotification: Sendable, Equatable {
 public protocol HostNotificationSink: Sendable {
     /// Posts an "Update available" notification.
     func notifyUpdateAvailable(_ notification: UpdateNotification) async
+    /// Posts the §7.4 "ready to install; quit to update" notification.
+    func notifyUpdateWaiting(_ notification: UpdateNotification) async
 }
 
 /// The result of one coordinator check run.
@@ -598,7 +600,8 @@ public actor UpdateCoordinator {
         runtime: any UpdateRuntimeAccess,
         gate: GentleUpdateGate,
         started: Date = Date(),
-        origin: ArtifactOrigin? = nil
+        origin: ArtifactOrigin? = nil,
+        closeRunningApp: Bool = false
     ) async -> UpdateInstallOutcome {
         let records = (try? await store.listManagedPackages()) ?? []
         guard let record = records.first(where: { $0.packageId == packageID }) else {
@@ -641,9 +644,16 @@ public actor UpdateCoordinator {
                 versionName: preview.versionName,
                 provider: candidate.provider.type,
                 signerDigests: preview.artifactSet.signerDigests,
-                cursor: candidate.cursor)
+                cursor: candidate.cursor,
+                reopenAfterInstall: closeRunningApp)
         }
         await stateStore.flush()
+
+        // §7.3 "Update Now": end the package's sessions with `.updating`
+        // before the gate evaluates, so GU2/GU3 see the app as closed.
+        if closeRunningApp {
+            await runtime.endSessions(for: packageID, reason: .updating)
+        }
 
         // §7.1–§7.2: the gentle gate admits the install or queues it as
         // `staged`; user-initiated runs jump ahead of automatic ones.
@@ -656,7 +666,8 @@ public actor UpdateCoordinator {
             expectedVersionCode: preview.versionCode,
             expectedSigners: Set(preview.artifactSet.signerDigests),
             provider: candidate.provider.type, cursor: candidate.cursor,
-            trigger: trigger, runtime: runtime, gate: gate, started: started)
+            trigger: trigger, runtime: runtime, gate: gate, started: started,
+            reopenAfterInstall: closeRunningApp)
     }
 
     /// §7.2 trigger: resumes a staged install the gate now admits.
@@ -688,8 +699,39 @@ public actor UpdateCoordinator {
             expectedVersionCode: expectedVersionCode,
             expectedSigners: Set(summary.signerDigests ?? []),
             provider: summary.provider, cursor: summary.cursor,
-            trigger: trigger, runtime: runtime, gate: gate, started: started)
+            trigger: trigger, runtime: runtime, gate: gate, started: started,
+            reopenAfterInstall: summary.reopenAfterInstall)
     }
+
+    /// §7.4: a candidate staged longer than `stagedNoticeAfter` gets one
+    /// "ready to install; quit to update" notification per stage. The
+    /// trigger pump calls this every §7.2 tick.
+    public func notifyOverdueStagedUpdates(now: Date = Date()) async {
+        guard let notifier else { return }
+        for (packageID, row) in await stateStore.allStates() {
+            guard row.phase == "staged",
+                let stagedAt = row.stagedAt,
+                stagedAt.addingTimeInterval(Self.stagedNoticeAfter) < now,
+                row.waitingNotifiedAt == nil
+            else {
+                continue
+            }
+            let records = (try? await store.listManagedPackages()) ?? []
+            guard let record = records.first(where: { $0.packageId == packageID }) else {
+                continue
+            }
+            await notifier.notifyUpdateWaiting(
+                UpdateNotification(
+                    packageID: packageID,
+                    displayName: record.displayName,
+                    versionCode: row.candidate?.versionCode,
+                    versionName: row.candidate?.versionName))
+            await stateStore.update(packageID) { $0.waitingNotifiedAt = now }
+        }
+    }
+
+    /// §7.4's waiting period before the one-time notice fires.
+    static let stagedNoticeAfter: TimeInterval = 7 * 24 * 3600
 
     /// The post-gate portion of an install: ensure the runtime is up,
     /// hold the `storeOperation` assertion, run `installStaged`, then H1 —
@@ -705,7 +747,8 @@ public actor UpdateCoordinator {
         trigger: UpdateTrigger,
         runtime: any UpdateRuntimeAccess,
         gate: GentleUpdateGate,
-        started: Date
+        started: Date,
+        reopenAfterInstall: Bool = false
     ) async -> UpdateInstallOutcome {
         // Automatic runs need a ready runtime (§3.5).
         do {
@@ -739,6 +782,10 @@ public actor UpdateCoordinator {
             started: started)
         assertion.release()
         await gate.finishInstall(packageID)
+        // §7.3: "Update Now" reopens the app after a successful update.
+        if case .installed = outcome, reopenAfterInstall {
+            await runtime.reopen(packageID)
+        }
         return outcome
     }
 

@@ -135,7 +135,8 @@ public actor EmbeddedUpdateService {
         runtime: any UpdateRuntimeAccess,
         gate: GentleUpdateGate? = nil,
         started: Date,
-        origin: ArtifactOrigin? = nil
+        origin: ArtifactOrigin? = nil,
+        closeRunningApp: Bool = false
     ) async -> WireUpdateOutcome? {
         switch await coordinator.download(
             packageID, candidate: candidate, context: context,
@@ -145,7 +146,7 @@ public actor EmbeddedUpdateService {
             return await validateAndInstall(
                 packageID, ticket: downloaded.ticket, candidate: candidate,
                 trigger: trigger, runtime: runtime, gate: gate, started: started,
-                origin: origin)
+                origin: origin, closeRunningApp: closeRunningApp)
         case .failed(let failure):
             return .skipped(reason: "downloadFailed", error: Self.catalogError(for: failure))
         }
@@ -161,7 +162,8 @@ public actor EmbeddedUpdateService {
         runtime: any UpdateRuntimeAccess,
         gate: GentleUpdateGate? = nil,
         started: Date,
-        origin: ArtifactOrigin? = nil
+        origin: ArtifactOrigin? = nil,
+        closeRunningApp: Bool = false
     ) async -> WireUpdateOutcome? {
         switch await coordinator.validate(
             packageID, ticket: ticket, candidate: candidate,
@@ -172,7 +174,7 @@ public actor EmbeddedUpdateService {
                 packageID, validated: validated, candidate: candidate,
                 trigger: trigger, runtime: runtime,
                 gate: gate ?? gateInstance(runtime: runtime), started: started,
-                origin: origin)
+                origin: origin, closeRunningApp: closeRunningApp)
             {
             case .installed(let from, let to):
                 return .updated(from: from, to: to)
@@ -211,6 +213,11 @@ public actor EmbeddedUpdateService {
     /// version itself.
     func notePostUpdateFirstFrame(_ packageID: PackageID) async {
         await stateStore.update(packageID) { $0.postUpdateFirstFrameAt = Date() }
+    }
+
+    /// §7.4: notifies once per staged candidate waiting over 7 days.
+    func notifyOverdueStagedUpdates(now: Date = Date()) async {
+        await coordinator.notifyOverdueStagedUpdates(now: now)
     }
 
     /// §7.2 trigger: runs the staged install the gate pump admitted.
@@ -264,7 +271,8 @@ public actor EmbeddedUpdateService {
         _ packageID: PackageID,
         context: ProviderContext,
         runtime: any UpdateRuntimeAccess,
-        gate: GentleUpdateGate? = nil
+        gate: GentleUpdateGate? = nil,
+        closeRunningApp: Bool = false
     ) async -> WireUpdateOutcome? {
         let started = Date()
         switch await coordinator.check(
@@ -276,7 +284,8 @@ public actor EmbeddedUpdateService {
         case .available(let candidate):
             return await continueUpdate(
                 packageID, candidate: candidate, trigger: .userInitiated,
-                context: context, runtime: runtime, gate: gate, started: started)
+                context: context, runtime: runtime, gate: gate, started: started,
+                closeRunningApp: closeRunningApp)
         case .failed(let failure):
             return .skipped(reason: "checkFailed", error: Self.catalogError(for: failure))
         }
@@ -288,7 +297,8 @@ public actor EmbeddedUpdateService {
         _ packageID: PackageID,
         ticket: UUID,
         runtime: any UpdateRuntimeAccess,
-        gate: GentleUpdateGate? = nil
+        gate: GentleUpdateGate? = nil,
+        closeRunningApp: Bool = false
     ) async throws(RuntimeWireError) -> WireUpdateOutcome? {
         let started = Date()
         let records = (try? await store.listManagedPackages()) ?? []
@@ -315,7 +325,8 @@ public actor EmbeddedUpdateService {
         return await validateAndInstall(
             packageID, ticket: ticket, candidate: candidate,
             trigger: .manual, runtime: runtime, gate: gate, started: started,
-            origin: ArtifactOrigin(type: .manualFile))
+            origin: ArtifactOrigin(type: .manualFile),
+            closeRunningApp: closeRunningApp)
     }
 
     /// Every managed package whose record authority is `apkrun`.
@@ -1274,6 +1285,9 @@ extension RuntimeHost {
     /// staged row frees the gate's slot.
     private func drainUpdateGate() async {
         let gate = updateGateInstance()
+        // §7.4: the one-time "ready to install" notice for >7-day waits
+        // rides on every trigger and the 10-minute tick.
+        await updateServiceInstance().notifyOverdueStagedUpdates()
         guard let packageID = await gate.nextReadyPackage() else { return }
         let outcome = await updateServiceInstance().resumeStagedInstall(
             packageID, runtime: updateRuntimeAccess(), gate: gate)
@@ -1367,13 +1381,15 @@ extension RuntimeHost {
                 }
                 outcome = try await service.updateFromFile(
                     packageID, ticket: ticket, runtime: updateRuntimeAccess(),
-                    gate: updateGateInstance())
+                    gate: updateGateInstance(),
+                    closeRunningApp: options.closeRunningApp)
             } else {
                 outcome = await service.updatePackageNow(
                     packageID,
                     context: service.providerContext(userInitiated: true),
                     runtime: updateRuntimeAccess(),
-                    gate: updateGateInstance())
+                    gate: updateGateInstance(),
+                    closeRunningApp: options.closeRunningApp)
             }
         } catch {
             let wireError: RuntimeWireError

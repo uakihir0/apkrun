@@ -480,6 +480,76 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Starts wrapper generation on the daemon and returns the operation handle.
+    ///
+    /// `icon` carries the optional custom icon file sent next to the request.
+    /// A transport failure is reconciled through `operationStatus` like every
+    /// other long operation, because the daemon deduplicates by operation ID.
+    public func createWrapper(
+        _ request: WrapperRequest,
+        icon: FileHandle?,
+        operationID: OperationID
+    ) async throws(RuntimeControlClientError) -> OperationHandle {
+        let requestFingerprint: String
+        do {
+            requestFingerprint = try RuntimeOperationRequestFingerprint.make(for: request)
+        } catch {
+            throw .encodingFailure
+        }
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeCreateWrapperControlRequest(
+                header: APIRequestHeader(
+                    operationID: operationID.rawValue,
+                    clientKind: configuration.clientKind
+                ),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.createWrapper(data, icon: icon)
+            let reply = try Self.decode(RuntimeCreateWrapperControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let handle = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            guard handle.operationID == operationID, handle.kind == .wrapperCreate else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return handle
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            switch clientError {
+            case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply, .invalidRemoteProxy:
+                do {
+                    let snapshot = try await operationStatus(operationID)
+                    guard snapshot.operationID == operationID,
+                        snapshot.kind == .wrapperCreate,
+                        snapshot.packageID == request.packageID,
+                        snapshot.requestFingerprint == requestFingerprint
+                    else {
+                        throw RuntimeControlClientError.operationResultUnknown(
+                            operation: "createWrapper"
+                        )
+                    }
+                    return OperationHandle(
+                        operationID: snapshot.operationID,
+                        parent: snapshot.parent,
+                        kind: snapshot.kind
+                    )
+                } catch {
+                    throw RuntimeControlClientError.operationResultUnknown(
+                        operation: "createWrapper"
+                    )
+                }
+            default:
+                throw clientError
+            }
+        }
+    }
+
     /// Returns the latest state for an operation.
     public func operationStatus(
         _ operationID: OperationID
@@ -1378,6 +1448,9 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func terminate(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func verifyWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data
+
+    /// Starts a wrapper generation; the reply carries the operation handle.
+    func createWrapper(_ request: Data, icon: FileHandle?) async throws(RuntimeControlClientError) -> Data
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void)
     func invalidate()
 }
@@ -1803,6 +1876,21 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.verifyWrapper(request) { response in finish(.success(response)) }
+        }
+    }
+
+    /// Starts a wrapper generation; the reply carries the operation handle.
+    func createWrapper(_ request: Data, icon: FileHandle?) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.createWrapper(request, icon: icon) { response in finish(.success(response)) }
         }
     }
 

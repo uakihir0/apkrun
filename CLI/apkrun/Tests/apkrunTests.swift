@@ -1014,6 +1014,102 @@ private final class CLIOutputRecorder: @unchecked Sendable {
     }
 }
 
+#if !APKRUN_EMBEDDED_RUNTIME
+    @Test func wrapCommandParsesPackageOutputReplaceAndJSON() async throws {
+        let parsed = try await APKRunCommand.asyncParseAsRoot([
+            "wrap", "io.apkrun.fixture.hellotext",
+            "--output", "/tmp", "--replace", "--json",
+        ])
+        let command = try #require(parsed as? WrapCommand)
+        #expect(command.package == "io.apkrun.fixture.hellotext")
+        #expect(command.output == "/tmp")
+        #expect(command.replace == true)
+        #expect(command.json == true)
+    }
+
+    @Test func wrapSuccessResultPrintsTheBundlePath() {
+        #expect(WrapCommandSupport.resultText(helloWrapperInfo()) == golden("wrap-success.txt"))
+    }
+
+    @Test func wrapperInfoReturnsTheSucceededWrapper() throws {
+        let info = helloWrapperInfo()
+        let snapshot = wrapSnapshot(result: .succeeded(.wrapper(info)))
+        #expect(
+            try WrapCommandSupport.wrapperInfo(
+                from: snapshot, expectedPackageID: helloPackageID) == info)
+    }
+
+    @Test func wrapperInfoPropagatesPackageNotInstalled() {
+        let wireError = RuntimeWireError(
+            domain: "wrapper",
+            code: "wrapper.packageNotInstalled",
+            message: "io.apkrun.fixture.hellotext isn't installed in APKRun.",
+            remediation: "Install io.apkrun.fixture.hellotext first. "
+                + "apkrun wrap installs it too when you add --install."
+        )
+        let snapshot = wrapSnapshot(result: .failed(wireError))
+        #expect(throws: wireError) {
+            try WrapCommandSupport.wrapperInfo(
+                from: snapshot, expectedPackageID: helloPackageID)
+        }
+        #expect(ErrorOutput.render(wireError, json: false) == golden("wrap-package-not-installed.txt"))
+    }
+
+    @Test func wrapperInfoPropagatesWrapperExists() {
+        let wireError = RuntimeWireError(
+            domain: "wrapper",
+            code: "wrapper.wrapperExists",
+            message:
+                "io.apkrun.fixture.hellotext already has a Mac app (HelloText.app).",
+            remediation:
+                "Use Update Mac App, or run: apkrun wrap io.apkrun.fixture.hellotext --replace"
+        )
+        let snapshot = wrapSnapshot(result: .failed(wireError))
+        #expect(throws: wireError) {
+            try WrapCommandSupport.wrapperInfo(
+                from: snapshot, expectedPackageID: helloPackageID)
+        }
+        #expect(ErrorOutput.render(wireError, json: false) == golden("wrap-wrapper-exists.txt"))
+    }
+
+    private var helloPackageID: RuntimePackageID {
+        RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext")!
+    }
+
+    private func helloWrapperInfo() -> WrapperInfo {
+        WrapperInfo(
+            summary: WrapperSummary(
+                packageID: helloPackageID,
+                bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+                displayName: "HelloText",
+                kind: .local,
+                bundleURL: URL(fileURLWithPath: "/Applications/HelloText.app"),
+                status: WrapperStatus(state: .valid),
+                approval: .generated,
+                launcherVersion: "1",
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+            ),
+            fileName: "HelloText",
+            customization: WrapperCustomizationWire(),
+            signer: .adHoc,
+            cdhash: "0123456789abcdef0123456789abcdef01234567",
+            launcherAPI: APIVersion(major: 1, minor: 0),
+            formatVersion: 1
+        )
+    }
+
+    private func wrapSnapshot(result: OperationResult) -> OperationSnapshot {
+        OperationSnapshot(
+            operationID: OperationID(),
+            kind: .wrapperCreate,
+            packageID: helloPackageID,
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            result: result,
+            finishedAt: Date(timeIntervalSince1970: 1_700_000_001)
+        )
+    }
+#endif
+
 private func golden(_ name: String) -> String {
     let contents = try! String(
         contentsOf: goldenDirectory.appendingPathComponent(name), encoding: .utf8)

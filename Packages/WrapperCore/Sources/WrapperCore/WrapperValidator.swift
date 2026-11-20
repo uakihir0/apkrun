@@ -2,22 +2,9 @@ import DiagnosticsCore
 import Foundation
 import RuntimeAPI
 
-/// `WrapperRefreshReason`, `WrapperState`, and `BundleProblem` are defined in
-/// RuntimeAPI so the wire and domain layers share one type (runtime-api.md §10).
-
-/// The on-demand status of a wrapper (wrapper.md §9.1).
-public struct WrapperStatus: Codable, Sendable, Equatable {
-    /// The state decided by the first failing check.
-    public var state: WrapperState
-    /// Why the wrapper wants a refresh.
-    public var refreshReasons: Set<WrapperRefreshReason>
-
-    /// Creates a status.
-    public init(state: WrapperState, refreshReasons: Set<WrapperRefreshReason> = []) {
-        self.state = state
-        self.refreshReasons = refreshReasons
-    }
-}
+/// `WrapperRefreshReason`, `WrapperState`, `BundleProblem`, and `WrapperStatus`
+/// are defined in RuntimeAPI so the wire and domain layers share one type
+/// (runtime-api.md §10).
 
 /// Runs the structural checks of wrapper.md §9.1 (checks 1–3 and 5) and the
 /// wrapper.json cross-checks of wrapper-json.md §5.1 on any bundle, registered

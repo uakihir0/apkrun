@@ -225,6 +225,8 @@ public enum EventPayload: Codable, Equatable, Sendable {
     case packages(PackageChange)
     /// An operation started, progressed, or finished.
     case operations(OperationEvent)
+    /// A wrapper was created, refreshed, removed, or changed state.
+    case wrappers(WrapperChange)
     /// Events for the topic were dropped; fetch a fresh snapshot.
     case resyncRequired(EventTopic)
     /// The daemon reported an event kind added by a newer API version.
@@ -235,6 +237,7 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case packages
         case operations
         case resyncRequired
+        case wrappers
     }
 
     private enum AssociatedKey: String, CodingKey {
@@ -259,6 +262,9 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case "operations":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .operations(try payload.decode(OperationEvent.self, forKey: .first))
+        case "wrappers":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .wrappers(try payload.decode(WrapperChange.self, forKey: .first))
         case "resyncRequired":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .resyncRequired(try payload.decode(EventTopic.self, forKey: .first))
@@ -280,6 +286,9 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case .operations(let event):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .operations)
             try payload.encode(event, forKey: .first)
+        case .wrappers(let change):
+            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .wrappers)
+            try payload.encode(change, forKey: .first)
         case .resyncRequired(let topic):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .resyncRequired)
             try payload.encode(topic, forKey: .first)
@@ -1355,7 +1364,7 @@ public enum OperationEvent: Codable, Equatable, Sendable {
     }
 }
 
-private struct RuntimeEventCodingKey: CodingKey, Hashable {
+struct RuntimeEventCodingKey: CodingKey, Hashable {
     let stringValue: String
     let intValue: Int?
 

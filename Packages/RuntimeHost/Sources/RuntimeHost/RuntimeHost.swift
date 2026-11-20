@@ -64,7 +64,10 @@ public actor RuntimeHost {
     private var supervisorEventsTask: Task<Void, Never>?
     private var packageQueryService: EmbeddedPackageService?
     private var wrapperRegistry: WrapperRegistry?
+    private var wrapperRegistryLoadTask: Task<WrapperRegistry, Never>?
     private var wrapperHealthChecksRegistered = false
+    /// Package IDs with a `wrapperCreate` operation in flight.
+    private var wrapperCreationsInFlight: Set<String> = []
     private var headlessSessionService: (any RuntimeSessionService)?
     private var runtimeSessionGeneration: UInt64 = 0
     private var bootProgressEstimator: BootProgressEstimator?
@@ -1237,11 +1240,262 @@ public actor RuntimeHost {
                 bundledVersion: nil
             )
         } catch {
-            guard let failure = error as? WrapperFailure else {
-                throw .runtime("internal", message: "APKRun couldn't verify the Mac app.")
-            }
-            throw Self.wrapperWireError(for: failure)
+            throw Self.wrapperWireError(for: error)
         }
+    }
+
+    /// Starts a `wrapperCreate` operation for an installed package
+    /// (runtime-api.md §10.3). Portable wrappers and `importTicket` are #90;
+    /// `updateDefaults` is only valid with an import ticket.
+    func createWrapper(
+        _ request: WrapperRequest,
+        icon: FileHandle?,
+        operationID requestedID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) throws(RuntimeWireError) -> OperationHandle {
+        guard !request.portable, request.importTicket == nil else {
+            throw .runtime(
+                "malformedRequest",
+                message: "Portable wrappers are not supported yet."
+            )
+        }
+        guard request.updateDefaults == nil else {
+            throw .runtime(
+                "malformedRequest",
+                message: "updateDefaults is only valid with an import ticket."
+            )
+        }
+
+        let requestPayload: Data
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            requestPayload = try encoder.encode(request)
+        } catch {
+            throw .runtime(
+                "malformedRequest",
+                message: "APKRun's background service couldn't read the request."
+            )
+        }
+        if let existing = trackedOperations[requestedID] {
+            guard existing.handle.kind == .wrapperCreate, existing.requestPayload == requestPayload
+            else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The operation ID is already being used for a different request."
+                )
+            }
+            return existing.handle
+        }
+        // One generation per package at a time: two writers would interleave
+        // the placement and the registry update.
+        guard wrapperCreationsInFlight.insert(request.packageID.rawValue).inserted else {
+            throw Self.packageOperationInProgressError
+        }
+        do {
+            try beginLifecycleOperation()
+        } catch {
+            wrapperCreationsInFlight.remove(request.packageID.rawValue)
+            throw Self.sessionWireError(for: error)
+        }
+
+        let handle = OperationHandle(operationID: requestedID, kind: .wrapperCreate)
+        let snapshot = OperationSnapshot(
+            operationID: requestedID,
+            kind: .wrapperCreate,
+            packageID: request.packageID,
+            requestFingerprint: RuntimeOperationRequestFingerprint.make(from: requestPayload),
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(
+                stage: "generating",
+                message: "Generating the Mac app…"
+            )
+        )
+        trackedOperations[requestedID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: requestPayload,
+            snapshot: snapshot,
+            isCancellable: false,
+            task: nil
+        )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: requestedID)
+        let task = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            if let diagnosticsID = DiagnosticsCore.OperationID(wire: requestedID.wireValue) {
+                let context = OperationContext(operationID: diagnosticsID)
+                await OperationContext.$current.withValue(context) {
+                    await self.runCreateWrapperOperation(
+                        request,
+                        icon: icon,
+                        operationID: requestedID
+                    )
+                }
+            } else {
+                await self.runCreateWrapperOperation(request, icon: icon, operationID: requestedID)
+            }
+        }
+        trackedOperations[requestedID]?.task = task
+        return handle
+    }
+
+    /// Runs a `wrapperCreate` operation to its terminal state.
+    private func runCreateWrapperOperation(
+        _ request: WrapperRequest,
+        icon: FileHandle?,
+        operationID: WireOperationID
+    ) async {
+        defer {
+            wrapperCreationsInFlight.remove(request.packageID.rawValue)
+            finishLifecycleOperation()
+        }
+        do {
+            let info = try await performCreateWrapper(request, icon: icon, operationID: operationID)
+            finishOperation(operationID, result: .succeeded(.wrapper(info)))
+            logger?.notice(
+                "Wrapper creation completed for \(request.packageID.rawValue, .public)")
+        } catch {
+            if Task.isCancelled {
+                finishOperation(operationID, result: .cancelled)
+                return
+            }
+            let wireError = Self.operationWireError(for: error)
+            finishOperation(operationID, result: .failed(wireError))
+            logger?.error("Wrapper creation failed", errorCode: wireError.code)
+        }
+    }
+
+    /// Generates the wrapper bundle for a `wrapperCreate` operation.
+    private func performCreateWrapper(
+        _ request: WrapperRequest,
+        icon: FileHandle?,
+        operationID: WireOperationID
+    ) async throws(RuntimeWireError) -> WrapperInfo {
+        guard let launcher = launcherBuild() else {
+            throw Self.wrapperWireError(for: .launcherTemplateInvalid("missing"))
+        }
+        let registry = await wrapperRegistryInstance()
+
+        // The package record supplies the display name, the update authority,
+        // and (with #56) the Android icon.
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        try await attachPackageQueriesIfRuntimeIsReady(to: service)
+        let details: RuntimePackageDetails
+        do {
+            details = try await service.packageInfo(
+                RuntimePackageRequest(packageID: request.packageID))
+        } catch {
+            guard error.code == "store.packageNotFound" else { throw error }
+            throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
+        }
+        guard details.summary.managed, details.summary.state == .installed else {
+            throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
+        }
+
+        let iconSource: WrapperIconSource
+        switch request.icon {
+        case .custom:
+            let data = icon.flatMap { try? $0.readToEnd() }
+            guard let data, !data.isEmpty else {
+                throw Self.wrapperWireError(for: .customIconInvalid(.unreadable))
+            }
+            iconSource = .preview(data)
+        case .android, .none:
+            iconSource = .placeholder
+        }
+
+        var window = WindowDefaults()
+        if let windowDefaults = request.windowDefaults {
+            window.defaultWidth = windowDefaults.defaultWidth ?? window.defaultWidth
+            window.defaultHeight = windowDefaults.defaultHeight ?? window.defaultHeight
+            window.resizable = windowDefaults.resizable ?? window.resizable
+        }
+        let updates = WrapperUpdateDefaults(
+            authority: details.summary.updateAuthority == .apkrun ? .apkrun : .manual,
+            mode: .automatic,
+            provider: nil
+        )
+        let configuration = WrapperConfiguration(
+            packageID: request.packageID,
+            displayName: request.displayName ?? details.summary.displayName,
+            icon: iconSource,
+            window: window,
+            updates: updates,
+            kind: .local
+        )
+        let destination: WrapperDestination
+        switch request.destination {
+        case .userApplications, .none:
+            destination = .userApplications
+        case .applications:
+            destination = .applications
+        case .directory(let url):
+            destination = .directory(url)
+        }
+        let replace: ReplacePolicy = request.replace == .sameWrapper ? .sameWrapper : .never
+        let generator = AppWrapperGenerator(
+            environment: AppWrapperGenerator.Environment(
+                launcher: launcher,
+                registry: registry,
+                installer: WrapperInstaller(sink: diagnostics?.logSink),
+                stagingRoot: paths.wrapperStagingDirectory
+            )
+        )
+        let generation = WrapperGenerationRequest(
+            configuration: configuration,
+            destination: destination,
+            fileName: request.fileName,
+            replace: replace
+        )
+        let generated: GeneratedWrapper
+        do {
+            generated = try await generator.generate(generation)
+        } catch {
+            throw Self.wrapperWireError(for: error)
+        }
+
+        guard let entry = await registry.entry(bundleID: generated.bundleID) else {
+            throw .runtime("internal", message: "APKRun couldn't register the Mac app.")
+        }
+        let summary = Self.wrapperSummary(for: entry, packageID: request.packageID)
+        eventHub.publishWrapperChange(.created(summary), operationID: operationID)
+        return WrapperInfo(
+            summary: summary,
+            fileName: entry.fileName,
+            customization: WrapperCustomizationWire(
+                displayName: entry.customization.displayName,
+                customIcon: entry.customization.iconFile != nil
+            ),
+            signer: .adHoc,
+            cdhash: generated.cdhash,
+            launcherAPI: Self.launcherAPIVersion(entry.launcherAPI) ?? APIVersion(major: 1, minor: 0),
+            formatVersion: entry.formatVersion,
+            iconDigest: entry.iconDigest.flatMap { RuntimeSHA256Digest(rawValue: "sha256:\($0)") },
+            lastValidatedAt: entry.lastValidatedAt,
+            warnings: []
+        )
+    }
+
+    /// Maps a registry entry to its wire summary.
+    private static func wrapperSummary(
+        for entry: WrapperRegistryEntry,
+        packageID: RuntimePackageID
+    ) -> WrapperSummary {
+        WrapperSummary(
+            packageID: packageID,
+            bundleID: entry.bundleId,
+            displayName: entry.displayName,
+            kind: WrapperKindTag(rawValue: entry.kind.rawValue) ?? .local,
+            bundleURL: URL(fileURLWithPath: entry.path),
+            status: WrapperStatus(state: .valid),
+            approval: entry.approval == .user ? .user : .generated,
+            launcherVersion: entry.launcherVersion,
+            createdAt: entry.createdAt,
+            refreshedAt: entry.refreshedAt
+        )
     }
 
     /// The daemon's wrapper registry, created on first use with startup
@@ -1250,9 +1504,17 @@ public actor RuntimeHost {
         if let wrapperRegistry {
             return wrapperRegistry
         }
-        let registry = WrapperRegistry(paths: paths, sink: diagnostics?.logSink)
-        _ = await registry.load()
-        await registry.recover { WrapperCodeSign.cdhash(of: $0) }
+        if let wrapperRegistryLoadTask {
+            return await wrapperRegistryLoadTask.value
+        }
+        let loadTask = Task { () -> WrapperRegistry in
+            let registry = WrapperRegistry(paths: paths, sink: diagnostics?.logSink)
+            _ = await registry.load()
+            await registry.recover { WrapperCodeSign.cdhash(of: $0) }
+            return registry
+        }
+        wrapperRegistryLoadTask = loadTask
+        let registry = await loadTask.value
         wrapperRegistry = registry
         registerWrapperHealthChecks(registry: registry)
         return registry
@@ -1305,23 +1567,42 @@ public actor RuntimeHost {
 
     /// Maps a wrapper failure to the wire error type of the control endpoint.
     private static func wrapperWireError(for failure: WrapperFailure) -> RuntimeWireError {
-        let remediation: String?
-        switch failure {
-        case .bundleInvalid:
-            remediation = "Create the Mac app again."
-        case .registryUnavailable:
-            remediation = "Re-register Mac apps from the home screen."
-        case .destinationNotAccessible, .destinationNotWritable:
-            remediation = "Pick a different destination or grant access in System Settings."
-        default:
-            remediation = nil
+        let entry = ErrorCatalog.entry(for: failure.qualifiedCode)
+        let message =
+            entry?.message?["en"].map {
+                interpolate($0, parameters: failure.parameters)
+            } ?? failure.code
+        let remediation = entry?.remediation?["en"].map {
+            interpolate($0, parameters: failure.parameters)
         }
         return RuntimeWireError(
             domain: "wrapper",
             code: failure.qualifiedCode,
-            message: failure.code,
+            message: message,
             remediation: remediation
         )
+    }
+
+    private static func interpolate(
+        _ template: String,
+        parameters: [String: ErrorParameter]
+    ) -> String {
+        var result = template
+        for (name, parameter) in parameters {
+            let value: String
+            switch parameter {
+            case .text(let text), .fileName(let text):
+                value = text
+            case .count(let count):
+                value = String(count)
+            case .bytes(let bytes):
+                value = String(bytes)
+            case .duration:
+                continue
+            }
+            result = result.replacingOccurrences(of: "{\(name)}", with: value)
+        }
+        return result
     }
 
     /// Returns a point-in-time view for the control endpoint.

@@ -327,6 +327,8 @@
                 return "Installed \(DaemonInstallSupport.safeTerminalText(summary.displayName)) "
                     + "(\(summary.packageID.rawValue)), version "
                     + "\(summary.versionCode.map(String.init) ?? "unknown")."
+            case .wrapper(let info):
+                return "Created \(DaemonInstallSupport.safeTerminalText(info.summary.bundleURL.path))"
             case .unknown:
                 return "The result of operation \(snapshot.operationID.wireValue) is unknown."
             }

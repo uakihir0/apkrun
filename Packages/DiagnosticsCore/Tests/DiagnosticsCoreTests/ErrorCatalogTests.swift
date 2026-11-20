@@ -61,7 +61,7 @@ import Testing
             + [
                 "packageNotInstalled", "invalidName", "customIconInvalid", "iconConversionFailed",
                 "launcherTemplateInvalid", "destinationNotWritable", "destinationNotAccessible",
-                "nameConflict", "wrapperExists", "wrapperNotFound",
+                "nameConflict", "wrapperExists", "wrapperNotFound", "signingFailed",
                 "verificationFailed", "registrationFailed", "registryUnavailable",
                 "stagingExpired", "bundleInvalid",
             ].map { "wrapper.\($0)" }

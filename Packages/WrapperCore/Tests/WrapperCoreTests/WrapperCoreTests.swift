@@ -99,38 +99,6 @@ private func makeLauncherStub(at dir: URL) throws -> URL {
     return executable
 }
 
-/// Re-signs a generated bundle ad-hoc as in wrapper.md §7.1 (signing itself
-/// is #47; until then T1 tests use this helper).
-private func signAdHoc(bundleURL: URL, identifier: String) throws {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
-    process.arguments = [
-        "--force", "--sign", "-",
-        "--identifier", identifier,
-        "--options", "runtime", "--timestamp=none",
-        bundleURL.path,
-    ]
-    try process.run()
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-        throw WrapperFailure.verificationFailed("codesign exited \(process.terminationStatus)")
-    }
-}
-
-/// Applies the post-signing cdhash to the registry entry, mirroring
-/// generation step 9-12 once signing lands in #47.
-private func updateRegistrySignature(
-    registry: WrapperRegistry, bundleURL: URL, bundleID: String
-) async throws {
-    guard var entry = await registry.entry(bundleID: bundleID),
-        let cdhash = WrapperCodeSign.cdhash(of: bundleURL)
-    else { throw WrapperFailure.verificationFailed("no entry or cdhash") }
-    entry.cdhash = cdhash
-    entry.state = .pending
-    try await registry.markPending(entry)
-    try await registry.activate(bundleID: bundleID, path: bundleURL, bookmark: Data())
-}
-
 private struct Fixture {
     let root: URL
     let destination: URL
@@ -336,14 +304,39 @@ private func sha256Tree(at url: URL) throws -> [String: String] {
     #expect(entries.first?.bundleId == "io.apkrun.android.com.example.game")
 }
 
+// MARK: - T1: WrapperSigner (wrapper.md §7.1)
+
+@Test func signerSignsAdHocAndReturnsCdhash() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.cleanup() }
+    let generated = try await fixture.generator().generate(fixture.request())
+    let bundleID = "io.apkrun.android.com.example.game"
+    #expect(generated.cdhash.count == 40)
+    #expect(generated.cdhash.allSatisfy { $0.isHexDigit })
+    #expect(WrapperCodeSign.signatureIdentifier(of: generated.bundleURL) == bundleID)
+    #expect(
+        WrapperCodeSign.signatureIsValid(
+            bundleURL: generated.bundleURL, identifier: bundleID))
+    let entry = try await fixture.registry.entry(bundleID: bundleID)
+    #expect(entry?.state == .active)
+    #expect(entry?.cdhash == generated.cdhash)
+    #expect(entry?.approval == .generated)
+}
+
+@Test func signerRejectsUnsignableBundle() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.cleanup() }
+    let bogus = fixture.destination.appendingPathComponent("Bogus.app")
+    try FileManager.default.createDirectory(at: bogus, withIntermediateDirectories: true)
+    #expect(throws: WrapperFailure.self) {
+        try WrapperSigner.sign(bundleURL: bogus, bundleID: "io.apkrun.android.x")
+    }
+}
+
 @Test func validatorAcceptsGeneratedBundle() async throws {
     let fixture = try await Fixture()
     defer { fixture.cleanup() }
     let generated = try await fixture.generator().generate(fixture.request())
-    try signAdHoc(bundleURL: generated.bundleURL, identifier: generated.bundleID)
-    try await updateRegistrySignature(
-        registry: fixture.registry, bundleURL: generated.bundleURL,
-        bundleID: generated.bundleID)
     let validator = WrapperValidator(
         registry: fixture.registry,
         currentLauncher: fixture.launcher,
@@ -384,10 +377,6 @@ private func sha256Tree(at url: URL) throws -> [String: String] {
     let fixture = try await Fixture()
     defer { fixture.cleanup() }
     let generated = try await fixture.generator().generate(fixture.request())
-    try signAdHoc(bundleURL: generated.bundleURL, identifier: generated.bundleID)
-    try await updateRegistrySignature(
-        registry: fixture.registry, bundleURL: generated.bundleURL,
-        bundleID: generated.bundleID)
     let validator = WrapperValidator(
         registry: fixture.registry,
         packageExists: { _ in false })

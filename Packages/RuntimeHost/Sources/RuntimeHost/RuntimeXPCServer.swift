@@ -1084,6 +1084,7 @@ extension RuntimeOperationStatusControlRequest: VersionedControlRequest {}
 extension RuntimeSubscribeControlRequest: VersionedControlRequest {}
 extension RuntimeUnsubscribeControlRequest: VersionedControlRequest {}
 extension RuntimeVerifyWrapperControlRequest: VersionedControlRequest {}
+extension RuntimeCreateWrapperControlRequest: VersionedControlRequest {}
 
 enum RuntimeControlOperation {
     case runtimeStatus
@@ -1105,6 +1106,7 @@ enum RuntimeControlOperation {
     case subscribe
     case unsubscribe
     case verifyWrapper
+    case createWrapper
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1130,6 +1132,13 @@ enum RuntimeControlOperation {
             case .app, .menuBar, .cli, .launcher:
                 true
             case .wrapper:
+                false
+            }
+        case .createWrapper:
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
                 false
             }
         case .listPackages:
@@ -1942,6 +1951,55 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeVerifyWrapperControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func createWrapper(_ request: Data, icon: FileHandle?, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeCreateWrapperControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .createWrapper,
+                as: RuntimeCreateWrapperControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeCreateWrapperControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeCreateWrapperControlRequest.self,
+                    from: request
+                ),
+                let operationID = RuntimeAPI.OperationID(rawValue: decoded.header.operationID)
+            else {
+                response.send(
+                    Self.encode(RuntimeCreateWrapperControlReply(error: Self.malformedWireError))
+                )
+                return
+            }
+            do {
+                let result = try await host.createWrapper(
+                    decoded.request,
+                    icon: icon,
+                    operationID: operationID,
+                    clientKind: decoded.header.clientKind
+                )
+                response.send(Self.encode(RuntimeCreateWrapperControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeCreateWrapperControlReply(error: wireError)))
             }
         }
     }

@@ -1723,6 +1723,13 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
     }
 
+    func createWrapper(
+        _ request: Data,
+        icon: FileHandle?
+    ) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
     func snapshot() -> Snapshot {
         lock.withLock {
             Snapshot(

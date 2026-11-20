@@ -46,6 +46,10 @@ public protocol HostNotificationSink: Sendable {
     /// notification: the user chooses Keep <new>, Roll Back, or
     /// Restore <old> (erases data) when no rollback mechanism exists.
     func notifyUpdateKeptAfterFailedHealthCheck(_ notification: UpdateNotification) async
+    /// Posts the §9 "Updated" notification: an automatic update passed its
+    /// health check. The coordinator calls it only when
+    /// `updates.notifyInstalled` is on.
+    func notifyUpdateInstalled(_ notification: UpdateNotification) async
 }
 
 extension HostNotificationSink {
@@ -55,6 +59,8 @@ extension HostNotificationSink {
     /// Sinks that cannot render the §8.3 notices may drop them; the phases
     /// and history still record the outcome.
     public func notifyUpdateKeptAfterFailedHealthCheck(_ notification: UpdateNotification) async {}
+    /// Sinks that cannot render the "Updated" notice may drop it.
+    public func notifyUpdateInstalled(_ notification: UpdateNotification) async {}
 }
 
 /// The result of one coordinator check run.
@@ -107,6 +113,9 @@ public actor UpdateCoordinator {
     private let validator: UpdateValidator
     /// H1's budget (§8.1): 30 s for Android to report the staged set.
     private let healthCheckBudget: Duration
+    /// `updates.notifyInstalled` (§9): post "Updated" after a passed
+    /// health check.
+    private let installedNotificationEnabled: @Sendable () -> Bool
     /// Injected for tests: the poll tick between H1 queries.
     private let healthCheckTickSleep: @Sendable () async -> Void
     /// The hard size cap of one downloaded set (§5); 8 GiB.
@@ -133,7 +142,8 @@ public actor UpdateCoordinator {
         healthCheckBudget: Duration = .seconds(30),
         healthCheckTickSleep: @escaping @Sendable () async -> Void = {
             try? await Task.sleep(for: .seconds(1))
-        }
+        },
+        installedNotificationEnabled: @escaping @Sendable () -> Bool = { false }
     ) {
         self.store = store
         self.stateStore = stateStore
@@ -146,6 +156,7 @@ public actor UpdateCoordinator {
         self.validator = validator
         self.healthCheckBudget = healthCheckBudget
         self.healthCheckTickSleep = healthCheckTickSleep
+        self.installedNotificationEnabled = installedNotificationEnabled
     }
 
     /// The current phase of a package, restoring a persisted `available` or
@@ -981,6 +992,12 @@ public actor UpdateCoordinator {
         let outcome = UpdateOutcome.updated(
             from: record.versionCode, to: updated.versionCode)
         setPhase(packageID, .completed(outcome))
+        if installedNotificationEnabled() {
+            await notifier?.notifyUpdateInstalled(
+                UpdateNotification(
+                    packageID: packageID, displayName: record.displayName,
+                    versionCode: updated.versionCode, versionName: nil))
+        }
         await appendHistory(
             record: record, to: updated.versionCode,
             provider: provider, trigger: trigger,

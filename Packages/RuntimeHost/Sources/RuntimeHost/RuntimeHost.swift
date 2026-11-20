@@ -115,6 +115,8 @@ public actor RuntimeHost {
     /// The lazily created update service (update-system.md). Internal for
     /// `RuntimeHostUpdates.swift`.
     var updateService: EmbeddedUpdateService?
+    /// The §3 update scheduler (RuntimeHostUpdates.swift).
+    var updateScheduler: UpdateScheduler?
     /// The §7.1 gentle-update gate shared by update installs, created with
     /// the pump tasks below on first use.
     var updateGate: GentleUpdateGate?
@@ -237,6 +239,8 @@ public actor RuntimeHost {
         // Load the wrapper registry and recover pending/refreshing entries at
         // daemon start (wrapper.md §6.2), independent of the first verify call.
         Task { _ = await self.wrapperRegistryInstance() }
+        // apkrund-start trigger (update-system.md §3.3): arm the scheduler.
+        Task { await self.updateSchedulerInstance().start() }
 
         // Startup step 2: the kernel releases this lock automatically after a crash.
         do {
@@ -2004,9 +2008,21 @@ public actor RuntimeHost {
             return false
         }
         let runtimeState = await supervisor?.state
+        // runtime-daemon.md §2.4: do not exit while update work is due
+        // inside the idle grace window — a check that would start before
+        // the grace ends keeps the daemon alive.
+        let updateDueSoon: Bool
+        if let scheduler = updateScheduler,
+            let next = await scheduler.earliestWakeAt()
+        {
+            updateDueSoon = next < Date().addingTimeInterval(120)
+        } else {
+            updateDueSoon = false
+        }
         return !isShuttingDown
             && activeLifecycleOperations == 0
             && (runtimeState == nil || runtimeState == .stopped)
+            && !updateDueSoon
     }
 
     private func observeSupervisorEvents(from supervisor: RuntimeSupervisor) {
@@ -2199,6 +2215,7 @@ public actor RuntimeHost {
         isShuttingDown = true
         runtimeSessionGeneration &+= 1
         hostState = "shuttingDown"
+        await updateScheduler?.stop()
         // Unanswered approval prompts must not hold the request drain:
         // their launchers get `timedOut` instead of the ten-minute wait.
         await approvalService?.cancelAll()

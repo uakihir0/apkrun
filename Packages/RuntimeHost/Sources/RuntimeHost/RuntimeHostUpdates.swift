@@ -1,6 +1,9 @@
 import APKStoreCore
+import CoreGraphics
 import DiagnosticsCore
 import Foundation
+import IOKit.ps
+import Network
 import RuntimeAPI
 import RuntimeCore
 import UpdateCore
@@ -12,11 +15,12 @@ import UpdateCore
 public actor EmbeddedUpdateService {
     private let paths: APKRunPaths
     private let fileManager = FileManager.default
-    private let store: PackageStore
+    let store: PackageStore
     /// The persisted update phases; internal for the `updates.waiting`
     /// health check and tests.
     let stateStore: UpdateStateStore
-    private let coordinator: UpdateCoordinator
+    /// Internal for the §3 scheduler the host drives.
+    let coordinator: UpdateCoordinator
     private let credentials = KeychainProviderCredentials()
     private var isOpen = false
 
@@ -50,7 +54,12 @@ public actor EmbeddedUpdateService {
             notifier: notifier,
             developerModeEnabled: developerModeEnabled,
             checkIntervalHours: checkIntervalHours(),
-            guestFacts: guestFacts
+            guestFacts: guestFacts,
+            installedNotificationEnabled: {
+                GlobalSettings.load(
+                    from: APKRunPaths(allowingHomeOverride: true).settingsFile
+                ).updatesNotifyInstalled
+            }
         )
     }
 
@@ -736,6 +745,106 @@ extension RuntimeHost {
         return service
     }
 
+    /// `apkrun config get` (configuration.md §2.7): the `updates.*` values;
+    /// `keys` nil returns all four.
+    func updateConfigValues(keys: [String]?) -> [String: String] {
+        let globals = GlobalSettings.load(from: paths.settingsFile)
+        let all: [String: String] = [
+            "updates.checkIntervalHours": String(globals.updatesCheckIntervalHours),
+            "updates.downloadOnExpensiveNetwork":
+                globals.updatesDownloadOnExpensiveNetwork ? "true" : "false",
+            "updates.startRuntimeToInstall":
+                globals.updatesStartRuntimeToInstall ? "true" : "false",
+            "updates.notifyInstalled": globals.updatesNotifyInstalled ? "true" : "false",
+        ]
+        guard let keys else { return all }
+        return all.filter { keys.contains($0.key) }
+    }
+
+    /// `apkrun config set` (configuration.md §2.7): validates and writes one
+    /// `updates.*` key, returning the values after the write.
+    func updateConfigSet(key: String, value: String) throws -> [String: String] {
+        var globals = GlobalSettings.load(from: paths.settingsFile)
+        switch key {
+        case "updates.checkIntervalHours":
+            guard let hours = Int(value),
+                GlobalSettings.allowedCheckIntervalHours.contains(hours)
+            else {
+                throw RuntimeWireError(
+                    domain: "runtime", code: "runtime.invalidConfigValue",
+                    message:
+                        "updates.checkIntervalHours must be one of 1, 3, 6, 12, 24, 72, 168"
+                )
+            }
+            globals.updatesCheckIntervalHours = hours
+        case "updates.downloadOnExpensiveNetwork", "updates.startRuntimeToInstall",
+            "updates.notifyInstalled":
+            guard let flag = value == "true" ? true : value == "false" ? false : nil
+            else {
+                throw RuntimeWireError(
+                    domain: "runtime", code: "runtime.invalidConfigValue",
+                    message: "\(key) must be true or false")
+            }
+            switch key {
+            case "updates.downloadOnExpensiveNetwork":
+                globals.updatesDownloadOnExpensiveNetwork = flag
+            case "updates.startRuntimeToInstall":
+                globals.updatesStartRuntimeToInstall = flag
+            default:
+                globals.updatesNotifyInstalled = flag
+            }
+        default:
+            throw RuntimeWireError(
+                domain: "runtime", code: "runtime.unknownConfigKey",
+                message: "unknown setting \(key); run `apkrun config get` to list the keys")
+        }
+        try GlobalSettings.store(globals, to: paths.settingsFile)
+        return updateConfigValues(keys: nil)
+    }
+
+    /// The lazily created §3 update scheduler: drives due checks, timers,
+    /// wake and launch triggers, and the §3.4 resource limits.
+    func updateSchedulerInstance() -> UpdateScheduler {
+        if let updateScheduler { return updateScheduler }
+        let service = updateServiceInstance()
+        let scheduler = UpdateScheduler(
+            coordinator: service.coordinator,
+            stateStore: service.stateStore,
+            store: service.store,
+            contextProvider: { await service.providerContext(userInitiated: false) },
+            runtimeProvider: { [weak self] in await self?.updateRuntimeAccess() },
+            gateProvider: { [weak self] in await self?.updateGate },
+            networkSatisfied: { Self.updateNetworkPathSatisfied() },
+            backgroundDownloadAllowed: {
+                Self.updateBackgroundDownloadAllowed()
+            })
+        updateScheduler = scheduler
+        return scheduler
+    }
+
+    /// `NWPathMonitor`-backed answer for "may a check run now" (§3.4). The
+    /// monitor is created lazily; before its first sample lands the path is
+    /// treated as satisfied (a check is cheap, a false negative is not).
+    private static let updatePathMonitor = UpdatePathMonitor()
+    static func updateNetworkPathSatisfied() -> Bool {
+        updatePathMonitor.satisfied
+    }
+
+    /// §3.4: a background download needs a non-expensive/non-constrained
+    /// path unless `updates.downloadOnExpensiveNetwork`, and is skipped in
+    /// Low Power Mode when the staged set tops 50 MiB (approximated here by
+    /// "any background download" — the per-set size check lives in the
+    /// download step itself).
+    static func updateBackgroundDownloadAllowed() -> Bool {
+        let globals = GlobalSettings.load(
+            from: APKRunPaths(allowingHomeOverride: true).settingsFile)
+        if ProcessInfo.processInfo.isLowPowerModeEnabled {
+            return false
+        }
+        return updatePathMonitor.inexpensive
+            || globals.updatesDownloadOnExpensiveNetwork
+    }
+
     /// Registers `updates.waiting` once (diagnostics.md §7.4).
     private func registerUpdatesWaitingCheck(service: EmbeddedUpdateService) {
         guard !updatesHealthChecksRegistered, let checks = healthCheckRegistry else { return }
@@ -747,15 +856,9 @@ extension RuntimeHost {
 
     /// `updates.checkIntervalHours` (configuration.md §2.7), default 6.
     static func updatesCheckIntervalHours() -> Int {
-        guard let data = try? Data(contentsOf: APKRunPaths(allowingHomeOverride: true).settingsFile),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let updates = object["updates"] as? [String: Any],
-            let hours = updates["checkIntervalHours"] as? Int,
-            hours > 0
-        else {
-            return 6
-        }
-        return hours
+        GlobalSettings.load(
+            from: APKRunPaths(allowingHomeOverride: true).settingsFile
+        ).updatesCheckIntervalHours
     }
 
     /// `checkForUpdates` (runtime-api.md §9.1): a long operation that checks
@@ -1278,6 +1381,30 @@ extension RuntimeHost {
                 guard let self, let supervisor = await self.supervisor else {
                     throw UpdateFailure.providerUnreachable(reason: "runtime is not running")
                 }
+                // §3.5: booting a stopped runtime for an automatic install is
+                // allowed only under `updates.startRuntimeToInstall` while a
+                // staged update has waited > 24 h on AC with the user idle
+                // >= 15 min; otherwise the install defers to the next gate.
+                if reason == .update, await supervisor.state == .stopped {
+                    let globals = GlobalSettings.load(from: self.paths.settingsFile)
+                    guard globals.updatesStartRuntimeToInstall else {
+                        throw UpdateFailure.providerUnreachable(
+                            reason: "updates.startRuntimeToInstall is off")
+                    }
+                    let cutoff = Date().addingTimeInterval(-86_400)
+                    let staged = await self.updateServiceInstance().stateStore.allStates()
+                        .values.contains {
+                            $0.phase == "staged" && ($0.stagedAt ?? .distantFuture) < cutoff
+                        }
+                    guard staged else {
+                        throw UpdateFailure.providerUnreachable(
+                            reason: "no staged update older than 24 h")
+                    }
+                    guard Self.hostOnACPower(), Self.hostIdleSeconds() >= 900 else {
+                        throw UpdateFailure.providerUnreachable(
+                            reason: "§3.5 needs AC power and >=15 min idle")
+                    }
+                }
                 // A user-initiated Update Now may resume a suspended runtime;
                 // automatic installs go through .automatic (§7.1 GU1).
                 try await supervisor.ensureReady(reason == .user ? .user : .automatic)
@@ -1372,6 +1499,10 @@ extension RuntimeHost {
             firstFrameObserver: { [weak self] packageID in
                 guard let self, let package = PackageID(rawValue: packageID.rawValue) else { return }
                 await self.updateServiceInstance().notePostUpdateFirstFrame(package)
+                // runtime-daemon.md §7.1: a due package's check is scheduled
+                // 30 s after the first frame — never before openSession
+                // replies.
+                await self.updateSchedulerInstance().noteLaunched(package)
             })
     }
 
@@ -1569,5 +1700,54 @@ extension RuntimeHost {
         }
         finishOperation(operationID, result: .succeeded(.none))
         return (handle, outcome)
+    }
+}
+
+/// `NWPathMonitor` wrapper for the §3.4 network rules. `satisfied` starts
+/// true — a check must not be skipped before the first sample; `inexpensive`
+/// starts false so a background download defers until the path is known.
+final class UpdatePathMonitor: @unchecked Sendable {
+    private let monitor = NWPathMonitor()
+    private let queue = DispatchQueue(label: "io.apkrun.update-path")
+    private let lock = NSLock()
+    private var satisfiedPath = true
+    private var inexpensivePath = false
+
+    init() {
+        monitor.pathUpdateHandler = { [weak self] path in
+            self?.lock.lock()
+            self?.satisfiedPath = path.status == .satisfied
+            self?.inexpensivePath = !path.isExpensive && !path.isConstrained
+            self?.lock.unlock()
+        }
+        monitor.start(queue: queue)
+    }
+
+    var satisfied: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return satisfiedPath
+    }
+
+    var inexpensive: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return inexpensivePath
+    }
+}
+
+extension RuntimeHost {
+    /// `HIDIdleTime` equivalent (update-system.md §3.5): seconds since the
+    /// last user input, via `CGEventSourceSecondsSinceLastEventType`.
+    static func hostIdleSeconds() -> TimeInterval {
+        guard let anyEvent = CGEventType(rawValue: ~0) else { return 0 }
+        return CGEventSource.secondsSinceLastEventType(
+            .combinedSessionState, eventType: anyEvent)
+    }
+
+    /// True while the Mac runs on external power (§3.5): IOPowerSources'
+    /// "time remaining" sentinel for AC.
+    static func hostOnACPower() -> Bool {
+        IOPSGetTimeRemainingEstimate() == -2.0
     }
 }

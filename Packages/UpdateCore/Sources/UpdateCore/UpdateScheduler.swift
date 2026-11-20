@@ -18,11 +18,11 @@ public actor UpdateScheduler {
     /// Managed-package records (authority, provider host, update mode).
     private let store: PackageStore
     /// Builds the provider context a scheduled check runs with.
-    private let contextProvider: @Sendable () -> ProviderContext
+    private let contextProvider: @Sendable () async -> ProviderContext
     /// The runtime access the install step needs; nil means staging waits.
-    private let runtimeProvider: @Sendable () -> (any UpdateRuntimeAccess)?
+    private let runtimeProvider: @Sendable () async -> (any UpdateRuntimeAccess)?
     /// The gentle-update gate install requests queue behind.
-    private let gateProvider: @Sendable () -> GentleUpdateGate?
+    private let gateProvider: @Sendable () async -> GentleUpdateGate?
     /// Injected clock; `ContinuousClock` in production (pitfall: never
     /// `SuspendingClock` — checks due during sleep run after wake).
     private let now: @Sendable () -> Date
@@ -60,9 +60,9 @@ public actor UpdateScheduler {
         coordinator: UpdateCoordinator,
         stateStore: UpdateStateStore,
         store: PackageStore,
-        contextProvider: @escaping @Sendable () -> ProviderContext,
-        runtimeProvider: @escaping @Sendable () -> (any UpdateRuntimeAccess)?,
-        gateProvider: @escaping @Sendable () -> GentleUpdateGate?,
+        contextProvider: @escaping @Sendable () async -> ProviderContext,
+        runtimeProvider: @escaping @Sendable () async -> (any UpdateRuntimeAccess)?,
+        gateProvider: @escaping @Sendable () async -> GentleUpdateGate?,
         now: @escaping @Sendable () -> Date = { Date() },
         sleepUntil: @escaping @Sendable (Date) async -> Void = { target in
             try? await Task.sleep(for: .seconds(target.timeIntervalSinceNow))
@@ -109,8 +109,9 @@ public actor UpdateScheduler {
         let delay = wakeDelay
         wakeTask?.cancel()
         wakeTask = Task {
-            await sleepUntil(now().addingTimeInterval(
-                TimeInterval(delay.components.seconds)))
+            await sleepUntil(
+                now().addingTimeInterval(
+                    TimeInterval(delay.components.seconds)))
             guard !Task.isCancelled else { return }
             await runDueChecks(trigger: .scheduled)
         }
@@ -123,8 +124,9 @@ public actor UpdateScheduler {
         guard launchChecks[packageID] == nil else { return }
         let delay = launchCheckDelay
         launchChecks[packageID] = Task {
-            await sleepUntil(now().addingTimeInterval(
-                TimeInterval(delay.components.seconds)))
+            await sleepUntil(
+                now().addingTimeInterval(
+                    TimeInterval(delay.components.seconds)))
             defer { Task { await self.clearLaunchCheck(packageID) } }
             guard !Task.isCancelled else { return }
             guard networkSatisfied() else { return }
@@ -188,7 +190,7 @@ public actor UpdateScheduler {
         }
 
         let outcome = await coordinator.check(
-            packageID, trigger: trigger, context: contextProvider())
+            packageID, trigger: trigger, context: await contextProvider())
         guard case .available(let candidate) = outcome else { return }
 
         // §3.4: a scheduled background download waits on an inexpensive path
@@ -197,12 +199,12 @@ public actor UpdateScheduler {
         guard let settings = try? await store.packageSettings(for: packageID),
             settings.updateMode != "notifyOnly", backgroundDownloadAllowed()
         else { return }
-        guard let runtime = runtimeProvider(), let gate = gateProvider() else {
+        guard let runtime = await runtimeProvider(), let gate = await gateProvider() else {
             return
         }
         let started = now()
         switch await coordinator.download(
-            packageID, candidate: candidate, context: contextProvider(),
+            packageID, candidate: candidate, context: await contextProvider(),
             trigger: trigger, started: started)
         {
         case .failed:
@@ -226,8 +228,9 @@ public actor UpdateScheduler {
     /// The provider host a package's checks count against (§3.4).
     private func providerHost(for packageID: PackageID) async -> String {
         let records = (try? await store.listManagedPackages()) ?? []
-        guard let ref = records.first(where: { $0.packageId == packageID })?
-            .updateProvider
+        guard
+            let ref = records.first(where: { $0.packageId == packageID })?
+                .updateProvider
         else { return "" }
         switch ref.configuration {
         case .local: return "local"

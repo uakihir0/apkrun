@@ -3513,6 +3513,12 @@ public actor RuntimeHost {
             return packageQueryService
         }
         let service = EmbeddedPackageService(paths: paths)
+        Task { [weak self] in
+            await service.setIconChangeHandler { [weak self] packageID in
+                guard let wireID = RuntimePackageID(rawValue: packageID.rawValue) else { return }
+                self?.eventHub.publishPackageChange(.iconChanged(wireID))
+            }
+        }
         packageQueryService = service
         return service
     }

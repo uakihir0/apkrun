@@ -10,8 +10,11 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
     /// 1.12 adds the createWrapper long operation, the wrappers event topic, and WrapperInfo;
     /// 1.13 adds approval prompts and decisions, denied wrappers, and broker requestApproval;
-    /// 1.14 adds `perfStatistics`, `frameStatistics`, and `RuntimeLaunchRequest.launchTiming`.
-    public static let current = APIVersion(major: 1, minor: 16)
+    /// 1.14 adds `perfStatistics`, `frameStatistics`, and `RuntimeLaunchRequest.launchTiming`;
+    /// 1.15 adds the gentle-update session rules and `update` package changes;
+    /// 1.16 adds update ownership and rollback surfaces;
+    /// 1.17 adds the `iconChanged` package change (package-store.md §10.2).
+    public static let current = APIVersion(major: 1, minor: 17)
 
     /// The incompatible protocol generation.
     public let major: Int

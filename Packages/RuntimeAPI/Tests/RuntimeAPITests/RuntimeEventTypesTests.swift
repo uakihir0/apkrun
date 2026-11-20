@@ -16,7 +16,7 @@ private func eventRoundTrip<Value: Codable & Equatable>(_ value: Value) throws -
     let subscribe = RuntimeSubscribeControlRequest(header: header, topics: [.operations, .packages])
     let unsubscribe = RuntimeUnsubscribeControlRequest(header: header, topics: [.operations])
 
-    #expect(APIVersion.current == APIVersion(major: 1, minor: 16))
+    #expect(APIVersion.current == APIVersion(major: 1, minor: 17))
     #expect(try topics.map(eventRoundTrip) == topics)
     #expect(try eventRoundTrip(subscribe) == subscribe)
     #expect(try eventRoundTrip(unsubscribe) == unsubscribe)
@@ -110,6 +110,7 @@ private func eventRoundTrip<Value: Codable & Equatable>(_ value: Value) throws -
         .installed(summary),
         .updated(summary, from: 6),
         .removed(packageID, keptData: true),
+        .iconChanged(packageID),
     ]
     let envelopes = changes.enumerated().map { index, change in
         EventEnvelope(

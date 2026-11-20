@@ -137,6 +137,11 @@ public actor EmbeddedPackageService: RuntimeService {
     }
 
     /// Reuses the daemon's session owner when package operations run over XPC.
+    /// Routes store-rendered icon changes to the caller's sink (package-store.md §10.2).
+    func setIconChangeHandler(_ handler: @escaping @Sendable (PackageID) async -> Void) async {
+        await store.setIconChangeHandler { packageID in await handler(packageID) }
+    }
+
     func setSessionService(_ sessionService: any RuntimeSessionService) {
         self.sessionService = sessionService
     }

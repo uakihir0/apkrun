@@ -97,10 +97,11 @@ public enum IconComposer {
 
         let grapheme = displayName.first.map(String.init) ?? "?"
         let font = CTFontCreateWithName(".AppleSystemUIFontHeavy" as CFString, 560, nil)
-        let attributes = [
-            kCTFontAttributeName: font,
-            kCTForegroundColorAttributeName: CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1),
-        ] as [CFString: Any]
+        let attributes =
+            [
+                kCTFontAttributeName: font,
+                kCTForegroundColorAttributeName: CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1),
+            ] as [CFString: Any]
         let line = CTLineCreateWithAttributedString(
             NSAttributedString(
                 string: grapheme,
@@ -181,7 +182,10 @@ public enum IconComposer {
         guard let pixels = rgbaPixels(image) else {
             throw .iconConversionFailed("cannot decode the icon pixels")
         }
-        var minX = image.width, minY = image.height, maxX = -1, maxY = -1
+        var minX = image.width
+        var minY = image.height
+        var maxX = -1
+        var maxY = -1
         for y in 0..<image.height {
             for x in 0..<image.width where pixels[y * image.width + x] >= 8 {
                 minX = min(minX, x)

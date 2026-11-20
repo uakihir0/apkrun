@@ -140,10 +140,12 @@ private func adaptiveIcon(seed: UInt8) -> StoreIcon {
     #expect(await channel.renderCalls == [helloPackage])
     #expect(probe.count == 1)
     let iconDir = try #require(await store.iconDirectory(for: record.packageId))
-    #expect(FileManager.default.fileExists(
-        atPath: iconDir.appendingPathComponent("background.png").path))
-    #expect(FileManager.default.fileExists(
-        atPath: iconDir.appendingPathComponent("monochrome.png").path))
+    #expect(
+        FileManager.default.fileExists(
+            atPath: iconDir.appendingPathComponent("background.png").path))
+    #expect(
+        FileManager.default.fileExists(
+            atPath: iconDir.appendingPathComponent("monochrome.png").path))
     let manifest = await store.iconManifest(for: record.packageId)
     #expect(manifest?.kind == .adaptive)
     #expect(manifest?.sizePx == 1536)

@@ -69,8 +69,9 @@ private func centerAlpha(_ image: CGImage) -> UInt8 {
 
 @Test func legacyNonSquareIconFits820Box() throws {
     // A 2:1 landscape icon sits inside the centered 820 box on white.
-    let master = try IconComposer.composeLegacy(try image(size: 400, r: 1, g: 0, b: 0).cropping(
-        to: CGRect(x: 0, y: 100, width: 400, height: 200))!)
+    let master = try IconComposer.composeLegacy(
+        try image(size: 400, r: 1, g: 0, b: 0).cropping(
+            to: CGRect(x: 0, y: 100, width: 400, height: 200))!)
     #expect(master.width == 1024)
 }
 

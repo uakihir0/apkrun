@@ -1879,10 +1879,12 @@ public actor PackageStore {
     /// The `icon/` directory of a managed package (package-store.md §10.2),
     /// or `nil` for a package the store does not manage.
     public func iconDirectory(for packageID: PackageID) -> URL? {
-        guard let directory = directories[packageID]
-            ?? (records[packageID] != nil ? directoryName(for: packageID) : nil)
+        guard
+            let directory = directories[packageID]
+                ?? (records[packageID] != nil ? directoryName(for: packageID) : nil)
         else { return nil }
-        return packagesDirectory
+        return
+            packagesDirectory
             .appendingPathComponent(directory, isDirectory: true)
             .appendingPathComponent("icon", isDirectory: true)
     }

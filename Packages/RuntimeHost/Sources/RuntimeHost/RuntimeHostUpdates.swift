@@ -852,15 +852,24 @@ extension RuntimeHost {
 private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
     private let stateOf: @Sendable () async -> WireRuntimeState
     private let inUse: @Sendable (PackageID) async -> Bool
+    private let lastEnd: @Sendable (PackageID) async -> ContinuousClock.Instant?
+    private let endAll: @Sendable (PackageID) async -> Void
+    private let reopenPackage: @Sendable (PackageID) async throws -> Void
     private let ready: @Sendable (UpdateStartReason) async throws -> Void
 
     init(
         stateOf: @escaping @Sendable () async -> WireRuntimeState,
         inUse: @escaping @Sendable (PackageID) async -> Bool,
+        lastEnd: @escaping @Sendable (PackageID) async -> ContinuousClock.Instant?,
+        endAll: @escaping @Sendable (PackageID) async -> Void,
+        reopenPackage: @escaping @Sendable (PackageID) async throws -> Void,
         ready: @escaping @Sendable (UpdateStartReason) async throws -> Void
     ) {
         self.stateOf = stateOf
         self.inUse = inUse
+        self.lastEnd = lastEnd
+        self.endAll = endAll
+        self.reopenPackage = reopenPackage
         self.ready = ready
     }
 
@@ -870,6 +879,18 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
 
     func hasActiveUse(_ packageID: PackageID) async -> Bool {
         await inUse(packageID)
+    }
+
+    func lastSessionEnd(_ packageID: PackageID) async -> ContinuousClock.Instant? {
+        await lastEnd(packageID)
+    }
+
+    func endSessions(for packageID: PackageID, reason: UpdateSessionEndReason) async {
+        await endAll(packageID)
+    }
+
+    func reopen(_ packageID: PackageID) async {
+        try? await reopenPackage(packageID)
     }
 
     func ensureReady(_ reason: UpdateStartReason) async throws {
@@ -897,6 +918,36 @@ extension RuntimeHost {
                     return false
                 }
                 return await handling.hasActiveSession(packageID: wireID)
+            },
+            lastEnd: { [weak self] packageID in
+                guard let self,
+                    let handling = await self.headlessSessionService
+                        as? any PackageMutationSessionHandling,
+                    let wireID = RuntimePackageID(rawValue: packageID.rawValue)
+                else {
+                    return nil
+                }
+                return await handling.lastSessionEnd(packageID: wireID)
+            },
+            endAll: { [weak self] packageID in
+                guard let self,
+                    let handling = await self.headlessSessionService
+                        as? any PackageMutationSessionHandling,
+                    let wireID = RuntimePackageID(rawValue: packageID.rawValue)
+                else {
+                    return
+                }
+                await handling.endSessionForUpdate(packageID: wireID)
+            },
+            reopenPackage: { [weak self] packageID in
+                guard let self,
+                    let handling = await self.headlessSessionService
+                        as? any PackageMutationSessionHandling,
+                    let wireID = RuntimePackageID(rawValue: packageID.rawValue)
+                else {
+                    return
+                }
+                try await handling.reopenPackageSession(packageID: wireID)
             },
             ready: { [weak self] reason in
                 guard let self, let supervisor = await self.supervisor else {

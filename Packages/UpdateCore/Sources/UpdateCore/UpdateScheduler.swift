@@ -98,6 +98,28 @@ public actor UpdateScheduler {
     public func start() {
         armTimer()
         Task { await runDueChecks(trigger: .scheduled) }
+        Task { await resumeStagedInstalls() }
+    }
+
+    /// §7.1 and §3.5: a daemon restart forgets the gate's in-memory queue.
+    /// Re-request admission for every staged row so an admitted install —
+    /// including the >24 h headless boot — does not wait for the next check.
+    private func resumeStagedInstalls() async {
+        try? await store.open()
+        let staged = await stateStore.allStates()
+            .filter { $0.value.phase == "staged" }
+            .map(\.key)
+        guard !staged.isEmpty else { return }
+        guard let runtime = await runtimeProvider(),
+            let gate = await gateProvider()
+        else { return }
+        for packageID in staged {
+            if await gate.requestInstall(packageID) {
+                _ = await coordinator.resumeStagedInstall(
+                    packageID, trigger: .scheduled, runtime: runtime, gate: gate)
+                return
+            }
+        }
     }
 
     /// apkrund is shutting down: cancel the timer and delayed checks.
@@ -266,8 +288,9 @@ public actor UpdateScheduler {
                 _ = await runDueChecks(trigger: .scheduled)
                 guard let next = await earliestWakeAt() else { return }
                 while next <= now(), !Task.isCancelled {
-                    await sleepUntil(now().addingTimeInterval(
-                        TimeInterval(retryDelay.components.seconds)))
+                    await sleepUntil(
+                        now().addingTimeInterval(
+                            TimeInterval(retryDelay.components.seconds)))
                     guard !Task.isCancelled else { return }
                     guard let retry = await earliestWakeAt() else { return }
                     if retry > now() {

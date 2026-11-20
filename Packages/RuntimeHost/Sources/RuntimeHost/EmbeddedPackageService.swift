@@ -375,10 +375,22 @@ public actor EmbeddedPackageService: RuntimeService {
             if requestedProviderRef != nil || request.options.updateMode != nil {
                 let mode = UpdatePolicyRules.settingsMode(
                     for: request.options.updateMode ?? .automatic)
+                // `--updates manual` demotes to manual; a provider spec
+                // promotes to apkrun. A mode-only flag leaves the stored
+                // authority alone, so reinstalling `--updates notify` on a
+                // package with a configured provider keeps APKRun checking.
+                let authority: UpdateAuthority? =
+                    if request.options.updateMode == .manual {
+                        .manual
+                    } else if requestedProviderRef != nil {
+                        .apkrun
+                    } else {
+                        nil
+                    }
                 try await store.setUpdateMode(for: packageID, mode: mode)
                 try await store.setUpdatePolicy(
                     for: packageID,
-                    authority: request.options.authority == .apkrun ? .apkrun : .manual,
+                    authority: authority,
                     provider: requestedProviderRef,
                     requireProvider: request.options.authority == .apkrun)
             }

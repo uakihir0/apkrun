@@ -368,6 +368,73 @@ func embeddedPackageServiceImportsIndexedFileHandlesWithoutStartingAndroid() asy
 }
 
 @Test(.timeLimit(.minutes(1)))
+func embeddedPackageServiceModeOnlyReinstallKeepsAuthorityAndProvider() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-package-service-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": root.path])
+    let package = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    final class InspectVersion: @unchecked Sendable { var code: VersionCode = 12 }
+    let inspectVersion = InspectVersion()
+    let service = EmbeddedPackageService(
+        paths: paths,
+        inspector: { _ in
+            APKFacts(
+                packageID: package,
+                versionCode: inspectVersion.code,
+                versionName: "1.2",
+                splitName: nil,
+                displayName: "Hello Text",
+                minSDK: 23,
+                targetSDK: 35,
+                nativeABIs: []
+            )
+        },
+        importVerifier: PackageStore.legacyImportVerifier
+    )
+    try await service.open()
+
+    func install(_ options: RuntimeInstallOptions) async throws {
+        let source = root.appendingPathComponent("hello-\(inspectVersion.code).apk")
+        try Data("apk-test-bytes".utf8).write(to: source)
+        let handle = try FileHandle(forReadingFrom: source)
+        defer { try? handle.close() }
+        let preview = try await service.importPackage(
+            RuntimeImportPackageRequest(
+                files: [RuntimeImportSourceFile(fileIndex: 0, name: "hello.apk")],
+                origin: .cli
+            ),
+            files: [handle]
+        )
+        _ = try await service.installImportedWithChange(
+            RuntimeInstallImportedRequest(ticket: preview.ticket, options: options),
+            beforeStoreMutation: {})
+    }
+
+    try await install(
+        RuntimeInstallOptions(
+            authority: .apkrun,
+            provider: try #require(ProviderSpec(spec: "direct:https://updates.example.com/app.json")),
+            updateMode: .automatic))
+    var record = try #require(
+        await service.store.listManagedPackages().first { $0.packageId == package })
+    #expect(record.updateAuthority == .apkrun)
+    #expect(record.updateProvider != nil)
+
+    inspectVersion.code = 13
+    try await install(
+        RuntimeInstallOptions(authority: .manual, updateMode: .notifyOnly))
+    record = try #require(
+        await service.store.listManagedPackages().first { $0.packageId == package })
+    #expect(record.updateAuthority == .apkrun)
+    #expect(record.updateProvider != nil)
+    let settings = try #require(await service.store.packageSettings(for: package))
+    #expect(settings.updateMode == "notifyOnly")
+}
+
+@Test(.timeLimit(.minutes(1)))
 func embeddedPackageServiceStagesSameSetPreviewForGuestVerification() async throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("apkrun-package-service-\(UUID().uuidString)", isDirectory: true)

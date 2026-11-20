@@ -204,6 +204,16 @@ public actor EmbeddedPackageService: RuntimeService {
         }
     }
 
+    /// The stored `integrations.*` settings of a package
+    /// (package-metadata-json.md §3); nil for unmanaged or unconfigured ones.
+    func packageIntegrationSettings(for packageID: String) async throws -> PackageSettings? {
+        try await ensureOpen()
+        guard let id = PackageID(rawValue: packageID) else {
+            return nil
+        }
+        return try await store.packageSettings(for: id)
+    }
+
     /// The `current/` artifact directory of a managed package (collision-aware; §9.5).
     public func artifactCurrentDirectory(
         for packageID: RuntimePackageID

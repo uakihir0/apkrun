@@ -683,6 +683,17 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         sessionEndedObserver?(sessionID, reason)
     }
 
+    /// The package of a live app session, for session-channel routing
+    /// (desktop-integration.md §3.3).
+    public func packageID(forSession sessionID: UUID) -> String? {
+        sessionsByPackage.first { $0.value == .app(sessionID) }?.key
+    }
+
+    /// Whether the package has a live session, for `integrationStatus`.
+    public func hasLiveSession(packageID: String) -> Bool {
+        sessionsByPackage[packageID] != nil
+    }
+
     /// Installs the daemon's perf hooks once (idempotent; diagnostics.md §4.3).
     public func setPerfObservers(
         firstFrame: @escaping @Sendable (SessionID) -> Void,

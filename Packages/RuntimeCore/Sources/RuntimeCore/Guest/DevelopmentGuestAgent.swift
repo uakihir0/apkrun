@@ -58,6 +58,8 @@ public actor DevelopmentGuestAgent {
     public nonisolated let taskEvents: AsyncStream<DevelopmentGuestTaskEvent>
     /// Display lifecycle changes from the same sequenced Guest Agent event relay.
     public nonisolated let displayEvents: AsyncStream<GuestDisplayEvent>
+    /// `clipboard_changed` events from the guest (desktop-integration.md §4.3).
+    public nonisolated let clipboardEvents: AsyncStream<GPClipData>
     /// Android reboot notifications inferred from consecutive supervisor snapshots.
     public nonisolated var androidRestartEvents: AsyncStream<GuestAndroidRestart> {
         supervisor.androidRestartEvents
@@ -80,6 +82,7 @@ public actor DevelopmentGuestAgent {
     private var inputConnectionToken: Data?
     private let taskEventContinuation: AsyncStream<DevelopmentGuestTaskEvent>.Continuation
     private let displayEventContinuation: AsyncStream<GuestDisplayEvent>.Continuation
+    private let clipboardEventContinuation: AsyncStream<GPClipData>.Continuation
     private var taskEventRelay: Task<Void, Never>?
 
     /// Creates the coordinator for `bundle`, reached through `adb`.
@@ -117,6 +120,12 @@ public actor DevelopmentGuestAgent {
         )
         self.displayEvents = displayEvents
         self.displayEventContinuation = displayEventContinuation
+        let (clipboardEvents, clipboardEventContinuation) = AsyncStream.makeStream(
+            of: GPClipData.self,
+            bufferingPolicy: .bufferingNewest(256)
+        )
+        self.clipboardEvents = clipboardEvents
+        self.clipboardEventContinuation = clipboardEventContinuation
         relay.set { [weak self] loss in
             guard let self else {
                 return false
@@ -242,6 +251,7 @@ public actor DevelopmentGuestAgent {
         taskEventRelay = nil
         taskEventContinuation.finish()
         displayEventContinuation.finish()
+        clipboardEventContinuation.finish()
         // The input connection belongs to the control session, so it ends with it.
         await inputConnection?.close()
         inputConnection = nil
@@ -326,6 +336,7 @@ public actor DevelopmentGuestAgent {
         let updates = supervisor.updates
         let continuation = taskEventContinuation
         let displayContinuation = displayEventContinuation
+        let clipboardContinuation = clipboardEventContinuation
         taskEventRelay = Task {
             for await event in updates {
                 guard let kind = event.kind else {
@@ -344,6 +355,8 @@ public actor DevelopmentGuestAgent {
                     displayContinuation.yield(.removed(displayID: display.displayID))
                 case .tasksCleared(let tasks):
                     displayContinuation.yield(.tasksCleared(displayID: tasks.displayID))
+                case .clipboardChanged(let clip):
+                    clipboardContinuation.yield(clip)
                 default:
                     break
                 }

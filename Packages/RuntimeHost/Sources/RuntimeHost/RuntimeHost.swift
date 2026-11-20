@@ -1,6 +1,7 @@
 import DiagnosticsCore
 import Foundation
 import ImageCore
+import IntegrationCore
 import RuntimeAPI
 import RuntimeCore
 import WrapperCore
@@ -113,6 +114,33 @@ public actor RuntimeHost {
     private var statisticsSinceDate = Date()
     /// Launches waiting for `FIRST_FRAME_DISPLAYED` or their session's end, by session ID.
     private var pendingLaunchRecords: [UUID: PendingLaunchRecord] = [:]
+    /// The §2.3 policy and §4 clipboard coordinator (desktop-integration.md);
+    /// internal so the RuntimeHostIntegrations extension can build it lazily.
+    var clipboardCoordinator: ClipboardCoordinator?
+    /// The guest→coordinator clip relay; alive while the guest agent is.
+    var clipboardRelayTask: Task<Void, Never>?
+    /// Cached settings and capabilities for the synchronous policy closures.
+    let integrationSettings = IntegrationSettingsCache()
+
+    /// The supervisor the integration channel sends through.
+    func runtimeSupervisorForIntegrations() -> RuntimeSupervisor? {
+        supervisor
+    }
+
+    /// The store service that answers per-package `integrations.*` settings.
+    func packageServiceForIntegrations() -> EmbeddedPackageService? {
+        packageQueryService
+    }
+
+    /// The session service that resolves session IDs to packages.
+    func sessionServiceForIntegrations() -> DaemonHeadlessSessionService? {
+        headlessSessionService as? DaemonHeadlessSessionService
+    }
+
+    /// `settings.json` of the data root (configuration.md §1.2).
+    var integrationSettingsFile: URL {
+        paths.settingsFile
+    }
 
     /// A launch record in progress (diagnostics.md §4.3).
     private struct PendingLaunchRecord {
@@ -1962,6 +1990,11 @@ public actor RuntimeHost {
         if case .booting = snapshot.state {
             publishBootProgress(generation: bootProgressGeneration)
         }
+        if case .ready = snapshot.state {
+            startClipboardRelay()
+        } else if case .stopped = snapshot.state {
+            stopClipboardRelay()
+        }
     }
 
     private func publishBootProgress(generation: UInt64) {
@@ -2517,6 +2550,7 @@ public actor RuntimeHost {
     /// frame was shown the record is already written.
     private func noteSessionEnded(_ sessionID: UUID, reason: String) {
         firstFramesBeforeRecord.remove(sessionID)
+        Task { await clipboardCoordinator?.noteSessionEnded(sessionID: sessionID) }
         guard let pending = pendingLaunchRecords.removeValue(forKey: sessionID) else {
             return
         }

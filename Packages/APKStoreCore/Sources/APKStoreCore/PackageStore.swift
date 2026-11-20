@@ -2046,13 +2046,16 @@ public actor PackageStore {
                 // A crash inside `moveReplacing` can leave only the `.old-*`
                 // backup of metadata.json; restore the newest one so the
                 // record survives without rolling back a later write.
-                let backups = (try? fileManager.contentsOfDirectory(atPath: child.path))?
+                let backups =
+                    (try? fileManager.contentsOfDirectory(atPath: child.path))?
                     .filter { $0.hasPrefix(".metadata.json.old-") } ?? []
                 let newest = backups.max { lhs, rhs in
-                    let lhsDate = (try? fileManager.attributesOfItem(
-                        atPath: child.appendingPathComponent(lhs).path))?[.modificationDate] as? Date
-                    let rhsDate = (try? fileManager.attributesOfItem(
-                        atPath: child.appendingPathComponent(rhs).path))?[.modificationDate] as? Date
+                    let lhsDate =
+                        (try? fileManager.attributesOfItem(
+                            atPath: child.appendingPathComponent(lhs).path))?[.modificationDate] as? Date
+                    let rhsDate =
+                        (try? fileManager.attributesOfItem(
+                            atPath: child.appendingPathComponent(rhs).path))?[.modificationDate] as? Date
                     return (lhsDate ?? .distantPast, lhs) < (rhsDate ?? .distantPast, rhs)
                 }
                 if let newest {

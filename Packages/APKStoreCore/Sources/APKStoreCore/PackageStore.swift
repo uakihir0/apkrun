@@ -1,5 +1,6 @@
 import CryptoKit
 import Darwin
+import DiagnosticsCore
 import Foundation
 
 /// A preview produced from private copies of one APK or a split APK set.
@@ -181,6 +182,12 @@ private final class GuestUninstallBoundaryState: @unchecked Sendable {
 /// isolated and lets RuntimeHost use `APKRunPaths` without making APKStoreCore depend on
 /// DiagnosticsCore.
 public actor PackageStore {
+    /// The Android package that owns update installation for APKRun-managed apps.
+    ///
+    /// The Store Agent on custom images signs as this package (package-store.md §6.3,
+    /// guest-components.md §8.1).
+    public static let updateOwnerPackage = PackageID(rawValue: "io.apkrun.store")!
+
     /// Async host-side APK metadata reader, injected to keep package import testable.
     public typealias Inspector = @Sendable (URL) async throws -> APKFacts
 
@@ -1498,7 +1505,9 @@ public actor PackageStore {
                         allowDowngrade: false,
                         mode: .update,
                         signerDigests: stagedSet.signerDigests,
-                        enableRollback: enableRollback && channel.capabilities.contains(.rollback)
+                        enableRollback: enableRollback && channel.capabilities.contains(.rollback),
+                        requestUpdateOwnership: existing.updateAuthority.claimsUpdateOwnership
+                            && channel.capabilities.contains(.updateOwnership)
                     ),
                     files: Self.artifactURLs(in: staged, set: stagedSet)
                 )
@@ -1560,8 +1569,40 @@ public actor PackageStore {
         try injectFault(kind: "update", step: "metadataWritten")
         try appendTerminal(transaction, op: "commit")
         records[packageID] = record
+        warnOnMissingUpdateOwner(record)
         try purgeTrash()
         return record
+    }
+
+    /// The managed packages whose Android update owner is not `io.apkrun.store`
+    /// even though their authority claims ownership (package-store.md §6.3).
+    ///
+    /// Health reports these as `store.ownership` warnings (`store.updateOwnerMissing`):
+    /// expected on stock images and when the image's enforcement flag is off.
+    public func updateOwnerMissingPackages() async throws -> [PackageID] {
+        try requireOpen()
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        return records.values
+            .filter { record in
+                record.state == .installed && record.updateAuthority.claimsUpdateOwnership
+                    && record.android.updateOwner != Self.updateOwnerPackage
+            }
+            .map(\.packageId)
+            .sorted { $0.rawValue < $1.rawValue }
+    }
+
+    /// Logs the `store.ownership` health warning for a record whose update owner
+    /// Android did not report as the Store Agent (package-store.md §6.3, §13).
+    private func warnOnMissingUpdateOwner(_ record: PackageRecord) {
+        guard record.updateAuthority.claimsUpdateOwnership,
+            record.android.updateOwner != Self.updateOwnerPackage
+        else { return }
+        APKLogger(category: StoreLogCategory.reconcile).warning(
+            "\(record.packageId.rawValue, .public) is not update-owned by io.apkrun.store",
+            errorCode: "store.updateOwnerMissing"
+        )
     }
 
     /// Sets the package's update policy — authority and/or provider — as
@@ -1679,6 +1720,7 @@ public actor PackageStore {
             state: .installed,
             artifacts: ArtifactSlots(currentMatchesAndroid: false),
             android: AndroidPackageFacts(
+                updateOwner: info.updateOwner,
                 installerOfRecord: info.installerPackage,
                 firstInstallTime: info.firstInstallTime,
                 lastUpdateTime: info.lastUpdateTime,
@@ -2141,7 +2183,12 @@ public actor PackageStore {
                         versionCode: preview.versionCode,
                         allowDowngrade: false,
                         mode: kind == "reinstall" ? .reinstall : .new,
-                        signerDigests: preview.artifactSet.signerDigests
+                        signerDigests: preview.artifactSet.signerDigests,
+                        // package-store.md §6.3: the authority the record will carry decides
+                        // whether the install asks Android for update ownership.
+                        requestUpdateOwnership: (previousRecord?.updateAuthority ?? .manual)
+                            .claimsUpdateOwnership
+                            && channel.capabilities.contains(.updateOwnership)
                     ),
                     files: Self.artifactURLs(in: incoming, set: preview.artifactSet)
                 )
@@ -2220,6 +2267,7 @@ public actor PackageStore {
         directories[packageID] = directory
         tickets[preview.ticket] = nil
         activeTickets.remove(preview.ticket)
+        warnOnMissingUpdateOwner(record)
         try injectFault(kind: kind, step: "commit")
         // Cleanup follows the durable commit and cannot change whether the install succeeded.
         var cleanupDeferred = false
@@ -2312,6 +2360,7 @@ public actor PackageStore {
                 try appendTerminal(transaction, op: "commit")
                 records[packageID] = recovered
                 directories[packageID] = directory
+                warnOnMissingUpdateOwner(recovered)
                 try? fileManager.removeItem(at: current.appendingPathComponent("ticket.json"))
             } else if kind == "firstInstall" {
                 try appendAbort(transaction, reason: "incomingArtifactsMissing")
@@ -2356,6 +2405,7 @@ public actor PackageStore {
         )
         records[packageID] = recovered
         directories[packageID] = directory
+        warnOnMissingUpdateOwner(recovered)
         tickets[ticketID] = nil
         try? fileManager.removeItem(at: current.appendingPathComponent("ticket.json"))
         try purgeTrash()
@@ -2444,6 +2494,7 @@ public actor PackageStore {
             fileCount: set.files.count
         )
         let android = AndroidPackageFacts(
+            updateOwner: info.updateOwner,
             installerOfRecord: info.installerPackage,
             firstInstallTime: info.firstInstallTime,
             lastUpdateTime: info.lastUpdateTime,
@@ -2508,6 +2559,7 @@ public actor PackageStore {
         record.state = .installed
         record.artifacts = ArtifactSlots(current: setSummary, currentMatchesAndroid: setSummary != nil)
         record.android = AndroidPackageFacts(
+            updateOwner: info.updateOwner,
             installerOfRecord: info.installerPackage,
             firstInstallTime: info.firstInstallTime,
             lastUpdateTime: info.lastUpdateTime,
@@ -3355,6 +3407,7 @@ public actor PackageStore {
         try appendStep(transaction, kind: "update", step: "metadataWritten")
         try appendTerminal(transaction, op: "commit")
         records[packageID] = record
+        warnOnMissingUpdateOwner(record)
         try purgeTrash()
     }
 
@@ -3490,6 +3543,7 @@ public actor PackageStore {
             currentMatchesAndroid: true
         )
         record.android = AndroidPackageFacts(
+            updateOwner: info.updateOwner,
             installerOfRecord: info.installerPackage,
             firstInstallTime: info.firstInstallTime,
             lastUpdateTime: info.lastUpdateTime,

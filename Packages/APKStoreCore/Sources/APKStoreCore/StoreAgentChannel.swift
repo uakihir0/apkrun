@@ -16,6 +16,10 @@ public struct StorePackageInfo: Sendable, Equatable {
     public var launchableComponent: String?
     /// The package that installed this package, if reported.
     public var installerPackage: PackageID?
+    /// The package that owns update installation, if reported (API 34 `InstallSourceInfo`).
+    ///
+    /// Only channels with the `updateOwnership` capability can read it; others leave it `nil`.
+    public var updateOwner: PackageID?
     /// The time Android first installed this package, if reported.
     public var firstInstallTime: Date?
     /// The time Android last updated this package, if reported.
@@ -36,6 +40,7 @@ public struct StorePackageInfo: Sendable, Equatable {
         enabled: Bool,
         launchableComponent: String? = nil,
         installerPackage: PackageID? = nil,
+        updateOwner: PackageID? = nil,
         firstInstallTime: Date? = nil,
         lastUpdateTime: Date? = nil,
         targetSDK: Int,
@@ -49,6 +54,7 @@ public struct StorePackageInfo: Sendable, Equatable {
         self.enabled = enabled
         self.launchableComponent = launchableComponent
         self.installerPackage = installerPackage
+        self.updateOwner = updateOwner
         self.firstInstallTime = firstInstallTime
         self.lastUpdateTime = lastUpdateTime
         self.targetSDK = targetSDK

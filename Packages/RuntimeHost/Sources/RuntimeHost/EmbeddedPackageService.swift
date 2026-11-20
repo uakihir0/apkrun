@@ -248,7 +248,8 @@ public actor EmbeddedPackageService: RuntimeService {
     /// Installs an import and reports the store change that occurred.
     func installImportedWithChange(
         _ request: RuntimeInstallImportedRequest,
-        beforeStoreMutation: PackageMutationBoundary? = nil
+        beforeStoreMutation: PackageMutationBoundary? = nil,
+        requiresReinstallMark: Bool = false
     ) async throws(RuntimeWireError) -> RuntimePackageInstallResult {
         do {
             try await ensureOpen()
@@ -286,17 +287,20 @@ public actor EmbeddedPackageService: RuntimeService {
                 if case .uninstalledWithData = preview.relation {
                     outcome = try await store.installImportedWithOutcome(
                         ticket: ticket,
-                        beforeGuestInstall: beforeStoreMutation
+                        beforeGuestInstall: beforeStoreMutation,
+                        requiresReinstallMark: requiresReinstallMark
                     )
                 } else if case .newPackage = preview.relation {
                     outcome = try await store.installImportedWithOutcome(
                         ticket: ticket,
-                        beforeGuestInstall: beforeStoreMutation
+                        beforeGuestInstall: beforeStoreMutation,
+                        requiresReinstallMark: requiresReinstallMark
                     )
                 } else {
                     outcome = try await store.reinstallWithOutcome(
                         ticket: ticket,
-                        beforeGuestInstall: beforeStoreMutation
+                        beforeGuestInstall: beforeStoreMutation,
+                        requiresReinstallMark: requiresReinstallMark
                     )
                 }
             } else {
@@ -304,7 +308,8 @@ public actor EmbeddedPackageService: RuntimeService {
                 // safely permits first installs and retained-data reinstalls in this case.
                 outcome = try await store.installImportedWithOutcome(
                     ticket: ticket,
-                    beforeGuestInstall: beforeStoreMutation
+                    beforeGuestInstall: beforeStoreMutation,
+                    requiresReinstallMark: requiresReinstallMark
                 )
             }
             importPreviews[ticket] = nil

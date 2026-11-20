@@ -527,7 +527,8 @@ public actor PackageStore {
     /// Installs a new package or retained-data package and reports its committed prior state.
     public func installImportedWithOutcome(
         ticket: UUID,
-        beforeGuestInstall: BeforeGuestInstall? = nil
+        beforeGuestInstall: BeforeGuestInstall? = nil,
+        requiresReinstallMark: Bool = false
     ) async throws -> PackageInstallOutcome {
         try requireWritable()
         guard let manifest = try verifiedTicket(ticket) else {
@@ -541,14 +542,16 @@ public actor PackageStore {
                 manifest,
                 kind: "reinstall",
                 from: existing.versionCode,
-                beforeGuestInstall: beforeGuestInstall
+                beforeGuestInstall: beforeGuestInstall,
+                requiresReinstallMark: requiresReinstallMark
             )
         }
         return try await performInstall(
             manifest,
             kind: "firstInstall",
             from: nil,
-            beforeGuestInstall: beforeGuestInstall
+            beforeGuestInstall: beforeGuestInstall,
+            requiresReinstallMark: requiresReinstallMark
         )
     }
 
@@ -560,7 +563,8 @@ public actor PackageStore {
     /// Reinstalls a package and reports the prior state validated by its install transaction.
     public func reinstallWithOutcome(
         ticket: UUID,
-        beforeGuestInstall: BeforeGuestInstall? = nil
+        beforeGuestInstall: BeforeGuestInstall? = nil,
+        requiresReinstallMark: Bool = false
     ) async throws -> PackageInstallOutcome {
         try requireWritable()
         guard let manifest = try verifiedTicket(ticket) else {
@@ -576,7 +580,8 @@ public actor PackageStore {
             manifest,
             kind: "reinstall",
             from: existing.versionCode,
-            beforeGuestInstall: beforeGuestInstall
+            beforeGuestInstall: beforeGuestInstall,
+            requiresReinstallMark: requiresReinstallMark
         )
     }
 
@@ -1003,7 +1008,8 @@ public actor PackageStore {
         _ manifest: TicketManifest,
         kind: String,
         from: VersionCode?,
-        beforeGuestInstall: BeforeGuestInstall?
+        beforeGuestInstall: BeforeGuestInstall?,
+        requiresReinstallMark: Bool = false
     ) async throws -> PackageInstallOutcome {
         guard let runtimeAccess else { throw PackageStoreFailure.runtimeUnavailable }
         let preview = manifest.preview
@@ -1017,6 +1023,14 @@ public actor PackageStore {
         try reloadRecordsPreservingImportDirectories()
         if let detail = unreadableRecords[packageID] {
             throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
+        }
+        // Checked inside the mutation lock so an uninstall or forget committed between
+        // the caller's pending-reinstall snapshot and this install cannot resurrect a
+        // removed package (package-store.md §9.5).
+        if requiresReinstallMark {
+            guard let record = records[packageID], Self.isReinstallPending(record.state) else {
+                throw PackageStoreFailure.packageNotFound
+            }
         }
         let directory = directories[packageID] ?? directoryName(for: packageID)
         let incoming = incomingDirectory(packageID: packageID, directory: directory, ticket: preview.ticket)
@@ -1218,6 +1232,18 @@ public actor PackageStore {
                 && previouslyInstalled == nil,
             cleanupDeferred: cleanupDeferred
         )
+    }
+
+    /// Whether the record still waits on the pending-reinstall reconcile: the same set
+    /// `pendingReinstalls()` reports (`needsReinstall` and a failed earlier reinstall).
+    private static func isReinstallPending(_ state: PackageState) -> Bool {
+        switch state {
+        case .needsReinstall, .broken(.reinstallFailed):
+            return true
+        case .installed, .uninstalledKeepingData, .broken(.removedInAndroid),
+            .broken(.artifactMissing), .broken(.signerChanged):
+            return false
+        }
     }
 
     private static func canReinstall(_ state: PackageState) -> Bool {

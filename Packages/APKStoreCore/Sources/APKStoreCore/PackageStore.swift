@@ -1026,7 +1026,7 @@ public actor PackageStore {
         }
         // Checked inside the mutation lock so an uninstall or forget committed between
         // the caller's pending-reinstall snapshot and this install cannot resurrect a
-        // removed package (package-store.md §9.5).
+        // removed package (package-store.md §9.2).
         if requiresReinstallMark {
             guard let record = records[packageID], Self.isReinstallPending(record.state) else {
                 throw PackageStoreFailure.packageNotFound

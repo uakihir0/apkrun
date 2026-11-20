@@ -1,4 +1,5 @@
 import AppKit
+import DiagnosticsCore
 import InputCore
 
 /// Editor mode (input.md §5.1, §5.3): the view is an `NSTextInputClient`, so the macOS input method
@@ -107,7 +108,9 @@ extension IOSurfaceLayerView: @preconcurrency NSTextInputClient {
         case .editorAction(let action):
             deliverText(.editorAction(action))
         case .unmapped:
+            // §5.4: counted, and the selector name is logged at debug.
             unmappedCommandCount += 1
+            Self.imeLogger.debug("unmapped doCommand selector \(name, .public)")
         case .consumed:
             break
         }
@@ -159,6 +162,9 @@ extension IOSurfaceLayerView: @preconcurrency NSTextInputClient {
         }
         return (string as? String) ?? ""
     }
+
+    /// The input-subsystem logger for editor mode (input.md §5.4).
+    private static let imeLogger = APKLogger(category: .ime)
 
     /// Sends one text event to the sink.
     private func deliverText(_ event: ImeTextEvent) {

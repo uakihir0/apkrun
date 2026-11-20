@@ -330,6 +330,32 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         await registry.session(packageID: packageID.rawValue) != nil
     }
 
+    /// GU4: when this service's session ended (`AppSessionSnapshot` has no
+    /// timestamp, so `transition(to:)` records it).
+    private var lastEndAt: ContinuousClock.Instant?
+
+    func lastSessionEnd(packageID: RuntimePackageID) async -> ContinuousClock.Instant? {
+        lastEndAt
+    }
+
+    /// §7.3 Update Now: close the live session with the updating reason;
+    /// the Android process may keep running — only the session ends.
+    func endSessionForUpdate(packageID: RuntimePackageID) async {
+        guard let sessionID,
+            let current = await registry.session(packageID: packageID.rawValue),
+            current.id == sessionID
+        else { return }
+        if !current.state.isEnded, current.state != .closing {
+            _ = try? await transition(to: .closing)
+        }
+        _ = try? await transition(to: .ended(.updating))
+    }
+
+    /// §7.3 Update Now: relaunch the package after the install.
+    func reopenPackageSession(packageID: RuntimePackageID) async throws {
+        _ = try await launch(RuntimeLaunchRequest(packageID: packageID))
+    }
+
     /// Closes this package's active window with the package-removal reason before uninstall.
     func endSessionForPackageUninstall(_ request: RuntimeTerminateRequest) async throws(RuntimeWireError) {
         await acquireSessionOperation()
@@ -942,7 +968,9 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         guard let sessionID else {
             throw .sessionNotFound
         }
-        return try await registry.transition(sessionID, to: state)
+        let snapshot = try await registry.transition(sessionID, to: state)
+        if state.isEnded { lastEndAt = .now }
+        return snapshot
     }
 }
 

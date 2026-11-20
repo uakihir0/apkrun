@@ -680,7 +680,33 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         }
         frameRateSamples[sessionID] = nil
         firstFrameMarked.remove(sessionID)
+        lastSessionEndAt[packageID] = .now
         sessionEndedObserver?(sessionID, reason)
+    }
+
+    /// GU4: the package's last session end, tracked here because
+    /// `AppSessionSnapshot` carries no timestamps.
+    private var lastSessionEndAt: [String: ContinuousClock.Instant] = [:]
+
+    func lastSessionEnd(packageID: RuntimePackageID) async -> ContinuousClock.Instant? {
+        lastSessionEndAt[packageID.rawValue]
+    }
+
+    /// §7.3 Update Now: close the live session with the updating reason;
+    /// the Android process may keep running — only the session ends.
+    func endSessionForUpdate(packageID: RuntimePackageID) async {
+        guard let current = await registry.session(packageID: packageID.rawValue) else { return }
+        if current.state != .closing, !Self.isEnded(current.state) {
+            _ = try? await registry.transition(current.id, to: .closing)
+        }
+        await stopDrainingFrames(for: current.id)
+        _ = try? await registry.transition(current.id, to: .ended(.updating))
+        forgetSession(packageID: packageID.rawValue, sessionID: current.id, reason: "updating")
+    }
+
+    /// §7.3 Update Now: relaunch the package after the install.
+    func reopenPackageSession(packageID: RuntimePackageID) async throws {
+        _ = try await launch(RuntimeLaunchRequest(packageID: packageID))
     }
 
     /// The package of a live app session, for session-channel routing

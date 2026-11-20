@@ -53,6 +53,18 @@ public actor EmbeddedMultiSessionService: RuntimeSessionService, PackageMutation
         try await session.endSessionForPackageUninstall(request)
     }
 
+    func lastSessionEnd(packageID: RuntimePackageID) async -> ContinuousClock.Instant? {
+        await sessions[packageID.rawValue]?.lastSessionEnd(packageID: packageID)
+    }
+
+    func endSessionForUpdate(packageID: RuntimePackageID) async {
+        await sessions[packageID.rawValue]?.endSessionForUpdate(packageID: packageID)
+    }
+
+    func reopenPackageSession(packageID: RuntimePackageID) async throws {
+        _ = try await launch(RuntimeLaunchRequest(packageID: packageID))
+    }
+
     private static func sessionUnavailable(_ packageID: String) -> RuntimeWireError {
         .runtime(
             "sessionNotFound",

@@ -645,34 +645,6 @@ public actor EmbeddedUpdateService {
     }
 }
 
-/// `GET` through `URLSession` (update-system.md §4.1).
-public struct URLSessionUpdateHTTPClient: UpdateHTTPClient {
-    /// Creates a client.
-    public init() {}
-
-    /// Performs a GET request.
-    public func get(_ url: URL, headers: [String: String]) async throws(UpdateFailure) -> HTTPResponse {
-        var request = URLRequest(url: url)
-        for (name, value) in headers {
-            request.setValue(value, forHTTPHeaderField: name)
-        }
-        let (body, response): (Data, URLResponse)
-        do {
-            (body, response) = try await URLSession.shared.data(for: request)
-        } catch {
-            throw UpdateFailure.providerUnreachable(reason: error.localizedDescription)
-        }
-        guard let http = response as? HTTPURLResponse else {
-            throw UpdateFailure.providerUnreachable(reason: "not an HTTP response")
-        }
-        return HTTPResponse(
-            status: http.statusCode,
-            body: body,
-            etag: http.value(forHTTPHeaderField: "ETag"),
-            lastModified: http.value(forHTTPHeaderField: "Last-Modified"))
-    }
-}
-
 /// The on-disk provider cache under `Updates/cache/<key>/` (§4.1).
 public struct FileProviderCache: ProviderCache {
     /// The cache root.

@@ -143,6 +143,17 @@ public struct UpdateCandidate: Codable, Sendable, Hashable {
 public protocol UpdateHTTPClient: Sendable {
     /// Performs a GET request and returns the body and response metadata.
     func get(_ url: URL, headers: [String: String]) async throws(UpdateFailure) -> HTTPResponse
+
+    /// Streams a GET request into `file`, hashing the bytes while they
+    /// arrive. Writing stops after `byteLimit` bytes (`limitHit` in the
+    /// result); a nil `byteLimit` streams without a cap. The caller maps the
+    /// status code to its failure semantics.
+    func download(
+        _ url: URL,
+        headers: [String: String],
+        into file: URL,
+        byteLimit: Int64?
+    ) async throws(UpdateFailure) -> DownloadResponse
 }
 
 /// Response metadata an HTTP provider needs for cursors.
@@ -155,13 +166,72 @@ public struct HTTPResponse: Sendable {
     public var etag: String?
     /// The `Last-Modified` header value, when present.
     public var lastModified: String?
+    /// The URL the response finally came from, after redirects.
+    public var finalURL: URL?
+    /// The `Retry-After` header in seconds, when present.
+    public var retryAfter: TimeInterval?
 
     /// Creates an HTTP response.
-    public init(status: Int, body: Data, etag: String? = nil, lastModified: String? = nil) {
+    public init(
+        status: Int,
+        body: Data,
+        etag: String? = nil,
+        lastModified: String? = nil,
+        finalURL: URL? = nil,
+        retryAfter: TimeInterval? = nil
+    ) {
         self.status = status
         self.body = body
         self.etag = etag
         self.lastModified = lastModified
+        self.finalURL = finalURL
+        self.retryAfter = retryAfter
+    }
+}
+
+/// The result of a streamed download.
+public struct DownloadResponse: Sendable {
+    /// The response status code.
+    public var status: Int
+    /// Bytes written to the file.
+    public var bytesWritten: Int64
+    /// SHA-256 of the written bytes.
+    public var sha256: SHA256Digest?
+    /// True when writing stopped because `byteLimit` was reached.
+    public var limitHit: Bool
+    /// The URL the response finally came from, after redirects.
+    public var finalURL: URL?
+    /// The `Retry-After` header in seconds, when present.
+    public var retryAfter: TimeInterval?
+
+    /// Creates a download result.
+    public init(
+        status: Int,
+        bytesWritten: Int64,
+        sha256: SHA256Digest? = nil,
+        limitHit: Bool = false,
+        finalURL: URL? = nil,
+        retryAfter: TimeInterval? = nil
+    ) {
+        self.status = status
+        self.bytesWritten = bytesWritten
+        self.sha256 = sha256
+        self.limitHit = limitHit
+        self.finalURL = finalURL
+        self.retryAfter = retryAfter
+    }
+}
+
+extension UpdateHTTPClient {
+    /// Clients that cannot stream answer `providerUnreachable` — providers
+    /// only call `download` on transports that support it.
+    public func download(
+        _ url: URL,
+        headers: [String: String],
+        into file: URL,
+        byteLimit: Int64?
+    ) async throws(UpdateFailure) -> DownloadResponse {
+        throw .providerUnreachable(reason: "the HTTP client cannot download")
     }
 }
 
@@ -257,8 +327,9 @@ public enum UpdateFailure: Error, Equatable, Sendable {
     case providerUnreachable(reason: String)
     /// The provider answered with a non-success HTTP status.
     case providerHTTPStatus(Int)
-    /// The provider rate-limited the request.
-    case providerRateLimited
+    /// The provider rate-limited the request; `retryAfter` carries the
+    /// server's `Retry-After` hint, when it gave one.
+    case providerRateLimited(retryAfter: TimeInterval?)
     /// The provider's metadata (manifest, index, directory) failed validation.
     case providerMetadataInvalid(detail: String)
     /// The provider's signed metadata did not verify.

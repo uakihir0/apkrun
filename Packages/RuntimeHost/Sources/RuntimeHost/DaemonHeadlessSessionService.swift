@@ -695,6 +695,17 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         sessionEndedObserver = sessionEnded
     }
 
+    /// The `session` attribute of `FIRST_FRAME_DISPLAYED`, comparable with a
+    /// launch record's `sessionID` (diagnostics.md §4.2).
+    private static func sessionAttribute(_ session: SessionID) -> String {
+        switch session {
+        case .app(let id):
+            return id.uuidString
+        case .system(let use):
+            return "system:\(use)"
+        }
+    }
+
     /// Marks `FIRST_FRAME_DISPLAYED` once for a session and notifies the observer
     /// (diagnostics.md §4.2, §4.3).
     private func noteFirstFrame(of session: SessionID) {
@@ -702,7 +713,10 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             return
         }
         firstFrameMarked.insert(session)
-        Perf.mark(.firstFrameDisplayed)
+        Perf.mark(
+            .firstFrameDisplayed,
+            ["session": .string(Self.sessionAttribute(session))]
+        )
         firstFrameObserver?(session)
     }
 

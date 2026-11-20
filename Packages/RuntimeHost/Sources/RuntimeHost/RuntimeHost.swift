@@ -2412,8 +2412,8 @@ public actor RuntimeHost {
         let now = ContinuousClock.now
         let base: ContinuousClock.Instant
         if let timing = request.launchTiming {
-            base = Self.instant(continuousNanos: timing.processStart)
-            let requestInstant = Self.instant(continuousNanos: timing.requestSent)
+            base = Self.instant(continuousTicks: timing.processStart)
+            let requestInstant = Self.instant(continuousTicks: timing.requestSent)
             let xpcDelayMs = Self.milliseconds(from: requestInstant, to: now)
             let timeline = diagnostics?.perfTimeline
             if let timeline {
@@ -2446,10 +2446,25 @@ public actor RuntimeHost {
         )
     }
 
-    /// Converts continuous-clock nanoseconds (`mach_continuous_time`) to an instant.
-    private static func instant(continuousNanos: UInt64) -> ContinuousClock.Instant {
-        let delta = Int64(bitPattern: continuousNanos) &- Int64(bitPattern: mach_continuous_time())
-        return ContinuousClock.now.advanced(by: .nanoseconds(delta))
+    /// The `mach_timebase_info` scale, cached: `mach_continuous_time` ticks are
+    /// not nanoseconds on every machine (diagnostics.md §4.2).
+    private static let machTimebaseNanosPerTick: Double = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        return Double(info.numer) / Double(info.denom)
+    }()
+
+    /// Converts `mach_continuous_time` ticks to nanoseconds.
+    private static func nanoseconds(machTicks: UInt64) -> UInt64 {
+        UInt64((Double(machTicks) * machTimebaseNanosPerTick).rounded())
+    }
+
+    /// Converts `mach_continuous_time` ticks to a clock instant.
+    private static func instant(continuousTicks: UInt64) -> ContinuousClock.Instant {
+        let deltaTicks =
+            Int64(bitPattern: continuousTicks) &- Int64(bitPattern: mach_continuous_time())
+        return ContinuousClock.now.advanced(
+            by: .nanoseconds(Int64(Double(deltaTicks) * machTimebaseNanosPerTick)))
     }
 
     /// Milliseconds between two instants.
@@ -2463,12 +2478,21 @@ public actor RuntimeHost {
     }
 
     /// Attaches the session to a pending launch record; `FIRST_FRAME_DISPLAYED` or
-    /// the session's end finalizes it.
+    /// the session's end finalizes it. A first frame that arrived before the
+    /// record (the notification wins the race once, per session) is in
+    /// `firstFramesBeforeRecord`, so the launch finalizes as `shown` at once.
     private func completeLaunchRecord(_ record: PendingLaunchRecord, sessionID: UUID) {
         var pending = record
         pending.sessionID = sessionID
+        if firstFramesBeforeRecord.remove(sessionID) != nil {
+            finalizeLaunchRecord(pending, outcome: "shown", at: ContinuousClock.now)
+            return
+        }
         pendingLaunchRecords[sessionID] = pending
     }
+
+    /// Sessions whose first frame arrived while no pending record existed.
+    private var firstFramesBeforeRecord: Set<UUID> = []
 
     /// Writes a `failed(<code>)` record for a launch that never opened a session.
     private func failLaunchRecord(_ record: PendingLaunchRecord, code: String) {
@@ -2478,9 +2502,12 @@ public actor RuntimeHost {
         finalizeLaunchRecord(pending, outcome: "failed(\(code))", at: ContinuousClock.now)
     }
 
-    /// The session's first frame: outcome `shown`.
+    /// The session's first frame: outcome `shown`. A notification that arrives
+    /// before the launch's record is registered is held for
+    /// `completeLaunchRecord` (the notification fires only once per session).
     private func noteSessionFirstFrame(_ sessionID: UUID) {
         guard let pending = pendingLaunchRecords.removeValue(forKey: sessionID) else {
+            firstFramesBeforeRecord.insert(sessionID)
             return
         }
         finalizeLaunchRecord(pending, outcome: "shown", at: ContinuousClock.now)
@@ -2489,6 +2516,7 @@ public actor RuntimeHost {
     /// A session that ended before its first frame: `ended(<reason>)`; after the
     /// frame was shown the record is already written.
     private func noteSessionEnded(_ sessionID: UUID, reason: String) {
+        firstFramesBeforeRecord.remove(sessionID)
         guard let pending = pendingLaunchRecords.removeValue(forKey: sessionID) else {
             return
         }
@@ -2505,6 +2533,19 @@ public actor RuntimeHost {
         if let timeline = diagnostics?.perfTimeline {
             for event in timeline.snapshot()
             where event.time >= record.base && Self.launchMarkers.contains(event.marker) {
+                // A marker that names another operation belongs to another
+                // launch; contextless markers and markers of this operation
+                // join the record.
+                if let context = event.operationContext, context.operationID.wireValue != record.operationID {
+                    continue
+                }
+                // A marker attributed to another session (for example the first
+                // frame of a concurrently launched app) is not this launch's.
+                if case .string(let session)? = event.attributes["session"],
+                    session != record.sessionID?.uuidString
+                {
+                    continue
+                }
                 markers[event.marker.rawValue] = Self.milliseconds(from: record.base, to: event.time)
             }
         }
@@ -2614,23 +2655,26 @@ public actor RuntimeHost {
         return rows.filter { $0.sessionID == sessionID }.map(\.statistics)
     }
 
-    /// Per-marker segment distributions: for each event, the gap since the
-    /// previous event of the same name, per marker (diagnostics.md §9.3).
+    /// Per-marker segment distributions. A marker's duration is its segment
+    /// inside one operation: the gap to the previous event carrying the same
+    /// operation context (diagnostics.md §9.3). Events without a context share
+    /// one group.
     private static func markerStatistics(from events: [PerfEvent]) -> [WireMarkerStatistics] {
         var lastSeen: [String: ContinuousClock.Instant] = [:]
         var durations: [String: [Int64]] = [:]
         var counts: [String: Int] = [:]
         for event in events.sorted(by: { $0.time < $1.time }) {
             let name = event.marker.rawValue
+            let context = event.operationContext?.operationID.wireValue ?? ""
             counts[name, default: 0] += 1
-            if let previous = lastSeen[name] {
+            if let previous = lastSeen[context] {
                 let components = (event.time - previous).components
                 let us =
                     components.seconds * 1_000_000
                     + components.attoseconds / 1_000_000_000_000
                 durations[name, default: []].append(us)
             }
-            lastSeen[name] = event.time
+            lastSeen[context] = event.time
         }
         return counts.keys.sorted().map { name in
             let values = (durations[name] ?? []).sorted()
@@ -2660,7 +2704,7 @@ public actor RuntimeHost {
             let elapsedNs =
                 UInt64(max(0, elapsed.components.seconds)) * 1_000_000_000
                 + UInt64(max(0, elapsed.components.attoseconds) / 1_000_000_000)
-            let vmUptime = mach_continuous_time() &- elapsedNs
+            let vmUptime = Self.nanoseconds(machTicks: mach_continuous_time()) &- elapsedNs
             if let pid = sampler.findVirtualMachineService(afterUptimeNanos: vmUptime) {
                 vmFootprint = sampler.physFootprint(of: pid)
             }

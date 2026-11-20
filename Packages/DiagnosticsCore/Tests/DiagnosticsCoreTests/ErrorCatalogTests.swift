@@ -64,7 +64,6 @@ import Testing
                 "nameConflict", "wrapperExists", "wrapperNotFound", "signingFailed",
                 "verificationFailed", "registrationFailed", "registryUnavailable",
                 "stagingExpired", "bundleInvalid",
-                "approvalDenied", "approvalTimedOut", "approvalNotFound",
             ].map { "wrapper.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)

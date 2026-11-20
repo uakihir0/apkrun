@@ -133,6 +133,9 @@
             packageID: RuntimePackageID,
             operationID: OperationID
         ) async -> any Error {
+            if let wireError = error as? RuntimeWireError {
+                return wireError
+            }
             if let failure = error as? RuntimeControlClientError,
                 case .remoteFailure = failure
             {
@@ -146,6 +149,9 @@
             packageID: RuntimePackageID,
             operationID: OperationID
         ) async -> any Error {
+            if let wireError = error as? RuntimeWireError {
+                return wireError
+            }
             if let failure = error as? RuntimeControlClientError,
                 case .remoteFailure = failure
             {

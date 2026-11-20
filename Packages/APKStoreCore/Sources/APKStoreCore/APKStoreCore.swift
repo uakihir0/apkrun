@@ -255,6 +255,14 @@ public enum UpdateAuthority: String, Codable, Sendable {
     case googlePlay
     case external
     case manual
+
+    /// Whether installs request Android update ownership (package-store.md §6.3).
+    public var claimsUpdateOwnership: Bool {
+        switch self {
+        case .apkrun, .manual: true
+        case .googlePlay, .external: false
+        }
+    }
 }
 
 /// A supported Android application update provider.

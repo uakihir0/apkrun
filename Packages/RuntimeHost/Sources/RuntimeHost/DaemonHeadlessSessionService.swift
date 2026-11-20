@@ -119,6 +119,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         let packageID = request.packageID.rawValue
         if let existing = await registry.session(packageID: packageID) {
             sessionsByPackage[packageID] = existing.id
+            noteActivity(packageID, .started)
             return try await launchExisting(existing)
         }
 
@@ -147,6 +148,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             throw Self.wireError(for: error)
         }
         sessionsByPackage[packageID] = session.id
+        noteActivity(packageID, .started)
         guard session.state == .acquiringDisplay,
             let lease = await registry.displayLease(session.id)
         else {
@@ -682,6 +684,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         firstFrameMarked.remove(sessionID)
         lastSessionEndAt[packageID] = .now
         sessionEndedObserver?(sessionID, reason)
+        noteActivity(packageID, .ended)
     }
 
     /// GU4: the package's last session end, tracked here because
@@ -707,6 +710,42 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     /// §7.3 Update Now: relaunch the package after the install.
     func reopenPackageSession(packageID: RuntimePackageID) async throws {
         _ = try await launch(RuntimeLaunchRequest(packageID: packageID))
+    }
+
+    /// GU3: packages with a keepRunning task (update-system.md §7.1). Filled
+    /// by `markBackgroundTask`; empty until `window.closeBehavior =
+    /// keepRunning` lands.
+    private var backgroundTasks: Set<String> = []
+
+    /// §7.2 trigger observers, retained for the service's life.
+    private var sessionActivityObservers: [@Sendable (RuntimePackageID, PackageSessionActivity) -> Void] = []
+
+    /// Marks a keepRunning task for `packageID` active or ended (#43 calls
+    /// this when `window.closeBehavior = keepRunning` keeps a task alive).
+    /// Ending a task is a §7.2 gate trigger.
+    func markBackgroundTask(_ packageID: String, active: Bool) {
+        if active {
+            backgroundTasks.insert(packageID)
+        } else if backgroundTasks.remove(packageID) != nil {
+            noteActivity(packageID, .taskEnded)
+        }
+    }
+
+    func hasBackgroundActivity(packageID: RuntimePackageID) async -> Bool {
+        backgroundTasks.contains(packageID.rawValue)
+    }
+
+    func observeSessionActivity(
+        _ observer: @escaping @Sendable (RuntimePackageID, PackageSessionActivity) -> Void
+    ) {
+        sessionActivityObservers.append(observer)
+    }
+
+    private func noteActivity(_ packageID: String, _ activity: PackageSessionActivity) {
+        guard let wireID = RuntimePackageID(rawValue: packageID) else { return }
+        for observer in sessionActivityObservers {
+            observer(wireID, activity)
+        }
     }
 
     /// The package of a live app session, for session-channel routing

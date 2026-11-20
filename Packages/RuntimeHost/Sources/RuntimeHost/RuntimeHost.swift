@@ -3502,6 +3502,22 @@ public actor RuntimeHost {
         )
     }
 
+    /// The dev Store Agent channel for update constraint checks
+    /// (update-system.md §7.1 GU5); `nil` without an attached runtime.
+    func storeAccessForUpdateConstraints() -> DevelopmentStoreRuntimeAccess? {
+        guard let supervisor, let image, let instanceStore,
+            let adbExecutable = try? AdbClient.resolveExecutable(environment: environment)
+        else { return nil }
+        return DevelopmentStoreRuntimeAccess(
+            supervisor: supervisor,
+            adbExecutable: adbExecutable,
+            instanceStore: instanceStore,
+            image: image,
+            logSink: diagnostics?.logSink,
+            startRuntimeIfNeeded: false
+        )
+    }
+
     private static let launchUnavailableError = RuntimeWireError.runtime(
         "windowUnavailable",
         message: "APKRun can't open an Android app window in this build.",

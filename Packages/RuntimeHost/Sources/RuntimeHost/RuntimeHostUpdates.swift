@@ -2,6 +2,7 @@ import APKStoreCore
 import DiagnosticsCore
 import Foundation
 import RuntimeAPI
+import RuntimeCore
 import UpdateCore
 
 /// The daemon's update service (update-system.md). It owns the `Updates/`
@@ -853,6 +854,8 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
     private let stateOf: @Sendable () async -> WireRuntimeState
     private let inUse: @Sendable (PackageID) async -> Bool
     private let lastEnd: @Sendable (PackageID) async -> ContinuousClock.Instant?
+    private let androidOK: @Sendable (PackageID) async -> Bool
+    private let events: @Sendable () -> AsyncStream<UpdateRuntimeEvent>
     private let endAll: @Sendable (PackageID) async -> Void
     private let reopenPackage: @Sendable (PackageID) async throws -> Void
     private let ready: @Sendable (UpdateStartReason) async throws -> Void
@@ -861,6 +864,8 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         stateOf: @escaping @Sendable () async -> WireRuntimeState,
         inUse: @escaping @Sendable (PackageID) async -> Bool,
         lastEnd: @escaping @Sendable (PackageID) async -> ContinuousClock.Instant?,
+        androidOK: @escaping @Sendable (PackageID) async -> Bool,
+        events: @escaping @Sendable () -> AsyncStream<UpdateRuntimeEvent>,
         endAll: @escaping @Sendable (PackageID) async -> Void,
         reopenPackage: @escaping @Sendable (PackageID) async throws -> Void,
         ready: @escaping @Sendable (UpdateStartReason) async throws -> Void
@@ -868,6 +873,8 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         self.stateOf = stateOf
         self.inUse = inUse
         self.lastEnd = lastEnd
+        self.androidOK = androidOK
+        self.events = events
         self.endAll = endAll
         self.reopenPackage = reopenPackage
         self.ready = ready
@@ -875,6 +882,14 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
 
     var runtimeState: WireRuntimeState {
         get async { await stateOf() }
+    }
+
+    nonisolated var runtimeEvents: AsyncStream<UpdateRuntimeEvent> {
+        events()
+    }
+
+    func androidAllowsGentleInstall(_ packageID: PackageID) async -> Bool {
+        await androidOK(packageID)
     }
 
     func hasActiveUse(_ packageID: PackageID) async -> Bool {
@@ -899,6 +914,12 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
 }
 
 extension RuntimeHost {
+    /// Test hook: installs the session service `updateRuntimeAccess` reads
+    /// (T1 with fake sessions, update-system.md §7.5).
+    func installHeadlessSessionServiceForTesting(_ service: any RuntimeSessionService) {
+        headlessSessionService = service
+    }
+
     /// Builds the §7.5 runtime access over this host's supervisor and
     /// headless session service.
     func updateRuntimeAccess() -> any UpdateRuntimeAccess {
@@ -917,7 +938,11 @@ extension RuntimeHost {
                 else {
                     return false
                 }
-                return await handling.hasActiveSession(packageID: wireID)
+                // GU2 + GU3: a live session or a keepRunning task.
+                if await handling.hasActiveSession(packageID: wireID) {
+                    return true
+                }
+                return await handling.hasBackgroundActivity(packageID: wireID)
             },
             lastEnd: { [weak self] packageID in
                 guard let self,
@@ -928,6 +953,70 @@ extension RuntimeHost {
                     return nil
                 }
                 return await handling.lastSessionEnd(packageID: wireID)
+            },
+            androidOK: { [weak self] packageID in
+                guard let self, let supervisor = await self.supervisor else {
+                    return true
+                }
+                // Custom image: Store Agent op 110 (`store.constraints.v1`).
+                // A channel without the capability answers nil and the
+                // ListTasks fallback below decides (update-system.md §7.1).
+                if let access = await self.storeAccessForUpdateConstraints(),
+                    let answer = try? await access.withStoreAgent(UUID()) { channel -> Bool? in
+                        guard channel.capabilities.contains(.constraints) else {
+                            return nil
+                        }
+                        return try await channel.installConstraintsAllow(packageID)
+                    }
+                {
+                    return answer
+                }
+                // Stock image: the guest's ListTasks snapshot — gentle when
+                // no task of the package is on any display (GU5 fallback).
+                guard let agent = await supervisor.developmentGuestAgent else {
+                    return true
+                }
+                return await agent.tasks(forPackage: packageID.rawValue).isEmpty
+            },
+            events: { [weak self] in
+                AsyncStream { continuation in
+                    let pump = Task { [weak self] in
+                        guard let self else { return }
+                        if let supervisor = await self.supervisor {
+                            Task {
+                                for await event in supervisor.events {
+                                    guard case .state(let snapshot) = event else { continue }
+                                    continuation.yield(
+                                        .stateChanged(
+                                            Self.wireRuntimeState(for: snapshot.state)))
+                                }
+                            }
+                        }
+                        // The session service appears when the runtime is
+                        // ready; retry until it does or the stream ends.
+                        while !Task.isCancelled {
+                            if let handling = await self.headlessSessionService
+                                as? any PackageMutationSessionHandling
+                            {
+                                await handling.observeSessionActivity { packageID, activity in
+                                    guard let id = PackageID(rawValue: packageID.rawValue)
+                                    else { return }
+                                    switch activity {
+                                    case .started:
+                                        continuation.yield(.sessionStarted(id))
+                                    case .ended:
+                                        continuation.yield(.sessionEnded(id))
+                                    case .taskEnded:
+                                        continuation.yield(.taskEnded(id))
+                                    }
+                                }
+                                return
+                            }
+                            try? await Task.sleep(for: .seconds(3))
+                        }
+                    }
+                    continuation.onTermination = { _ in pump.cancel() }
+                }
             },
             endAll: { [weak self] packageID in
                 guard let self,

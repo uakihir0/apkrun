@@ -588,6 +588,13 @@ public actor DevelopmentGuestAgent {
         return !(await supervisor.snapshot.tasks.values.contains { $0.package == package })
     }
 
+    /// Live Android tasks of `package` from the latest guest snapshot —
+    /// the stock-image `ListTasks` surface (guest-protocol.md §7.1 op 17),
+    /// used as the gentle-update GU5 fallback.
+    public func tasks(forPackage package: String) async -> [GPTaskInfo] {
+        await supervisor.snapshot.tasks.values.filter { $0.package == package }
+    }
+
     /// Throws `requiredAgentUnavailable` once the restart budget is spent, and the agent stays down.
     public func requireAvailable() throws(GuestAgentFailure) {
         if restartsRefused {

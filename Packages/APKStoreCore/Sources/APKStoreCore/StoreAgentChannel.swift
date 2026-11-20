@@ -137,6 +137,9 @@ public struct StoreCapabilities: OptionSet, Sendable, Hashable {
     public static let rollback = Self(rawValue: 1 << 5)
     /// The channel can reinstall an older package version.
     public static let downgradeReinstall = Self(rawValue: 1 << 6)
+    /// The channel can ask PackageInstaller whether an install's
+    /// constraints are satisfied (Store Agent op 110, `store.constraints.v1`).
+    public static let constraints = Self(rawValue: 1 << 7)
 }
 
 /// The install mode of a `StoreInstallRequest` (guest-protocol.md §11.3).
@@ -218,11 +221,21 @@ public protocol StoreAgentChannel: Sendable {
     /// `StoreChannelFailure.updateOwnershipNotHeld` when Android reports
     /// `FAILED_PRECONDITION`.
     func relinquishUpdateOwnership(_ package: PackageID) async throws
+
+    /// Asks Android whether the package satisfies `GENTLE_UPDATE` install
+    /// constraints (Store Agent op 110, guest-protocol.md §11.1). `nil`
+    /// means the channel cannot ask — callers fall back to a task check.
+    ///
+    /// Only channels advertising `constraints` are asked; the answer is a
+    /// hint the gentle-update gate re-evaluates before each install.
+    func installConstraintsAllow(_ package: PackageID) async throws -> Bool?
 }
 
 extension StoreAgentChannel {
     /// Channels that cannot grant update ownership have nothing to relinquish.
     public func relinquishUpdateOwnership(_ package: PackageID) async throws {}
+    /// Channels without `constraints` cannot ask Android: `nil`.
+    public func installConstraintsAllow(_ package: PackageID) async throws -> Bool? { nil }
 }
 
 /// The runtime gate injected by RuntimeHost.

@@ -334,8 +334,29 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
     /// timestamp, so `transition(to:)` records it).
     private var lastEndAt: ContinuousClock.Instant?
 
+    /// §7.2 trigger observers, retained for the service's life.
+    private var sessionActivityObservers: [@Sendable (RuntimePackageID, PackageSessionActivity) -> Void] = []
+
+    private func noteActivity(_ activity: PackageSessionActivity) {
+        guard let packageID, let wireID = RuntimePackageID(rawValue: packageID) else { return }
+        for observer in sessionActivityObservers {
+            observer(wireID, activity)
+        }
+    }
+
     func lastSessionEnd(packageID: RuntimePackageID) async -> ContinuousClock.Instant? {
         lastEndAt
+    }
+
+    /// keepRunning tasks are a daemon feature; a dev window run has none.
+    func hasBackgroundActivity(packageID: RuntimePackageID) async -> Bool {
+        false
+    }
+
+    func observeSessionActivity(
+        _ observer: @escaping @Sendable (RuntimePackageID, PackageSessionActivity) -> Void
+    ) {
+        sessionActivityObservers.append(observer)
     }
 
     /// §7.3 Update Now: close the live session with the updating reason;
@@ -416,6 +437,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         let snapshot = try await registry.request(packageID: packageID)
         sessionID = snapshot.id
         self.packageID = packageID
+        noteActivity(.started)
         taskID = nil
         pendingLaunchFrameCount = nil
         frameReconciliationSessionID = nil
@@ -969,7 +991,10 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
             throw .sessionNotFound
         }
         let snapshot = try await registry.transition(sessionID, to: state)
-        if state.isEnded { lastEndAt = .now }
+        if state.isEnded {
+            lastEndAt = .now
+            noteActivity(.ended)
+        }
         return snapshot
     }
 }

@@ -806,6 +806,9 @@ public actor UpdateCoordinator {
             cursor: cursor, trigger: trigger, runtime: runtime,
             gate: gate, started: started)
         assertion.release()
+        // Free the gate's slot before anything that can open a session:
+        // a launch while the install still holds its slot waits for it.
+        let next = await gate.finishInstall(packageID)
         // §7.3: "Update Now" reopens the app after a successful update,
         // and its caller returns once its own install is done; unrelated
         // queued installs drain in the background.
@@ -813,32 +816,39 @@ public actor UpdateCoordinator {
             await runtime.reopen(packageID)
         }
         Task.detached {
-            await self.pumpQueuedInstalls(
-                after: packageID, trigger: trigger, runtime: runtime, gate: gate)
+            await self.drainQueuedInstalls(
+                first: next, trigger: trigger, runtime: runtime, gate: gate)
         }
         return outcome
     }
 
-    /// Frees the finished install's gate slot, then drains the queue.
+    /// Frees the finished install's gate slot, then drains the queue
+    /// starting at the package the slot's release admitted.
     private func pumpQueuedInstalls(
         after packageID: PackageID,
         trigger: UpdateTrigger,
         runtime: any UpdateRuntimeAccess,
         gate: GentleUpdateGate
     ) async {
-        _ = await gate.finishInstall(packageID)
-        await drainQueuedInstalls(trigger: trigger, runtime: runtime, gate: gate)
+        let first = await gate.finishInstall(packageID)
+        await drainQueuedInstalls(
+            first: first, trigger: trigger, runtime: runtime, gate: gate)
     }
 
     /// Admits each queued install and runs it; a package that lost its
     /// staged row frees the gate's slot. A resumed install continues the
-    /// chain itself.
+    /// chain itself. `first` is a package a `finishInstall` already
+    /// admitted — skipping it would leave its claim dangling.
     private func drainQueuedInstalls(
+        first: PackageID? = nil,
         trigger: UpdateTrigger,
         runtime: any UpdateRuntimeAccess,
         gate: GentleUpdateGate
     ) async {
-        var next = await gate.nextReadyPackage()
+        var next = first
+        if next == nil {
+            next = await gate.nextReadyPackage()
+        }
         while let admitted = next {
             if await resumeStagedInstall(
                 admitted, trigger: trigger, runtime: runtime, gate: gate

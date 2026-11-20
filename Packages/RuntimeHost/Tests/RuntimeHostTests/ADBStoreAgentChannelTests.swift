@@ -192,6 +192,35 @@ func adbStoreChannelDoesNotPassUnsupportedDowngradeRequestsToAndroid() async thr
     #expect(await guest.installCalls.isEmpty)
 }
 
+@Test(.timeLimit(.minutes(1)))
+func adbStoreChannelInstallsASplitSetInOneInstallMultipleCall() async throws {
+    // #43 §6.4: the whole split set goes through one `adb install-multiple`
+    // invocation, base first.
+    let package = try #require(PackageID(rawValue: "io.apkrun.fixture.hellosplit"))
+    let guest = FakeStoreGuestAgent(packageInfo: packageInfo(package: package.rawValue, versionCode: 1))
+    let channel = ADBStoreAgentChannel(
+        agent: guest,
+        adb: FakeStoreADBClient(),
+        capabilities: [.install, .metadata]
+    )
+    let files = [
+        URL(fileURLWithPath: "/tmp/base.apk"),
+        URL(fileURLWithPath: "/tmp/split_config.arm64_v8a.apk"),
+        URL(fileURLWithPath: "/tmp/split_config.ja.apk"),
+        URL(fileURLWithPath: "/tmp/split_config.xhdpi.apk"),
+        URL(fileURLWithPath: "/tmp/split_feature.apk"),
+    ]
+
+    _ = try await channel.install(
+        StoreInstallRequest(packageID: package, versionCode: 1),
+        files: files
+    )
+
+    let calls = await guest.installCalls
+    #expect(calls.count == 1)
+    #expect(calls[0].0 == files)
+}
+
 private func packageInfo(package: String, versionCode: Int64) -> GPPackageInfo {
     var info = GPPackageInfo()
     info.package = package

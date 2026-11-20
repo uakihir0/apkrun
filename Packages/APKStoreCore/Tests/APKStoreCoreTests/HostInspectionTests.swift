@@ -265,3 +265,115 @@ private func inspected(
     #expect(parts[0] == Data([0xAA, 0xBB, 0xCC]))
     #expect(parts[1] == Data([0x11, 0x22]))
 }
+
+// MARK: - HelloSplit selection (#43 T0)
+
+/// The committed `HelloSplit.apks` container is the fixture the split tests share
+/// with #74. Its member names and manifest attributes are fixed by `check-fixtures.sh`.
+private func helloSplitContainer() throws -> Archive {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let fixture = root.appendingPathComponent("Tests/Fixtures/containers/HelloSplit.apks")
+    return try Archive(url: fixture, accessMode: .read)
+}
+
+/// Members as the inspector reports them: `split` from each manifest plus the
+/// feature marker on `feature-master.apk`.
+private func helloSplitCandidates(_ names: [String]) -> [SplitCandidate] {
+    names.map { name in
+        let base = name.replacingOccurrences(of: "splits/", with: "").replacingOccurrences(of: ".apk", with: "")
+        if base == "base-master" {
+            return SplitCandidate(name: "base.apk", splitName: nil)
+        }
+        if base == "feature-master" {
+            return SplitCandidate(
+                name: "split_feature.apk", splitName: "feature",
+                attributes: SplitAttributes(
+                    isFeatureSplit: true, splitTypes: ["feature__module"]))
+        }
+        let splitName = "config.\(base.dropFirst("base-".count))"
+        return SplitCandidate(name: "split_\(splitName).apk", splitName: splitName)
+    }
+}
+
+@Test func helloSplitApksSelectsAbiDensityLanguageAndFeatureForBaselineGuest() throws {
+    let archive = try helloSplitContainer()
+    let memberNames = archive.filter { $0.path.hasSuffix(".apk") }.map(\.path)
+    #expect(
+        memberNames.sorted() == [
+            "splits/base-arm64_v8a.apk",
+            "splits/base-ja.apk",
+            "splits/base-master.apk",
+            "splits/base-xhdpi.apk",
+            "splits/feature-master.apk",
+        ])
+
+    // Baseline guest: arm64-v8a, 320 dpi (xhdpi), SDK 37. Every member survives
+    // selection; nothing is excluded.
+    let selection = try SplitSelector().select(helloSplitCandidates(memberNames))
+    #expect(selection.excludedSplits == [])
+    #expect(
+        selection.included.sorted() == [
+            "base.apk",
+            "split_config.arm64_v8a.apk",
+            "split_config.ja.apk",
+            "split_config.xhdpi.apk",
+            "split_feature.apk",
+        ])
+}
+
+@Test func helloSplitApksDropsTheABISplitForAMismatchedGuest() throws {
+    let archive = try helloSplitContainer()
+    let memberNames = archive.filter { $0.path.hasSuffix(".apk") }.map(\.path)
+    var guest = SplitSelector.GuestFacts()
+    guest.abis = ["x86_64"]
+
+    let selection = try SplitSelector(guest: guest).select(helloSplitCandidates(memberNames))
+    #expect(selection.excludedSplits == ["config.arm64_v8a"])
+    #expect(
+        selection.included.sorted() == [
+            "base.apk",
+            "split_config.ja.apk",
+            "split_config.xhdpi.apk",
+            "split_feature.apk",
+        ])
+}
+
+@Test func installSpecsListBaseFirstThenSplitsByName() throws {
+    let set = ArtifactSet(
+        packageID: PackageID(rawValue: "io.apkrun.fixture.hellosplit")!,
+        versionCode: 1,
+        files: [
+            ArtifactFile(
+                name: "split_feature.apk", splitName: "feature", size: 1, sha256: SHA256Digest(data: Data([5]))),
+            ArtifactFile(
+                name: "split_config.xhdpi.apk", splitName: "config.xhdpi", size: 1,
+                sha256: SHA256Digest(data: Data([4]))),
+            ArtifactFile(name: "base.apk", splitName: nil, size: 1, sha256: SHA256Digest(data: Data([1]))),
+            ArtifactFile(
+                name: "split_config.arm64_v8a.apk", splitName: "config.arm64_v8a", size: 1,
+                sha256: SHA256Digest(data: Data([2]))),
+            ArtifactFile(
+                name: "split_config.ja.apk", splitName: "config.ja", size: 1, sha256: SHA256Digest(data: Data([3]))),
+        ],
+        setDigest: SHA256Digest(data: Data([0])),
+        signerDigests: [],
+        lineage: [],
+        inspection: InspectionProvenance(
+            aapt2Version: "", verifierVersion: "", inspectedAt: Date(), hostChecksPerformed: [])
+    )
+
+    // The spec list is the BeginInstall order regardless of the stored order.
+    #expect(
+        set.installSpecs.map(\.name) == [
+            "base.apk",
+            "split_config.arm64_v8a.apk",
+            "split_config.ja.apk",
+            "split_config.xhdpi.apk",
+            "split_feature.apk",
+        ])
+}

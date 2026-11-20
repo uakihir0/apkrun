@@ -132,6 +132,8 @@ class StoreDispatcher(
                 operations.relinquishUpdateOwnership(request.relinquishUpdateOwnership.`package`)
                 response.relinquishUpdateOwnership = Empty.getDefaultInstance()
             }
+            Request.OpCase.ROLLBACK_PACKAGE ->
+                response.rollbackPackage = operations.rollbackPackage(request.rollbackPackage)
             Request.OpCase.CHECK_INSTALL_CONSTRAINTS ->
                 response.checkInstallConstraints =
                     operations.checkInstallConstraints(request.checkInstallConstraints)

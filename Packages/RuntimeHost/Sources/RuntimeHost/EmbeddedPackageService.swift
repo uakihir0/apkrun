@@ -1170,6 +1170,27 @@ public actor EmbeddedPackageService: RuntimeService {
                 return .store(
                     "stagedUpdateMissing", message: "No verified update is staged for this package.",
                     remediation: "Run `apkrun update check` to download and stage an update first.")
+            case .rollbackUnavailable(let reason):
+                switch reason {
+                case .noPreviousSet:
+                    return .store(
+                        "rollbackUnavailable",
+                        message: "No previous APK set is retained for this package.",
+                        remediation: "Rollback is possible only after an update.")
+                case .noMechanism:
+                    return .store(
+                        "rollbackUnavailable",
+                        message: "Android cannot roll this package back automatically.",
+                        remediation:
+                            "Retry with `apkrun rollback <package> --allow-data-loss` to reinstall the previous version (its app data is deleted).")
+                }
+            case .rollbackFailed(let detail):
+                return RuntimeWireError(
+                    domain: "update",
+                    code: "update.rollbackFailed",
+                    message: "The update rollback failed: \(detail).",
+                    remediation:
+                        "Repair the app with `apkrun repair <package>` or uninstall and install it again.")
             case .io:
                 return .store(
                     "storageIO", message: "APKRun could not read or write package data.",

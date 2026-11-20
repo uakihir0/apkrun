@@ -191,6 +191,16 @@ public struct StoreInstallRequest: Sendable, Equatable {
     }
 }
 
+/// The outcome of a `RollbackManager` rollback request (Store Agent op 108).
+public enum StoreRollbackResult: Sendable, Equatable {
+    /// Android restored the package to the requested version.
+    case rolledBack
+    /// No matching rollback is available (none was enabled at install, or it expired).
+    case unavailable
+    /// Android refused or failed the commit.
+    case failed(detail: String)
+}
+
 /// Failures a store channel reports under its operation contract.
 public enum StoreChannelFailure: Error, Equatable, Sendable {
     /// `PackageManager.relinquishUpdateOwnership` answered `FAILED_PRECONDITION`:
@@ -229,6 +239,12 @@ public protocol StoreAgentChannel: Sendable {
     /// Only channels advertising `constraints` are asked; the answer is a
     /// hint the gentle-update gate re-evaluates before each install.
     func installConstraintsAllow(_ package: PackageID) async throws -> Bool?
+
+    /// Asks Android's RollbackManager to restore the package to `to`
+    /// (Store Agent op 108, package-store.md §7.3). Only channels advertising
+    /// `rollback` are asked.
+    func rollback(_ package: PackageID, from: VersionCode, to: VersionCode) async throws
+        -> StoreRollbackResult
 }
 
 extension StoreAgentChannel {
@@ -236,6 +252,10 @@ extension StoreAgentChannel {
     public func relinquishUpdateOwnership(_ package: PackageID) async throws {}
     /// Channels without `constraints` cannot ask Android: `nil`.
     public func installConstraintsAllow(_ package: PackageID) async throws -> Bool? { nil }
+    /// Channels without `rollback` answer unavailable, like an expired rollback.
+    public func rollback(_ package: PackageID, from: VersionCode, to: VersionCode) async throws
+        -> StoreRollbackResult
+    { .unavailable }
 }
 
 /// The runtime gate injected by RuntimeHost.

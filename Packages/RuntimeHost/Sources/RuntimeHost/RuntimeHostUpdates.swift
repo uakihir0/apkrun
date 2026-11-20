@@ -1521,7 +1521,12 @@ extension RuntimeHost {
             displaySlotFree: { true })
         updateGate = gate
         startUpdateGatePump()
-        Task { await self.wireUpdateGateSessionHooks() }
+        Task { [weak self] in
+            await gate.setOnIdle { [host = self] in
+                await host?.stopUpdateBootedRuntimeIfIdle()
+            }
+            await self?.wireUpdateGateSessionHooks()
+        }
         return gate
     }
 

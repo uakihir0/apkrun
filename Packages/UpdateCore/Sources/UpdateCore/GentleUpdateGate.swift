@@ -175,6 +175,17 @@ public actor GentleUpdateGate {
         installing != nil || !queue.isEmpty || admitting
     }
 
+    /// Called when a `finishInstall` leaves no install in flight or
+    /// queued. The host uses it for the §3.5 idle stop, which the
+    /// assertion's release skipped while the finishing install still
+    /// held the slot.
+    public var onIdle: (@Sendable () async -> Void)?
+
+    /// Sets the idle hook (actor-isolated assign for non-actor callers).
+    public func setOnIdle(_ handler: (@Sendable () async -> Void)?) {
+        onIdle = handler
+    }
+
     /// Requests admission for a staged install. When nothing is
     /// installing and the gate is open the package installs immediately
     /// and `true` is returned; otherwise the request waits in the queue.
@@ -235,7 +246,11 @@ public actor GentleUpdateGate {
         for waiter in waiters {
             waiter.1.resume()
         }
-        return await nextReadyPackage()
+        let next = await nextReadyPackage()
+        if installing == nil, !admitting, queue.isEmpty {
+            await onIdle?()
+        }
+        return next
     }
 
     /// Whether the gate's install slot is claimed or an admission is

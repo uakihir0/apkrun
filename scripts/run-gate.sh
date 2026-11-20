@@ -2,12 +2,12 @@
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-    printf 'usage: scripts/run-gate.sh G1|G2|G3|G8\n' >&2
+    printf 'usage: scripts/run-gate.sh G1|G2|G3|G7|G8\n' >&2
     exit 64
 fi
 
 gate="$1"
-if [[ "$gate" != G1 && "$gate" != G2 && "$gate" != G3 && "$gate" != G8 ]]; then
+if [[ "$gate" != G1 && "$gate" != G2 && "$gate" != G3 && "$gate" != G7 && "$gate" != G8 ]]; then
     printf 'run-gate: unsupported gate: %s\n' "$gate" >&2
     exit 64
 fi
@@ -24,6 +24,7 @@ signing_arguments=(
 )
 # The G3 and G8 inputs, set once their artifacts are staged. Empty for G1 and G2.
 g3_build_settings=()
+g7_build_settings=()
 g8_build_settings=()
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -72,6 +73,27 @@ if [[ "$gate" == G3 ]]; then
     g3_virgl="$repo_root/ThirdParty/out/virgl-runtime/current"
     if [[ ! -f "$g3_virgl/libvirglrenderer.1.dylib" ]]; then
         printf 'run-gate: G3 needs the virgl runtime at %s (ThirdParty, #21)\n' "$g3_virgl" >&2
+        exit 78
+    fi
+    rm -rf "$gate_dir/artifacts" "$gate_dir/products" "$gate_dir/screen-recording.mov" "$gate_dir/screen-recording.mp4"
+fi
+
+if [[ "$gate" == G7 ]]; then
+    # G7 updates HelloUpdate V1 to V2 on the custom image, so it needs the
+    # Android bundle, adb, and the virgl runtime (the same inputs as G8).
+    g7_bundle="${APKRUN_G7_ANDROID_BUNDLE:-}"
+    if [[ "$g7_bundle" != /* || ! -f "$g7_bundle/manifest.json" || ! -f "$g7_bundle/SHA256SUMS" ]]; then
+        printf 'run-gate: G7 needs APKRUN_G7_ANDROID_BUNDLE, the absolute path of the Android bundle\n' >&2
+        exit 78
+    fi
+    g7_android_home="${APKRUN_G7_ANDROID_HOME:-}"
+    if [[ "$g7_android_home" != /* || ! -x "$g7_android_home/platform-tools/adb" ]]; then
+        printf 'run-gate: G7 needs adb at %s/platform-tools/adb (environment-setup.md §2.5)\n' "$g7_android_home" >&2
+        exit 78
+    fi
+    g7_virgl="$repo_root/ThirdParty/out/virgl-runtime/current"
+    if [[ ! -f "$g7_virgl/libvirglrenderer.1.dylib" ]]; then
+        printf 'run-gate: G7 needs the virgl runtime at %s (ThirdParty, #21)\n' "$g7_virgl" >&2
         exit 78
     fi
     rm -rf "$gate_dir/artifacts" "$gate_dir/products" "$gate_dir/screen-recording.mov" "$gate_dir/screen-recording.mp4"
@@ -201,6 +223,49 @@ if [[ "$gate" == G3 ]]; then
     } >> "$report"
 fi
 
+if [[ "$gate" == G7 ]]; then
+    # The Guest Agent bundle, the HelloUpdate V1/V2 fixtures with their local
+    # update repo, and the Debug app with its embedded helpers (as in G8).
+    export ANDROID_HOME="$g7_android_home"
+    scripts/build-guest.sh
+    scripts/build-fixtures.sh --app HelloUpdate
+    SRCROOT="$repo_root" scripts/build/stamp-commit.sh
+    xcodebuild build \
+        -project APKRun.xcodeproj \
+        -scheme APKRun \
+        -configuration Debug \
+        -jobs 1 \
+        -derivedDataPath "$gate_dir/DerivedData" \
+        "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
+        "APKRUN_CI=1" \
+        "${signing_arguments[@]}"
+    g7_app="$gate_dir/DerivedData/Build/Products/Debug/APKRun.app"
+    staging="$APKRUN_TEST_LINUX_DIR/g7-staging"
+    rm -rf "$staging"
+    mkdir -p "$staging"
+    cp -R "$g7_app" "$staging/APKRun.app"
+    cp -R Tests/Fixtures/update-repos/local "$staging/update-repo"
+    artifacts="$APKRUN_TEST_LINUX_DIR/g7-artifacts"
+    g7_build_settings=(
+        "APKRUN_G7_APP=$staging/APKRun.app"
+        "APKRUN_G7_CLI=$staging/APKRun.app/Contents/Resources/bin/apkrun"
+        "APKRUN_G7_V1_APK=$staging/update-repo/io.apkrun.fixture.helloupdate/1/app.apk"
+        "APKRUN_G7_V2_APK=$staging/update-repo/io.apkrun.fixture.helloupdate/2/app.apk"
+        "APKRUN_G7_UPDATE_REPO=$staging/update-repo"
+        "APKRUN_G7_ARTIFACTS=$artifacts"
+        "APKRUN_G7_ADB=$g7_android_home/platform-tools/adb"
+    )
+    {
+        printf 'bundle: %s\n' "$g7_bundle"
+        printf 'app: %s\n' "$staging/APKRun.app"
+        printf 'helloupdate_v1_apk_sha256: %s\n' \
+            "$(shasum -a 256 "$staging/update-repo/io.apkrun.fixture.helloupdate/1/app.apk" | awk '{ print $1 }')"
+        printf 'helloupdate_v2_apk_sha256: %s\n' \
+            "$(shasum -a 256 "$staging/update-repo/io.apkrun.fixture.helloupdate/2/app.apk" | awk '{ print $1 }')"
+        printf 'android_sdk: %s\n' "$g7_android_home"
+    } >> "$report"
+fi
+
 if [[ "$gate" == G8 ]]; then
     # The Guest Agent bundle, the HelloText fixture, and the Debug app with its
     # embedded helpers (apkrund, the launcher, the CLI). Everything the test
@@ -251,7 +316,8 @@ xcodebuild build-for-testing \
     "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
     "APKRUN_CI=1" \
     "${signing_arguments[@]}" \
-    ${g3_build_settings[@]+"${g3_build_settings[@]}"}
+    ${g3_build_settings[@]+"${g3_build_settings[@]}"} \
+    ${g7_build_settings[@]+"${g7_build_settings[@]}"}
 scripts/tools/verify-test-host-directory.sh \
     "$gate_dir/DerivedData/Build/Products/Debug/APKRunTestHost.app" "$APKRUN_TEST_LINUX_DIR"
 xcodebuild test \
@@ -325,6 +391,56 @@ if [[ "$gate" == G3 ]]; then
     } >> "$report"
     gate_status=$g3_status
     if [[ $gate_status -eq 0 ]]; then gate_status=$check_status; fi
+    if [[ $gate_status -eq 0 ]]; then gate_status=$recorder_status; fi
+    exit "$gate_status"
+fi
+if [[ "$gate" == G7 ]]; then
+    # The G7 check runs like G8: serialised with other VM runs by lockf, with a
+    # screen recording kept as evidence (test-strategy §5).
+    artifacts="$APKRUN_TEST_LINUX_DIR/g7-artifacts"
+    rm -rf "$artifacts"
+    recording="$gate_dir/screen-recording.mov"
+    screencapture -v -V 1800 "$recording" &
+    recording_pid=$!
+    g7_status=0
+    lockf -k /tmp/apkrun-vm.lock xcodebuild test \
+        -project APKRun.xcodeproj \
+        -scheme AcceptanceTests \
+        -testPlan AcceptanceTests \
+        -configuration Debug \
+        -only-test-configuration G7 \
+        -only-testing:AcceptanceTests/G7GentleUpdateTests \
+        -test-timeouts-enabled NO \
+        -jobs 1 \
+        -derivedDataPath "$gate_dir/DerivedData" \
+        -resultBundlePath "$gate_dir/$gate.xcresult" \
+        "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
+        "APKRUN_CI=1" \
+        "${signing_arguments[@]}" \
+        ${g7_build_settings[@]+"${g7_build_settings[@]}"} || g7_status=$?
+    recorder_status=0
+    wait "$recording_pid" || recorder_status=$?
+    if [[ -d "$artifacts" ]]; then
+        rm -rf "$gate_dir/artifacts"
+        cp -R "$artifacts" "$gate_dir/artifacts"
+    fi
+    if [[ -f "$recording" ]]; then
+        if avconvert --preset PresetMediumQuality --source "$recording" --output "$gate_dir/screen-recording.mp4"; then
+            rm -f "$recording"
+        else
+            recorder_status=1
+        fi
+    fi
+    if [[ ! -s "$gate_dir/screen-recording.mp4" ]]; then
+        recorder_status=1
+    fi
+    {
+        printf 'artifacts: %s\n' "$gate_dir/artifacts"
+        printf 'screen_recording: %s\n' "$gate_dir/screen-recording.mp4"
+        printf 'recorder_exit: %s\n' "$recorder_status"
+        printf 'test_exit: %s\n' "$g7_status"
+    } >> "$report"
+    gate_status=$g7_status
     if [[ $gate_status -eq 0 ]]; then gate_status=$recorder_status; fi
     exit "$gate_status"
 fi

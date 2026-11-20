@@ -126,12 +126,17 @@ public actor UpdateScheduler {
         guard let runtime = await runtimeProvider(),
             let gate = await gateProvider()
         else { return }
+        // Admit every staged row, not just the first: a row that never
+        // enters the queue never reaches a §7.2 pump trigger and its
+        // update is left behind.
         for packageID in staged {
             if await gate.requestInstall(packageID) {
                 if await coordinator.resumeStagedInstall(
                     packageID, trigger: .scheduled, runtime: runtime, gate: gate
                 ) != nil {
-                    return
+                    // The install that just ran continues the queue
+                    // itself; the rows after it stay queued.
+                    continue
                 }
                 // An admitted row that cannot resume (no candidate summary)
                 // must free the shared install slot.

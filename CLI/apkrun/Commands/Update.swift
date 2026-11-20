@@ -12,6 +12,12 @@ struct UpdateCommand: AsyncParsableCommand {
         subcommands: [UpdatePolicyCommand.self, UpdateHistoryCommand.self]
     )
 
+    @Argument(help: "The Android package name. Omit it to check every package.")
+    var package: String?
+
+    @Option(name: .long, parsing: .upToNextOption, help: "APK files for a manual update.")
+    var file: [String] = []
+
     @Flag(name: .long, help: "Report only; do not download or notify.")
     var checkOnly = false
 
@@ -21,6 +27,18 @@ struct UpdateCommand: AsyncParsableCommand {
     mutating func run() async throws {
         do {
             let client = try RuntimeControlClient(clientKind: .cli)
+            if let package {
+                guard !checkOnly else {
+                    throw CLIFailure.invalidArgument(
+                        argument: "--check-only", reason: "incompatible")
+                }
+                try await runSingle(client: client, package: package)
+                return
+            }
+            guard file.isEmpty else {
+                throw CLIFailure.invalidArgument(
+                    argument: "--file", reason: "requiresPackage")
+            }
             let (_, results) = try await client.checkForUpdates(
                 packages: nil, checkOnly: checkOnly)
             if json {
@@ -43,6 +61,63 @@ struct UpdateCommand: AsyncParsableCommand {
             throw code
         } catch {
             throw await RuntimeStatusOutput.commandFailure(error)
+        }
+    }
+
+    /// `apkrun update <package> [--file <apk>…]` (cli.md §4.3): check and
+    /// install this package now; `--file` applies a manual file update.
+    private func runSingle(client: RuntimeControlClient, package: String) async throws {
+        guard let packageID = RuntimePackageID(rawValue: package) else {
+            throw CLIFailure.invalidPackageName(package: package)
+        }
+        var files: [RuntimeImportSourceFile]?
+        var handles: [FileHandle] = []
+        if !self.file.isEmpty {
+            guard self.file.count <= 20 else {
+                throw CLIFailure.invalidArgument(
+                    argument: "--file", reason: "invalidValue")
+            }
+            files = self.file.enumerated().map { index, path in
+                RuntimeImportSourceFile(
+                    fileIndex: index, name: URL(fileURLWithPath: path).lastPathComponent)
+            }
+            for path in self.file {
+                let url = URL(fileURLWithPath: path)
+                do {
+                    handles.append(try FileHandle(forReadingFrom: url))
+                } catch {
+                    throw CLIFailure.fileNotAccessible(file: path, .permissionDenied)
+                }
+            }
+        }
+        defer {
+            for handle in handles {
+                try? handle.close()
+            }
+        }
+        let options = UpdateNowOptions(files: files)
+        let (_, outcome) = try await client.updatePackage(
+            packageID: packageID, options: options, files: handles)
+        if json {
+            try PackageQueryOutput.writeJSON(outcome)
+            return
+        }
+        guard let outcome else {
+            Output.write("will update when \(package) quits")
+            return
+        }
+        switch outcome {
+        case .updated(let from, let to):
+            Output.write("\(package): installed: \(from) → \(to)")
+        case .rolledBack(let reason):
+            Output.write("\(package): rolled back: \(reason)")
+        case .keptAfterFailedHealthCheck(let reason):
+            Output.write("\(package): kept after failed health check: \(reason)")
+        case .skipped(let reason, let error):
+            Output.write("\(package): skipped: \(reason)\(error.map { " (\($0.code))" } ?? "")")
+            if error != nil {
+                throw ExitCode(2)
+            }
         }
     }
 }

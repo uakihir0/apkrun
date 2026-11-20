@@ -877,33 +877,24 @@ public actor EmbeddedPackageService: RuntimeService {
         }
     }
 
+    /// Maps the store's §4.7 classification onto the wire enum.
     private func relation(for preview: PackageImportPreview) async throws -> RuntimeImportRelation {
-        let records = try await store.listManagedPackages()
-        guard let record = records.first(where: { $0.packageId == preview.packageID }) else {
+        switch preview.relation {
+        case .newPackage:
             return .newPackage
-        }
-        if record.state == .uninstalledKeepingData {
-            return .uninstalledWithData(record.versionCode)
-        }
-        if !preview.artifactSet.signerDigests.isEmpty,
-            !record.signingCertificates.isEmpty,
-            preview.artifactSet.signerDigests != record.signingCertificates
-        {
-            return .otherSigner
-        }
-        if preview.versionCode < record.versionCode {
-            return .downgrade(from: record.versionCode)
-        }
-        if preview.versionCode > record.versionCode {
-            return .update(from: record.versionCode)
-        }
-        if preview.artifactSet.setDigest == record.artifacts.current?.setDigest {
-            if record.state == .installed {
-                return .sameAsInstalled
-            }
+        case .sameAsInstalled:
+            return .sameAsInstalled
+        case .reinstallSameVersion:
             return .reinstallSameVersion
+        case .update(let from):
+            return .update(from: from)
+        case .downgrade(let from):
+            return .downgrade(from: from)
+        case .otherSigner:
+            return .otherSigner
+        case .uninstalledWithData(let versionCode):
+            return .uninstalledWithData(versionCode)
         }
-        return .reinstallSameVersion
     }
 
     private func currentArtifactSet(for packageID: PackageID) throws -> ArtifactSet? {
@@ -1127,6 +1118,14 @@ public actor EmbeddedPackageService: RuntimeService {
                     message:
                         "Version \(candidate) is older than installed version \(installed).",
                     remediation: "Choose a newer APK, or uninstall the app first."
+                )
+            case .signerMismatch(let packageID):
+                return .store(
+                    "signerMismatch",
+                    message:
+                        "The APK for \(packageID.rawValue) is signed by a different key than the installed app.",
+                    remediation:
+                        "Install the APK signed by the same key, or uninstall the app first (its data is removed)."
                 )
             case .downgradeReinstallUnavailable:
                 return .store(

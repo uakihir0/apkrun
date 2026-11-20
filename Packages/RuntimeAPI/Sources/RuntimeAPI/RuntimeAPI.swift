@@ -725,6 +725,9 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func updateHistory(_ request: Data, reply: @escaping (Data) -> Void)
     /// Sets a package's update mode and provider (runtime-api.md §9.1).
     func setUpdatePolicy(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Checks and installs a package update now, optionally from files
+    /// (runtime-api.md §9.1). File handles travel like `importPackage`.
+    func updatePackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.

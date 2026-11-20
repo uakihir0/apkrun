@@ -22,6 +22,8 @@ public struct PackageImportPreview: Codable, Sendable, Equatable {
     public let excludedSplits: [String]
     /// Non-blocking observations of the intrinsic checks (§4.6).
     public let warnings: [ImportWarning]
+    /// How this import relates to the managed record (package-store.md §4.7).
+    public let relation: ImportRelation
 
     /// Creates an import preview.
     public init(
@@ -33,7 +35,8 @@ public struct PackageImportPreview: Codable, Sendable, Equatable {
         artifactSet: ArtifactSet,
         sourceFileNames: [String],
         excludedSplits: [String] = [],
-        warnings: [ImportWarning] = []
+        warnings: [ImportWarning] = [],
+        relation: ImportRelation = .newPackage
     ) {
         self.ticket = ticket
         self.packageID = packageID
@@ -44,11 +47,12 @@ public struct PackageImportPreview: Codable, Sendable, Equatable {
         self.sourceFileNames = sourceFileNames
         self.excludedSplits = excludedSplits
         self.warnings = warnings
+        self.relation = relation
     }
 
     private enum CodingKeys: String, CodingKey {
         case ticket, packageID, displayName, versionCode, versionName
-        case artifactSet, sourceFileNames, excludedSplits, warnings
+        case artifactSet, sourceFileNames, excludedSplits, warnings, relation
     }
 
     /// Decodes an import preview, defaulting fields absent in older manifests.
@@ -63,7 +67,27 @@ public struct PackageImportPreview: Codable, Sendable, Equatable {
         sourceFileNames = try container.decode([String].self, forKey: .sourceFileNames)
         excludedSplits = try container.decodeIfPresent([String].self, forKey: .excludedSplits) ?? []
         warnings = try container.decodeIfPresent([ImportWarning].self, forKey: .warnings) ?? []
+        relation = try container.decodeIfPresent(ImportRelation.self, forKey: .relation) ?? .newPackage
     }
+}
+
+/// How an import relates to the managed record of its package
+/// (package-store.md §4.7).
+public enum ImportRelation: Codable, Sendable, Equatable {
+    /// No managed record exists for the package.
+    case newPackage
+    /// The same artifact set as the managed record.
+    case sameAsInstalled
+    /// The same versionCode, different files.
+    case reinstallSameVersion
+    /// A newer versionCode; UpdateCore takes it as a manual update.
+    case update(from: VersionCode)
+    /// A lower versionCode; refused with store.downgradeRefused.
+    case downgrade(from: VersionCode)
+    /// A different signer; refused with store.signerMismatch.
+    case otherSigner
+    /// The package was uninstalled keeping its data; installing restores it.
+    case uninstalledWithData(VersionCode)
 }
 
 /// Failures detected by the package store itself.
@@ -91,6 +115,9 @@ public enum PackageStoreFailure: Error, Equatable, Sendable {
     case guestPackageMismatch
     case guestVersionMismatch
     case downgradeRefused(installed: VersionCode, candidate: VersionCode)
+    /// The import is signed by a different key than the managed record
+    /// (package-store.md §4.7 `otherSigner`).
+    case signerMismatch(PackageID)
     case downgradeReinstallUnavailable
     case unsupportedJournalVersion(Int)
     case journalUnreadable
@@ -670,7 +697,13 @@ public actor PackageStore {
             artifactSet: artifactSet,
             sourceFileNames: sourceNames,
             excludedSplits: verifiedImport.excludedSplits,
-            warnings: verifiedImport.warnings
+            warnings: verifiedImport.warnings,
+            relation: classifyRelation(
+                packageID: baseFacts.packageID,
+                versionCode: baseFacts.versionCode,
+                setDigest: artifactSet.setDigest,
+                signerDigests: artifactSet.signerDigests
+            )
         )
         let manifest = TicketManifest(
             preview: preview,
@@ -766,8 +799,9 @@ public actor PackageStore {
         }
         let directory = directories[preview.packageID] ?? directoryName(for: preview.packageID)
         let target = try incomingDirectory(
-            packageID: preview.packageID, directory: directory, ticket: ticket)
-            .appendingPathComponent(name)
+            packageID: preview.packageID, directory: directory, ticket: ticket
+        )
+        .appendingPathComponent(name)
         try contents.write(to: target, options: .atomic)
     }
 
@@ -827,11 +861,12 @@ public actor PackageStore {
             throw PackageStoreFailure.importTicketNotFound
         }
 
-        let rawFiles = ((try? fileManager.contentsOfDirectory(
-            at: incoming,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        )) ?? []).filter { !$0.hasDirectoryPath }
+        let rawFiles =
+            ((try? fileManager.contentsOfDirectory(
+                at: incoming,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )) ?? []).filter { !$0.hasDirectoryPath }
         guard !rawFiles.isEmpty else {
             try? fileManager.removeItem(at: incoming)
             downloadTickets[ticket] = nil
@@ -941,7 +976,13 @@ public actor PackageStore {
             artifactSet: artifactSet,
             sourceFileNames: sourceNames,
             excludedSplits: verifiedImport.excludedSplits,
-            warnings: verifiedImport.warnings
+            warnings: verifiedImport.warnings,
+            relation: classifyRelation(
+                packageID: baseFacts.packageID,
+                versionCode: baseFacts.versionCode,
+                setDigest: artifactSet.setDigest,
+                signerDigests: artifactSet.signerDigests
+            )
         )
         let manifest = TicketManifest(
             preview: preview,
@@ -959,11 +1000,13 @@ public actor PackageStore {
         }
         // Drop the provider's raw file names and the inspection scratch; only
         // the canonical set and its metadata remain.
-        for item in (try? fileManager.contentsOfDirectory(
-            at: incoming,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        )) ?? [] {
+        for item
+            in (try? fileManager.contentsOfDirectory(
+                at: incoming,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )) ?? []
+        {
             let name = item.lastPathComponent
             if name != "ticket.json", name != "artifact.json",
                 !artifactFiles.contains(where: { $0.name == name })
@@ -1003,8 +1046,23 @@ public actor PackageStore {
             throw PackageStoreFailure.importTicketNotFound
         }
         if let existing = records[manifest.preview.packageID] {
-            guard existing.state == .uninstalledKeepingData else {
-                throw PackageStoreFailure.packageAlreadyInstalled
+            if existing.state != .uninstalledKeepingData {
+                // Route refusals through the §4.7 relation so a signer
+                // mismatch or a versionCode regression names its real cause.
+                switch classifyRelation(
+                    packageID: manifest.preview.packageID,
+                    versionCode: manifest.preview.versionCode,
+                    setDigest: manifest.preview.artifactSet.setDigest,
+                    signerDigests: manifest.preview.artifactSet.signerDigests
+                ) {
+                case .otherSigner:
+                    throw PackageStoreFailure.signerMismatch(manifest.preview.packageID)
+                case .downgrade(let from):
+                    throw PackageStoreFailure.downgradeRefused(
+                        installed: from, candidate: manifest.preview.versionCode)
+                default:
+                    throw PackageStoreFailure.packageAlreadyInstalled
+                }
             }
             return try await performInstall(
                 manifest,
@@ -1994,6 +2052,24 @@ public actor PackageStore {
                 throw PackageStoreFailure.guestVersionMismatch
             }
         }
+        // Refuse signer mismatches before any Android call (package-store.md §4.7).
+        // The relation is re-derived here: the record may have changed since the
+        // preview was built. A versionCode regression is refused again below against
+        // the guest-reported version.
+        switch classifyRelation(
+            packageID: packageID,
+            versionCode: preview.versionCode,
+            setDigest: preview.artifactSet.setDigest,
+            signerDigests: preview.artifactSet.signerDigests
+        ) {
+        case .otherSigner:
+            throw PackageStoreFailure.signerMismatch(packageID)
+        case .downgrade(let from):
+            throw PackageStoreFailure.downgradeRefused(
+                installed: from, candidate: preview.versionCode)
+        default:
+            break
+        }
         let operationID = UUID()
         let previouslyInstalled = try await runtimeAccess.withStoreAgent(operationID) { channel in
             try await channel.packageInfo(packageID)
@@ -2501,13 +2577,16 @@ public actor PackageStore {
                 // A crash inside `moveReplacing` can leave only the `.old-*`
                 // backup of metadata.json; restore the newest one so the
                 // record survives without rolling back a later write.
-                let backups = (try? fileManager.contentsOfDirectory(atPath: child.path))?
+                let backups =
+                    (try? fileManager.contentsOfDirectory(atPath: child.path))?
                     .filter { $0.hasPrefix(".metadata.json.old-") } ?? []
                 let newest = backups.max { lhs, rhs in
-                    let lhsDate = (try? fileManager.attributesOfItem(
-                        atPath: child.appendingPathComponent(lhs).path))?[.modificationDate] as? Date
-                    let rhsDate = (try? fileManager.attributesOfItem(
-                        atPath: child.appendingPathComponent(rhs).path))?[.modificationDate] as? Date
+                    let lhsDate =
+                        (try? fileManager.attributesOfItem(
+                            atPath: child.appendingPathComponent(lhs).path))?[.modificationDate] as? Date
+                    let rhsDate =
+                        (try? fileManager.attributesOfItem(
+                            atPath: child.appendingPathComponent(rhs).path))?[.modificationDate] as? Date
                     return (lhsDate ?? .distantPast, lhs) < (rhsDate ?? .distantPast, rhs)
                 }
                 if let newest {
@@ -3227,8 +3306,9 @@ public actor PackageStore {
         let staged = packageDirectory.appendingPathComponent("staged", isDirectory: true)
         let current = packageDirectory.appendingPathComponent("current", isDirectory: true)
         let previous = packageDirectory.appendingPathComponent("previous", isDirectory: true)
-        guard let toDigest = transactions[transaction]?.begin.setDigest
-            .flatMap(SHA256Digest.init(rawValue:))
+        guard
+            let toDigest = transactions[transaction]?.begin.setDigest
+                .flatMap(SHA256Digest.init(rawValue:))
         else {
             try appendAbort(transaction, reason: "updateSetDigestMissing")
             return
@@ -3292,7 +3372,8 @@ public actor PackageStore {
         current: URL,
         previous: URL
     ) throws {
-        let trashedPrevious = trashDirectory
+        let trashedPrevious =
+            trashDirectory
             .appendingPathComponent("\(transaction)-previous", isDirectory: true)
         if fileManager.fileExists(atPath: previous.path),
             !fileManager.fileExists(atPath: trashedPrevious.path)
@@ -3323,7 +3404,8 @@ public actor PackageStore {
             if remaining == fromDigest, !fileManager.fileExists(atPath: previous.path) {
                 try moveItem(staged, to: previous)
             } else {
-                let trashed = trashDirectory
+                let trashed =
+                    trashDirectory
                     .appendingPathComponent("\(transaction)-staged", isDirectory: true)
                 guard !fileManager.fileExists(atPath: trashed.path) else {
                     throw PackageStoreFailure.io
@@ -3534,6 +3616,40 @@ public actor PackageStore {
         try? fileManager.removeItem(at: incomingDirectory(packageID: packageID, directory: dir, ticket: ticket))
         tickets[ticket] = nil
         activeTickets.remove(ticket)
+    }
+
+    /// Classifies an import against the managed record (package-store.md §4.7).
+    /// `uninstalledKeepingData` takes precedence over the signer and version
+    /// checks: a reinstall that restores kept data is legal with any signer.
+    private func classifyRelation(
+        packageID: PackageID,
+        versionCode: VersionCode,
+        setDigest: SHA256Digest,
+        signerDigests: [SHA256Digest]
+    ) -> ImportRelation {
+        guard let record = records[packageID] else { return .newPackage }
+        if record.state == .uninstalledKeepingData {
+            return .uninstalledWithData(record.versionCode)
+        }
+        let candidateSigners = Set(signerDigests)
+        let installedSigners = Set(record.signingCertificates)
+        if !candidateSigners.isEmpty, !installedSigners.isEmpty,
+            candidateSigners != installedSigners
+        {
+            return .otherSigner
+        }
+        if versionCode < record.versionCode {
+            return .downgrade(from: record.versionCode)
+        }
+        if versionCode > record.versionCode {
+            return .update(from: record.versionCode)
+        }
+        if setDigest == record.artifacts.current?.setDigest,
+            record.state == .installed
+        {
+            return .sameAsInstalled
+        }
+        return .reinstallSameVersion
     }
 
     private func directoryName(for packageID: PackageID) -> String {

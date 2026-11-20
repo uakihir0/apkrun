@@ -80,8 +80,7 @@ public actor UpdateCoordinator {
     /// Injected for tests: the network-failure backoff (10 s, then 60 s, §5).
     private let downloadRetrySleep: @Sendable (TimeInterval) async -> Void
     /// Injected for tests: overrides `ProviderRegistry` resolution.
-    private let providerFactory:
-        (@Sendable (UpdateProviderRef) throws(UpdateFailure) -> any UpdateProvider)?
+    private let providerFactory: (@Sendable (UpdateProviderRef) throws(UpdateFailure) -> any UpdateProvider)?
     /// V1–V3 of §6; stateless, injectable for tests.
     private let validator: UpdateValidator
     /// H1's budget (§8.1): 30 s for Android to report the staged set.
@@ -107,8 +106,7 @@ public actor UpdateCoordinator {
             try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000))
         },
         providerFactory:
-            (@Sendable (UpdateProviderRef) throws(UpdateFailure) -> any UpdateProvider)?
-        = nil,
+            (@Sendable (UpdateProviderRef) throws(UpdateFailure) -> any UpdateProvider)? = nil,
         validator: UpdateValidator = UpdateValidator(),
         healthCheckBudget: Duration = .seconds(30),
         healthCheckTickSleep: @escaping @Sendable () async -> Void = {
@@ -411,14 +409,16 @@ public actor UpdateCoordinator {
                     .hashMismatch(artifact: declared.url.lastPathComponent))
             }
         }
-        let diskTotal = ((try? FileManager.default.contentsOfDirectory(
-            at: ticketInfo.directory,
-            includingPropertiesForKeys: [.fileSizeKey],
-            options: [.skipsHiddenFiles]
-        )) ?? []).reduce(Int64(0)) {
-            $0 + Int64(
-                (try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-        }
+        let diskTotal =
+            ((try? FileManager.default.contentsOfDirectory(
+                at: ticketInfo.directory,
+                includingPropertiesForKeys: [.fileSizeKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []).reduce(Int64(0)) {
+                $0
+                    + Int64(
+                        (try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            }
         guard diskTotal <= Self.downloadSizeLimit else {
             try? await store.discardDownload(ticket: ticket)
             return .failure(
@@ -593,7 +593,8 @@ public actor UpdateCoordinator {
         candidate: UpdateCandidate,
         trigger: UpdateTrigger,
         runtime: any UpdateRuntimeAccess,
-        started: Date = Date()
+        started: Date = Date(),
+        origin: ArtifactOrigin? = nil
     ) async -> UpdateInstallOutcome {
         let records = (try? await store.listManagedPackages()) ?? []
         guard let record = records.first(where: { $0.packageId == packageID }) else {
@@ -610,10 +611,11 @@ public actor UpdateCoordinator {
             setDigest: preview.artifactSet.setDigest,
             size: preview.artifactSet.files.reduce(Int64(0)) { $0 + $1.size },
             fileCount: preview.artifactSet.files.count,
-            origin: ArtifactOrigin(
-                type: ArtifactOriginType(rawValue: candidate.provider.type.rawValue) ?? .local,
-                url: candidate.artifacts.first?.url.absoluteString,
-                declaredDigests: candidate.artifacts.compactMap(\.sha256)))
+            origin: origin
+                ?? ArtifactOrigin(
+                    type: ArtifactOriginType(rawValue: candidate.provider.type.rawValue) ?? .local,
+                    url: candidate.artifacts.first?.url.absoluteString,
+                    declaredDigests: candidate.artifacts.compactMap(\.sha256)))
         do {
             try await store.stage(ticket: validated.ticket, candidate: staged)
         } catch {

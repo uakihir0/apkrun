@@ -69,13 +69,18 @@ public actor EmbeddedUpdateService {
     }
 
     /// Runs a check for every package ID (update-system.md §5). The outcome is
-    /// per package; a failing package never fails the batch.
+    /// per package; a failing package never fails the batch. With
+    /// `checkOnly == false` a package whose choice is `automatic` continues
+    /// past `available` into download, validation, and install (runtime-api.md
+    /// §9.2); `notifyOnly` and `manual` stop at `available`.
     public func checkPackages(
         _ packageIDs: [PackageID],
         context: ProviderContext,
-        checkOnly: Bool = false
+        checkOnly: Bool = false,
+        runtime: (any UpdateRuntimeAccess)? = nil
     ) async -> [UpdateCheckResult] {
         var results: [UpdateCheckResult] = []
+        let records = (try? await store.listManagedPackages()) ?? []
         for packageID in packageIDs {
             let outcome = await coordinator.check(
                 packageID, trigger: .userInitiated, context: context,
@@ -85,9 +90,24 @@ public actor EmbeddedUpdateService {
             case .upToDate:
                 results.append(UpdateCheckResult(packageID: wireID, outcome: .upToDate))
             case .available(let candidate):
+                let record = records.first(where: { $0.packageId == packageID })
+                let settings = try? await store.packageSettings(for: packageID)
+                let choice = record.map {
+                    Self.choice(authority: $0.updateAuthority, mode: settings?.updateMode)
+                }
+                guard !checkOnly, choice == .automatic, let runtime else {
+                    results.append(
+                        UpdateCheckResult(
+                            packageID: wireID, outcome: .available(Self.wireCandidate(candidate))))
+                    break
+                }
+                let updateOutcome = await continueUpdate(
+                    packageID, candidate: candidate, trigger: .userInitiated,
+                    context: context, runtime: runtime, started: Date())
                 results.append(
                     UpdateCheckResult(
-                        packageID: wireID, outcome: .available(Self.wireCandidate(candidate))))
+                        packageID: wireID,
+                        outcome: Self.checkResultOutcome(updateOutcome)))
             case .failed(let failure):
                 results.append(
                     UpdateCheckResult(
@@ -96,6 +116,143 @@ public actor EmbeddedUpdateService {
             }
         }
         return results
+    }
+
+    /// Runs download → validate → install after a check surfaced a candidate
+    /// (update-system.md §5–§8). A nil result means the update is staged and
+    /// waits for the gate to open (§7.3).
+    func continueUpdate(
+        _ packageID: PackageID,
+        candidate: UpdateCandidate,
+        trigger: UpdateTrigger,
+        context: ProviderContext,
+        runtime: any UpdateRuntimeAccess,
+        started: Date,
+        origin: ArtifactOrigin? = nil
+    ) async -> WireUpdateOutcome? {
+        switch await coordinator.download(
+            packageID, candidate: candidate, context: context,
+            trigger: trigger, started: started)
+        {
+        case .downloaded(let downloaded):
+            return await validateAndInstall(
+                packageID, ticket: downloaded.ticket, candidate: candidate,
+                trigger: trigger, runtime: runtime, started: started,
+                origin: origin)
+        case .failed(let failure):
+            return .skipped(reason: "downloadFailed", error: Self.catalogError(for: failure))
+        }
+    }
+
+    /// Runs validate → install on an already-downloaded ticket. `origin`
+    /// overrides the provider-derived origin (manual file updates).
+    func validateAndInstall(
+        _ packageID: PackageID,
+        ticket: UUID,
+        candidate: UpdateCandidate,
+        trigger: UpdateTrigger,
+        runtime: any UpdateRuntimeAccess,
+        started: Date,
+        origin: ArtifactOrigin? = nil
+    ) async -> WireUpdateOutcome? {
+        switch await coordinator.validate(
+            packageID, ticket: ticket, candidate: candidate,
+            trigger: trigger, started: started)
+        {
+        case .validated(let validated):
+            switch await coordinator.install(
+                packageID, validated: validated, candidate: candidate,
+                trigger: trigger, runtime: runtime, started: started,
+                origin: origin)
+            {
+            case .installed(let from, let to):
+                return .updated(from: from, to: to)
+            case .keptAfterFailedHealthCheck(let failure):
+                return .keptAfterFailedHealthCheck(reason: failure.errorCode)
+            case .staged:
+                return nil
+            case .failed(let failure):
+                return .skipped(reason: "installFailed", error: Self.catalogError(for: failure))
+            }
+        case .failed(let failure):
+            return .skipped(reason: "validationFailed", error: Self.catalogError(for: failure))
+        }
+    }
+
+    /// Maps a continued update's wire outcome onto `UpdateCheckResult.Result`
+    /// (runtime-api.md §9.2): nil (still waiting) reports `.waiting` with the
+    /// only gate this milestone implements (§7.1 GU2).
+    static func checkResultOutcome(_ outcome: WireUpdateOutcome?) -> UpdateCheckResult.Result {
+        switch outcome {
+        case nil:
+            return .waiting(.appInUse)
+        case .updated(let from, let to):
+            return .installed(from: from, to: to)
+        case .keptAfterFailedHealthCheck(let reason):
+            return .failed(WireError(domain: "update", code: reason))
+        case .skipped(_, let error):
+            return .failed(error ?? WireError(domain: "update", code: "unknown"))
+        case .rolledBack(let reason):
+            return .failed(WireError(domain: "update", code: reason))
+        }
+    }
+
+    /// `updatePackage` without files: check now, then install when the check
+    /// surfaces a candidate regardless of update choice (§7.3).
+    public func updatePackageNow(
+        _ packageID: PackageID,
+        context: ProviderContext,
+        runtime: any UpdateRuntimeAccess
+    ) async -> WireUpdateOutcome? {
+        let started = Date()
+        switch await coordinator.check(
+            packageID, trigger: .userInitiated, context: context,
+            checkOnly: false)
+        {
+        case .upToDate:
+            return .skipped(reason: "upToDate", error: nil)
+        case .available(let candidate):
+            return await continueUpdate(
+                packageID, candidate: candidate, trigger: .userInitiated,
+                context: context, runtime: runtime, started: started)
+        case .failed(let failure):
+            return .skipped(reason: "checkFailed", error: Self.catalogError(for: failure))
+        }
+    }
+
+    /// `updatePackage` with files: the imported ticket enters the pipeline at
+    /// `validating` with trigger `manual` (update-system.md §7.1).
+    public func updateFromFile(
+        _ packageID: PackageID,
+        ticket: UUID,
+        runtime: any UpdateRuntimeAccess
+    ) async throws(RuntimeWireError) -> WireUpdateOutcome? {
+        let started = Date()
+        let records = (try? await store.listManagedPackages()) ?? []
+        guard let record = records.first(where: { $0.packageId == packageID }) else {
+            throw .store(
+                "packageNotFound",
+                message: "The package is not managed by APKRun.",
+                remediation: "Install the app first with `apkrun install`.")
+        }
+        switch record.updateAuthority {
+        case .googlePlay, .external:
+            return .skipped(
+                reason: "checkFailed",
+                error: Self.catalogError(for: UpdateFailure.authorityDoesNotAllowUpdates))
+        case .apkrun, .manual:
+            break
+        }
+        let candidate = UpdateCandidate(
+            packageID: packageID,
+            provider: UpdateProviderRef(
+                type: .local, configuration: .local(path: "file", bookmark: "")),
+            artifacts: [],
+            cursor: ProviderCursor(type: .local, value: ticket.uuidString))
+        return await validateAndInstall(
+            packageID, ticket: ticket, candidate: candidate,
+            trigger: .manual, runtime: runtime, started: started,
+            origin: ArtifactOrigin(type: .manualFile))
     }
 
     /// Every managed package whose record authority is `apkrun`.
@@ -600,7 +757,7 @@ extension RuntimeHost {
 
         let results = await service.checkPackages(
             selected, context: service.providerContext(userInitiated: true),
-            checkOnly: checkOnly)
+            checkOnly: checkOnly, runtime: updateRuntimeAccess())
         let all = preResults + results
         let failures = all.filter { result in
             if case .failed = result.outcome { return true }
@@ -671,5 +828,159 @@ extension RuntimeHost {
         } catch {
             throw EmbeddedUpdateService.wireError(for: error)
         }
+    }
+}
+
+/// The `UpdateRuntimeAccess` the host supplies to UpdateCore (update-system.md
+/// §7.5): runtime state from the supervisor, session presence from the
+/// headless session service, readiness through `ensureReady(.automatic)`.
+private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
+    private let stateOf: @Sendable () async -> WireRuntimeState
+    private let inUse: @Sendable (PackageID) async -> Bool
+    private let ready: @Sendable () async throws -> Void
+
+    init(
+        stateOf: @escaping @Sendable () async -> WireRuntimeState,
+        inUse: @escaping @Sendable (PackageID) async -> Bool,
+        ready: @escaping @Sendable () async throws -> Void
+    ) {
+        self.stateOf = stateOf
+        self.inUse = inUse
+        self.ready = ready
+    }
+
+    var runtimeState: WireRuntimeState {
+        get async { await stateOf() }
+    }
+
+    func hasActiveUse(_ packageID: PackageID) async -> Bool {
+        await inUse(packageID)
+    }
+
+    func ensureReadyForUpdate() async throws {
+        try await ready()
+    }
+}
+
+extension RuntimeHost {
+    /// Builds the §7.5 runtime access over this host's supervisor and
+    /// headless session service.
+    func updateRuntimeAccess() -> any UpdateRuntimeAccess {
+        EmbeddedUpdateRuntimeAccess(
+            stateOf: { [weak self] in
+                guard let self, let supervisor = await self.supervisor else {
+                    return .stopped
+                }
+                return Self.wireRuntimeState(for: await supervisor.state)
+            },
+            inUse: { [weak self] packageID in
+                guard let self,
+                    let handling = await self.headlessSessionService
+                        as? any PackageMutationSessionHandling,
+                    let wireID = RuntimePackageID(rawValue: packageID.rawValue)
+                else {
+                    return false
+                }
+                return await handling.hasActiveSession(packageID: wireID)
+            },
+            ready: { [weak self] in
+                guard let self, let supervisor = await self.supervisor else {
+                    throw UpdateFailure.providerUnreachable(reason: "runtime is not running")
+                }
+                try await supervisor.ensureReady(.automatic)
+            })
+    }
+
+    /// `updatePackage` (runtime-api.md §9.1): check and install one package
+    /// now, or apply a manual file update when `options.files` is set.
+    public func updatePackage(
+        packageID wireID: RuntimePackageID,
+        options: UpdateNowOptions,
+        files: [FileHandle],
+        operationID: RuntimeAPI.OperationID,
+        requestPayload: Data,
+        clientKind: RuntimeClientKind
+    ) async throws(RuntimeWireError) -> (OperationHandle, WireUpdateOutcome?) {
+        guard let packageID = PackageID(rawValue: wireID.rawValue) else {
+            throw .store(
+                "packageNotFound",
+                message: "The package is not managed by APKRun.",
+                remediation: "Use `apkrun list` to see managed packages.")
+        }
+        let service = updateServiceInstance()
+        do {
+            try await service.open()
+        } catch {
+            throw EmbeddedUpdateService.wireError(for: error)
+        }
+
+        let handle = OperationHandle(operationID: operationID, kind: .update)
+        let snapshot = OperationSnapshot(
+            operationID: operationID,
+            kind: .update,
+            packageID: wireID,
+            requestFingerprint: RuntimeOperationRequestFingerprint.make(from: requestPayload),
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(stage: "updating", message: "Updating…")
+        )
+        trackedOperations[operationID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: requestPayload,
+            snapshot: snapshot,
+            isCancellable: false,
+            task: nil
+        )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: operationID)
+
+        let outcome: WireUpdateOutcome?
+        do {
+            if let sources = options.files {
+                // A manual file update enters at `validating` (§7.1): import
+                // the files into a ticket, then validate and install it.
+                let preview = try await packageQueryServiceInstance().importPackage(
+                    RuntimeImportPackageRequest(files: sources, origin: .cli),
+                    files: files)
+                guard let ticket = UUID(uuidString: preview.ticket.rawValue) else {
+                    throw RuntimeWireError.store(
+                        "importTicketNotFound",
+                        message: "The APK preview is no longer valid.",
+                        remediation: "Run the update again.")
+                }
+                switch preview.relation {
+                case .downgrade:
+                    throw RuntimeWireError.store(
+                        "downgradeRefused",
+                        message: "The APK is older than the installed version.",
+                        remediation: "Choose a newer APK, or uninstall the app first.")
+                case .otherSigner:
+                    throw RuntimeWireError.store(
+                        "signerMismatch",
+                        message: "The APK is signed by a different key than the installed app.",
+                        remediation:
+                            "Install the APK signed by the same key, or uninstall the app first (its data is removed).")
+                default:
+                    break
+                }
+                outcome = try await service.updateFromFile(
+                    packageID, ticket: ticket, runtime: updateRuntimeAccess())
+            } else {
+                outcome = await service.updatePackageNow(
+                    packageID,
+                    context: service.providerContext(userInitiated: true),
+                    runtime: updateRuntimeAccess())
+            }
+        } catch {
+            let wireError: RuntimeWireError
+            if let error = error as? RuntimeWireError {
+                wireError = error
+            } else {
+                wireError = EmbeddedUpdateService.wireError(for: error)
+            }
+            finishOperation(operationID, result: .failed(wireError))
+            throw wireError
+        }
+        finishOperation(operationID, result: .succeeded(.none))
+        return (handle, outcome)
     }
 }

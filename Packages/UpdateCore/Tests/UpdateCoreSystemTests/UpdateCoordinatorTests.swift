@@ -384,8 +384,9 @@ private func makeV2Candidate(record: PackageRecord, repo: URL) throws -> UpdateC
     // The discarded download leaves no incoming set behind.
     let incomingRoot = root.appendingPathComponent(
         "Packages/io.apkrun.fixture.helloupdate/incoming")
-    let leftovers = (try? FileManager.default.contentsOfDirectory(
-        at: incomingRoot, includingPropertiesForKeys: nil)) ?? []
+    let leftovers =
+        (try? FileManager.default.contentsOfDirectory(
+            at: incomingRoot, includingPropertiesForKeys: nil)) ?? []
     #expect(leftovers.isEmpty)
 }
 
@@ -661,8 +662,8 @@ private func validatedV2(
     return (validated, candidate)
 }
 
-private extension CoordinatorChannel {
-    func set(reportedVersionCode: VersionCode) {
+extension CoordinatorChannel {
+    fileprivate func set(reportedVersionCode: VersionCode) {
         self.reportedVersionCode = reportedVersionCode
     }
 }

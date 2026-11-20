@@ -147,10 +147,12 @@ public struct LocalProvider: UpdateProvider {
                 return nil
             }
             var entryIsDirectory = ObjCBool(false)
-            guard FileManager.default.fileExists(
-                atPath: packageDirectory.appendingPathComponent(name).path,
-                isDirectory: &entryIsDirectory
-            ), entryIsDirectory.boolValue else {
+            guard
+                FileManager.default.fileExists(
+                    atPath: packageDirectory.appendingPathComponent(name).path,
+                    isDirectory: &entryIsDirectory
+                ), entryIsDirectory.boolValue
+            else {
                 return nil
             }
             return (code, name)

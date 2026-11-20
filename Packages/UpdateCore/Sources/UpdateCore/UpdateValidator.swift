@@ -97,7 +97,8 @@ public struct UpdateValidator: Sendable {
                         "packageMismatch(expected:\(record.packageId.rawValue),found:\(preview.packageID.rawValue))"),
                 .validation(
                     detail:
-                        "packageMismatch(expected: \(record.packageId.rawValue), found: \(preview.packageID.rawValue))"))
+                        "packageMismatch(expected: \(record.packageId.rawValue), found: \(preview.packageID.rawValue))")
+            )
         }
         checks.append(
             ValidationCheck(

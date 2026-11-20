@@ -121,7 +121,8 @@ private func makePackagesRoot() throws -> URL {
 private func slotDigests(in packages: URL, record: PackageRecord) -> (
     current: String?, previous: String?, staged: String?
 ) {
-    let directory = packages
+    let directory =
+        packages
         .appendingPathComponent(record.packageId.rawValue, isDirectory: true)
     func digest(_ slot: String) -> String? {
         let url = directory.appendingPathComponent(slot, isDirectory: true)
@@ -307,7 +308,8 @@ private func slotDigests(in packages: URL, record: PackageRecord) -> (
     let (_, record) = try await installV1AndStageV2(at: packages, runtime: runtime)
 
     // Forge the staged set to an older version by rewriting artifact.json.
-    let stagedArtifact = packages
+    let stagedArtifact =
+        packages
         .appendingPathComponent(record.packageId.rawValue, isDirectory: true)
         .appendingPathComponent("staged/artifact.json")
     let decoder = JSONDecoder()

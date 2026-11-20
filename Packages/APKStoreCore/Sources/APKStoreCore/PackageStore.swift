@@ -97,6 +97,8 @@ public enum PackageStoreFailure: Error, Equatable, Sendable {
     case metadataUnreadable(PackageID, detail: String)
     case androidInventoryUnreadable
     case unreadablePackageRecord
+    /// `authority == .apkrun` requires a configured update provider.
+    case providerNotConfigured
     case io
 }
 
@@ -444,6 +446,8 @@ public actor PackageStore {
 
     /// Loads records, recovers host-only operations, and restores unexpired import tickets.
     public func open() async throws {
+        // Idempotent: the shared store is opened by whichever service runs first.
+        guard !opened else { return }
         try createDirectory(packagesDirectory)
 
         let importsLock = try await acquireLock(at: importsLockURL)
@@ -1077,7 +1081,8 @@ public actor PackageStore {
         for packageID: PackageID,
         authority: UpdateAuthority? = nil,
         provider: UpdateProviderRef? = nil,
-        removeProvider: Bool = false
+        removeProvider: Bool = false,
+        requireProvider: Bool = false
     ) async throws {
         try requireWritable()
         guard operationsInProgress.insert(packageID).inserted else {
@@ -1098,6 +1103,13 @@ public actor PackageStore {
             record.updateProvider = nil
         } else if let provider {
             record.updateProvider = provider
+        }
+        // Checked inside the mutation lock so a concurrent provider removal
+        // cannot leave `apkrun` authority without a provider.
+        if requireProvider, record.updateAuthority == .apkrun,
+            record.updateProvider == nil
+        {
+            throw PackageStoreFailure.providerNotConfigured
         }
         record.updatedAt = clock()
         try writeRecord(record, directory: directory)
@@ -2030,6 +2042,17 @@ public actor PackageStore {
             let metadataURL = child.appendingPathComponent("metadata.json")
             let directoryName = child.lastPathComponent
             let directoryPackageID = Self.packageID(fromDirectoryName: directoryName)
+            if !fileManager.fileExists(atPath: metadataURL.path) {
+                // A crash inside `moveReplacing` can leave only the `.old-*`
+                // backup of metadata.json; restore it so the record survives.
+                if let backup = (try? fileManager.contentsOfDirectory(atPath: child.path))?
+                    .first(where: { $0.hasPrefix(".metadata.json.old-") })
+                {
+                    try? fileManager.moveItem(
+                        atPath: child.appendingPathComponent(backup).path,
+                        toPath: metadataURL.path)
+                }
+            }
             guard fileManager.fileExists(atPath: metadataURL.path) else {
                 if let packageID = directoryPackageID, Self.hasPersistedPackageData(in: child, fileManager: fileManager)
                 {

@@ -61,10 +61,9 @@ import Testing
             + [
                 "packageNotInstalled", "invalidName", "customIconInvalid", "iconConversionFailed",
                 "launcherTemplateInvalid", "destinationNotWritable", "destinationNotAccessible",
-                "nameConflict", "wrapperExists", "wrapperNotFound", "signingFailed",
+                "nameConflict", "wrapperExists", "wrapperNotFound",
                 "verificationFailed", "registrationFailed", "registryUnavailable",
                 "stagingExpired", "bundleInvalid",
-                "approvalDenied", "approvalTimedOut", "approvalNotFound",
             ].map { "wrapper.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)

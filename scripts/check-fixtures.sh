@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Rebuilds the HelloUpdate fixtures into a scratch directory and fails when any
 # committed byte differs (test-strategy.md §4.5, "a CI check fails when a copy
-# is older than its sources"). Covers the local update repo and the derived
-# set of Tests/Fixtures/apks/ (#42).
+# is older than its sources"). Covers the local update repo, the derived
+# set of Tests/Fixtures/apks/ (#42), and Tests/Fixtures/containers/HelloSplit.apks (#43).
 #
 #   scripts/check-fixtures.sh
 #
@@ -45,6 +45,16 @@ compare_tree() {
 status=0
 compare_tree "$committed_repo" "$work/repo" "update repo" || status=1
 compare_tree "$committed_derived" "$work/apks" "derived APKs" || status=1
+
+# HelloSplit.apks builds through bundletool, not the derived-apks step, so it
+# gets its own rebuild (#43 step 1).
+"$script_dir/build-fixtures.sh" --app HelloSplit >/dev/null
+if ! cmp -s \
+    "$repo_root/Tests/Fixtures/containers/HelloSplit.apks" \
+    "$repo_root/Tests/Fixtures/AndroidApps/out/HelloSplit.apks"; then
+    printf 'check-fixtures: HelloSplit.apks differs from the rebuilt bytes\n' >&2
+    status=1
+fi
 if ((status == 0)); then
     printf 'check-fixtures: committed fixtures match the rebuilt bytes\n'
 fi

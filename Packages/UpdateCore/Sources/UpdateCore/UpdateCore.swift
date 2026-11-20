@@ -351,7 +351,7 @@ public enum SkipReason: Sendable, Equatable {
     case authorityChanged
 
     /// The history-file name of the reason (update-system.md §10.2).
-    var name: String {
+    public var name: String {
         switch self {
         case .upToDate: "upToDate"
         case .checkFailed: "checkFailed"

@@ -1104,6 +1104,39 @@ public actor PackageStore {
         records[packageID] = record
     }
 
+    /// Writes `update.mode` to the package's `settings.json` (update-system.md
+    /// §2.3). The caller writes this before `setUpdatePolicy` so a crash never
+    /// turns on automatic updates without the record change.
+    public func setUpdateMode(for packageID: PackageID, mode: String) async throws {
+        try requireWritable()
+        guard operationsInProgress.insert(packageID).inserted else {
+            throw PackageStoreFailure.operationInProgress
+        }
+        defer { operationsInProgress.remove(packageID) }
+
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        if let detail = unreadableRecords[packageID] {
+            throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
+        }
+        guard records[packageID] != nil else { throw PackageStoreFailure.packageNotFound }
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        let url = packagesDirectory.appendingPathComponent(directory, isDirectory: true)
+            .appendingPathComponent("settings.json")
+        var settings: PackageSettings
+        if fileManager.fileExists(atPath: url.path),
+            let data = try? Data(contentsOf: url),
+            let decoded = try? Self.decoder().decode(PackageSettings.self, from: data)
+        {
+            settings = decoded
+        } else {
+            settings = PackageSettings()
+        }
+        settings.update["mode"] = mode
+        try writeJSON(settings, to: url)
+    }
+
     /// Adopts a package Android has but APKRun does not manage (package-store.md §9.3).
     ///
     /// The record gets `installer: external`, `updateAuthority: external`, no artifact, and

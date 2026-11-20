@@ -34,7 +34,7 @@ public enum RuntimeHostError: Error, Equatable, Sendable {
     case stateStore(DaemonStateStoreError)
 }
 
-private struct RuntimeTrackedOperation {
+struct RuntimeTrackedOperation {
     let handle: OperationHandle
     let requestPayload: Data
     var snapshot: OperationSnapshot
@@ -49,7 +49,7 @@ private struct RuntimeTrackedOperation {
 public actor RuntimeHost {
     nonisolated let eventHub = RuntimeEventHub()
 
-    private let paths: APKRunPaths
+    let paths: APKRunPaths
     private let buildInfo: BuildInfo
     private let environment: [String: String]
     private let executableURL: URL
@@ -105,7 +105,10 @@ public actor RuntimeHost {
     private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
     private var packageMutationWaiters: [CheckedContinuation<Void, Never>] = []
     private var shutdownWaiters: [CheckedContinuation<Void, Never>] = []
-    private var trackedOperations: [WireOperationID: RuntimeTrackedOperation] = [:]
+    var trackedOperations: [WireOperationID: RuntimeTrackedOperation] = [:]
+    /// The lazily created update service (update-system.md). Internal for
+    /// `RuntimeHostUpdates.swift`.
+    var updateService: EmbeddedUpdateService?
     private var packageActivityReservations = PackageActivityReservations()
     /// The perf record writer (`perf/launches.jsonl`), created with `paths`.
     private var perfRecords: PerfRecordWriter?
@@ -1261,7 +1264,7 @@ public actor RuntimeHost {
         }
     }
 
-    private func finishOperation(_ operationID: WireOperationID, result: OperationResult) {
+    func finishOperation(_ operationID: WireOperationID, result: OperationResult) {
         guard var operation = trackedOperations[operationID], operation.snapshot.result == nil else {
             return
         }

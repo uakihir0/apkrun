@@ -188,6 +188,7 @@ class InstallService(
         }
         session.open =
             OpenArtifact(
+                transferId = frame.transferId,
                 artifact = artifact,
                 stream = session.handle.openWrite(artifact.name, 0, artifact.size),
                 spoolStream = artifact.spool.outputStream(),
@@ -367,8 +368,9 @@ class InstallService(
             invalid(session, "the staged version is ${info.versionCode}")
         }
         if (session.expectedSigners.isNotEmpty()) {
-            val staged = info.signerSha256.toSet()
-            val expected = session.expectedSigners.toSet()
+            // ByteArray equality is referential; compare the digests' contents.
+            val staged = info.signerSha256.map { it.toList() }.toSet()
+            val expected = session.expectedSigners.map { it.toList() }.toSet()
             if (staged != expected) {
                 invalid(session, "the staged signer does not match")
             }
@@ -381,8 +383,9 @@ class InstallService(
     }
 
     private fun sessionOf(frame: BulkFrame): Session? {
-        // Chunk and end frames do not carry the context: the open artifact identifies the session.
-        return sessions.values.firstOrNull { it.open != null }
+        // Chunk and end frames do not carry the context: the transfer id identifies the open
+        // artifact, so two installs can stream at once without mixing chunks.
+        return sessions.values.firstOrNull { it.open?.transferId == frame.transferId }
     }
 
     private fun abandonQuietly(session: Session) {

@@ -1420,12 +1420,9 @@ extension RuntimeHost {
                         "downgradeRefused",
                         message: "The APK is older than the installed version.",
                         remediation: "Choose a newer APK, or uninstall the app first.")
-                case .otherSigner:
-                    throw RuntimeWireError.store(
-                        "signerMismatch",
-                        message: "The APK is signed by a different key than the installed app.",
-                        remediation:
-                            "Install the APK signed by the same key, or uninstall the app first (its data is removed).")
+                // .otherSigner is not refused here: the update validator's
+                // V3 check decides whether a signing rotation is allowed by
+                // lineage capability, and refuses a plain mismatch itself.
                 default:
                     break
                 }

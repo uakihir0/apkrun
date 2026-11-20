@@ -387,6 +387,16 @@ struct APKSignatureVerifier: Sendable {
                     lineageNodes = try Self.parseLineage(
                         attribute.subdata(in: 4..<attribute.count), file: file)
                     lineage = lineageNodes.map(\.certificateDigest)
+                    // The newest lineage entry must be the signer itself;
+                    // otherwise a carrier APK could present a lineage that
+                    // grants its predecessor's capabilities to a different
+                    // key (apksig §6.3: the lineage ends at the signer).
+                    guard lineageNodes.last?.certificateDigest == SHA256Digest(data: certificateDER)
+                    else {
+                        throw .invalidSignature(
+                            file: file,
+                            reason: "signing lineage does not end at the signer")
+                    }
                 }
             }
         }

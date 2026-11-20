@@ -201,6 +201,7 @@ class StoreConnection(
                 GuestCapability.STORE_INSTALL,
                 GuestCapability.STORE_METADATA,
                 GuestCapability.STORE_OWNERSHIP,
+                GuestCapability.STORE_CONSTRAINTS,
             )
     }
 }

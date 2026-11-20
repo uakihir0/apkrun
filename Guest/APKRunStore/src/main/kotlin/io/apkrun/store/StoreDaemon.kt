@@ -39,10 +39,11 @@ class StoreDaemon(private val context: Context) {
         InstallService(context, events) { android.os.SystemClock.elapsedRealtime() }
     private val ownership = OwnershipService(context.packageManager)
     private val metadata = MetadataService(context.packageManager, context.packageName)
+    private val constraints = ConstraintsService(context.packageManager.packageInstaller)
     private val enforcement = OwnershipEnforcement(context.contentResolver)
     internal val dispatcher =
         StoreDispatcher(
-            operations = DeviceStoreOperations(install, ownership, metadata),
+            operations = DeviceStoreOperations(install, ownership, metadata, constraints),
             uptimeMillis = { android.os.SystemClock.elapsedRealtime() },
         )
 

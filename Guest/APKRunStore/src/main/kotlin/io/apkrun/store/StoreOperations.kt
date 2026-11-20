@@ -1,6 +1,8 @@
 package io.apkrun.store
 
 import io.apkrun.guest.protocol.v1.BeginInstallResult
+import io.apkrun.guest.protocol.v1.CheckInstallConstraints
+import io.apkrun.guest.protocol.v1.ConstraintsResult
 import io.apkrun.guest.protocol.v1.InstallRequest
 import io.apkrun.guest.protocol.v1.ListManagedPackages
 import io.apkrun.guest.protocol.v1.Pong
@@ -37,6 +39,11 @@ interface StoreOperations {
 
     /** Releases Android update ownership (store.ownership.v1). */
     fun relinquishUpdateOwnership(packageName: String)
+
+    /**
+     * Answers whether Android's install constraints hold now (store.constraints.v1). A hint only.
+     */
+    suspend fun checkInstallConstraints(request: CheckInstallConstraints): ConstraintsResult
 }
 
 /** The device implementation of [StoreOperations]: the services of [StoreDaemon]. */
@@ -44,6 +51,7 @@ class DeviceStoreOperations(
     private val install: InstallService,
     private val ownership: OwnershipService,
     private val metadata: MetadataService,
+    private val constraints: ConstraintsService,
 ) : StoreOperations {
     override fun beginInstall(request: InstallRequest): BeginInstallResult =
         install.beginInstall(request)
@@ -63,4 +71,8 @@ class DeviceStoreOperations(
 
     override fun relinquishUpdateOwnership(packageName: String) =
         ownership.relinquishUpdateOwnership(packageName)
+
+    override suspend fun checkInstallConstraints(
+        request: CheckInstallConstraints
+    ): ConstraintsResult = constraints.checkInstallConstraints(request)
 }

@@ -169,6 +169,17 @@ final class RuntimeEventHub: @unchecked Sendable {
         )
     }
 
+    func publishWrapperChange(_ change: WrapperChange, operationID: OperationID? = nil) {
+        publish(
+            QueuedEvent(
+                topic: .wrappers,
+                time: Date(),
+                operationID: operationID,
+                payload: .wrappers(change)
+            )
+        )
+    }
+
     func publishPackageChange(_ change: PackageChange, operationID: OperationID? = nil) {
         publish(
             QueuedEvent(

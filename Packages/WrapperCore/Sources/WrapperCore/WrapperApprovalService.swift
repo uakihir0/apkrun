@@ -357,9 +357,14 @@ public actor WrapperApprovalService {
 
     /// Registers an approved bundle as a `user` entry (§7.3 step 5). Uses the
     /// cdhash and plist captured at request time: the user approved that exact
-    /// code, not whatever now sits at the path.
+    /// code, not whatever now sits at the path. The bundle may have been
+    /// trashed or replaced while the prompt was open, so it must still be
+    /// there, signed as the exact code the user saw.
     private func register(pending: PendingApproval) async throws(WrapperFailure) -> WrapperSummary {
-        try await register(
+        guard WrapperCodeSign.cdhash(of: pending.prompt.bundleURL) == pending.cdhash else {
+            throw .bundleInvalid(pending.prompt.bundleURL, reason: .signatureInvalid)
+        }
+        return try await register(
             bundleURL: pending.prompt.bundleURL,
             bundleID: pending.prompt.bundleID,
             packageID: pending.prompt.packageID.rawValue,

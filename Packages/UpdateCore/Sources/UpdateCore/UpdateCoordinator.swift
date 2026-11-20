@@ -1206,8 +1206,13 @@ public actor UpdateCoordinator {
             state.nextCheckAt = Self.nextCheck(
                 after: now, intervalHours: checkIntervalHours, failures: failures)
             state.consecutiveFailures = failures
-            state.phase = nil
-            state.candidate = nil
+            // A still-staged candidate survives an up-to-date check: the
+            // provider has nothing newer, but §7.2 may yet install the
+            // staged set (and §3.5 counts its stagedAt age).
+            if state.phase != "staged" {
+                state.phase = nil
+                state.candidate = nil
+            }
         }
         setPhase(record.packageId, .completed(.skipped(outcome)))
         await appendHistory(

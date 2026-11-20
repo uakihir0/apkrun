@@ -187,9 +187,14 @@ struct ArtifactVerifier: Sendable {
         while index + 30 <= data.count {
             guard data[index] == 0x50, data[index + 1] == 0x4B,
                 data[index + 2] == 0x03, data[index + 3] == 0x04
-            else { break }
+            else {
+                index += 1
+                continue
+            }
             let nameLength = Int(data[index + 26]) | Int(data[index + 27]) << 8
             let extraLength = Int(data[index + 28]) | Int(data[index + 29]) << 8
+            let compressedSize = Int(data[index + 18]) | Int(data[index + 19]) << 8
+                | Int(data[index + 20]) << 16 | Int(data[index + 21]) << 24
             let nameEnd = index + 30 + nameLength
             guard nameEnd <= data.count else { break }
             let name = String(decoding: data[(index + 30)..<nameEnd], as: UTF8.self)
@@ -202,7 +207,10 @@ struct ArtifactVerifier: Sendable {
                 let dataStart = nameEnd + extraLength
                 arscOK = compression == 0 && dataStart % 4 == 0
             }
-            index += 4
+            // Skip the entry's compressed data; entries written with a data descriptor
+            // carry size 0 here, and the signature scan finds the next header instead.
+            let next = nameEnd + extraLength + compressedSize
+            index = next > index ? next : index + 4
         }
         return (abis.sorted(), arscOK)
     }

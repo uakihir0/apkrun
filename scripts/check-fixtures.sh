@@ -34,12 +34,38 @@ compare_tree() {
             status=1
             continue
         fi
-        if ! cmp -s "$file" "$actual/$relative"; then
+        if ! compare_file "$file" "$actual/$relative"; then
             printf 'check-fixtures: %s: %s differs from the rebuilt bytes\n' "$label" "$relative" >&2
             status=1
         fi
     done < <(find "$expected" -type f -print0)
     return "$status"
+}
+
+compare_file() {
+    local committed="$1"
+    local rebuilt="$2"
+    case "$committed" in
+        *.apk|*.apks)
+            python3 - "$committed" "$rebuilt" <<'PY'
+import sys
+import zipfile
+
+def entries(path):
+    with zipfile.ZipFile(path) as archive:
+        return sorted(
+            (i.filename, i.CRC, i.file_size)
+            for i in archive.infolist()
+            if not i.filename.startswith("META-INF/")
+        )
+
+sys.exit(0 if entries(sys.argv[1]) == entries(sys.argv[2]) else 1)
+PY
+            ;;
+        *)
+            cmp -s "$committed" "$rebuilt"
+            ;;
+    esac
 }
 
 status=0

@@ -46,7 +46,7 @@ final class SplitInstallTests: XCTestCase {
 
             // The density split SplitSelector kept must resolve at runtime (OQ-14).
             let dump = try await adb.shell("pm dump \(Self.packageName)")
-            let splitLine = dump.standardOutput.split(whereSeparator: \.isNewline)
+            let splitLine = dump.output.split(whereSeparator: \.isNewline)
                 .map(String.init)
                 .first { $0.contains("splits=[") }
             let listed = try XCTUnwrap(splitLine, "PackageManager lists no splits")

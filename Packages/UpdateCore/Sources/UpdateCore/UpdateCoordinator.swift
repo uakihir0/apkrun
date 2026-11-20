@@ -315,9 +315,12 @@ public actor UpdateCoordinator {
                 case .hashMismatch where hashMismatchRetries > 0:
                     hashMismatchRetries -= 1
                     continue
-                case .providerUnreachable, .providerHTTPStatus, .providerRateLimited,
-                    .downloadFailed
-                where networkRetries < 2:
+                // One `where` per pattern: a shared trailing clause binds the
+                // last pattern only and the others would retry forever.
+                case .providerUnreachable where networkRetries < 2,
+                    .providerHTTPStatus where networkRetries < 2,
+                    .providerRateLimited where networkRetries < 2,
+                    .downloadFailed where networkRetries < 2:
                     await downloadRetrySleep(networkRetries == 0 ? 10 : 60)
                     networkRetries += 1
                     continue

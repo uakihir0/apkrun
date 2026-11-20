@@ -66,6 +66,18 @@ struct DevInputBinding: Sendable {
                         channel = next
                         boundToken = token
                         reportedFailure = false
+                        do {
+                            // The IME is its own channel, next to the input channel (input.md §5.6).
+                            let ime = try await agent.imeChannel()
+                            for route in boundRoutes {
+                                await route.bindIme(ime)
+                            }
+                        } catch {
+                            for route in boundRoutes {
+                                await route.bindIme(nil)
+                            }
+                            report(.warning("the IME channel could not be bound; editor mode is off"))
+                        }
                         let displayIDs = await boundRoutes.asyncMap { await $0.targetDisplayIDForDiagnostics() }
                         report(.message("input is bound to display\(displayIDs.count == 1 ? "" : "s") \(displayIDs)"))
                         report(.message("ADB shell invocations so far: \(await agent.adbShellInvocationCount)"))

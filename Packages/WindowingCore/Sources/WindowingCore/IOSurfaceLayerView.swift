@@ -24,7 +24,7 @@ public final class IOSurfaceLayerView: NSView {
     private var keyTranslator = KeyTranslator()
     /// The pixel size and generation that the owner set with ``update(pixelWidth:pixelHeight:generation:)``. Nil until
     /// then, so the translator maps nothing before the first surface.
-    private var geometry: (pixelWidth: Int, pixelHeight: Int, generation: UInt64)?
+    var geometry: (pixelWidth: Int, pixelHeight: Int, generation: UInt64)?
     private var trackingArea: NSTrackingArea?
     /// The rectangle of the tracking area, so that a layout that does not move the content keeps the area.
     private var trackingRect: CGRect = .zero
@@ -34,6 +34,20 @@ public final class IOSurfaceLayerView: NSView {
 
     /// Receives the pointer and key events, in order.
     public var inputSink: PointerInputSink?
+
+    /// Receives the text and editor events of editor mode (input.md §5.1).
+    public var imeTextSink: ImeTextSink?
+
+    /// The model of the bound Android editor (input.md §5.3).
+    var textInputModel = TextInputModel()
+    /// The latest editor report from the IME; editor mode is on while `editorFocused` holds.
+    private(set) var editorState: EditorState?
+    /// The secure input calls of input.md §5.5, balanced by a counter.
+    var secureInput = SecureInputController()
+    /// `doCommand` selectors with no mapping, for the `input.ime.unmappedCommand` counter (input.md §5.4).
+    internal var unmappedCommandCount = 0
+    /// Whether the window is key, tracked for the secure input policy (input.md §5.5).
+    var windowIsKey = true
 
     /// Requests a new display geometry after a View menu zoom action.
     public var onZoomChanged: ((Double) -> Void)?
@@ -163,6 +177,8 @@ public final class IOSurfaceLayerView: NSView {
     /// The window lost key status. The open gesture, the buttons, the hover, and the keys end on the guest (input.md §4.2,
     /// §7.3). The `cancelAll` that the pointer translator sends releases the keys on the guest.
     public func focusLost(sendCancellation: Bool = true) {
+        windowIsKey = false
+        updateSecureInput()
         cancelPending()
         keyTranslator.reset()
         let events = translator.focusLost(at: Self.now())
@@ -171,11 +187,34 @@ public final class IOSurfaceLayerView: NSView {
         }
     }
 
+    /// The window became key again; the secure input policy re-evaluates (input.md §5.5).
+    func windowBecameKey() {
+        windowIsKey = true
+        updateSecureInput()
+    }
+
     /// The window is closing. Everything that is open ends on the guest, as with `focusLost` (input.md §4.2).
     public func cancelAll() {
+        // The session ends: secure input is released (input.md §5.5).
+        windowIsKey = false
+        editorState = nil
+        updateSecureInput()
         cancelPending()
         keyTranslator.reset()
         deliver(translator.cancelAll(at: Self.now()))
+    }
+
+    /// The latest editor report of the IME (input.md §5.1). Editor mode turns on and off with
+    /// `editorFocused`; the cursor rectangle feeds `firstRect(forCharacterRange:)`.
+    public func updateEditor(_ state: EditorState) {
+        editorState = state
+        textInputModel.updateCursorRect(state.cursorRectPx)
+        updateSecureInput()
+    }
+
+    /// Editor mode: an Android editor is bound (input.md §5.1).
+    var isEditorMode: Bool {
+        editorState?.editorFocused == true
     }
 
     public override func updateTrackingAreas() {
@@ -232,18 +271,31 @@ public final class IOSurfaceLayerView: NSView {
         forward(event)
     }
 
-    /// Key mode: a key goes down. The view does not call `super`, so an unhandled key does not beep (input.md §5.1).
+    /// Editor mode sends the key through the macOS input method (input.md §5.1); key mode translates
+    /// it directly.
     public override func keyDown(with event: NSEvent) {
-        forwardKey(event)
+        if isEditorMode {
+            interpretKeyEvents([event])
+        } else {
+            forwardKey(event)
+        }
     }
 
     public override func keyUp(with event: NSEvent) {
-        forwardKey(event)
+        if isEditorMode {
+            inputContext?.handleEvent(event)
+        } else {
+            forwardKey(event)
+        }
     }
 
     /// A modifier key goes down or up, and Caps Lock toggles.
     public override func flagsChanged(with event: NSEvent) {
-        forwardKey(event)
+        if isEditorMode {
+            inputContext?.handleEvent(event)
+        } else {
+            forwardKey(event)
+        }
     }
 
     /// The ⌘ shortcuts of input.md §6 (⌘C, ⌘X, ⌘V, ⌘A, ⌘Z, and ⌘[) reach the guest before the menus can take them. The
@@ -264,6 +316,12 @@ public final class IOSurfaceLayerView: NSView {
                 break
             }
         }
+        if isEditorMode, event.modifierFlags.contains(.command),
+            let characters = event.charactersIgnoringModifiers,
+            editorKeyEquivalent(characters)
+        {
+            return true
+        }
         guard inputEnabled,
             let sample = KeyEventAdapter.sample(for: event),
             KeyTranslator.forwardsCommandShortcut(sample)
@@ -275,7 +333,7 @@ public final class IOSurfaceLayerView: NSView {
     }
 
     /// The content rectangle in the view's coordinates: the aspect fit of the content in the bounds.
-    private var contentRect: CGRect {
+    var contentRect: CGRect {
         DisplayGeometry.aspectFit(contentSize: contentSize, in: bounds.size)
     }
 
@@ -388,7 +446,7 @@ public final class IOSurfaceLayerView: NSView {
     }
 
     /// The current time on the clock of the event timestamps (`NSEvent.timestamp` is seconds since the system started).
-    private static func now() -> InputTimestamp {
+    static func now() -> InputTimestamp {
         InputTimestamp(hostNanos: UInt64(ProcessInfo.processInfo.systemUptime * 1_000_000_000))
     }
 }

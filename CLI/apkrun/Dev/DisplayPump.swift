@@ -1,6 +1,7 @@
 #if APKRUN_EMBEDDED_RUNTIME
     import AppKit
     import Foundation
+    import InputCore
     import RuntimeHost
     import WindowingCore
 
@@ -14,6 +15,10 @@
         private let display: DeveloperDisplay
         private let showStatistics: Bool
         private let inputSink: PointerInputSink
+        /// The window's editor-mode events (input.md §5.1).
+        private let imeTextSink: ImeTextSink?
+        /// The editor reports of the bound IME, forwarded to the window.
+        private let editorStates: AsyncStream<EditorState>?
         private let onFocusChanged: @Sendable (Bool) -> Void
         private let onWindowClosed: @MainActor () -> Void
         private var windowTitle = "APKRun display 0"
@@ -34,12 +39,16 @@
             display: DeveloperDisplay,
             showStatistics: Bool,
             inputSink: PointerInputSink,
+            imeTextSink: ImeTextSink? = nil,
+            editorStates: AsyncStream<EditorState>? = nil,
             onFocusChanged: @escaping @Sendable (Bool) -> Void = { _ in },
             onWindowClosed: @escaping @MainActor () -> Void
         ) {
             self.display = display
             self.showStatistics = showStatistics
             self.inputSink = inputSink
+            self.imeTextSink = imeTextSink
+            self.editorStates = editorStates
             self.onFocusChanged = onFocusChanged
             self.onWindowClosed = onWindowClosed
         }
@@ -63,6 +72,15 @@
                     }
                 }
             )
+            if let editorStates {
+                tasks.append(
+                    Task { @MainActor [weak self] in
+                        for await state in editorStates {
+                            self?.window?.updateEditor(state)
+                        }
+                    }
+                )
+            }
         }
 
         /// Stops the statistics and the frames, and closes the window.
@@ -125,6 +143,7 @@
                     title: windowTitle,
                     backingScale: display.backingScale,
                     inputSink: inputSink,
+                    imeTextSink: imeTextSink,
                     allowsResize: display.supportsWindowResize,
                     onFocusChanged: { [onFocusChanged] focused in onFocusChanged(focused) },
                     onGeometryChanged: { [weak self] pointSize, backingScale, zoom, completion in

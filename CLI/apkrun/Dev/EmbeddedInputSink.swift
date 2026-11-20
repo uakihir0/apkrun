@@ -11,10 +11,12 @@
     /// route in the order they were delivered, so a batch never overtakes an earlier one. The events are converted to the
     /// wire types of runtime-api.md §7.2 here, and RuntimeHost converts them back before `InputRouter`. The conversion
     /// tables of the two sides are the same, and `EmbeddedInputSinkTests` and `DevInputRouteTests` check both.
-    final class EmbeddedInputSink: PointerInputSink {
+    final class EmbeddedInputSink: PointerInputSink, ImeTextSink {
         private enum Event: Sendable {
             case input([InputCore.InputEvent])
             case focusChanged(Bool, generation: UInt64)
+            /// An editor event of input.md §5.1, for the IME channel.
+            case text(InputCore.ImeTextEvent)
         }
 
         private let queue: AsyncStream<Event>.Continuation
@@ -34,6 +36,8 @@
                         }
                     case .focusChanged(let focused, let generation):
                         await route.focusChanged(focused, generation: generation)
+                    case .text(let event):
+                        await route.sendText(wire(event))
                     }
                 }
             }
@@ -45,6 +49,42 @@
 
         func focusChanged(_ focused: Bool) {
             queue.yield(.focusChanged(focused, generation: focusGeneration.next()))
+        }
+
+        /// Editor mode events keep the stream's order with key events they follow (input.md §5.1).
+        func deliverText(_ event: InputCore.ImeTextEvent) {
+            queue.yield(.text(event))
+        }
+
+        /// One editor event in the wire types (runtime-api.md §7.2).
+        static func wire(_ event: InputCore.ImeTextEvent) -> RuntimeAPI.WireImeTextEvent {
+            switch event {
+            case .commit(let text):
+                return .commit(text)
+            case .setComposing(let text, let selection):
+                return .setComposing(
+                    text, selection: RuntimeAPI.TextRange(start: selection.start, end: selection.end))
+            case .finishComposing:
+                return .finishComposing
+            case .key(let key):
+                return .key(
+                    RuntimeAPI.WireKeyEvent(
+                        action: keyAction(key.action),
+                        androidKeyCode: key.androidKeyCode,
+                        metaState: key.metaState.rawValue,
+                        repeatCount: key.repeatCount,
+                        time: wireTime(key.time)))
+            case .editorAction(let action):
+                return .editorAction(action)
+            case .contextMenuAction(let action):
+                return .contextMenuAction(
+                    switch action {
+                    case .copy: .copy
+                    case .cut: .cut
+                    case .paste: .paste
+                    case .selectAll: .selectAll
+                    })
+            }
         }
 
         /// The wire batches of `events`, in order. A list longer than the route accepts in one batch is cut into

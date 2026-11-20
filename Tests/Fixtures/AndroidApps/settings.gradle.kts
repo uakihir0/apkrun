@@ -24,6 +24,7 @@ include(":HelloGL")
 include(":HelloCompose")
 include(":HelloWebView")
 include(":HelloSplit")
+include(":OtherInstaller")
 include(":feature")
 
 project(":feature").projectDir = file("HelloSplitFeature")

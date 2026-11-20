@@ -97,10 +97,17 @@ class Connection(
             return
         }
         daemon.sessions.track(socket)
+        if (channel == ChannelKind.CHANNEL_KIND_GUEST_BULK) {
+            // Diagnostics payloads leave on this connection (guest-protocol.md §10).
+            daemon.bulkTransfers.attach(writer)
+        }
         try {
             secondaryLoop(negotiated.enabled)
         } finally {
             daemon.sessions.untrack(socket)
+            if (channel == ChannelKind.CHANNEL_KIND_GUEST_BULK) {
+                daemon.bulkTransfers.detach(writer)
+            }
             if (channel == ChannelKind.CHANNEL_KIND_GUEST_INPUT) {
                 // A closed input stream releases the gestures it left open (input.md §7.3).
                 daemon.input.streamClosed(this)

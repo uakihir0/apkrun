@@ -49,6 +49,9 @@ public actor GuestConnection {
     /// The acks of the agent for the input batches that asked for one (input.md §8). Only the input endpoint has
     /// them. The stream finishes when the connection closes.
     public nonisolated let inputAcks: AsyncStream<GPInputAck>
+    /// The bulk transfer frames of the agent (guest-protocol.md §10). Only the bulk endpoint has them; on any other
+    /// channel a bulk frame is a protocol violation. The stream finishes when the connection closes.
+    public nonisolated let bulkFrames: AsyncStream<GPBulkFrame>
 
     /// The number of requests that may be in flight at once (guest-protocol.md §6).
     public static let maximumInFlight = 64
@@ -64,6 +67,7 @@ public actor GuestConnection {
     private let logger: APKLogger
     private let eventContinuation: AsyncStream<GPEvent>.Continuation
     private let inputAckContinuation: AsyncStream<GPInputAck>.Continuation
+    private let bulkFrameContinuation: AsyncStream<GPBulkFrame>.Continuation
     private var outbound: AsyncStream<Data>.Continuation?
     /// The bytes that the frames yielded to `outbound` hold, until the transport has written them.
     private var outboundBacklog = 0
@@ -111,6 +115,9 @@ public actor GuestConnection {
         let acks = AsyncStream.makeStream(of: GPInputAck.self, bufferingPolicy: .bufferingNewest(256))
         inputAcks = acks.stream
         inputAckContinuation = acks.continuation
+        let bulk = AsyncStream.makeStream(of: GPBulkFrame.self, bufferingPolicy: .unbounded)
+        bulkFrames = bulk.stream
+        bulkFrameContinuation = bulk.continuation
     }
 
     /// Whether the connection can carry requests: the handshake completed and the connection is still open.
@@ -354,6 +361,12 @@ public actor GuestConnection {
                 throw .malformedFrame
             }
             inputAckContinuation.yield(ack)
+        case .bulk(let frame):
+            // Transfers leave on the bulk channel only (guest-protocol.md §10).
+            guard endpoint == .guestBulk else {
+                throw .malformedFrame
+            }
+            bulkFrameContinuation.yield(frame)
         default:
             throw .malformedFrame
         }

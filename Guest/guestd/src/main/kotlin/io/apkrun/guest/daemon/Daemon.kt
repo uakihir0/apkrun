@@ -67,6 +67,8 @@ class Daemon(internal val scope: CoroutineScope) {
     private val tasks = TaskService(events, post)
     private val launch = LaunchService(tasks, displays) { SystemContext.get() }
     private val packages = PackageService(AndroidPackageCatalog(SystemContext.get().packageManager))
+    internal val bulkTransfers = BulkTransfers()
+    private val diagnostics = DiagnosticsService(bulkTransfers)
     internal val input =
         InputService(
             boundsOf = { displayId ->
@@ -82,7 +84,7 @@ class Daemon(internal val scope: CoroutineScope) {
         )
     internal val dispatcher =
         Dispatcher(
-            operations = DeviceOperations(displays, tasks, launch, packages),
+            operations = DeviceOperations(displays, tasks, launch, packages, diagnostics),
             uptimeMillis = { SystemClock.elapsedRealtime() },
         )
 

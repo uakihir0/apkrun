@@ -165,6 +165,12 @@ class Dispatcher(
                 Response.newBuilder()
                     .setListPackages(operations.listPackages(request.listPackages))
                     .build()
+            Request.OpCase.COLLECT_DIAGNOSTICS ->
+                Response.newBuilder()
+                    .setCollectDiagnostics(
+                        operations.collectDiagnostics(request.collectDiagnostics)
+                    )
+                    .build()
             Request.OpCase.FOCUS_DISPLAY -> {
                 val displayId = request.focusDisplay.displayId
                 withDisplayLock(displayId) { operations.focusDisplay(displayId) }
@@ -213,6 +219,7 @@ class Dispatcher(
                 Request.OpCase.FOCUS_DISPLAY -> GuestCapability.INPUT
                 Request.OpCase.QUERY_PACKAGE,
                 Request.OpCase.LIST_PACKAGES -> GuestCapability.PACKAGES
+                Request.OpCase.COLLECT_DIAGNOSTICS -> GuestCapability.DIAGNOSTICS
                 else -> null
             }
 

@@ -67,10 +67,10 @@ public actor DevelopmentGuestAgent {
     private let provisioner: GuestAgentProvisioner
     private let logger: APKLogger
     private let clock: @Sendable () -> ContinuousClock.Instant
-    /// The transport of the control connection, which the input connection shares.
-    private let transport: any GuestTransport
-    private let hostVersion: String
-    private let logSink: (any LogSink)?
+    /// The transport of the control connection, which the secondary connections share.
+    let transport: any GuestTransport
+    let hostVersion: String
+    let logSink: (any LogSink)?
     private var budget = GuestAgentRestartBudget()
     private var restartsRefused = false
     /// Counts the stops, so that a start in flight can tell that the boot that asked for it has ended.

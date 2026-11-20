@@ -326,7 +326,7 @@ private func respond(_ name: String, etag: String? = nil, status: Int = 200) thr
     for file in [
         "schema-version", "package-mismatch", "bad-sha", "mixed-shapes",
         "http-artifact", "user-info-url", "duplicate-split", "split-no-name",
-        "oversize-total", "not-json", "not-utf8",
+        "oversize-total", "not-json", "not-utf8", "duplicate-file-name",
     ] {
         var http = ScriptedHTTP(manifests: [:])
         http.manifests[url] = HTTPResponse(

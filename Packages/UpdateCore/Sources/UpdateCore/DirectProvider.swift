@@ -240,6 +240,14 @@ public struct DirectProvider: UpdateProvider {
         guard Set(resolved).count == resolved.count else {
             throw .providerMetadataInvalid(detail: "artifacts: duplicate url")
         }
+        // The download stores every artifact under its URL's last path
+        // component, so two artifacts that end in the same name could
+        // never both land (and the coordinator could never find both).
+        let fileNames = resolved.map(\.lastPathComponent)
+        guard Set(fileNames).count == fileNames.count else {
+            throw .providerMetadataInvalid(
+                detail: "artifacts: duplicate file name across urls")
+        }
 
         // D7: declared sizes sum to at most 8 GiB.
         let declaredTotal = manifest.artifacts.reduce(Int64(0)) { $0 + ($1.size ?? 0) }

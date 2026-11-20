@@ -312,6 +312,18 @@ public struct ArtifactSet: Codable, Sendable, Hashable {
         }.joined()
         return SHA256Digest(data: Data(canonicalLines.utf8))
     }
+
+    /// The `ArtifactSpec` list for `BeginInstall` and `install-multiple`: the
+    /// base APK first, then splits by stored name (guest-protocol.md §11.3,
+    /// package-store.md §6.4). `files` already stores this order; the
+    /// property makes the contract explicit for decoded sets.
+    public var installSpecs: [ArtifactFile] {
+        files.sorted {
+            if $0.splitName == nil { return $1.splitName != nil }
+            if $1.splitName == nil { return false }
+            return $0.name < $1.name
+        }
+    }
 }
 
 /// Errors raised while computing the canonical digest of an APK set.

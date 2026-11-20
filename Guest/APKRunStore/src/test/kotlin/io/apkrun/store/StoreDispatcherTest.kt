@@ -72,6 +72,9 @@ private class FakeStoreOperations : StoreOperations {
         }
         return result.build()
     }
+
+    override fun renderIcon(request: io.apkrun.guest.protocol.v1.RenderIcon) =
+        io.apkrun.guest.protocol.v1.IconResult.getDefaultInstance()
 }
 
 /**

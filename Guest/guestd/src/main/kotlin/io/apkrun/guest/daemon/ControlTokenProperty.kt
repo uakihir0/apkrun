@@ -14,9 +14,17 @@ object ControlTokenProperty {
     /** The `Settings.Global` key the daemon writes the session token to, as hex. */
     private const val KEY = "apkrun_ime_session_token"
 
+    /**
+     * The package whose context may write secure settings: `SettingsProvider` checks the calling
+     * package belongs to the calling UID, and shell owns `com.android.shell`. The daemon's own
+     * system context is `android`, which is not a shell package and is refused.
+     */
+    private const val SHELL_PACKAGE = "com.android.shell"
+
     /** Publishes the token of the opened control session; null clears it. */
     fun publish(context: Context, token: ByteArray?) {
-        Settings.Global.putString(context.contentResolver, KEY, token?.toHex())
+        val shell = context.createPackageContext(SHELL_PACKAGE, 0)
+        Settings.Global.putString(shell.contentResolver, KEY, token?.toHex())
     }
 
     /** Whether [token] is the token of the current control session. */

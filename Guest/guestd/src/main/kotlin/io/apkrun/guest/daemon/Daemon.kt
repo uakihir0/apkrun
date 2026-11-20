@@ -64,7 +64,10 @@ class Daemon(internal val scope: CoroutineScope) {
     internal val events = EventBus()
     internal val sessions =
         SessionManager({ SystemClock.elapsedRealtime() }) { token ->
-            ControlTokenProperty.publish(SystemContext.get(), token)
+            // Publishing must not kill the control accept path: a settings failure degrades to
+            // the IME channel refusing connections, not to the agent dying.
+            runCatching { ControlTokenProperty.publish(SystemContext.get(), token) }
+                .onFailure { AgentLog.warning("the session token could not be published") }
         }
     private val displays = DisplayService(events, post)
     private val tasks = TaskService(events, post)

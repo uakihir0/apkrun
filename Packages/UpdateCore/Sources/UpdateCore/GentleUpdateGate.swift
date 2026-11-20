@@ -225,6 +225,11 @@ public actor GentleUpdateGate {
         return await nextReadyPackage()
     }
 
+    /// Whether an install currently holds the gate's slot.
+    public var installInFlight: Bool {
+        installing != nil
+    }
+
     /// The §7.2 phase of the package's in-flight install, if any.
     public func installPhase(for packageID: PackageID) -> UpdateInstallPhase? {
         guard installing == packageID else { return nil }

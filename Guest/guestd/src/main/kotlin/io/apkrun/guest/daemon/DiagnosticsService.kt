@@ -11,9 +11,9 @@ import java.util.concurrent.TimeUnit
 
 /**
  * CollectDiagnostics, operation 73 (guest-protocol.md §7.1, diagnostics.md §5–§6). Each item is
- * answered on its own: an item this build does not have is UNSUPPORTED and never fails the
- * request, and a payload longer than the request's `max_bytes` is truncated. The payload itself
- * travels as a [BulkKind.BULK_KIND_DIAGNOSTICS_ITEM] transfer on the bulk channel.
+ * answered on its own: an item this build does not have is UNSUPPORTED and never fails the request,
+ * and a payload longer than the request's `max_bytes` is truncated. The payload itself travels as a
+ * [BulkKind.BULK_KIND_DIAGNOSTICS_ITEM] transfer on the bulk channel.
  */
 class DiagnosticsService(
     private val bulk: BulkTransfers,
@@ -89,8 +89,7 @@ class DiagnosticsService(
             // The read loop must not block: a command that never closes its
             // pipe still has to hit the deadline, so bytes are only consumed
             // while `available()` says they exist.
-            val deadlineNanos =
-                System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS)
+            val deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS)
             while (output.size() <= MAX_ITEM_BYTES_INT) {
                 val available = reader.available()
                 if (available > 0) {
@@ -117,14 +116,9 @@ class DiagnosticsService(
                 }
             }
             val remainingNanos = deadlineNanos - System.nanoTime()
-            if (
-                remainingNanos <= 0 ||
-                    !process.waitFor(remainingNanos, TimeUnit.NANOSECONDS)
-            ) {
+            if (remainingNanos <= 0 || !process.waitFor(remainingNanos, TimeUnit.NANOSECONDS)) {
                 process.destroyForcibly()
-                throw IllegalStateException(
-                    "the command did not finish within ${TIMEOUT_SECONDS}s"
-                )
+                throw IllegalStateException("the command did not finish within ${TIMEOUT_SECONDS}s")
             }
             return output.toByteArray()
         }

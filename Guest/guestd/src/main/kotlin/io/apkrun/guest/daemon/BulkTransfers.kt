@@ -1,7 +1,6 @@
 package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.v1.BulkKind
-import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 
 /**

@@ -813,7 +813,7 @@ extension RuntimeHost {
             store: service.store,
             contextProvider: { await service.providerContext(userInitiated: false) },
             runtimeProvider: { [weak self] in await self?.updateRuntimeAccess() },
-            gateProvider: { [weak self] in await self?.updateGate },
+            gateProvider: { [weak self] in await self?.updateGateInstance() },
             networkSatisfied: { Self.updateNetworkPathSatisfied() },
             backgroundDownloadAllowed: {
                 Self.updateBackgroundDownloadAllowed()
@@ -1121,6 +1121,7 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
     private let endAll: @Sendable (PackageID) async -> Void
     private let reopenPackage: @Sendable (PackageID) async throws -> Void
     private let ready: @Sendable (UpdateStartReason) async throws -> Void
+    private let mayStart: @Sendable () async -> Bool
     private let assertOperation: @Sendable () async throws -> UpdateActivityAssertion
     private let healthLaunch: @Sendable (PackageID, UpdateHealthCheckTimeouts) async -> HealthLaunchResult
     private let drawnFrame: @Sendable (PackageID) async -> Bool
@@ -1134,6 +1135,7 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         endAll: @escaping @Sendable (PackageID) async -> Void,
         reopenPackage: @escaping @Sendable (PackageID) async throws -> Void,
         ready: @escaping @Sendable (UpdateStartReason) async throws -> Void,
+        mayStart: @escaping @Sendable () async -> Bool = { false },
         assertOperation: @escaping @Sendable () async throws -> UpdateActivityAssertion,
         healthLaunch: @escaping @Sendable (PackageID, UpdateHealthCheckTimeouts) async -> UpdateCore.HealthLaunchResult,
         drawnFrame: @escaping @Sendable (PackageID) async -> Bool
@@ -1146,6 +1148,7 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         self.endAll = endAll
         self.reopenPackage = reopenPackage
         self.ready = ready
+        self.mayStart = mayStart
         self.assertOperation = assertOperation
         self.healthLaunch = healthLaunch
         self.drawnFrame = drawnFrame
@@ -1181,6 +1184,10 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
 
     func ensureReady(_ reason: UpdateStartReason) async throws {
         try await ready(reason)
+    }
+
+    func mayStartForUpdateInstall() async -> Bool {
+        await mayStart()
     }
 
     func assertStoreOperation() async throws -> UpdateActivityAssertion {
@@ -1257,6 +1264,21 @@ extension RuntimeHost {
     /// (T1 with fake sessions, update-system.md §7.5).
     func installHeadlessSessionServiceForTesting(_ service: any RuntimeSessionService) {
         headlessSessionService = service
+    }
+
+    /// The §3.5 headless-install conditions: `updates.startRuntimeToInstall`
+    /// on, a staged update waiting longer than 24 h, AC power, and the user
+    /// idle for at least 15 minutes. GU1 and `ensureReady(.update)` both ask.
+    func mayStartUpdateInstallOnStoppedRuntime() async -> Bool {
+        let globals = GlobalSettings.load(from: paths.settingsFile)
+        guard globals.updatesStartRuntimeToInstall else { return false }
+        let cutoff = Date().addingTimeInterval(-86_400)
+        let staged = await updateServiceInstance().stateStore.allStates()
+            .values.contains {
+                $0.phase == "staged" && ($0.stagedAt ?? .distantFuture) < cutoff
+            }
+        guard staged else { return false }
+        return Self.hostOnACPower() && Self.hostIdleSeconds() >= 900
     }
 
     /// Builds the §7.5 runtime access over this host's supervisor and
@@ -1386,23 +1408,9 @@ extension RuntimeHost {
                 // staged update has waited > 24 h on AC with the user idle
                 // >= 15 min; otherwise the install defers to the next gate.
                 if reason == .update, await supervisor.state == .stopped {
-                    let globals = GlobalSettings.load(from: self.paths.settingsFile)
-                    guard globals.updatesStartRuntimeToInstall else {
+                    guard await self.mayStartUpdateInstallOnStoppedRuntime() else {
                         throw UpdateFailure.providerUnreachable(
-                            reason: "updates.startRuntimeToInstall is off")
-                    }
-                    let cutoff = Date().addingTimeInterval(-86_400)
-                    let staged = await self.updateServiceInstance().stateStore.allStates()
-                        .values.contains {
-                            $0.phase == "staged" && ($0.stagedAt ?? .distantFuture) < cutoff
-                        }
-                    guard staged else {
-                        throw UpdateFailure.providerUnreachable(
-                            reason: "no staged update older than 24 h")
-                    }
-                    guard Self.hostOnACPower(), Self.hostIdleSeconds() >= 900 else {
-                        throw UpdateFailure.providerUnreachable(
-                            reason: "§3.5 needs AC power and >=15 min idle")
+                            reason: "the §3.5 headless-install conditions do not hold")
                     }
                 }
                 // A user-initiated Update Now may resume a suspended runtime;
@@ -1418,6 +1426,9 @@ extension RuntimeHost {
                     throw UpdateFailure.providerUnreachable(
                         reason: "package channel is not connected")
                 }
+            },
+            mayStart: { [weak self] in
+                await self?.mayStartUpdateInstallOnStoppedRuntime() ?? false
             },
             assertOperation: { [weak self] in
                 guard let self else { return UpdateActivityAssertion() }

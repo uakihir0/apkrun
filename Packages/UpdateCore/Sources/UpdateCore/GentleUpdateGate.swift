@@ -118,12 +118,19 @@ public actor GentleUpdateGate {
         userInitiated: Bool = false
     ) async -> GentleGateEvaluation {
         var blocks: [GentleGateBlock] = []
-        // GU1.
+        // GU1. A stopped runtime admits an automatic install only when the
+        // host's §3.5 headless-boot conditions hold (setting, staged wait,
+        // AC power, idle user); the admitted install then boots it through
+        // `ensureReady(.update)`.
         switch await runtime.runtimeState {
         case .ready:
             break
         case .suspended where userInitiated:
             break
+        case .stopped where !userInitiated:
+            if await !runtime.mayStartForUpdateInstall() {
+                blocks.append(.runtimeNotReady)
+            }
         default:
             blocks.append(.runtimeNotReady)
         }

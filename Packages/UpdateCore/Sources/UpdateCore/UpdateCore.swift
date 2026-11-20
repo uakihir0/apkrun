@@ -349,6 +349,19 @@ public enum SkipReason: Sendable, Equatable {
     case userSkipped
     /// The update authority changed before install.
     case authorityChanged
+
+    /// The history-file name of the reason (update-system.md §10.2).
+    var name: String {
+        switch self {
+        case .upToDate: "upToDate"
+        case .checkFailed: "checkFailed"
+        case .downloadFailed: "downloadFailed"
+        case .validationFailed: "validationFailed"
+        case .installFailed: "installFailed"
+        case .userSkipped: "userSkipped"
+        case .authorityChanged: "authorityChanged"
+        }
+    }
 }
 
 /// The terminal outcome of an update run (state-machines.md §6).

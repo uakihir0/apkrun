@@ -114,9 +114,7 @@ struct SplitSelector: Sendable {
                 continue
             }
             guard let qualifier = Self.configQualifier(of: candidate) else {
-                // Not a config split: included only when `configForSplit` of an included split
-                // requires it — handled in the second pass below; default to excluded here.
-                excluded.append(candidate.splitName ?? candidate.name)
+                // Not a config split by name: deferred to the configForSplit pass below.
                 continue
             }
             if let abi = Self.abiQualifiers[qualifier] {
@@ -155,6 +153,13 @@ struct SplitSelector: Sendable {
                 }
             }
         }
+        // Candidates still unclassified (no qualifier, no included parent) are excluded.
+        for candidate in candidates
+        where !included.contains(where: { $0.name == candidate.name })
+            && !excluded.contains(candidate.splitName ?? candidate.name)
+        {
+            excluded.append(candidate.splitName ?? candidate.name)
+        }
 
         // requiredSplitTypes of the base must be satisfied by the included splitTypes.
         if let base = candidates.first(where: { $0.splitName == nil }) {
@@ -176,9 +181,15 @@ struct SplitSelector: Sendable {
         return SplitSelection(included: included.map { $0.name }, excludedSplits: excluded)
     }
 
-    /// The config qualifier of a `config.<qualifier>` split name.
+    /// The config qualifier of a `config.<qualifier>` or `<split>.config.<qualifier>` split name.
     private static func configQualifier(of candidate: SplitCandidate) -> String? {
-        guard let split = candidate.splitName, split.hasPrefix("config.") else { return nil }
-        return String(split.dropFirst("config.".count))
+        guard let split = candidate.splitName else { return nil }
+        if split.hasPrefix("config.") {
+            return String(split.dropFirst("config.".count))
+        }
+        if let marker = split.range(of: ".config.") {
+            return String(split[marker.upperBound...])
+        }
+        return nil
     }
 }

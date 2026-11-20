@@ -166,3 +166,25 @@ import Testing
 
     #expect(record.updateAuthority == .manual)
 }
+
+@Test func splitSelectorKeepsFeatureConfigSplitForGuestABI() throws {
+    let base = SplitCandidate(name: "base.apk", splitName: nil)
+    let feature = SplitCandidate(
+        name: "feature.apk", splitName: "feature",
+        attributes: SplitAttributes(isFeatureSplit: true))
+    let featureConfigARM = SplitCandidate(
+        name: "feature.config.arm64_v8a.apk", splitName: "feature.config.arm64_v8a",
+        attributes: SplitAttributes(configForSplit: "feature"))
+    let featureConfigX86 = SplitCandidate(
+        name: "feature.config.x86_64.apk", splitName: "feature.config.x86_64",
+        attributes: SplitAttributes(configForSplit: "feature"))
+    let orphan = SplitCandidate(
+        name: "orphan.apk", splitName: "orphan",
+        attributes: SplitAttributes(configForSplit: "missing"))
+
+    let selection = try SplitSelector().select(
+        [base, feature, featureConfigARM, featureConfigX86, orphan])
+
+    #expect(selection.included == ["base.apk", "feature.apk", "feature.config.arm64_v8a.apk"])
+    #expect(selection.excludedSplits == ["feature.config.x86_64", "orphan"])
+}

@@ -65,6 +65,16 @@ class StoreDispatcher(
             return failure.toGuestError().let {
                 Response.newBuilder().setError(it).build()
             }
+        } catch (error: Exception) {
+            // A framework exception must not kill the agent: answer with an error instead.
+            io.apkrun.guest.runtime.AgentLog.error(
+                "store operation ${request.opCase} failed",
+                error,
+            )
+            return failure(
+                GuestErrorCode.GUEST_ERROR_CODE_INTERNAL,
+                "the operation failed",
+            )
         } finally {
             active.remove(id)
         }

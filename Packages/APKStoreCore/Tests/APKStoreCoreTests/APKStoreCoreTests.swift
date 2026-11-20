@@ -188,3 +188,24 @@ import Testing
     #expect(selection.included == ["base.apk", "feature.apk", "feature.config.arm64_v8a.apk"])
     #expect(selection.excludedSplits == ["feature.config.x86_64", "orphan"])
 }
+
+@Test func splitSelectorPicksDensityPerModule() throws {
+    // The base only reaches hdpi while the feature only offers xhdpi+; each
+    // module keeps its own nearest bucket (guest density 320 dpi).
+    let base = SplitCandidate(name: "base.apk", splitName: nil)
+    let feature = SplitCandidate(
+        name: "feature.apk", splitName: "feature",
+        attributes: SplitAttributes(isFeatureSplit: true))
+    func config(_ name: String) -> SplitCandidate {
+        SplitCandidate(name: name, splitName: String(name.dropLast(4)))
+    }
+    let selection = try SplitSelector().select([
+        base, feature,
+        config("config.mdpi.apk"), config("config.hdpi.apk"),
+        config("feature.config.xhdpi.apk"), config("feature.config.xxhdpi.apk"),
+    ])
+    #expect(selection.included.contains("config.hdpi.apk"))
+    #expect(selection.included.contains("feature.config.xhdpi.apk"))
+    #expect(
+        selection.excludedSplits == ["config.mdpi", "feature.config.xxhdpi"])
+}

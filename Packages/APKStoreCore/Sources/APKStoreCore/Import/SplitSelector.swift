@@ -87,23 +87,27 @@ struct SplitSelector: Sendable {
         var included: [SplitCandidate] = []
         var excluded: [String] = []
 
-        // Density: nearest bucket to the guest density; if none is at least it, the highest.
+        // Density: nearest bucket to the guest density per module, matching
+        // bundletool; if none is at least it, the highest. Bare `config.<q>`
+        // splits belong to the base module, `<split>.config.<q>` to `<split>`:
+        // picking one density across the whole set would strip the density
+        // resources of every module that does not offer it.
         let densitySplits = candidates.compactMap {
-            candidate -> (candidate: SplitCandidate, qualifier: String, dpi: Int)? in
+            candidate -> (owner: String, qualifier: String, dpi: Int)? in
             guard let qualifier = Self.configQualifier(of: candidate),
                 let dpi = Self.densityBuckets[qualifier]
             else { return nil }
-            return (candidate, qualifier, dpi)
+            return (Self.configOwner(of: candidate), qualifier, dpi)
         }
         var keptDensities = Set<String>()
-        if !densitySplits.isEmpty {
-            let atLeast = densitySplits.filter { $0.dpi >= guest.densityDPI }
+        for (owner, group) in Dictionary(grouping: densitySplits, by: \.owner) {
+            let atLeast = group.filter { $0.dpi >= guest.densityDPI }
             let pick =
                 atLeast.isEmpty
-                ? densitySplits.max { $0.dpi < $1.dpi }
+                ? group.max { $0.dpi < $1.dpi }
                 : atLeast.min { $0.dpi < $1.dpi }
             if let pick {
-                keptDensities.insert(pick.qualifier)
+                keptDensities.insert(owner + "\u{0}" + pick.qualifier)
             }
         }
 
@@ -126,7 +130,8 @@ struct SplitSelector: Sendable {
                 continue
             }
             if Self.densityBuckets[qualifier] != nil {
-                if keptDensities.contains(qualifier) {
+                let owner = Self.configOwner(of: candidate)
+                if keptDensities.contains(owner + "\u{0}" + qualifier) {
                     included.append(candidate)
                 } else {
                     excluded.append(candidate.splitName ?? candidate.name)
@@ -191,5 +196,16 @@ struct SplitSelector: Sendable {
             return String(split[marker.upperBound...])
         }
         return nil
+    }
+
+    /// The module a config split belongs to: `""` for the base module's bare
+    /// `config.<qualifier>` names, the feature name for `<split>.config.<qualifier>`.
+    private static func configOwner(of candidate: SplitCandidate) -> String {
+        guard let split = candidate.splitName else { return "" }
+        if split.hasPrefix("config.") { return "" }
+        if let marker = split.range(of: ".config.") {
+            return String(split[..<marker.lowerBound])
+        }
+        return ""
     }
 }

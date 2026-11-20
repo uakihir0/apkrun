@@ -1,4 +1,6 @@
 import Foundation
+import GuestProtocol
+import InputCore
 import RuntimeAPI
 import RuntimeCore
 
@@ -25,9 +27,21 @@ public actor DevInputRoute {
     /// The drops that happen before the router sees the events: the events of an unbound route, and the events cut
     /// from a long batch.
     private var localCounters = InputCounters()
+    /// The development IME channel of input.md §5, when one is bound.
+    private var imeChannel: GuestImeChannel?
+    /// The task that relays the bound IME channel's states to `editorStates`.
+    private var imeStatesTask: Task<Void, Never>?
+    /// The sequence number of the next `ImeCommand`.
+    private var imeSeq: UInt64 = 0
+    /// The editor reports of the bound IME channel (input.md §5.1). Latest wins.
+    public let editorStates: AsyncStream<EditorState>
+    private let editorStateContinuation: AsyncStream<EditorState>.Continuation
 
     /// Creates an unbound route.
-    public init() {}
+    public init() {
+        (editorStates, editorStateContinuation) = AsyncStream.makeStream(
+            of: EditorState.self, bufferingPolicy: .bufferingNewest(8))
+    }
 
     /// Selects the Android display before the route is bound to the guest input router.
     public func setDisplayID(_ displayID: Int32) {
@@ -132,6 +146,99 @@ public actor DevInputRoute {
 
     private func addRouterCounters(_ counters: InputCounters) {
         localCounters.add(counters)
+    }
+
+    /// Binds the development IME channel (input.md §5), or clears it with nil. The bound channel's states are
+    /// published on ``editorStates`` until the next bind.
+    public func bindIme(_ channel: GuestImeChannel?) {
+        imeStatesTask?.cancel()
+        imeStatesTask = nil
+        imeChannel = channel
+        guard let channel else {
+            return
+        }
+        let continuation = editorStateContinuation
+        imeStatesTask = Task {
+            for await state in channel.states {
+                continuation.yield(Self.editorState(state))
+            }
+        }
+    }
+
+    /// Sends one editor event on the bound IME channel (input.md §5.1). Without a channel the event is
+    /// dropped and counted as not running.
+    public func sendText(_ event: RuntimeAPI.WireImeTextEvent) async {
+        guard let imeChannel else {
+            localCounters.droppedNotRunning += 1
+            return
+        }
+        var command = GPImeCommand()
+        imeSeq += 1
+        command.seq = imeSeq
+        command.displayID = targetDisplayID
+        switch event {
+        case .commit(let text):
+            command.commitText = text
+        case .setComposing(let text, let selection):
+            var composing = GPComposing()
+            composing.text = text
+            composing.selectionStart = Int32(clamping: selection.start)
+            composing.selectionEnd = Int32(clamping: selection.end)
+            command.setComposing = composing
+        case .finishComposing:
+            command.finishComposing = GPFinishComposing()
+        case .key(let key):
+            var body = GPKeyEvent()
+            body.action = key.action == .down ? .down : .up
+            body.keyCode = key.androidKeyCode
+            body.metaState = UInt32(bitPattern: key.metaState)
+            body.repeatCount = key.repeatCount
+            command.key = body
+        case .editorAction(let action):
+            command.editorAction = action
+        case .contextMenuAction(let action):
+            command.contextMenuAction = Self.contextMenuAction(action)
+        }
+        do {
+            try await imeChannel.send(command)
+        } catch {
+            localCounters.droppedNotRunning += 1
+        }
+    }
+
+    /// The wire action in the proto enum (guest-protocol.md §9).
+    private static func contextMenuAction(_ action: RuntimeAPI.ContextMenuAction) -> GPContextMenuAction {
+        switch action {
+        case .copy: .copy
+        case .cut: .cut
+        case .paste: .paste
+        case .selectAll: .selectAll
+        }
+    }
+
+    /// The proto report in the view's editor state (input.md §5.1); the editor's text is never mirrored.
+    private static func editorState(_ state: GPImeState) -> EditorState {
+        var cursorRectPx: CGRect?
+        if state.hasCursorRectPx {
+            cursorRectPx = CGRect(
+                x: CGFloat(state.cursorRectPx.left),
+                y: CGFloat(state.cursorRectPx.top),
+                width: CGFloat(state.cursorRectPx.right - state.cursorRectPx.left),
+                height: CGFloat(state.cursorRectPx.bottom - state.cursorRectPx.top))
+        }
+        var composing: InputCore.TextRange?
+        if state.composingStart >= 0 {
+            composing = InputCore.TextRange(start: state.composingStart, end: state.composingEnd)
+        }
+        return EditorState(
+            editorFocused: state.editorFocused,
+            displayID: state.displayID,
+            packageID: state.package,
+            inputType: state.inputType,
+            imeOptions: state.imeOptions,
+            selection: InputCore.TextRange(start: state.selectionStart, end: state.selectionEnd),
+            composing: composing,
+            cursorRectPx: cursorRectPx)
     }
 
     /// Routes a wire batch. The events beyond ``maximumEventsPerBatch`` are dropped and counted as invalid. The rest

@@ -46,6 +46,10 @@ public actor WrapperApprovalService {
 
     private struct PendingApproval {
         var prompt: ApprovalPrompt
+        /// The cdhash and plist captured when the bundle passed the static
+        /// checks, so the decision registers exactly the code the user saw.
+        var cdhash: String
+        var plist: [String: Any]
         var waiters: [CheckedContinuation<ApprovalReply, Never>]
         var timeoutTask: Task<Void, Never>
     }
@@ -154,6 +158,15 @@ public actor WrapperApprovalService {
             expiresAt: expiresAt
         )
 
+        // A request for the same bundle ID may have opened a pending entry
+        // while the awaits above ran; join it instead of replacing its waiters.
+        if var pending = pendingByBundleID[bundleID] {
+            return await withCheckedContinuation { continuation in
+                pending.waiters.append(continuation)
+                pendingByBundleID[bundleID] = pending
+            }
+        }
+
         let approvalID = prompt.approvalID
         let timeout = configuration.promptTimeout
         let timeoutTask = Task { [weak self] in
@@ -161,7 +174,12 @@ public actor WrapperApprovalService {
             await self?.expire(approvalID: approvalID)
         }
         pendingByBundleID[bundleID] = PendingApproval(
-            prompt: prompt, waiters: [], timeoutTask: timeoutTask)
+            prompt: prompt,
+            cdhash: cdhash,
+            plist: plist,
+            waiters: [],
+            timeoutTask: timeoutTask
+        )
         announce(.requested(prompt))
 
         return await withCheckedContinuation { continuation in
@@ -192,25 +210,46 @@ public actor WrapperApprovalService {
         announce(.resolved(approvalID))
 
         let reply: ApprovalReply
-        if allow {
-            let summary = try await register(pending: pending)
-            announce(.created(summary))
-            reply = .approved
-        } else {
-            let until = now().addingTimeInterval(configuration.denialDuration.timeInterval)
-            do {
-                try await registry.deny(
-                    bundleID: pending.prompt.bundleID,
-                    cdhash: WrapperCodeSign.cdhash(of: pending.prompt.bundleURL) ?? "",
-                    until: until
-                )
-            } catch {
+        do {
+            if allow {
+                let summary = try await register(pending: pending)
+                announce(.created(summary))
+                reply = .approved
+            } else {
+                let until = now().addingTimeInterval(configuration.denialDuration.timeInterval)
+                do {
+                    try await registry.deny(
+                        bundleID: pending.prompt.bundleID,
+                        cdhash: pending.cdhash,
+                        until: until
+                    )
+                } catch {
+                    throw WrapperFailure.registryUnavailable
+                }
+                reply = .denied(until: until)
+            }
+        } catch {
+            // The launcher still needs a terminal reply (§7.3 step 5).
+            for waiter in pending.waiters { waiter.resume(returning: .timedOut) }
+            guard let failure = error as? WrapperFailure else {
                 throw .registryUnavailable
             }
-            reply = .denied(until: until)
+            throw failure
         }
         for waiter in pending.waiters { waiter.resume(returning: reply) }
         return reply
+    }
+
+    /// Ends every pending prompt during daemon shutdown. Each waiter gets
+    /// `timedOut` so the broker's reply is not held past the drain.
+    public func cancelAll() {
+        let pending = pendingByBundleID
+        pendingByBundleID.removeAll()
+        for entry in pending.values {
+            entry.timeoutTask.cancel()
+            announce(.resolved(entry.prompt.approvalID))
+            for waiter in entry.waiters { waiter.resume(returning: .timedOut) }
+        }
     }
 
     /// The prompts that are still waiting (runtime-api.md `pendingApprovals`).
@@ -316,19 +355,17 @@ public actor WrapperApprovalService {
         return .adHoc
     }
 
-    /// Registers an approved bundle as a `user` entry (§7.3 step 5).
+    /// Registers an approved bundle as a `user` entry (§7.3 step 5). Uses the
+    /// cdhash and plist captured at request time: the user approved that exact
+    /// code, not whatever now sits at the path.
     private func register(pending: PendingApproval) async throws(WrapperFailure) -> WrapperSummary {
-        let plist = InfoPlistWriter.infoDictionary(of: pending.prompt.bundleURL) ?? [:]
-        guard let cdhash = WrapperCodeSign.cdhash(of: pending.prompt.bundleURL) else {
-            throw .bundleInvalid(pending.prompt.bundleURL, reason: .signatureInvalid)
-        }
-        return try await register(
+        try await register(
             bundleURL: pending.prompt.bundleURL,
             bundleID: pending.prompt.bundleID,
             packageID: pending.prompt.packageID.rawValue,
-            cdhash: cdhash,
+            cdhash: pending.cdhash,
             displayName: pending.prompt.displayName,
-            plist: plist
+            plist: pending.plist
         )
     }
 

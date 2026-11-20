@@ -2789,9 +2789,20 @@ public actor RuntimeHost {
         _ request: ResetAndroidRequest,
         operationID: WireOperationID
     ) async throws {
+        guard instanceLock != nil else {
+            throw RuntimeHostError.runtimeFailure(.instanceLocked(owner: .unknown))
+        }
         guard let image, let instanceStore else {
             throw RuntimeHostError.image(.noCurrentImage)
         }
+        // Reject new starts and package mutations for the whole reset, then let in-flight work
+        // finish before the disks are erased.
+        isRuntimeResetting = true
+        defer { isRuntimeResetting = false }
+        if let runtimeStartTask {
+            _ = await runtimeStartTask.value
+        }
+        await waitForPackageMutations()
         await supervisor?.stop(reason: .reset)
         await packageQueryService?.detachRuntime()
         headlessSessionService = nil

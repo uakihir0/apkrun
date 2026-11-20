@@ -1123,6 +1123,7 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
     private let ready: @Sendable (UpdateStartReason) async throws -> Void
     private let mayStart: @Sendable () async -> Bool
     private let assertOperation: @Sendable () async throws -> UpdateActivityAssertion
+    private let idle: @Sendable () async -> Void
     private let healthLaunch: @Sendable (PackageID, UpdateHealthCheckTimeouts) async -> HealthLaunchResult
     private let drawnFrame: @Sendable (PackageID) async -> Bool
 
@@ -1137,6 +1138,7 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         ready: @escaping @Sendable (UpdateStartReason) async throws -> Void,
         mayStart: @escaping @Sendable () async -> Bool = { false },
         assertOperation: @escaping @Sendable () async throws -> UpdateActivityAssertion,
+        idle: @escaping @Sendable () async -> Void = {},
         healthLaunch: @escaping @Sendable (PackageID, UpdateHealthCheckTimeouts) async -> UpdateCore.HealthLaunchResult,
         drawnFrame: @escaping @Sendable (PackageID) async -> Bool
     ) {
@@ -1150,6 +1152,7 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         self.ready = ready
         self.mayStart = mayStart
         self.assertOperation = assertOperation
+        self.idle = idle
         self.healthLaunch = healthLaunch
         self.drawnFrame = drawnFrame
     }
@@ -1192,6 +1195,10 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
 
     func assertStoreOperation() async throws -> UpdateActivityAssertion {
         try await assertOperation()
+    }
+
+    func updatesIdle() async {
+        await idle()
     }
 
     /// §8.2: the session service runs the health launch when it knows how;
@@ -1470,6 +1477,9 @@ extension RuntimeHost {
                     }
                 }
             },
+            idle: { [weak self] in
+                await self?.stopUpdateBootedRuntimeIfIdle()
+            },
             // §8.2: the session service runs the health-check launch; a
             // service without it answers `.launchFailed`, the same as no
             // channel.
@@ -1522,9 +1532,6 @@ extension RuntimeHost {
         updateGate = gate
         startUpdateGatePump()
         Task { [weak self] in
-            await gate.setOnIdle { [host = self] in
-                await host?.stopUpdateBootedRuntimeIfIdle()
-            }
             await self?.wireUpdateGateSessionHooks()
         }
         return gate

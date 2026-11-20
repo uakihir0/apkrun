@@ -874,6 +874,9 @@ public actor UpdateCoordinator {
             await self.drainQueuedInstalls(
                 first: next, trigger: trigger, runtime: runtime, gate: gate)
         }
+        // §3.5: the idle stop runs only after the reopen could claim a
+        // session — stopping first would drop a reopened app.
+        await runtime.updatesIdle()
         return outcome
     }
 
@@ -914,6 +917,7 @@ public actor UpdateCoordinator {
             // try the one after it.
             next = await gate.finishInstall(admitted)
         }
+        await runtime.updatesIdle()
     }
 
     /// `installStaged` plus the H1 confirmation, called with the gate's

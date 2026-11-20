@@ -92,6 +92,11 @@ public protocol UpdateRuntimeAccess: Sendable {
     /// duration (§7.2; runtime-daemon.md §5.1). Throws when the runtime is
     /// already stopping — the install fails instead of racing shutdown.
     func assertStoreOperation() async throws -> UpdateActivityAssertion
+    /// Reports that the caller finished its follow-ups (reopen, queue
+    /// drain) after an install. The §3.5 stop runs here — after a reopen
+    /// could claim a session — and on the assertion's release as a
+    /// fallback.
+    func updatesIdle() async
     /// Launches the package on the health-check display for H2–H4
     /// (§8.2): a system-session DisplayPool lease, no window, no
     /// force-stop afterwards.
@@ -119,6 +124,8 @@ extension UpdateRuntimeAccess {
     public func assertStoreOperation() async -> UpdateActivityAssertion {
         UpdateActivityAssertion()
     }
+    /// Nothing to settle on a channel that cannot boot Android.
+    public func updatesIdle() async {}
     /// A channel that cannot launch answers like a missing launcher: the
     /// H2–H4 steps then fail as a launch failure.
     public func healthCheckLaunch(_ package: PackageID, timeouts: UpdateHealthCheckTimeouts) async

@@ -106,6 +106,24 @@ public actor RuntimeHost {
     private var shutdownWaiters: [CheckedContinuation<Void, Never>] = []
     private var trackedOperations: [WireOperationID: RuntimeTrackedOperation] = [:]
     private var packageActivityReservations = PackageActivityReservations()
+    /// The perf record writer (`perf/launches.jsonl`), created with `paths`.
+    private var perfRecords: PerfRecordWriter?
+    /// When `perfStatistics` was last reset (diagnostics.md §9.3).
+    private var statisticsSinceInstant: ContinuousClock.Instant = .now
+    private var statisticsSinceDate = Date()
+    /// Launches waiting for `FIRST_FRAME_DISPLAYED` or their session's end, by session ID.
+    private var pendingLaunchRecords: [UUID: PendingLaunchRecord] = [:]
+
+    /// A launch record in progress (diagnostics.md §4.3).
+    private struct PendingLaunchRecord {
+        /// The record base: `WRAPPER_PROCESS_START`, or request arrival without launchTiming.
+        var base: ContinuousClock.Instant
+        var packageID: String
+        var versionCode: Int64?
+        var sessionID: UUID?
+        var operationID: String?
+        var launchState: String
+    }
 
     /// Creates a daemon host for the current user.
     public init(
@@ -159,6 +177,8 @@ public actor RuntimeHost {
         recordedBootOperationIDs = Set(
             BootRecordLog.read(from: paths.bootPerformanceFile).map(\.operationID)
         )
+        perfRecords = PerfRecordWriter(paths: paths)
+        perfRecords?.enforceLimits()
 
         // Load the wrapper registry and recover pending/refreshing entries at
         // daemon start (wrapper.md §6.2), independent of the first verify call.
@@ -542,26 +562,38 @@ public actor RuntimeHost {
     public func launch(_ request: RuntimeLaunchRequest) async throws(RuntimeWireError) -> RuntimeLaunchResult {
         try beginPackageLaunch(request.packageID)
         defer { finishPackageLaunch(request.packageID) }
-        guard headlessLaunchHookIsEnabled else {
-            throw Self.launchUnavailableError
-        }
-        // runtime-daemon.md §7.2: open the window owner first — the registered
-        // wrapper when its checks pass, else the generic launcher --package.
-        await openWindowOwner(for: request.packageID)
+        let launchTracking = await beginLaunchRecord(request)
         do {
-            try await startRuntime(reason: .automatic)
+            guard headlessLaunchHookIsEnabled else {
+                throw Self.launchUnavailableError
+            }
+            // runtime-daemon.md §7.2: open the window owner first — the registered
+            // wrapper when its checks pass, else the generic launcher --package.
+            await openWindowOwner(for: request.packageID)
+            do {
+                try await startRuntime(reason: .automatic)
+            } catch {
+                throw Self.sessionWireError(for: error)
+            }
+            // A package still marked needsReinstall must be restored before it can open;
+            // an unaffected package's launch never waits on the background reconcile.
+            if pendingReinstallIDs.contains(request.packageID), let reconcileTask {
+                _ = await reconcileTask.value
+            }
+            try requirePackageLaunchAllowed(request.packageID)
+            let service = try await makeHeadlessSessionService()
+            try requirePackageLaunchAllowed(request.packageID)
+            let result = try await service.launch(request)
+            completeLaunchRecord(launchTracking, sessionID: result.sessionID)
+            return result
         } catch {
-            throw Self.sessionWireError(for: error)
+            failLaunchRecord(
+                launchTracking,
+                code: (error as? RuntimeWireError)?.code ?? "runtime.internal"
+            )
+            throw (error as? RuntimeWireError)
+                ?? .runtime("internal", message: "APKRun's background service failed.")
         }
-        // A package still marked needsReinstall must be restored before it can open;
-        // an unaffected package's launch never waits on the background reconcile.
-        if pendingReinstallIDs.contains(request.packageID), let reconcileTask {
-            _ = await reconcileTask.value
-        }
-        try requirePackageLaunchAllowed(request.packageID)
-        let service = try await makeHeadlessSessionService()
-        try requirePackageLaunchAllowed(request.packageID)
-        return try await service.launch(request)
     }
 
     /// Stops a package session through the daemon-owned Guest Agent.
@@ -2367,8 +2399,280 @@ public actor RuntimeHost {
             displayPool: displayPool,
             logSink: diagnostics?.logSink
         )
+        await attachPerfObservers(to: service)
         headlessSessionService = service
         return service
+    }
+
+    // MARK: - Performance records and statistics (diagnostics.md §4.3, §9.3; #71)
+
+    /// Marks `WRAPPER_PROCESS_START`/`APP_LAUNCH_REQUEST` from the launcher's own
+    /// stamps and returns the record bookkeeping (diagnostics.md §4.2, §4.3).
+    private func beginLaunchRecord(_ request: RuntimeLaunchRequest) async -> PendingLaunchRecord {
+        let now = ContinuousClock.now
+        let base: ContinuousClock.Instant
+        if let timing = request.launchTiming {
+            base = Self.instant(continuousNanos: timing.processStart)
+            let requestInstant = Self.instant(continuousNanos: timing.requestSent)
+            let xpcDelayMs = Self.milliseconds(from: requestInstant, to: now)
+            let timeline = diagnostics?.perfTimeline
+            if let timeline {
+                Perf.mark(.wrapperProcessStart, at: base, timeline: timeline)
+                Perf.mark(
+                    .appLaunchRequest,
+                    at: requestInstant,
+                    ["xpcDelayMs": .double(max(0, xpcDelayMs))],
+                    timeline: timeline
+                )
+            }
+        } else {
+            base = now
+        }
+        let supervisorState = await supervisor?.state
+        // `warm` only when Android is already up; a boot started by this launch is
+        // `cold`, and the provisioning boot is `firstBoot` (diagnostics.md §4.3).
+        let launchState: String
+        switch supervisorState {
+        case .ready, .stopping: launchState = "warm"
+        case .booting, .stopped, .failed, nil: launchState = "cold"
+        }
+        return PendingLaunchRecord(
+            base: base,
+            packageID: request.packageID.rawValue,
+            versionCode: nil,
+            sessionID: nil,
+            operationID: OperationContext.currentWireID,
+            launchState: launchState
+        )
+    }
+
+    /// Converts continuous-clock nanoseconds (`mach_continuous_time`) to an instant.
+    private static func instant(continuousNanos: UInt64) -> ContinuousClock.Instant {
+        let delta = Int64(bitPattern: continuousNanos) &- Int64(bitPattern: mach_continuous_time())
+        return ContinuousClock.now.advanced(by: .nanoseconds(delta))
+    }
+
+    /// Milliseconds between two instants.
+    private static func milliseconds(
+        from earlier: ContinuousClock.Instant,
+        to later: ContinuousClock.Instant
+    ) -> Double {
+        let components = (later - earlier).components
+        return Double(components.seconds) * 1_000
+            + Double(components.attoseconds) / 1_000_000_000_000_000
+    }
+
+    /// Attaches the session to a pending launch record; `FIRST_FRAME_DISPLAYED` or
+    /// the session's end finalizes it.
+    private func completeLaunchRecord(_ record: PendingLaunchRecord, sessionID: UUID) {
+        var pending = record
+        pending.sessionID = sessionID
+        pendingLaunchRecords[sessionID] = pending
+    }
+
+    /// Writes a `failed(<code>)` record for a launch that never opened a session.
+    private func failLaunchRecord(_ record: PendingLaunchRecord, code: String) {
+        let pending =
+            record.sessionID.flatMap { pendingLaunchRecords.removeValue(forKey: $0) }
+            ?? record
+        finalizeLaunchRecord(pending, outcome: "failed(\(code))", at: ContinuousClock.now)
+    }
+
+    /// The session's first frame: outcome `shown`.
+    private func noteSessionFirstFrame(_ sessionID: UUID) {
+        guard let pending = pendingLaunchRecords.removeValue(forKey: sessionID) else {
+            return
+        }
+        finalizeLaunchRecord(pending, outcome: "shown", at: ContinuousClock.now)
+    }
+
+    /// A session that ended before its first frame: `ended(<reason>)`; after the
+    /// frame was shown the record is already written.
+    private func noteSessionEnded(_ sessionID: UUID, reason: String) {
+        guard let pending = pendingLaunchRecords.removeValue(forKey: sessionID) else {
+            return
+        }
+        finalizeLaunchRecord(pending, outcome: "ended(\(reason))", at: ContinuousClock.now)
+    }
+
+    /// Assembles markers from the timeline window and appends the record.
+    private func finalizeLaunchRecord(
+        _ record: PendingLaunchRecord,
+        outcome: String,
+        at end: ContinuousClock.Instant
+    ) {
+        var markers: [String: Double] = [:]
+        if let timeline = diagnostics?.perfTimeline {
+            for event in timeline.snapshot()
+            where event.time >= record.base && Self.launchMarkers.contains(event.marker) {
+                markers[event.marker.rawValue] = Self.milliseconds(from: record.base, to: event.time)
+            }
+        }
+        perfRecords?.appendLaunch(
+            LaunchRecord(
+                packageID: record.packageID,
+                versionCode: record.versionCode,
+                sessionID: record.sessionID?.uuidString,
+                operationID: record.operationID,
+                launchState: record.launchState,
+                windowMode: "secondaryDisplay",
+                build: buildInfo.buildNumber,
+                image: image?.version.description ?? "",
+                gpuProfile: "drmVirgl",
+                markers: markers,
+                totalMs: Self.milliseconds(from: record.base, to: end),
+                outcome: outcome
+            ))
+    }
+
+    /// Markers that join a launch record (diagnostics.md §4.3).
+    private static let launchMarkers: Set<PerfMarker> = [
+        .wrapperProcessStart, .appLaunchRequest, .displayAttached, .activityStarted,
+        .firstFrame, .firstFrameDisplayed, .updateCheckStart, .updateCheckEnd,
+    ]
+
+    /// Connects the session service's perf hooks once (idempotent).
+    private func attachPerfObservers(to service: DaemonHeadlessSessionService) async {
+        await service.setPerfObservers(
+            firstFrame: { [weak self] sessionID in
+                guard case .app(let uuid) = sessionID else {
+                    return
+                }
+                Task { await self?.noteSessionFirstFrame(uuid) }
+            },
+            sessionEnded: { [weak self] sessionID, reason in
+                guard case .app(let uuid) = sessionID else {
+                    return
+                }
+                Task { await self?.noteSessionEnded(uuid, reason: reason) }
+            }
+        )
+    }
+
+    /// The developer-mode gate for `perfStatistics` and `frameStatistics`
+    /// (diagnostics.md §9.3): `developer.enabled` in `settings.json`.
+    private func requireDeveloperMode() throws(RuntimeWireError) {
+        guard GlobalSettings.load(from: paths.settingsFile).developerEnabled else {
+            throw .runtime(
+                "developerModeRequired",
+                message: "Developer mode is turned off.",
+                remediation:
+                    "Turn on Developer mode in Settings → Advanced, or run: apkrun config set developer.enabled true"
+            )
+        }
+    }
+
+    /// `perfStatistics`: markers, input histograms, session graphics, and an
+    /// on-demand metrics snapshot; `reset` clears them (diagnostics.md §9.3).
+    public func perfStatistics(
+        _ request: PerfStatisticsRequest
+    ) async throws(RuntimeWireError) -> WirePerfStatistics {
+        try requireDeveloperMode()
+        let events = (diagnostics?.perfTimeline.snapshot() ?? [])
+            .filter { $0.time >= statisticsSinceInstant }
+        let markers = Self.markerStatistics(from: events)
+        let input = InputLatencyRecorder.shared.histograms().map {
+            WireInputHistogram(segment: $0.segment, boundsUs: $0.boundsUs, counts: $0.counts)
+        }
+        let sessions = await sessionGraphicsStatistics(sessionID: nil)
+        let metrics = metricsSnapshot()
+        let result = WirePerfStatistics(
+            since: statisticsSinceDate,
+            markers: markers,
+            input: input,
+            sessions: sessions,
+            metrics: metrics
+        )
+        if request.reset {
+            diagnostics?.perfTimeline.clear()
+            InputLatencyRecorder.shared.reset()
+            statisticsSinceInstant = .now
+            statisticsSinceDate = Date()
+        }
+        return result
+    }
+
+    /// `frameStatistics`: per-session graphics; never starts Android
+    /// (diagnostics.md §9.3, runtime-api.md §13.1).
+    public func frameStatistics(sessionID: UUID?) async throws(RuntimeWireError)
+        -> [SessionGraphicsStatistics]
+    {
+        try requireDeveloperMode()
+        return await sessionGraphicsStatistics(sessionID: sessionID)
+    }
+
+    /// Session graphics rows from the headless session service, or `[]` before
+    /// Android has ever run (the read itself never starts it).
+    private func sessionGraphicsStatistics(sessionID: UUID?) async -> [SessionGraphicsStatistics] {
+        guard let service = headlessSessionService as? DaemonHeadlessSessionService else {
+            return []
+        }
+        let rows = await service.sessionGraphicsStatistics()
+        guard let sessionID else {
+            return rows.map(\.statistics)
+        }
+        return rows.filter { $0.sessionID == sessionID }.map(\.statistics)
+    }
+
+    /// Per-marker segment distributions: for each event, the gap since the
+    /// previous event of the same name, per marker (diagnostics.md §9.3).
+    private static func markerStatistics(from events: [PerfEvent]) -> [WireMarkerStatistics] {
+        var lastSeen: [String: ContinuousClock.Instant] = [:]
+        var durations: [String: [Int64]] = [:]
+        var counts: [String: Int] = [:]
+        for event in events.sorted(by: { $0.time < $1.time }) {
+            let name = event.marker.rawValue
+            counts[name, default: 0] += 1
+            if let previous = lastSeen[name] {
+                let components = (event.time - previous).components
+                let us =
+                    components.seconds * 1_000_000
+                    + components.attoseconds / 1_000_000_000_000
+                durations[name, default: []].append(us)
+            }
+            lastSeen[name] = event.time
+        }
+        return counts.keys.sorted().map { name in
+            let values = (durations[name] ?? []).sorted()
+            let p50 = values.isEmpty ? 0 : values[values.count / 2]
+            let p95 =
+                values.isEmpty
+                ? 0
+                : values[min(values.count - 1, (values.count * 95 + 99) / 100 - 1)]
+            return WireMarkerStatistics(
+                name: name,
+                count: counts[name] ?? 0,
+                p50Us: p50,
+                p95Us: p95,
+                maxUs: values.last ?? 0
+            )
+        }
+    }
+
+    /// The on-demand metrics snapshot of diagnostics.md §5.
+    private func metricsSnapshot() -> WireMetricsSnapshot {
+        let sampler = MetricsSampler()
+        let daemon = sampler.daemonMetrics()
+        var vmFootprint: Int64?
+        if let vmStart = diagnostics?.perfTimeline.snapshot().last(where: { $0.marker == .vmStart }) {
+            // The marker's instant converted back to mach uptime nanoseconds (OQ-06).
+            let elapsed = ContinuousClock.now - vmStart.time
+            let elapsedNs =
+                UInt64(max(0, elapsed.components.seconds)) * 1_000_000_000
+                + UInt64(max(0, elapsed.components.attoseconds) / 1_000_000_000)
+            let vmUptime = mach_continuous_time() &- elapsedNs
+            if let pid = sampler.findVirtualMachineService(afterUptimeNanos: vmUptime) {
+                vmFootprint = sampler.physFootprint(of: pid)
+            }
+        }
+        return WireMetricsSnapshot(
+            sampledAt: Date(),
+            vmServiceFootprintBytes: vmFootprint,
+            daemonFootprintBytes: daemon.footprintBytes,
+            daemonResidentBytes: daemon.residentBytes,
+            daemonCPUUserUs: daemon.cpuUserUs,
+            daemonCPUSystemUs: daemon.cpuSystemUs
+        )
     }
 
     // MARK: - First-run provisioning and Reset Android (#67)

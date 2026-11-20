@@ -683,10 +683,14 @@ public struct RuntimePackageRequest: Codable, Sendable, Equatable {
 public struct RuntimeLaunchRequest: Codable, Sendable, Equatable {
     /// The package to launch.
     public var packageID: RuntimePackageID
+    /// The calling launcher's own timing stamps, so the daemon can record
+    /// `WRAPPER_PROCESS_START` and `APP_LAUNCH_REQUEST` (diagnostics.md §4.2).
+    public var launchTiming: LaunchTiming?
 
     /// Creates a launch request.
-    public init(packageID: RuntimePackageID) {
+    public init(packageID: RuntimePackageID, launchTiming: LaunchTiming? = nil) {
         self.packageID = packageID
+        self.launchTiming = launchTiming
     }
 }
 

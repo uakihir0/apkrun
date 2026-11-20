@@ -76,6 +76,13 @@ public protocol ScanoutController: Sendable {
 
     /// Detaches one pool. A generation mismatch leaves a newer lease untouched.
     func detachPool(_ scanout: ScanoutID, generation: UInt64?)
+
+    /// The present statistics of a scanout's current presenter, for `frameStatistics`
+    /// (diagnostics.md §9.3). `nil` when no presenter is attached.
+    func presentStatistics(for scanout: ScanoutID) -> (statistics: PresentStatistics, durationsUs: [UInt64])?
+
+    /// The device-wide GPU counters (`hostReadbacks`, `cpuPixelCopies`).
+    func graphicsCounters() -> GraphicsCounters
 }
 
 /// Production scanout operations backed by one running or booting virtio-gpu device.
@@ -104,6 +111,21 @@ public final class VirtioGPUScanoutController: ScanoutController, Sendable {
         height: Int
     ) throws(GraphicsFailure) -> ScanoutPoolHandle {
         ScanoutPoolHandle(presenter: try device.attachPresenter(scanout, width: width, height: height), device: device)
+    }
+
+    /// The present statistics of the scanout's presenter, or `nil`.
+    public func presentStatistics(
+        for scanout: ScanoutID
+    ) -> (statistics: PresentStatistics, durationsUs: [UInt64])? {
+        guard let presenter = device.presenter(for: scanout) else {
+            return nil
+        }
+        return (presenter.statistics, presenter.presentDurationsUs)
+    }
+
+    /// The device-wide GPU counters.
+    public func graphicsCounters() -> GraphicsCounters {
+        device.statistics
     }
 
     /// Replaces the selected scanout's presenter pool after its mode changes.

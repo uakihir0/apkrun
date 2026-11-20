@@ -367,7 +367,7 @@ public protocol UpdateRuntimeAccess: Sendable {
     func ensureReady(_ reason: StartReason) async throws(RuntimeFailure)          // .update (§3.5, §7.3)
     func endSessions(for package: PackageID, reason: SessionEndReason) async
     func reopen(_ package: PackageID) async                              // after "Update Now"
-    func healthCheckLaunch(_ package: PackageID, timeouts: HealthCheckTimeouts) async -> HealthLaunchResult   // §8.2
+    func healthCheckLaunch(_ package: PackageID, timeouts: UpdateHealthCheckTimeouts) async -> HealthLaunchResult   // §8.2
 }
 ```
 

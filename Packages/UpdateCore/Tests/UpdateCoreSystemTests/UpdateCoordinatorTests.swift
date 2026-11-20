@@ -10,7 +10,7 @@ import Testing
 // candidate, notifyOnly posts once, state survives a restart).
 
 actor CoordinatorChannel: StoreAgentChannel {
-    nonisolated let capabilities: StoreCapabilities = [.install, .metadata]
+    nonisolated(unsafe) var capabilities: StoreCapabilities = [.install, .metadata]
     /// When set, `packageInfo` reports this versionCode instead of the
     /// installed one — an Android that has not caught up, for H1 tests.
     var reportedVersionCode: VersionCode?
@@ -41,6 +41,18 @@ actor CoordinatorChannel: StoreAgentChannel {
 
     func listPackages(_: StorePackageFilter) async throws -> [StorePackageSummary] {
         []
+    }
+
+    /// §7.3 mechanism: RollbackManager. Only reachable while `.rollback` is
+    /// in `capabilities`.
+    func rollback(
+        _ package: PackageID, from _: VersionCode, to: VersionCode
+    ) async throws -> StoreRollbackResult {
+        guard var info = packages[package] else { return .unavailable }
+        info.versionCode = to
+        packages[package] = info
+        reportedVersionCode = nil
+        return .rolledBack
     }
 }
 
@@ -81,6 +93,8 @@ actor RecordingNotifier: HostNotificationSink {
     private(set) var sent: [UpdateNotification] = []
     private(set) var waitingSent: [UpdateNotification] = []
     private(set) var refusedSent: [UpdateNotification] = []
+    private(set) var rolledBackSent: [UpdateNotification] = []
+    private(set) var keptSent: [UpdateNotification] = []
     func notifyUpdateAvailable(_ notification: UpdateNotification) async {
         sent.append(notification)
     }
@@ -91,6 +105,14 @@ actor RecordingNotifier: HostNotificationSink {
 
     func notifyUpdateRefused(_ notification: UpdateNotification) async {
         refusedSent.append(notification)
+    }
+
+    func notifyUpdateRolledBack(_ notification: UpdateNotification) async {
+        rolledBackSent.append(notification)
+    }
+
+    func notifyUpdateKeptAfterFailedHealthCheck(_ notification: UpdateNotification) async {
+        keptSent.append(notification)
     }
 }
 
@@ -699,6 +721,10 @@ extension CoordinatorChannel {
     fileprivate func set(reportedVersionCode: VersionCode) {
         self.reportedVersionCode = reportedVersionCode
     }
+
+    fileprivate func set(capabilities: StoreCapabilities) {
+        self.capabilities = capabilities
+    }
 }
 
 @Test func installStagesInstallsAndConfirmsH1() async throws {
@@ -941,4 +967,126 @@ private func localRef() -> UpdateProviderRef? {
     await coordinator.notifyOverdueStagedUpdates(
         now: weekLater.addingTimeInterval(3600))
     #expect(await notifier.waitingSent.count == 1)
+}
+
+// MARK: - #44 §8.3 health-check outcomes, §8.4 skipped versions
+
+// §8.3 fail+autoRollback: the store rolls back to `previous/`, the failed
+// version lands in `failed/2/`, §8.4 adds it to `skippedVersions`, and the
+// rolledBack notification fires.
+@Test func failedHealthCheckRollsBackAndSkipsVersion() async throws {
+    let root = try makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let channel = CoordinatorChannel()
+    await channel.set(capabilities: [.install, .metadata, .rollback])
+    let notifier = RecordingNotifier()
+    let knobs = InspectKnobs()
+    let store = makeKnobbedStore(at: root, knobs: knobs, channel: channel)
+    try await store.open()
+    let record = try await installV1(store: store, repo: fixtureRepo())
+    knobs.versionCode = 2
+    let coordinator = makeV2Coordinator(
+        store: store, root: root, provider: try v2Provider(for: record),
+        notifier: notifier)
+    let (validated, candidate) = try await validatedV2(
+        coordinator: coordinator, record: record)
+    await channel.set(reportedVersionCode: 1)
+    let runtime = FakeUpdateRuntime()
+
+    let outcome = await coordinator.install(
+        record.packageId, validated: validated, candidate: candidate,
+        trigger: .userInitiated, runtime: runtime, gate: testGate(runtime))
+    guard case .rolledBack = outcome else {
+        Issue.record("expected .rolledBack, got \(outcome)")
+        return
+    }
+
+    let restored = try #require(
+        await store.listManagedPackages().first(where: { $0.packageId == record.packageId }))
+    #expect(restored.versionCode == 1)
+    let directory = root.appendingPathComponent(
+        "Packages/io.apkrun.fixture.helloupdate")
+    #expect(
+        FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent("failed/2/artifact.json").path))
+    let stateStore = UpdateStateStore(directory: root.appendingPathComponent("Updates"))
+    #expect(try await stateStore.state(for: record.packageId)?.skippedVersions == [2])
+    let history = try await stateStore.history(packageID: record.packageId)
+    #expect(history.last?.outcome == "rolledBack")
+    #expect(await notifier.rolledBackSent.count == 1)
+}
+
+// §8.3 fail+no mechanism: keeps the broken update installed and posts the
+// kept notification instead of rolling back.
+@Test func failedHealthCheckWithoutMechanismKeeps() async throws {
+    let root = try makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let channel = CoordinatorChannel()
+    let notifier = RecordingNotifier()
+    let knobs = InspectKnobs()
+    let store = makeKnobbedStore(at: root, knobs: knobs, channel: channel)
+    try await store.open()
+    let record = try await installV1(store: store, repo: fixtureRepo())
+    knobs.versionCode = 2
+    let coordinator = makeV2Coordinator(
+        store: store, root: root, provider: try v2Provider(for: record),
+        notifier: notifier)
+    let (validated, candidate) = try await validatedV2(
+        coordinator: coordinator, record: record)
+    await channel.set(reportedVersionCode: 1)
+    let runtime = FakeUpdateRuntime()
+
+    let outcome = await coordinator.install(
+        record.packageId, validated: validated, candidate: candidate,
+        trigger: .userInitiated, runtime: runtime, gate: testGate(runtime))
+    guard case .keptAfterFailedHealthCheck = outcome else {
+        Issue.record("expected .keptAfterFailedHealthCheck, got \(outcome)")
+        return
+    }
+    #expect(await notifier.keptSent.count == 1)
+    let history = try await UpdateStateStore(
+        directory: root.appendingPathComponent("Updates")
+    )
+    .history(packageID: record.packageId)
+    #expect(history.last?.outcome == "keptAfterFailedHealthCheck")
+    let records = try await store.listManagedPackages()
+    #expect(records.first?.versionCode == 2)
+}
+
+// §8.3 fail+autoRollback off: even with a working rollback mechanism the
+// update stays installed and the notification offers the Roll Back action.
+@Test func failedHealthCheckAutoRollbackOffKeeps() async throws {
+    let root = try makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let channel = CoordinatorChannel()
+    await channel.set(capabilities: [.install, .metadata, .rollback])
+    let notifier = RecordingNotifier()
+    let knobs = InspectKnobs()
+    let store = makeKnobbedStore(at: root, knobs: knobs, channel: channel)
+    try await store.open()
+    let record = try await installV1(store: store, repo: fixtureRepo())
+    knobs.versionCode = 2
+    // update.autoRollback=false (§8.3).
+    let directory = root.appendingPathComponent(
+        "Packages/io.apkrun.fixture.helloupdate")
+    try Data(#"{"update":{"autoRollback":"false"}}"#.utf8)
+        .write(to: directory.appendingPathComponent("settings.json"))
+    let coordinator = makeV2Coordinator(
+        store: store, root: root, provider: try v2Provider(for: record),
+        notifier: notifier)
+    let (validated, candidate) = try await validatedV2(
+        coordinator: coordinator, record: record)
+    await channel.set(reportedVersionCode: 1)
+    let runtime = FakeUpdateRuntime()
+
+    let outcome = await coordinator.install(
+        record.packageId, validated: validated, candidate: candidate,
+        trigger: .userInitiated, runtime: runtime, gate: testGate(runtime))
+    guard case .keptAfterFailedHealthCheck = outcome else {
+        Issue.record("expected .keptAfterFailedHealthCheck, got \(outcome)")
+        return
+    }
+    #expect(await notifier.keptSent.count == 1)
+    let records = try await store.listManagedPackages()
+    #expect(records.first?.versionCode == 2)
 }

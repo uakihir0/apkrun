@@ -1183,7 +1183,8 @@ public actor EmbeddedPackageService: RuntimeService {
                         "rollbackUnavailable",
                         message: "Android cannot roll this package back automatically.",
                         remediation:
-                            "Retry with `apkrun rollback <package> --allow-data-loss` to reinstall the previous version (its app data is deleted).")
+                            "Retry with `apkrun rollback <package> --allow-data-loss` to reinstall the previous version (its app data is deleted)."
+                    )
                 }
             case .rollbackFailed(let detail):
                 return RuntimeWireError(

@@ -778,7 +778,6 @@ public struct RuntimeSetUpdateAuthorityControlReply: Codable, Sendable {
     }
 }
 
-
 /// A `rollbackPackage` control request (update-system.md §8.5).
 public struct RuntimeRollbackPackageControlRequest: Codable, Sendable {
     /// The common request header.

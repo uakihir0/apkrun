@@ -1784,7 +1784,7 @@ public actor PackageStore {
             }
             info = committed
         }
-        guard info?.versionCode == previousSet.versionCode else {
+        guard let info, info.versionCode == previousSet.versionCode else {
             try appendAbort(transaction, reason: "guestVersionMismatch")
             throw PackageStoreFailure.guestVersionMismatch
         }
@@ -1804,7 +1804,7 @@ public actor PackageStore {
 
         let record = recordAfterRollback(
             existing,
-            info: info!,
+            info: info,
             set: previousSet,
             digest: previousDigest,
             operationID: operationID,
@@ -3904,14 +3904,15 @@ public actor PackageStore {
         }
         let record = recordAfterRollback(
             old,
-            info: info ?? StorePackageInfo(
-                packageID: packageID,
-                displayName: old.displayName,
-                versionCode: restoredSet.versionCode,
-                enabled: true,
-                targetSDK: old.android.targetSdk,
-                minSDK: old.android.minSdk
-            ),
+            info: info
+                ?? StorePackageInfo(
+                    packageID: packageID,
+                    displayName: old.displayName,
+                    versionCode: restoredSet.versionCode,
+                    enabled: true,
+                    targetSDK: old.android.targetSdk,
+                    minSDK: old.android.minSdk
+                ),
             set: restoredSet,
             digest: toDigest,
             operationID: UUID(),

@@ -52,6 +52,8 @@ extension HostNotificationSink {
     /// Sinks that cannot render the §8.3 notices may drop them; the phases
     /// and history still record the outcome.
     public func notifyUpdateRolledBack(_ notification: UpdateNotification) async {}
+    /// Sinks that cannot render the §8.3 notices may drop them; the phases
+    /// and history still record the outcome.
     public func notifyUpdateKeptAfterFailedHealthCheck(_ notification: UpdateNotification) async {}
 }
 

@@ -1281,6 +1281,23 @@ extension RuntimeHost {
         return Self.hostOnACPower() && Self.hostIdleSeconds() >= 900
     }
 
+    /// §3.5's tail: marks that an update install booted a stopped runtime.
+    func markUpdateBootedForInstall() { updateBootedForInstall = true }
+    /// §3.5's tail: clears the mark — a real session now owns the runtime.
+    func clearUpdateBootedForInstall() { updateBootedForInstall = false }
+    /// §3.5's tail: stops a runtime this daemon booted only for update
+    /// installs once no update work, mutation, or session keeps it.
+    private func stopUpdateBootedRuntimeIfIdle() async {
+        guard updateBootedForInstall, activePackageMutations == 0 else { return }
+        if let service = headlessSessionService as? DaemonHeadlessSessionService,
+            await service.hasLiveSessions
+        {
+            return
+        }
+        updateBootedForInstall = false
+        try? await stopRuntimeBody(reason: .idle)
+    }
+
     /// Builds the §7.5 runtime access over this host's supervisor and
     /// headless session service.
     func updateRuntimeAccess() -> any UpdateRuntimeAccess {
@@ -1412,6 +1429,9 @@ extension RuntimeHost {
                         throw UpdateFailure.providerUnreachable(
                             reason: "the §3.5 headless-install conditions do not hold")
                     }
+                    // §3.5's tail: remember this boot was update-driven so
+                    // the runtime stops again once the installs finish.
+                    await markUpdateBootedForInstall()
                 }
                 // A user-initiated Update Now may resume a suspended runtime;
                 // automatic installs go through .automatic (§7.1 GU1).
@@ -1439,15 +1459,20 @@ extension RuntimeHost {
                 let inner = await self.updateIdleController.assertActivity(.storeOperation)
                 return UpdateActivityAssertion {
                     inner.release()
-                    Task { await self.finishPackageMutation() }
+                    Task {
+                        await self.finishPackageMutation()
+                        await self.stopUpdateBootedRuntimeIfIdle()
+                    }
                 }
             },
             // §8.2: the session service runs the health-check launch; a
             // service without it answers `.launchFailed`, the same as no
             // channel.
             healthLaunch: { [weak self] packageID, timeouts in
+                // The service is created lazily so an install that booted
+                // Android itself (§3.5) can still run its health launch.
                 guard let self,
-                    let service = await self.headlessSessionService
+                    let service = (try? await self.makeHeadlessSessionService())
                         as? DaemonHeadlessSessionService,
                     let wireID = RuntimePackageID(rawValue: packageID.rawValue)
                 else {
@@ -1458,7 +1483,7 @@ extension RuntimeHost {
             },
             drawnFrame: { [weak self] packageID in
                 guard let self else { return false }
-                if let service = await self.headlessSessionService
+                if let service = (try? await self.makeHeadlessSessionService())
                     as? DaemonHeadlessSessionService,
                     let wireID = RuntimePackageID(rawValue: packageID.rawValue),
                     await service.hasDrawnFrame(packageID: wireID)
@@ -1508,7 +1533,11 @@ extension RuntimeHost {
                 await self?.awaitUpdateInstall(for: packageID, gate: updateGate)
             },
             firstFrameObserver: { [weak self] packageID in
-                guard let self, let package = PackageID(rawValue: packageID.rawValue) else { return }
+                guard let self else { return }
+                // A session that drew a frame means someone is using the
+                // runtime: it is no longer a headless update boot.
+                await clearUpdateBootedForInstall()
+                guard let package = PackageID(rawValue: packageID.rawValue) else { return }
                 await self.updateServiceInstance().notePostUpdateFirstFrame(package)
                 // runtime-daemon.md §7.1: a due package's check is scheduled
                 // 30 s after the first frame — never before openSession

@@ -99,7 +99,7 @@ public actor RuntimeHost {
     private var shutdownCompleted = false
     private var activeLifecycleOperations = 0
     private var activeRuntimeStarts = 0
-    private var activePackageMutations = 0
+    var activePackageMutations = 0
     private var runtimeStartTask: Task<Result<Void, RuntimeHostError>, Never>?
     /// Managed-package reinstalls still pending after the last userdata reset (§9.5).
     private var pendingReinstallIDs: Set<RuntimePackageID> = []
@@ -132,6 +132,9 @@ public actor RuntimeHost {
     /// The idle controller the `storeOperation` assertion holds (#75 wires
     /// its suspend/stop deadlines).
     let updateIdleController = IdleController()
+    /// §3.5: set when `ensureReady(.update)` booted a stopped runtime so
+    /// it stops again once the admitted installs finish (update-system.md).
+    var updateBootedForInstall = false
     /// `updates.waiting` registers once when the update service is created.
     var updatesHealthChecksRegistered = false
     private var packageActivityReservations = PackageActivityReservations()
@@ -554,7 +557,7 @@ public actor RuntimeHost {
         try await startRuntimeBody(reason: reason)
     }
 
-    private func stopRuntimeBody(reason: StopReason) async throws(RuntimeHostError) {
+    func stopRuntimeBody(reason: StopReason) async throws(RuntimeHostError) {
         try await waitForStartupCompletion()
         try beginLifecycleOperation()
         defer { finishLifecycleOperation() }
@@ -2464,7 +2467,7 @@ public actor RuntimeHost {
         #endif
     }
 
-    private func makeHeadlessSessionService() async throws(RuntimeWireError) -> any RuntimeSessionService {
+    func makeHeadlessSessionService() async throws(RuntimeWireError) -> any RuntimeSessionService {
         if let headlessSessionService {
             return headlessSessionService
         }

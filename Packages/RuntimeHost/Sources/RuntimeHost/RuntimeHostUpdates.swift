@@ -1325,8 +1325,13 @@ extension RuntimeHost {
         // GU4: re-evaluate exactly when the earliest quiet period ends so
         // an install blocked on `sessionEndedRecently` runs within its
         // 30-second window instead of waiting for the 10-minute tick.
+        // A deadline already past means an install is in flight: its
+        // finish path drains the queue itself, and re-arming for a past
+        // instant would spin this drain until it ends.
         updateGateQuietTask?.cancel()
-        if let instant = await gate.nextQuietReevaluation() {
+        if let instant = await gate.nextQuietReevaluation(),
+            instant > ContinuousClock.now
+        {
             updateGateQuietTask = Task { [weak self] in
                 try? await Task.sleep(until: instant, clock: .continuous)
                 guard !Task.isCancelled else { return }

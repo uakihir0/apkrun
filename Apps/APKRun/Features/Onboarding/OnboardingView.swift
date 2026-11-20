@@ -197,6 +197,13 @@ struct OnboardingView: View {
                 Button("Report…") {
                     ReportSupport.report(error: error)
                 }
+                if step == .installingImage {
+                    // Image downloads arrive with the release feed (#59); until then the user
+                    // can point onboarding at a local image bundle.
+                    Button("Choose Image Folder…") {
+                        chooseImageFolder()
+                    }
+                }
                 if step == .firstBoot, failedFirstBoots >= 2 {
                     Button("Start Over") {
                         Task { await requestSetup(recreateInstance: true) }
@@ -233,6 +240,25 @@ struct OnboardingView: View {
             if step == .firstBoot { failedFirstBoots += 1 }
         default:
             break
+        }
+    }
+
+    private func chooseImageFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the Android image bundle folder"
+        guard panel.runModal() == .OK, let url = panel.url,
+            let bookmark = try? url.bookmarkData(
+                options: .withSecurityScope,
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+        else { return }
+        Task {
+            _ = try? await model.beginSetup(
+                request: SetupRequest(image: .directory(bookmark: bookmark)))
         }
     }
 

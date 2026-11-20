@@ -425,6 +425,8 @@ public actor RuntimeHost {
         bootStartedAt = nil
         bootProgressEstimator = nil
         recordSuccessfulBootIfPresent()
+        // Retry any managed packages still marked for reinstall (§9.5); failures stay marked.
+        await reconcileManagedReinstalls()
     }
 
     /// Stops Android but keeps the daemon available for a later request.
@@ -2816,14 +2818,26 @@ public actor RuntimeHost {
         var record = try await provisioningStore.load()
         record.userdataGeneration = instance.userdataGeneration
         try await provisioningStore.save(record)
-        let bootSupervisor = try supervisorInstance()
-        try await bootSupervisor.ensureReady(.user)
-        // Mark every managed package as needing a reinstall on the new generation, then reinstall
-        // it from its retained artifact under the store's operation assertion (§9.5).
+        // Mark every managed package as needing a reinstall on the new generation first: the
+        // records must reflect the erase even when the reinstall cannot run yet — e.g. in a
+        // build without the development Guest Agent (§9.5).
         let service = packageQueryServiceInstance()
         try await service.open()
-        try await attachPackageQueriesIfRuntimeIsReady(to: service)
         let marked = try await service.markForUserdataReset()
+        let bootSupervisor = try supervisorInstance()
+        try await bootSupervisor.ensureReady(.user)
+        // Reinstall the marked packages from their retained artifacts under the store's
+        // operation assertion. When the runtime cannot attach, the marks are left for
+        // reconcileManagedReinstalls() on a later boot.
+        do {
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+        } catch {
+            logger?.warning(
+                "Reset Android: \(marked.count, .public) managed package(s) stay marked for reinstall until the runtime can attach."
+            )
+            setProvisioningState(.complete)
+            return
+        }
         for packageID in marked {
             do {
                 try await reinstallManagedPackage(
@@ -2839,12 +2853,36 @@ public actor RuntimeHost {
         setProvisioningState(.complete)
     }
 
+    /// Retries managed packages still marked `needsReinstall` after a userdata reset or an
+    /// earlier failed reinstall (§9.5). Called after a successful boot; failures only keep the
+    /// mark for a later attempt.
+    private func reconcileManagedReinstalls() async {
+        let service = packageQueryService ?? packageQueryServiceInstance()
+        do {
+            try await service.open()
+            let pending = try await service.pendingReinstalls()
+            guard !pending.isEmpty else { return }
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+            for packageID in pending {
+                do {
+                    try await reinstallManagedPackage(packageID: packageID, service: service)
+                } catch {
+                    logger?.warning(
+                        "Reinstall reconcile failed for \(packageID.rawValue, .public)"
+                    )
+                }
+            }
+        } catch {
+            logger?.warning("Managed-package reinstall reconcile failed")
+        }
+    }
+
     /// Reinstalls one managed package from `Packages/<id>/current/` after a userdata reset.
     private func reinstallManagedPackage(
         packageID: RuntimePackageID,
         service: EmbeddedPackageService
     ) async throws {
-        let current = paths.packageCurrentDirectory(packageID: packageID.rawValue)
+        let current = try await service.artifactCurrentDirectory(for: packageID)
         guard
             let names = try? FileManager.default.contentsOfDirectory(atPath: current.path)
                 .filter({ $0.hasSuffix(".apk") }).sorted(),

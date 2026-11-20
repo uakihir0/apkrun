@@ -186,6 +186,39 @@ public actor EmbeddedPackageService: RuntimeService {
         }
     }
 
+    /// Managed packages still waiting for a reinstall after a userdata reset or restore.
+    /// The records stay marked when a reinstall could not run, so a later boot retries them.
+    public func pendingReinstalls() async throws(RuntimeWireError) -> [RuntimePackageID] {
+        do {
+            try await ensureOpen()
+            return try await store.listManagedPackages().compactMap { record in
+                switch record.state {
+                case .needsReinstall, .broken(.reinstallFailed):
+                    return RuntimePackageID(rawValue: record.packageId.rawValue)
+                default:
+                    return nil
+                }
+            }
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
+    /// The `current/` artifact directory of a managed package (collision-aware; §9.5).
+    public func artifactCurrentDirectory(
+        for packageID: RuntimePackageID
+    ) async throws(RuntimeWireError) -> URL {
+        do {
+            try await ensureOpen()
+            guard let id = PackageID(rawValue: packageID.rawValue) else {
+                throw PackageStoreFailure.packageNotFound
+            }
+            return try await store.artifactCurrentDirectory(packageID: id)
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
     /// Installs a new import, restores a retained-data package, or updates a managed package.
     public func installImported(
         _ request: RuntimeInstallImportedRequest

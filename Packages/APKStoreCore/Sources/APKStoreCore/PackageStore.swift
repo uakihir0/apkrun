@@ -873,7 +873,8 @@ public actor PackageStore {
             case .installed:
                 record.state = .needsReinstall(.userdataReset)
                 record.updatedAt = Date()
-                try writeRecord(record, directory: packageID.rawValue)
+                try writeRecord(
+                    record, directory: directories[packageID] ?? directoryName(for: packageID))
                 records[packageID] = record
                 marked.append(packageID)
             case .needsReinstall(.userdataReset), .needsReinstall(.userdataRestored),
@@ -886,9 +887,10 @@ public actor PackageStore {
         // Adopted packages have no host artifact to reinstall from.
         for (packageID, var record) in records {
             guard record.source.kind == .adopted else { continue }
+            let directory = directories[packageID] ?? directoryName(for: packageID)
             let current =
                 packagesDirectory
-                .appendingPathComponent(packageID.rawValue, isDirectory: true)
+                .appendingPathComponent(directory, isDirectory: true)
                 .appendingPathComponent("current", isDirectory: true)
             let hasArtifact =
                 (try? fileManager.contentsOfDirectory(atPath: current.path))?
@@ -896,11 +898,22 @@ public actor PackageStore {
             if !hasArtifact, record.state == .installed {
                 record.state = .broken(.removedInAndroid)
                 record.updatedAt = Date()
-                try writeRecord(record, directory: packageID.rawValue)
+                try writeRecord(record, directory: directory)
                 records[packageID] = record
             }
         }
         return marked
+    }
+
+    /// The `current/` artifact directory of a managed package, honoring the collision-resolved
+    /// directory name (`<id>~<digest>`) on case-insensitive volumes.
+    public func artifactCurrentDirectory(packageID: PackageID) async throws -> URL {
+        try requireOpen()
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        return
+            packagesDirectory
+            .appendingPathComponent(directory, isDirectory: true)
+            .appendingPathComponent("current", isDirectory: true)
     }
 
     /// Returns unreadable package metadata without making healthy records unavailable.

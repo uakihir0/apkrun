@@ -268,6 +268,7 @@ class Connection(
                 GuestCapability.INPUT_ACK_TRACE,
                 GuestCapability.PACKAGES,
                 GuestCapability.DIAGNOSTICS,
+                GuestCapability.CLIPBOARD_TEXT,
             )
     }
 }

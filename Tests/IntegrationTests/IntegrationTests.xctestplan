@@ -398,6 +398,11 @@
             "key": "ANDROID_ADB_SERVER_PORT",
             "value": "15040",
             "enabled": true
+          },
+          {
+            "key": "APKRUN_HELLOSPLIT_APKS",
+            "value": "/tmp/apkrun-test-fixtures/HelloSplit.apks",
+            "enabled": true
           }
         ],
         "maximumTestExecutionTimeAllowance": 2400

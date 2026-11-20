@@ -247,7 +247,14 @@ public actor PackageStore {
                     resourcesArscOK: zipFacts.resourcesArscOK,
                     permissions: itemFacts.permissions,
                     requiredFeatures: itemFacts.requiredFeatures,
-                    debuggable: itemFacts.debuggable
+                    debuggable: itemFacts.debuggable,
+                    attributes: SplitAttributes(
+                        isFeatureSplit: itemFacts.isFeatureSplit,
+                        configForSplit: itemFacts.configForSplit,
+                        isSplitRequired: itemFacts.isSplitRequired,
+                        requiredSplitTypes: itemFacts.requiredSplitTypes,
+                        splitTypes: itemFacts.splitTypes
+                    )
                 )
             )
         }
@@ -1709,7 +1716,11 @@ public actor PackageStore {
             signingCertificates: info.signingDigests,
             signingLineage: [],
             installer: .apkrun,
-            updateAuthority: .manual,
+            // A reinstall keeps the update policy the package already has: an adopted
+            // package stays externally managed, and an apkrun-managed package keeps
+            // its provider (package-store.md §2.1, §9.3).
+            updateAuthority: existing?.updateAuthority ?? .manual,
+            updateProvider: existing?.updateProvider,
             state: .installed,
             artifacts: ArtifactSlots(current: summary, currentMatchesAndroid: true),
             android: android,

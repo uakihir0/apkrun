@@ -30,6 +30,24 @@ public struct APKFacts: Sendable, Equatable {
     public var iconPaths: [String: String]
     /// The manifest's default icon path.
     public var iconPath: String?
+    /// `android:isFeatureSplit="true"` (xmltree; package-store.md §4.3).
+    public var isFeatureSplit: Bool
+    /// `android:configForSplit`, or `nil`.
+    public var configForSplit: String?
+    /// `android:isSplitRequired="true"`.
+    public var isSplitRequired: Bool
+    /// `android:requiredSplitTypes` of the base (comma separated in the manifest).
+    public var requiredSplitTypes: [String]
+    /// `android:splitTypes` of a split.
+    public var splitTypes: [String]
+    /// `android:sharedUserId`, or `nil`.
+    public var sharedUserID: String?
+    /// `android:extractNativeLibs`, or `nil` when the attribute is absent.
+    public var extractNativeLibs: Bool?
+    /// The manifest declares a `<dist:module>` element.
+    public var hasDistModule: Bool
+    /// The `<dist:module>` element sets `dist:onDemand="true"`.
+    public var distOnDemand: Bool
 
     /// Creates a snapshot of the host-inspected APK metadata.
     public init(
@@ -45,7 +63,16 @@ public struct APKFacts: Sendable, Equatable {
         requiredFeatures: [String] = [],
         debuggable: Bool = false,
         iconPaths: [String: String] = [:],
-        iconPath: String? = nil
+        iconPath: String? = nil,
+        isFeatureSplit: Bool = false,
+        configForSplit: String? = nil,
+        isSplitRequired: Bool = false,
+        requiredSplitTypes: [String] = [],
+        splitTypes: [String] = [],
+        sharedUserID: String? = nil,
+        extractNativeLibs: Bool? = nil,
+        hasDistModule: Bool = false,
+        distOnDemand: Bool = false
     ) {
         self.packageID = packageID
         self.versionCode = versionCode
@@ -60,6 +87,15 @@ public struct APKFacts: Sendable, Equatable {
         self.debuggable = debuggable
         self.iconPaths = iconPaths
         self.iconPath = iconPath
+        self.isFeatureSplit = isFeatureSplit
+        self.configForSplit = configForSplit
+        self.isSplitRequired = isSplitRequired
+        self.requiredSplitTypes = requiredSplitTypes
+        self.splitTypes = splitTypes
+        self.sharedUserID = sharedUserID
+        self.extractNativeLibs = extractNativeLibs
+        self.hasDistModule = hasDistModule
+        self.distOnDemand = distOnDemand
     }
 }
 
@@ -121,6 +157,29 @@ public struct APKInspector: Sendable {
             throw .aapt2NotFound
         }
 
+        let badging = try await runAAPT2(
+            arguments: ["dump", "badging", apk.path],
+            apk: apk,
+            executable: executable
+        )
+        var facts = try Self.parseBadging(badging)
+        // The split-selection attributes (§4.3) come from the binary manifest itself:
+        // `dump badging` does not print them.
+        let xmltree = try await runAAPT2(
+            arguments: ["dump", "xmltree", "--file", "AndroidManifest.xml", apk.path],
+            apk: apk,
+            executable: executable
+        )
+        Self.applyXMLTree(xmltree, to: &facts)
+        return facts
+    }
+
+    /// Runs one sandboxed aapt2 invocation and returns its output (20 s, 16 MiB cap).
+    private func runAAPT2(
+        arguments: [String],
+        apk: URL,
+        executable: URL
+    ) async throws(APKInspectionFailure) -> String {
         let process = Process()
         let wasSandboxed =
             sandboxExecutable.map { FileManager.default.isExecutableFile(atPath: $0.path) } ?? false
@@ -132,20 +191,18 @@ public struct APKInspector: Sendable {
         }
         process.executableURL = wasSandboxed ? sandboxExecutable : executable
         if wasSandboxed {
-            process.arguments = [
-                "-p",
-                Self.sandboxProfile(
-                    tool: executable,
-                    apk: apk,
-                    importDirectory: apk.deletingLastPathComponent()
-                ),
-                executable.path,
-                "dump",
-                "badging",
-                apk.path,
-            ]
+            process.arguments =
+                [
+                    "-p",
+                    Self.sandboxProfile(
+                        tool: executable,
+                        apk: apk,
+                        importDirectory: apk.deletingLastPathComponent()
+                    ),
+                    executable.path,
+                ] + arguments
         } else {
-            process.arguments = ["dump", "badging", apk.path]
+            process.arguments = arguments
         }
         process.environment = ["LANG": "C", "LC_ALL": "C"]
         process.standardInput = FileHandle.nullDevice
@@ -202,7 +259,87 @@ public struct APKInspector: Sendable {
         guard process.terminationStatus == 0 else {
             throw .aapt2Failed(process.terminationStatus)
         }
-        return try Self.parseBadging(output)
+        return output
+    }
+
+    /// Merges the manifest attributes of `aapt2 dump xmltree` into `facts` (§4.3). Tolerant:
+    /// attributes the APK does not declare keep their `APKFacts` defaults.
+    static func applyXMLTree(_ output: String, to facts: inout APKFacts) {
+        var currentElement = ""
+        for rawLine in output.split(whereSeparator: \.isNewline) {
+            let line = rawLine.drop(while: { $0 == " " || $0 == "\t" })
+            if line.hasPrefix("E: ") {
+                currentElement = String(
+                    line.dropFirst(3).prefix(while: { $0 != " " && $0 != "(" }))
+                if currentElement.split(separator: ":").last == "module" {
+                    facts.hasDistModule = true
+                }
+                continue
+            }
+            guard line.hasPrefix("A: ") else { continue }
+            let attribute = String(line.dropFirst(3))
+            guard let equals = attribute.firstIndex(of: "=") else { continue }
+            let namePart = attribute[..<equals]
+            let nameEnd = namePart.firstIndex(of: "(") ?? namePart.endIndex
+            guard let localName = namePart[..<nameEnd].split(separator: ":").last else { continue }
+            let value = xmlTreeValue(attribute)
+            switch (currentElement, String(localName)) {
+            case ("manifest", "isFeatureSplit"):
+                facts.isFeatureSplit = xmlTreeBool(value) ?? false
+            case ("manifest", "configForSplit"):
+                facts.configForSplit = value
+            case ("manifest", "isSplitRequired"):
+                facts.isSplitRequired = xmlTreeBool(value) ?? false
+            case ("manifest", "requiredSplitTypes"):
+                facts.requiredSplitTypes = xmlTreeList(value)
+            case ("manifest", "splitTypes"):
+                facts.splitTypes = xmlTreeList(value)
+            case ("manifest", "sharedUserId"):
+                facts.sharedUserID = value
+            case ("application", "debuggable"):
+                if let debuggable = xmlTreeBool(value) { facts.debuggable = debuggable }
+            case ("application", "extractNativeLibs"):
+                facts.extractNativeLibs = xmlTreeBool(value)
+            case (_, "onDemand") where currentElement.split(separator: ":").last == "module":
+                facts.distOnDemand = xmlTreeBool(value) ?? false
+            default:
+                continue
+            }
+        }
+    }
+
+    /// The decoded value of an xmltree attribute: `=0x1`, `(type 0x10)0x1`, or `="x"`.
+    private static func xmlTreeValue(_ attribute: String) -> String? {
+        guard let equals = attribute.firstIndex(of: "=") else { return nil }
+        var value = String(attribute[attribute.index(after: equals)...])
+        if let raw = value.range(of: "(Raw:") {
+            value = String(value[..<raw.lowerBound])
+        }
+        value = value.trimmingCharacters(in: .whitespaces)
+        if value.hasPrefix("(type"), let closeParen = value.firstIndex(of: ")") {
+            value = String(value[value.index(after: closeParen)...])
+                .trimmingCharacters(in: .whitespaces)
+        }
+        if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") {
+            return String(value.dropFirst().dropLast())
+        }
+        return value
+    }
+
+    private static func xmlTreeBool(_ value: String?) -> Bool? {
+        guard let value else { return nil }
+        if value == "true" || value == "0x1" || value == "0xffffffff" { return true }
+        if value == "false" || value == "0x0" || value == "0" { return false }
+        if value.hasPrefix("0x"), let number = UInt64(value.dropFirst(2), radix: 16) {
+            return number != 0
+        }
+        return Int(value).map { $0 != 0 }
+    }
+
+    private static func xmlTreeList(_ value: String?) -> [String] {
+        guard let value else { return [] }
+        return value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
     }
 
     /// Parses fields from `aapt2 dump badging`. Kept pure for fast parser tests.

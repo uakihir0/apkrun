@@ -19,7 +19,8 @@ private actor CoordinatorChannel: StoreAgentChannel {
             versionCode: request.versionCode,
             enabled: true,
             targetSDK: 37,
-            minSDK: 29)
+            minSDK: 29,
+            signingDigests: request.signerDigests)
         packages[request.packageID] = info
         return info
     }
@@ -441,4 +442,178 @@ private func makeV2Candidate(record: PackageRecord, repo: URL) throws -> UpdateC
         return
     }
     #expect(await provider.downloadCalls == 0)
+}
+
+// MARK: - #39 step 3: validating
+
+/// Knobs for a store whose inspector and verifier report scripted facts: the
+/// versionCode an inspection returns and the signer digests the import
+/// pipeline reports, so V1–V3 refusals are exercised deterministically.
+private final class InspectKnobs: @unchecked Sendable {
+    var versionCode: VersionCode = 1
+    var signerDigests: [SHA256Digest] = []
+}
+
+private func makeKnobbedStore(at root: URL, knobs: InspectKnobs) -> PackageStore {
+    PackageStore(
+        packagesDirectory: root.appendingPathComponent("Packages", isDirectory: true),
+        runtimeAccess: CoordinatorRuntime(channel: CoordinatorChannel()),
+        inspector: { _ in
+            APKFacts(
+                packageID: helloUpdateID,
+                versionCode: knobs.versionCode,
+                versionName: "\(knobs.versionCode).0",
+                splitName: nil,
+                displayName: "HelloUpdate",
+                minSDK: 29,
+                targetSDK: 37,
+                nativeABIs: ["arm64-v8a"])
+        },
+        importVerifier: { staged, scratch, inspect in
+            var verified = try await PackageStore.legacyImportVerifier(
+                staged, scratch, inspect)
+            verified.signerDigests = knobs.signerDigests
+            return verified
+        })
+}
+
+/// Downloads the v2 artifact through a scripted provider and returns the
+/// `Downloaded` payload.
+private func downloadV2(
+    coordinator: UpdateCoordinator, record: PackageRecord
+) async throws -> UpdateDownloadOutcome.Downloaded {
+    let candidate = try makeV2Candidate(record: record, repo: fixtureRepo())
+    let outcome = await coordinator.download(
+        record.packageId, candidate: candidate,
+        context: makeContext(at: fixtureRepo()), trigger: .userInitiated)
+    guard case .downloaded(let downloaded) = outcome else {
+        throw UpdateFailure.downloadFailed(reason: "expected .downloaded, got \(outcome)")
+    }
+    return downloaded
+}
+
+private func makeV2Coordinator(
+    store: PackageStore, root: URL, provider: ScriptedProvider
+) -> UpdateCoordinator {
+    UpdateCoordinator(
+        store: store,
+        stateStore: UpdateStateStore(directory: root.appendingPathComponent("Updates")),
+        developerModeEnabled: { true },
+        downloadRetrySleep: { _ in },
+        providerFactory: { _ in provider })
+}
+
+private func v2Provider(for record: PackageRecord) throws -> ScriptedProvider {
+    let candidate = try makeV2Candidate(record: record, repo: fixtureRepo())
+    return ScriptedProvider(
+        ref: candidate.provider,
+        steps: [.copy(candidate.artifacts[0].url)])
+}
+
+@Test func validateAcceptsV2AndWritesValidationJSON() async throws {
+    let root = try makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let knobs = InspectKnobs()
+    let store = makeKnobbedStore(at: root, knobs: knobs)
+    try await store.open()
+    let record = try await installV1(store: store, repo: fixtureRepo())
+    knobs.versionCode = 2
+    let coordinator = makeV2Coordinator(
+        store: store, root: root, provider: try v2Provider(for: record))
+    let downloaded = try await downloadV2(coordinator: coordinator, record: record)
+    let candidate = try makeV2Candidate(record: record, repo: fixtureRepo())
+
+    let outcome = await coordinator.validate(
+        record.packageId, ticket: downloaded.ticket, candidate: candidate,
+        trigger: .userInitiated)
+    guard case .validated(let report) = outcome else {
+        Issue.record("expected .validated, got \(outcome)")
+        return
+    }
+    #expect(report.outcome == "accepted")
+    #expect(report.checks.map(\.id) == ["V0", "V1", "V2", "V3"])
+    #expect(report.checks.allSatisfy { $0.verdict == "passed" })
+    // validation.json sits in the ticket's incoming set so `stage` carries it.
+    let incoming = root.appendingPathComponent(
+        "Packages/io.apkrun.fixture.helloupdate/incoming/\(downloaded.ticket.uuidString)/validation.json")
+    #expect(FileManager.default.fileExists(atPath: incoming.path))
+    try await store.discardImport(ticket: downloaded.ticket)
+}
+
+@Test func validateNotNewerRefusesAndDiscardsTicket() async throws {
+    let root = try makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let knobs = InspectKnobs()  // inspect reports the installed versionCode.
+    let store = makeKnobbedStore(at: root, knobs: knobs)
+    try await store.open()
+    let record = try await installV1(store: store, repo: fixtureRepo())
+    let coordinator = makeV2Coordinator(
+        store: store, root: root, provider: try v2Provider(for: record))
+    let downloaded = try await downloadV2(coordinator: coordinator, record: record)
+    let candidate = try makeV2Candidate(record: record, repo: fixtureRepo())
+
+    let outcome = await coordinator.validate(
+        record.packageId, ticket: downloaded.ticket, candidate: candidate,
+        trigger: .userInitiated)
+    guard case .failed(let failure) = outcome else {
+        Issue.record("expected .failed, got \(outcome)")
+        return
+    }
+    #expect(failure == .validation(detail: "notNewer(1)"))
+    #expect(
+        await coordinator.phase(for: record.packageId)
+            == .completed(.skipped(.validationFailed(failure))))
+    let incoming = root.appendingPathComponent(
+        "Packages/io.apkrun.fixture.helloupdate/incoming/\(downloaded.ticket.uuidString)")
+    #expect(!FileManager.default.fileExists(atPath: incoming.path))
+}
+
+@Test func validateDowngradeRefuses() async throws {
+    let root = try makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let knobs = InspectKnobs()
+    knobs.versionCode = 2  // install "v1" reporting versionCode 2
+    let store = makeKnobbedStore(at: root, knobs: knobs)
+    try await store.open()
+    let record = try await installV1(store: store, repo: fixtureRepo())
+    knobs.versionCode = 1  // the download inspects as lower
+    let coordinator = makeV2Coordinator(
+        store: store, root: root, provider: try v2Provider(for: record))
+    let downloaded = try await downloadV2(coordinator: coordinator, record: record)
+    let candidate = try makeV2Candidate(record: record, repo: fixtureRepo())
+
+    let outcome = await coordinator.validate(
+        record.packageId, ticket: downloaded.ticket, candidate: candidate,
+        trigger: .userInitiated)
+    guard case .failed(let failure) = outcome else {
+        Issue.record("expected .failed, got \(outcome)")
+        return
+    }
+    #expect(failure == .validation(detail: "downgrade(installed: 2, candidate: 1)"))
+}
+
+@Test func validateSignerMismatchRefuses() async throws {
+    let root = try makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let knobs = InspectKnobs()
+    let installed = SHA256Digest(data: Data("installed-signer".utf8))
+    knobs.signerDigests = [installed]
+    let store = makeKnobbedStore(at: root, knobs: knobs)
+    try await store.open()
+    let record = try await installV1(store: store, repo: fixtureRepo())
+    knobs.signerDigests = [SHA256Digest(data: Data("other-signer".utf8))]
+    knobs.versionCode = 2
+    let coordinator = makeV2Coordinator(
+        store: store, root: root, provider: try v2Provider(for: record))
+    let downloaded = try await downloadV2(coordinator: coordinator, record: record)
+    let candidate = try makeV2Candidate(record: record, repo: fixtureRepo())
+
+    let outcome = await coordinator.validate(
+        record.packageId, ticket: downloaded.ticket, candidate: candidate,
+        trigger: .userInitiated)
+    guard case .failed(let failure) = outcome else {
+        Issue.record("expected .failed, got \(outcome)")
+        return
+    }
+    #expect(failure == .validation(detail: "signerMismatch"))
 }

@@ -82,6 +82,8 @@ public actor UpdateCoordinator {
     /// Injected for tests: overrides `ProviderRegistry` resolution.
     private let providerFactory:
         (@Sendable (UpdateProviderRef) throws(UpdateFailure) -> any UpdateProvider)?
+    /// V1–V3 of §6; stateless, injectable for tests.
+    private let validator: UpdateValidator
     /// The hard size cap of one downloaded set (§5); 8 GiB.
     private static let downloadSizeLimit: Int64 = 8 * 1_024 * 1_024 * 1_024
     /// The in-memory phase per package (transient phases are not persisted).
@@ -102,7 +104,8 @@ public actor UpdateCoordinator {
         },
         providerFactory:
             (@Sendable (UpdateProviderRef) throws(UpdateFailure) -> any UpdateProvider)?
-        = nil
+        = nil,
+        validator: UpdateValidator = UpdateValidator()
     ) {
         self.store = store
         self.stateStore = stateStore
@@ -112,6 +115,7 @@ public actor UpdateCoordinator {
         self.guestFacts = guestFacts
         self.downloadRetrySleep = downloadRetrySleep
         self.providerFactory = providerFactory
+        self.validator = validator
     }
 
     /// The current phase of a package, restoring a persisted `available` or
@@ -441,6 +445,107 @@ public actor UpdateCoordinator {
                 started: started)
         }
         await stateStore.flush()
+    }
+
+    /// The result of `validate`: the accepted report, or the refusing failure.
+    public enum UpdateValidationOutcome: Sendable {
+        /// The set passed V0–V3; the report was written into the ticket's set.
+        case validated(ValidationReport)
+        /// A check refused; the ticket was discarded and the run closed
+        /// `completed(.skipped(.validationFailed))`.
+        case failed(UpdateFailure)
+    }
+
+    /// §6 validating: V0 inside `inspect(ticket:)`, then V1–V3 on the verified
+    /// preview. The accepted `ValidationReport` is written as
+    /// `validation.json` into the ticket's `incoming/` set so `stage` carries
+    /// it into `staged/`. A refusal discards the ticket, saves the cursor, and
+    /// closes the run `completed(.skipped(.validationFailed))` with one
+    /// history line.
+    public func validate(
+        _ packageID: PackageID,
+        ticket: UUID,
+        candidate: UpdateCandidate,
+        trigger: UpdateTrigger,
+        started: Date = Date()
+    ) async -> UpdateValidationOutcome {
+        setPhase(packageID, .validating)
+        let records = (try? await store.listManagedPackages()) ?? []
+        guard let record = records.first(where: { $0.packageId == packageID }) else {
+            let failure = UpdateFailure.providerMetadataInvalid(
+                detail: "package is not managed")
+            return await finishFailedValidation(
+                packageID, ticket: ticket, record: nil, candidate: candidate,
+                failure: failure, trigger: trigger, started: started)
+        }
+
+        // V0 — the intrinsic checks run inside inspect.
+        let preview: PackageImportPreview
+        do {
+            preview = try await store.inspect(ticket: ticket)
+        } catch {
+            let failure = UpdateFailure.validation(detail: "intrinsic(\(error))")
+            return await finishFailedValidation(
+                packageID, ticket: ticket, record: record, candidate: candidate,
+                failure: failure, trigger: trigger, started: started)
+        }
+
+        // V1–V3 — identity, ordering, signer continuity.
+        let report: ValidationReport
+        do {
+            report = try validator.validate(
+                preview: preview, installed: record, candidate: candidate)
+        } catch let refusal {
+            return await finishFailedValidation(
+                packageID, ticket: ticket, record: record, candidate: candidate,
+                failure: refusal.failure, trigger: trigger, started: started)
+        }
+
+        // The report rides the ticket set into staged/.
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            try await store.writeTicketFile(
+                ticket: ticket, name: "validation.json",
+                contents: try encoder.encode(report))
+        } catch {
+            let failure = UpdateFailure.validation(
+                detail: "validationReportWriteFailed(\(error))")
+            return await finishFailedValidation(
+                packageID, ticket: ticket, record: record, candidate: candidate,
+                failure: failure, trigger: trigger, started: started)
+        }
+        return .validated(report)
+    }
+
+    /// Closes a refused validation: discards the ticket set, saves the cursor,
+    /// and reports `completed(.skipped(.validationFailed))` with one history
+    /// line (§5).
+    private func finishFailedValidation(
+        _ packageID: PackageID,
+        ticket: UUID,
+        record: PackageRecord?,
+        candidate: UpdateCandidate,
+        failure: UpdateFailure,
+        trigger: UpdateTrigger,
+        started: Date
+    ) async -> UpdateValidationOutcome {
+        try? await store.discardDownload(ticket: ticket)
+        await stateStore.update(packageID) { state in
+            state.cursor = candidate.cursor
+            state.phase = nil
+            state.candidate = nil
+        }
+        setPhase(packageID, .completed(.skipped(.validationFailed(failure))))
+        if let record {
+            await appendHistory(
+                record: record, to: candidate.declaredVersionCode,
+                provider: candidate.provider.type, trigger: trigger,
+                outcome: "skipped.validationFailed", failure: failure.errorCode,
+                started: started)
+        }
+        await stateStore.flush()
+        return .failed(failure)
     }
 
     private func setPhase(_ packageID: PackageID, _ phase: UpdatePhase) {

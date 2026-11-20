@@ -748,6 +748,41 @@ public actor PackageStore {
         return (ticket, incoming)
     }
 
+    /// Writes a JSON sidecar into a verified ticket's `incoming/` set — the
+    /// coordinator's `validation.json` (update-system.md §6), which `stage`
+    /// then carries into `staged/` alongside the artifact set.
+    public func writeTicketFile(ticket: UUID, name: String, contents: Data) async throws {
+        try requireWritable()
+        guard Self.isSafeTicketSidecarName(name) else {
+            throw PackageStoreFailure.invalidImport
+        }
+        let importsLock = try await acquireLock(at: importsLockURL)
+        defer { _ = Darwin.close(importsLock) }
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard let preview = tickets[ticket]?.preview else {
+            throw PackageStoreFailure.importTicketNotFound
+        }
+        let directory = directories[preview.packageID] ?? directoryName(for: preview.packageID)
+        let target = try incomingDirectory(
+            packageID: preview.packageID, directory: directory, ticket: ticket)
+            .appendingPathComponent(name)
+        try contents.write(to: target, options: .atomic)
+    }
+
+    /// The sidecar names `writeTicketFile` accepts: `*.json` files that are
+    /// neither the manifest (`ticket.json`) nor the artifact set
+    /// (`artifact.json`), made of filename-safe characters only.
+    private static func isSafeTicketSidecarName(_ name: String) -> Bool {
+        name.hasSuffix(".json")
+            && name != "ticket.json" && name != "artifact.json"
+            && name.count <= 64
+            && name.allSatisfy {
+                $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "_" || $0 == "-")
+            }
+    }
+
     /// Discards an unverified download ticket's `incoming/` set (§5): a failed
     /// download, a hash mismatch, or a refused validation. The ticket may also
     /// be a verified one whose `inspect` manifest exists; either way the set

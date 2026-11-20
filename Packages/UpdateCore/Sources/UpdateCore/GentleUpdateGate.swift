@@ -75,6 +75,12 @@ public actor GentleUpdateGate {
     private var queue: [Request] = []
     /// The package currently installing; installs serialize on it.
     private var installing: PackageID?
+    /// An admission (`requestInstall`/`nextReadyPackage`) is mid-
+    /// evaluation; a second caller queues instead of racing the claim.
+    private var admitting = false
+    /// When each package's GU4 quiet period ends (§7.1), for packages
+    /// whose last evaluation was blocked on `sessionEndedRecently`.
+    private var quietPeriodEnds: [PackageID: ContinuousClock.Instant] = [:]
     /// The blocks of the last evaluation per package (§7.3 waiting reasons).
     private var lastBlocks: [PackageID: [GentleGateBlock]] = [:]
     /// §7.2 race boundary per running install (absent means preCommit).
@@ -130,6 +136,9 @@ public actor GentleUpdateGate {
             now() < lastEnd + quietPeriod
         {
             blocks.append(.sessionEndedRecently)
+            quietPeriodEnds[packageID] = lastEnd + quietPeriod
+        } else {
+            quietPeriodEnds.removeValue(forKey: packageID)
         }
         // GU5, hint only, and never consulted for user-initiated updates
         // (§7.3). A definitive "unsatisfied" blocks; a failed query does
@@ -160,13 +169,18 @@ public actor GentleUpdateGate {
         _ packageID: PackageID,
         userInitiated: Bool = false
     ) async -> Bool {
-        if installing == nil,
-            await evaluate(packageID, userInitiated: userInitiated).isOpen
-        {
-            installing = packageID
-            phases[packageID] = .preCommit
-            queue.removeAll { $0.packageID == packageID }
-            return true
+        // `admitting` makes the evaluate-then-claim section atomic: two
+        // overlapping requests cannot both see an empty install slot.
+        if installing == nil, !admitting {
+            admitting = true
+            let open = await evaluate(packageID, userInitiated: userInitiated).isOpen
+            admitting = false
+            if open, installing == nil {
+                installing = packageID
+                phases[packageID] = .preCommit
+                queue.removeAll { $0.packageID == packageID }
+                return true
+            }
         }
         if !queue.contains(where: { $0.packageID == packageID }) {
             queue.append(
@@ -180,7 +194,9 @@ public actor GentleUpdateGate {
     /// package admitted to install, or `nil` while the gate stays closed.
     /// User-initiated requests go first, then the longest waiting.
     public func nextReadyPackage() async -> PackageID? {
-        guard installing == nil else { return nil }
+        guard installing == nil, !admitting else { return nil }
+        admitting = true
+        defer { admitting = false }
         for request in queue.sorted(by: Self.queueOrder) {
             if await evaluate(request.packageID, userInitiated: request.userInitiated).isOpen {
                 installing = request.packageID
@@ -201,6 +217,7 @@ public actor GentleUpdateGate {
         }
         phases.removeValue(forKey: packageID)
         cancelRequests.remove(packageID)
+        quietPeriodEnds.removeValue(forKey: packageID)
         let waiters = installWaiters.removeValue(forKey: packageID) ?? []
         for waiter in waiters {
             waiter.1.resume()
@@ -305,6 +322,12 @@ public actor GentleUpdateGate {
     /// The blocks of the package's last evaluation (§7.3 waiting reasons).
     public func waitingReasons(_ packageID: PackageID) -> [GentleGateBlock] {
         lastBlocks[packageID] ?? []
+    }
+
+    /// When the earliest GU4 quiet period ends, so the trigger pump can
+    /// re-evaluate exactly then instead of waiting for the next tick.
+    public func nextQuietReevaluation() -> ContinuousClock.Instant? {
+        quietPeriodEnds.values.min()
     }
 
     private static func queueOrder(_ left: Request, _ right: Request) -> Bool {

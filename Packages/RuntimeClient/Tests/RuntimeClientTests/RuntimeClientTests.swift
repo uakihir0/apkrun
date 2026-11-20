@@ -1306,6 +1306,39 @@ private struct BrokerErrorEnvelope: Encodable {
     let error: RuntimeControlError
 }
 
+@Test func perfAndFrameStatisticsRoundTrip() async throws {
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development,
+        clientVersion: "0.1.0",
+        clientBuild: 1
+    )
+    let transport = try MockRuntimeTransport(hello: hello, status: nil)
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    let statistics = try await client.perfStatistics(reset: true)
+    #expect(statistics.markers.first?.name == "firstFrameDisplayed")
+    #expect(statistics.markers.first?.p95Us == 1_500_000)
+    #expect(statistics.input.first?.segment == "input.route")
+
+    let request = try JSONDecoder().decode(
+        RuntimePerfStatisticsControlRequest.self,
+        from: transport.perfStatisticsRequestsValue.first ?? Data())
+    #expect(request.reset)
+
+    let sessions = try await client.frameStatistics()
+    #expect(sessions.count == 1)
+    #expect(sessions.first?.packageID.rawValue == "io.apkrun.fixture.hellotext")
+    #expect(sessions.first?.hostReadbacks == 0)
+}
+
 private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBrokerChannel, RuntimeControlChannel,
     @unchecked Sendable
 {
@@ -1350,6 +1383,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var launchRequestsValue: [Data] = []
     private var terminateRequestsValue: [Data] = []
     private var resetRequestsValue: [Data] = []
+    var perfStatisticsRequestsValue: [Data] = []
+    var frameStatisticsRequestsValue: [Data] = []
     private var brokerConnectionsValue = 0
     private var controlConnectionsValue = 0
     private var brokerInvalidationsValue = 0
@@ -1779,6 +1814,47 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
 
     func requestApproval(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func perfStatistics(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { perfStatisticsRequestsValue.append(request) }
+        do {
+            return try JSONEncoder().encode(
+                RuntimePerfStatisticsControlReply(
+                    result: WirePerfStatistics(
+                        since: Date(timeIntervalSince1970: 1_700_000_000),
+                        markers: [
+                            WireMarkerStatistics(
+                                name: "firstFrameDisplayed",
+                                count: 2, p50Us: 800_000, p95Us: 1_500_000, maxUs: 2_000_000)
+                        ],
+                        input: [
+                            WireInputHistogram(
+                                segment: "input.route", boundsUs: [4_000, 8_000, 16_000],
+                                counts: [10, 4, 1])
+                        ],
+                        sessions: [],
+                        metrics: nil
+                    )))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func frameStatistics(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { frameStatisticsRequestsValue.append(request) }
+        do {
+            return try JSONEncoder().encode(
+                RuntimeFrameStatisticsControlReply(
+                    sessions: [
+                        SessionGraphicsStatistics(
+                            packageID: RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext")!,
+                            displayID: 7, fps: 59.4, droppedFrames: 2, hostReadbacks: 0,
+                            cpuPixelCopies: 0, presentGPUTimeP50Us: 3_000, presentGPUTimeP95Us: 8_000)
+                    ]))
+        } catch {
+            throw .encodingFailure
+        }
     }
 
     func snapshot() -> Snapshot {

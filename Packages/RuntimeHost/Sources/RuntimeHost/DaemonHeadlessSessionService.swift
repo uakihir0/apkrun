@@ -26,6 +26,14 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     private var activeResynchronizations = 0
     private var isShuttingDown = false
     private var didCompleteShutdown = false
+    /// Called once when a session's first frame lands on its scanout (`FIRST_FRAME_DISPLAYED`).
+    var firstFrameObserver: (@Sendable (SessionID) -> Void)?
+    /// Called when a session is forgotten; the reason feeds the launch record's outcome.
+    var sessionEndedObserver: (@Sendable (SessionID, String) -> Void)?
+    private var firstFrameMarked: Set<SessionID> = []
+    /// Per-session `(sampleTime, framesPresented)` samples for the 10 s fps window.
+    private var frameRateSamples: [SessionID: [(time: ContinuousClock.Instant, frames: UInt64)]] =
+        [:]
 
     /// Creates the daemon's Guest Agent-backed headless session service.
     public init(
@@ -641,6 +649,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 }
                 if case .frameReady(_, _, let sequence) = frame {
                     pool.frameDisplayed(sequence: sequence)
+                    await self.noteFirstFrame(of: lease.session)
                 }
             }
         }
@@ -665,10 +674,107 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         forgetSession(packageID: current.packageID, sessionID: sessionID)
     }
 
-    private func forgetSession(packageID: String, sessionID: SessionID) {
+    private func forgetSession(packageID: String, sessionID: SessionID, reason: String = "ended") {
         if sessionsByPackage[packageID] == sessionID {
             sessionsByPackage[packageID] = nil
         }
+        frameRateSamples[sessionID] = nil
+        firstFrameMarked.remove(sessionID)
+        sessionEndedObserver?(sessionID, reason)
+    }
+
+    /// Installs the daemon's perf hooks once (idempotent; diagnostics.md §4.3).
+    public func setPerfObservers(
+        firstFrame: @escaping @Sendable (SessionID) -> Void,
+        sessionEnded: @escaping @Sendable (SessionID, String) -> Void
+    ) {
+        guard firstFrameObserver == nil else {
+            return
+        }
+        firstFrameObserver = firstFrame
+        sessionEndedObserver = sessionEnded
+    }
+
+    /// The `session` attribute of `FIRST_FRAME_DISPLAYED`, comparable with a
+    /// launch record's `sessionID` (diagnostics.md §4.2).
+    private static func sessionAttribute(_ session: SessionID) -> String {
+        switch session {
+        case .app(let id):
+            return id.uuidString
+        case .system(let use):
+            return "system:\(use)"
+        }
+    }
+
+    /// Marks `FIRST_FRAME_DISPLAYED` once for a session and notifies the observer
+    /// (diagnostics.md §4.2, §4.3).
+    private func noteFirstFrame(of session: SessionID) {
+        guard !firstFrameMarked.contains(session) else {
+            return
+        }
+        firstFrameMarked.insert(session)
+        Perf.mark(
+            .firstFrameDisplayed,
+            ["session": .string(Self.sessionAttribute(session))]
+        )
+        firstFrameObserver?(session)
+    }
+
+    /// The graphics statistics of every live session, for `frameStatistics` and
+    /// `perfStatistics` (diagnostics.md §9.3, runtime-api.md §13.1).
+    public func sessionGraphicsStatistics() async
+        -> [(sessionID: UUID, statistics: SessionGraphicsStatistics)]
+    {
+        let counters = await displayPool.graphicsCounters()
+        let now = ContinuousClock.now
+        var rows: [(sessionID: UUID, statistics: SessionGraphicsStatistics)] = []
+        for snapshot in await registry.snapshot() where !Self.isEnded(snapshot.state) {
+            guard
+                let lease = await registry.displayLease(snapshot.id),
+                let wirePackageID = RuntimePackageID(rawValue: snapshot.packageID)
+            else {
+                continue
+            }
+            let present = await displayPool.presentStatistics(lease.scanout)
+            let durations = (present?.durationsUs ?? []).sorted()
+            let p50 = durations.isEmpty ? 0 : Int64(durations[durations.count / 2])
+            let p95 =
+                durations.isEmpty
+                ? 0
+                : Int64(durations[min(durations.count - 1, (durations.count * 95 + 99) / 100 - 1)])
+            let frames = present?.statistics.framesPresented ?? 0
+            var samples = frameRateSamples[snapshot.id] ?? []
+            samples.append((time: now, frames: frames))
+            samples = samples.filter { (now - $0.time) <= .seconds(10) }
+            frameRateSamples[snapshot.id] = samples
+            var fps = 0.0
+            if let first = samples.first, let last = samples.last, last.time > first.time {
+                let elapsed = (last.time - first.time).components
+                let seconds =
+                    Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+                if seconds > 0 {
+                    fps = Double(last.frames - first.frames) / seconds
+                }
+            }
+            guard case .app(let sessionUUID) = snapshot.id else {
+                continue
+            }
+            rows.append(
+                (
+                    sessionID: sessionUUID,
+                    statistics: SessionGraphicsStatistics(
+                        packageID: wirePackageID,
+                        displayID: lease.androidDisplayID,
+                        fps: fps,
+                        droppedFrames: present?.statistics.droppedFrames ?? 0,
+                        hostReadbacks: counters.hostReadbacks,
+                        cpuPixelCopies: counters.cpuPixelCopies,
+                        presentGPUTimeP50Us: p50,
+                        presentGPUTimeP95Us: p95
+                    )
+                ))
+        }
+        return rows
     }
 
     private func releaseOperation() {

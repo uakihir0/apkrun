@@ -1130,6 +1130,8 @@ extension RuntimePendingApprovalsControlRequest: VersionedControlRequest {}
 extension RuntimeDecideApprovalControlRequest: VersionedControlRequest {}
 extension RuntimeDeniedWrappersControlRequest: VersionedControlRequest {}
 extension RuntimeClearWrapperDenialControlRequest: VersionedControlRequest {}
+extension RuntimePerfStatisticsControlRequest: VersionedControlRequest {}
+extension RuntimeFrameStatisticsControlRequest: VersionedControlRequest {}
 
 enum RuntimeControlOperation {
     case runtimeStatus
@@ -1158,6 +1160,8 @@ enum RuntimeControlOperation {
     case decideApproval
     case deniedWrappers
     case clearWrapperDenial
+    case perfStatistics
+    case frameStatistics
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1228,6 +1232,10 @@ enum RuntimeControlOperation {
             case .launcher, .wrapper:
                 false
             }
+        case .perfStatistics, .frameStatistics:
+            // Developer-mode reads; the developer.enabled gate is enforced in
+            // RuntimeHost (diagnostics.md §9.3, runtime-api.md §13.1).
+            true
         }
     }
 }
@@ -2028,7 +2036,9 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 return
             }
             do {
-                let result = try await host.launch(RuntimeLaunchRequest(packageID: decoded.packageID))
+                let result = try await host.launch(
+                    RuntimeLaunchRequest(
+                        packageID: decoded.packageID, launchTiming: decoded.launchTiming))
                 response.send(Self.encode(RuntimeLaunchControlReply(result: result)))
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
@@ -2309,6 +2319,99 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeClearWrapperDenialControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func perfStatistics(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimePerfStatisticsControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .perfStatistics,
+                as: RuntimePerfStatisticsControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimePerfStatisticsControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimePerfStatisticsControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimePerfStatisticsControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let result = try await host.perfStatistics(
+                    PerfStatisticsRequest(reset: decoded.reset))
+                response.send(Self.encode(RuntimePerfStatisticsControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimePerfStatisticsControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func frameStatistics(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeFrameStatisticsControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .frameStatistics,
+                as: RuntimeFrameStatisticsControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeFrameStatisticsControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeFrameStatisticsControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeFrameStatisticsControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let sessions = try await host.frameStatistics(sessionID: decoded.sessionID)
+                response.send(Self.encode(RuntimeFrameStatisticsControlReply(sessions: sessions)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeFrameStatisticsControlReply(error: wireError)))
             }
         }
     }

@@ -2761,6 +2761,24 @@
    }
   },
   {
+   "code": "runtime.developerModeRequired",
+   "parameters": [],
+   "message": {
+    "en": "This request needs developer mode."
+   },
+   "remediation": {
+    "en": "Turn on Developer mode in Settings → Advanced, or run: apkrun config set developer.enabled true"
+   },
+   "action": "none",
+   "cliExit": 5,
+   "doc": {
+    "case": "developerModeRequired",
+    "when": "perfStatistics or frameStatistics while `developer.enabled` is off",
+    "raisedBy": "RuntimeHost",
+    "ref": "[../02-design/diagnostics.md](../02-design/diagnostics.md) §9.3, [configuration.md](configuration.md)"
+   }
+  },
+  {
    "code": "wrapper.packageNotInstalled",
    "parameters": [
     "app"

@@ -220,6 +220,17 @@ let package = Package(
             path: "Packages/IntegrationCore/Sources/IntegrationCore"
         ),
         .executableTarget(
+            name: "apkrun-perf",
+            dependencies: [
+                "RuntimeClient",
+                "RuntimeAPI",
+                "DiagnosticsCore",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
+            path: "Tests/PerformanceTests",
+            exclude: ["baselines"]
+        ),
+        .executableTarget(
             name: "apkrun",
             dependencies: [
                 "RuntimeClient",

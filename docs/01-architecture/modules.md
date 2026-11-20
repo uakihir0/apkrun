@@ -167,6 +167,7 @@ APKRun.app       → RuntimeClient, RuntimeAPI, DiagnosticsCore, Sparkle (third 
 APKRunMenuBar    → RuntimeClient, RuntimeAPI, DiagnosticsCore
 apkrun (CLI)     → RuntimeClient, RuntimeAPI, DiagnosticsCore, ArgumentParser (third party, swift-argument-parser)
                    + RuntimeHost, WindowingCore, InputCore only when built with APKRUN_EMBEDDED_RUNTIME (SwiftPM trait EmbeddedRuntime)
+apkrun-perf      → RuntimeClient, RuntimeAPI, DiagnosticsCore, ArgumentParser (third party, swift-argument-parser); the §9.2 harness ([diagnostics.md](../02-design/diagnostics.md))
 ```
 
 Notes:

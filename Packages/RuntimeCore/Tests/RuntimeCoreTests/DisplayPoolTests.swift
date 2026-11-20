@@ -586,6 +586,16 @@ final class FakeScanoutController: ScanoutController, @unchecked Sendable {
         makePool(scanout)
     }
 
+    func presentStatistics(
+        for scanout: ScanoutID
+    ) -> (statistics: PresentStatistics, durationsUs: [UInt64])? {
+        nil
+    }
+
+    func graphicsCounters() -> GraphicsCounters {
+        GraphicsCounters()
+    }
+
     func detachPool(_ scanout: ScanoutID, generation: UInt64?) {
         lock.withLock { detached.append(DetachCall(scanout: scanout.rawValue, generation: generation)) }
     }

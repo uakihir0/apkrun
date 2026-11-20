@@ -77,6 +77,9 @@ public actor RuntimeControlClient {
     private let connectionFactory: any RuntimeXPCConnectionFactory
     private let eventStreamHub: RuntimeEventStreamHub
     private let eventSink: RuntimeEventSinkReceiver
+    /// The closest stamp to this process's start (diagnostics.md §4.2,
+    /// `WRAPPER_PROCESS_START`): taken when the client is created.
+    private let processStartNanos = mach_continuous_time()
     private var openedControl: OpenedControlConnection?
     private var openingControl: Task<OpenedControlConnection, any Error>?
     private var remoteEventTopics: [EventTopic] = []
@@ -326,9 +329,16 @@ public actor RuntimeControlClient {
     {
         let opened = try await ensureControl()
         do {
+            // Stamp APP_LAUNCH_REQUEST just before the send; the caller's own
+            // stamps win when it carried them (diagnostics.md §4.2).
             let controlRequest = RuntimeLaunchControlRequest(
                 header: makeHeader(),
-                packageID: request.packageID
+                packageID: request.packageID,
+                launchTiming: request.launchTiming
+                    ?? LaunchTiming(
+                        processStart: processStartNanos,
+                        requestSent: mach_continuous_time()
+                    )
             )
             let data = try Self.encode(controlRequest)
             let response = try await opened.channel.launch(data)
@@ -765,6 +775,64 @@ public actor RuntimeControlClient {
             if let failure = reply.error {
                 throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
             }
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Returns host-side performance statistics; developer mode only
+    /// (diagnostics.md §9.3, runtime-api.md §13.1).
+    public func perfStatistics(
+        reset: Bool = false
+    ) async throws(RuntimeControlClientError) -> WirePerfStatistics {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimePerfStatisticsControlRequest(
+                header: makeHeader(), reset: reset)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.perfStatistics(data)
+            let reply = try Self.decode(RuntimePerfStatisticsControlReply.self, from: response)
+            guard (reply.result != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let result = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return result
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Returns per-session graphics statistics; developer mode only.
+    /// `sessionID` narrows the reply to one session; `nil` asks for all live sessions.
+    public func frameStatistics(
+        sessionID: UUID? = nil
+    ) async throws(RuntimeControlClientError) -> [SessionGraphicsStatistics] {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeFrameStatisticsControlRequest(
+                header: makeHeader(), sessionID: sessionID)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.frameStatistics(data)
+            let reply = try Self.decode(RuntimeFrameStatisticsControlReply.self, from: response)
+            guard (reply.sessions != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let sessions = reply.sessions else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return sessions
         } catch {
             let clientError = Self.clientError(from: error)
             invalidateAfterTransportFailure(opened.channel, error: clientError)
@@ -1717,6 +1785,10 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func deniedWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Removes a denied entry.
     func clearWrapperDenial(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Returns host-side performance statistics; developer mode only.
+    func perfStatistics(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Returns per-session graphics statistics; developer mode only.
+    func frameStatistics(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void)
     func invalidate()
 }
@@ -2255,6 +2327,34 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.clearWrapperDenial(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func perfStatistics(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.perfStatistics(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func frameStatistics(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.frameStatistics(request) { response in finish(.success(response)) }
         }
     }
 

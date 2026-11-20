@@ -9,8 +9,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
     /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
     /// 1.12 adds the createWrapper long operation, the wrappers event topic, and WrapperInfo;
-    /// 1.13 adds approval prompts and decisions, denied wrappers, and broker requestApproval.
-    public static let current = APIVersion(major: 1, minor: 13)
+    /// 1.13 adds approval prompts and decisions, denied wrappers, and broker requestApproval;
+    /// 1.14 adds `perfStatistics`, `frameStatistics`, and `RuntimeLaunchRequest.launchTiming`.
+    public static let current = APIVersion(major: 1, minor: 14)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -332,11 +333,19 @@ public struct RuntimeLaunchControlRequest: Codable, Equatable, Sendable {
     public let header: APIRequestHeader
     /// The Android package to launch.
     public let packageID: RuntimePackageID
+    /// The launcher's own stamps for `WRAPPER_PROCESS_START`/`APP_LAUNCH_REQUEST`
+    /// in continuous-clock nanoseconds (diagnostics.md §4.2).
+    public var launchTiming: LaunchTiming?
 
     /// Creates a launch request.
-    public init(header: APIRequestHeader, packageID: RuntimePackageID) {
+    public init(
+        header: APIRequestHeader,
+        packageID: RuntimePackageID,
+        launchTiming: LaunchTiming? = nil
+    ) {
         self.header = header
         self.packageID = packageID
+        self.launchTiming = launchTiming
     }
 }
 
@@ -628,6 +637,10 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func deniedWrappers(_ request: Data, reply: @escaping (Data) -> Void)
     /// Removes a denied entry (Settings → Privacy → Remove).
     func clearWrapperDenial(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns host-side performance statistics; developer mode only (diagnostics.md §9.3).
+    func perfStatistics(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns per-session graphics statistics; developer mode only; never starts Android.
+    func frameStatistics(_ request: Data, reply: @escaping (Data) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.

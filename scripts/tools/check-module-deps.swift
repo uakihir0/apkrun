@@ -469,6 +469,9 @@ func targetRoles(
     if target.name == "apkrunTests" {
         return .test("apkrun")
     }
+    if normalizedPath == "Tests/PerformanceTests" {
+        return .executable("apkrun-perf")
+    }
     if normalizedPath.hasPrefix("Tests/IntegrationTests/")
         || normalizedPath.hasPrefix("Tests/AcceptanceTests/")
     {

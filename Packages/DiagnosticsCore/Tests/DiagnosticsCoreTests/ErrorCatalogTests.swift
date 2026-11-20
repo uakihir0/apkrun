@@ -46,6 +46,7 @@ import Testing
                 "guestAgentConnectTimedOut", "guestAgentHandshakeFailed", "requiredAgentUnavailable",
                 "guestAgentOperationFailed", "inputNotBound",
                 "busy", "operationNotFound", "notProvisioned", "hostRequirementsNotMet",
+                "developerModeRequired",
             ].map { "runtime.\($0)" }
             + [
                 "rendererInitFailed", "rendererOperationFailed", "rendererLost", "libraryMissing",

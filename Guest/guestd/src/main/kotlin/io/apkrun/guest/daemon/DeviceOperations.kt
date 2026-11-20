@@ -2,6 +2,8 @@ package io.apkrun.guest.daemon
 
 import android.os.SystemClock
 import io.apkrun.guest.protocol.v1.ClearDisplay
+import io.apkrun.guest.protocol.v1.CollectDiagnostics
+import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
@@ -25,6 +27,7 @@ class DeviceOperations(
     private val tasks: TaskService,
     private val launch: LaunchService,
     private val packages: PackageService,
+    private val diagnostics: DiagnosticsService,
 ) : AgentOperations {
     override fun snapshot(): Snapshot =
         Snapshot.newBuilder()
@@ -60,6 +63,9 @@ class DeviceOperations(
     override fun queryPackage(request: QueryPackage): PackageInfo = packages.query(request)
 
     override fun listPackages(request: ListPackages): PackageList = packages.list(request)
+
+    override fun collectDiagnostics(request: CollectDiagnostics): CollectDiagnosticsResult =
+        diagnostics.collect(request)
 
     private fun systemState(): SystemState =
         SystemState.newBuilder()

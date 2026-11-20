@@ -321,6 +321,56 @@ func eventHubDropsQueuedTopicEventsWhenUnsubscribed() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func eventHubKeepsSubscribedConnectionWhenAnotherTopicPublishes() async throws {
+    let hub = RuntimeEventHub()
+    let sink = RecordingRuntimeEventSink()
+    let connectionID = ObjectIdentifier(sink)
+    let outputQueue = DispatchQueue(label: "RuntimeEventHubTests.otherTopic")
+    let operationID = OperationID()
+    let packageID = try #require(
+        RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext")
+    )
+    let snapshot = OperationSnapshot(
+        operationID: operationID,
+        kind: .wrapperCreate,
+        packageID: packageID,
+        clientKind: .cli,
+        startedAt: Date()
+    )
+    _ = try hub.subscribe(
+        connectionID: connectionID,
+        clientKind: .cli,
+        topics: [.operations],
+        sink: RuntimeEventSinkReference(value: sink),
+        outputQueue: outputQueue,
+        isConnectionOpen: { true }
+    )
+    // A topic the connection did not subscribe to must not drop the subscription.
+    hub.publishWrapperChange(
+        .created(
+            WrapperSummary(
+                packageID: packageID,
+                bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+                displayName: "HelloText",
+                kind: .local,
+                bundleURL: URL(fileURLWithPath: "/Applications/HelloText.app"),
+                status: WrapperStatus(state: .valid, refreshReasons: []),
+                approval: .generated,
+                launcherVersion: "0.1.0",
+                createdAt: Date()
+            )),
+        operationID: operationID
+    )
+    hub.publishOperationEvent(.started(snapshot), operationID: operationID)
+    try await Task.sleep(for: .milliseconds(60))
+
+    let delivered = try sink.envelopes()
+    #expect(delivered.count == 1)
+    #expect(delivered.first?.topic == .operations)
+    hub.remove(connectionID: connectionID)
+}
+
+@Test(.timeLimit(.minutes(1)))
 func eventHubPreservesEventsAcrossAcknowledgementBackpressure() async throws {
     let hub = RuntimeEventHub()
     let sink = RecordingRuntimeEventSink(acknowledgesImmediately: false)

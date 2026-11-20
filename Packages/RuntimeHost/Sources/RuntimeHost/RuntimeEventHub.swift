@@ -195,12 +195,12 @@ final class RuntimeEventHub: @unchecked Sendable {
         queue.sync {
             for connectionID in Array(subscribers.keys) {
                 guard var subscriber = subscribers[connectionID],
-                    subscriber.topics.contains(event.topic),
                     subscriber.isConnectionOpen()
                 else {
                     subscribers[connectionID] = nil
                     continue
                 }
+                guard subscriber.topics.contains(event.topic) else { continue }
                 if case .operations(.finished(let finishedID, _)) = event.payload {
                     subscriber.lastProgressDelivery[Self.operationProgressKey(finishedID)] = nil
                 }

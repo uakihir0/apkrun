@@ -79,6 +79,12 @@ final class PasteboardAdapter {
             lastSentChangeCount = count
             return nil
         }
+        // A paste-once clip (password managers' TransientType) crosses only on
+        // an explicit paste; focusing a window must not send it (§4.4).
+        if trigger == .focus, types.contains(Self.transientType) {
+            lastSentChangeCount = count
+            return nil
+        }
         guard types.contains(Self.plainTextType),
             let text = pasteboard.string(forType: Self.plainTextType),
             !text.isEmpty
@@ -96,6 +102,7 @@ final class PasteboardAdapter {
             return nil
         }
         lastSentChangeCount = count
+        lastReadChangeCount = count
         return ClipItem(
             text: clipped,
             html: html,
@@ -106,6 +113,16 @@ final class PasteboardAdapter {
             trigger: trigger
         )
     }
+
+    /// Unmarks a clip whose push failed, so a later paste retries it.
+    func pushFailed(changeCount: Int) {
+        if lastSentChangeCount == changeCount {
+            lastSentChangeCount = -1
+        }
+    }
+
+    /// The change count of the clip the last read returned.
+    private(set) var lastReadChangeCount = -1
 
     /// Writes a guest clip and returns what `clipboardWritten` reports (§4.2).
     ///

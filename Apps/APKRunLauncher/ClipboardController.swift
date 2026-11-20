@@ -20,6 +20,8 @@ final class ClipboardController {
     private var observers: [NSObjectProtocol] = []
     private var keyMonitor: Any?
     private var eventTask: Task<Void, Never>?
+    /// True while a consumed ⌘V is being re-dispatched, so the monitor passes it.
+    private var replayingPaste = false
 
     /// Creates the controller for a session window.
     init(
@@ -53,14 +55,28 @@ final class ClipboardController {
             })
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
             [weak self] event in
-            guard let self,
+            guard let self else { return event }
+            let replaying = MainActor.assumeIsolated { self.replayingPaste }
+            guard !replaying,
                 event.modifierFlags.contains(.command),
                 event.charactersIgnoringModifiers == "v"
             else {
                 return event
             }
-            Task { @MainActor in await self.pushHostClip(trigger: .paste) }
-            return event
+            // The §4.5 ordering: the ⌘V reaches Android only after the clip
+            // push is acknowledged or the timeout passes, so the event is
+            // consumed here and re-dispatched afterwards.
+            Task { @MainActor in
+                await self.pushHostClip(trigger: .paste)
+                self.replayingPaste = true
+                defer { self.replayingPaste = false }
+                if let window = event.window {
+                    window.sendEvent(event)
+                } else {
+                    NSApp.sendEvent(event)
+                }
+            }
+            return nil
         }
         eventTask = Task { [weak self] in
             await self?.consumeIntegrationEvents()
@@ -93,14 +109,15 @@ final class ClipboardController {
     }
 
     /// Reads the pasteboard and pushes the clip when it changed (§4.2).
-    private func pushHostClip(trigger: ClipTrigger) async {
+    @discardableResult
+    private func pushHostClip(trigger: ClipTrigger) async -> ClipAck? {
         guard let item = adapter.readHostClip(trigger: trigger) else {
-            return
+            return nil
         }
         // The §4.5 ordering: the window pushes and waits for the ClipAck
         // before the ⌘V reaches Android; 500 ms without a reply still pastes
         // the plain text already committed.
-        _ = await withTaskGroup(of: ClipAck?.self) { group in
+        let ack = await withTaskGroup(of: ClipAck?.self) { group in
             group.addTask { [client, sessionID, item] in
                 try? await client.pushClipboard(sessionID: sessionID, item: item)
             }
@@ -109,13 +126,14 @@ final class ClipboardController {
                 return nil
             }
             defer { group.cancelAll() }
-            while let result = await group.next() {
-                if result != nil {
-                    return result
-                }
-            }
-            return nil
+            // The first completed task decides: the ack, or the timeout's nil.
+            // A nil element also marks a failed push; both end the wait.
+            return await group.next() ?? nil
         }
+        if ack == nil {
+            adapter.pushFailed(changeCount: adapter.lastReadChangeCount)
+        }
+        return ack
     }
 
     /// Applies `clipboardFromGuest` events for this session (§4.3).

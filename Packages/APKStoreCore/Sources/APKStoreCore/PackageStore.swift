@@ -186,7 +186,12 @@ public actor PackageStore {
     ///
     /// The Store Agent on custom images signs as this package (package-store.md §6.3,
     /// guest-components.md §8.1).
-    public static let updateOwnerPackage = PackageID(rawValue: "io.apkrun.store")!
+    public static let updateOwnerPackage: PackageID = {
+        guard let package = PackageID(rawValue: "io.apkrun.store") else {
+            preconditionFailure("The Store Agent package name is a valid package ID.")
+        }
+        return package
+    }()
 
     /// Async host-side APK metadata reader, injected to keep package import testable.
     public typealias Inspector = @Sendable (URL) async throws -> APKFacts

@@ -40,20 +40,34 @@ public struct URLSessionUpdateHTTPClient: UpdateHTTPClient {
         return false
     }
 
-    /// Performs a GET request.
-    public func get(_ url: URL, headers: [String: String]) async throws(UpdateFailure) -> HTTPResponse {
+    /// Performs a GET request, streaming the body so at most `byteLimit` + 1
+    /// bytes are buffered — a larger body is truncated and the caller's size
+    /// check rejects it without the daemon buffering the whole response.
+    public func get(_ url: URL, headers: [String: String], byteLimit: Int64?) async throws(UpdateFailure)
+        -> HTTPResponse
+    {
         var request = URLRequest(url: url)
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)
         }
-        let (body, response): (Data, URLResponse)
+        let (bytes, response): (URLSession.AsyncBytes, URLResponse)
         do {
-            (body, response) = try await session.data(for: request)
+            (bytes, response) = try await session.bytes(for: request)
         } catch {
             throw UpdateFailure.providerUnreachable(reason: error.localizedDescription)
         }
         guard let http = response as? HTTPURLResponse else {
             throw UpdateFailure.providerUnreachable(reason: "not an HTTP response")
+        }
+        var body = Data()
+        let cap = byteLimit.map { Int($0) + 1 }
+        do {
+            for try await byte in bytes {
+                if let cap, body.count >= cap { break }
+                body.append(byte)
+            }
+        } catch {
+            throw UpdateFailure.providerUnreachable(reason: error.localizedDescription)
         }
         return HTTPResponse(
             status: http.statusCode,
@@ -129,7 +143,8 @@ public struct URLSessionUpdateHTTPClient: UpdateHTTPClient {
         return DownloadResponse(
             status: http.statusCode,
             bytesWritten: written,
-            sha256: SHA256Digest(data: Data(hasher.finalize())),
+            sha256: SHA256Digest(
+                hex: hasher.finalize().map { String(format: "%02x", $0) }.joined()),
             limitHit: limitHit,
             finalURL: http.url,
             retryAfter: Self.retryAfter(of: http))

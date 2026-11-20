@@ -933,6 +933,45 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
         reply(Self.encode(RuntimeEndpointReply.granted), controlListener.listener.endpoint)
     }
 
+    func requestApproval(_ request: Data, reply: @escaping (Data) -> Void) {
+        // Not allowed during shutdown: a new prompt could not be answered and
+        // would hold the request drain for the full ten-minute timeout.
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            let rejection = Self.rejection(for: admission)
+            reply(
+                Self.encode(
+                    RuntimeApprovalBrokerReply(
+                        error: RuntimeWireError(domain: "runtime", code: rejection.errorCode, message: ""))))
+            return
+        }
+        guard
+            request.count <= Self.maximumRequestSize,
+            let approvalRequest = try? JSONDecoder().decode(ApprovalRequest.self, from: request)
+        else {
+            reply(
+                Self.encode(
+                    RuntimeApprovalBrokerReply(
+                        error: RuntimeWireError(
+                            domain: "runtime", code: "malformedRequest", message: ""))))
+            pending.finish()
+            return
+        }
+        let response = XPCDataReply(reply)
+        Task {
+            defer { pending.finish() }
+            do {
+                let result = try await host.requestApproval(approvalRequest)
+                response.send(Self.encode(RuntimeApprovalBrokerReply(result: result)))
+            } catch {
+                let wireError =
+                    (error as? RuntimeWireError)
+                    ?? RuntimeWireError(domain: "runtime", code: "internal", message: "")
+                response.send(Self.encode(RuntimeApprovalBrokerReply(error: wireError)))
+            }
+        }
+    }
+
     private static let maximumRequestSize = 16 * 1024
 
     private static func endpointRejection(
@@ -1085,6 +1124,10 @@ extension RuntimeSubscribeControlRequest: VersionedControlRequest {}
 extension RuntimeUnsubscribeControlRequest: VersionedControlRequest {}
 extension RuntimeVerifyWrapperControlRequest: VersionedControlRequest {}
 extension RuntimeCreateWrapperControlRequest: VersionedControlRequest {}
+extension RuntimePendingApprovalsControlRequest: VersionedControlRequest {}
+extension RuntimeDecideApprovalControlRequest: VersionedControlRequest {}
+extension RuntimeDeniedWrappersControlRequest: VersionedControlRequest {}
+extension RuntimeClearWrapperDenialControlRequest: VersionedControlRequest {}
 
 enum RuntimeControlOperation {
     case runtimeStatus
@@ -1107,6 +1150,10 @@ enum RuntimeControlOperation {
     case unsubscribe
     case verifyWrapper
     case createWrapper
+    case pendingApprovals
+    case decideApproval
+    case deniedWrappers
+    case clearWrapperDenial
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1135,6 +1182,20 @@ enum RuntimeControlOperation {
                 false
             }
         case .createWrapper:
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
+                false
+            }
+        case .pendingApprovals, .decideApproval:
+            switch clientKind {
+            case .app:
+                true
+            case .menuBar, .cli, .launcher, .wrapper:
+                false
+            }
+        case .deniedWrappers, .clearWrapperDenial:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -2000,6 +2061,159 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeCreateWrapperControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func pendingApprovals(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimePendingApprovalsControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .pendingApprovals,
+                as: RuntimePendingApprovalsControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimePendingApprovalsControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            let prompts = await host.pendingApprovals()
+            response.send(Self.encode(RuntimePendingApprovalsControlReply(result: prompts)))
+        }
+    }
+
+    func decideApproval(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeDecideApprovalControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .decideApproval,
+                as: RuntimeDecideApprovalControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeDecideApprovalControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeDecideApprovalControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(RuntimeDecideApprovalControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try await host.decideApproval(
+                    DecideApprovalRequest(approvalID: decoded.approvalID, allow: decoded.allow))
+                response.send(Self.encode(RuntimeDecideApprovalControlReply()))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeDecideApprovalControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func deniedWrappers(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeDeniedWrappersControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .deniedWrappers,
+                as: RuntimeDeniedWrappersControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeDeniedWrappersControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            let denied = await host.deniedWrappers()
+            response.send(Self.encode(RuntimeDeniedWrappersControlReply(result: denied)))
+        }
+    }
+
+    func clearWrapperDenial(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeClearWrapperDenialControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .clearWrapperDenial,
+                as: RuntimeClearWrapperDenialControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeClearWrapperDenialControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeClearWrapperDenialControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeClearWrapperDenialControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try await host.clearWrapperDenial(
+                    ClearWrapperDenialRequest(bundleID: decoded.bundleID, cdhash: decoded.cdhash))
+                response.send(Self.encode(RuntimeClearWrapperDenialControlReply()))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeClearWrapperDenialControlReply(error: wireError)))
             }
         }
     }

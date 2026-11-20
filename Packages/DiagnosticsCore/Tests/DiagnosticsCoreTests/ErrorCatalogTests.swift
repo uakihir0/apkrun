@@ -44,7 +44,7 @@ import Testing
                 "guestAgent", "adb",
                 "guestAgentBundleMissing", "guestAgentInstallFailed", "guestAgentStartFailed", "guestAgentStopped",
                 "guestAgentConnectTimedOut", "guestAgentHandshakeFailed", "requiredAgentUnavailable",
-                "guestAgentOperationFailed", "inputNotBound", "operationNotFound",
+                "guestAgentOperationFailed", "inputNotBound", "operationNotFound", "busy",
             ].map { "runtime.\($0)" }
             + [
                 "rendererInitFailed", "rendererOperationFailed", "rendererLost", "libraryMissing",
@@ -64,6 +64,7 @@ import Testing
                 "nameConflict", "wrapperExists", "wrapperNotFound", "signingFailed",
                 "verificationFailed", "registrationFailed", "registryUnavailable",
                 "stagingExpired", "bundleInvalid",
+                "approvalDenied", "approvalTimedOut", "approvalNotFound",
             ].map { "wrapper.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)

@@ -102,6 +102,15 @@ final class RuntimeEventHub: @unchecked Sendable {
         }
     }
 
+    /// Whether a connected client of the kind is subscribed to the topic.
+    func hasSubscriber(clientKind: RuntimeClientKind, topic: EventTopic) -> Bool {
+        queue.sync {
+            subscribers.values.contains {
+                $0.clientKind == clientKind && $0.topics.contains(topic) && $0.isConnectionOpen()
+            }
+        }
+    }
+
     func removeAll(connectionIDs: [ObjectIdentifier]) {
         queue.sync {
             for connectionID in connectionIDs {

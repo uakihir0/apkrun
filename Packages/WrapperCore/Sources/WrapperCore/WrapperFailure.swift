@@ -68,6 +68,19 @@ public enum WrapperFailure: APKRunError, Equatable {
     /// A bundle fails the static checks of §7.3 step 1.
     case bundleInvalid(URL, reason: BundleProblem)
 
+    /// The user pressed **Don't Allow** (wrapper.md §7.3 step 5).
+    case approvalDenied
+
+    /// Nobody answered the approval prompt within 10 minutes.
+    case approvalTimedOut
+
+    /// `decideApproval` named an unknown, answered, or expired prompt.
+    case approvalNotFound
+
+    /// More than 5 approval requests arrived within one minute
+    /// (wrapper.md §7.3 step 3); reported as `runtime.busy`.
+    case approvalBusy
+
     /// The stable error catalog namespace for wrappers.
     public static let domain: ErrorDomain = .wrapper
 
@@ -90,6 +103,10 @@ public enum WrapperFailure: APKRunError, Equatable {
         case .registryUnavailable: "registryUnavailable"
         case .stagingExpired: "stagingExpired"
         case .bundleInvalid: "bundleInvalid"
+        case .approvalDenied: "approvalDenied"
+        case .approvalTimedOut: "approvalTimedOut"
+        case .approvalNotFound: "approvalNotFound"
+        case .approvalBusy: "busy"
         }
     }
 
@@ -129,7 +146,8 @@ public enum WrapperFailure: APKRunError, Equatable {
             ["reason": .text(reason)]
         case .registrationFailed(let status):
             ["status": .count(Int(status))]
-        case .registryUnavailable, .stagingExpired:
+        case .registryUnavailable, .stagingExpired, .approvalDenied, .approvalTimedOut,
+            .approvalNotFound, .approvalBusy:
             [:]
         case .bundleInvalid(_, let reason):
             ["reason": .text(reason.rawValue)]

@@ -503,6 +503,9 @@ public actor RuntimeHost {
         guard headlessLaunchHookIsEnabled else {
             throw Self.launchUnavailableError
         }
+        // runtime-daemon.md §7.2: open the window owner first — the registered
+        // wrapper when its checks pass, else the generic launcher --package.
+        await openWindowOwner(for: request.packageID)
         do {
             try await startRuntime(reason: .automatic)
         } catch {
@@ -1565,6 +1568,191 @@ public actor RuntimeHost {
         return APIVersion(major: major, minor: minor)
     }
 
+    /// Opens the window owner of a package (runtime-daemon.md §7.2): the
+    /// registered wrapper when checks 1–3 of wrapper.md §9.1 pass and the
+    /// cdhash matches, otherwise the generic launcher with `--package`.
+    private func openWindowOwner(for packageID: RuntimePackageID) async {
+        guard let registry = try? await wrapperRegistryInstance() else { return }
+        if let entry = await registry.entry(packageID: packageID),
+            entry.state == .active,
+            let bundleURL = await launchBundleURL(for: entry, registry: registry),
+            await WorkspaceOpener.openApplication(at: bundleURL)
+        {
+            return
+        }
+        guard let appURL = containingAppURL() else { return }
+        let launcherURL = appURL.appendingPathComponent("Contents/Helpers/APKRunLauncher.app")
+        guard FileManager.default.fileExists(atPath: launcherURL.path) else { return }
+        await WorkspaceOpener.openApplication(
+            at: launcherURL, arguments: ["--package", packageID.rawValue])
+    }
+
+    /// Step 1 of wrapper.md §9.1 for the launch path: the bundle at the
+    /// registered path, else the LaunchServices candidates for the bundle ID,
+    /// keeping the first whose checks 2–3 pass. A found new location is written
+    /// back to the registry (§9.1's moved-wrapper rule).
+    private func launchBundleURL(
+        for entry: WrapperRegistryEntry,
+        registry: WrapperRegistry
+    ) async -> URL? {
+        let registeredURL = URL(fileURLWithPath: entry.path)
+        var candidates = [registeredURL]
+        if !FileManager.default.fileExists(atPath: registeredURL.path) {
+            candidates = WorkspaceOpener.applicationURLs(bundleIdentifier: entry.bundleId)
+        }
+        for candidate in candidates {
+            guard bundlePassesLaunchChecks(entry: entry, at: candidate) else { continue }
+            if candidate.path != entry.path {
+                let bookmark = (try? candidate.bookmarkData()) ?? Data()
+                try? await registry.updateLocation(
+                    bundleID: entry.bundleId, path: candidate, bookmark: bookmark)
+            }
+            return candidate
+        }
+        return nil
+    }
+
+    /// Checks 1–3 of wrapper.md §9.1 for one candidate: the bundle exists
+    /// outside the Trash, is readable, and identifier and cdhash match the
+    /// registry entry.
+    private func bundlePassesLaunchChecks(entry: WrapperRegistryEntry, at url: URL) -> Bool {
+        guard FileManager.default.fileExists(atPath: url.path),
+            !url.path.contains("/.Trash/"),
+            FileManager.default.isReadableFile(atPath: url.path)
+        else {
+            return false
+        }
+        guard let plist = InfoPlistWriter.infoDictionary(of: url),
+            (plist["CFBundleIdentifier"] as? String) == entry.bundleId,
+            let cdhash = WrapperCodeSign.cdhash(of: url),
+            cdhash == entry.cdhash
+        else {
+            return false
+        }
+        return true
+    }
+
+    // MARK: - Wrapper approval (wrapper.md §7.3)
+
+    private var approvalService: WrapperApprovalService?
+
+    /// The approval service, created on the shared registry on first use.
+    private func approvalServiceInstance() async throws(RuntimeWireError) -> WrapperApprovalService {
+        if let approvalService { return approvalService }
+        let registry = try await wrapperRegistryInstance()
+        let service = WrapperApprovalService(
+            registry: registry,
+            announce: { [weak self] announcement in
+                Task { await self?.announceApproval(announcement) }
+            },
+            packageInstalled: { [weak self] packageID in
+                guard let self else { return false }
+                return await self.packageIsInstalled(packageID)
+            },
+            iconProvider: { _ in nil }
+        )
+        approvalService = service
+        return service
+    }
+
+    /// Whether the store has an installed managed record for the package.
+    private func packageIsInstalled(_ packageID: RuntimePackageID) async -> Bool {
+        let service = packageQueryServiceInstance()
+        try? await service.open()
+        guard
+            let details = try? await service.packageInfo(
+                RuntimePackageRequest(packageID: packageID))
+        else {
+            return false
+        }
+        return details.summary.managed && details.summary.state == .installed
+    }
+
+    /// Forwards approval announcements to subscribers and wakes APKRun.app.
+    private func announceApproval(_ announcement: WrapperApprovalService.Announcement) {
+        switch announcement {
+        case .requested(let prompt):
+            eventHub.publishWrapperChange(.approvalRequested(prompt))
+            // No connected UI client → open APKRun.app with --approve
+            // (wrapper.md §7.3 step 4, host-ui.md §3.3).
+            if !eventHub.hasSubscriber(clientKind: .app, topic: .wrappers),
+                let appURL = containingAppURL()
+            {
+                Task {
+                    await WorkspaceOpener.openApplication(at: appURL, arguments: ["--approve"])
+                }
+            }
+        case .resolved(let approvalID):
+            eventHub.publishWrapperChange(.approvalResolved(approvalID))
+        case .created(let summary):
+            eventHub.publishWrapperChange(.created(summary))
+        }
+    }
+
+    /// The `.app` bundle that contains this daemon (like `launcherBuild()`).
+    private func containingAppURL() -> URL? {
+        var url = executableURL.deletingLastPathComponent()
+        while url.path != "/", url.pathExtension != "app" {
+            url.deleteLastPathComponent()
+        }
+        return url.pathExtension == "app" ? url : nil
+    }
+
+    /// The broker's `requestApproval` op (runtime-api.md §3.4).
+    public func requestApproval(_ request: ApprovalRequest) async throws(RuntimeWireError)
+        -> ApprovalReply
+    {
+        let service = try await approvalServiceInstance()
+        do {
+            return try await service.request(
+                bundleURL: request.bundleURL,
+                bundleID: request.bundleID,
+                packageID: request.packageID
+            )
+        } catch {
+            if case .approvalBusy = error { throw Self.approvalBusyError }
+            throw Self.wrapperWireError(for: error)
+        }
+    }
+
+    /// The prompts APKRun.app shows (runtime-api.md `pendingApprovals`).
+    public func pendingApprovals() async -> [ApprovalPrompt] {
+        guard let service = try? await approvalServiceInstance() else { return [] }
+        return await service.pendingPrompts()
+    }
+
+    /// APKRun.app's answer to a prompt (runtime-api.md `decideApproval`).
+    public func decideApproval(_ request: DecideApprovalRequest) async throws(RuntimeWireError) {
+        let service = try await approvalServiceInstance()
+        do {
+            _ = try await service.decide(approvalID: request.approvalID, allow: request.allow)
+        } catch {
+            throw Self.wrapperWireError(for: error)
+        }
+    }
+
+    /// The denied list of Settings → Privacy (runtime-api.md `deniedWrappers`).
+    public func deniedWrappers() async -> [DeniedWrapper] {
+        guard let service = try? await approvalServiceInstance() else { return [] }
+        return await service.deniedWrappers()
+    }
+
+    /// Removes a denied entry (runtime-api.md `clearWrapperDenial`).
+    public func clearWrapperDenial(_ request: ClearWrapperDenialRequest) async throws(RuntimeWireError) {
+        let service = try await approvalServiceInstance()
+        do {
+            try await service.clearDenial(bundleID: request.bundleID)
+        } catch {
+            throw Self.wrapperWireError(for: error)
+        }
+    }
+
+    private static let approvalBusyError = RuntimeWireError(
+        domain: "runtime",
+        code: "runtime.busy",
+        message: "Too many approval requests. Try again in a minute."
+    )
+
     /// Maps a wrapper failure to the wire error type of the control endpoint.
     private static func wrapperWireError(for failure: WrapperFailure) -> RuntimeWireError {
         let entry = ErrorCatalog.entry(for: failure.qualifiedCode)
@@ -1848,6 +2036,9 @@ public actor RuntimeHost {
         isShuttingDown = true
         runtimeSessionGeneration &+= 1
         hostState = "shuttingDown"
+        // Unanswered approval prompts must not hold the request drain:
+        // their launchers get `timedOut` instead of the ten-minute wait.
+        await approvalService?.cancelAll()
         guard hasStarted else {
             hostState = "stopped"
             completeShutdown()

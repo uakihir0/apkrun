@@ -8,8 +8,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.7 adds daemon-backed package import and install; 1.8 adds asynchronous install handles
     /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
     /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
-    /// 1.12 adds the createWrapper long operation, the wrappers event topic, and WrapperInfo.
-    public static let current = APIVersion(major: 1, minor: 12)
+    /// 1.12 adds the createWrapper long operation, the wrappers event topic, and WrapperInfo;
+    /// 1.13 adds approval prompts and decisions, denied wrappers, and broker requestApproval.
+    public static let current = APIVersion(major: 1, minor: 13)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -564,6 +565,8 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func hello(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns only an anonymous endpoint protected by a code-signing requirement.
     func requestEndpoint(_ request: Data, reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void)
+    /// Asks the user to approve an unknown wrapper (wrapper.md §7.3).
+    func requestApproval(_ request: Data, reply: @escaping (Data) -> Void)
 }
 
 /// Authenticated control endpoint operations implemented by apkrund.
@@ -608,6 +611,14 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func verifyWrapper(_ request: Data, reply: @escaping (Data) -> Void)
     /// Starts a wrapper generation; replies with the operation handle.
     func createWrapper(_ request: Data, icon: FileHandle?, reply: @escaping (Data) -> Void)
+    /// Returns the approval prompts waiting for APKRun.app.
+    func pendingApprovals(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Answers an approval prompt (APKRun.app only).
+    func decideApproval(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Lists wrappers the user denied (Settings → Privacy).
+    func deniedWrappers(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Removes a denied entry (Settings → Privacy → Remove).
+    func clearWrapperDenial(_ request: Data, reply: @escaping (Data) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.

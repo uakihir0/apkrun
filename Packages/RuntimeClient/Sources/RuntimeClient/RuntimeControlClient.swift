@@ -550,6 +550,106 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// The approval prompts waiting for APKRun.app (runtime-api.md §10.6).
+    public func pendingApprovals() async throws(RuntimeControlClientError) -> [ApprovalPrompt] {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimePendingApprovalsControlRequest(header: makeHeader())
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.pendingApprovals(data)
+            let reply = try Self.decode(RuntimePendingApprovalsControlReply.self, from: response)
+            guard (reply.result != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let result = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return result
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Answers an approval prompt (runtime-api.md §10.6, APKRun.app only).
+    public func decideApproval(
+        approvalID: ApprovalID,
+        allow: Bool
+    ) async throws(RuntimeControlClientError) {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeDecideApprovalControlRequest(
+                header: makeHeader(), approvalID: approvalID, allow: allow)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.decideApproval(data)
+            let reply = try Self.decode(RuntimeDecideApprovalControlReply.self, from: response)
+            guard (reply.acknowledged == true) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// The wrappers the user denied (runtime-api.md §10.6).
+    public func deniedWrappers() async throws(RuntimeControlClientError) -> [DeniedWrapper] {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeDeniedWrappersControlRequest(header: makeHeader())
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.deniedWrappers(data)
+            let reply = try Self.decode(RuntimeDeniedWrappersControlReply.self, from: response)
+            guard (reply.result != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let result = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return result
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Removes a denied entry (runtime-api.md §10.6, Settings → Privacy → Remove).
+    public func clearWrapperDenial(
+        bundleID: String,
+        cdhash: String
+    ) async throws(RuntimeControlClientError) {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeClearWrapperDenialControlRequest(
+                header: makeHeader(), bundleID: bundleID, cdhash: cdhash)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.clearWrapperDenial(data)
+            let reply = try Self.decode(RuntimeClearWrapperDenialControlReply.self, from: response)
+            guard (reply.acknowledged == true) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
     /// Returns the latest state for an operation.
     public func operationStatus(
         _ operationID: OperationID
@@ -1425,6 +1525,8 @@ struct RuntimeBrokerEndpointReply: Sendable {
 protocol RuntimeBrokerChannel: Sendable {
     func hello(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func requestEndpoint(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeBrokerEndpointReply
+    /// Asks the user to approve an unknown wrapper (runtime-api.md §3.4).
+    func requestApproval(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func invalidate()
 }
 
@@ -1451,6 +1553,14 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
 
     /// Starts a wrapper generation; the reply carries the operation handle.
     func createWrapper(_ request: Data, icon: FileHandle?) async throws(RuntimeControlClientError) -> Data
+    /// Returns the approval prompts waiting for APKRun.app.
+    func pendingApprovals(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Answers an approval prompt.
+    func decideApproval(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Lists the wrappers the user denied.
+    func deniedWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Removes a denied entry.
+    func clearWrapperDenial(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void)
     func invalidate()
 }
@@ -1582,6 +1692,20 @@ private final class XPCBrokerChannel: RuntimeBrokerChannel, @unchecked Sendable 
                 let wrappedEndpoint = endpoint.map { RuntimeXPCListenerEndpoint(value: $0) }
                 finish(.success(RuntimeBrokerEndpointReply(data: response, endpoint: wrappedEndpoint)))
             }
+        }
+    }
+
+    func requestApproval(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeBrokerXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.requestApproval(request) { response in finish(.success(response)) }
         }
     }
 
@@ -1891,6 +2015,62 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.createWrapper(request, icon: icon) { response in finish(.success(response)) }
+        }
+    }
+
+    func pendingApprovals(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.pendingApprovals(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func decideApproval(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.decideApproval(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func deniedWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.deniedWrappers(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func clearWrapperDenial(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.clearWrapperDenial(request) { response in finish(.success(response)) }
         }
     }
 

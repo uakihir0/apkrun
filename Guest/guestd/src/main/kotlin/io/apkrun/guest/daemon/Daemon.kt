@@ -4,6 +4,7 @@ import android.net.LocalSocket
 import android.os.HandlerThread
 import android.os.Process
 import android.os.SystemClock
+import io.apkrun.guest.protocol.SessionManager
 import io.apkrun.guest.protocol.v1.ChannelKind
 import io.apkrun.guest.runtime.AgentLog
 import io.apkrun.guest.runtime.AgentSocketServer

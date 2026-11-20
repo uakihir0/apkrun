@@ -1,8 +1,8 @@
 package io.apkrun.guest.ime
 
-import io.apkrun.guest.daemon.FrameReader
-import io.apkrun.guest.daemon.FrameWriter
 import io.apkrun.guest.protocol.AgentHandshake
+import io.apkrun.guest.protocol.FrameReader
+import io.apkrun.guest.protocol.FrameWriter
 import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.GuestProtocolFailure
 import io.apkrun.guest.protocol.ProtocolVersion

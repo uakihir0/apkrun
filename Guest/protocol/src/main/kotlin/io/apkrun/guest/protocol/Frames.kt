@@ -1,7 +1,5 @@
-package io.apkrun.guest.daemon
+package io.apkrun.guest.protocol
 
-import io.apkrun.guest.protocol.FrameCodec
-import io.apkrun.guest.protocol.FrameDecoder
 import io.apkrun.guest.protocol.v1.Envelope
 import java.io.EOFException
 import java.io.InputStream

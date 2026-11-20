@@ -1,7 +1,5 @@
-package io.apkrun.guest.daemon
+package io.apkrun.guest.protocol
 
-import io.apkrun.guest.protocol.ControlSessions
-import io.apkrun.guest.protocol.HandshakeFailureReason
 import java.io.Closeable
 
 /**

@@ -1766,6 +1766,22 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         }
     }
 
+    func checkForUpdates(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func listUpdates(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func updateHistory(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func setUpdatePolicy(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void) {
         lock.withLock { connectionEventHandlerValue = handler }
     }

@@ -45,9 +45,25 @@ public enum UpdateCheckOutcome: Sendable, Equatable {
     case failed(UpdateFailure)
 }
 
-/// Runs the update phase machine for one package at a time. For this task the
-/// run covers `checking` → `available` or `completed(.skipped(*))`; download,
-/// validation, staging, install, and health check arrive in #39.
+/// The result of one coordinator download run (update-system.md §5).
+public enum UpdateDownloadOutcome: Sendable {
+    /// The candidate's artifacts sit in `incoming/<ticket>/`, hashes verified.
+    public struct Downloaded: Sendable {
+        /// The store download ticket `inspect`/`stage` consume.
+        public var ticket: UUID
+        /// The artifact set the provider returned.
+        public var artifact: PackageArtifact
+    }
+
+    /// The set downloaded and verified; validation continues from here.
+    case downloaded(Downloaded)
+    /// The download ended in `completed(.skipped(.downloadFailed))`.
+    case failed(UpdateFailure)
+}
+
+/// Runs the update phase machine for one package at a time. The run covers
+/// `checking` → `available` → `downloading`; validation, staging, install, and
+/// health check arrive in the following steps of #39.
 public actor UpdateCoordinator {
     /// The package store to read records and settings from.
     private let store: PackageStore
@@ -61,6 +77,13 @@ public actor UpdateCoordinator {
     private let checkIntervalHours: Int
     /// The guest facts providers filter with.
     private let guestFacts: @Sendable () -> GuestFacts
+    /// Injected for tests: the network-failure backoff (10 s, then 60 s, §5).
+    private let downloadRetrySleep: @Sendable (TimeInterval) async -> Void
+    /// Injected for tests: overrides `ProviderRegistry` resolution.
+    private let providerFactory:
+        (@Sendable (UpdateProviderRef) throws(UpdateFailure) -> any UpdateProvider)?
+    /// The hard size cap of one downloaded set (§5); 8 GiB.
+    private static let downloadSizeLimit: Int64 = 8 * 1_024 * 1_024 * 1_024
     /// The in-memory phase per package (transient phases are not persisted).
     private var phases: [PackageID: UpdatePhase] = [:]
     /// Notified whenever a package's phase changes (wire `updates` topic).
@@ -73,7 +96,13 @@ public actor UpdateCoordinator {
         notifier: (any HostNotificationSink)? = nil,
         developerModeEnabled: @escaping @Sendable () -> Bool = { false },
         checkIntervalHours: Int = 6,
-        guestFacts: @escaping @Sendable () -> GuestFacts = { GuestFacts() }
+        guestFacts: @escaping @Sendable () -> GuestFacts = { GuestFacts() },
+        downloadRetrySleep: @escaping @Sendable (TimeInterval) async -> Void = {
+            try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000))
+        },
+        providerFactory:
+            (@Sendable (UpdateProviderRef) throws(UpdateFailure) -> any UpdateProvider)?
+        = nil
     ) {
         self.store = store
         self.stateStore = stateStore
@@ -81,6 +110,8 @@ public actor UpdateCoordinator {
         self.developerModeEnabled = developerModeEnabled
         self.checkIntervalHours = checkIntervalHours
         self.guestFacts = guestFacts
+        self.downloadRetrySleep = downloadRetrySleep
+        self.providerFactory = providerFactory
     }
 
     /// The current phase of a package, restoring a persisted `available` or
@@ -141,8 +172,7 @@ public actor UpdateCoordinator {
         setPhase(packageID, .checking)
         let settings = try? await store.packageSettings(for: packageID)
         do {
-            let provider = try ProviderRegistry.provider(
-                for: providerRef, developerModeEnabled: developerModeEnabled())
+            let provider = try resolveProvider(providerRef)
             let candidate = try await provider.check(installed, context: context)
             guard let candidate else {
                 await recordCheck(
@@ -212,6 +242,84 @@ public actor UpdateCoordinator {
         }
     }
 
+    /// Runs `downloading` for a candidate (§5): a store download ticket, the
+    /// provider stream with progress events, the per-file declared-hash check,
+    /// and the §5 retry policy — a hash mismatch discards the set and retries
+    /// once from scratch; a network failure retries twice (10 s, then 60 s).
+    /// A failure ends the run in `completed(.skipped(.downloadFailed))` and
+    /// appends the history line for the whole run.
+    public func download(
+        _ packageID: PackageID,
+        candidate: UpdateCandidate,
+        context: ProviderContext,
+        trigger: UpdateTrigger,
+        started: Date = Date()
+    ) async -> UpdateDownloadOutcome {
+        guard
+            let record = try? await store.listManagedPackages()
+                .first(where: { $0.packageId == packageID })
+        else {
+            let failure = UpdateFailure.providerMetadataInvalid(
+                detail: "package is not managed")
+            await finishFailedDownload(
+                packageID, record: nil, candidate: candidate, failure: failure,
+                trigger: trigger, started: started)
+            return .failed(failure)
+        }
+        let declaredTotal = candidate.artifacts.reduce(Int64(0)) {
+            $0 + ($1.size ?? 0)
+        }
+        guard declaredTotal <= Self.downloadSizeLimit else {
+            let failure = UpdateFailure.tooLarge(
+                bytes: declaredTotal, limit: Self.downloadSizeLimit)
+            await finishFailedDownload(
+                packageID, record: record, candidate: candidate, failure: failure,
+                trigger: trigger, started: started)
+            return .failed(failure)
+        }
+
+        let provider: any UpdateProvider
+        do {
+            provider = try resolveProvider(candidate.provider)
+        } catch let failure {
+            await finishFailedDownload(
+                packageID, record: record, candidate: candidate, failure: failure,
+                trigger: trigger, started: started)
+            return .failed(failure)
+        }
+
+        var hashMismatchRetries = 1
+        var networkRetries = 0
+        while true {
+            setPhase(packageID, .downloading(progress: 0))
+            let result = await attemptDownload(
+                provider, candidate: candidate,
+                packageID: packageID, context: context)
+            switch result {
+            case .success(let downloaded):
+                return .downloaded(downloaded)
+            case .failure(let failure):
+                switch failure {
+                case .hashMismatch where hashMismatchRetries > 0:
+                    hashMismatchRetries -= 1
+                    continue
+                case .providerUnreachable, .providerHTTPStatus, .providerRateLimited,
+                    .downloadFailed
+                where networkRetries < 2:
+                    await downloadRetrySleep(networkRetries == 0 ? 10 : 60)
+                    networkRetries += 1
+                    continue
+                default:
+                    await finishFailedDownload(
+                        packageID, record: record, candidate: candidate,
+                        failure: failure,
+                        trigger: trigger, started: started)
+                    return .failed(failure)
+                }
+            }
+        }
+    }
+
     /// Packages due for a check now (§3.2): authority `apkrun` and no
     /// `nextCheckAt` in the future.
     public func duePackages(now: Date = Date()) async -> [PackageID] {
@@ -227,6 +335,113 @@ public actor UpdateCoordinator {
     }
 
     // MARK: - Internals
+
+    private func resolveProvider(
+        _ ref: UpdateProviderRef
+    ) throws(UpdateFailure) -> any UpdateProvider {
+        if let providerFactory { return try providerFactory(ref) }
+        return try ProviderRegistry.provider(
+            for: ref, developerModeEnabled: developerModeEnabled())
+    }
+
+    /// One download attempt: open a ticket, stream into `incoming/<ticket>/`,
+    /// then verify every provider-declared SHA-256 against the file on disk
+    /// (§5). A declared file missing or mismatching is `.hashMismatch`; the set
+    /// exceeding the 8 GiB cap on disk is `.tooLarge`. Any store write failure
+    /// is `.downloadFailed`.
+    private func attemptDownload(
+        _ provider: any UpdateProvider,
+        candidate: UpdateCandidate,
+        packageID: PackageID,
+        context: ProviderContext
+    ) async -> Result<UpdateDownloadOutcome.Downloaded, UpdateFailure> {
+        let ticketInfo: (ticket: UUID, directory: URL)
+        do {
+            ticketInfo = try await store.beginDownloadTicket(for: packageID)
+        } catch {
+            return .failure(.downloadFailed(reason: String(describing: error)))
+        }
+        let ticket = ticketInfo.ticket
+        let destination = DownloadDestination(
+            ticket: ticket, directory: ticketInfo.directory)
+
+        let artifact: PackageArtifact
+        do {
+            artifact = try await provider.download(
+                candidate, to: destination, context: context
+            ) { [weak self] progress in
+                let fraction: Double
+                if let total = progress.bytesTotal, total > 0 {
+                    fraction =
+                        min(1, Double(progress.bytesWritten) / Double(total))
+                } else {
+                    fraction = 0
+                }
+                Task { await self?.setPhase(packageID, .downloading(progress: fraction)) }
+            }
+        } catch let failure {
+            try? await store.discardDownload(ticket: ticket)
+            return .failure(failure)
+        }
+
+        // Hash every artifact the provider declared a digest for (§5): the
+        // digest covers the file as streamed, so a file that differs on disk
+        // after the download is a mismatch.
+        for declared in candidate.artifacts where declared.sha256 != nil {
+            let file = ticketInfo.directory.appendingPathComponent(
+                declared.url.lastPathComponent)
+            let observed = Self.fileDigest(at: file)
+            guard let observed, observed == declared.sha256 else {
+                try? await store.discardDownload(ticket: ticket)
+                return .failure(
+                    .hashMismatch(artifact: declared.url.lastPathComponent))
+            }
+        }
+        let diskTotal = ((try? FileManager.default.contentsOfDirectory(
+            at: ticketInfo.directory,
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []).reduce(Int64(0)) {
+            $0 + Int64(
+                (try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        guard diskTotal <= Self.downloadSizeLimit else {
+            try? await store.discardDownload(ticket: ticket)
+            return .failure(
+                .tooLarge(bytes: diskTotal, limit: Self.downloadSizeLimit))
+        }
+        return .success(
+            UpdateDownloadOutcome.Downloaded(ticket: ticket, artifact: artifact))
+    }
+
+    private static func fileDigest(at url: URL) -> SHA256Digest? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return SHA256Digest(data: data)
+    }
+
+    private func finishFailedDownload(
+        _ packageID: PackageID,
+        record: PackageRecord?,
+        candidate: UpdateCandidate,
+        failure: UpdateFailure,
+        trigger: UpdateTrigger,
+        started: Date
+    ) async {
+        await stateStore.update(packageID) { state in
+            state.cursor = candidate.cursor
+            state.phase = nil
+            state.candidate = nil
+        }
+        setPhase(packageID, .completed(.skipped(.downloadFailed(failure))))
+        if let record {
+            await appendHistory(
+                record: record, to: candidate.declaredVersionCode,
+                provider: candidate.provider.type, trigger: trigger,
+                outcome: "skipped.downloadFailed", failure: failure.errorCode,
+                started: started)
+        }
+        await stateStore.flush()
+    }
 
     private func setPhase(_ packageID: PackageID, _ phase: UpdatePhase) {
         phases[packageID] = phase

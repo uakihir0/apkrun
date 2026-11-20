@@ -418,6 +418,9 @@ public actor PackageStore {
     private var unreadableRecords: [PackageID: String] = [:]
     private var tickets: [UUID: TicketManifest] = [:]
     private var activeTickets = Set<UUID>()
+    /// Download tickets handed to providers, before `inspect(ticket:)` verifies
+    /// them into regular tickets. Maps the ticket to its package's directory.
+    private var downloadTickets: [UUID: (packageID: PackageID, directory: String)] = [:]
     private var transactions: [String: JournalTransaction] = [:]
     private var operationsInProgress = Set<PackageID>()
     private var sequence: Int64 = 0
@@ -714,6 +717,230 @@ public actor PackageStore {
         }
         tickets[ticket] = nil
         activeTickets.remove(ticket)
+    }
+
+    /// Opens a download ticket for an update (package-store.md §4,
+    /// update-system.md §5). The provider streams artifacts into
+    /// `incoming/<ticket>/`; `inspect(ticket:)` verifies them in place. The
+    /// directory is scratch space: no journal entries reference it, `open()`
+    /// deletes it if the run dies before `inspect`, and `discardDownload`
+    /// removes it after a failed or refused download.
+    ///
+    /// - Returns: the ticket and the directory the provider writes into.
+    public func beginDownloadTicket(for packageID: PackageID) async throws -> (
+        ticket: UUID, directory: URL
+    ) {
+        try requireWritable()
+        let importsLock = try await acquireLock(at: importsLockURL)
+        defer { _ = Darwin.close(importsLock) }
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard records[packageID] != nil else {
+            throw PackageStoreFailure.packageNotFound
+        }
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        let ticket = UUID()
+        let incoming = incomingDirectory(
+            packageID: packageID, directory: directory, ticket: ticket)
+        try createDirectory(incoming)
+        downloadTickets[ticket] = (packageID, directory)
+        return (ticket, incoming)
+    }
+
+    /// Discards an unverified download ticket's `incoming/` set (§5): a failed
+    /// download, a hash mismatch, or a refused validation. The ticket may also
+    /// be a verified one whose `inspect` manifest exists; either way the set
+    /// goes to `.trash`'s purge path by plain removal.
+    public func discardDownload(ticket: UUID) async throws {
+        try requireWritable()
+        let importsLock = try await acquireLock(at: importsLockURL)
+        defer { _ = Darwin.close(importsLock) }
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        let packageID = downloadTickets[ticket]?.packageID ?? tickets[ticket]?.preview.packageID
+        guard let packageID else { return }
+        removeIncoming(ticket: ticket, packageID: packageID)
+        downloadTickets[ticket] = nil
+    }
+
+    /// Verifies a download ticket's `incoming/` set in place (package-store.md
+    /// §4.6, update-system.md §5). The files the provider wrote are run through
+    /// the same verifier as imports — containers expand, signatures and the
+    /// intrinsic checks I1–I12 run, splits are selected — then canonicalized as
+    /// `base.apk`/`split_<name>.apk` beside a `ticket.json` and `artifact.json`.
+    /// Afterwards the ticket is an ordinary verified ticket: `stage` or
+    /// `installStaged`'s callers consume it like an import ticket.
+    public func inspect(ticket: UUID) async throws -> PackageImportPreview {
+        try requireWritable()
+        let importsLock = try await acquireLock(at: importsLockURL)
+        defer { _ = Darwin.close(importsLock) }
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard let ticketInfo = downloadTickets[ticket] else {
+            throw PackageStoreFailure.importTicketNotFound
+        }
+        let packageID = ticketInfo.packageID
+        guard !operationsInProgress.contains(packageID) else {
+            throw PackageStoreFailure.operationInProgress
+        }
+        let incoming = incomingDirectory(
+            packageID: packageID, directory: ticketInfo.directory, ticket: ticket)
+        guard fileManager.fileExists(atPath: incoming.path) else {
+            throw PackageStoreFailure.importTicketNotFound
+        }
+
+        let rawFiles = ((try? fileManager.contentsOfDirectory(
+            at: incoming,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )) ?? []).filter { !$0.hasDirectoryPath }
+        guard !rawFiles.isEmpty else {
+            try? fileManager.removeItem(at: incoming)
+            downloadTickets[ticket] = nil
+            throw PackageStoreFailure.invalidImport
+        }
+        let sourceNames = rawFiles.map(\.lastPathComponent)
+        let scratch = incoming.appendingPathComponent(".inspect", isDirectory: true)
+        try createDirectory(scratch)
+        let verifiedImport = try await importVerifier(rawFiles, scratch, inspector)
+        let facts = verifiedImport.facts
+        let baseFacts = try Self.validateSplitFacts(facts)
+        guard baseFacts.packageID == packageID else {
+            try? fileManager.removeItem(at: incoming)
+            downloadTickets[ticket] = nil
+            throw PackageStoreFailure.importPackageMismatch
+        }
+
+        var artifactFiles: [ArtifactFile] = []
+        let ordered = zip(verifiedImport.files, facts).sorted { lhs, rhs in
+            switch (lhs.1.splitName, rhs.1.splitName) {
+            case (nil, .some): return true
+            case (.some, nil): return false
+            case (nil, nil): return false
+            case (.some(let lhs), .some(let rhs)): return lhs < rhs
+            }
+        }
+        do {
+            for (sourceURL, itemFacts) in ordered {
+                let name: String
+                if let splitName = itemFacts.splitName {
+                    guard Self.isSafeSplitName(splitName) else {
+                        throw PackageStoreFailure.unsafeSplitName
+                    }
+                    name = "split_\(splitName).apk"
+                } else {
+                    name = "base.apk"
+                }
+                let destination = incoming.appendingPathComponent(name)
+                // A downloaded file may already sit at its canonical name.
+                if sourceURL.standardizedFileURL != destination.standardizedFileURL {
+                    try copyBoundedFile(
+                        from: sourceURL,
+                        to: destination,
+                        maximumBytes: Self.maximumAPKFileSize,
+                        totalBytesAlreadyCopied: artifactFiles.reduce(Int64(0)) { $0 + $1.size },
+                        totalBytesLimit: Self.maximumImportSetSize,
+                        requiredFreeSpaceAfterWrite: { _ in 0 }
+                    )
+                }
+                try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
+                let (size, digest) = try Self.hashFile(at: destination)
+                artifactFiles.append(
+                    ArtifactFile(name: name, splitName: itemFacts.splitName, size: size, sha256: digest)
+                )
+            }
+        } catch let failure as PackageStoreFailure {
+            try? fileManager.removeItem(at: incoming)
+            downloadTickets[ticket] = nil
+            throw failure
+        } catch {
+            try? fileManager.removeItem(at: incoming)
+            downloadTickets[ticket] = nil
+            throw PackageStoreFailure.io
+        }
+        artifactFiles.sort {
+            if $0.splitName == nil { return true }
+            if $1.splitName == nil { return false }
+            return ($0.splitName ?? "") < ($1.splitName ?? "")
+        }
+
+        let digest: SHA256Digest
+        do {
+            digest = try ArtifactSet.computeSetDigest(for: artifactFiles)
+        } catch {
+            try? fileManager.removeItem(at: incoming)
+            downloadTickets[ticket] = nil
+            throw PackageStoreFailure.invalidSplitSet
+        }
+        let artifactSet = ArtifactSet(
+            packageID: baseFacts.packageID,
+            versionCode: baseFacts.versionCode,
+            versionName: baseFacts.versionName,
+            files: artifactFiles,
+            setDigest: digest,
+            signerDigests: verifiedImport.signerDigests,
+            lineage: verifiedImport.lineage,
+            inspection: InspectionProvenance(
+                aapt2Version: "unknown",
+                verifierVersion: "host-inspection-v1",
+                inspectedAt: clock(),
+                hostChecksPerformed: [
+                    "packageMetadata",
+                    "versionCode",
+                    "splitSet",
+                    "sha256",
+                    "signature:verified",
+                    "intrinsicChecks",
+                ]
+            )
+        )
+        let preview = PackageImportPreview(
+            ticket: ticket,
+            packageID: baseFacts.packageID,
+            displayName: baseFacts.displayName,
+            versionCode: baseFacts.versionCode,
+            versionName: baseFacts.versionName,
+            artifactSet: artifactSet,
+            sourceFileNames: sourceNames,
+            excludedSplits: verifiedImport.excludedSplits,
+            warnings: verifiedImport.warnings
+        )
+        let manifest = TicketManifest(
+            preview: preview,
+            createdAt: clock(),
+            facts: facts.map(PersistedAPKFacts.init),
+            origin: nil
+        )
+        do {
+            try writeJSON(manifest, to: incoming.appendingPathComponent("ticket.json"))
+            try writeJSON(artifactSet, to: incoming.appendingPathComponent("artifact.json"))
+        } catch {
+            try? fileManager.removeItem(at: incoming)
+            downloadTickets[ticket] = nil
+            throw PackageStoreFailure.io
+        }
+        // Drop the provider's raw file names and the inspection scratch; only
+        // the canonical set and its metadata remain.
+        for item in (try? fileManager.contentsOfDirectory(
+            at: incoming,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )) ?? [] {
+            let name = item.lastPathComponent
+            if name != "ticket.json", name != "artifact.json",
+                !artifactFiles.contains(where: { $0.name == name })
+            {
+                try? fileManager.removeItem(at: item)
+            }
+        }
+        try? fileManager.removeItem(at: scratch)
+        tickets[ticket] = manifest
+        activeTickets.insert(ticket)
+        downloadTickets[ticket] = nil
+        return preview
     }
 
     /// Returns the package identity of an open import ticket without starting Android.

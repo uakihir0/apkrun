@@ -94,6 +94,7 @@ private func iconStore(at packages: URL, channel: IconChannel) -> PackageStore {
                 targetSDK: 37,
                 nativeABIs: ["arm64-v8a"])
         },
+        hostFreeSpace: { _ in Int64.max },
         importVerifier: PackageStore.legacyImportVerifier)
 }
 

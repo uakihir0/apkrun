@@ -137,7 +137,8 @@ class TaskService(
 
     /**
      * Waits until Android no longer reports [packageName], publishing `TaskVanished` before return.
-     * Used after `IActivityManager.forceStopPackage`, which removes tasks without calling `removeTask`.
+     * Used after `IActivityManager.forceStopPackage`, which removes tasks without calling
+     * `removeTask`.
      */
     suspend fun awaitPackageTasksDisappear(packageName: String) {
         removalLock.withLock {

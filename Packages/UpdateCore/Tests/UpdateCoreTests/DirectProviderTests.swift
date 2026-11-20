@@ -488,3 +488,46 @@ private func respond(_ name: String, etag: String? = nil, status: Int = 200) thr
     }
     #expect(url == "https://updates.example.com/app.json")
 }
+
+/// §12: every key any fixture uses is a property the published schema
+/// declares, at the top level and inside `artifacts`.
+@Test func fixturesAgreeWithPublishedSchema() throws {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let schemaData = try Data(
+        contentsOf: root.appendingPathComponent(
+            "docs/03-reference/schemas/direct-provider-manifest.schema.json"))
+    let schema = try #require(
+        JSONSerialization.jsonObject(with: schemaData) as? [String: Any])
+    let topProperties = Set(
+        (schema["properties"] as? [String: Any] ?? [:]).keys)
+    let defs = schema["$defs"] as? [String: Any] ?? [:]
+    let artifact = defs["artifact"] as? [String: Any] ?? [:]
+    let artifactProperties = Set(
+        (artifact["properties"] as? [String: Any] ?? [:]).keys)
+    let manager = FileManager.default
+    let fixtureRoot = root.appendingPathComponent(
+        "Tests/Fixtures/update-repos/direct")
+    for group in ["valid", "invalid"] {
+        let directory = fixtureRoot.appendingPathComponent(group)
+        for name in try manager.contentsOfDirectory(atPath: directory.path)
+        where name.hasSuffix(".json") {
+            let data = try Data(
+                contentsOf: directory.appendingPathComponent(name))
+            guard
+                let object = try? JSONSerialization.jsonObject(with: data)
+                    as? [String: Any]
+            else { continue }
+            #expect(
+                Set(object.keys).isSubset(of: topProperties),
+                "\(group)/\(name): undeclared top-level keys")
+            for item in object["artifacts"] as? [[String: Any]] ?? [] {
+                #expect(
+                    Set(item.keys).isSubset(of: artifactProperties),
+                    "\(group)/\(name): undeclared artifact keys")
+            }
+        }
+    }
+}

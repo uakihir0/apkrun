@@ -189,8 +189,16 @@ def main():
     Handler.root = os.path.abspath(args.root)
     Handler.delay = args.delay
 
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
-    host, port = server.server_address[:2]
+    # Bind manually: HTTPServer.server_bind resolves the host with
+    # socket.getfqdn, which hangs on hosts without reverse DNS.
+    server = ThreadingHTTPServer(
+        (args.host, args.port), Handler, bind_and_activate=False)
+    server.socket.bind((args.host, args.port))
+    server.socket.listen(server.request_queue_size)
+    server.server_name = args.host
+    host, port = server.socket.getsockname()[:2]
+    server.server_port = port
+    server.server_address = (host, port)
     Handler.base_url = "http://%s:%d" % (
         "127.0.0.1" if host == "localhost" else host, port)
     print("update-server.py: %s serving %s" % (Handler.base_url, Handler.root), flush=True)

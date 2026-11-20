@@ -110,14 +110,16 @@ public struct URLSessionUpdateHTTPClient: UpdateHTTPClient {
             for try await byte in bytes {
                 buffer.append(byte)
                 if buffer.count >= 65_536 {
-                    try flush(&buffer, into: handle, hasher: &hasher, written: &written,
-                              limit: byteLimit, limitHit: &limitHit)
+                    try flush(
+                        &buffer, into: handle, hasher: &hasher, written: &written,
+                        limit: byteLimit, limitHit: &limitHit)
                     if limitHit { break }
                 }
             }
             if !limitHit {
-                try flush(&buffer, into: handle, hasher: &hasher, written: &written,
-                          limit: byteLimit, limitHit: &limitHit)
+                try flush(
+                    &buffer, into: handle, hasher: &hasher, written: &written,
+                    limit: byteLimit, limitHit: &limitHit)
             }
         } catch let error as UpdateFailure {
             throw error

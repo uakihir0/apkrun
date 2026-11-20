@@ -4,6 +4,7 @@ import DiagnosticsCore
 import Foundation
 import RuntimeAPI
 import RuntimeCore
+import UpdateCore
 
 typealias PackageMutationBoundary = @Sendable () async throws(RuntimeWireError) -> Void
 
@@ -282,7 +283,12 @@ public actor EmbeddedPackageService: RuntimeService {
     ) async throws(RuntimeWireError) -> RuntimePackageInstallResult {
         do {
             try await ensureOpen()
-            guard request.options.authority == .manual else {
+            // A `--provider` install attaches the provider after the store
+            // commit; `apkrun` authority without one stays refused (§2.4).
+            guard
+                request.options.authority == .manual
+                    || (request.options.authority == .apkrun && request.options.provider != nil)
+            else {
                 throw EmbeddedPackageServiceFailure.unsupportedUpdateAuthority
             }
             guard !request.options.createWrapper else {
@@ -342,6 +348,19 @@ public actor EmbeddedPackageService: RuntimeService {
                 )
             }
             importPreviews[ticket] = nil
+            if let spec = request.options.provider {
+                // §2.4: the install flags land on the record. `--updates
+                // manual` keeps authority `manual` and the provider unused.
+                let ref = try UpdatePolicyRules.providerRef(for: spec)
+                let mode = UpdatePolicyRules.settingsMode(
+                    for: request.options.updateMode ?? .automatic)
+                try await store.setUpdateMode(for: packageID, mode: mode)
+                try await store.setUpdatePolicy(
+                    for: packageID,
+                    authority: request.options.authority == .apkrun ? .apkrun : .manual,
+                    provider: ref,
+                    requireProvider: request.options.authority == .apkrun)
+            }
             try? await refreshAndroidInventory()
             let summary = try Self.summary(from: outcome.record)
             return RuntimePackageInstallResult(

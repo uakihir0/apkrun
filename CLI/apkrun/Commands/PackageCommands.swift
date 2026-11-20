@@ -20,10 +20,28 @@
         @Flag(name: .long, help: "Print the result as JSON.")
         var json = false
 
+        @Option(name: .long, help: "A provider spec such as local:/path or direct:<https-url>.")
+        var provider: String?
+
+        @Option(name: .long, help: "Update mode: automatic, notify, or manual.")
+        var updates: String?
+
+        @Option(name: .long, help: "Alias for --updates.")
+        var update: String?
+
+        @Option(name: .long, help: "Provider type used with --update-url.")
+        var updateProvider: String?
+
+        @Option(name: .long, help: "Provider URL used with --update-provider.")
+        var updateURL: String?
+
         mutating func run() async throws {
             guard !files.isEmpty else {
                 throw CLIFailure.invalidArgument(argument: "file", reason: "required")
             }
+            let installOptions = try InstallUpdateOptions.options(
+                provider: provider, updates: updates, update: update,
+                updateProvider: updateProvider, updateURL: updateURL)
             let urls = try PackageCommandSupport.inputFiles(files)
             let handles = try urls.map { try PackageCommandSupport.openRegularFile(at: $0) }
             defer {
@@ -43,7 +61,7 @@
 
             let installRequest = RuntimeInstallImportedRequest(
                 ticket: preview.ticket,
-                options: RuntimeInstallOptions()
+                options: installOptions
             )
             PackageCommandSupport.writePreview(preview)
             try PackageCommandSupport.confirm(

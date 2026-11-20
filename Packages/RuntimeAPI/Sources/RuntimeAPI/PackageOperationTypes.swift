@@ -579,22 +579,32 @@ public struct RuntimeInstallOptions: Codable, Sendable, Equatable {
     public var createWrapper: Bool
     /// Reserved for wire compatibility. RuntimeHost rejects lower-version imports regardless.
     public var allowDowngrade: Bool
+    /// The `--provider` spec attached after a successful install (cli.md §4.2).
+    public var provider: ProviderSpec?
+    /// The `--updates` mode; nil means the §2.4 defaults.
+    public var updateMode: UpdateChoice?
 
     /// Creates installation options.
     public init(
         authority: RuntimeUpdateAuthority = .manual,
         createWrapper: Bool = false,
-        allowDowngrade: Bool = false
+        allowDowngrade: Bool = false,
+        provider: ProviderSpec? = nil,
+        updateMode: UpdateChoice? = nil
     ) {
         self.authority = authority
         self.createWrapper = createWrapper
         self.allowDowngrade = allowDowngrade
+        self.provider = provider
+        self.updateMode = updateMode
     }
 
     private enum CodingKeys: String, CodingKey {
         case authority
         case createWrapper
         case allowDowngrade
+        case provider
+        case updateMode
     }
 
     /// Decodes older clients with downgrade approval disabled by default.
@@ -603,6 +613,8 @@ public struct RuntimeInstallOptions: Codable, Sendable, Equatable {
         authority = try container.decodeIfPresent(RuntimeUpdateAuthority.self, forKey: .authority) ?? .manual
         createWrapper = try container.decodeIfPresent(Bool.self, forKey: .createWrapper) ?? false
         allowDowngrade = try container.decodeIfPresent(Bool.self, forKey: .allowDowngrade) ?? false
+        provider = try container.decodeIfPresent(ProviderSpec.self, forKey: .provider)
+        updateMode = try container.decodeIfPresent(UpdateChoice.self, forKey: .updateMode)
     }
 
     /// Encodes all install options for newer clients.
@@ -611,6 +623,8 @@ public struct RuntimeInstallOptions: Codable, Sendable, Equatable {
         try container.encode(authority, forKey: .authority)
         try container.encode(createWrapper, forKey: .createWrapper)
         try container.encode(allowDowngrade, forKey: .allowDowngrade)
+        try container.encodeIfPresent(provider, forKey: .provider)
+        try container.encodeIfPresent(updateMode, forKey: .updateMode)
     }
 }
 

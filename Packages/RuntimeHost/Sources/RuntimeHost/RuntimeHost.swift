@@ -64,7 +64,10 @@ public actor RuntimeHost {
     private var supervisorEventsTask: Task<Void, Never>?
     private var packageQueryService: EmbeddedPackageService?
     private var wrapperRegistry: WrapperRegistry?
+    private var wrapperRegistryLoadTask: Task<WrapperRegistry, Never>?
     private var wrapperHealthChecksRegistered = false
+    /// Package IDs with a `wrapperCreate` operation in flight.
+    private var wrapperCreationsInFlight: Set<String> = []
     private var headlessSessionService: (any RuntimeSessionService)?
     private var runtimeSessionGeneration: UInt64 = 0
     private var bootProgressEstimator: BootProgressEstimator?
@@ -1237,10 +1240,7 @@ public actor RuntimeHost {
                 bundledVersion: nil
             )
         } catch {
-            guard let failure = error as? WrapperFailure else {
-                throw .runtime("internal", message: "APKRun couldn't verify the Mac app.")
-            }
-            throw Self.wrapperWireError(for: failure)
+            throw Self.wrapperWireError(for: error)
         }
     }
 
@@ -1287,6 +1287,17 @@ public actor RuntimeHost {
             }
             return existing.handle
         }
+        // One generation per package at a time: two writers would interleave
+        // the placement and the registry update.
+        guard wrapperCreationsInFlight.insert(request.packageID.rawValue).inserted else {
+            throw Self.packageOperationInProgressError
+        }
+        do {
+            try beginLifecycleOperation()
+        } catch {
+            wrapperCreationsInFlight.remove(request.packageID.rawValue)
+            throw Self.sessionWireError(for: error)
+        }
 
         let handle = OperationHandle(operationID: requestedID, kind: .wrapperCreate)
         let snapshot = OperationSnapshot(
@@ -1310,7 +1321,9 @@ public actor RuntimeHost {
         )
         eventHub.publishOperationEvent(.started(snapshot), operationID: requestedID)
         let task = Task { [weak self] in
-            guard let self else { return }
+            guard let self else {
+                return
+            }
             if let diagnosticsID = DiagnosticsCore.OperationID(wire: requestedID.wireValue) {
                 let context = OperationContext(operationID: diagnosticsID)
                 await OperationContext.$current.withValue(context) {
@@ -1334,6 +1347,10 @@ public actor RuntimeHost {
         icon: FileHandle?,
         operationID: WireOperationID
     ) async {
+        defer {
+            wrapperCreationsInFlight.remove(request.packageID.rawValue)
+            finishLifecycleOperation()
+        }
         do {
             let info = try await performCreateWrapper(request, icon: icon, operationID: operationID)
             finishOperation(operationID, result: .succeeded(.wrapper(info)))
@@ -1436,10 +1453,7 @@ public actor RuntimeHost {
         do {
             generated = try await generator.generate(generation)
         } catch {
-            guard let failure = error as? WrapperFailure else {
-                throw .runtime("internal", message: "APKRun couldn't generate the Mac app.")
-            }
-            throw Self.wrapperWireError(for: failure)
+            throw Self.wrapperWireError(for: error)
         }
 
         guard let entry = await registry.entry(bundleID: generated.bundleID) else {
@@ -1489,9 +1503,17 @@ public actor RuntimeHost {
         if let wrapperRegistry {
             return wrapperRegistry
         }
-        let registry = WrapperRegistry(paths: paths, sink: diagnostics?.logSink)
-        _ = await registry.load()
-        await registry.recover { WrapperCodeSign.cdhash(of: $0) }
+        if let wrapperRegistryLoadTask {
+            return await wrapperRegistryLoadTask.value
+        }
+        let loadTask = Task { () -> WrapperRegistry in
+            let registry = WrapperRegistry(paths: paths, sink: diagnostics?.logSink)
+            _ = await registry.load()
+            await registry.recover { WrapperCodeSign.cdhash(of: $0) }
+            return registry
+        }
+        wrapperRegistryLoadTask = loadTask
+        let registry = await loadTask.value
         wrapperRegistry = registry
         registerWrapperHealthChecks(registry: registry)
         return registry

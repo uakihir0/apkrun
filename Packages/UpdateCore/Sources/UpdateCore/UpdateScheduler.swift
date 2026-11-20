@@ -108,19 +108,20 @@ public actor UpdateScheduler {
         try? await store.open()
         let managed = Set(
             ((try? await store.listManagedPackages()) ?? []).map(\.packageId))
-        var staged = await stateStore.allStates()
+        let stagedRows = await stateStore.allStates()
             .filter { $0.value.phase == "staged" && managed.contains($0.key) }
-            .map(\.key)
-        // §2.2: a package switched to notifyOnly after staging must never
-        // auto-install — the staged row stays for the user's "Update".
-        var automatic: [PackageID] = []
-        for packageID in staged {
+        // §2.2: a package switched to notifyOnly after an automatic stage
+        // must never auto-install. A notifyOnly package never stages on
+        // its own, so a user-requested staged row still resumes — it is
+        // the "Update" the user already approved.
+        var staged: [PackageID] = []
+        for (packageID, row) in stagedRows {
             let mode = (try? await store.packageSettings(for: packageID))?.updateMode
-            if mode != "notifyOnly" {
-                automatic.append(packageID)
+            if mode == "notifyOnly", row.candidate?.userRequested != true {
+                continue
             }
+            staged.append(packageID)
         }
-        staged = automatic
         guard !staged.isEmpty else { return }
         guard let runtime = await runtimeProvider(),
             let gate = await gateProvider()

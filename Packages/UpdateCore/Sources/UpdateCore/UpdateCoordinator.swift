@@ -699,7 +699,8 @@ public actor UpdateCoordinator {
                 provider: candidate.provider.type,
                 signerDigests: preview.artifactSet.signerDigests,
                 cursor: candidate.cursor,
-                reopenAfterInstall: closeRunningApp)
+                reopenAfterInstall: closeRunningApp,
+                userRequested: trigger == .userInitiated || trigger == .manual)
         }
         await stateStore.flush()
 

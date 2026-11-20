@@ -664,6 +664,14 @@ public actor UpdateCoordinator {
             try? await runtime.ensureReady(.user)
         }
         guard await gate.requestInstall(packageID, userInitiated: userInitiated) else {
+            // A request queued behind an in-flight admission is not
+            // re-evaluated when that admission fails; drain the queue in
+            // the background so an open package does not wait for the
+            // 10-minute tick.
+            Task.detached {
+                await self.drainQueuedInstalls(
+                    trigger: trigger, runtime: runtime, gate: gate)
+            }
             return .staged
         }
         return await runGatedInstall(
@@ -759,8 +767,10 @@ public actor UpdateCoordinator {
         do {
             try await runtime.ensureReady(.update)
         } catch {
-            await pumpQueuedInstalls(
-                after: packageID, trigger: trigger, runtime: runtime, gate: gate)
+            Task.detached {
+                await self.pumpQueuedInstalls(
+                    after: packageID, trigger: trigger, runtime: runtime, gate: gate)
+            }
             return await finishFailedInstall(
                 packageID, record: record, cursor: cursor,
                 candidateVersionCode: expectedVersionCode, provider: provider,
@@ -775,8 +785,10 @@ public actor UpdateCoordinator {
         do {
             assertion = try await runtime.assertStoreOperation()
         } catch {
-            await pumpQueuedInstalls(
-                after: packageID, trigger: trigger, runtime: runtime, gate: gate)
+            Task.detached {
+                await self.pumpQueuedInstalls(
+                    after: packageID, trigger: trigger, runtime: runtime, gate: gate)
+            }
             return await finishFailedInstall(
                 packageID, record: record, cursor: cursor,
                 candidateVersionCode: expectedVersionCode, provider: provider,
@@ -794,25 +806,39 @@ public actor UpdateCoordinator {
             cursor: cursor, trigger: trigger, runtime: runtime,
             gate: gate, started: started)
         assertion.release()
-        await pumpQueuedInstalls(
-            after: packageID, trigger: trigger, runtime: runtime, gate: gate)
-        // §7.3: "Update Now" reopens the app after a successful update.
+        // §7.3: "Update Now" reopens the app after a successful update,
+        // and its caller returns once its own install is done; unrelated
+        // queued installs drain in the background.
         if case .installed = outcome, reopenAfterInstall {
             await runtime.reopen(packageID)
+        }
+        Task.detached {
+            await self.pumpQueuedInstalls(
+                after: packageID, trigger: trigger, runtime: runtime, gate: gate)
         }
         return outcome
     }
 
-    /// Frees the finished install's gate slot, then admits and runs each
-    /// queued install until the queue drains or an install resumes (the
-    /// resumed install continues the chain itself).
+    /// Frees the finished install's gate slot, then drains the queue.
     private func pumpQueuedInstalls(
         after packageID: PackageID,
         trigger: UpdateTrigger,
         runtime: any UpdateRuntimeAccess,
         gate: GentleUpdateGate
     ) async {
-        var next = await gate.finishInstall(packageID)
+        _ = await gate.finishInstall(packageID)
+        await drainQueuedInstalls(trigger: trigger, runtime: runtime, gate: gate)
+    }
+
+    /// Admits each queued install and runs it; a package that lost its
+    /// staged row frees the gate's slot. A resumed install continues the
+    /// chain itself.
+    private func drainQueuedInstalls(
+        trigger: UpdateTrigger,
+        runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate
+    ) async {
+        var next = await gate.nextReadyPackage()
         while let admitted = next {
             if await resumeStagedInstall(
                 admitted, trigger: trigger, runtime: runtime, gate: gate

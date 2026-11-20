@@ -610,7 +610,15 @@ public actor EmbeddedPackageService: RuntimeService {
             return RuntimePackageDetails(
                 summary: try Self.summary(from: record),
                 files: files,
-                artifactBytes: bytes
+                artifactBytes: bytes,
+                staged: record.artifacts.staged.map {
+                    RuntimeStagedArtifact(
+                        versionCode: $0.versionCode,
+                        versionName: $0.versionName,
+                        size: $0.size,
+                        fileCount: $0.fileCount,
+                        origin: $0.origin.type.rawValue)
+                }
             )
         } catch {
             throw Self.wireError(for: error)

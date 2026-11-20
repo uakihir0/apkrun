@@ -1779,6 +1779,49 @@ public actor PackageStore {
             // The rollback may have committed even though the reply was lost.
             let committed = try await queryPackage(packageID, through: runtimeAccess)
             guard committed?.versionCode == previousSet.versionCode else {
+                if needsDataLossFallback.boxed, committed == nil {
+                    // §7.3 data-loss fallback part-way: the guest uninstall
+                    // ran but the previous-set reinstall did not, so Android
+                    // has no package. Commit the journal with the file slots
+                    // and record consistent — the restored previous set in
+                    // `current/` no longer matches Android — then surface the
+                    // failure so the caller marks the package broken.
+                    try appendStep(
+                        transaction, kind: "rollback", step: "guestUninstalled")
+                    try finishRollbackRestore(
+                        transaction: transaction,
+                        failedVersion: existing.versionCode,
+                        previousDigest: previousDigest,
+                        packageDirectory: packageDirectory
+                    )
+                    try appendStep(
+                        transaction, kind: "rollback", step: "filesRestored")
+                    var lostRecord = recordAfterRollback(
+                        existing,
+                        info: StorePackageInfo(
+                            packageID: packageID,
+                            displayName: existing.displayName,
+                            versionCode: previousSet.versionCode,
+                            enabled: true,
+                            targetSDK: existing.android.targetSdk,
+                            minSDK: existing.android.minSdk
+                        ),
+                        set: previousSet,
+                        digest: previousDigest,
+                        operationID: operationID,
+                        startedAt: startedAt
+                    )
+                    lostRecord.artifacts.currentMatchesAndroid = false
+                    try writeRecord(lostRecord, directory: directory)
+                    try appendStep(
+                        transaction, kind: "rollback", step: "metadataWritten")
+                    try appendTerminal(transaction, op: "commit")
+                    records[packageID] = lostRecord
+                    try purgeTrash()
+                    throw PackageStoreFailure.rollbackFailed(
+                        detail:
+                            "the fallback reinstall never finished; the package is uninstalled in Android")
+                }
                 try appendAbort(transaction, reason: "guestRollbackFailed")
                 throw error
             }
@@ -4149,6 +4192,9 @@ public actor PackageStore {
         var record = old
         record.versionCode = info.versionCode
         record.versionName = info.versionName ?? set.versionName
+        record.signingCertificates =
+            info.signingDigests.isEmpty ? set.signerDigests : info.signingDigests
+        record.signingLineage = set.lineage
         record.state = .installed
         record.artifacts = ArtifactSlots(
             current: ArtifactSlotSummary(

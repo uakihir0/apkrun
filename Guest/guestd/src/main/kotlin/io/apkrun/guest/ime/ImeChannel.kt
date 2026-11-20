@@ -1,6 +1,5 @@
 package io.apkrun.guest.ime
 
-import io.apkrun.guest.daemon.ActiveControlToken
 import io.apkrun.guest.daemon.FrameReader
 import io.apkrun.guest.daemon.FrameWriter
 import io.apkrun.guest.protocol.AgentHandshake
@@ -40,6 +39,8 @@ class ImeChannel(
     private val onCommand: (ImeCommand) -> Unit,
     /** Runs once the handshake has been accepted, before the read loop. */
     private val onBound: () -> Unit = {},
+    /** Judges the HelloAck's session token, as `admitSecondary` does on the daemon's channels. */
+    private val sessionTokenCheck: (ByteArray) -> Boolean = { true },
 ) {
     private val reader = FrameReader(input)
     private val writer = FrameWriter(output)
@@ -62,7 +63,7 @@ class ImeChannel(
         val negotiated = AgentHandshake.evaluate(ack.helloAck, ProtocolVersion.HOST, capabilities)
         // The IME channel is bound to the control session, as the daemon's secondary channels
         // are (guest-protocol.md §5.4): a token that is not the current control token is refused.
-        if (!ActiveControlToken.matches(negotiated.sessionToken)) {
+        if (!sessionTokenCheck(negotiated.sessionToken)) {
             throw GuestProtocolFailure.MalformedFrame(
                 "the session token does not match the control session"
             )

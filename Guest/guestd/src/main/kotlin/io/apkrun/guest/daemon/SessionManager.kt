@@ -12,7 +12,7 @@ import java.io.Closeable
  * connection releases only its own claim, so an old connection that ends late cannot clear the new
  * session.
  */
-class SessionManager(now: () -> Long) {
+class SessionManager(now: () -> Long, private val publishToken: (ByteArray?) -> Unit = {}) {
     private val sessions = ControlSessions(now)
     private val secondaries = mutableSetOf<Closeable>()
 
@@ -51,7 +51,7 @@ class SessionManager(now: () -> Long) {
         }
         handshaking = null
         sessions.openControl(token)
-        ActiveControlToken.set(token)
+        publishToken(token)
         control = connection
         return true
     }
@@ -90,7 +90,7 @@ class SessionManager(now: () -> Long) {
         }
         control = null
         sessions.close()
-        ActiveControlToken.set(null)
+        publishToken(null)
         closeSecondaries()
         return true
     }
@@ -102,7 +102,7 @@ class SessionManager(now: () -> Long) {
         val previous = control
         control = null
         sessions.close()
-        ActiveControlToken.set(null)
+        publishToken(null)
         closeSecondaries()
         previous?.let { runCatching { it.close() } }
     }

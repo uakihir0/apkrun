@@ -20,7 +20,7 @@ private class FakeConnection : Closeable {
 
 class SessionManagerTest {
     private var clock = 0L
-    private val sessions = SessionManager { clock }
+    private val sessions = SessionManager(now = { clock })
     private val token = byteArrayOf(1, 2, 3)
 
     @Test

@@ -13,6 +13,7 @@ import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import io.apkrun.guest.BuildConfig
 import io.apkrun.guest.daemon.AndroidKeyEventFactory
+import io.apkrun.guest.daemon.ControlTokenProperty
 import io.apkrun.guest.protocol.GuestProtocolFailure
 import io.apkrun.guest.protocol.v1.AgentInfo
 import io.apkrun.guest.protocol.v1.AgentKind
@@ -181,6 +182,7 @@ class ApkRunInputMethodService : InputMethodService() {
                             .build(),
                     runtimeImageVersion = "",
                     onBound = { handler.post { publish() } },
+                    sessionTokenCheck = { ControlTokenProperty.matches(this, it) },
                     onCommand = { command ->
                         // The InputConnection belongs to the main thread (input.md §5.6).
                         handler.post { apply(command) }

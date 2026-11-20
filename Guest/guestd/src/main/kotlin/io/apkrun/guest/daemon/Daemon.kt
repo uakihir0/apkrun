@@ -62,7 +62,10 @@ class Daemon(internal val scope: CoroutineScope) {
     }
 
     internal val events = EventBus()
-    internal val sessions = SessionManager { SystemClock.elapsedRealtime() }
+    internal val sessions =
+        SessionManager({ SystemClock.elapsedRealtime() }) { token ->
+            ControlTokenProperty.publish(SystemContext.get(), token)
+        }
     private val displays = DisplayService(events, post)
     private val tasks = TaskService(events, post)
     private val launch = LaunchService(tasks, displays) { SystemContext.get() }

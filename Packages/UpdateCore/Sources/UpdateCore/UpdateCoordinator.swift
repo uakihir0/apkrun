@@ -645,7 +645,7 @@ public actor UpdateCoordinator {
 
         // Automatic runs need a ready runtime (§3.5).
         do {
-            try await runtime.ensureReadyForUpdate()
+            try await runtime.ensureReady(.update)
         } catch {
             return await finishFailedInstall(
                 packageID, record: record, candidate: candidate,

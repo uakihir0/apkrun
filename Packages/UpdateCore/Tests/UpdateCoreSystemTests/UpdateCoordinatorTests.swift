@@ -642,7 +642,7 @@ private final class FakeUpdateRuntime: UpdateRuntimeAccess, @unchecked Sendable 
 
     var runtimeState: WireRuntimeState { .ready }
     func hasActiveUse(_: PackageID) async -> Bool { inUse }
-    func ensureReadyForUpdate() async throws {
+    func ensureReady(_: UpdateStartReason) async throws {
         ensureReadyCalls += 1
         if let ensureReadyError { throw ensureReadyError }
     }

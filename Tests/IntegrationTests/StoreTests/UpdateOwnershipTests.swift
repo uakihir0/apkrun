@@ -280,5 +280,5 @@ final class UpdateOwnershipTests: XCTestCase {
 private struct ReadyUpdateRuntime: UpdateRuntimeAccess {
     var runtimeState: WireRuntimeState { .ready }
     func hasActiveUse(_ package: PackageID) async -> Bool { false }
-    func ensureReadyForUpdate() async throws {}
+    func ensureReady(_: UpdateStartReason) async throws {}
 }

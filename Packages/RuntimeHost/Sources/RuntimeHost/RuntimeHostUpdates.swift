@@ -852,12 +852,12 @@ extension RuntimeHost {
 private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
     private let stateOf: @Sendable () async -> WireRuntimeState
     private let inUse: @Sendable (PackageID) async -> Bool
-    private let ready: @Sendable () async throws -> Void
+    private let ready: @Sendable (UpdateStartReason) async throws -> Void
 
     init(
         stateOf: @escaping @Sendable () async -> WireRuntimeState,
         inUse: @escaping @Sendable (PackageID) async -> Bool,
-        ready: @escaping @Sendable () async throws -> Void
+        ready: @escaping @Sendable (UpdateStartReason) async throws -> Void
     ) {
         self.stateOf = stateOf
         self.inUse = inUse
@@ -872,8 +872,8 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         await inUse(packageID)
     }
 
-    func ensureReadyForUpdate() async throws {
-        try await ready()
+    func ensureReady(_ reason: UpdateStartReason) async throws {
+        try await ready(reason)
     }
 }
 
@@ -898,11 +898,13 @@ extension RuntimeHost {
                 }
                 return await handling.hasActiveSession(packageID: wireID)
             },
-            ready: { [weak self] in
+            ready: { [weak self] reason in
                 guard let self, let supervisor = await self.supervisor else {
                     throw UpdateFailure.providerUnreachable(reason: "runtime is not running")
                 }
-                try await supervisor.ensureReady(.automatic)
+                // A user-initiated Update Now may resume a suspended runtime;
+                // automatic installs go through .automatic (§7.1 GU1).
+                try await supervisor.ensureReady(reason == .user ? .user : .automatic)
                 // After a daemon restart or an Android stop the shared store's
                 // runtime access is still detached: without this, a ready
                 // Android answers every update install with runtimeUnavailable.

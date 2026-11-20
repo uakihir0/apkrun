@@ -777,3 +777,85 @@ public struct RuntimeSetUpdateAuthorityControlReply: Codable, Sendable {
         self.error = error
     }
 }
+
+
+/// A `rollbackPackage` control request (update-system.md §8.5).
+public struct RuntimeRollbackPackageControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The package to roll back to `previous/`.
+    public var packageID: RuntimePackageID
+    /// Permits the §7.3 uninstall + first-install fallback; only the
+    /// confirmed "Restore (erases data)" choice sets it.
+    public var allowDataLoss: Bool
+
+    /// Creates a control request.
+    public init(
+        header: APIRequestHeader,
+        packageID: RuntimePackageID,
+        allowDataLoss: Bool = false
+    ) {
+        self.header = header
+        self.packageID = packageID
+        self.allowDataLoss = allowDataLoss
+    }
+}
+
+/// The `rollbackPackage` reply.
+public struct RuntimeRollbackPackageControlReply: Codable, Sendable {
+    /// The version rolled back to, on success.
+    public var rolledBackTo: RuntimeVersionCode?
+    /// True when no `previous/` set or no rollback mechanism exists (§7.3).
+    public var unavailable: Bool?
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates a control reply.
+    public init(
+        rolledBackTo: RuntimeVersionCode? = nil,
+        unavailable: Bool? = nil,
+        error: RuntimeWireError? = nil
+    ) {
+        self.rolledBackTo = rolledBackTo
+        self.unavailable = unavailable
+        self.error = error
+    }
+}
+
+/// An `updateSkipped` control request (update-system.md §8.4): adds or
+/// removes a versionCode on the package's skip list.
+public struct RuntimeUpdateSkipControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The package whose skip list changes.
+    public var packageID: RuntimePackageID
+    /// The versionCode to skip or unskip.
+    public var versionCode: RuntimeVersionCode
+    /// True adds the version ("Skip This Version"); false removes it
+    /// ("Try Again", `apkrun update unskip`).
+    public var skipped: Bool
+
+    /// Creates a control request.
+    public init(
+        header: APIRequestHeader,
+        packageID: RuntimePackageID,
+        versionCode: RuntimeVersionCode,
+        skipped: Bool
+    ) {
+        self.header = header
+        self.packageID = packageID
+        self.versionCode = versionCode
+        self.skipped = skipped
+    }
+}
+
+/// The `updateSkipped` reply.
+public struct RuntimeUpdateSkipControlReply: Codable, Sendable {
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates a control reply.
+    public init(error: RuntimeWireError? = nil) {
+        self.error = error
+    }
+}

@@ -11,6 +11,7 @@ struct UpdateCommand: AsyncParsableCommand {
         abstract: "Check for, list, and manage Android app updates.",
         subcommands: [
             UpdatePolicyCommand.self, UpdateAuthorityCommand.self, UpdateHistoryCommand.self,
+            UpdateSkipCommand.self, UpdateUnskipCommand.self,
         ]
     )
 
@@ -327,5 +328,108 @@ enum UpdateOutput {
             return "\(name) (\(code))"
         }
         return code
+    }
+}
+
+/// `apkrun update skip <package> <versionCode>` (§8.4, cli.md §4.3):
+/// refuses the version on the next checks until unskipped.
+struct UpdateSkipCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "skip",
+        abstract: "Skip an update version so it is not offered again."
+    )
+
+    @Argument(help: "The Android package name.")
+    var package: String
+
+    @Argument(help: "The versionCode to skip.")
+    var versionCode: Int64
+
+    mutating func run() async throws {
+        guard let packageID = RuntimePackageID(rawValue: package) else {
+            throw CLIFailure.invalidPackageName(package: package)
+        }
+        do {
+            let client = try RuntimeControlClient(clientKind: .cli)
+            try await client.updateSkipped(
+                packageID: packageID, versionCode: versionCode, skipped: true)
+            Output.write("\(package): version \(versionCode) skipped")
+        } catch let failure as RuntimeWireError {
+            throw failure
+        } catch {
+            throw await RuntimeStatusOutput.commandFailure(error)
+        }
+    }
+}
+
+/// `apkrun update unskip <package> <versionCode>` (§8.4, cli.md §4.3):
+/// removes the skip so the version is offered again.
+struct UpdateUnskipCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "unskip",
+        abstract: "Offer a skipped update version again."
+    )
+
+    @Argument(help: "The Android package name.")
+    var package: String
+
+    @Argument(help: "The versionCode to unskip.")
+    var versionCode: Int64
+
+    mutating func run() async throws {
+        guard let packageID = RuntimePackageID(rawValue: package) else {
+            throw CLIFailure.invalidPackageName(package: package)
+        }
+        do {
+            let client = try RuntimeControlClient(clientKind: .cli)
+            try await client.updateSkipped(
+                packageID: packageID, versionCode: versionCode, skipped: false)
+            Output.write("\(package): version \(versionCode) unskipped")
+        } catch let failure as RuntimeWireError {
+            throw failure
+        } catch {
+            throw await RuntimeStatusOutput.commandFailure(error)
+        }
+    }
+}
+
+/// `apkrun rollback <package> [--allow-data-loss]` (§8.5, cli.md §4.3):
+/// rolls back to `previous/`. App data is never rolled back;
+/// `--allow-data-loss` is the confirmed Restore choice that erases it.
+struct RollbackCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "rollback",
+        abstract: "Roll an app back to its previous version."
+    )
+
+    @Argument(help: "The Android package name.")
+    var package: String
+
+    @Flag(name: .long, help: "Allow the data-erasing restore fallback.")
+    var allowDataLoss = false
+
+    mutating func run() async throws {
+        guard let packageID = RuntimePackageID(rawValue: package) else {
+            throw CLIFailure.invalidPackageName(package: package)
+        }
+        do {
+            let client = try RuntimeControlClient(clientKind: .cli)
+            let reply = try await client.rollbackPackage(
+                packageID: packageID, allowDataLoss: allowDataLoss)
+            if let to = reply.rolledBackTo {
+                Output.write(
+                    "\(package): rolled back to version \(to). App data was not changed.")
+            } else {
+                Output.writeLogLine(
+                    "\(package): no previous version to roll back to, or no rollback mechanism is available.",
+                    toStandardError: true
+                )
+                throw ExitCode.failure
+            }
+        } catch let failure as RuntimeWireError {
+            throw failure
+        } catch {
+            throw await RuntimeStatusOutput.commandFailure(error)
+        }
     }
 }

@@ -489,6 +489,28 @@ public actor EmbeddedUpdateService {
         return updated
     }
 
+    /// §8.5: rolls the package back to `previous/`. The coordinator
+    /// decides which §7.3 mechanism can run.
+    public func rollbackPackage(
+        packageID: PackageID,
+        allowDataLoss: Bool = false
+    ) async throws -> UpdateCoordinator.UpdateRollbackOutcome {
+        try await coordinator.rollbackPackage(packageID, allowDataLoss: allowDataLoss)
+    }
+
+    /// §8.4: adds (`skipped` true) or removes a version on the skip list.
+    public func setSkippedVersion(
+        packageID: PackageID,
+        versionCode: VersionCode,
+        skipped: Bool
+    ) async {
+        if skipped {
+            await stateStore.skipVersion(packageID, versionCode: versionCode)
+        } else {
+            await stateStore.unskipVersion(packageID, versionCode: versionCode)
+        }
+    }
+
     /// The wire `UpdateChoice` a record and its settings mode describe. The
     /// rule lives in UpdateCore (update-system.md §2.2).
     static func choice(authority: UpdateAuthority, mode: String?) -> UpdateChoice? {
@@ -936,6 +958,63 @@ extension RuntimeHost {
         } catch {
             throw EmbeddedUpdateService.wireError(for: error)
         }
+    }
+
+    /// `rollbackPackage` (update-system.md §8.5, cli.md §4.3).
+    public func rollbackPackage(
+        packageID wireID: RuntimePackageID,
+        allowDataLoss: Bool
+    ) async throws(RuntimeWireError) -> RuntimeRollbackPackageControlReply {
+        let service = updateServiceInstance()
+        do {
+            try await service.open()
+        } catch {
+            throw EmbeddedPackageService.wireError(for: error)
+        }
+        guard let packageID = PackageID(rawValue: wireID.rawValue) else {
+            throw .store(
+                "packageNotFound",
+                message: "The package is not managed by APKRun.",
+                remediation: "Use `apkrun list` to see managed packages.")
+        }
+        do {
+            switch try await service.rollbackPackage(
+                packageID: packageID, allowDataLoss: allowDataLoss)
+            {
+            case .rolledBack(let to):
+                return RuntimeRollbackPackageControlReply(rolledBackTo: to)
+            case .unavailable:
+                return RuntimeRollbackPackageControlReply(unavailable: true)
+            case .failed(let failure):
+                throw EmbeddedUpdateService.wireError(for: failure)
+            }
+        } catch let error as RuntimeWireError {
+            throw error
+        } catch {
+            throw EmbeddedUpdateService.wireError(for: error)
+        }
+    }
+
+    /// `updateSkipped` (update-system.md §8.4, cli.md §4.3).
+    public func setSkippedVersion(
+        packageID wireID: RuntimePackageID,
+        versionCode: RuntimeVersionCode,
+        skipped: Bool
+    ) async throws(RuntimeWireError) {
+        let service = updateServiceInstance()
+        do {
+            try await service.open()
+        } catch {
+            throw EmbeddedPackageService.wireError(for: error)
+        }
+        guard let packageID = PackageID(rawValue: wireID.rawValue) else {
+            throw .store(
+                "packageNotFound",
+                message: "The package is not managed by APKRun.",
+                remediation: "Use `apkrun list` to see managed packages.")
+        }
+        await service.setSkippedVersion(
+            packageID: packageID, versionCode: versionCode, skipped: skipped)
     }
 }
 

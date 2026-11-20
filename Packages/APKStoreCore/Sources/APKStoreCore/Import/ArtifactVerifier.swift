@@ -193,7 +193,8 @@ struct ArtifactVerifier: Sendable {
             }
             let nameLength = Int(data[index + 26]) | Int(data[index + 27]) << 8
             let extraLength = Int(data[index + 28]) | Int(data[index + 29]) << 8
-            let compressedSize = Int(data[index + 18]) | Int(data[index + 19]) << 8
+            let compressedSize =
+                Int(data[index + 18]) | Int(data[index + 19]) << 8
                 | Int(data[index + 20]) << 16 | Int(data[index + 21]) << 24
             let nameEnd = index + 30 + nameLength
             guard nameEnd <= data.count else { break }

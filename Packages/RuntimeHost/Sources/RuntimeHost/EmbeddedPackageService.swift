@@ -1156,7 +1156,8 @@ public actor EmbeddedPackageService: RuntimeService {
             case .unsupportedContainer(let kind):
                 return .store(
                     code, message: "APKRun can't add this kind of file (\(kind.rawValue)).",
-                    remediation: "APKRun can add .apk, .apks, .xapk, and .apkm files, and .zip files that contain only APKs."
+                    remediation:
+                        "APKRun can add .apk, .apks, .xapk, and .apkm files, and .zip files that contain only APKs."
                 )
             case .unreadableArchive:
                 return .store(
@@ -1202,7 +1203,8 @@ public actor EmbeddedPackageService: RuntimeService {
             case .invalidSignature(let file, _):
                 return .store(
                     code, message: "The signature of \(file) isn't valid.",
-                    remediation: "The file may have been changed after signing. Download it again from the app's developer.")
+                    remediation:
+                        "The file may have been changed after signing. Download it again from the app's developer.")
             case .legacySignatureNotAllowed(let targetSdk):
                 return .store(
                     code,

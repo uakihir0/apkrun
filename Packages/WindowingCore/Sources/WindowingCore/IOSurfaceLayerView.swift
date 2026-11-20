@@ -207,7 +207,15 @@ public final class IOSurfaceLayerView: NSView {
     /// The latest editor report of the IME (input.md §5.1). Editor mode turns on and off with
     /// `editorFocused`; the cursor rectangle feeds `firstRect(forCharacterRange:)`.
     public func updateEditor(_ state: EditorState) {
+        let previous = editorState
         editorState = state
+        // A released or replaced editor does not keep the old composition (input.md §5.3): the
+        // marked text of the previous editor is cleared instead of carried into the next one.
+        let editorChanged = previous?.editorFocused != true || previous?.packageID != state.packageID
+        if editorChanged, textInputModel.hasMarkedText {
+            textInputModel.clearMarked()
+            inputContext?.discardMarkedText()
+        }
         textInputModel.updateCursorRect(state.cursorRectPx)
         updateSecureInput()
     }

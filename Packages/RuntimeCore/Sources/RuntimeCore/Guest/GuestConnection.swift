@@ -562,6 +562,8 @@ public actor GuestConnection {
         slotWaiters.removeAll()
         eventContinuation.finish()
         inputAckContinuation.finish()
+        bulkFrameContinuation.finish()
+        imeStateContinuation.finish()
         outbound?.finish()
     }
 

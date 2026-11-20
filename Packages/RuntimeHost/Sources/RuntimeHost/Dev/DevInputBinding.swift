@@ -33,6 +33,8 @@ struct DevInputBinding: Sendable {
     func run(report: @escaping @Sendable (DevBootEvent) -> Void) async {
         var channel: GuestInputChannel?
         var boundToken: Data?
+        var imeChannel: GuestImeChannel?
+        var imeStatesTask: Task<Void, Never>?
         var reportedFailure = false
         while !Task.isCancelled {
             if let token = await agent.supervisor.session?.sessionToken {
@@ -40,7 +42,11 @@ struct DevInputBinding: Sendable {
                 if let channel {
                     usable = await channel.connection.isUsable
                 }
-                if token != boundToken || !usable {
+                var imeUsable = false
+                if let imeChannel {
+                    imeUsable = await imeChannel.connection.isUsable
+                }
+                if token != boundToken || !usable || !imeUsable {
                     do {
                         let next = try await agent.inputChannel()
                         let router = InputRouter(
@@ -66,13 +72,26 @@ struct DevInputBinding: Sendable {
                         channel = next
                         boundToken = token
                         reportedFailure = false
+                        imeStatesTask?.cancel()
+                        imeStatesTask = nil
                         do {
                             // The IME is its own channel, next to the input channel (input.md §5.6).
+                            // Its `states` stream has one subscriber: this task fans each report out
+                            // to every bound route (per-route pumps would contend for the stream).
                             let ime = try await agent.imeChannel()
+                            imeChannel = ime
                             for route in boundRoutes {
                                 await route.bindIme(ime)
                             }
+                            imeStatesTask = Task {
+                                for await state in ime.states {
+                                    for route in boundRoutes {
+                                        await route.editorStateArrived(state)
+                                    }
+                                }
+                            }
                         } catch {
+                            imeChannel = nil
                             for route in boundRoutes {
                                 await route.bindIme(nil)
                             }

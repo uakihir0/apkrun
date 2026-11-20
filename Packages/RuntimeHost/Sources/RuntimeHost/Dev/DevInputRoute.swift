@@ -29,8 +29,6 @@ public actor DevInputRoute {
     private var localCounters = InputCounters()
     /// The development IME channel of input.md §5, when one is bound.
     private var imeChannel: GuestImeChannel?
-    /// The task that relays the bound IME channel's states to `editorStates`.
-    private var imeStatesTask: Task<Void, Never>?
     /// The sequence number of the next `ImeCommand`.
     private var imeSeq: UInt64 = 0
     /// The editor reports of the bound IME channel (input.md §5.1). Latest wins.
@@ -148,27 +146,23 @@ public actor DevInputRoute {
         localCounters.add(counters)
     }
 
-    /// Binds the development IME channel (input.md §5), or clears it with nil. The bound channel's states are
-    /// published on ``editorStates`` until the next bind.
+    /// Binds the development IME channel for sending (input.md §5), or clears it with nil. The channel's
+    /// `states` stream fans out to every route from ``DevInputBinding``, which is the one subscriber.
     public func bindIme(_ channel: GuestImeChannel?) {
-        imeStatesTask?.cancel()
-        imeStatesTask = nil
         imeChannel = channel
-        guard let channel else {
-            return
-        }
-        let continuation = editorStateContinuation
-        imeStatesTask = Task {
-            for await state in channel.states {
-                continuation.yield(Self.editorState(state))
-            }
-        }
+    }
+
+    /// One editor state report from the bound channel, fanned out by ``DevInputBinding`` to every
+    /// route (the channel's stream has a single subscriber; per-route pumps would contend for it).
+    public func editorStateArrived(_ state: GPImeState) {
+        editorStateContinuation.yield(Self.editorState(state))
     }
 
     /// Sends one editor event on the bound IME channel (input.md §5.1). Without a channel the event is
-    /// dropped and counted as not running.
+    /// dropped and counted as not running. Only the focused window's route may type (R-05): events of
+    /// an unfocused or ended route are dropped.
     public func sendText(_ event: RuntimeAPI.WireImeTextEvent) async {
-        guard let imeChannel else {
+        guard let imeChannel, isFocused, !isTerminal else {
             localCounters.droppedNotRunning += 1
             return
         }

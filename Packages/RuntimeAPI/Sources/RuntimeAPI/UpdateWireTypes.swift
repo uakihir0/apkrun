@@ -554,3 +554,129 @@ public struct UpdateHistoryEntry: Codable, Sendable, Equatable {
         self.phaseDurationsMs = phaseDurationsMs
     }
 }
+
+/// A `checkForUpdates` control request.
+public struct RuntimeCheckForUpdatesControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// Packages to check; nil selects every `apkrun` package.
+    public var packages: [RuntimePackageID]?
+    /// Report only, without downloading or notifying.
+    public var checkOnly: Bool
+
+    /// Creates a control request.
+    public init(header: APIRequestHeader, packages: [RuntimePackageID]? = nil, checkOnly: Bool = false) {
+        self.header = header
+        self.packages = packages
+        self.checkOnly = checkOnly
+    }
+}
+
+/// The `checkForUpdates` reply: the accepted operation plus, for
+/// `checkOnly`, the results once checks finish.
+public struct RuntimeCheckForUpdatesControlReply: Codable, Sendable {
+    /// The long-running check operation.
+    public var operation: OperationHandle?
+    /// Results per package, populated for `checkOnly` requests.
+    public var results: [UpdateCheckResult]?
+    /// The failure on error, for example `update.providerNotConfigured`.
+    public var error: RuntimeWireError?
+
+    /// Creates a control reply.
+    public init(
+        operation: OperationHandle? = nil,
+        results: [UpdateCheckResult]? = nil,
+        error: RuntimeWireError? = nil
+    ) {
+        self.operation = operation
+        self.results = results
+        self.error = error
+    }
+}
+
+/// A `listUpdates` control request.
+public struct RuntimeListUpdatesControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+
+    /// Creates a control request.
+    public init(header: APIRequestHeader) {
+        self.header = header
+    }
+}
+
+/// The `listUpdates` reply.
+public struct RuntimeListUpdatesControlReply: Codable, Sendable {
+    /// Per-package update state.
+    public var updates: [PackageUpdateStatus]?
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates a control reply.
+    public init(updates: [PackageUpdateStatus]? = nil, error: RuntimeWireError? = nil) {
+        self.updates = updates
+        self.error = error
+    }
+}
+
+/// An `updateHistory` control request.
+public struct RuntimeUpdateHistoryControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The package to read; nil means every package.
+    public var packageID: RuntimePackageID?
+    /// The maximum entries, newest first; default 50, max 1000.
+    public var limit: Int?
+
+    /// Creates a control request.
+    public init(header: APIRequestHeader, packageID: RuntimePackageID? = nil, limit: Int? = nil) {
+        self.header = header
+        self.packageID = packageID
+        self.limit = limit
+    }
+}
+
+/// The `updateHistory` reply.
+public struct RuntimeUpdateHistoryControlReply: Codable, Sendable {
+    /// The history entries, newest first.
+    public var entries: [UpdateHistoryEntry]?
+    /// The failure on error, for example `store.packageNotFound`.
+    public var error: RuntimeWireError?
+
+    /// Creates a control reply.
+    public init(entries: [UpdateHistoryEntry]? = nil, error: RuntimeWireError? = nil) {
+        self.entries = entries
+        self.error = error
+    }
+}
+
+/// A `setUpdatePolicy` control request.
+public struct RuntimeSetUpdatePolicyControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The package to change.
+    public var packageID: RuntimePackageID
+    /// The new policy.
+    public var policy: UpdatePolicy
+
+    /// Creates a control request.
+    public init(header: APIRequestHeader, packageID: RuntimePackageID, policy: UpdatePolicy) {
+        self.header = header
+        self.packageID = packageID
+        self.policy = policy
+    }
+}
+
+/// The `setUpdatePolicy` reply: the package's update status after the write.
+public struct RuntimeSetUpdatePolicyControlReply: Codable, Sendable {
+    /// The updated status on success.
+    public var status: PackageUpdateStatus?
+    /// The failure on error, for example `update.authorityDoesNotAllowUpdates`.
+    public var error: RuntimeWireError?
+
+    /// Creates a control reply.
+    public init(status: PackageUpdateStatus? = nil, error: RuntimeWireError? = nil) {
+        self.status = status
+        self.error = error
+    }
+}

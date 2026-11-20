@@ -989,6 +989,119 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Checks packages for updates (runtime-api.md §9.1). `packages` nil
+    /// selects every `apkrun`-authority package. `checkOnly` reports without
+    /// downloading or notifying.
+    public func checkForUpdates(
+        packages: [RuntimePackageID]? = nil,
+        checkOnly: Bool = false
+    ) async throws(RuntimeControlClientError) -> (operation: OperationHandle, results: [UpdateCheckResult]) {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeCheckForUpdatesControlRequest(
+                header: makeHeader(), packages: packages, checkOnly: checkOnly)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.checkForUpdates(data)
+            let reply = try Self.decode(RuntimeCheckForUpdatesControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let operation = reply.operation else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return (operation, reply.results ?? [])
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Lists per-package update state (runtime-api.md §9.1).
+    public func listUpdates() async throws(RuntimeControlClientError) -> [PackageUpdateStatus] {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeListUpdatesControlRequest(header: makeHeader())
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.listUpdates(data)
+            let reply = try Self.decode(RuntimeListUpdatesControlReply.self, from: response)
+            guard (reply.updates != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let updates = reply.updates else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return updates
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Reads update history (runtime-api.md §9.1). `packageID` nil reads every
+    /// package; `limit` defaults to 50 and clamps to 1000.
+    public func updateHistory(
+        packageID: RuntimePackageID? = nil,
+        limit: Int? = nil
+    ) async throws(RuntimeControlClientError) -> [UpdateHistoryEntry] {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeUpdateHistoryControlRequest(
+                header: makeHeader(), packageID: packageID, limit: limit)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.updateHistory(data)
+            let reply = try Self.decode(RuntimeUpdateHistoryControlReply.self, from: response)
+            guard (reply.entries != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let entries = reply.entries else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return entries
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Sets a package's update mode and provider (runtime-api.md §9.1) and
+    /// returns its update status after the write.
+    public func setUpdatePolicy(
+        packageID: RuntimePackageID,
+        policy: UpdatePolicy
+    ) async throws(RuntimeControlClientError) -> PackageUpdateStatus {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeSetUpdatePolicyControlRequest(
+                header: makeHeader(), packageID: packageID, policy: policy)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.setUpdatePolicy(data)
+            let reply = try Self.decode(RuntimeSetUpdatePolicyControlReply.self, from: response)
+            guard (reply.status != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let status = reply.status else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return status
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
     /// Returns the latest state for an operation.
     public func operationStatus(
         _ operationID: OperationID
@@ -1948,6 +2061,14 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func focusChanged(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Returns the per-kind integration status of a package (runtime-api.md §11).
     func integrationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Checks packages for updates (runtime-api.md §9.1).
+    func checkForUpdates(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Lists per-package update state (runtime-api.md §9.1).
+    func listUpdates(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Reads update history (runtime-api.md §9.1).
+    func updateHistory(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Sets a package's update mode and provider (runtime-api.md §9.1).
+    func setUpdatePolicy(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void)
     func invalidate()
 }
@@ -2598,6 +2719,62 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.integrationStatus(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func checkForUpdates(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.checkForUpdates(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func listUpdates(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.listUpdates(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func updateHistory(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.updateHistory(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func setUpdatePolicy(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.setUpdatePolicy(request) { response in finish(.success(response)) }
         }
     }
 

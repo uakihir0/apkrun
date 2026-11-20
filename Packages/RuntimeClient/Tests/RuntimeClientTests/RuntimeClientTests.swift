@@ -1857,6 +1857,42 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         }
     }
 
+    func pushClipboard(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                RuntimePushClipboardControlReply(ack: ClipAck(seq: 1)))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func clipboardWritten(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(RuntimeClipboardWrittenControlReply())
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func focusChanged(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(RuntimeFocusChangedControlReply())
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func integrationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                RuntimeIntegrationStatusControlReply(
+                    status: IntegrationStatus(
+                        packageID: RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext")!, items: [])))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
     func snapshot() -> Snapshot {
         lock.withLock {
             Snapshot(

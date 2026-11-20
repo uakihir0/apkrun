@@ -840,6 +840,105 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Pushes a Mac clip toward Android; the reply carries the acknowledged
+    /// seq (desktop-integration.md §4.2, runtime-api.md §11.2).
+    public func pushClipboard(
+        sessionID: UUID, item: ClipItem
+    ) async throws(RuntimeControlClientError) -> ClipAck {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimePushClipboardControlRequest(
+                header: makeHeader(), sessionID: sessionID, item: item)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.pushClipboard(data)
+            let reply = try Self.decode(RuntimePushClipboardControlReply.self, from: response)
+            guard (reply.ack != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let ack = reply.ack else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return ack
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Reports the pasteboard write the window made (one-way; §4.2).
+    public func clipboardWritten(
+        sessionID: UUID, written: ClipboardWritten
+    ) async throws(RuntimeControlClientError) {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeClipboardWrittenControlRequest(
+                header: makeHeader(), sessionID: sessionID, written: written)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.clipboardWritten(data)
+            let reply = try Self.decode(RuntimeClipboardWrittenControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Reports whether the session's window is the key window (one-way; §4.1).
+    public func focusChanged(
+        sessionID: UUID, isKey: Bool
+    ) async throws(RuntimeControlClientError) {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeFocusChangedControlRequest(
+                header: makeHeader(), sessionID: sessionID, isKey: isKey)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.focusChanged(data)
+            let reply = try Self.decode(RuntimeFocusChangedControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Returns the per-kind integration status of a package (runtime-api.md §11).
+    public func integrationStatus(
+        packageID: RuntimePackageID
+    ) async throws(RuntimeControlClientError) -> IntegrationStatus {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeIntegrationStatusControlRequest(
+                header: makeHeader(), packageID: packageID)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.integrationStatus(data)
+            let reply = try Self.decode(RuntimeIntegrationStatusControlReply.self, from: response)
+            guard (reply.status != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let status = reply.status else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return status
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
     /// Returns the latest state for an operation.
     public func operationStatus(
         _ operationID: OperationID
@@ -1789,6 +1888,14 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func perfStatistics(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Returns per-session graphics statistics; developer mode only.
     func frameStatistics(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Pushes a Mac clip toward Android (desktop-integration.md §4.2).
+    func pushClipboard(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Reports a pasteboard write the window made (desktop-integration.md §4.2).
+    func clipboardWritten(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Reports whether the session's window is the key window (§4.1).
+    func focusChanged(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Returns the per-kind integration status of a package (runtime-api.md §11).
+    func integrationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void)
     func invalidate()
 }
@@ -2355,6 +2462,62 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.frameStatistics(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func pushClipboard(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.pushClipboard(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func clipboardWritten(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.clipboardWritten(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func focusChanged(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.focusChanged(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func integrationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.integrationStatus(request) { response in finish(.success(response)) }
         }
     }
 

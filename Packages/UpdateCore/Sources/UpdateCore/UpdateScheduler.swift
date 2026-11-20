@@ -39,6 +39,10 @@ public actor UpdateScheduler {
     /// §3.3: a due package's check after `noteLaunched` waits this long
     /// after the first frame.
     private let launchCheckDelay: Duration
+    /// How long the timer waits before retrying a due check it could not
+    /// start (offline or at the §3.4 caps) so an overdue package does not
+    /// spin the sweep.
+    private let retryDelay: Duration
 
     /// Checks currently running (a due package is never checked twice).
     private var inFlight: Set<PackageID> = []
@@ -70,7 +74,8 @@ public actor UpdateScheduler {
         networkSatisfied: @escaping @Sendable () -> Bool = { true },
         backgroundDownloadAllowed: @escaping @Sendable () -> Bool = { true },
         wakeDelay: Duration = .seconds(120),
-        launchCheckDelay: Duration = .seconds(30)
+        launchCheckDelay: Duration = .seconds(30),
+        retryDelay: Duration = .seconds(60)
     ) {
         self.coordinator = coordinator
         self.stateStore = stateStore
@@ -84,6 +89,7 @@ public actor UpdateScheduler {
         self.backgroundDownloadAllowed = backgroundDownloadAllowed
         self.wakeDelay = wakeDelay
         self.launchCheckDelay = launchCheckDelay
+        self.retryDelay = retryDelay
     }
 
     // MARK: - Triggers (§3.3)
@@ -142,6 +148,7 @@ public actor UpdateScheduler {
     @discardableResult
     public func runDueChecks(trigger: UpdateTrigger) async -> Int {
         guard networkSatisfied() else { return 0 }
+        try? await store.open()
         let due = await coordinator.duePackages(now: now())
         var started = 0
         for packageID in due where admissible(packageID) {
@@ -155,6 +162,7 @@ public actor UpdateScheduler {
     /// instant the timer should fire next (§3.3 "sleep until the earliest
     /// nextCheckAt"). nil means nothing is scheduled.
     public func earliestWakeAt() async -> Date? {
+        try? await store.open()
         let records = (try? await store.listManagedPackages()) ?? []
         let states = await stateStore.allStates()
         return records.filter {
@@ -242,15 +250,39 @@ public actor UpdateScheduler {
         }
     }
 
-    /// Re-arms the single timer to fire at `earliestWakeAt`.
+    /// Re-arms the single timer to fire at `earliestWakeAt`. A deadline that
+    /// is still past after a sweep (the check could not start — offline or
+    /// the §3.4 caps were full) paces retries with `retryDelay` instead of
+    /// refiring the timer in a hot loop.
     private func armTimer() {
         timerTask?.cancel()
         timerTask = Task {
-            guard let wake = await earliestWakeAt() else { return }
-            await sleepUntil(wake)
-            guard !Task.isCancelled else { return }
-            await runDueChecks(trigger: .scheduled)
-            armTimer()
+            while !Task.isCancelled {
+                guard var wake = await earliestWakeAt() else { return }
+                if wake > now() {
+                    await sleepUntil(wake)
+                    guard !Task.isCancelled else { return }
+                }
+                _ = await runDueChecks(trigger: .scheduled)
+                guard let next = await earliestWakeAt() else { return }
+                while next <= now(), !Task.isCancelled {
+                    await sleepUntil(now().addingTimeInterval(
+                        TimeInterval(retryDelay.components.seconds)))
+                    guard !Task.isCancelled else { return }
+                    guard let retry = await earliestWakeAt() else { return }
+                    if retry > now() {
+                        wake = retry
+                        break
+                    }
+                    _ = await runDueChecks(trigger: .scheduled)
+                    guard let again = await earliestWakeAt() else { return }
+                    wake = again
+                    if again > now() { break }
+                }
+                if wake > now() {
+                    continue
+                }
+            }
         }
     }
 

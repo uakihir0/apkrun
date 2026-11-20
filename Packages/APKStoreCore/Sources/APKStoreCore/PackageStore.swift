@@ -1758,6 +1758,9 @@ public actor PackageStore {
                     // post-boot task of §5.5; the record change still lands now.
                 }
             }
+            // The new authority does not hold the owner either way — a pending post-boot
+            // task finishes the relinquish, so the record must not keep the stale owner.
+            record.android.updateOwner = nil
         }
 
         record.updateAuthority = authority

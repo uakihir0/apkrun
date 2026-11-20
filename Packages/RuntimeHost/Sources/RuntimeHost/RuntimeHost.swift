@@ -2636,6 +2636,16 @@ public actor RuntimeHost {
 
         record = try await step(.checkingHost, record) {
             setProvisioningState(.checkingHost)
+            // The daemon must own the instance lock to write the image and userdata; when a
+            // developer CLI session (apkrun dev boot) holds it, provisioning cannot run.
+            guard instanceLock != nil else {
+                let failure = RuntimeFailure.instanceLocked(owner: .unknown)
+                throw ProvisioningStepFailure(
+                    step: .checkingHost,
+                    wireError: Self.sessionWireError(for: .runtimeFailure(failure)),
+                    stateError: Self.wireError(for: failure)
+                )
+            }
             let check = HostRequirementsCheck(
                 probe: SystemHostProbe(),
                 dataRoot: paths.dataRoot,

@@ -182,6 +182,7 @@ func aBoundRouteSendsItsEventsOnDisplayZero() async {
     let channel = CollectingInputChannel()
     let route = DevInputRoute()
     await route.bind(router: InputRouter(channel: channel))
+    await route.focusChanged(true, generation: 1)
     await route.send(
         RuntimeAPI.InputBatch(events: [
             .touch(RuntimeAPI.WireTouchEvent(phase: .down, pointerID: 0, position: wirePoint, time: wireTime))
@@ -200,6 +201,7 @@ func aBoundRouteUsesItsSelectedLeasedDisplay() async {
     let route = DevInputRoute()
     await route.setDisplayID(7)
     await route.bind(router: InputRouter(channel: channel))
+    await route.focusChanged(true, generation: 1)
     await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
 
     #expect(await channel.batches.first?.displayID == 7)
@@ -210,6 +212,7 @@ func aBoundRouteExposesTheAcknowledgementCoverageItReceives() async throws {
     let channel = AcknowledgingInputChannel()
     let route = DevInputRoute()
     await route.bind(router: InputRouter(channel: channel))
+    await route.focusChanged(true, generation: 1)
     await route.send(
         RuntimeAPI.InputBatch(events: [
             .touch(RuntimeAPI.WireTouchEvent(phase: .down, pointerID: 0, position: wirePoint, time: wireTime))
@@ -266,6 +269,7 @@ func anOptInPerEventCaptureUsesSingleEventBatches() async {
     let channel = CollectingInputChannel()
     let route = DevInputRoute()
     await route.bind(router: InputRouter(channel: channel))
+    await route.focusChanged(true, generation: 1)
     let baseline = await route.startAcknowledgementHistoryCapture(
         everyBatch: true, captureSentEventHistory: true)
     #expect(baseline?.batchesSent == 0)
@@ -293,6 +297,7 @@ func aBatchOfMoreThan512EventsIsCutAt512() async {
     let channel = CollectingInputChannel()
     let route = DevInputRoute()
     await route.bind(router: InputRouter(channel: channel))
+    await route.focusChanged(true, generation: 1)
     let events = (0..<600).map { index in
         RuntimeAPI.WireInputEvent.touch(
             RuntimeAPI.WireTouchEvent(
@@ -314,6 +319,7 @@ func unbindingEndsTheSessionAndLaterEventsAreDropped() async {
     let channel = CollectingInputChannel()
     let route = DevInputRoute()
     await route.bind(router: InputRouter(channel: channel))
+    await route.focusChanged(true, generation: 1)
     await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
     await route.unbind()
     await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
@@ -331,6 +337,7 @@ func aRebindMovesTheSessionToTheNewChannelAndCancelsTheOld() async {
     let newChannel = CollectingInputChannel()
     let route = DevInputRoute()
     await route.bind(router: InputRouter(channel: oldChannel))
+    await route.focusChanged(true, generation: 1)
     await route.bind(router: InputRouter(channel: newChannel))
     await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
     // The old session ends with a cancelAll on the old channel, and the event goes to the new channel only.
@@ -347,6 +354,7 @@ func aRebindKeepsTheCountsOfTheRouterItReplaces() async {
     let newChannel = CollectingInputChannel()
     let route = DevInputRoute()
     await route.bind(router: InputRouter(channel: oldChannel))
+    await route.focusChanged(true, generation: 1)
     await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
     await route.bind(router: InputRouter(channel: newChannel))
     await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))

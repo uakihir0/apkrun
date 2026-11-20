@@ -96,8 +96,10 @@ class AndroidInstallBackend(private val context: Context) : InstallBackend {
     ) {
         // DELETE_KEEP_DATA is a hidden flag: pm uninstall -k (guest-protocol.md §11).
         val flags = if (keepData) DELETE_KEEP_DATA else 0
-        // The status arrives as the same session broadcast: the sender id identifies the call.
-        val requestCode = (packageName.hashCode() * 31) + if (keepData) 1 else 0
+        // The status arrives as the same session broadcast: the request code identifies the
+        // call. A package-name hash can be non-positive or collide; the receiver only accepts
+        // positive codes, so count upward instead.
+        val requestCode = nextUninstallRequest.getAndIncrement()
         pendingUninstalls[requestCode] = onResult
         val intent =
             Intent(ACTION_SESSION_STATUS)
@@ -121,6 +123,8 @@ class AndroidInstallBackend(private val context: Context) : InstallBackend {
             onResult(UninstallOutcome(false, error.message.orEmpty()))
         }
     }
+
+    private val nextUninstallRequest = java.util.concurrent.atomic.AtomicInteger(1)
 
     private val pendingUninstalls = mutableMapOf<Int, (UninstallOutcome) -> Unit>()
 

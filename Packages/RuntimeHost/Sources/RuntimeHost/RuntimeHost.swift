@@ -2475,6 +2475,7 @@ public actor RuntimeHost {
         )
         await attachPerfObservers(to: service)
         headlessSessionService = service
+        await wireUpdateGateSessionHooks()
         return service
     }
 

@@ -28,6 +28,27 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     private var didCompleteShutdown = false
     /// Called once when a session's first frame lands on its scanout (`FIRST_FRAME_DISPLAYED`).
     var firstFrameObserver: (@Sendable (SessionID) -> Void)?
+    /// §7.2 (update-system.md, runtime-daemon.md §7.1): before a session is
+    /// requested for a package with a pending update transaction this waits
+    /// or cancels it — a pre-commit install returns to `staged`, a
+    /// committing one is awaited up to 30 s.
+    var packageTransactionWaiter: (@Sendable (RuntimePackageID) async -> Void)?
+    /// Packages whose next session's first frame is the update's H4 (§7.2).
+    private var postUpdateLaunchPackages = Set<String>()
+    /// Fires when a session's first frame counts as an update's H4 (§7.2):
+    /// the session waited on a committing install, then launched the new
+    /// version.
+    var postUpdateFirstFrameObserver: (@Sendable (RuntimePackageID) async -> Void)?
+
+    /// Installs the §7.2 hooks once (the gate and the service are each
+    /// created lazily; whichever comes second calls this).
+    func setUpdateHooks(
+        transactionWaiter: @escaping @Sendable (RuntimePackageID) async -> Void,
+        firstFrameObserver: @escaping @Sendable (RuntimePackageID) async -> Void
+    ) {
+        packageTransactionWaiter = transactionWaiter
+        postUpdateFirstFrameObserver = firstFrameObserver
+    }
     /// Called when a session is forgotten; the reason feeds the launch record's outcome.
     var sessionEndedObserver: (@Sendable (SessionID, String) -> Void)?
     private var firstFrameMarked: Set<SessionID> = []
@@ -135,6 +156,14 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 message: "This app is not installed in Android.",
                 remediation: "Install the app first, then launch it again."
             )
+        }
+
+        // §7.2 race (update-system.md, runtime-daemon.md §7.1): a pending
+        // update transaction for this package is cancelled (pre-commit) or
+        // awaited up to 30 s (committing) before the session requests its
+        // display.
+        if let packageTransactionWaiter {
+            await packageTransactionWaiter(request.packageID)
         }
 
         let session: AppSessionSnapshot
@@ -794,6 +823,22 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             ["session": .string(Self.sessionAttribute(session))]
         )
         firstFrameObserver?(session)
+        // §7.2: the first frame of a session that waited on a committing
+        // update is that update's H4.
+        if let package = sessionsByPackage.first(where: { $0.value == session })?.key,
+            postUpdateLaunchPackages.remove(package) != nil,
+            let wireID = RuntimePackageID(rawValue: package),
+            let postUpdateFirstFrameObserver
+        {
+            Task { await postUpdateFirstFrameObserver(wireID) }
+        }
+    }
+
+    /// Called by the host's §7.2 waiter when a launching session waited on
+    /// a committing update install; the next first frame is the update's
+    /// H4. `packageID` is the Android package identifier (raw).
+    func markPostUpdateLaunch(_ packageID: String) {
+        postUpdateLaunchPackages.insert(packageID)
     }
 
     /// The graphics statistics of every live session, for `frameStatistics` and

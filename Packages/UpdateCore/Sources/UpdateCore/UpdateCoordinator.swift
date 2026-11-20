@@ -721,6 +721,16 @@ public actor UpdateCoordinator {
 
         // §7.2: the install runs under a `storeOperation` assertion.
         let assertion = await runtime.assertStoreOperation()
+        // §7.2 race boundary: past `requestCommit` the Android commit is
+        // requested. A session that opened while the update streamed
+        // cancelled the install; it returns to `staged` and the gate slot
+        // frees for the next queued package.
+        guard await gate.requestCommit(packageID) else {
+            assertion.release()
+            await gate.finishInstall(packageID)
+            setPhase(packageID, .staged)
+            return .staged
+        }
         let outcome = await performGatedInstall(
             packageID, record: record,
             expectedVersionCode: expectedVersionCode,

@@ -156,6 +156,56 @@ struct GentleUpdateGateTests {
         #expect(await gate.nextReadyPackage() == Self.packageA)
     }
 
+    // MARK: - §7.2 races
+
+    @Test func preCommitCancelBlocksTheCommit() async throws {
+        let gate = makeGate()
+        #expect(await gate.requestInstall(Self.packageA))
+        #expect(await gate.installPhase(for: Self.packageA) == .preCommit)
+        // A session opens while the update streams (§7.2).
+        await gate.cancelInstall(Self.packageA)
+        // The coordinator reaches the commit boundary and must abort.
+        #expect(await gate.requestCommit(Self.packageA) == false)
+        _ = await gate.finishInstall(Self.packageA)
+        #expect(await gate.installPhase(for: Self.packageA) == nil)
+    }
+
+    @Test func committingInstallIgnoresCancelAndCompletes() async throws {
+        let gate = makeGate()
+        #expect(await gate.requestInstall(Self.packageA))
+        #expect(await gate.requestCommit(Self.packageA))
+        #expect(await gate.installPhase(for: Self.packageA) == .committing)
+        // A session opened after the commit was requested cannot cancel.
+        await gate.cancelInstall(Self.packageA)
+        _ = await gate.finishInstall(Self.packageA)
+        #expect(await gate.isWaiting(Self.packageA) == false)
+    }
+
+    @Test func waiterResumesWhenInstallFinishes() async throws {
+        let gate = makeGate()
+        #expect(await gate.requestInstall(Self.packageA))
+        #expect(await gate.requestCommit(Self.packageA))
+        let waiting = Task { await gate.awaitInstallFinish(Self.packageA, timeout: .seconds(30)) }
+        // Let the waiter register, then finish the install.
+        try await Task.sleep(for: .milliseconds(20))
+        _ = await gate.finishInstall(Self.packageA)
+        #expect(await waiting.value == true)
+    }
+
+    @Test func waiterTimesOutOnAStalledInstall() async throws {
+        let gate = makeGate()
+        #expect(await gate.requestInstall(Self.packageA))
+        #expect(await gate.requestCommit(Self.packageA))
+        #expect(await gate.awaitInstallFinish(Self.packageA, timeout: .milliseconds(30)) == false)
+        _ = await gate.finishInstall(Self.packageA)
+    }
+
+    @Test func noInstallMeansNoWait() async throws {
+        let gate = makeGate()
+        #expect(await gate.awaitInstallFinish(Self.packageA, timeout: .seconds(30)) == true)
+        #expect(await gate.installPhase(for: Self.packageA) == nil)
+    }
+
     @Test func waitingReasonsReportLastEvaluation() async throws {
         let gate = makeGate()
         runtime.state = .booting(.systemServer)

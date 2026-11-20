@@ -19,6 +19,10 @@ public enum UpdateTrigger: String, Codable, Sendable {
 public struct PackageUpdateState: Codable, Sendable, Equatable {
     /// When the last check ran.
     public var lastCheckAt: Date?
+    /// When a session's first frame was counted as the install's H4
+    /// (update-system.md §7.2): the session waited on a committing
+    /// install, then launched the new version itself.
+    public var postUpdateFirstFrameAt: Date?
     /// When the package is next due.
     public var nextCheckAt: Date?
     /// Checks that failed in a row; resets on success.

@@ -206,6 +206,13 @@ public actor EmbeddedUpdateService {
         return gate
     }
 
+    /// §7.2: a session's first frame counted as the install's H4 — the
+    /// session waited on the committing install, then launched the new
+    /// version itself.
+    func notePostUpdateFirstFrame(_ packageID: PackageID) async {
+        await stateStore.update(packageID) { $0.postUpdateFirstFrameAt = Date() }
+    }
+
     /// §7.2 trigger: runs the staged install the gate pump admitted.
     func resumeStagedInstall(
         _ packageID: PackageID,
@@ -1204,7 +1211,44 @@ extension RuntimeHost {
             displaySlotFree: { true })
         updateGate = gate
         startUpdateGatePump()
+        Task { await self.wireUpdateGateSessionHooks() }
         return gate
+    }
+
+    /// Attaches the §7.2 session hooks once both the gate and the session
+    /// service exist (either may be created first).
+    func wireUpdateGateSessionHooks() async {
+        guard let updateGate,
+            let service = headlessSessionService as? DaemonHeadlessSessionService
+        else {
+            return
+        }
+        await service.setUpdateHooks(
+            transactionWaiter: { [weak self] packageID in
+                await self?.awaitUpdateInstall(for: packageID, gate: updateGate)
+            },
+            firstFrameObserver: { [weak self] packageID in
+                guard let self, let package = PackageID(rawValue: packageID.rawValue) else { return }
+                await self.updateServiceInstance().notePostUpdateFirstFrame(package)
+            })
+    }
+
+    /// The §7.2 race from `openSession`: a pre-commit install is cancelled
+    /// back to `staged`; a committing install is awaited up to 30 s and the
+    /// session's first frame counts as H4 (runtime-daemon.md §7.1).
+    private func awaitUpdateInstall(for packageID: RuntimePackageID, gate: GentleUpdateGate) async {
+        guard let package = PackageID(rawValue: packageID.rawValue) else { return }
+        switch await gate.installPhase(for: package) {
+        case .preCommit?, nil:
+            // nil covers the race where the install just finished.
+            await gate.cancelInstall(package)
+        case .committing:
+            if await gate.awaitInstallFinish(package, timeout: .seconds(30)),
+                let service = headlessSessionService as? DaemonHeadlessSessionService
+            {
+                await service.markPostUpdateLaunch(packageID.rawValue)
+            }
+        }
     }
 
     /// Starts the §7.2 trigger pump once: runtime events plus the

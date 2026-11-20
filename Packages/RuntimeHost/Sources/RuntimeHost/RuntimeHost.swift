@@ -94,6 +94,10 @@ public actor RuntimeHost {
     private var activeRuntimeStarts = 0
     private var activePackageMutations = 0
     private var runtimeStartTask: Task<Result<Void, RuntimeHostError>, Never>?
+    /// Managed-package reinstalls still pending after the last userdata reset (§9.5).
+    private var pendingReinstallIDs: Set<RuntimePackageID> = []
+    /// The background reinstall reconcile started after a successful boot.
+    private var reconcileTask: Task<Void, Never>?
     private var isRuntimeStopping = false
     private var isRuntimeResetting = false
     private var isRuntimeRestarting = false
@@ -425,8 +429,26 @@ public actor RuntimeHost {
         bootStartedAt = nil
         bootProgressEstimator = nil
         recordSuccessfulBootIfPresent()
-        // Retry any managed packages still marked for reinstall (§9.5); failures stay marked.
-        await reconcileManagedReinstalls()
+        // Retry managed packages still marked for reinstall in the background (§9.5):
+        // a launch waits on this only when its own package is still pending. The set
+        // is read here, not in the task, so a launch racing the reconcile start sees it.
+        do {
+            let service = packageQueryService ?? packageQueryServiceInstance()
+            try await service.open()
+            pendingReinstallIDs = Set(try await service.pendingReinstalls())
+        } catch {
+            pendingReinstallIDs = []
+        }
+        guard !pendingReinstallIDs.isEmpty else { return }
+        reconcileTask = Task { [weak self] in
+            guard let self else { return }
+            await self.reconcileManagedReinstalls()
+            await self.clearReconcileTask()
+        }
+    }
+
+    private func clearReconcileTask() {
+        reconcileTask = nil
     }
 
     /// Stops Android but keeps the daemon available for a later request.
@@ -530,6 +552,11 @@ public actor RuntimeHost {
             try await startRuntime(reason: .automatic)
         } catch {
             throw Self.sessionWireError(for: error)
+        }
+        // A package still marked needsReinstall must be restored before it can open;
+        // an unaffected package's launch never waits on the background reconcile.
+        if pendingReinstallIDs.contains(request.packageID), let reconcileTask {
+            _ = await reconcileTask.value
         }
         try requirePackageLaunchAllowed(request.packageID)
         let service = try await makeHeadlessSessionService()
@@ -2806,6 +2833,11 @@ public actor RuntimeHost {
         if let runtimeStartTask {
             _ = await runtimeStartTask.value
         }
+        // A background reinstall must finish before the disks are erased: an install
+        // landing after markForUserdataReset would flip a package back to `.installed`.
+        if let reconcileTask {
+            _ = await reconcileTask.value
+        }
         await waitForPackageMutations()
         await supervisor?.stop(reason: .reset)
         await packageQueryService?.detachRuntime()
@@ -2826,6 +2858,7 @@ public actor RuntimeHost {
         let service = packageQueryServiceInstance()
         try await service.open()
         let marked = try await service.markForUserdataReset()
+        pendingReinstallIDs = Set(marked)
         let bootSupervisor = try supervisorInstance()
         try await bootSupervisor.ensureReady(.user)
         // Reinstall the marked packages from their retained artifacts under the store's
@@ -2846,6 +2879,7 @@ public actor RuntimeHost {
                     packageID: packageID,
                     service: service
                 )
+                pendingReinstallIDs.remove(packageID)
             } catch {
                 logger?.warning(
                     "Reinstall after Reset Android failed for \(packageID.rawValue, .public)"
@@ -2863,11 +2897,13 @@ public actor RuntimeHost {
         do {
             try await service.open()
             let pending = try await service.pendingReinstalls()
+            pendingReinstallIDs = Set(pending)
             guard !pending.isEmpty else { return }
             try await attachPackageQueriesIfRuntimeIsReady(to: service)
             for packageID in pending {
                 do {
                     try await reinstallManagedPackage(packageID: packageID, service: service)
+                    pendingReinstallIDs.remove(packageID)
                 } catch {
                     logger?.warning(
                         "Reinstall reconcile failed for \(packageID.rawValue, .public)"

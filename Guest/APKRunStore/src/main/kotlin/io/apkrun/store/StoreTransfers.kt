@@ -6,6 +6,7 @@ import io.apkrun.guest.protocol.v1.BulkBegin
 import io.apkrun.guest.protocol.v1.BulkEnd
 import io.apkrun.guest.protocol.v1.BulkFrame
 import io.apkrun.guest.protocol.v1.BulkKind
+import io.apkrun.guest.runtime.AgentLog
 import java.security.MessageDigest
 
 /**
@@ -32,6 +33,18 @@ class StoreTransfers {
             if (this.writer === writer) {
                 this.writer = null
             }
+        }
+    }
+
+    /**
+     * Records a `BulkAck` that arrived on the artifact channel. Acks are the receiver's verdict on
+     * a send we already finished; a rejection is logged, and the install handler must never see
+     * them (it would answer REJECTED to an ack).
+     */
+    fun receiveAck(frame: BulkFrame) {
+        val ack = frame.ack
+        if (ack.status != io.apkrun.guest.protocol.v1.BulkAckStatus.BULK_ACK_STATUS_OK) {
+            AgentLog.warning("bulk transfer ${frame.transferId} rejected: ${ack.status.name}")
         }
     }
 

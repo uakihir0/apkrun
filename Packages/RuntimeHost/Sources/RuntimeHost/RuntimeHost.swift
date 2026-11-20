@@ -1577,6 +1577,7 @@ public actor RuntimeHost {
         }
 
         var iconDigest: String?
+        var customIconPNG: Data?
         let iconSource: WrapperIconSource
         switch request.icon {
         case .custom:
@@ -1585,13 +1586,15 @@ public actor RuntimeHost {
                 throw Self.wrapperWireError(for: .customIconInvalid(.unreadable))
             }
             // A custom icon is validated, composed, and never tracked by
-            // iconDigest (wrapper.md §8.2 `custom`, §8.5).
+            // iconDigest (wrapper.md §8.2 `custom`, §8.5). Its PNG master is
+            // kept so `Wrappers/icons/<bundleId>.png` can reuse it (§4.2).
             let customURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("apkrun-custom-icon-\(UUID().uuidString)")
             defer { try? FileManager.default.removeItem(at: customURL) }
             do {
                 try data.write(to: customURL)
                 iconSource = .rendered(try IconComposer.customIconData(at: customURL))
+                customIconPNG = try? IconComposer.customIconPNG(at: customURL)
             } catch let failure as WrapperFailure {
                 throw Self.wrapperWireError(for: failure)
             } catch {
@@ -1663,6 +1666,20 @@ public actor RuntimeHost {
 
         if iconDigest != nil {
             try? await registry.setIconDigest(bundleID: generated.bundleID, digest: iconDigest)
+        }
+        if let customIconPNG {
+            let iconFile = "\(generated.bundleID).png"
+            let iconURL = paths.wrapperIconsDirectory.appendingPathComponent(iconFile)
+            do {
+                try FileManager.default.createDirectory(
+                    at: paths.wrapperIconsDirectory, withIntermediateDirectories: true)
+                try customIconPNG.write(to: iconURL)
+                try await registry.setCustomIconFile(
+                    bundleID: generated.bundleID, fileName: iconFile)
+            } catch {
+                // The icon is already in the bundle; only refresh bookkeeping
+                // is lost when the source copy cannot be stored.
+            }
         }
         guard let entry = await registry.entry(bundleID: generated.bundleID) else {
             throw .runtime("internal", message: "APKRun couldn't register the Mac app.")

@@ -102,7 +102,13 @@ class StoreConnection(
                         "the body is not allowed on the artifact channel"
                     )
                 }
-                daemon.install.receive(envelope.bulk) { reply -> writer.send { it.setBulk(reply) } }
+                if (envelope.bulk.hasAck()) {
+                    daemon.transfers.receiveAck(envelope.bulk)
+                } else {
+                    daemon.install.receive(envelope.bulk) { reply ->
+                        writer.send { it.setBulk(reply) }
+                    }
+                }
             }
         } finally {
             daemon.transfers.detach(writer)

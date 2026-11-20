@@ -21,7 +21,7 @@ public enum IconsetLayout {
         Slot(fileName: "icon_16x16@2x.png", pixels: 32, icnsType: "ic05"),
         Slot(fileName: "icon_32x32@2x.png", pixels: 64, icnsType: "ic11"),
         Slot(fileName: "icon_128x128.png", pixels: 128, icnsType: "ic07"),
-        Slot(fileName: "icon_128x128@2x.png", pixels: 256, icnsType: "ic12"),
+        Slot(fileName: "icon_128x128@2x.png", pixels: 256, icnsType: "ic13"),
         Slot(fileName: "icon_256x256@2x.png", pixels: 512, icnsType: "ic14"),
         Slot(fileName: "icon_512x512@2x.png", pixels: 1024, icnsType: "ic10"),
     ]

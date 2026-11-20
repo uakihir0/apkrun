@@ -127,6 +127,25 @@ public enum IconComposer {
         if data.prefix(4) == Data("icns".utf8) {
             return data
         }
+        // §8.2 `custom`: PNG/JPEG/HEIC are composed into an `.icns`, the
+        // same finished format the bundle's AppIcon.icns expects.
+        let master = try customIconMaster(at: url)
+        return try IconsetWriter.icnsData(from: master)
+    }
+
+    /// The 1024 px PNG master of a custom icon, stored as the
+    /// `Wrappers/icons/<bundleId>.png` source a refresh can reuse
+    /// (wrapper.md §4.2).
+    public static func customIconPNG(at url: URL) throws(WrapperFailure) -> Data {
+        let master = try customIconMaster(at: url)
+        return try pngData(master)
+    }
+
+    /// Validates a custom icon file and returns its composed 1024 px master.
+    static func customIconMaster(at url: URL) throws(WrapperFailure) -> CGImage {
+        guard let data = try? Data(contentsOf: url) else {
+            throw .customIconInvalid(.unreadable)
+        }
         guard
             let source = CGImageSourceCreateWithData(data as CFData, nil),
             let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
@@ -139,8 +158,7 @@ public enum IconComposer {
         guard image.width >= 512 else {
             throw .customIconInvalid(.tooSmall)
         }
-        let master = try composeLegacy(image)
-        return try pngData(master)
+        return try composeLegacy(image)
     }
 
     /// Encodes a master as PNG.
@@ -201,9 +219,12 @@ public enum IconComposer {
                 width: maxX - minX + 1, height: maxY - minY + 1))
     }
 
-    /// Whether all four corners at 2 % insets have alpha ≥ 250.
+    /// Whether all four corners at 2 % insets have alpha ≥ 250. An image
+    /// too small for distinct corner samples counts as not opaque.
     static func cornersAreOpaque(_ image: CGImage) -> Bool {
-        guard let pixels = rgbaPixels(image) else { return false }
+        guard image.width >= 4, image.height >= 4,
+            let pixels = rgbaPixels(image)
+        else { return false }
         let insetX = max(1, image.width / 50)
         let insetY = max(1, image.height / 50)
         let corners = [

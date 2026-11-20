@@ -406,6 +406,15 @@ public actor WrapperRegistry {
         try save()
     }
 
+    /// Records the custom icon file name kept in `Wrappers/icons/`
+    /// (wrapper.md §4.2); `nil` restores the Android icon choice.
+    public func setCustomIconFile(bundleID: String, fileName: String?) throws {
+        guard var entry = entry(bundleID: bundleID) else { return }
+        entry.customization.iconFile = fileName
+        upsert(entry)
+        try save()
+    }
+
     /// Records the last full validation time (wrapper-json.md §4.2).
     public func markValidated(bundleID: String, at date: Date = Date()) throws {
         guard var entry = entry(bundleID: bundleID) else { return }

@@ -121,6 +121,12 @@ public actor RuntimeHost {
     /// §7.2 trigger pumps: runtime events and the 10-minute staged+ready tick.
     var updateGatePumpTask: Task<Void, Never>?
     var updateGateTimerTask: Task<Void, Never>?
+    /// §7.1 quiet-period re-evaluation (GU4), rearmed on every drain.
+    var updateGateQuietTask: Task<Void, Never>?
+    /// Internal subscribers of the single `supervisor.events` consumer for
+    /// §7.2 update triggers; `consumeSupervisorState` feeds them so the
+    /// update path never races the host's own event loop.
+    var updateEventContinuations: [UUID: AsyncStream<UpdateRuntimeEvent>.Continuation] = [:]
     /// The idle controller the `storeOperation` assertion holds (#75 wires
     /// its suspend/stop deadlines).
     let updateIdleController = IdleController()
@@ -2028,6 +2034,9 @@ public actor RuntimeHost {
         runtimeStateEventRevision = snapshot.revision
         synchronizeRuntimeStateSnapshot(snapshot)
         eventHub.publishRuntimeChange(.stateChanged(Self.wireRuntimeState(for: snapshot.state)))
+        for continuation in updateEventContinuations.values {
+            continuation.yield(.stateChanged(Self.wireRuntimeState(for: snapshot.state)))
+        }
         if case .booting = snapshot.state {
             publishBootProgress(generation: bootProgressGeneration)
         }

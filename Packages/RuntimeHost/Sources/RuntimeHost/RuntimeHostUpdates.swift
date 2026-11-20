@@ -943,7 +943,7 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
     private let endAll: @Sendable (PackageID) async -> Void
     private let reopenPackage: @Sendable (PackageID) async throws -> Void
     private let ready: @Sendable (UpdateStartReason) async throws -> Void
-    private let assertOperation: @Sendable () async -> UpdateActivityAssertion
+    private let assertOperation: @Sendable () async throws -> UpdateActivityAssertion
 
     init(
         stateOf: @escaping @Sendable () async -> WireRuntimeState,
@@ -954,7 +954,7 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         endAll: @escaping @Sendable (PackageID) async -> Void,
         reopenPackage: @escaping @Sendable (PackageID) async throws -> Void,
         ready: @escaping @Sendable (UpdateStartReason) async throws -> Void,
-        assertOperation: @escaping @Sendable () async -> UpdateActivityAssertion
+        assertOperation: @escaping @Sendable () async throws -> UpdateActivityAssertion
     ) {
         self.stateOf = stateOf
         self.inUse = inUse
@@ -999,8 +999,8 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         try await ready(reason)
     }
 
-    func assertStoreOperation() async -> UpdateActivityAssertion {
-        await assertOperation()
+    func assertStoreOperation() async throws -> UpdateActivityAssertion {
+        try await assertOperation()
     }
 }
 
@@ -1122,18 +1122,15 @@ extension RuntimeHost {
             },
             events: { [weak self] in
                 AsyncStream { continuation in
+                    let streamID = UUID()
                     let pump = Task { [weak self] in
                         guard let self else { return }
-                        if let supervisor = await self.supervisor {
-                            Task {
-                                for await event in supervisor.events {
-                                    guard case .state(let snapshot) = event else { continue }
-                                    continuation.yield(
-                                        .stateChanged(
-                                            Self.wireRuntimeState(for: snapshot.state)))
-                                }
-                            }
-                        }
+                        // State changes ride the host's single
+                        // `supervisor.events` consumer: a second iteration
+                        // of the same stream would split the events and
+                        // starve the host's own monitoring.
+                        await self.registerUpdateEventContinuation(
+                            streamID, continuation)
                         // The session service appears when the runtime is
                         // ready; retry until it does or the stream ends.
                         while !Task.isCancelled {
@@ -1157,7 +1154,10 @@ extension RuntimeHost {
                             try? await Task.sleep(for: .seconds(3))
                         }
                     }
-                    continuation.onTermination = { _ in pump.cancel() }
+                    continuation.onTermination = { [weak self] _ in
+                        pump.cancel()
+                        Task { await self?.removeUpdateEventContinuation(streamID) }
+                    }
                 }
             },
             endAll: { [weak self] packageID in
@@ -1200,8 +1200,15 @@ extension RuntimeHost {
             },
             assertOperation: { [weak self] in
                 guard let self else { return UpdateActivityAssertion() }
+                // The host's package-mutation guard makes a stop, restart,
+                // or reset wait for a queued install resuming without its
+                // original client request.
+                try await self.beginPackageMutation()
                 let inner = await self.updateIdleController.assertActivity(.storeOperation)
-                return UpdateActivityAssertion { inner.release() }
+                return UpdateActivityAssertion {
+                    inner.release()
+                    Task { await self.finishPackageMutation() }
+                }
             })
     }
 
@@ -1262,6 +1269,20 @@ extension RuntimeHost {
         }
     }
 
+    /// Adds or removes an internal §7.2 state subscriber; the host's
+    /// single `supervisor.events` consumer feeds them.
+    func registerUpdateEventContinuation(
+        _ id: UUID,
+        _ continuation: AsyncStream<UpdateRuntimeEvent>.Continuation
+    ) {
+        updateEventContinuations[id] = continuation
+    }
+
+    /// Drops an internal §7.2 state subscriber.
+    func removeUpdateEventContinuation(_ id: UUID) {
+        updateEventContinuations.removeValue(forKey: id)
+    }
+
     /// Starts the §7.2 trigger pump once: runtime events plus the
     /// 10-minute staged+ready tick drain the queue.
     private func startUpdateGatePump() {
@@ -1281,18 +1302,36 @@ extension RuntimeHost {
         }
     }
 
-    /// Admits the next queued install and runs it; a package that lost its
-    /// staged row frees the gate's slot.
+    /// Admits each queued install and runs it; a package that lost its
+    /// staged row frees the gate's slot. After the drain, the GU4 quiet
+    /// timer re-arms for the earliest blocked package's quiet-period end.
     private func drainUpdateGate() async {
         let gate = updateGateInstance()
         // §7.4: the one-time "ready to install" notice for >7-day waits
         // rides on every trigger and the 10-minute tick.
         await updateServiceInstance().notifyOverdueStagedUpdates()
-        guard let packageID = await gate.nextReadyPackage() else { return }
-        let outcome = await updateServiceInstance().resumeStagedInstall(
-            packageID, runtime: updateRuntimeAccess(), gate: gate)
-        if outcome == nil {
-            await gate.finishInstall(packageID)
+        var next = await gate.nextReadyPackage()
+        while let packageID = next {
+            let outcome = await updateServiceInstance().resumeStagedInstall(
+                packageID, runtime: updateRuntimeAccess(), gate: gate)
+            guard outcome == nil else {
+                // A resumed install frees and re-drains the queue itself.
+                next = nil
+                continue
+            }
+            // Free the leaked admission and try the next queued package.
+            next = await gate.finishInstall(packageID)
+        }
+        // GU4: re-evaluate exactly when the earliest quiet period ends so
+        // an install blocked on `sessionEndedRecently` runs within its
+        // 30-second window instead of waiting for the 10-minute tick.
+        updateGateQuietTask?.cancel()
+        if let instant = await gate.nextQuietReevaluation() {
+            updateGateQuietTask = Task { [weak self] in
+                try? await Task.sleep(until: instant, clock: .continuous)
+                guard !Task.isCancelled else { return }
+                await self?.drainUpdateGate()
+            }
         }
     }
 

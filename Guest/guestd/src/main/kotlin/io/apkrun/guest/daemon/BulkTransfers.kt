@@ -1,5 +1,8 @@
 package io.apkrun.guest.daemon
 
+import io.apkrun.guest.protocol.v1.BulkBegin
+import io.apkrun.guest.protocol.v1.BulkEnd
+import io.apkrun.guest.protocol.v1.BulkFrame
 import io.apkrun.guest.protocol.v1.BulkKind
 import java.security.MessageDigest
 
@@ -41,14 +44,18 @@ class BulkTransfers {
             val transferId = nextTransferId
             nextTransferId += 2
             target.send { envelope ->
-                envelope.bulkBuilder
-                    .setTransferId(transferId)
-                    .beginBuilder
-                    .setKind(BulkKind.BULK_KIND_DIAGNOSTICS_ITEM)
-                    .setName(name)
-                    .setMimeType(mimeType)
-                    .setSize(payload.size.toLong())
-                    .setSha256(com.google.protobuf.ByteString.copyFrom(digest))
+                envelope.bulk =
+                    BulkFrame.newBuilder()
+                        .setTransferId(transferId)
+                        .setBegin(
+                            BulkBegin.newBuilder()
+                                .setKind(BulkKind.BULK_KIND_DIAGNOSTICS_ITEM)
+                                .setName(name)
+                                .setMimeType(mimeType)
+                                .setSize(payload.size.toLong())
+                                .setSha256(com.google.protobuf.ByteString.copyFrom(digest))
+                        )
+                        .build()
             }
             var offset = 0
             while (offset < payload.size) {
@@ -56,16 +63,22 @@ class BulkTransfers {
                 val chunk = payload.copyOfRange(offset, end)
                 offset = end
                 target.send { envelope ->
-                    envelope.bulkBuilder
-                        .setTransferId(transferId)
-                        .setChunk(com.google.protobuf.ByteString.copyFrom(chunk))
+                    envelope.bulk =
+                        BulkFrame.newBuilder()
+                            .setTransferId(transferId)
+                            .setChunk(com.google.protobuf.ByteString.copyFrom(chunk))
+                            .build()
                 }
             }
             target.send { envelope ->
-                envelope.bulkBuilder
-                    .setTransferId(transferId)
-                    .endBuilder
-                    .setSha256(com.google.protobuf.ByteString.copyFrom(digest))
+                envelope.bulk =
+                    BulkFrame.newBuilder()
+                        .setTransferId(transferId)
+                        .setEnd(
+                            BulkEnd.newBuilder()
+                                .setSha256(com.google.protobuf.ByteString.copyFrom(digest))
+                        )
+                        .build()
             }
             return transferId
         }

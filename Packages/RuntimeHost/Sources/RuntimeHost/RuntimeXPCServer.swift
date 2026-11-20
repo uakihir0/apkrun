@@ -2457,7 +2457,8 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 request,
                 clientKind: clientKind,
                 operation: .pushClipboard,
-                as: RuntimePushClipboardControlRequest.self
+                as: RuntimePushClipboardControlRequest.self,
+                byteLimit: Self.maximumClipboardRequestSize
             ) {
                 response.send(
                     Self.encode(
@@ -2670,6 +2671,11 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
 
     private static let maximumRequestSize = 1024 * 1024
 
+    /// The bound of a clipboard request: 1 MiB text + 1 MiB HTML + a 16 MiB
+    /// PNG (which JSON-encodes to base64, ~1.34x), plus envelope overhead
+    /// (runtime-api.md §11.4).
+    private static let maximumClipboardRequestSize = 24 * 1024 * 1024
+
     private static let malformedWireError = RuntimeWireError.runtime(
         "malformedRequest",
         message: safeMessage(for: "runtime.malformedRequest")
@@ -2690,9 +2696,10 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         _ data: Data,
         clientKind: RuntimeClientKind,
         operation: RuntimeControlOperation,
-        as requestType: Request.Type
+        as requestType: Request.Type,
+        byteLimit: Int = maximumRequestSize
     ) -> RuntimeControlError? {
-        guard data.count <= maximumRequestSize,
+        guard data.count <= byteLimit,
             let request = try? JSONDecoder().decode(requestType, from: data)
         else {
             return RuntimeControlError(

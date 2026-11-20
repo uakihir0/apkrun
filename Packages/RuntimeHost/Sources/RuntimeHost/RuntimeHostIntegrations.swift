@@ -47,6 +47,11 @@ final class IntegrationSettingsCache: @unchecked Sendable {
     func supports(_ capability: String) -> Bool {
         lock.withLock { !capabilitiesKnown || capabilities.contains(capability) }
     }
+
+    /// Whether the capability set has been read at least once this run.
+    var capabilitiesAreKnown: Bool {
+        lock.withLock { capabilitiesKnown }
+    }
 }
 
 /// The channel that sends host clips to the Guest Agent (desktop-integration.md §3.3).
@@ -162,6 +167,16 @@ extension RuntimeHost {
 
     /// One `clipboard_changed` guest event for the coordinator.
     func clipboardFromGuest(_ clip: GPClipData) async {
+        // The §2.3 policy reads the cache, so refresh it first: the key
+        // package, plus the source package of a foreign clip (§4.3).
+        if let key = await integrationCoordinator().currentKeySession {
+            await refreshIntegrationSettings(for: key.packageID)
+            if !clip.sourcePackage.isEmpty, clip.sourcePackage != key.packageID.rawValue,
+                let foreign = RuntimePackageID(rawValue: clip.sourcePackage)
+            {
+                await refreshIntegrationSettings(for: foreign)
+            }
+        }
         await integrationCoordinator().guestChanged(clip)
     }
 
@@ -259,6 +274,9 @@ extension RuntimeHost {
     /// The image support of a kind's capability.
     private func supportState(kind: IntegrationKind, capability: String?) -> IntegrationSupport {
         guard let capability else { return .unknown }
+        // `supports` treats an unread capability set as supported so a stopped
+        // image does not block the policy; the status answer reports unknown.
+        guard integrationSettings.capabilitiesAreKnown else { return .unknown }
         return integrationSettings.supports(capability) ? .supported : .unsupported
     }
 

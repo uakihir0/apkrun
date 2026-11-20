@@ -1117,6 +1117,8 @@ extension RuntimeLaunchControlRequest: VersionedControlRequest {}
 extension RuntimeTerminateControlRequest: VersionedControlRequest {}
 extension RuntimeImportPackageControlRequest: VersionedControlRequest {}
 extension RuntimeInstallImportedControlRequest: VersionedControlRequest {}
+extension RuntimeDiscardImportControlRequest: VersionedControlRequest {}
+extension RuntimeAdoptPackageControlRequest: VersionedControlRequest {}
 extension RuntimeBeginInstallImportedControlRequest: VersionedControlRequest {}
 extension RuntimeBeginUninstallPackageControlRequest: VersionedControlRequest {}
 extension RuntimeCancelOperationControlRequest: VersionedControlRequest {}
@@ -1151,6 +1153,8 @@ enum RuntimeControlOperation {
     case terminate
     case importPackage
     case installImported
+    case discardImport
+    case adoptPackage
     case beginInstallImported
     case beginUninstallPackage
     case cancelOperation
@@ -1182,7 +1186,7 @@ enum RuntimeControlOperation {
             }
         case .startRuntime, .stopRuntime, .restartRuntime, .resetRuntime,
             .setup, .resetAndroid,
-            .importPackage, .installImported, .beginInstallImported,
+            .importPackage, .installImported, .beginInstallImported, .discardImport, .adoptPackage,
             .beginUninstallPackage,
             .cancelOperation, .listOperations, .operationStatus:
             switch clientKind {
@@ -1672,6 +1676,76 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeInstallImportedControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func discardImport(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeDiscardImportControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .discardImport,
+                as: RuntimeDiscardImportControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeDiscardImportControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimeDiscardImportControlRequest.self, from: request)
+            else {
+                response.send(Self.encode(RuntimeDiscardImportControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try await host.discardImport(decoded.request)
+                response.send(Self.encode(RuntimeDiscardImportControlReply()))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeDiscardImportControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func adoptPackage(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeAdoptPackageControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .adoptPackage,
+                as: RuntimeAdoptPackageControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeAdoptPackageControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimeAdoptPackageControlRequest.self, from: request)
+            else {
+                response.send(Self.encode(RuntimeAdoptPackageControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let summary = try await host.adoptPackage(decoded.request)
+                response.send(Self.encode(RuntimeAdoptPackageControlReply(summary: summary)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeAdoptPackageControlReply(error: wireError)))
             }
         }
     }

@@ -18,6 +18,52 @@ public struct PackageImportPreview: Codable, Sendable, Equatable {
     public let artifactSet: ArtifactSet
     /// The original file names, without parent paths.
     public let sourceFileNames: [String]
+    /// Split names excluded by ABI and density selection (§4.4), empty for plain APK imports.
+    public let excludedSplits: [String]
+    /// Non-blocking observations of the intrinsic checks (§4.6).
+    public let warnings: [ImportWarning]
+
+    /// Creates an import preview.
+    public init(
+        ticket: UUID,
+        packageID: PackageID,
+        displayName: String,
+        versionCode: VersionCode,
+        versionName: String?,
+        artifactSet: ArtifactSet,
+        sourceFileNames: [String],
+        excludedSplits: [String] = [],
+        warnings: [ImportWarning] = []
+    ) {
+        self.ticket = ticket
+        self.packageID = packageID
+        self.displayName = displayName
+        self.versionCode = versionCode
+        self.versionName = versionName
+        self.artifactSet = artifactSet
+        self.sourceFileNames = sourceFileNames
+        self.excludedSplits = excludedSplits
+        self.warnings = warnings
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ticket, packageID, displayName, versionCode, versionName
+        case artifactSet, sourceFileNames, excludedSplits, warnings
+    }
+
+    /// Decodes an import preview, defaulting fields absent in older manifests.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ticket = try container.decode(UUID.self, forKey: .ticket)
+        packageID = try container.decode(PackageID.self, forKey: .packageID)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        versionCode = try container.decode(VersionCode.self, forKey: .versionCode)
+        versionName = try container.decodeIfPresent(String.self, forKey: .versionName)
+        artifactSet = try container.decode(ArtifactSet.self, forKey: .artifactSet)
+        sourceFileNames = try container.decode([String].self, forKey: .sourceFileNames)
+        excludedSplits = try container.decodeIfPresent([String].self, forKey: .excludedSplits) ?? []
+        warnings = try container.decodeIfPresent([ImportWarning].self, forKey: .warnings) ?? []
+    }
 }
 
 /// Failures detected by the package store itself.
@@ -34,6 +80,7 @@ public enum PackageStoreFailure: Error, Equatable, Sendable {
     case duplicateSplitName
     case unsafeSplitName
     case packageAlreadyInstalled
+    case packageAlreadyManaged
     case packageNotFound
     case uninstallDataUnverified(PackageID)
     case operationInProgress
@@ -114,6 +161,140 @@ public actor PackageStore {
     public typealias BeforeGuestInstall = @Sendable () async throws -> Void
     /// Runs under the package mutation lock after validating the managed package.
     public typealias BeforeForget = @Sendable () async throws -> Void
+
+    /// The file set the import stage verified, with the metadata the §4 checks produced.
+    public struct VerifiedImport: Sendable {
+        /// The APK files to keep, in store order (base first), inside the scratch directory.
+        public var files: [URL]
+        /// One facts record per file in `files`.
+        public var facts: [APKFacts]
+        /// Certificate digests of the verified signers (§4.5).
+        public var signerDigests: [SHA256Digest]
+        /// Signing lineage digests when a rotation proof was present.
+        public var lineage: [SHA256Digest]
+        /// Non-blocking observations of the intrinsic checks (§4.6).
+        public var warnings: [ImportWarning]
+        /// Split names excluded by ABI and density selection (§4.4).
+        public var excludedSplits: [String]
+
+        /// Creates a verified import result.
+        public init(
+            files: [URL],
+            facts: [APKFacts],
+            signerDigests: [SHA256Digest],
+            lineage: [SHA256Digest],
+            warnings: [ImportWarning],
+            excludedSplits: [String]
+        ) {
+            self.files = files
+            self.facts = facts
+            self.signerDigests = signerDigests
+            self.lineage = lineage
+            self.warnings = warnings
+            self.excludedSplits = excludedSplits
+        }
+    }
+
+    /// Host inspection stage of `importPackage` (package-store.md §4): takes the privately staged
+    /// copies and a scratch directory, returns the verified APK set or refuses it. Injected like
+    /// `inspector` so store-mechanics tests can keep stubbed inputs.
+    public typealias ImportVerifier =
+        @Sendable (_ staged: [URL], _ scratch: URL, _ inspect: Inspector) async throws -> VerifiedImport
+
+    /// The §4 pipeline: container detection and expansion, signature verification, the intrinsic
+    /// checks I1–I12, and ABI/density split selection.
+    public static let strictImportVerifier: ImportVerifier = { staged, scratch, inspect in
+        let reader = ContainerReader()
+        var stagedURLs: [URL] = []
+        var expandedFromContainer = false
+        for (index, stagedFile) in staged.enumerated() {
+            let container = try reader.detect(at: stagedFile)
+            switch container {
+            case .apk:
+                stagedURLs.append(stagedFile)
+            default:
+                expandedFromContainer = true
+                let target = scratch.appendingPathComponent("extracted-\(index)", isDirectory: true)
+                stagedURLs.append(contentsOf: try reader.extract(container, from: stagedFile, into: target))
+            }
+        }
+        guard stagedURLs.count <= ContainerReader.maxAPKs else {
+            throw StoreFailure.archiveLimitExceeded(.apkCount)
+        }
+
+        var facts: [APKFacts] = []
+        for stagedURL in stagedURLs {
+            facts.append(try await inspect(stagedURL))
+        }
+
+        // Host signature verification and the intrinsic checks I1–I12 (§4.5, §4.6).
+        let signatureVerifier = APKSignatureVerifier()
+        var inspected: [InspectedAPK] = []
+        for (stagedURL, itemFacts) in zip(stagedURLs, facts) {
+            let signature = try signatureVerifier.verify(apk: stagedURL, targetSDK: itemFacts.targetSDK)
+            let zipFacts = ArtifactVerifier.zipFacts(of: stagedURL)
+            inspected.append(
+                InspectedAPK(
+                    file: ArtifactFile(
+                        name: stagedURL.lastPathComponent,
+                        splitName: itemFacts.splitName,
+                        size: 0,
+                        sha256: SHA256Digest(data: Data())
+                    ),
+                    facts: itemFacts,
+                    signature: signature,
+                    libraryABIs: zipFacts.libraryABIs,
+                    resourcesArscOK: zipFacts.resourcesArscOK,
+                    permissions: itemFacts.permissions,
+                    requiredFeatures: itemFacts.requiredFeatures,
+                    debuggable: itemFacts.debuggable
+                )
+            )
+        }
+        var verified = try ArtifactVerifier().verify(set: inspected)
+        var excludedSplits: [String] = []
+        if expandedFromContainer, stagedURLs.count > 1 {
+            let selection = try SplitSelector().select(
+                inspected.map {
+                    SplitCandidate(name: $0.file.name, splitName: $0.facts.splitName, attributes: $0.attributes)
+                }
+            )
+            excludedSplits = selection.excludedSplits
+            let keep = Set(selection.included)
+            var pairs = Array(zip(stagedURLs, facts))
+            pairs = pairs.filter { keep.contains($0.0.lastPathComponent) }
+            stagedURLs = pairs.map(\.0)
+            facts = pairs.map(\.1)
+            inspected = inspected.filter { keep.contains($0.file.name) }
+            verified = try ArtifactVerifier().verify(set: inspected)
+        }
+
+        return VerifiedImport(
+            files: stagedURLs,
+            facts: facts,
+            signerDigests: verified.signerDigests,
+            lineage: verified.lineage,
+            warnings: verified.warnings,
+            excludedSplits: excludedSplits
+        )
+    }
+
+    /// The pre-§4 behavior: inspect every staged file without container expansion, signature
+    /// verification, or the intrinsic checks. For tests that stub the inspector.
+    public static let legacyImportVerifier: ImportVerifier = { staged, _, inspect in
+        var facts: [APKFacts] = []
+        for stagedURL in staged {
+            facts.append(try await inspect(stagedURL))
+        }
+        return VerifiedImport(
+            files: staged,
+            facts: facts,
+            signerDigests: [],
+            lineage: [],
+            warnings: [],
+            excludedSplits: []
+        )
+    }
 
     private struct TicketManifest: Codable, Sendable {
         var preview: PackageImportPreview
@@ -201,6 +382,7 @@ public actor PackageStore {
 
     private let packagesDirectory: URL
     private let inspector: Inspector
+    private let importVerifier: ImportVerifier
     private let runtimeAccess: (any StoreRuntimeAccess)?
     private let faultInjector: FaultInjector
     private let fileManager: FileManager
@@ -234,11 +416,13 @@ public actor PackageStore {
         fileManager: FileManager = .default,
         clock: @escaping @Sendable () -> Date = { Date() },
         hostFreeSpace: (@Sendable (URL) -> Int64)? = nil,
-        faultInjector: FaultInjector? = nil
+        faultInjector: FaultInjector? = nil,
+        importVerifier: @escaping ImportVerifier = PackageStore.strictImportVerifier
     ) {
         self.packagesDirectory = packagesDirectory
         self.runtimeAccess = runtimeAccess
         self.inspector = inspector
+        self.importVerifier = importVerifier
         self.fileManager = fileManager
         self.clock = clock
         self.hostFreeSpace = hostFreeSpace ?? { Self.availableHostSpace($0) }
@@ -354,10 +538,11 @@ public actor PackageStore {
             sourceNames.append(safeName)
         }
 
-        var facts: [APKFacts] = []
-        for stagedURL in stagedURLs {
-            facts.append(try await inspector(stagedURL))
-        }
+        // §4 host inspection: containers expand, signatures and the intrinsic checks I1–I12 run,
+        // splits are selected. Injectable so store-mechanics tests can keep stubbed inputs.
+        let verifiedImport = try await importVerifier(stagedURLs, scratch, inspector)
+        stagedURLs = verifiedImport.files
+        let facts = verifiedImport.facts
         let baseFacts = try Self.validateSplitFacts(facts)
         let mutationLock = try await acquireLock(at: mutationLockURL)
         defer { _ = Darwin.close(mutationLock) }
@@ -439,18 +624,19 @@ public actor PackageStore {
             versionName: baseFacts.versionName,
             files: artifactFiles,
             setDigest: digest,
-            signerDigests: [],
-            lineage: [],
+            signerDigests: verifiedImport.signerDigests,
+            lineage: verifiedImport.lineage,
             inspection: InspectionProvenance(
                 aapt2Version: "unknown",
-                verifierVersion: "apk-inspector-v0",
+                verifierVersion: "host-inspection-v1",
                 inspectedAt: clock(),
                 hostChecksPerformed: [
                     "packageMetadata",
                     "versionCode",
                     "splitSet",
                     "sha256",
-                    "signature:notPerformed",
+                    "signature:verified",
+                    "intrinsicChecks",
                 ]
             )
         )
@@ -461,7 +647,9 @@ public actor PackageStore {
             versionCode: baseFacts.versionCode,
             versionName: baseFacts.versionName,
             artifactSet: artifactSet,
-            sourceFileNames: sourceNames
+            sourceFileNames: sourceNames,
+            excludedSplits: verifiedImport.excludedSplits,
+            warnings: verifiedImport.warnings
         )
         let manifest = TicketManifest(
             preview: preview,
@@ -744,6 +932,70 @@ public actor PackageStore {
             try injectFault(kind: "forget", step: "uninstallOutcomesResolved")
         }
         try finishForget(transaction: transaction, packageID: packageID, directory: directory, injectFaults: true)
+    }
+
+    /// Adopts a package Android has but APKRun does not manage (package-store.md §9.3).
+    ///
+    /// The record gets `installer: external`, `updateAuthority: external`, no artifact, and
+    /// `source: adopted`; APKRun never updates the package. Adoption queries Android for the
+    /// live package facts, so the runtime must be attached.
+    public func adoptPackage(packageID: PackageID) async throws -> PackageRecord {
+        try requireWritable()
+        guard let runtimeAccess else { throw PackageStoreFailure.runtimeUnavailable }
+        guard operationsInProgress.insert(packageID).inserted else {
+            throw PackageStoreFailure.operationInProgress
+        }
+        defer { operationsInProgress.remove(packageID) }
+
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        if let detail = unreadableRecords[packageID] {
+            throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
+        }
+        guard records[packageID] == nil else { throw PackageStoreFailure.packageAlreadyManaged }
+        guard let info = try await queryPackage(packageID, through: runtimeAccess) else {
+            throw PackageStoreFailure.packageNotFound
+        }
+
+        let now = clock()
+        let record = PackageRecord(
+            packageId: packageID,
+            displayName: info.displayName,
+            versionCode: info.versionCode,
+            versionName: info.versionName,
+            signingCertificates: info.signingDigests,
+            installer: .external,
+            updateAuthority: .external,
+            state: .installed,
+            artifacts: ArtifactSlots(currentMatchesAndroid: false),
+            android: AndroidPackageFacts(
+                installerOfRecord: info.installerPackage,
+                firstInstallTime: info.firstInstallTime,
+                lastUpdateTime: info.lastUpdateTime,
+                minSdk: info.minSDK,
+                targetSdk: info.targetSDK,
+                nativeAbis: [],
+                userdataGeneration: await runtimeAccess.userdataGeneration() ?? UUID(),
+                lastSyncedAt: now
+            ),
+            source: PackageSource(kind: .adopted, at: now),
+            lastOperation: OperationSummary(
+                kind: .adopt,
+                operationID: UUID(),
+                startedAt: now,
+                finishedAt: now,
+                toVersionCode: info.versionCode,
+                result: .succeeded
+            ),
+            createdAt: now,
+            updatedAt: now
+        )
+        let directory = directoryName(for: packageID)
+        try writeRecord(record, directory: directory)
+        records[packageID] = record
+        directories[packageID] = directory
+        return record
     }
 
     /// Resolves guest-dependent transactions left by an interrupted process.

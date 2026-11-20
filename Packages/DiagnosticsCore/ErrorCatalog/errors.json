@@ -3335,6 +3335,691 @@
     "raisedBy": "ClipboardCoordinator",
     "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §4.4"
    }
+  },
+  {
+   "code": "store.unsupportedContainer",
+   "parameters": [
+    "kind"
+   ],
+   "message": {
+    "en": "APKRun can't add this kind of file.",
+    "ja": "この種類のファイルは APKRun に追加できません。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "unsupportedContainer(ContainerKind)",
+    "when": "the content is not a supported container (.unknown)",
+    "raisedBy": "ContainerReader",
+    "ref": "package-store.md §4.2"
+   },
+   "remediation": {
+    "en": "APKRun can add .apk, .apks, .xapk, and .apkm files, and .zip files that contain only APKs.",
+    "ja": "APKRun には .apk、.apks、.xapk、.apkm、そして APK のみを含む .zip を追加できます。"
+   },
+   "variants": {
+    "appBundle": {
+     "message": {
+      "en": "This file is an Android App Bundle (.aab), which can't be installed directly.",
+      "ja": "このファイルは Android App Bundle (.aab) であり、直接インストールできません。"
+     },
+     "remediation": {
+      "en": "Get an .apk or .apks file from the app's developer. Converting a bundle would change its signature and break updates.",
+      "ja": "アプリの開発者から .apk または .apks ファイルを入手してください。バンドルを変換すると署名が変わり、更新が壊れます。"
+     },
+     "doc": {
+      "when": "an .aab (ZIP with BundleConfig.pb)",
+      "ref": "package-store.md §4.2"
+     }
+    },
+    "encryptedAPKM": {
+     "message": {
+      "en": "This .apkm file is encrypted.",
+      "ja": "この .apkm ファイルは暗号化されています。"
+     },
+     "remediation": {
+      "en": "Download the app as an unencrypted file, for example an .apk.",
+      "ja": "暗号化されていない形式（例: .apk）でアプリをダウンロードしてください。"
+     },
+     "doc": {
+      "when": "an encrypted or non-ZIP .apkm",
+      "ref": "package-store.md §4.2"
+     }
+    }
+   }
+  },
+  {
+   "code": "store.unreadableArchive",
+   "parameters": [
+    "detail"
+   ],
+   "message": {
+    "en": "This file couldn't be read. It may be damaged or incomplete.",
+    "ja": "このファイルを読み取れませんでした。破損しているか不完全な可能性があります。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "unreadableArchive(detail:)",
+    "when": "the ZIP structure can't be read",
+    "raisedBy": "ContainerReader",
+    "ref": "package-store.md §4.2"
+   },
+   "remediation": {
+    "en": "Download the file again.",
+    "ja": "もう一度ファイルをダウンロードしてください。"
+   }
+  },
+  {
+   "code": "store.archiveLimitExceeded",
+   "parameters": [
+    "limit"
+   ],
+   "message": {
+    "en": "This file contains more than APKRun can safely unpack.",
+    "ja": "このファイルには APKRun が安全に展開できる量を超える内容が含まれています。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "archiveLimitExceeded(ArchiveLimit)",
+    "when": "an extraction limit is violated (zip-bomb and path safety)",
+    "raisedBy": "ContainerReader",
+    "ref": "package-store.md §4.2"
+   },
+   "variants": {
+    "entryCount": {
+     "message": {
+      "en": "This file contains more than 512 entries.",
+      "ja": "このファイルには 512 を超えるエントリが含まれています。"
+     },
+     "remediation": {
+      "en": "Download the app again from its developer.",
+      "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+     },
+     "doc": {
+      "when": "more than 512 entries",
+      "ref": "package-store.md §4.2"
+     }
+    },
+    "apkCount": {
+     "message": {
+      "en": "This file contains more than 256 APKs.",
+      "ja": "このファイルには 256 を超える APK が含まれています。"
+     },
+     "remediation": {
+      "en": "Download the app again from its developer.",
+      "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+     },
+     "doc": {
+      "when": "more than 256 APKs",
+      "ref": "package-store.md §4.2"
+     }
+    },
+    "fileSize": {
+     "message": {
+      "en": "A file inside is larger than 2 GB.",
+      "ja": "内部のファイルが 2 GB を超えています。"
+     },
+     "remediation": {
+      "en": "Download the app again from its developer.",
+      "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+     },
+     "doc": {
+      "when": "an extracted file above 2 GiB",
+      "ref": "package-store.md §4.2"
+     }
+    },
+    "totalSize": {
+     "message": {
+      "en": "The files inside are larger than 8 GB in total.",
+      "ja": "内部のファイルの合計が 8 GB を超えています。"
+     },
+     "remediation": {
+      "en": "Download the app again from its developer.",
+      "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+     },
+     "doc": {
+      "when": "extracted files above 8 GiB in total",
+      "ref": "package-store.md §4.2"
+     }
+    },
+    "compressionRatio": {
+     "message": {
+      "en": "This file is compressed in a way that isn't safe to unpack.",
+      "ja": "このファイルは安全に展開できない方法で圧縮されています。"
+     },
+     "remediation": {
+      "en": "Download the app again from its developer.",
+      "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+     },
+     "doc": {
+      "when": "an entry above 100:1",
+      "ref": "package-store.md §4.2"
+     }
+    },
+    "unsafeName": {
+     "message": {
+      "en": "This file contains entries with unsafe names.",
+      "ja": "このファイルには安全でない名前のエントリが含まれています。"
+     },
+     "remediation": {
+      "en": "Download the app again from its developer.",
+      "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+     },
+     "doc": {
+      "when": "a name that is not UTF-8 or relative, contains .., or is a symlink or device entry",
+      "ref": "package-store.md §4.2"
+     }
+    }
+   }
+  },
+  {
+   "code": "store.notAnAPK",
+   "parameters": [
+    "file"
+   ],
+   "message": {
+    "en": "{file} isn't an Android app (APK).",
+    "ja": "{file} は Android アプリ（APK）ではありません。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "notAnAPK(file:)",
+    "when": "a file has no AndroidManifest.xml",
+    "raisedBy": "APKInspector",
+    "ref": "package-store.md §4.6"
+   },
+   "remediation": {
+    "en": "Choose the app's .apk, .apks, .xapk, or .apkm file.",
+    "ja": "アプリの .apk、.apks、.xapk、.apkm ファイルを選択してください。"
+   }
+  },
+  {
+   "code": "store.missingBase",
+   "parameters": [],
+   "message": {
+    "en": "The base APK is missing from this set.",
+    "ja": "このセットにベース APK がありません。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "missingBase",
+    "when": "no base APK",
+    "raisedBy": "ArtifactVerifier",
+    "ref": "package-store.md §4.4, §4.6"
+   },
+   "remediation": {
+    "en": "Add the base APK too, or use the complete .apks, .xapk, or .apkm file.",
+    "ja": "ベース APK も追加するか、完全な .apks、.xapk、.apkm ファイルを使用してください。"
+   }
+  },
+  {
+   "code": "store.multipleBases",
+   "parameters": [],
+   "message": {
+    "en": "This set contains more than one base APK.",
+    "ja": "このセットには複数のベース APK が含まれています。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "multipleBases",
+    "when": "more than one base",
+    "raisedBy": "ArtifactVerifier",
+    "ref": "package-store.md §4.6"
+   },
+   "remediation": {
+    "en": "Add the APKs of one app version only.",
+    "ja": "1 つのアプリバージョンの APK のみを追加してください。"
+   }
+  },
+  {
+   "code": "store.duplicateSplit",
+   "parameters": [
+    "split"
+   ],
+   "message": {
+    "en": "The split {split} appears more than once.",
+    "ja": "スプリット {split} が複数回現れています。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "duplicateSplit(name:)",
+    "when": "a split name appears twice",
+    "raisedBy": "ArtifactVerifier",
+    "ref": "package-store.md §4.6"
+   },
+   "remediation": {
+    "en": "Add each split APK only once.",
+    "ja": "各スプリット APK は 1 回だけ追加してください。"
+   }
+  },
+  {
+   "code": "store.inconsistentSplits",
+   "parameters": [
+    "field",
+    "file"
+   ],
+   "message": {
+    "en": "The APKs in this set don't belong together.",
+    "ja": "このセットの APK は同一のアプリではありません。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "inconsistentSplits(InconsistentField, file:)",
+    "when": "the APKs differ in package, version, or signer",
+    "raisedBy": "ArtifactVerifier",
+    "ref": "package-store.md §4.6"
+   },
+   "remediation": {
+    "en": "Add the APKs of one app version from one source.",
+    "ja": "1 つの提供元の、1 つのアプリバージョンの APK を追加してください。"
+   },
+   "variants": {
+    "package": {
+     "message": {
+      "en": "{file} belongs to another app.",
+      "ja": "{file} は別のアプリのものです。"
+     },
+     "remediation": {
+      "en": "Add the APKs of one app version from one source.",
+      "ja": "1 つの提供元の、1 つのアプリバージョンの APK を追加してください。"
+     },
+     "doc": {
+      "when": "a file of another package",
+      "ref": "package-store.md §4.6"
+     }
+    },
+    "versionCode": {
+     "message": {
+      "en": "{file} is from another version of the app.",
+      "ja": "{file} は別バージョンのアプリのものです。"
+     },
+     "remediation": {
+      "en": "Add the APKs of one app version from one source.",
+      "ja": "1 つの提供元の、1 つのアプリバージョンの APK を追加してください。"
+     },
+     "doc": {
+      "when": "a file of another VersionCode",
+      "ref": "package-store.md §4.6"
+     }
+    },
+    "signer": {
+     "message": {
+      "en": "{file} is signed by a different developer.",
+      "ja": "{file} は別の開発者によって署名されています。"
+     },
+     "remediation": {
+      "en": "Add the APKs of one app version from one source.",
+      "ja": "1 つの提供元の、1 つのアプリバージョンの APK を追加してください。"
+     },
+     "doc": {
+      "when": "a file with another signer set",
+      "ref": "package-store.md §4.6"
+     }
+    }
+   }
+  },
+  {
+   "code": "store.incompleteSplitSet",
+   "parameters": [
+    "split"
+   ],
+   "message": {
+    "en": "This set is missing parts that the app needs: {split}.",
+    "ja": "このセットにはアプリが必要とする部分がありません: {split}。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "incompleteSplitSet(missing:)",
+    "when": "requiredSplitTypes or isSplitRequired is not satisfied",
+    "raisedBy": "SplitSelector",
+    "ref": "package-store.md §4.4"
+   },
+   "remediation": {
+    "en": "Use the complete .apks, .xapk, or .apkm file of the app.",
+    "ja": "アプリの完全な .apks、.xapk、.apkm ファイルを使用してください。"
+   }
+  },
+  {
+   "code": "store.unsignedAPK",
+   "parameters": [
+    "file"
+   ],
+   "message": {
+    "en": "{file} isn't signed.",
+    "ja": "{file} は署名されていません。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "unsignedAPK(file:)",
+    "when": "no signature",
+    "raisedBy": "APKSignatureVerifier",
+    "ref": "package-store.md §4.5"
+   },
+   "remediation": {
+    "en": "Android installs only signed apps. Get a signed copy from the app's developer.",
+    "ja": "Android は署名済みアプリのみインストールします。開発者から署名済みのものを入手してください。"
+   }
+  },
+  {
+   "code": "store.invalidSignature",
+   "parameters": [
+    "file",
+    "reason"
+   ],
+   "message": {
+    "en": "The signature of {file} isn't valid.",
+    "ja": "{file} の署名が正しくありません。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "invalidSignature(file:reason:)",
+    "when": "a digest or signature does not verify",
+    "raisedBy": "APKSignatureVerifier",
+    "ref": "package-store.md §4.5"
+   },
+   "remediation": {
+    "en": "The file may have been changed after signing. Download it again from the app's developer.",
+    "ja": "署名後にファイルが変更された可能性があります。開発者からもう一度ダウンロードしてください。"
+   }
+  },
+  {
+   "code": "store.legacySignatureNotAllowed",
+   "parameters": [
+    "target"
+   ],
+   "message": {
+    "en": "This app uses an old signature format that Android doesn't accept for apps that target API {target}.",
+    "ja": "このアプリは Android が API {target} を対象とするアプリに受け付けない古い署名形式を使用しています。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "legacySignatureNotAllowed(targetSdk:)",
+    "when": "v1 signature only, and targetSdk >= 30",
+    "raisedBy": "APKSignatureVerifier",
+    "ref": "package-store.md §4.5"
+   },
+   "remediation": {
+    "en": "Get a newer build of the app from its developer.",
+    "ja": "開発者からアプリの新しいビルドを入手してください。"
+   }
+  },
+  {
+   "code": "store.unsupportedABI",
+   "parameters": [
+    "found",
+    "supported"
+   ],
+   "message": {
+    "en": "This app is built only for {found}, but Android in APKRun needs {supported}.",
+    "ja": "このアプリは {found} 向けにのみビルドされていますが、APKRun の Android は {supported} が必要です。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "unsupportedABI(found:supported:)",
+    "when": "native code for no guest ABI",
+    "raisedBy": "ArtifactVerifier",
+    "ref": "package-store.md §4.6"
+   },
+   "remediation": {
+    "en": "Get a build of the app for {supported}.",
+    "ja": "{supported} 向けのアプリのビルドを入手してください。"
+   }
+  },
+  {
+   "code": "store.minSdkTooHigh",
+   "parameters": [
+    "required",
+    "guest"
+   ],
+   "message": {
+    "en": "This app needs Android API {required} or later. Android in APKRun has API {guest}.",
+    "ja": "このアプリは Android API {required} 以降が必要です。APKRun の Android は API {guest} です。"
+   },
+   "action": "updateAndroid",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "minSdkTooHigh(required:guest:)",
+    "when": "minSdkVersion above the guest SDK",
+    "raisedBy": "ArtifactVerifier",
+    "ref": "package-store.md §4.6"
+   },
+   "remediation": {
+    "en": "Update Android, or get an older build of the app.",
+    "ja": "Android を更新するか、古いビルドのアプリを入手してください。"
+   }
+  },
+  {
+   "code": "store.targetSdkTooLow",
+   "parameters": [
+    "target",
+    "floor"
+   ],
+   "message": {
+    "en": "This app targets API {target}. Android in APKRun installs only apps that target API {floor} or later.",
+    "ja": "このアプリは API {target} を対象としています。APKRun の Android は API {floor} 以降を対象とするアプリのみインストールできます。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "targetSdkTooLow(target:floor:)",
+    "when": "targetSdkVersion below the install floor",
+    "raisedBy": "ArtifactVerifier",
+    "ref": "package-store.md §4.6"
+   },
+   "remediation": {
+    "en": "Get a newer build of the app from its developer.",
+    "ja": "開発者からアプリの新しいビルドを入手してください。"
+   }
+  },
+  {
+   "code": "store.expansionFilesNotSupported",
+   "parameters": [],
+   "message": {
+    "en": "This file includes expansion files (OBB), which APKRun doesn't support yet.",
+    "ja": "このファイルには APKRun がまだサポートしていない拡張ファイル（OBB）が含まれています。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "expansionFilesNotSupported",
+    "when": "an .xapk with expansions (OBB)",
+    "raisedBy": "ContainerReader",
+    "ref": "package-store.md §4.2"
+   },
+   "remediation": {
+    "en": "Get a build of the app without expansion files.",
+    "ja": "拡張ファイルのないアプリのビルドを入手してください。"
+   }
+  },
+  {
+   "code": "store.reservedPackage",
+   "parameters": [
+    "package"
+   ],
+   "message": {
+    "en": "{package} is part of Android or APKRun and can't be added as an app.",
+    "ja": "{package} は Android または APKRun の一部であり、アプリとして追加できません。"
+   },
+   "action": "none",
+   "cliExit": 5,
+   "doc": {
+    "table": "storeImport",
+    "case": "reservedPackage(PackageID)",
+    "when": "io.apkrun.guest, io.apkrun.store, or a platform package of the image",
+    "raisedBy": "ArtifactVerifier",
+    "ref": "package-store.md §4.6"
+   },
+   "remediation": {
+    "en": "No action is needed.",
+    "ja": "対応は不要です。"
+   }
+  },
+  {
+   "code": "store.tooLarge",
+   "parameters": [
+    "bytes",
+    "limit"
+   ],
+   "message": {
+    "en": "This app is too large ({bytes}; the limit is {limit}).",
+    "ja": "このアプリは大きすぎます（{bytes}、上限は {limit}）。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "tooLarge(bytes:limit:)",
+    "when": "a file above 2 GiB, or the set above 8 GiB",
+    "raisedBy": "ArtifactVerifier",
+    "ref": "package-store.md §4.6"
+   },
+   "remediation": {
+    "en": "Get a smaller build of the app, for example one for fewer device types.",
+    "ja": "より小さいビルド（例: 対象デバイスが少ないもの）を入手してください。"
+   }
+  },
+  {
+   "code": "store.resourcesArscNotAligned",
+   "parameters": [
+    "file"
+   ],
+   "message": {
+    "en": "{file} isn't packaged the way Android requires for apps that target API 30 or later.",
+    "ja": "{file} は API 30 以降を対象とするアプリに Android が要求する形式でパッケージ化されていません。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "resourcesArscNotAligned(file:)",
+    "when": "targetSdk >= 30, and resources.arsc is compressed or not 4-byte aligned",
+    "raisedBy": "ArtifactVerifier",
+    "ref": "package-store.md §4.6"
+   },
+   "remediation": {
+    "en": "Get a build of the app made with current Android build tools from its developer.",
+    "ja": "開発者から現行の Android ビルドツールで作成されたアプリのビルドを入手してください。"
+   }
+  },
+  {
+   "code": "store.alreadyInstalled",
+   "parameters": [
+    "app",
+    "version"
+   ],
+   "message": {
+    "en": "{app} {version} is already installed.",
+    "ja": "{app} {version} はすでにインストールされています。"
+   },
+   "action": "none",
+   "cliExit": 0,
+   "doc": {
+    "table": "storeImport",
+    "case": "alreadyInstalled(VersionCode)",
+    "when": "ImportRelation.sameAsInstalled",
+    "raisedBy": "PackageStore",
+    "ref": "package-store.md §4.7"
+   },
+   "remediation": {
+    "en": "No action is needed.",
+    "ja": "対応は不要です。"
+   }
+  },
+  {
+   "code": "store.packageAlreadyManaged",
+   "parameters": [],
+   "message": {
+    "en": "This package is already managed by APKRun.",
+    "ja": "このパッケージはすでに APKRun の管理下にあります。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeImport",
+    "case": "packageAlreadyManaged",
+    "when": "adoptPackage on a managed package",
+    "raisedBy": "PackageStore",
+    "ref": "package-store.md §9.3"
+   },
+   "remediation": {
+    "en": "The package needs no adoption. See it with `apkrun list`.",
+    "ja": "このパッケージは引き取り不要です。`apkrun list` で確認できます。"
+   }
+  },
+  {
+   "code": "store.downgradeRefused",
+   "parameters": [
+    "installed",
+    "candidate"
+   ],
+   "message": {
+    "en": "Version {candidate} is older than installed version {installed}.",
+    "ja": "バージョン {candidate} はインストール済みのバージョン {installed} より古いです。"
+   },
+   "action": "none",
+   "cliExit": 5,
+   "doc": {
+    "table": "storeImport",
+    "case": "downgradeRefused(installed:candidate:)",
+    "when": "the candidate is below the live PackageManager version or the managed-record fallback",
+    "raisedBy": "PackageStore",
+    "ref": "package-store.md §4.7"
+   },
+   "remediation": {
+    "en": "Choose a newer APK, or uninstall the app first.",
+    "ja": "より新しい APK を選択するか、先にアプリをアンインストールしてください。"
+   }
+  },
+  {
+   "code": "store.signerMismatch",
+   "parameters": [
+    "app"
+   ],
+   "message": {
+    "en": "This file is signed by a different developer than the installed app.",
+    "ja": "このファイルはインストール済みアプリとは別の開発者によって署名されています。"
+   },
+   "action": "none",
+   "cliExit": 5,
+   "doc": {
+    "table": "storeImport",
+    "case": "signerMismatch",
+    "when": "ImportRelation.otherSigner",
+    "raisedBy": "PackageStore",
+    "ref": "package-store.md §4.7"
+   },
+   "remediation": {
+    "en": "Install updates of {app} from its original developer, or uninstall {app} first.",
+    "ja": "{app} の更新は元の開発者からインストールするか、先に {app} をアンインストールしてください。"
+   }
   }
  ]
 }

@@ -653,6 +653,24 @@ public actor RuntimeHost {
         return try await service.importPackage(request, files: files)
     }
 
+    /// Drops an import ticket and its private APK copies without starting Android.
+    public func discardImport(
+        _ request: RuntimeDiscardImportRequest
+    ) async throws(RuntimeWireError) {
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        try await service.discardImport(request)
+    }
+
+    /// Adopts a package Android has but APKRun does not manage (package-store.md §9.3).
+    public func adoptPackage(
+        _ request: RuntimeAdoptPackageRequest
+    ) async throws(RuntimeWireError) -> RuntimePackageSummary {
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        return try await service.adoptPackage(request)
+    }
+
     /// Starts Android on demand, attaches its package channel, and installs an inspected import.
     public func installImported(
         _ request: RuntimeInstallImportedRequest

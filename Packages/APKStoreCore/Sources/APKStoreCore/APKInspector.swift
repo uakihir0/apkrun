@@ -20,6 +20,16 @@ public struct APKFacts: Sendable, Equatable {
     public var targetSDK: Int
     /// Native ABIs declared by the APK.
     public var nativeABIs: [String]
+    /// Declared `uses-permission` names.
+    public var permissions: [String]
+    /// `uses-feature` names declared `android:required="true"`.
+    public var requiredFeatures: [String]
+    /// `android:debuggable="true"`.
+    public var debuggable: Bool
+    /// Icon paths by density bucket (`application-icon-XXX`).
+    public var iconPaths: [String: String]
+    /// The manifest's default icon path.
+    public var iconPath: String?
 
     /// Creates a snapshot of the host-inspected APK metadata.
     public init(
@@ -30,7 +40,12 @@ public struct APKFacts: Sendable, Equatable {
         displayName: String,
         minSDK: Int,
         targetSDK: Int,
-        nativeABIs: [String]
+        nativeABIs: [String],
+        permissions: [String] = [],
+        requiredFeatures: [String] = [],
+        debuggable: Bool = false,
+        iconPaths: [String: String] = [:],
+        iconPath: String? = nil
     ) {
         self.packageID = packageID
         self.versionCode = versionCode
@@ -40,6 +55,11 @@ public struct APKFacts: Sendable, Equatable {
         self.minSDK = minSDK
         self.targetSDK = targetSDK
         self.nativeABIs = nativeABIs
+        self.permissions = permissions
+        self.requiredFeatures = requiredFeatures
+        self.debuggable = debuggable
+        self.iconPaths = iconPaths
+        self.iconPath = iconPath
     }
 }
 
@@ -192,6 +212,10 @@ public struct APKInspector: Sendable {
         var minSDK: Int?
         var targetSDK: Int?
         var nativeABIs: [String] = []
+        var permissions: [String] = []
+        var requiredFeatures: [String] = []
+        var iconPaths: [String: String] = [:]
+        var iconPath: String?
 
         for line in output.split(whereSeparator: \.isNewline).map(String.init) {
             if line.hasPrefix("package:") {
@@ -201,12 +225,34 @@ public struct APKInspector: Sendable {
                 packageFields = keyValueFields(in: String(line.dropFirst("package:".count)))
             } else if line.hasPrefix("application-label:'") {
                 label = quotedValue(after: "application-label:", in: line)
-            } else if line.hasPrefix("sdkVersion:'") {
-                minSDK = integerValue(after: "sdkVersion:", in: line)
+            } else if line.hasPrefix("application-icon-") {
+                // application-icon-<density>:'<path>'
+                if let densityEnd = line.firstIndex(of: ":") {
+                    let density = String(
+                        line[line.index(line.startIndex, offsetBy: "application-icon-".count)..<densityEnd])
+                    iconPaths[density] = quotedValues(in: line).first
+                }
+            } else if line.hasPrefix("application-icon:'") {
+                iconPath = quotedValue(after: "application-icon:", in: line)
+            } else if line.hasPrefix("sdkVersion:'") || line.hasPrefix("minSdkVersion:'") {
+                // aapt2 renamed sdkVersion to minSdkVersion in newer build-tools.
+                minSDK =
+                    integerValue(after: "sdkVersion:", in: line)
+                    ?? integerValue(after: "minSdkVersion:", in: line)
             } else if line.hasPrefix("targetSdkVersion:'") {
                 targetSDK = integerValue(after: "targetSdkVersion:", in: line)
             } else if line.hasPrefix("native-code:") {
                 nativeABIs = quotedValues(in: line)
+            } else if line.hasPrefix("uses-permission:") {
+                if let name = quotedValues(in: line).first {
+                    permissions.append(name)
+                }
+            } else if line.hasPrefix("uses-feature:") {
+                if let name = quotedValues(in: line).first, line.contains("required") {
+                    requiredFeatures.append(name)
+                }
+            } else if line.hasPrefix("uses-feature-not-required:") {
+                continue
             }
         }
         guard let fields = packageFields, let rawPackage = fields["name"] else {
@@ -244,7 +290,11 @@ public struct APKInspector: Sendable {
             displayName: name,
             minSDK: minSDK,
             targetSDK: targetSDK,
-            nativeABIs: nativeABIs.sorted()
+            nativeABIs: nativeABIs.sorted(),
+            permissions: permissions,
+            requiredFeatures: requiredFeatures,
+            iconPaths: iconPaths,
+            iconPath: iconPath
         )
     }
 

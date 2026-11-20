@@ -59,7 +59,8 @@ public actor EmbeddedPackageService: RuntimeService {
         paths: APKRunPaths = APKRunPaths(allowingHomeOverride: true),
         inspector: @escaping PackageStore.Inspector = { apk in try await APKInspector().inspect(apk) },
         hostFreeSpace: (@Sendable (URL) -> Int64)? = nil,
-        sessionService: (any RuntimeSessionService)? = nil
+        sessionService: (any RuntimeSessionService)? = nil,
+        importVerifier: @escaping PackageStore.ImportVerifier = PackageStore.strictImportVerifier
     ) {
         self.paths = paths
         self.inspector = inspector
@@ -71,7 +72,8 @@ public actor EmbeddedPackageService: RuntimeService {
             packagesDirectory: paths.packagesDirectory,
             runtimeAccess: runtimeAccess,
             inspector: inspector,
-            fileManager: .default
+            fileManager: .default,
+            importVerifier: importVerifier
         )
     }
 
@@ -168,6 +170,22 @@ public actor EmbeddedPackageService: RuntimeService {
             let result = try Self.runtimePreview(from: preview, relation: relation)
             importPreviews[preview.ticket] = result
             return result
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
+    /// Drops an import ticket and its private APK copies without starting Android.
+    public func discardImport(
+        _ request: RuntimeDiscardImportRequest
+    ) async throws(RuntimeWireError) {
+        do {
+            try await ensureOpen()
+            guard let ticket = UUID(uuidString: request.ticket.rawValue) else {
+                throw PackageStoreFailure.importTicketNotFound
+            }
+            try await store.discardImport(ticket: ticket)
+            importPreviews.removeValue(forKey: ticket)
         } catch {
             throw Self.wireError(for: error)
         }
@@ -599,6 +617,26 @@ public actor EmbeddedPackageService: RuntimeService {
         }
     }
 
+    /// Adopts a package Android has but APKRun does not manage (package-store.md §9.3).
+    ///
+    /// The live Store Agent supplies the package facts; the runtime must be attached and Android
+    /// must report the package for adoption to succeed.
+    public func adoptPackage(
+        _ request: RuntimeAdoptPackageRequest
+    ) async throws(RuntimeWireError) -> RuntimePackageSummary {
+        do {
+            try await ensureOpen()
+            guard let packageID = PackageID(rawValue: request.packageID.rawValue) else {
+                throw EmbeddedPackageServiceFailure.invalidPackageID
+            }
+            guard runtimeAttached else { throw PackageStoreFailure.runtimeUnavailable }
+            let record = try await store.adoptPackage(packageID: packageID)
+            return try Self.summary(from: record)
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
     private func ensureOpen() async throws {
         if isOpen {
             return
@@ -909,8 +947,16 @@ public actor EmbeddedPackageService: RuntimeService {
                 return runtimeDigest
             },
             files: try preview.artifactSet.files.map(runtimeArtifact),
+            excludedSplits: preview.excludedSplits,
             relation: relation,
-            warnings: [.signingNotChecked]
+            warnings: preview.warnings.map { warning in
+                switch warning {
+                case .missingHardwareFeature(let feature): .missingHardwareFeature(feature: feature)
+                case .certificateOnlyVerification: .certificateOnlyVerification
+                case .debuggable: .debuggable
+                case .lowTargetSDK(let target): .lowTargetSDK(target: target)
+                }
+            }
         )
     }
 
@@ -1024,6 +1070,10 @@ public actor EmbeddedPackageService: RuntimeService {
                 return .store(
                     "invalidSplitSet", message: "The APK files do not form a consistent split set.",
                     remediation: "Select the base APK and all matching split APKs.")
+            case .packageAlreadyManaged:
+                return .store(
+                    "packageAlreadyManaged", message: "This package is already managed by APKRun.",
+                    remediation: "The package needs no adoption. See it with `apkrun list`.")
             case .packageAlreadyInstalled:
                 return .store(
                     "packageAlreadyInstalled", message: "This package is already installed.",

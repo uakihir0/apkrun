@@ -2954,7 +2954,21 @@ public actor RuntimeHost {
             files: handles
         )
         _ = try await service.installImportedWithChange(
-            RuntimeInstallImportedRequest(ticket: preview.ticket)
+            RuntimeInstallImportedRequest(ticket: preview.ticket),
+            beforeStoreMutation: { () async throws(RuntimeWireError) in
+                // An `uninstall --forget` or uninstall committed between the
+                // reinstall snapshot and now removes the mark or the record;
+                // the store's mutation lock makes this re-check atomic with
+                // them, so the reinstall cannot resurrect the app.
+                let stillPending = try await service.pendingReinstalls().contains(packageID)
+                guard stillPending else {
+                    throw RuntimeWireError.store(
+                        "packageNotFound",
+                        message: "The app was uninstalled before APKRun could restore it.",
+                        remediation: "Install it again with `apkrun install`."
+                    )
+                }
+            }
         )
     }
 

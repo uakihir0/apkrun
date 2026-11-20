@@ -387,8 +387,13 @@ public actor EmbeddedUpdateService {
         }
         // Provider-staged sets die with the authority that can no longer
         // install them: leaving apkrun, and every move to external (§2.1).
+        // A manual-file staged set survives a move to `manual` — installing
+        // it is exactly what the manual authority does.
+        let stagedSurvives =
+            target == .manual && record.artifacts.staged?.origin.type == .manualFile
         if record.updateAuthority != target,
-            record.updateAuthority == .apkrun || target == .external
+            record.updateAuthority == .apkrun || target == .external,
+            !stagedSurvives
         {
             try await store.discardStaged(packageID: packageID)
         }

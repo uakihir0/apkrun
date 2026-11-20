@@ -113,7 +113,8 @@ public actor UpdateCoordinator {
     public func check(
         _ packageID: PackageID,
         trigger: UpdateTrigger,
-        context: ProviderContext
+        context: ProviderContext,
+        checkOnly: Bool = false
     ) async -> UpdateCheckOutcome {
         let started = Date()
         guard
@@ -158,7 +159,12 @@ public actor UpdateCoordinator {
                 state.nextCheckAt = Self.nextCheck(
                     after: started, intervalHours: checkIntervalHours, failures: 0)
                 state.consecutiveFailures = 0
-                state.cursor = newCursor
+                // A `--check-only` report does not consume the candidate: the
+                // next real check must find it again (§4.2 cursors mark
+                // processed candidates only).
+                if !checkOnly {
+                    state.cursor = newCursor
+                }
                 state.phase = "available"
                 state.candidate = PackageUpdateState.CandidateSummary(
                     versionCode: candidate.declaredVersionCode,
@@ -167,8 +173,13 @@ public actor UpdateCoordinator {
             }
             setPhase(packageID, .available(candidate))
 
-            if settings?.updateMode == "notifyOnly", newCursor != row.notifiedCursor {
-                await notifier?.notifyUpdateAvailable(
+            // Mark the candidate notified only when a notifier actually
+            // delivered it; otherwise the notification stays pending for the
+            // next check (check-only runs never notify).
+            if !checkOnly, settings?.updateMode == "notifyOnly",
+                newCursor != row.notifiedCursor, let notifier
+            {
+                await notifier.notifyUpdateAvailable(
                     UpdateNotification(
                         packageID: packageID,
                         displayName: record.displayName,

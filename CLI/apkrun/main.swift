@@ -40,6 +40,7 @@ struct APKRunCommand: AsyncParsableCommand {
                     LaunchCommand.self,
                     StopCommand.self,
                     OperationsCommand.self,
+                    WrapCommand.self,
                 ]
             )
         #endif

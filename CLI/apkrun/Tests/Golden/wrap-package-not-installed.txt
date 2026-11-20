@@ -1,0 +1,3 @@
+error: io.apkrun.fixture.hellotext isn't installed in APKRun.
+hint: Install io.apkrun.fixture.hellotext first. apkrun wrap installs it too when you add --install.
+code: wrapper.packageNotInstalled

@@ -39,6 +39,10 @@ public actor UpdateScheduler {
     /// §3.3: a due package's check after `noteLaunched` waits this long
     /// after the first frame.
     private let launchCheckDelay: Duration
+    /// How long the timer waits before retrying a due check it could not
+    /// start (offline or at the §3.4 caps) so an overdue package does not
+    /// spin the sweep.
+    private let retryDelay: Duration
 
     /// Checks currently running (a due package is never checked twice).
     private var inFlight: Set<PackageID> = []
@@ -70,7 +74,8 @@ public actor UpdateScheduler {
         networkSatisfied: @escaping @Sendable () -> Bool = { true },
         backgroundDownloadAllowed: @escaping @Sendable () -> Bool = { true },
         wakeDelay: Duration = .seconds(120),
-        launchCheckDelay: Duration = .seconds(30)
+        launchCheckDelay: Duration = .seconds(30),
+        retryDelay: Duration = .seconds(60)
     ) {
         self.coordinator = coordinator
         self.stateStore = stateStore
@@ -84,6 +89,7 @@ public actor UpdateScheduler {
         self.backgroundDownloadAllowed = backgroundDownloadAllowed
         self.wakeDelay = wakeDelay
         self.launchCheckDelay = launchCheckDelay
+        self.retryDelay = retryDelay
     }
 
     // MARK: - Triggers (§3.3)
@@ -92,6 +98,51 @@ public actor UpdateScheduler {
     public func start() {
         armTimer()
         Task { await runDueChecks(trigger: .scheduled) }
+        Task { await resumeStagedInstalls() }
+    }
+
+    /// §7.1 and §3.5: a daemon restart forgets the gate's in-memory queue.
+    /// Re-request admission for every staged row so an admitted install —
+    /// including the >24 h headless boot — does not wait for the next check.
+    private func resumeStagedInstalls() async {
+        try? await store.open()
+        let managed = Set(
+            ((try? await store.listManagedPackages()) ?? []).map(\.packageId))
+        let stagedRows = await stateStore.allStates()
+            .filter { $0.value.phase == "staged" && managed.contains($0.key) }
+        // §2.2: a package switched to notifyOnly after an automatic stage
+        // must never auto-install. A notifyOnly package never stages on
+        // its own, so a user-requested staged row still resumes — it is
+        // the "Update" the user already approved.
+        var staged: [PackageID] = []
+        for (packageID, row) in stagedRows {
+            let mode = (try? await store.packageSettings(for: packageID))?.updateMode
+            if mode == "notifyOnly", row.candidate?.userRequested != true {
+                continue
+            }
+            staged.append(packageID)
+        }
+        guard !staged.isEmpty else { return }
+        guard let runtime = await runtimeProvider(),
+            let gate = await gateProvider()
+        else { return }
+        // Admit every staged row, not just the first: a row that never
+        // enters the queue never reaches a §7.2 pump trigger and its
+        // update is left behind.
+        for packageID in staged {
+            if await gate.requestInstall(packageID) {
+                if await coordinator.resumeStagedInstall(
+                    packageID, trigger: .scheduled, runtime: runtime, gate: gate
+                ) != nil {
+                    // The install that just ran continues the queue
+                    // itself; the rows after it stay queued.
+                    continue
+                }
+                // An admitted row that cannot resume (no candidate summary)
+                // must free the shared install slot.
+                _ = await gate.finishInstall(packageID)
+            }
+        }
     }
 
     /// apkrund is shutting down: cancel the timer and delayed checks.
@@ -142,6 +193,7 @@ public actor UpdateScheduler {
     @discardableResult
     public func runDueChecks(trigger: UpdateTrigger) async -> Int {
         guard networkSatisfied() else { return 0 }
+        try? await store.open()
         let due = await coordinator.duePackages(now: now())
         var started = 0
         for packageID in due where admissible(packageID) {
@@ -155,6 +207,7 @@ public actor UpdateScheduler {
     /// instant the timer should fire next (§3.3 "sleep until the earliest
     /// nextCheckAt"). nil means nothing is scheduled.
     public func earliestWakeAt() async -> Date? {
+        try? await store.open()
         let records = (try? await store.listManagedPackages()) ?? []
         let states = await stateStore.allStates()
         return records.filter {
@@ -242,15 +295,40 @@ public actor UpdateScheduler {
         }
     }
 
-    /// Re-arms the single timer to fire at `earliestWakeAt`.
+    /// Re-arms the single timer to fire at `earliestWakeAt`. A deadline that
+    /// is still past after a sweep (the check could not start — offline or
+    /// the §3.4 caps were full) paces retries with `retryDelay` instead of
+    /// refiring the timer in a hot loop.
     private func armTimer() {
         timerTask?.cancel()
         timerTask = Task {
-            guard let wake = await earliestWakeAt() else { return }
-            await sleepUntil(wake)
-            guard !Task.isCancelled else { return }
-            await runDueChecks(trigger: .scheduled)
-            armTimer()
+            while !Task.isCancelled {
+                guard var wake = await earliestWakeAt() else { return }
+                if wake > now() {
+                    await sleepUntil(wake)
+                    guard !Task.isCancelled else { return }
+                }
+                _ = await runDueChecks(trigger: .scheduled)
+                guard let next = await earliestWakeAt() else { return }
+                while next <= now(), !Task.isCancelled {
+                    await sleepUntil(
+                        now().addingTimeInterval(
+                            TimeInterval(retryDelay.components.seconds)))
+                    guard !Task.isCancelled else { return }
+                    guard let retry = await earliestWakeAt() else { return }
+                    if retry > now() {
+                        wake = retry
+                        break
+                    }
+                    _ = await runDueChecks(trigger: .scheduled)
+                    guard let again = await earliestWakeAt() else { return }
+                    wake = again
+                    if again > now() { break }
+                }
+                if wake > now() {
+                    continue
+                }
+            }
         }
     }
 

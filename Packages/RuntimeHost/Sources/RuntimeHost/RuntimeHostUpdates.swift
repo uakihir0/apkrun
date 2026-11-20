@@ -813,7 +813,7 @@ extension RuntimeHost {
             store: service.store,
             contextProvider: { await service.providerContext(userInitiated: false) },
             runtimeProvider: { [weak self] in await self?.updateRuntimeAccess() },
-            gateProvider: { [weak self] in await self?.updateGate },
+            gateProvider: { [weak self] in await self?.updateGateInstance() },
             networkSatisfied: { Self.updateNetworkPathSatisfied() },
             backgroundDownloadAllowed: {
                 Self.updateBackgroundDownloadAllowed()
@@ -1121,7 +1121,9 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
     private let endAll: @Sendable (PackageID) async -> Void
     private let reopenPackage: @Sendable (PackageID) async throws -> Void
     private let ready: @Sendable (UpdateStartReason) async throws -> Void
+    private let mayStart: @Sendable () async -> Bool
     private let assertOperation: @Sendable () async throws -> UpdateActivityAssertion
+    private let idle: @Sendable () async -> Void
     private let healthLaunch: @Sendable (PackageID, UpdateHealthCheckTimeouts) async -> HealthLaunchResult
     private let drawnFrame: @Sendable (PackageID) async -> Bool
 
@@ -1134,7 +1136,9 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         endAll: @escaping @Sendable (PackageID) async -> Void,
         reopenPackage: @escaping @Sendable (PackageID) async throws -> Void,
         ready: @escaping @Sendable (UpdateStartReason) async throws -> Void,
+        mayStart: @escaping @Sendable () async -> Bool = { false },
         assertOperation: @escaping @Sendable () async throws -> UpdateActivityAssertion,
+        idle: @escaping @Sendable () async -> Void = {},
         healthLaunch: @escaping @Sendable (PackageID, UpdateHealthCheckTimeouts) async -> UpdateCore.HealthLaunchResult,
         drawnFrame: @escaping @Sendable (PackageID) async -> Bool
     ) {
@@ -1146,7 +1150,9 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         self.endAll = endAll
         self.reopenPackage = reopenPackage
         self.ready = ready
+        self.mayStart = mayStart
         self.assertOperation = assertOperation
+        self.idle = idle
         self.healthLaunch = healthLaunch
         self.drawnFrame = drawnFrame
     }
@@ -1183,8 +1189,16 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         try await ready(reason)
     }
 
+    func mayStartForUpdateInstall() async -> Bool {
+        await mayStart()
+    }
+
     func assertStoreOperation() async throws -> UpdateActivityAssertion {
         try await assertOperation()
+    }
+
+    func updatesIdle() async {
+        await idle()
     }
 
     /// §8.2: the session service runs the health launch when it knows how;
@@ -1257,6 +1271,39 @@ extension RuntimeHost {
     /// (T1 with fake sessions, update-system.md §7.5).
     func installHeadlessSessionServiceForTesting(_ service: any RuntimeSessionService) {
         headlessSessionService = service
+    }
+
+    /// The §3.5 headless-install conditions: `updates.startRuntimeToInstall`
+    /// on, a staged update waiting longer than 24 h, AC power, and the user
+    /// idle for at least 15 minutes. GU1 and `ensureReady(.update)` both ask.
+    func mayStartUpdateInstallOnStoppedRuntime() async -> Bool {
+        let globals = GlobalSettings.load(from: paths.settingsFile)
+        guard globals.updatesStartRuntimeToInstall else { return false }
+        let cutoff = Date().addingTimeInterval(-86_400)
+        let staged = await updateServiceInstance().stateStore.allStates()
+            .values.contains {
+                $0.phase == "staged" && ($0.stagedAt ?? .distantFuture) < cutoff
+            }
+        guard staged else { return false }
+        return Self.hostOnACPower() && Self.hostIdleSeconds() >= 900
+    }
+
+    /// §3.5's tail: marks that an update install booted a stopped runtime.
+    func markUpdateBootedForInstall() { updateBootedForInstall = true }
+    /// §3.5's tail: clears the mark — a real session now owns the runtime.
+    func clearUpdateBootedForInstall() { updateBootedForInstall = false }
+    /// §3.5's tail: stops a runtime this daemon booted only for update
+    /// installs once no update work, mutation, or session keeps it.
+    private func stopUpdateBootedRuntimeIfIdle() async {
+        guard updateBootedForInstall, activePackageMutations == 0 else { return }
+        if let gate = updateGate, await gate.hasPendingInstalls { return }
+        if let service = headlessSessionService as? DaemonHeadlessSessionService,
+            await service.hasLiveSessions
+        {
+            return
+        }
+        updateBootedForInstall = false
+        try? await stopRuntimeBody(reason: .idle)
     }
 
     /// Builds the §7.5 runtime access over this host's supervisor and
@@ -1378,6 +1425,10 @@ extension RuntimeHost {
                 try await handling.reopenPackageSession(packageID: wireID)
             },
             ready: { [weak self] reason in
+                // Daemon startup creates the supervisor asynchronously; an
+                // install admitted before that must not fail on a nil
+                // supervisor and drop the staged request.
+                try? await self?.waitForStartupCompletion()
                 guard let self, let supervisor = await self.supervisor else {
                     throw UpdateFailure.providerUnreachable(reason: "runtime is not running")
                 }
@@ -1386,24 +1437,13 @@ extension RuntimeHost {
                 // staged update has waited > 24 h on AC with the user idle
                 // >= 15 min; otherwise the install defers to the next gate.
                 if reason == .update, await supervisor.state == .stopped {
-                    let globals = GlobalSettings.load(from: self.paths.settingsFile)
-                    guard globals.updatesStartRuntimeToInstall else {
+                    guard await self.mayStartUpdateInstallOnStoppedRuntime() else {
                         throw UpdateFailure.providerUnreachable(
-                            reason: "updates.startRuntimeToInstall is off")
+                            reason: "the §3.5 headless-install conditions do not hold")
                     }
-                    let cutoff = Date().addingTimeInterval(-86_400)
-                    let staged = await self.updateServiceInstance().stateStore.allStates()
-                        .values.contains {
-                            $0.phase == "staged" && ($0.stagedAt ?? .distantFuture) < cutoff
-                        }
-                    guard staged else {
-                        throw UpdateFailure.providerUnreachable(
-                            reason: "no staged update older than 24 h")
-                    }
-                    guard Self.hostOnACPower(), Self.hostIdleSeconds() >= 900 else {
-                        throw UpdateFailure.providerUnreachable(
-                            reason: "§3.5 needs AC power and >=15 min idle")
-                    }
+                    // §3.5's tail: remember this boot was update-driven so
+                    // the runtime stops again once the installs finish.
+                    await markUpdateBootedForInstall()
                 }
                 // A user-initiated Update Now may resume a suspended runtime;
                 // automatic installs go through .automatic (§7.1 GU1).
@@ -1419,6 +1459,9 @@ extension RuntimeHost {
                         reason: "package channel is not connected")
                 }
             },
+            mayStart: { [weak self] in
+                await self?.mayStartUpdateInstallOnStoppedRuntime() ?? false
+            },
             assertOperation: { [weak self] in
                 guard let self else { return UpdateActivityAssertion() }
                 // The host's package-mutation guard makes a stop, restart,
@@ -1428,15 +1471,23 @@ extension RuntimeHost {
                 let inner = await self.updateIdleController.assertActivity(.storeOperation)
                 return UpdateActivityAssertion {
                     inner.release()
-                    Task { await self.finishPackageMutation() }
+                    Task {
+                        await self.finishPackageMutation()
+                        await self.stopUpdateBootedRuntimeIfIdle()
+                    }
                 }
+            },
+            idle: { [weak self] in
+                await self?.stopUpdateBootedRuntimeIfIdle()
             },
             // §8.2: the session service runs the health-check launch; a
             // service without it answers `.launchFailed`, the same as no
             // channel.
             healthLaunch: { [weak self] packageID, timeouts in
+                // The service is created lazily so an install that booted
+                // Android itself (§3.5) can still run its health launch.
                 guard let self,
-                    let service = await self.headlessSessionService
+                    let service = (try? await self.makeHeadlessSessionService())
                         as? DaemonHeadlessSessionService,
                     let wireID = RuntimePackageID(rawValue: packageID.rawValue)
                 else {
@@ -1447,7 +1498,7 @@ extension RuntimeHost {
             },
             drawnFrame: { [weak self] packageID in
                 guard let self else { return false }
-                if let service = await self.headlessSessionService
+                if let service = (try? await self.makeHeadlessSessionService())
                     as? DaemonHeadlessSessionService,
                     let wireID = RuntimePackageID(rawValue: packageID.rawValue),
                     await service.hasDrawnFrame(packageID: wireID)
@@ -1480,7 +1531,9 @@ extension RuntimeHost {
             displaySlotFree: { true })
         updateGate = gate
         startUpdateGatePump()
-        Task { await self.wireUpdateGateSessionHooks() }
+        Task { [weak self] in
+            await self?.wireUpdateGateSessionHooks()
+        }
         return gate
     }
 
@@ -1497,7 +1550,11 @@ extension RuntimeHost {
                 await self?.awaitUpdateInstall(for: packageID, gate: updateGate)
             },
             firstFrameObserver: { [weak self] packageID in
-                guard let self, let package = PackageID(rawValue: packageID.rawValue) else { return }
+                guard let self else { return }
+                // A session that drew a frame means someone is using the
+                // runtime: it is no longer a headless update boot.
+                await clearUpdateBootedForInstall()
+                guard let package = PackageID(rawValue: packageID.rawValue) else { return }
                 await self.updateServiceInstance().notePostUpdateFirstFrame(package)
                 // runtime-daemon.md §7.1: a due package's check is scheduled
                 // 30 s after the first frame — never before openSession

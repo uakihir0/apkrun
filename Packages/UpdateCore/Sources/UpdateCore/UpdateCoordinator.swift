@@ -699,7 +699,8 @@ public actor UpdateCoordinator {
                 provider: candidate.provider.type,
                 signerDigests: preview.artifactSet.signerDigests,
                 cursor: candidate.cursor,
-                reopenAfterInstall: closeRunningApp)
+                reopenAfterInstall: closeRunningApp,
+                userRequested: trigger == .userInitiated || trigger == .manual)
         }
         await stateStore.flush()
 
@@ -873,6 +874,9 @@ public actor UpdateCoordinator {
             await self.drainQueuedInstalls(
                 first: next, trigger: trigger, runtime: runtime, gate: gate)
         }
+        // §3.5: the idle stop runs only after the reopen could claim a
+        // session — stopping first would drop a reopened app.
+        await runtime.updatesIdle()
         return outcome
     }
 
@@ -913,6 +917,7 @@ public actor UpdateCoordinator {
             // try the one after it.
             next = await gate.finishInstall(admitted)
         }
+        await runtime.updatesIdle()
     }
 
     /// `installStaged` plus the H1 confirmation, called with the gate's
@@ -1206,8 +1211,13 @@ public actor UpdateCoordinator {
             state.nextCheckAt = Self.nextCheck(
                 after: now, intervalHours: checkIntervalHours, failures: failures)
             state.consecutiveFailures = failures
-            state.phase = nil
-            state.candidate = nil
+            // A still-staged candidate survives an up-to-date check: the
+            // provider has nothing newer, but §7.2 may yet install the
+            // staged set (and §3.5 counts its stagedAt age).
+            if state.phase != "staged" {
+                state.phase = nil
+                state.candidate = nil
+            }
         }
         setPhase(record.packageId, .completed(.skipped(outcome)))
         await appendHistory(

@@ -1,0 +1,1 @@
+{"schemaVersion":1,"packageId":"com.example.app","versionCode":2,"artifacts":[{"type":"apk","url":"https://files.example.com/v2/app.apk","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"type":"split","url":"https://files.example.com/splits/app.apk","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","splitName":"config.en"}]}

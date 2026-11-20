@@ -131,6 +131,10 @@ public struct GlobalSettings: Equatable, Sendable {
         let temporary = parent.appendingPathComponent(".\(fileURL.lastPathComponent).\(UUID().uuidString).tmp")
         try data.write(to: temporary, options: .withoutOverwriting)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
-        _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary)
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary)
+        } else {
+            try FileManager.default.moveItem(at: temporary, to: fileURL)
+        }
     }
 }

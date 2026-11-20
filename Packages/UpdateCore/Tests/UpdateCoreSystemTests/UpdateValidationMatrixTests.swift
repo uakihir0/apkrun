@@ -622,7 +622,8 @@ private func fakeArtifact(_ name: String, split: String?, _ byte: UInt8) -> Arti
 @Test func forgedLineageTailDoesNotConsent() async throws {
     let root = try makeTemporaryRoot()
     defer { try? FileManager.default.removeItem(at: root) }
-    let a = fakeDigest(0xAA), b = fakeDigest(0xBB)
+    let a = fakeDigest(0xAA)
+    let b = fakeDigest(0xBB)
     // The lineage grants the installed signer INSTALLED_DATA but ends at A:
     // a signer B carrying it did not earn the rotation (SEC finding on #144).
     do {

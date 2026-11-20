@@ -211,7 +211,8 @@ public struct UpdateValidator: Sendable {
                 // this, but a preview that reaches V3 through another path
                 // must not extend consent past the lineage's end.
                 let lineageNodes = preview.artifactSet.lineageNodes
-                let rotation = lineageNodes
+                let rotation =
+                    lineageNodes
                     .first(where: { $0.certificateDigest == installedSigner })
                 if let rotation,
                     lineageNodes.last?.certificateDigest == candidateSigner,

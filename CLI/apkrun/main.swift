@@ -95,6 +95,8 @@ struct APKRunCommand: AsyncParsableCommand {
             }
         } catch let cleanExit as CleanExit {
             Self.exit(withError: cleanExit)
+        } catch let exitCode as ExitCode {
+            Self.exit(withError: exitCode)
         } catch {
             if Self.isBuiltInOutputRequest(arguments) {
                 Self.exit(withError: error)

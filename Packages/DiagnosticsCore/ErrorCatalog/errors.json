@@ -1172,6 +1172,24 @@
    }
   },
   {
+   "code": "runtime.busy",
+   "parameters": [],
+   "message": {
+    "en": "APKRun's background service is busy."
+   },
+   "remediation": {
+    "en": "Wait a moment and try again."
+   },
+   "action": "retry",
+   "cliExit": 75,
+   "doc": {
+    "case": "busy",
+    "when": "a rate-limited operation arrives faster than its limit, for example more than five wrapper approval requests per minute (wrapper.md §7.3 step 3)",
+    "raisedBy": "RuntimeHost",
+    "ref": "wrapper.md §7.3 step 3"
+   }
+  },
+  {
    "code": "runtime.notAuthorized",
    "parameters": [],
    "message": {
@@ -2968,6 +2986,67 @@
     "when": "a static check of wrapper.md §7.3 step 1 fails (approval or verifyWrapper)",
     "raisedBy": "WrapperApprovalService, WrapperValidator",
     "ref": "wrapper.md §7.3 step 1"
+   }
+  },
+  {
+   "code": "wrapper.approvalDenied",
+   "parameters": [
+    "app"
+   ],
+   "message": {
+    "en": "APKRun did not allow {app} to open."
+   },
+   "remediation": {
+    "en": "To allow it, remove it from Mac apps you didn't allow in Settings → Privacy, then open {app} again."
+   },
+   "action": "openPrivacySettings",
+   "cliExit": 5,
+   "doc": {
+    "table": "wrapperFailure",
+    "case": "approvalDenied",
+    "when": "the user chose Don't Allow, or a denial for the same cdhash has not expired (24 h)",
+    "raisedBy": "WrapperApprovalService, APKRunLauncher",
+    "ref": "wrapper.md §7.3 step 5"
+   }
+  },
+  {
+   "code": "wrapper.approvalTimedOut",
+   "parameters": [
+    "app"
+   ],
+   "message": {
+    "en": "APKRun did not allow {app} to open."
+   },
+   "remediation": {
+    "en": "The request wasn't answered within 10 minutes. Open {app} again to ask again."
+   },
+   "action": "retry",
+   "cliExit": 1,
+   "doc": {
+    "table": "wrapperFailure",
+    "case": "approvalTimedOut",
+    "when": "no answer within 10 minutes",
+    "raisedBy": "WrapperApprovalService, APKRunLauncher",
+    "ref": "wrapper.md §7.3 step 5"
+   }
+  },
+  {
+   "code": "wrapper.approvalNotFound",
+   "parameters": [],
+   "message": {
+    "en": "This request to open a Mac app was already answered or has expired."
+   },
+   "remediation": {
+    "en": "No action is needed. To ask again, open the Mac app again."
+   },
+   "action": "none",
+   "cliExit": 4,
+   "doc": {
+    "table": "wrapperFailure",
+    "case": "approvalNotFound",
+    "when": "decideApproval for an approval that is unknown, already answered, or expired",
+    "raisedBy": "WrapperApprovalService",
+    "ref": "wrapper.md §7.3 step 5"
    }
   }
  ]

@@ -468,6 +468,10 @@ public enum WrapperChange: Codable, Equatable, Sendable {
     case removed(RuntimePackageID)
     /// The on-demand status of a wrapper changed (coalesced per package).
     case statusChanged(RuntimePackageID, WrapperStatus)
+    /// APKRun.app shows the approval dialog (wrapper.md §7.3 step 4).
+    case approvalRequested(ApprovalPrompt)
+    /// An approval prompt was answered (wrapper.md §7.3 step 5).
+    case approvalResolved(ApprovalID)
     /// The daemon reported a wrapper change added by a newer API version.
     case unknown
 
@@ -503,6 +507,12 @@ public enum WrapperChange: Codable, Equatable, Sendable {
                 try payload.decode(RuntimePackageID.self, forKey: .first),
                 try payload.decode(WrapperStatus.self, forKey: .status)
             )
+        case "approvalRequested":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .approvalRequested(try payload.decode(ApprovalPrompt.self, forKey: .first))
+        case "approvalResolved":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .approvalResolved(try payload.decode(ApprovalID.self, forKey: .first))
         default:
             self = .unknown
         }
@@ -537,6 +547,18 @@ public enum WrapperChange: Codable, Equatable, Sendable {
             )
             try payload.encode(packageID, forKey: .first)
             try payload.encode(status, forKey: .status)
+        case .approvalRequested(let prompt):
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self,
+                forKey: RuntimeEventCodingKey("approvalRequested")
+            )
+            try payload.encode(prompt, forKey: .first)
+        case .approvalResolved(let approvalID):
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self,
+                forKey: RuntimeEventCodingKey("approvalResolved")
+            )
+            try payload.encode(approvalID, forKey: .first)
         case .unknown:
             throw EncodingError.invalidValue(
                 self,
@@ -546,5 +568,409 @@ public enum WrapperChange: Codable, Equatable, Sendable {
                 )
             )
         }
+    }
+}
+
+// MARK: - Approval (runtime-api.md §10.6, wrapper.md §7.3)
+
+/// The approval kinds that appear in a prompt (runtime-api.md §10.6).
+public enum IntegrationKind: String, Codable, Sendable, CaseIterable {
+    /// `integrations.clipboard`.
+    case clipboard
+    /// `integrations.notifications`.
+    case notifications
+    /// `integrations.links`.
+    case links
+    /// `integrations.files`.
+    case files
+    /// `integrations.sharedFolders`.
+    case sharedFolders
+    /// `integrations.microphone`.
+    case microphone
+}
+
+/// The value an approval prompt reports for an integration
+/// (configuration.md §3.3's cap domain).
+public enum WireIntegrationDecision: String, Codable, Sendable, Equatable {
+    /// The integration is off.
+    case off
+    /// The integration is on.
+    case on
+    /// Shared folders are read-only.
+    case readOnly
+    /// Shared folders are read-write.
+    case readWrite
+    /// Links open in Android.
+    case android
+    /// Links ask where to open.
+    case ask
+    /// Links open on the Mac.
+    case mac
+}
+
+/// The identifier of one approval prompt (runtime-api.md §10.6).
+public struct ApprovalID: RawRepresentable, Codable, Sendable, Hashable {
+    /// The opaque identifier.
+    public var rawValue: String
+
+    /// Creates an approval identifier.
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+}
+
+/// The kind of approval being requested (runtime-api.md §10.6).
+public enum ApprovalPromptKind: Codable, Sendable, Equatable {
+    /// A wrapper asks to be approved (wrapper.md §7.3).
+    case wrapper
+    /// A portable bootstrap asks to install a package (runtime-api.md §10.7).
+    case bootstrapInstall(RuntimeImportPreview)
+}
+
+/// One prompt APKRun.app shows for an approval request (runtime-api.md §10.6).
+public struct ApprovalPrompt: Codable, Sendable, Equatable {
+    /// The prompt's identifier; `decideApproval` answers with it.
+    public var approvalID: ApprovalID
+    /// What is being asked.
+    public var kind: ApprovalPromptKind
+    /// The bundle on disk that is asking.
+    public var bundleURL: URL
+    /// The bundle's claimed identifier.
+    public var bundleID: String
+    /// The Android package the wrapper belongs to.
+    public var packageID: RuntimePackageID
+    /// The wrapper's display name.
+    public var displayName: String
+    /// Who signed the bundle.
+    public var signer: WrapperSigner
+    /// Whether the package is installed on this Mac.
+    public var packageInstalled: Bool
+    /// The installed version, when the package is installed.
+    public var installedVersion: String?
+    /// The version bundled in a portable wrapper.
+    public var bundledVersion: String?
+    /// The location of the entry this approval replaces.
+    public var replacesURL: URL?
+    /// The integrations the app gets, capped by this Mac's defaults.
+    public var integrations: [IntegrationKind: WireIntegrationDecision]
+    /// A PNG icon of at most 256 px.
+    public var icon: Data?
+    /// When the request was made.
+    public var requestedAt: Date
+    /// When the prompt times out (10 minutes).
+    public var expiresAt: Date
+
+    /// Creates an approval prompt.
+    public init(
+        approvalID: ApprovalID,
+        kind: ApprovalPromptKind,
+        bundleURL: URL,
+        bundleID: String,
+        packageID: RuntimePackageID,
+        displayName: String,
+        signer: WrapperSigner,
+        packageInstalled: Bool,
+        installedVersion: String? = nil,
+        bundledVersion: String? = nil,
+        replacesURL: URL? = nil,
+        integrations: [IntegrationKind: WireIntegrationDecision] = [:],
+        icon: Data? = nil,
+        requestedAt: Date,
+        expiresAt: Date
+    ) {
+        self.approvalID = approvalID
+        self.kind = kind
+        self.bundleURL = bundleURL
+        self.bundleID = bundleID
+        self.packageID = packageID
+        self.displayName = displayName
+        self.signer = signer
+        self.packageInstalled = packageInstalled
+        self.installedVersion = installedVersion
+        self.bundledVersion = bundledVersion
+        self.replacesURL = replacesURL
+        self.integrations = integrations
+        self.icon = icon
+        self.requestedAt = requestedAt
+        self.expiresAt = expiresAt
+    }
+}
+
+/// The launcher's `requestApproval` broker request (runtime-api.md §3.4).
+public struct ApprovalRequest: Codable, Equatable, Sendable {
+    /// The bundle on disk that is asking.
+    public var bundleURL: URL
+    /// The bundle's claimed identifier.
+    public var bundleID: String
+    /// The Android package the wrapper belongs to.
+    public var packageID: RuntimePackageID
+
+    /// Creates an approval request.
+    public init(bundleURL: URL, bundleID: String, packageID: RuntimePackageID) {
+        self.bundleURL = bundleURL
+        self.bundleID = bundleID
+        self.packageID = packageID
+    }
+}
+
+/// The broker's answer to `requestApproval` (runtime-api.md §3.4).
+public enum ApprovalReply: Codable, Equatable, Sendable {
+    /// The user allowed the wrapper; repeat `requestEndpoint`.
+    case approved
+    /// The user denied it until the given date.
+    case denied(until: Date)
+    /// Nobody answered within 10 minutes.
+    case timedOut
+
+    private enum CodingKey: String, Swift.CodingKey {
+        case approved
+        case denied
+        case timedOut
+    }
+
+    private enum AssociatedKey: String, Swift.CodingKey {
+        case until = "_0"
+    }
+
+    /// Decodes an approval reply.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKey.self)
+        guard container.allKeys.count == 1, let key = container.allKeys.first else {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Expected one approval reply case."
+                )
+            )
+        }
+        switch key {
+        case .approved:
+            self = .approved
+        case .denied:
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .denied(until: try payload.decode(Date.self, forKey: .until))
+        case .timedOut:
+            self = .timedOut
+        }
+    }
+
+    /// Encodes an approval reply.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKey.self)
+        switch self {
+        case .approved:
+            try container.encode([String: String](), forKey: .approved)
+        case .denied(let until):
+            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .denied)
+            try payload.encode(until, forKey: .until)
+        case .timedOut:
+            try container.encode([String: String](), forKey: .timedOut)
+        }
+    }
+}
+
+/// APKRun.app's answer to an approval prompt (runtime-api.md §10.6).
+public struct DecideApprovalRequest: Codable, Equatable, Sendable {
+    /// The prompt being answered.
+    public var approvalID: ApprovalID
+    /// Whether the user allowed it.
+    public var allow: Bool
+
+    /// Creates a decision.
+    public init(approvalID: ApprovalID, allow: Bool) {
+        self.approvalID = approvalID
+        self.allow = allow
+    }
+}
+
+/// One denied wrapper in Settings → Privacy (runtime-api.md §10.6).
+public struct DeniedWrapper: Codable, Equatable, Sendable {
+    /// The denied bundle identifier.
+    public var bundleID: String
+    /// The Android package, when the bundle declared one.
+    public var packageID: RuntimePackageID?
+    /// The denied cdhash.
+    public var cdhash: String
+    /// Until when requests are refused at once.
+    public var until: Date
+
+    /// Creates a denied wrapper record.
+    public init(bundleID: String, packageID: RuntimePackageID?, cdhash: String, until: Date) {
+        self.bundleID = bundleID
+        self.packageID = packageID
+        self.cdhash = cdhash
+        self.until = until
+    }
+}
+
+/// The `clearWrapperDenial` request (runtime-api.md §10.6).
+public struct ClearWrapperDenialRequest: Codable, Equatable, Sendable {
+    /// The bundle identifier to clear.
+    public var bundleID: String
+    /// The denied cdhash to clear.
+    public var cdhash: String
+
+    /// Creates a clear request.
+    public init(bundleID: String, cdhash: String) {
+        self.bundleID = bundleID
+        self.cdhash = cdhash
+    }
+}
+
+// MARK: - Approval control operations (runtime-api.md §10.2)
+
+/// The `pendingApprovals` control request (runtime-api.md §10.6).
+public struct RuntimePendingApprovalsControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+
+    /// Creates a pending-approvals request.
+    public init(header: APIRequestHeader) {
+        self.header = header
+    }
+}
+
+/// The result or typed error returned by `pendingApprovals`.
+public struct RuntimePendingApprovalsControlReply: Codable, Equatable, Sendable {
+    /// The waiting prompts, present on success.
+    public let result: [ApprovalPrompt]?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: [ApprovalPrompt]) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// The `decideApproval` control request (runtime-api.md §10.6).
+public struct RuntimeDecideApprovalControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The prompt being answered.
+    public let approvalID: ApprovalID
+    /// Whether the user allowed it.
+    public let allow: Bool
+
+    /// Creates a decide-approval request.
+    public init(header: APIRequestHeader, approvalID: ApprovalID, allow: Bool) {
+        self.header = header
+        self.approvalID = approvalID
+        self.allow = allow
+    }
+}
+
+/// The result or typed error returned by `decideApproval`.
+public struct RuntimeDecideApprovalControlReply: Codable, Equatable, Sendable {
+    /// `true` on success, absent on failure.
+    public let acknowledged: Bool?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init() {
+        acknowledged = true
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        acknowledged = nil
+        self.error = error
+    }
+}
+
+/// The `deniedWrappers` control request (runtime-api.md §10.6).
+public struct RuntimeDeniedWrappersControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+
+    /// Creates a denied-wrappers request.
+    public init(header: APIRequestHeader) {
+        self.header = header
+    }
+}
+
+/// The result or typed error returned by `deniedWrappers`.
+public struct RuntimeDeniedWrappersControlReply: Codable, Equatable, Sendable {
+    /// The denied wrappers, present on success.
+    public let result: [DeniedWrapper]?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: [DeniedWrapper]) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// The `clearWrapperDenial` control request (runtime-api.md §10.6).
+public struct RuntimeClearWrapperDenialControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The bundle identifier to clear.
+    public let bundleID: String
+    /// The denied cdhash to clear.
+    public let cdhash: String
+
+    /// Creates a clear-wrapper-denial request.
+    public init(header: APIRequestHeader, bundleID: String, cdhash: String) {
+        self.header = header
+        self.bundleID = bundleID
+        self.cdhash = cdhash
+    }
+}
+
+/// The result or typed error returned by `clearWrapperDenial`.
+public struct RuntimeClearWrapperDenialControlReply: Codable, Equatable, Sendable {
+    /// `true` on success, absent on failure.
+    public let acknowledged: Bool?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init() {
+        acknowledged = true
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        acknowledged = nil
+        self.error = error
+    }
+}
+
+/// The reply to the broker's `requestApproval` (runtime-api.md §3.4).
+public struct RuntimeApprovalBrokerReply: Codable, Equatable, Sendable {
+    /// The approval reply, present on success.
+    public let result: ApprovalReply?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: ApprovalReply) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
     }
 }

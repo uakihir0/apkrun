@@ -3,6 +3,9 @@ package io.apkrun.guest.daemon
 import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.v1.ClearDisplay
 import io.apkrun.guest.protocol.v1.ClearPolicy
+import io.apkrun.guest.protocol.v1.ClipData
+import io.apkrun.guest.protocol.v1.CollectDiagnostics
+import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.ImePolicy
 import io.apkrun.guest.protocol.v1.LaunchApplication
@@ -46,6 +49,7 @@ private class FakeOperations : AgentOperations {
     var clearedDisplay: ClearDisplay? = null
     var queriedPackage: QueryPackage? = null
     var listedPackages: ListPackages? = null
+    var lastClipboard: ClipData? = null
     /**
      * Released by the first operation that starts. Tests that need an op to be in flight wait on
      * it.
@@ -100,6 +104,16 @@ private class FakeOperations : AgentOperations {
         return PackageList.newBuilder()
             .addPackages(PackageSummary.newBuilder().setPackage("io.apkrun.fixture.hellotext"))
             .build()
+    }
+
+    override fun setClipboard(request: ClipData) {
+        enter()
+        lastClipboard = request
+    }
+
+    override fun collectDiagnostics(request: CollectDiagnostics): CollectDiagnosticsResult {
+        enter()
+        return CollectDiagnosticsResult.getDefaultInstance()
     }
 }
 

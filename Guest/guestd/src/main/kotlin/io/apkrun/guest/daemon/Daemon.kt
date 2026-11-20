@@ -69,6 +69,7 @@ class Daemon(internal val scope: CoroutineScope) {
     private val packages = PackageService(AndroidPackageCatalog(SystemContext.get().packageManager))
     internal val bulkTransfers = BulkTransfers()
     private val diagnostics = DiagnosticsService(bulkTransfers)
+    internal val clipboard = ClipboardBridge.create(SystemContext.get(), events)
     internal val input =
         InputService(
             boundsOf = { displayId ->
@@ -84,7 +85,8 @@ class Daemon(internal val scope: CoroutineScope) {
         )
     internal val dispatcher =
         Dispatcher(
-            operations = DeviceOperations(displays, tasks, launch, packages, diagnostics),
+            operations =
+                DeviceOperations(displays, tasks, launch, packages, diagnostics, clipboard),
             uptimeMillis = { SystemClock.elapsedRealtime() },
         )
 
@@ -110,6 +112,7 @@ class Daemon(internal val scope: CoroutineScope) {
         displays.addRemovalListener { displayId -> input.displayRemoved(displayId) }
         displays.start()
         tasks.start()
+        clipboard.start()
         DeviceSetup.apply()
         sockets.forEach { it.start() }
         AgentLog.info("apkrun_guestd is serving the control, input, and bulk sockets")

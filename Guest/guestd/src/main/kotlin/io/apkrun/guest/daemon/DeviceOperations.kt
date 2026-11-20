@@ -2,6 +2,7 @@ package io.apkrun.guest.daemon
 
 import android.os.SystemClock
 import io.apkrun.guest.protocol.v1.ClearDisplay
+import io.apkrun.guest.protocol.v1.ClipData
 import io.apkrun.guest.protocol.v1.CollectDiagnostics
 import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
 import io.apkrun.guest.protocol.v1.GuestErrorCode
@@ -19,15 +20,16 @@ import io.apkrun.guest.runtime.HiddenApi
 
 /**
  * The operations of the agent on the device, over the services (guest-components.md §6.1). The
- * snapshot reports what the services know. The IME, notification, and clipboard fields keep their
- * defaults until #72, #54, and #55.
+ * snapshot reports what the services know. The IME and notification fields keep their defaults
+ * until #72 and #55.
  */
-class DeviceOperations(
+internal class DeviceOperations(
     private val displays: DisplayService,
     private val tasks: TaskService,
     private val launch: LaunchService,
     private val packages: PackageService,
     private val diagnostics: DiagnosticsService,
+    private val clipboard: ClipboardBridge,
 ) : AgentOperations {
     override fun snapshot(): Snapshot =
         Snapshot.newBuilder()
@@ -37,7 +39,7 @@ class DeviceOperations(
             .setFocusedDisplayId(tasks.focusedDisplayId())
             .setImeSelected(false)
             .setNotificationListenerEnabled(false)
-            .setClipboardSeq(0)
+            .setClipboardSeq(clipboard.currentSequence())
             .build()
 
     override fun setDisplayPolicy(request: SetDisplayPolicy) = displays.applyPolicy(request)
@@ -63,6 +65,8 @@ class DeviceOperations(
     override fun queryPackage(request: QueryPackage): PackageInfo = packages.query(request)
 
     override fun listPackages(request: ListPackages): PackageList = packages.list(request)
+
+    override fun setClipboard(request: ClipData) = clipboard.setClipboard(request)
 
     override fun collectDiagnostics(request: CollectDiagnostics): CollectDiagnosticsResult =
         diagnostics.collect(request)

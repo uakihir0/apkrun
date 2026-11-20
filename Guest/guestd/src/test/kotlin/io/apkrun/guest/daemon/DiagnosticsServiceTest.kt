@@ -8,8 +8,6 @@ import io.apkrun.guest.protocol.v1.Envelope
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -19,21 +17,22 @@ import org.junit.Test
  */
 class DiagnosticsServiceTest {
     private fun requestFor(vararg items: DiagnosticsItem, maxBytes: Long = 16 * 1024 * 1024) =
-        CollectDiagnostics.newBuilder().apply {
-            addAllItems(items.toList())
-            this.maxBytes = maxBytes
-        }.build()
+        CollectDiagnostics.newBuilder()
+            .apply {
+                addAllItems(items.toList())
+                this.maxBytes = maxBytes
+            }
+            .build()
 
     @Test
     fun unknownItemIsUnsupportedWithoutFailing() {
         val service = DiagnosticsService(BulkTransfers())
-        val result =
-            service.collect(
-                requestFor(DiagnosticsItem.DIAGNOSTICS_ITEM_LOGCAT))
+        val result = service.collect(requestFor(DiagnosticsItem.DIAGNOSTICS_ITEM_LOGCAT))
         assertEquals(1, result.itemsCount)
         assertEquals(
             DiagnosticsItemStatus.DIAGNOSTICS_ITEM_STATUS_UNSUPPORTED,
-            result.getItems(0).status)
+            result.getItems(0).status,
+        )
     }
 
     @Test
@@ -47,7 +46,8 @@ class DiagnosticsServiceTest {
                 bulk,
                 object : DiagnosticsService.ShellRunner {
                     override fun run(vararg command: String) = payload
-                })
+                },
+            )
 
         val result = service.collect(requestFor(DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_MEMINFO))
         assertEquals(1, result.itemsCount)
@@ -60,21 +60,25 @@ class DiagnosticsServiceTest {
         val reader = FrameReader(ByteArrayInputStream(output.toByteArray()))
         val frames = mutableListOf<BulkFrame>()
         while (true) {
-            val envelope = try {
-                reader.next()
-            } catch (end: Exception) {
-                break
-            }
+            val envelope =
+                try {
+                    reader.next()
+                } catch (end: Exception) {
+                    break
+                }
             if (envelope.bodyCase == Envelope.BodyCase.BULK) {
                 frames.add(envelope.bulk)
             }
         }
         assertTrue(frames.firstOrNull()?.hasBegin() == true)
         val chunks = frames.filter { it.hasChunk() }
-        val reassembled = chunks.fold(ByteArrayOutputStream()) { acc, frame ->
-            acc.write(frame.chunk.toByteArray())
-            acc
-        }.toByteArray()
+        val reassembled =
+            chunks
+                .fold(ByteArrayOutputStream()) { acc, frame ->
+                    acc.write(frame.chunk.toByteArray())
+                    acc
+                }
+                .toByteArray()
         assertTrue(reassembled.contentEquals(payload))
         assertTrue(frames.lastOrNull()?.hasEnd() == true)
     }
@@ -89,11 +93,13 @@ class DiagnosticsServiceTest {
                 bulk,
                 object : DiagnosticsService.ShellRunner {
                     override fun run(vararg command: String) = payload
-                })
+                },
+            )
 
         val result =
             service.collect(
-                requestFor(DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_MEMINFO, maxBytes = 1_000))
+                requestFor(DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_MEMINFO, maxBytes = 1_000)
+            )
         val item = result.getItems(0)
         assertEquals(DiagnosticsItemStatus.DIAGNOSTICS_ITEM_STATUS_OK, item.status)
         assertTrue(item.truncated)
@@ -106,10 +112,13 @@ class DiagnosticsServiceTest {
                 BulkTransfers(),
                 object : DiagnosticsService.ShellRunner {
                     override fun run(vararg command: String) = ByteArray(10)
-                })
+                },
+            )
         val result = service.collect(requestFor(DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_MEMINFO))
         assertEquals(
-            DiagnosticsItemStatus.DIAGNOSTICS_ITEM_STATUS_FAILED, result.getItems(0).status)
+            DiagnosticsItemStatus.DIAGNOSTICS_ITEM_STATUS_FAILED,
+            result.getItems(0).status,
+        )
     }
 
     @Test
@@ -122,9 +131,12 @@ class DiagnosticsServiceTest {
                 object : DiagnosticsService.ShellRunner {
                     override fun run(vararg command: String): ByteArray =
                         throw RuntimeException("no shell")
-                })
+                },
+            )
         val result = service.collect(requestFor(DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_MEMINFO))
         assertEquals(
-            DiagnosticsItemStatus.DIAGNOSTICS_ITEM_STATUS_FAILED, result.getItems(0).status)
+            DiagnosticsItemStatus.DIAGNOSTICS_ITEM_STATUS_FAILED,
+            result.getItems(0).status,
+        )
     }
 }

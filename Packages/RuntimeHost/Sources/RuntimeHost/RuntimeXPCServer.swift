@@ -1174,6 +1174,10 @@ enum RuntimeControlOperation {
     case clipboardWritten
     case focusChanged
     case integrationStatus
+    case checkForUpdates
+    case listUpdates
+    case updateHistory
+    case setUpdatePolicy
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1258,6 +1262,13 @@ enum RuntimeControlOperation {
                 false
             }
         case .integrationStatus:
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
+                false
+            }
+        case .checkForUpdates, .listUpdates, .updateHistory, .setUpdatePolicy:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true

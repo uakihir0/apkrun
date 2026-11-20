@@ -3464,7 +3464,7 @@ public actor RuntimeHost {
         return runtimeSupervisor
     }
 
-    private func packageQueryServiceInstance() -> EmbeddedPackageService {
+    func packageQueryServiceInstance() -> EmbeddedPackageService {
         if let packageQueryService {
             return packageQueryService
         }

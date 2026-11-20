@@ -18,22 +18,33 @@ public actor EmbeddedUpdateService {
     private var isOpen = false
 
     /// Creates an update service rooted at APKRun's data directory.
+    ///
+    /// `store` should be the `PackageStore` shared with the package service:
+    /// a second store on the same directory would delete another service's
+    /// pending import tickets during `open()` cleanup. `notifier` receives
+    /// `notifyOnly` update notifications; without one the notification stays
+    /// pending instead of being marked delivered.
     public init(
         paths: APKRunPaths = APKRunPaths(allowingHomeOverride: true),
+        store: PackageStore? = nil,
         developerModeEnabled: @escaping @Sendable () -> Bool = { false },
         checkIntervalHours: @escaping @Sendable () -> Int = { 6 },
-        guestFacts: @escaping @Sendable () -> GuestFacts = { GuestFacts() }
+        guestFacts: @escaping @Sendable () -> GuestFacts = { GuestFacts() },
+        notifier: (any HostNotificationSink)? = nil
     ) {
         self.paths = paths
-        store = PackageStore(
-            packagesDirectory: paths.packagesDirectory,
-            inspector: { apk in try await APKInspector().inspect(apk) },
-            fileManager: .default
-        )
+        self.store =
+            store
+            ?? PackageStore(
+                packagesDirectory: paths.packagesDirectory,
+                inspector: { apk in try await APKInspector().inspect(apk) },
+                fileManager: .default
+            )
         stateStore = UpdateStateStore(directory: paths.updatesDirectory)
         coordinator = UpdateCoordinator(
-            store: store,
+            store: self.store,
             stateStore: stateStore,
+            notifier: notifier,
             developerModeEnabled: developerModeEnabled,
             checkIntervalHours: checkIntervalHours(),
             guestFacts: guestFacts
@@ -61,12 +72,14 @@ public actor EmbeddedUpdateService {
     /// per package; a failing package never fails the batch.
     public func checkPackages(
         _ packageIDs: [PackageID],
-        context: ProviderContext
+        context: ProviderContext,
+        checkOnly: Bool = false
     ) async -> [UpdateCheckResult] {
         var results: [UpdateCheckResult] = []
         for packageID in packageIDs {
             let outcome = await coordinator.check(
-                packageID, trigger: .userInitiated, context: context)
+                packageID, trigger: .userInitiated, context: context,
+                checkOnly: checkOnly)
             guard let wireID = RuntimePackageID(rawValue: packageID.rawValue) else { continue }
             switch outcome {
             case .upToDate:
@@ -196,9 +209,13 @@ public actor EmbeddedUpdateService {
         }
 
         try await store.setUpdateMode(for: packageID, mode: Self.settingsMode(for: policy.choice))
+        // `requireProvider` makes the provider requirement atomic inside the
+        // store's mutation lock; the pre-check above cannot see a concurrent
+        // removal.
         try await store.setUpdatePolicy(
             for: packageID, authority: authority,
-            provider: provider, removeProvider: removeProvider)
+            provider: provider, removeProvider: removeProvider,
+            requireProvider: authority == .apkrun)
         guard
             let updated = try await store.listManagedPackages()
                 .first(where: { $0.packageId == packageID })
@@ -489,8 +506,12 @@ extension RuntimeHost {
     /// The lazily created update service (update-system.md).
     func updateServiceInstance() -> EmbeddedUpdateService {
         if let updateService { return updateService }
+        // Share the package service's store: a second PackageStore over the
+        // same directory would treat a pending install's `incoming/` as
+        // orphaned scratch and delete it during open() cleanup.
         let service = EmbeddedUpdateService(
             paths: paths,
+            store: packageQueryServiceInstance().store,
             developerModeEnabled: { [weak self] in
                 guard let self else { return false }
                 return GlobalSettings.load(from: self.paths.settingsFile).developerEnabled
@@ -578,7 +599,8 @@ extension RuntimeHost {
         eventHub.publishOperationEvent(.started(snapshot), operationID: operationID)
 
         let results = await service.checkPackages(
-            selected, context: service.providerContext(userInitiated: true))
+            selected, context: service.providerContext(userInitiated: true),
+            checkOnly: checkOnly)
         let all = preResults + results
         let failures = all.filter { result in
             if case .failed = result.outcome { return true }

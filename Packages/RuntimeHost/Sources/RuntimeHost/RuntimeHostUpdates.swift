@@ -755,6 +755,19 @@ extension RuntimeHost {
         )
         eventHub.publishOperationEvent(.started(snapshot), operationID: operationID)
 
+        // A non-checkOnly run can install: hold the package-mutation guard so
+        // stop/restart/reset cannot interrupt a stage→install transaction.
+        if !checkOnly {
+            do {
+                try beginPackageMutation()
+            } catch {
+                finishOperation(
+                    operationID, result: .failed(Self.sessionWireError(for: error)))
+                throw Self.sessionWireError(for: error)
+            }
+        }
+        defer { if !checkOnly { finishPackageMutation() } }
+
         let results = await service.checkPackages(
             selected, context: service.providerContext(userInitiated: true),
             checkOnly: checkOnly, runtime: updateRuntimeAccess())
@@ -888,6 +901,16 @@ extension RuntimeHost {
                     throw UpdateFailure.providerUnreachable(reason: "runtime is not running")
                 }
                 try await supervisor.ensureReady(.automatic)
+                // After a daemon restart or an Android stop the shared store's
+                // runtime access is still detached: without this, a ready
+                // Android answers every update install with runtimeUnavailable.
+                do {
+                    try await self.attachPackageQueriesIfRuntimeIsReady(
+                        to: self.packageQueryServiceInstance())
+                } catch {
+                    throw UpdateFailure.providerUnreachable(
+                        reason: "package channel is not connected")
+                }
             })
     }
 
@@ -932,6 +955,18 @@ extension RuntimeHost {
             task: nil
         )
         eventHub.publishOperationEvent(.started(snapshot), operationID: operationID)
+
+        // An update is a package mutation: it blocks stop/restart/reset like
+        // installs and uninstalls do, so Android cannot be torn down while a
+        // stage→install transaction is open.
+        do {
+            try beginPackageMutation()
+        } catch {
+            finishOperation(
+                operationID, result: .failed(Self.sessionWireError(for: error)))
+            throw Self.sessionWireError(for: error)
+        }
+        defer { finishPackageMutation() }
 
         let outcome: WireUpdateOutcome?
         do {

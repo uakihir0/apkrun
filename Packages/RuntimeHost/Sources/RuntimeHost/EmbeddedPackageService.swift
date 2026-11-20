@@ -43,7 +43,7 @@ public actor EmbeddedPackageService: RuntimeService {
     private let inspector: PackageStore.Inspector
     private let runtimeAccess: AttachedStoreRuntimeAccess
     /// Shared with `EmbeddedUpdateService` so a single store owns ticket cleanup.
-    let store: PackageStore
+    public let store: PackageStore
     private var sessionService: any RuntimeSessionService
     private let hostFreeSpace: @Sendable (URL) -> Int64
 

@@ -259,6 +259,7 @@ targets:
       - path: Tests/IntegrationTests/LinuxGuestTests
       - path: Tests/IntegrationTests/AndroidADBTests
       - path: Tests/IntegrationTests/AndroidPackageTests
+      - path: Tests/IntegrationTests/StoreTests
       - path: Tests/IntegrationTests/AndroidSupport
       - path: Tests/IntegrationTests/AndroidBootTests
       - path: Tests/IntegrationTests/AndroidGraphicsTests
@@ -301,6 +302,10 @@ targets:
         product: WindowingCore
       - package: APKRun
         product: RuntimeAPI
+      - package: APKRun
+        product: APKStoreCore
+      - package: APKRun
+        product: UpdateCore
     scheme:
       testTargets:
         - IntegrationTests

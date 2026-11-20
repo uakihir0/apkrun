@@ -32,17 +32,22 @@ struct APKSignatureInfo: Sendable, Equatable {
     var level: SignatureLevel
     /// The signing lineage oldest → newest when a rotation attribute is present.
     var lineage: [SHA256Digest]
+    /// The lineage nodes with capability flags, oldest → newest. Empty when
+    /// the APK carries no proof-of-rotation attribute.
+    var lineageNodes: [SignerLineageNode]
 
     init(
         signerDigests: [SHA256Digest],
         scheme: SignatureScheme,
         level: SignatureLevel,
-        lineage: [SHA256Digest] = []
+        lineage: [SHA256Digest] = [],
+        lineageNodes: [SignerLineageNode] = []
     ) {
         self.signerDigests = signerDigests
         self.scheme = scheme
         self.level = level
         self.lineage = lineage
+        self.lineageNodes = lineageNodes
     }
 }
 
@@ -251,6 +256,7 @@ struct APKSignatureVerifier: Sendable {
     ) throws(StoreFailure) -> APKSignatureInfo {
         var digests: [SHA256Digest] = []
         var lineage: [SHA256Digest] = []
+        var lineageNodes: [SignerLineageNode] = []
         let level: SignatureLevel = .verified
         var sawSigner = false
 
@@ -331,14 +337,23 @@ struct APKSignatureVerifier: Sendable {
             // Rotation attribute → lineage, oldest → newest.
             for attribute in Self.lengthPrefixed(attributesBlob) where attribute.count >= 8 {
                 if attribute.readUInt32LE(at: 0) == Self.proofOfRotationAttrID {
-                    lineage = Self.parseLineage(attribute.subdata(in: 4..<attribute.count))
+                    let valueLength = Int(attribute.readUInt32LE(at: 4))
+                    guard 8 + valueLength <= attribute.count else {
+                        throw .invalidSignature(
+                            file: file, reason: "truncated proof-of-rotation attribute")
+                    }
+                    lineageNodes = try Self.parseLineage(
+                        attribute.subdata(in: 8..<8 + valueLength), file: file)
+                    lineage = lineageNodes.map(\.certificateDigest)
                 }
             }
         }
         guard sawSigner else {
             throw .invalidSignature(file: file, reason: "empty signer set")
         }
-        return APKSignatureInfo(signerDigests: digests, scheme: scheme, level: level, lineage: lineage)
+        return APKSignatureInfo(
+            signerDigests: digests, scheme: scheme, level: level,
+            lineage: lineage, lineageNodes: lineageNodes)
     }
 
     /// The apksig chunked content digest: ZIP entries, central directory, EOCD with the CD
@@ -452,13 +467,106 @@ struct APKSignatureVerifier: Sendable {
     }
 
     /// Parses a SigningCertificateLineage into certificate digests, oldest → newest.
-    private static func parseLineage(_ blob: Data) -> [SHA256Digest] {
-        var digests: [SHA256Digest] = []
-        for node in Self.lengthPrefixed(blob) {
-            guard let certificate = Self.lengthPrefixed(node).first else { continue }
-            digests.append(SHA256Digest(data: certificate))
+    /// Parses and verifies a proof-of-rotation attribute value
+    /// (apksig `V3SigningCertificateLineage`): uint32 version (1), then
+    /// length-prefixed nodes, each `{lenPrefixed signedData, uint32 flags,
+    /// uint32 sigAlgorithmId, lenPrefixed signature}` where signedData is
+    /// `{lenPrefixed certificate, uint32 nextSigAlgorithmId}`. A node's
+    /// signature covers its signedData and verifies with the previous node's
+    /// certificate key, so the flag set can be trusted.
+    private static func parseLineage(
+        _ blob: Data, file: String
+    ) throws(StoreFailure) -> [SignerLineageNode] {
+        guard blob.count >= 4, blob.readUInt32LE(at: 0) == 1 else {
+            throw .invalidSignature(
+                file: file, reason: "unsupported signing-lineage version")
         }
-        return digests
+        var nodes: [SignerLineageNode] = []
+        var parentCertificate: Data?
+        var parentNextSigAlgorithm: UInt32 = 0
+        var index = 0
+        for node in Self.lengthPrefixed(blob.subdata(in: 4..<blob.count)) {
+            index += 1
+            var cursor = 0
+            func takeLengthPrefixed() throws(StoreFailure) -> Data {
+                guard cursor + 4 <= node.count else {
+                    throw StoreFailure.invalidSignature(
+                        file: file, reason: "truncated signing-lineage node")
+                }
+                let length = Int(node.readUInt32LE(at: cursor))
+                guard length >= 0, cursor + 4 + length <= node.count else {
+                    throw StoreFailure.invalidSignature(
+                        file: file, reason: "truncated signing-lineage node")
+                }
+                let part = node.subdata(in: cursor + 4..<cursor + 4 + length)
+                cursor += 4 + length
+                return part
+            }
+            let signedData = try takeLengthPrefixed()
+            guard cursor + 8 <= node.count else {
+                throw .invalidSignature(
+                    file: file, reason: "truncated signing-lineage node")
+            }
+            let flags = node.readUInt32LE(at: cursor)
+            let sigAlgorithmID = node.readUInt32LE(at: cursor + 4)
+            cursor += 8
+            let signature = try takeLengthPrefixed()
+
+            var innerCursor = 0
+            guard innerCursor + 4 <= signedData.count else {
+                throw .invalidSignature(
+                    file: file, reason: "truncated signing-lineage node")
+            }
+            let certLength = Int(signedData.readUInt32LE(at: innerCursor))
+            guard certLength >= 0, innerCursor + 4 + certLength + 4 <= signedData.count
+            else {
+                throw .invalidSignature(
+                    file: file, reason: "truncated signing-lineage node")
+            }
+            let certificate = signedData.subdata(
+                in: innerCursor + 4..<innerCursor + 4 + certLength)
+            innerCursor += 4 + certLength
+            let signedSigAlgorithm = signedData.readUInt32LE(at: innerCursor)
+
+            if let parent = parentCertificate {
+                // The node is signed over its signedData by the previous
+                // node's key, using the algorithm that node declared.
+                guard
+                    let algorithm = SignatureAlgorithm(rawValue: parentNextSigAlgorithm),
+                    let secAlgorithm = algorithm.secAlgorithm,
+                    let key = Self.secKey(for: parent)
+                else {
+                    throw .invalidSignature(
+                        file: file,
+                        reason: "unsupported signing-lineage signature algorithm")
+                }
+                var error: Unmanaged<CFError>?
+                guard SecKeyVerifySignature(
+                    key, secAlgorithm, signedData as CFData, signature as CFData, &error)
+                else {
+                    throw .invalidSignature(
+                        file: file,
+                        reason: "signing-lineage node \(index) signature does not verify")
+                }
+                guard signedSigAlgorithm == parentNextSigAlgorithm else {
+                    throw .invalidSignature(
+                        file: file,
+                        reason: "signing-lineage signature algorithm mismatch at node \(index)")
+                }
+            }
+            let digest = SHA256Digest(data: certificate)
+            guard !nodes.contains(where: { $0.certificateDigest == digest }) else {
+                throw .invalidSignature(
+                    file: file, reason: "duplicate certificate in signing lineage")
+            }
+            nodes.append(
+                SignerLineageNode(
+                    certificateDigest: digest,
+                    capabilities: SignerCapabilities(rawValue: flags)))
+            parentCertificate = certificate
+            parentNextSigAlgorithm = sigAlgorithmID
+        }
+        return nodes
     }
 
     private static func secKey(for certificateDER: Data) -> SecKey? {

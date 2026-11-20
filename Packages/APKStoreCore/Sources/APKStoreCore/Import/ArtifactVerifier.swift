@@ -47,6 +47,7 @@ struct VerifiedArtifactSet: Sendable {
     var files: [InspectedAPK]
     var signerDigests: [SHA256Digest]
     var lineage: [SHA256Digest]
+    var lineageNodes: [SignerLineageNode]
     var warnings: [ImportWarning]
 
 }
@@ -170,6 +171,7 @@ struct ArtifactVerifier: Sendable {
             files: files,
             signerDigests: base.signature.signerDigests,
             lineage: base.signature.lineage,
+            lineageNodes: base.signature.lineageNodes,
             warnings: warnings
         )
     }

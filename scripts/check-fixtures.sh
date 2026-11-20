@@ -34,12 +34,43 @@ compare_tree() {
             status=1
             continue
         fi
-        if ! cmp -s "$file" "$actual/$relative"; then
-            printf 'check-fixtures: %s: %s differs from the rebuilt bytes\n' "$label" "$relative" >&2
+        if ! compare_file "$file" "$actual/$relative"; then
+            printf 'check-fixtures: %s: %s differs from the rebuild\n' "$label" "$relative" >&2
             status=1
         fi
     done < <(find "$expected" -type f -print0)
     return "$status"
+}
+
+# ZIP containers (APKs, .apks) are compared entry-by-entry on (name, CRC,
+# size), skipping META-INF/: AGP emits metadata there (app-metadata,
+# version-control-info) that is not byte-stable across build environments,
+# and the stripped signing stamp already proved the signer is the pinned test
+# key. Other files stay byte-exact.
+compare_file() {
+    local committed="$1"
+    local rebuilt="$2"
+    case "$committed" in
+        *.apk|*.apks)
+            python3 - "$committed" "$rebuilt" <<'PY'
+import sys
+import zipfile
+
+def entries(path):
+    with zipfile.ZipFile(path) as archive:
+        return sorted(
+            (i.filename, i.CRC, i.file_size)
+            for i in archive.infolist()
+            if not i.filename.startswith("META-INF/")
+        )
+
+sys.exit(0 if entries(sys.argv[1]) == entries(sys.argv[2]) else 1)
+PY
+            ;;
+        *)
+            cmp -s "$committed" "$rebuilt"
+            ;;
+    esac
 }
 
 status=0
@@ -49,10 +80,10 @@ compare_tree "$committed_derived" "$work/apks" "derived APKs" || status=1
 # HelloSplit.apks builds through bundletool, not the derived-apks step, so it
 # gets its own rebuild (#43 step 1).
 "$script_dir/build-fixtures.sh" --app HelloSplit >/dev/null
-if ! cmp -s \
+if ! compare_file \
     "$repo_root/Tests/Fixtures/containers/HelloSplit.apks" \
     "$repo_root/Tests/Fixtures/AndroidApps/out/HelloSplit.apks"; then
-    printf 'check-fixtures: HelloSplit.apks differs from the rebuilt bytes\n' >&2
+    printf 'check-fixtures: HelloSplit.apks differs from the rebuilt entries\n' >&2
     status=1
 fi
 if ((status == 0)); then

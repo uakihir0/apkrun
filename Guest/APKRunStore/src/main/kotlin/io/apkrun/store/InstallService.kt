@@ -66,6 +66,8 @@ class InstallService(
     }
 
     private class OpenArtifact(
+        /** The bulk transfer that opened this artifact; later frames match by it. */
+        val transferId: Long,
         val artifact: Artifact,
         val stream: java.io.OutputStream,
         val spoolStream: java.io.OutputStream,

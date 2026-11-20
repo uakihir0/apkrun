@@ -434,7 +434,7 @@ func eventHubKeepsSnapshotReplyAheadOfResyncForBackpressuredEvents() async throw
     hub.endSnapshotBarrier(connectionID: connectionID, outputQueue: outputQueue) {
         replyRecorder.record(envelopeCount: (try? sink.envelopes().count) ?? -1)
     }
-    try await waitForValue { replyRecorder.envelopeCount >= 0 }
+    try await waitForValue { replyRecorder.envelopeCount != nil }
     #expect(replyRecorder.envelopeCount == 256)
 
     sink.acknowledgeAll()

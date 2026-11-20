@@ -635,6 +635,15 @@ private func v2Provider(for record: PackageRecord) throws -> ScriptedProvider {
 
 /// A fake §7.5 runtime: reports whether the package is in use and counts the
 /// times the coordinator brought the runtime up for an update.
+/// A gate wired to the fake runtime (the second install test relies on
+/// `inUse` blocking through GU2/3).
+private func testGate(_ runtime: FakeUpdateRuntime) -> GentleUpdateGate {
+    GentleUpdateGate(
+        runtime: runtime,
+        storeBusy: { _ in false },
+        requiresDisplaySlot: { _ in false })
+}
+
 private final class FakeUpdateRuntime: UpdateRuntimeAccess, @unchecked Sendable {
     var inUse = false
     var ensureReadyCalls = 0
@@ -686,7 +695,7 @@ extension CoordinatorChannel {
 
     let outcome = await coordinator.install(
         record.packageId, validated: validated, candidate: candidate,
-        trigger: .userInitiated, runtime: runtime)
+        trigger: .userInitiated, runtime: runtime, gate: testGate(runtime))
     guard case .installed(let from, let to) = outcome else {
         Issue.record("expected .installed, got \(outcome)")
         return
@@ -728,7 +737,7 @@ extension CoordinatorChannel {
 
     let outcome = await coordinator.install(
         record.packageId, validated: validated, candidate: candidate,
-        trigger: .userInitiated, runtime: runtime)
+        trigger: .userInitiated, runtime: runtime, gate: testGate(runtime))
     guard case .staged = outcome else {
         Issue.record("expected .staged, got \(outcome)")
         return
@@ -789,9 +798,10 @@ extension CoordinatorChannel {
     // Android keeps reporting the old versionCode (a lagging PackageManager).
     await channel.set(reportedVersionCode: 1)
 
+    let runtime = FakeUpdateRuntime()
     let outcome = await coordinator.install(
         record.packageId, validated: validated, candidate: candidate,
-        trigger: .userInitiated, runtime: FakeUpdateRuntime())
+        trigger: .userInitiated, runtime: runtime, gate: testGate(runtime))
     guard case .keptAfterFailedHealthCheck(let failure) = outcome else {
         Issue.record("expected .keptAfterFailedHealthCheck, got \(outcome)")
         return
@@ -812,7 +822,11 @@ extension CoordinatorChannel {
     let knobs = InspectKnobs()
     let store = makeKnobbedStore(at: root, knobs: knobs)
     try await store.open()
-    let record = try await installV1(store: store, repo: fixtureRepo())
+    // A plain install keeps the `manual` authority (installV1 would
+    // re-author it .apkrun via setUpdatePolicy).
+    let apk = fixtureRepo().appendingPathComponent("io.apkrun.fixture.helloupdate/1/app.apk")
+    let preview = try await store.importPackage(files: [apk])
+    let record = try await store.installImported(ticket: preview.ticket)
     #expect(record.updateAuthority == .manual)
 
     let provider = ScriptedProvider(

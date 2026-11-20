@@ -31,6 +31,33 @@ public enum UpdateSessionEndReason: Sendable, Equatable {
     case updating
 }
 
+/// A held runtime activity assertion (runtime-daemon.md §5.1). The
+/// `storeOperation` kind holds off idle shutdown while an install runs;
+/// release it with `release()` or by letting it deinit.
+public final class UpdateActivityAssertion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var onRelease: (@Sendable () -> Void)?
+
+    /// Creates an assertion that runs `onRelease` exactly once.
+    public init(onRelease: @escaping @Sendable () -> Void = {}) {
+        self.onRelease = onRelease
+    }
+
+    /// Releases the assertion; idempotent.
+    public func release() {
+        let action: (@Sendable () -> Void)?
+        lock.lock()
+        action = onRelease
+        onRelease = nil
+        lock.unlock()
+        action?()
+    }
+
+    deinit {
+        release()
+    }
+}
+
 /// The runtime surface an update install needs (update-system.md §7.5).
 /// RuntimeHost injects the implementation; UpdateCore never imports
 /// RuntimeCore. `healthCheckLaunch` arrives with the health-check task.
@@ -57,6 +84,9 @@ public protocol UpdateRuntimeAccess: Sendable {
     func endSessions(for package: PackageID, reason: UpdateSessionEndReason) async
     /// Reopens the package after Update Now (§7.3).
     func reopen(_ package: PackageID) async
+    /// Holds a `storeOperation` activity assertion for an install's
+    /// duration (§7.2; runtime-daemon.md §5.1).
+    func assertStoreOperation() async -> UpdateActivityAssertion
 }
 
 extension UpdateRuntimeAccess {
@@ -70,4 +100,8 @@ extension UpdateRuntimeAccess {
     public func endSessions(for package: PackageID, reason: UpdateSessionEndReason) async {}
     /// Reopening is a no-op when the channel cannot launch sessions.
     public func reopen(_ package: PackageID) async {}
+    /// Runtimes without an idle controller return a no-op assertion.
+    public func assertStoreOperation() async -> UpdateActivityAssertion {
+        UpdateActivityAssertion()
+    }
 }

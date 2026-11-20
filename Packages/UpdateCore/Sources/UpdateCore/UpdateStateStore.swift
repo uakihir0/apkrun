@@ -46,12 +46,25 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
         public var versionName: String?
         /// The provider type that offered it.
         public var provider: ProviderType
+        /// The expected signing identities, so a gate-resumed install can
+        /// still run H1's signer comparison (update-system.md §8.1).
+        public var signerDigests: [SHA256Digest]?
+        /// The provider cursor to save once the install completes.
+        public var cursor: ProviderCursor?
 
         /// Creates a summary.
-        public init(versionCode: VersionCode?, versionName: String?, provider: ProviderType) {
+        public init(
+            versionCode: VersionCode?,
+            versionName: String?,
+            provider: ProviderType,
+            signerDigests: [SHA256Digest]? = nil,
+            cursor: ProviderCursor? = nil
+        ) {
             self.versionCode = versionCode
             self.versionName = versionName
             self.provider = provider
+            self.signerDigests = signerDigests
+            self.cursor = cursor
         }
     }
 

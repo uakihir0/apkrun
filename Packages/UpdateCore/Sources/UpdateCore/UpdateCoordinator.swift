@@ -596,13 +596,16 @@ public actor UpdateCoordinator {
         candidate: UpdateCandidate,
         trigger: UpdateTrigger,
         runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate,
         started: Date = Date(),
         origin: ArtifactOrigin? = nil
     ) async -> UpdateInstallOutcome {
         let records = (try? await store.listManagedPackages()) ?? []
         guard let record = records.first(where: { $0.packageId == packageID }) else {
             return await finishFailedInstall(
-                packageID, record: nil, candidate: candidate,
+                packageID, record: nil, cursor: candidate.cursor,
+                candidateVersionCode: candidate.declaredVersionCode,
+                provider: candidate.provider.type,
                 failure: .providerMetadataInvalid(
                     detail: "package is not managed"),
                 trigger: trigger, started: started)
@@ -623,35 +626,125 @@ public actor UpdateCoordinator {
             try await store.stage(ticket: validated.ticket, candidate: staged)
         } catch {
             return await finishFailedInstall(
-                packageID, record: record, candidate: candidate,
+                packageID, record: record, cursor: candidate.cursor,
+                candidateVersionCode: candidate.declaredVersionCode,
+                provider: candidate.provider.type,
                 failure: .installFailed(detail: "stage(\(error))"),
                 trigger: trigger, started: started)
         }
         setPhase(packageID, .staged)
         await stateStore.update(packageID) { state in
             state.phase = "staged"
+            state.stagedAt = started
             state.candidate = PackageUpdateState.CandidateSummary(
                 versionCode: preview.versionCode,
                 versionName: preview.versionName,
-                provider: candidate.provider.type)
+                provider: candidate.provider.type,
+                signerDigests: preview.artifactSet.signerDigests,
+                cursor: candidate.cursor)
         }
         await stateStore.flush()
 
-        // §7: the install waits until the app is not in use; a package with a
-        // session stays staged.
-        if await runtime.hasActiveUse(packageID) {
+        // §7.1–§7.2: the gentle gate admits the install or queues it as
+        // `staged`; user-initiated runs jump ahead of automatic ones.
+        let userInitiated = trigger == .userInitiated || trigger == .manual
+        guard await gate.requestInstall(packageID, userInitiated: userInitiated) else {
             return .staged
         }
+        return await runGatedInstall(
+            packageID, record: record,
+            expectedVersionCode: preview.versionCode,
+            expectedSigners: Set(preview.artifactSet.signerDigests),
+            provider: candidate.provider.type, cursor: candidate.cursor,
+            trigger: trigger, runtime: runtime, gate: gate, started: started)
+    }
 
+    /// §7.2 trigger: resumes a staged install the gate now admits.
+    /// Returns `nil` while the gate stays closed or the package has no
+    /// staged candidate.
+    @discardableResult
+    public func resumeStagedInstall(
+        _ packageID: PackageID,
+        trigger: UpdateTrigger = .scheduled,
+        runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate,
+        started: Date = Date()
+    ) async -> UpdateInstallOutcome? {
+        guard let row = await stateStore.state(for: packageID),
+            row.phase == "staged",
+            let summary = row.candidate,
+            let expectedVersionCode = summary.versionCode
+        else {
+            return nil
+        }
+        let records = (try? await store.listManagedPackages()) ?? []
+        guard let record = records.first(where: { $0.packageId == packageID }) else {
+            return nil
+        }
+        // The pump already admitted the package via `nextReadyPackage`;
+        // install it without re-entering the queue.
+        return await runGatedInstall(
+            packageID, record: record,
+            expectedVersionCode: expectedVersionCode,
+            expectedSigners: Set(summary.signerDigests ?? []),
+            provider: summary.provider, cursor: summary.cursor,
+            trigger: trigger, runtime: runtime, gate: gate, started: started)
+    }
+
+    /// The post-gate portion of an install: ensure the runtime is up,
+    /// hold the `storeOperation` assertion, run `installStaged`, then H1 —
+    /// Android reporting the staged versionCode and signer set within the
+    /// health-check budget.
+    private func runGatedInstall(
+        _ packageID: PackageID,
+        record: PackageRecord,
+        expectedVersionCode: VersionCode,
+        expectedSigners: Set<SHA256Digest>,
+        provider: ProviderType,
+        cursor: ProviderCursor?,
+        trigger: UpdateTrigger,
+        runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate,
+        started: Date
+    ) async -> UpdateInstallOutcome {
         // Automatic runs need a ready runtime (§3.5).
         do {
             try await runtime.ensureReady(.update)
         } catch {
+            await gate.finishInstall(packageID)
             return await finishFailedInstall(
-                packageID, record: record, candidate: candidate,
+                packageID, record: record, cursor: cursor,
+                candidateVersionCode: expectedVersionCode, provider: provider,
                 failure: .installFailed(detail: "runtimeUnavailable(\(error))"),
                 trigger: trigger, started: started)
         }
+
+        // §7.2: the install runs under a `storeOperation` assertion.
+        let assertion = await runtime.assertStoreOperation()
+        let outcome = await performGatedInstall(
+            packageID, record: record,
+            expectedVersionCode: expectedVersionCode,
+            expectedSigners: expectedSigners, provider: provider,
+            cursor: cursor, trigger: trigger, runtime: runtime,
+            started: started)
+        assertion.release()
+        await gate.finishInstall(packageID)
+        return outcome
+    }
+
+    /// `installStaged` plus the H1 confirmation, called with the gate's
+    /// admission and the `storeOperation` assertion already held.
+    private func performGatedInstall(
+        _ packageID: PackageID,
+        record: PackageRecord,
+        expectedVersionCode: VersionCode,
+        expectedSigners: Set<SHA256Digest>,
+        provider: ProviderType,
+        cursor: ProviderCursor?,
+        trigger: UpdateTrigger,
+        runtime: any UpdateRuntimeAccess,
+        started: Date
+    ) async -> UpdateInstallOutcome {
 
         setPhase(packageID, .installing)
         let updated: PackageRecord
@@ -665,7 +758,8 @@ public actor UpdateCoordinator {
             return .staged
         } catch {
             return await finishFailedInstall(
-                packageID, record: record, candidate: candidate,
+                packageID, record: record, cursor: cursor,
+                candidateVersionCode: expectedVersionCode, provider: provider,
                 failure: .installFailed(detail: "\(error)"),
                 trigger: trigger, started: started)
         }
@@ -679,8 +773,8 @@ public actor UpdateCoordinator {
         while true {
             if let info = try? await store.installedPackageInfo(packageID) {
                 found = info.versionCode
-                if info.versionCode == preview.versionCode,
-                    Set(info.signingDigests) == Set(preview.artifactSet.signerDigests)
+                if info.versionCode == expectedVersionCode,
+                    Set(info.signingDigests) == expectedSigners
                 {
                     confirmed = true
                     break
@@ -694,14 +788,15 @@ public actor UpdateCoordinator {
                 detail: "versionNotConfirmed(found: \(found.map(String.init) ?? "none"))")
             let reason = RollbackReason.healthCheckFailed(failure)
             await stateStore.update(packageID) { state in
-                state.cursor = candidate.cursor
+                state.cursor = cursor
                 state.phase = nil
                 state.candidate = nil
+                state.stagedAt = nil
             }
             setPhase(packageID, .completed(.keptAfterFailedHealthCheck(reason: reason)))
             await appendHistory(
-                record: record, to: preview.versionCode,
-                provider: candidate.provider.type, trigger: trigger,
+                record: record, to: expectedVersionCode,
+                provider: provider, trigger: trigger,
                 outcome: "keptAfterFailedHealthCheck", failure: failure.errorCode,
                 started: started)
             await stateStore.flush()
@@ -709,16 +804,17 @@ public actor UpdateCoordinator {
         }
 
         await stateStore.update(packageID) { state in
-            state.cursor = candidate.cursor
+            state.cursor = cursor
             state.phase = nil
             state.candidate = nil
+            state.stagedAt = nil
         }
         let outcome = UpdateOutcome.updated(
             from: record.versionCode, to: updated.versionCode)
         setPhase(packageID, .completed(outcome))
         await appendHistory(
             record: record, to: updated.versionCode,
-            provider: candidate.provider.type, trigger: trigger,
+            provider: provider, trigger: trigger,
             outcome: "updated", failure: nil, started: started)
         await stateStore.flush()
         return .installed(from: record.versionCode, to: updated.versionCode)
@@ -729,21 +825,24 @@ public actor UpdateCoordinator {
     private func finishFailedInstall(
         _ packageID: PackageID,
         record: PackageRecord?,
-        candidate: UpdateCandidate,
+        cursor: ProviderCursor?,
+        candidateVersionCode: VersionCode?,
+        provider: ProviderType?,
         failure: UpdateFailure,
         trigger: UpdateTrigger,
         started: Date
     ) async -> UpdateInstallOutcome {
         await stateStore.update(packageID) { state in
-            state.cursor = candidate.cursor
+            state.cursor = cursor
             state.phase = nil
             state.candidate = nil
+            state.stagedAt = nil
         }
         setPhase(packageID, .completed(.skipped(.installFailed(failure))))
         if let record {
             await appendHistory(
-                record: record, to: candidate.declaredVersionCode,
-                provider: candidate.provider.type, trigger: trigger,
+                record: record, to: candidateVersionCode,
+                provider: provider, trigger: trigger,
                 outcome: "skipped.installFailed", failure: failure.errorCode,
                 started: started)
         }

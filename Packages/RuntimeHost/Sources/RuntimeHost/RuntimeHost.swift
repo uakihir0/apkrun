@@ -4,6 +4,7 @@ import ImageCore
 import IntegrationCore
 import RuntimeAPI
 import RuntimeCore
+import UpdateCore
 import WrapperCore
 
 typealias WireOperationID = RuntimeAPI.OperationID
@@ -60,6 +61,11 @@ public actor RuntimeHost {
     private var provisioningState: WireProvisioningState = .notStarted
     private var imageStore: ImageStore?
     private var diagnostics: DiagnosticsContext?
+    /// The health-check registry, for checks hosted outside this file
+    /// (`updates.waiting` in RuntimeHostUpdates.swift).
+    var healthCheckRegistry: HealthCheckRegistry? {
+        diagnostics?.healthChecks
+    }
     private var logger: APKLogger?
     private var instanceLock: InstanceLock?
     private var stateStore: DaemonStateStore?
@@ -109,6 +115,17 @@ public actor RuntimeHost {
     /// The lazily created update service (update-system.md). Internal for
     /// `RuntimeHostUpdates.swift`.
     var updateService: EmbeddedUpdateService?
+    /// The §7.1 gentle-update gate shared by update installs, created with
+    /// the pump tasks below on first use.
+    var updateGate: GentleUpdateGate?
+    /// §7.2 trigger pumps: runtime events and the 10-minute staged+ready tick.
+    var updateGatePumpTask: Task<Void, Never>?
+    var updateGateTimerTask: Task<Void, Never>?
+    /// The idle controller the `storeOperation` assertion holds (#75 wires
+    /// its suspend/stop deadlines).
+    let updateIdleController = IdleController()
+    /// `updates.waiting` registers once when the update service is created.
+    var updatesHealthChecksRegistered = false
     private var packageActivityReservations = PackageActivityReservations()
     /// The perf record writer (`perf/launches.jsonl`), created with `paths`.
     private var perfRecords: PerfRecordWriter?

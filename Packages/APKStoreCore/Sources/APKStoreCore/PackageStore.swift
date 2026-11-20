@@ -1137,6 +1137,13 @@ public actor PackageStore {
         _ = try await uninstallWithOutcome(packageID: packageID, keepData: keepData)
     }
 
+    /// Whether a store mutation for the package is in flight (GU6 of
+    /// update-system.md §7.1). Gentle installs read this before starting;
+    /// it does not take the file-level mutation lock.
+    public func packageMutationInProgress(_ packageID: PackageID) -> Bool {
+        operationsInProgress.contains(packageID)
+    }
+
     /// Uninstalls a package and returns whether post-commit trash cleanup needs to be retried.
     public func uninstallWithOutcome(
         packageID: PackageID,

@@ -13,7 +13,9 @@ public actor EmbeddedUpdateService {
     private let paths: APKRunPaths
     private let fileManager = FileManager.default
     private let store: PackageStore
-    private let stateStore: UpdateStateStore
+    /// The persisted update phases; internal for the `updates.waiting`
+    /// health check and tests.
+    let stateStore: UpdateStateStore
     private let coordinator: UpdateCoordinator
     private let credentials = KeychainProviderCredentials()
     private var isOpen = false
@@ -78,7 +80,8 @@ public actor EmbeddedUpdateService {
         _ packageIDs: [PackageID],
         context: ProviderContext,
         checkOnly: Bool = false,
-        runtime: (any UpdateRuntimeAccess)? = nil
+        runtime: (any UpdateRuntimeAccess)? = nil,
+        gate: GentleUpdateGate? = nil
     ) async -> [UpdateCheckResult] {
         var results: [UpdateCheckResult] = []
         let records = (try? await store.listManagedPackages()) ?? []
@@ -104,11 +107,13 @@ public actor EmbeddedUpdateService {
                 }
                 let updateOutcome = await continueUpdate(
                     packageID, candidate: candidate, trigger: .userInitiated,
-                    context: context, runtime: runtime, started: Date())
+                    context: context, runtime: runtime, gate: gate, started: Date())
                 results.append(
                     UpdateCheckResult(
                         packageID: wireID,
-                        outcome: Self.checkResultOutcome(updateOutcome)))
+                        outcome: await Self.checkResultOutcome(
+                            updateOutcome,
+                            blocks: gate?.waitingReasons(packageID) ?? [])))
             case .failed(let failure):
                 results.append(
                     UpdateCheckResult(
@@ -128,6 +133,7 @@ public actor EmbeddedUpdateService {
         trigger: UpdateTrigger,
         context: ProviderContext,
         runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate? = nil,
         started: Date,
         origin: ArtifactOrigin? = nil
     ) async -> WireUpdateOutcome? {
@@ -138,7 +144,7 @@ public actor EmbeddedUpdateService {
         case .downloaded(let downloaded):
             return await validateAndInstall(
                 packageID, ticket: downloaded.ticket, candidate: candidate,
-                trigger: trigger, runtime: runtime, started: started,
+                trigger: trigger, runtime: runtime, gate: gate, started: started,
                 origin: origin)
         case .failed(let failure):
             return .skipped(reason: "downloadFailed", error: Self.catalogError(for: failure))
@@ -153,6 +159,7 @@ public actor EmbeddedUpdateService {
         candidate: UpdateCandidate,
         trigger: UpdateTrigger,
         runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate? = nil,
         started: Date,
         origin: ArtifactOrigin? = nil
     ) async -> WireUpdateOutcome? {
@@ -163,7 +170,8 @@ public actor EmbeddedUpdateService {
         case .validated(let validated):
             switch await coordinator.install(
                 packageID, validated: validated, candidate: candidate,
-                trigger: trigger, runtime: runtime, started: started,
+                trigger: trigger, runtime: runtime,
+                gate: gate ?? gateInstance(runtime: runtime), started: started,
                 origin: origin)
             {
             case .installed(let from, let to):
@@ -180,13 +188,58 @@ public actor EmbeddedUpdateService {
         }
     }
 
+    /// The gate installs share; a caller-supplied gate wins so the host's
+    /// trigger pump sees the same queue.
+    private var serviceGate: GentleUpdateGate?
+    func gateInstance(runtime: any UpdateRuntimeAccess) -> GentleUpdateGate {
+        if let serviceGate { return serviceGate }
+        let gate = GentleUpdateGate(
+            runtime: runtime,
+            storeBusy: { [store] packageID in
+                await store.packageMutationInProgress(packageID)
+            },
+            // TODO(#42): launch health checks need a DisplayPool slot; v1's
+            // H1 is `versionOnly` for every package.
+            requiresDisplaySlot: { _ in false },
+            displaySlotFree: { true })
+        serviceGate = gate
+        return gate
+    }
+
+    /// §7.2 trigger: runs the staged install the gate pump admitted.
+    func resumeStagedInstall(
+        _ packageID: PackageID,
+        trigger: UpdateTrigger = .scheduled,
+        runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate
+    ) async -> UpdateCoordinator.UpdateInstallOutcome? {
+        await coordinator.resumeStagedInstall(
+            packageID, trigger: trigger, runtime: runtime, gate: gate)
+    }
+
+    /// The §7.1 block as the wire waiting reason (runtime-api.md
+    /// `WaitingReason`).
+    static func waitingReason(for block: GentleGateBlock?) -> WaitingReason {
+        switch block {
+        case .runtimeNotReady:
+            .runtimeNotReady
+        case .packageInUse, nil:
+            .appInUse
+        case .sessionEndedRecently, .androidBusy, .storeTransactionActive, .noDisplaySlot:
+            .conditionsUnmet
+        }
+    }
+
     /// Maps a continued update's wire outcome onto `UpdateCheckResult.Result`
     /// (runtime-api.md §9.2): nil (still waiting) reports `.waiting` with the
-    /// only gate this milestone implements (§7.1 GU2).
-    static func checkResultOutcome(_ outcome: WireUpdateOutcome?) -> UpdateCheckResult.Result {
+    /// §7.1 blocks the gate last evaluated.
+    static func checkResultOutcome(
+        _ outcome: WireUpdateOutcome?,
+        blocks: [GentleGateBlock]
+    ) -> UpdateCheckResult.Result {
         switch outcome {
         case nil:
-            return .waiting(.appInUse)
+            return .waiting(Self.waitingReason(for: blocks.first))
         case .updated(let from, let to):
             return .installed(from: from, to: to)
         case .keptAfterFailedHealthCheck(let reason):
@@ -203,7 +256,8 @@ public actor EmbeddedUpdateService {
     public func updatePackageNow(
         _ packageID: PackageID,
         context: ProviderContext,
-        runtime: any UpdateRuntimeAccess
+        runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate? = nil
     ) async -> WireUpdateOutcome? {
         let started = Date()
         switch await coordinator.check(
@@ -215,7 +269,7 @@ public actor EmbeddedUpdateService {
         case .available(let candidate):
             return await continueUpdate(
                 packageID, candidate: candidate, trigger: .userInitiated,
-                context: context, runtime: runtime, started: started)
+                context: context, runtime: runtime, gate: gate, started: started)
         case .failed(let failure):
             return .skipped(reason: "checkFailed", error: Self.catalogError(for: failure))
         }
@@ -226,7 +280,8 @@ public actor EmbeddedUpdateService {
     public func updateFromFile(
         _ packageID: PackageID,
         ticket: UUID,
-        runtime: any UpdateRuntimeAccess
+        runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate? = nil
     ) async throws(RuntimeWireError) -> WireUpdateOutcome? {
         let started = Date()
         let records = (try? await store.listManagedPackages()) ?? []
@@ -252,7 +307,7 @@ public actor EmbeddedUpdateService {
             cursor: ProviderCursor(type: .local, value: ticket.uuidString))
         return await validateAndInstall(
             packageID, ticket: ticket, candidate: candidate,
-            trigger: .manual, runtime: runtime, started: started,
+            trigger: .manual, runtime: runtime, gate: gate, started: started,
             origin: ArtifactOrigin(type: .manualFile))
     }
 
@@ -655,7 +710,17 @@ extension RuntimeHost {
             }
         )
         updateService = service
+        registerUpdatesWaitingCheck(service: service)
         return service
+    }
+
+    /// Registers `updates.waiting` once (diagnostics.md §7.4).
+    private func registerUpdatesWaitingCheck(service: EmbeddedUpdateService) {
+        guard !updatesHealthChecksRegistered, let checks = healthCheckRegistry else { return }
+        updatesHealthChecksRegistered = true
+        Task {
+            try? await checks.register(UpdatesWaitingCheck(stateStore: service.stateStore))
+        }
     }
 
     /// `updates.checkIntervalHours` (configuration.md §2.7), default 6.
@@ -747,7 +812,8 @@ extension RuntimeHost {
 
         let results = await service.checkPackages(
             selected, context: service.providerContext(userInitiated: true),
-            checkOnly: checkOnly, runtime: updateRuntimeAccess())
+            checkOnly: checkOnly, runtime: updateRuntimeAccess(),
+            gate: updateGateInstance())
         let all = preResults + results
         let failures = all.filter { result in
             if case .failed = result.outcome { return true }
@@ -859,6 +925,7 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
     private let endAll: @Sendable (PackageID) async -> Void
     private let reopenPackage: @Sendable (PackageID) async throws -> Void
     private let ready: @Sendable (UpdateStartReason) async throws -> Void
+    private let assertOperation: @Sendable () async -> UpdateActivityAssertion
 
     init(
         stateOf: @escaping @Sendable () async -> WireRuntimeState,
@@ -868,7 +935,8 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         events: @escaping @Sendable () -> AsyncStream<UpdateRuntimeEvent>,
         endAll: @escaping @Sendable (PackageID) async -> Void,
         reopenPackage: @escaping @Sendable (PackageID) async throws -> Void,
-        ready: @escaping @Sendable (UpdateStartReason) async throws -> Void
+        ready: @escaping @Sendable (UpdateStartReason) async throws -> Void,
+        assertOperation: @escaping @Sendable () async -> UpdateActivityAssertion
     ) {
         self.stateOf = stateOf
         self.inUse = inUse
@@ -878,6 +946,7 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         self.endAll = endAll
         self.reopenPackage = reopenPackage
         self.ready = ready
+        self.assertOperation = assertOperation
     }
 
     var runtimeState: WireRuntimeState {
@@ -910,6 +979,61 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
 
     func ensureReady(_ reason: UpdateStartReason) async throws {
         try await ready(reason)
+    }
+
+    func assertStoreOperation() async -> UpdateActivityAssertion {
+        await assertOperation()
+    }
+}
+
+/// `updates.waiting` (diagnostics.md §7.4): a staged update waiting more
+/// than 7 days reports `update.stagedTooLong` (error-catalog §20.3).
+struct UpdatesWaitingCheck: HealthCheck {
+    /// update-system.md §7.4's waiting period.
+    static let staleAfter: TimeInterval = 7 * 24 * 3600
+
+    let stateStore: UpdateStateStore
+
+    var id: HealthCheckID { "updates.waiting" }
+    var group: HealthGroup { .updates }
+    var requirement: HealthRequirement { .host }
+    var cost: HealthCost { .quick }
+    var fix: (any HealthFix)? { nil }
+    var title: LocalizedText {
+        LocalizedText(key: "health.updates.waiting", fallback: "Waiting updates")
+    }
+
+    func run(_ context: HealthContext) async -> DiagnosticsCore.HealthResult {
+        let states = await stateStore.allStates()
+        let now = context.clock.now
+        let stale = states.values.filter {
+            $0.phase == "staged"
+                && ($0.stagedAt.map { $0.addingTimeInterval(Self.staleAfter) < now } ?? false)
+        }
+        let stagedCount = states.values.count(where: { $0.phase == "staged" })
+        guard let oldest = stale.first else {
+            return DiagnosticsCore.HealthResult(
+                id: id, group: group, state: .pass, title: title,
+                detail: stagedCount == 0
+                    ? "No update is waiting."
+                    : "\(stagedCount) update(s) staged.",
+                error: nil, measuredAt: now)
+        }
+        let app = oldest.candidate?.versionName ?? "unknown"
+        return DiagnosticsCore.HealthResult(
+            id: id, group: group, state: .warning, title: title,
+            detail: "\(stale.count) update(s) staged for more than 7 days.",
+            error: ErrorInfo(
+                code: "update.stagedTooLong",
+                message: LocalizedText(
+                    key: "update.stagedTooLong",
+                    parameters: ["app": .text(app)],
+                    fallback: "An update of \(app) has been waiting for more than 7 days."),
+                remediation: LocalizedText(
+                    key: "update.stagedTooLong.remediation",
+                    fallback: "Quit the app to install it, or choose Update Now."),
+                action: .none),
+            measuredAt: now)
     }
 }
 
@@ -1055,7 +1179,63 @@ extension RuntimeHost {
                     throw UpdateFailure.providerUnreachable(
                         reason: "package channel is not connected")
                 }
+            },
+            assertOperation: { [weak self] in
+                guard let self else { return UpdateActivityAssertion() }
+                let inner = await self.updateIdleController.assertActivity(.storeOperation)
+                return UpdateActivityAssertion { inner.release() }
             })
+    }
+
+    /// The §7.1 gentle-update gate shared by update installs, created with
+    /// its §7.2 trigger pumps on first use.
+    func updateGateInstance() -> GentleUpdateGate {
+        if let updateGate { return updateGate }
+        let gate = GentleUpdateGate(
+            runtime: updateRuntimeAccess(),
+            storeBusy: { [weak self] packageID in
+                guard let self else { return false }
+                return await self.packageQueryServiceInstance().store
+                    .packageMutationInProgress(packageID)
+            },
+            // TODO(#42): launch health checks need a DisplayPool slot; v1's
+            // H1 is `versionOnly` for every package.
+            requiresDisplaySlot: { _ in false },
+            displaySlotFree: { true })
+        updateGate = gate
+        startUpdateGatePump()
+        return gate
+    }
+
+    /// Starts the §7.2 trigger pump once: runtime events plus the
+    /// 10-minute staged+ready tick drain the queue.
+    private func startUpdateGatePump() {
+        guard updateGatePumpTask == nil else { return }
+        let events = updateRuntimeAccess().runtimeEvents
+        updateGatePumpTask = Task { [weak self] in
+            for await _ in events {
+                await self?.drainUpdateGate()
+            }
+        }
+        updateGateTimerTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(600))
+                guard !Task.isCancelled else { return }
+                await self?.drainUpdateGate()
+            }
+        }
+    }
+
+    /// Admits the next queued install and runs it; a package that lost its
+    /// staged row frees the gate's slot.
+    private func drainUpdateGate() async {
+        let gate = updateGateInstance()
+        guard let packageID = await gate.nextReadyPackage() else { return }
+        let outcome = await updateServiceInstance().resumeStagedInstall(
+            packageID, runtime: updateRuntimeAccess(), gate: gate)
+        if outcome == nil {
+            await gate.finishInstall(packageID)
+        }
     }
 
     /// `updatePackage` (runtime-api.md §9.1): check and install one package
@@ -1142,12 +1322,14 @@ extension RuntimeHost {
                     break
                 }
                 outcome = try await service.updateFromFile(
-                    packageID, ticket: ticket, runtime: updateRuntimeAccess())
+                    packageID, ticket: ticket, runtime: updateRuntimeAccess(),
+                    gate: updateGateInstance())
             } else {
                 outcome = await service.updatePackageNow(
                     packageID,
                     context: service.providerContext(userInitiated: true),
-                    runtime: updateRuntimeAccess())
+                    runtime: updateRuntimeAccess(),
+                    gate: updateGateInstance())
             }
         } catch {
             let wireError: RuntimeWireError

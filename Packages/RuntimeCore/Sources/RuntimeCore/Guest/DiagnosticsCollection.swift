@@ -106,8 +106,9 @@ extension DevelopmentGuestAgent {
         if !pendingTransfers.isEmpty {
             // The host enforces the same per-item cap the agent does: a chunk
             // past `min(maxBytes, 16 MiB)` is a protocol violation, not a bigger
-            // payload (diagnostics.md §6).
-            let itemCap = Int(min(maxBytes, 16 * 1024 * 1024))
+            // payload. `maxBytes = 0` asks for the agent's default, 16 MiB
+            // (diagnostics.md §6).
+            let itemCap = Int(min(maxBytes == 0 ? 16 * 1024 * 1024 : maxBytes, 16 * 1024 * 1024))
             // The deadline applies even while no frame arrives: it ends the
             // stream by closing the connection.
             let watchdog = Task {

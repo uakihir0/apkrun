@@ -9,7 +9,9 @@ struct UpdateCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "update",
         abstract: "Check for, list, and manage Android app updates.",
-        subcommands: [UpdatePolicyCommand.self, UpdateHistoryCommand.self]
+        subcommands: [
+            UpdatePolicyCommand.self, UpdateAuthorityCommand.self, UpdateHistoryCommand.self,
+        ]
     )
 
     @Argument(help: "The Android package name. Omit it to check every package.")
@@ -118,6 +120,41 @@ struct UpdateCommand: AsyncParsableCommand {
             if error != nil {
                 throw ExitCode(2)
             }
+        }
+    }
+}
+
+/// `apkrun update authority <package> <apkrun|manual|external>` (cli.md
+/// §4.3, update-system.md §2.1): moves a package to a different update
+/// authority. `googlePlay` is not user-settable (#98 only).
+struct UpdateAuthorityCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "authority",
+        abstract: "Set the update authority of an Android app."
+    )
+
+    @Argument(help: "The Android package name.")
+    var package: String
+
+    @Argument(help: "apkrun, manual, or external.")
+    var authority: String
+
+    mutating func run() async throws {
+        guard let packageID = RuntimePackageID(rawValue: package) else {
+            throw CLIFailure.invalidPackageName(package: package)
+        }
+        guard let choice = AuthorityChoice(rawValue: authority), choice != .googlePlay else {
+            throw CLIFailure.invalidArgument(argument: "authority", reason: "invalidValue")
+        }
+        do {
+            let client = try RuntimeControlClient(clientKind: .cli)
+            let status = try await client.setUpdateAuthority(
+                packageID: packageID, authority: choice)
+            Output.write("\(status.packageID.rawValue): authority \(status.authority)")
+        } catch let failure as RuntimeWireError {
+            throw failure
+        } catch {
+            throw await RuntimeStatusOutput.commandFailure(error)
         }
     }
 }

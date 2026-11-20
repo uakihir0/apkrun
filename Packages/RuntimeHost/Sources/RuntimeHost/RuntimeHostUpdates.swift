@@ -353,6 +353,55 @@ public actor EmbeddedUpdateService {
         return updated
     }
 
+    /// `setUpdateAuthority` (update-system.md §2.1, §11.1, cli.md §4.3).
+    /// `googlePlay` is not user-settable (#98 only) and a `googlePlay` record
+    /// refuses every change. Moving to `external` relinquishes update
+    /// ownership before the record write (PackageStore, package-store.md §6.3);
+    /// a staged set the new authority does not install is discarded.
+    public func setUpdateAuthority(
+        packageID: PackageID,
+        authority: AuthorityChoice
+    ) async throws -> PackageRecord {
+        guard authority != .googlePlay else {
+            throw UpdateFailure.authorityDoesNotAllowUpdates
+        }
+        guard
+            let record = try await store.listManagedPackages()
+                .first(where: { $0.packageId == packageID })
+        else {
+            throw PackageStoreFailure.packageNotFound
+        }
+        if record.updateAuthority == .googlePlay {
+            throw UpdateFailure.authorityDoesNotAllowUpdates
+        }
+        let target: UpdateAuthority
+        switch authority {
+        case .apkrun:
+            guard record.updateProvider != nil else {
+                throw UpdateFailure.providerNotConfigured
+            }
+            target = .apkrun
+        case .manual: target = .manual
+        case .external: target = .external
+        case .googlePlay: target = .googlePlay
+        }
+        // Provider-staged sets die with the authority that can no longer
+        // install them: leaving apkrun, and every move to external (§2.1).
+        if record.updateAuthority != target,
+            record.updateAuthority == .apkrun || target == .external
+        {
+            try await store.discardStaged(packageID: packageID)
+        }
+        try await store.setUpdateAuthority(id: packageID, authority: target)
+        guard
+            let updated = try await store.listManagedPackages()
+                .first(where: { $0.packageId == packageID })
+        else {
+            throw PackageStoreFailure.packageNotFound
+        }
+        return updated
+    }
+
     /// The wire `UpdateChoice` a record and its settings mode describe. The
     /// rule lives in UpdateCore (update-system.md §2.2).
     static func choice(authority: UpdateAuthority, mode: String?) -> UpdateChoice? {
@@ -759,6 +808,32 @@ extension RuntimeHost {
         }
         do {
             let record = try await service.setUpdatePolicy(packageID: packageID, policy: policy)
+            return try await service.status(for: record)
+        } catch {
+            throw EmbeddedUpdateService.wireError(for: error)
+        }
+    }
+
+    /// `setUpdateAuthority` (runtime-api.md §9.1, cli.md §4.3).
+    public func setUpdateAuthority(
+        packageID wireID: RuntimePackageID,
+        authority: AuthorityChoice
+    ) async throws(RuntimeWireError) -> PackageUpdateStatus {
+        let service = updateServiceInstance()
+        do {
+            try await service.open()
+        } catch {
+            throw EmbeddedPackageService.wireError(for: error)
+        }
+        guard let packageID = PackageID(rawValue: wireID.rawValue) else {
+            throw .store(
+                "packageNotFound",
+                message: "The package is not managed by APKRun.",
+                remediation: "Use `apkrun list` to see managed packages.")
+        }
+        do {
+            let record = try await service.setUpdateAuthority(
+                packageID: packageID, authority: authority)
             return try await service.status(for: record)
         } catch {
             throw EmbeddedUpdateService.wireError(for: error)

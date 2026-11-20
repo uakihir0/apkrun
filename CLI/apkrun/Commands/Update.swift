@@ -99,7 +99,8 @@ struct UpdatePolicyCommand: AsyncParsableCommand {
                 policy: UpdatePolicy(choice: choice, provider: providerChange))
             let providerText = status.provider?.label ?? "none"
             Output.write(
-                "\(status.packageID.rawValue): mode \(status.choice?.rawValue ?? status.authority), provider \(providerText)")
+                "\(status.packageID.rawValue): mode \(status.choice?.rawValue ?? status.authority), provider \(providerText)"
+            )
         } catch let failure as RuntimeWireError {
             throw failure
         } catch {

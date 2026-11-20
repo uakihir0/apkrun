@@ -1,6 +1,5 @@
-import Foundation
-
 import APKStoreCore
+import Foundation
 
 // `Updates/state.json` and `Updates/history.jsonl` (update-system.md §10).
 

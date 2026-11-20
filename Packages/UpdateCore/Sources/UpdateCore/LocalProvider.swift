@@ -1,6 +1,5 @@
-import Foundation
-
 import APKStoreCore
+import Foundation
 
 /// Parses `ProviderSpec.spec` strings into provider configurations and creates
 /// providers from stored references (update-system.md §4, runtime-api.md §9.2).
@@ -118,6 +117,7 @@ public struct LocalProvider: UpdateProvider {
         self.displayPath = displayPath
     }
 
+    /// Returns the newest version directory above the installed version, or nil.
     public func check(
         _ package: InstalledPackage,
         context _: ProviderContext
@@ -148,9 +148,11 @@ public struct LocalProvider: UpdateProvider {
             }
             return (code, name)
         }
-        guard let (versionCode, directoryName) = candidates
-            .filter({ $0.0 > package.versionCode })
-            .max(by: { $0.0 < $1.0 })
+        guard
+            let (versionCode, directoryName) =
+                candidates
+                .filter({ $0.0 > package.versionCode })
+                .max(by: { $0.0 < $1.0 })
         else {
             return nil
         }
@@ -217,6 +219,7 @@ public struct LocalProvider: UpdateProvider {
             detail: "version directory holds no recognized APK layout")
     }
 
+    /// Copies the candidate's APK set into the destination directory.
     public func download(
         _ candidate: UpdateCandidate,
         to destination: DownloadDestination,
@@ -240,7 +243,8 @@ public struct LocalProvider: UpdateProvider {
             } catch {
                 throw UpdateFailure.downloadFailed(reason: error.localizedDescription)
             }
-            written += artifact.size
+            written +=
+                artifact.size
                 ?? Int64(
                     (try? target.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
             progress(DownloadProgress(bytesWritten: written, bytesTotal: total > 0 ? total : nil))
@@ -252,9 +256,11 @@ public struct LocalProvider: UpdateProvider {
         if copied.count == 1, copied[0].kind == .container {
             return .container(copied[0].url)
         }
-        guard let base = copied.first(where: {
-            $0.url.lastPathComponent == "app.apk" || $0.url.lastPathComponent == "base.apk"
-        }) else {
+        guard
+            let base = copied.first(where: {
+                $0.url.lastPathComponent == "app.apk" || $0.url.lastPathComponent == "base.apk"
+            })
+        else {
             throw UpdateFailure.providerMetadataInvalid(detail: "downloaded set has no base APK")
         }
         let splits = copied.filter { $0.url != base.url }.map(\.url)

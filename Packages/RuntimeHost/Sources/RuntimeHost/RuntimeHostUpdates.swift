@@ -105,8 +105,11 @@ public actor EmbeddedUpdateService {
         let state = await stateStore.state(for: record.packageId)
         let phase = await coordinator.phase(for: record.packageId)
         let settings = try? await store.packageSettings(for: record.packageId)
+        guard let wireID = RuntimePackageID(rawValue: record.packageId.rawValue) else {
+            throw UpdateFailure.validation(detail: "stored package id is not a wire id")
+        }
         return PackageUpdateStatus(
-            packageID: RuntimePackageID(rawValue: record.packageId.rawValue)!,
+            packageID: wireID,
             choice: Self.choice(authority: record.updateAuthority, mode: settings?.updateMode),
             authority: record.updateAuthority.rawValue,
             provider: record.updateProvider.map { Self.providerSummary($0, credentials: credentials) },
@@ -130,9 +133,12 @@ public actor EmbeddedUpdateService {
         limit: Int
     ) async throws -> [RuntimeAPI.UpdateHistoryEntry] {
         try await stateStore.history(packageID: packageID, limit: limit).map {
-            RuntimeAPI.UpdateHistoryEntry(
+            guard let wireID = RuntimePackageID(rawValue: $0.packageID.rawValue) else {
+                throw UpdateFailure.validation(detail: "stored package id is not a wire id")
+            }
+            return RuntimeAPI.UpdateHistoryEntry(
                 time: $0.time,
-                packageID: RuntimePackageID(rawValue: $0.packageID.rawValue)!,
+                packageID: wireID,
                 from: $0.from,
                 to: $0.to,
                 provider: $0.provider?.rawValue,
@@ -151,8 +157,9 @@ public actor EmbeddedUpdateService {
         packageID: PackageID,
         policy: UpdatePolicy
     ) async throws -> PackageRecord {
-        guard let record = try await store.listManagedPackages()
-            .first(where: { $0.packageId == packageID })
+        guard
+            let record = try await store.listManagedPackages()
+                .first(where: { $0.packageId == packageID })
         else {
             throw PackageStoreFailure.packageNotFound
         }
@@ -192,8 +199,9 @@ public actor EmbeddedUpdateService {
         try await store.setUpdatePolicy(
             for: packageID, authority: authority,
             provider: provider, removeProvider: removeProvider)
-        guard let updated = try await store.listManagedPackages()
-            .first(where: { $0.packageId == packageID })
+        guard
+            let updated = try await store.listManagedPackages()
+                .first(where: { $0.packageId == packageID })
         else {
             throw PackageStoreFailure.packageNotFound
         }
@@ -554,7 +562,7 @@ extension RuntimeHost {
         let snapshot = OperationSnapshot(
             operationID: operationID,
             kind: .updateCheck,
-            packageID: selected.first.map { RuntimePackageID(rawValue: $0.rawValue)! },
+            packageID: selected.first.flatMap { RuntimePackageID(rawValue: $0.rawValue) },
             requestFingerprint: RuntimeOperationRequestFingerprint.make(from: requestPayload),
             clientKind: clientKind,
             startedAt: Date(),

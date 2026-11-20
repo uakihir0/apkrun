@@ -1,6 +1,5 @@
-import Foundation
-
 import APKStoreCore
+import Foundation
 
 // Core types of the update system (update-system.md §4.1, state-machines.md §6).
 

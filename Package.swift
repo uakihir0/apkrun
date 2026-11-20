@@ -388,6 +388,11 @@ let package = Package(
             path: "Packages/UpdateCore/Tests/UpdateCoreTests"
         ),
         .testTarget(
+            name: "UpdateCoreSystemTests",
+            dependencies: ["UpdateCore", "APKStoreCore"],
+            path: "Packages/UpdateCore/Tests/UpdateCoreSystemTests"
+        ),
+        .testTarget(
             name: "WrapperCoreTests",
             dependencies: ["WrapperCore"],
             path: "Packages/WrapperCore/Tests/WrapperCoreTests"

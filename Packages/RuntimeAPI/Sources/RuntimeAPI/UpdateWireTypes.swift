@@ -60,6 +60,7 @@ public enum ProviderChange: Codable, Sendable, Equatable {
         case remove
     }
 
+    /// Decodes a provider change kind.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
@@ -69,6 +70,7 @@ public enum ProviderChange: Codable, Sendable, Equatable {
         }
     }
 
+    /// Encodes the provider change as a tagged object.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
@@ -217,6 +219,7 @@ public enum WireUpdateOutcome: Codable, Sendable, Equatable {
         case skipped
     }
 
+    /// Decodes an update outcome kind.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
@@ -236,6 +239,7 @@ public enum WireUpdateOutcome: Codable, Sendable, Equatable {
         }
     }
 
+    /// Encodes the update outcome as a tagged object.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
@@ -292,6 +296,7 @@ public enum WireUpdatePhase: Codable, Sendable, Equatable {
         case unknown
     }
 
+    /// Decodes an update phase kind.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
@@ -312,6 +317,7 @@ public enum WireUpdatePhase: Codable, Sendable, Equatable {
         }
     }
 
+    /// Encodes the update phase as a tagged object.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
@@ -442,6 +448,7 @@ public struct UpdateCheckResult: Codable, Sendable, Equatable {
             case failed
         }
 
+        /// Decodes a per-package check outcome kind.
         public init(from decoder: any Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             switch try container.decode(Kind.self, forKey: .kind) {
@@ -459,6 +466,7 @@ public struct UpdateCheckResult: Codable, Sendable, Equatable {
             }
         }
 
+        /// Encodes the check outcome as a tagged object.
         public func encode(to encoder: any Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
             switch self {

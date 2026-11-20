@@ -2183,7 +2183,8 @@ public actor PackageStore {
                 // package-store.md §5.5: roll forward when `staged/` already
                 // holds the new digest or a step was journaled; otherwise abort
                 // and delete the `incoming/` set.
-                let staged = packagesDirectory
+                let staged =
+                    packagesDirectory
                     .appendingPathComponent(directory, isDirectory: true)
                     .appendingPathComponent("staged", isDirectory: true)
                 let rolledToStaged =
@@ -2213,13 +2214,15 @@ public actor PackageStore {
                     try appendAbort(transaction, reason: "interruptedBeforeFileMove")
                 }
             case "discardStaged":
-                let staged = packagesDirectory
+                let staged =
+                    packagesDirectory
                     .appendingPathComponent(directory, isDirectory: true)
                     .appendingPathComponent("staged", isDirectory: true)
                 if state.lastStep != nil
                     || !fileManager.fileExists(atPath: staged.path)
                     || fileManager.fileExists(
-                        atPath: trashDirectory
+                        atPath:
+                            trashDirectory
                             .appendingPathComponent("\(transaction)-staged", isDirectory: true).path)
                 {
                     // A file step rolls forward; an already-moved set is a

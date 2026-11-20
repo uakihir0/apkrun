@@ -1,7 +1,7 @@
+import APKStoreCore
 import Foundation
 import Testing
 
-import APKStoreCore
 @testable import UpdateCore
 
 private struct FailingHTTP: UpdateHTTPClient {
@@ -92,11 +92,13 @@ private func writeFile(_ data: Data = Data([1, 2, 3]), at url: URL) throws {
     try writeFile(at: root.appendingPathComponent("\(package)/0/app.apk"))
 
     let provider = makeProvider(at: root)
-    #expect(try await provider.check(
-        makePackage(package, versionCode: 1), context: makeContext(root: root)) == nil)
+    #expect(
+        try await provider.check(
+            makePackage(package, versionCode: 1), context: makeContext(root: root)) == nil)
     // A package the repository does not carry is not an error.
-    #expect(try await provider.check(
-        makePackage("com.other.app", versionCode: 1), context: makeContext(root: root)) == nil)
+    #expect(
+        try await provider.check(
+            makePackage("com.other.app", versionCode: 1), context: makeContext(root: root)) == nil)
 }
 
 @Test func localProviderSkipsReleaseMatchingSavedCursor() async throws {
@@ -127,16 +129,19 @@ private func writeFile(_ data: Data = Data([1, 2, 3]), at url: URL) throws {
     try writeFile(at: root.appendingPathComponent("\(splits)/2/split_feature.apk"))
     try writeFile(at: root.appendingPathComponent("\(splits)/2/split_config.arm64_v8a.apk"))
     let provider = makeProvider(at: root)
-    let splitCandidate = try #require(await provider.check(
-        makePackage(splits, versionCode: 1), context: makeContext(root: root)))
-    #expect(splitCandidate.artifacts.map(\.kind) == [
-        .apk, .split("config.arm64_v8a"), .split("feature"),
-    ])
+    let splitCandidate = try #require(
+        await provider.check(
+            makePackage(splits, versionCode: 1), context: makeContext(root: root)))
+    #expect(
+        splitCandidate.artifacts.map(\.kind) == [
+            .apk, .split("config.arm64_v8a"), .split("feature"),
+        ])
 
     let container = "com.example.container"
     try writeFile(at: root.appendingPathComponent("\(container)/2/app.apks"))
-    let containerCandidate = try #require(await provider.check(
-        makePackage(container, versionCode: 1), context: makeContext(root: root)))
+    let containerCandidate = try #require(
+        await provider.check(
+            makePackage(container, versionCode: 1), context: makeContext(root: root)))
     #expect(containerCandidate.artifacts.map(\.kind) == [.container])
 }
 
@@ -149,7 +154,9 @@ private func writeFile(_ data: Data = Data([1, 2, 3]), at url: URL) throws {
     try writeFile(Data("notes".utf8), at: root.appendingPathComponent("\(package)/2/readme.txt"))
 
     let provider = makeProvider(at: root)
-    await #expect(throws: UpdateFailure.providerMetadataInvalid(detail: "version directory holds no recognized APK layout")) {
+    await #expect(
+        throws: UpdateFailure.providerMetadataInvalid(detail: "version directory holds no recognized APK layout")
+    ) {
         _ = try await provider.check(
             makePackage(package, versionCode: 1), context: makeContext(root: root))
     }

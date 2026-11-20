@@ -1,6 +1,5 @@
-import Foundation
-
 import APKStoreCore
+import Foundation
 
 // The per-package update coordinator (update-system.md §5, state-machines.md §6).
 
@@ -145,8 +144,9 @@ public actor UpdateCoordinator {
                 for: providerRef, developerModeEnabled: developerModeEnabled())
             let candidate = try await provider.check(installed, context: context)
             guard let candidate else {
-                await recordCheck(row: row, record: record, outcome: .upToDate,
-                                  failures: 0, now: started, trigger: trigger)
+                await recordCheck(
+                    row: row, record: record, outcome: .upToDate,
+                    failures: 0, now: started, trigger: trigger)
                 return .upToDate
             }
 
@@ -284,7 +284,7 @@ public actor UpdateCoordinator {
         case 2: interval = 2 * 3_600
         default: interval = TimeInterval(intervalHours) * 3_600
         }
-        let jitter = interval * 0.1 * Double.random(in: -1 ... 1)
+        let jitter = interval * 0.1 * Double.random(in: -1...1)
         return after.addingTimeInterval(interval + jitter)
     }
 }

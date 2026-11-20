@@ -33,6 +33,9 @@ class Dispatcher(
     private val displayLocks = ConcurrentHashMap<Int, Mutex>()
     private val displayExecutors = ConcurrentHashMap<Int, CoroutineDispatcher>()
     private val active = ConcurrentHashMap<Long, Deferred<Response?>>()
+    // `CollectDiagnostics` owns the single bulk-channel writer for the whole
+    // collect, so two collects can never run together.
+    private val diagnosticsMutex = Mutex()
     private val cancelled = ConcurrentHashMap.newKeySet<Long>()
 
     /**
@@ -166,11 +169,13 @@ class Dispatcher(
                     .setListPackages(operations.listPackages(request.listPackages))
                     .build()
             Request.OpCase.COLLECT_DIAGNOSTICS ->
-                Response.newBuilder()
-                    .setCollectDiagnostics(
-                        operations.collectDiagnostics(request.collectDiagnostics)
-                    )
-                    .build()
+                diagnosticsMutex.withLock {
+                    Response.newBuilder()
+                        .setCollectDiagnostics(
+                            operations.collectDiagnostics(request.collectDiagnostics)
+                        )
+                        .build()
+                }
             Request.OpCase.FOCUS_DISPLAY -> {
                 val displayId = request.focusDisplay.displayId
                 withDisplayLock(displayId) { operations.focusDisplay(displayId) }

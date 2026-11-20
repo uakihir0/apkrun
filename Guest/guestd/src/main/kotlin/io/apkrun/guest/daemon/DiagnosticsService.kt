@@ -86,16 +86,41 @@ class DiagnosticsService(
             val output = ByteArrayOutputStream()
             val buffer = ByteArray(64 * 1024)
             val reader = process.inputStream
+            // The read loop must not block: a command that never closes its
+            // pipe still has to hit the deadline, so bytes are only consumed
+            // while `available()` says they exist.
+            val deadlineNanos =
+                System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS)
             while (output.size() <= MAX_ITEM_BYTES_INT) {
-                val read = reader.read(buffer)
-                if (read < 0) {
-                    break
+                val available = reader.available()
+                if (available > 0) {
+                    val read = reader.read(buffer, 0, minOf(available, buffer.size))
+                    if (read < 0) {
+                        break
+                    }
+                    output.write(buffer, 0, read)
+                } else if (!process.isAlive) {
+                    if (reader.read() < 0) {
+                        break
+                    }
+                } else if (System.nanoTime() > deadlineNanos) {
+                    process.destroyForcibly()
+                    throw IllegalStateException(
+                        "the command did not finish within ${TIMEOUT_SECONDS}s"
+                    )
+                } else {
+                    Thread.sleep(POLL_MILLIS)
                 }
-                output.write(buffer, 0, read)
             }
-            if (!process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            val remainingNanos = deadlineNanos - System.nanoTime()
+            if (
+                remainingNanos <= 0 ||
+                    !process.waitFor(remainingNanos, TimeUnit.NANOSECONDS)
+            ) {
                 process.destroyForcibly()
-                throw IllegalStateException("the command did not finish within ${TIMEOUT_SECONDS}s")
+                throw IllegalStateException(
+                    "the command did not finish within ${TIMEOUT_SECONDS}s"
+                )
             }
             return output.toByteArray()
         }
@@ -107,5 +132,6 @@ class DiagnosticsService(
         private const val MAX_ITEM_BYTES_INT = 16 * 1024 * 1024
         /** The per-call timeout of diagnostics.md §6. */
         const val TIMEOUT_SECONDS = 60L
+        private const val POLL_MILLIS = 10L
     }
 }

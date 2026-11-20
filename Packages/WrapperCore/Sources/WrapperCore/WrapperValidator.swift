@@ -58,6 +58,7 @@ public struct WrapperValidator: Sendable {
     private let registry: WrapperRegistry
     private let currentLauncher: LauncherBuild?
     private let packageExists: @Sendable (String) -> Bool
+    private let iconDigest: @Sendable (String) async -> String?
     private let logger: APKLogger
 
     /// Creates a validator.
@@ -68,15 +69,20 @@ public struct WrapperValidator: Sendable {
     ///     refresh reasons are skipped when nil.
     ///   - packageExists: check 5 — whether the store has a record for the
     ///     package. WrapperCore never reads the store itself.
+    ///   - iconDigest: check 6 — SHA-256 hex of the icon master the store
+    ///     would produce for a package today, or nil when none exists
+    ///     (wrapper.md §8.5).
     public init(
         registry: WrapperRegistry,
         currentLauncher: LauncherBuild? = nil,
         packageExists: @escaping @Sendable (String) -> Bool,
+        iconDigest: @escaping @Sendable (String) async -> String? = { _ in nil },
         sink: (any LogSink)? = nil
     ) {
         self.registry = registry
         self.currentLauncher = currentLauncher
         self.packageExists = packageExists
+        self.iconDigest = iconDigest
         logger = APKLogger(category: WrapperLogCategory.lifecycle, sink: sink)
     }
 
@@ -190,6 +196,13 @@ public struct WrapperValidator: Sendable {
         }
         if let entry, entry.displayName != (plist["CFBundleDisplayName"] as? String) {
             reasons.insert(.displayName)
+        }
+        // §8.5: a store-rendered icon differs; a custom icon never refreshes.
+        if let entry, let packageID = result.packageID,
+            entry.customization.iconFile == nil,
+            await iconDigest(packageID) != entry.iconDigest
+        {
+            reasons.insert(.icon)
         }
         result.refreshReasons = reasons
 

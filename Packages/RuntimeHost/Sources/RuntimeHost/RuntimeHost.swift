@@ -1,6 +1,10 @@
+import APKStoreCore
+import CoreGraphics
+import CryptoKit
 import DiagnosticsCore
 import Foundation
 import ImageCore
+import ImageIO
 import IntegrationCore
 import RuntimeAPI
 import RuntimeCore
@@ -1294,7 +1298,7 @@ public actor RuntimeHost {
         }
     }
 
-    func finishOperation(_ operationID: WireOperationID, result: OperationResult) {
+    func finishOperation(_ operationID: WireOperationID, result: RuntimeAPI.OperationResult) {
         guard var operation = trackedOperations[operationID], operation.snapshot.result == nil else {
             return
         }
@@ -1382,6 +1386,19 @@ public actor RuntimeHost {
             registry: registry,
             currentLauncher: launcherBuild(),
             packageExists: { knownPackages?.contains($0) ?? true },
+            iconDigest: { packageID in
+                // §8.5: the digest of the icon master the store would
+                // produce today, or nil when the store has none.
+                guard let runtimeID = RuntimePackageID(rawValue: packageID) else {
+                    return nil
+                }
+                guard
+                    let rendered = await service.renderedIconLayers(for: runtimeID),
+                    let composed = RuntimeHost.composedIcon(
+                        kind: rendered.manifest.kind, layers: rendered.layers)
+                else { return nil }
+                return composed.digest
+            },
             sink: diagnostics?.logSink
         )
         do {
@@ -1559,6 +1576,7 @@ public actor RuntimeHost {
             throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
         }
 
+        var iconDigest: String?
         let iconSource: WrapperIconSource
         switch request.icon {
         case .custom:
@@ -1566,9 +1584,31 @@ public actor RuntimeHost {
             guard let data, !data.isEmpty else {
                 throw Self.wrapperWireError(for: .customIconInvalid(.unreadable))
             }
-            iconSource = .preview(data)
+            // A custom icon is validated, composed, and never tracked by
+            // iconDigest (wrapper.md §8.2 `custom`, §8.5).
+            let customURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("apkrun-custom-icon-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: customURL) }
+            do {
+                try data.write(to: customURL)
+                iconSource = .rendered(try IconComposer.customIconData(at: customURL))
+            } catch let failure as WrapperFailure {
+                throw Self.wrapperWireError(for: failure)
+            } catch {
+                throw Self.wrapperWireError(for: .customIconInvalid(.unreadable))
+            }
         case .android, .none:
-            iconSource = .placeholder
+            // Store-rendered layers compose the icon; otherwise the
+            // placeholder (wrapper.md §8.2; issue #56 step 3).
+            if let rendered = await service.renderedIconLayers(for: request.packageID),
+                let composed = Self.composedIcon(
+                    kind: rendered.manifest.kind, layers: rendered.layers)
+            {
+                iconSource = .rendered(composed.icns)
+                iconDigest = composed.digest
+            } else {
+                iconSource = .placeholder
+            }
         }
 
         var window = WindowDefaults()
@@ -1621,6 +1661,9 @@ public actor RuntimeHost {
             throw Self.wrapperWireError(for: error)
         }
 
+        if iconDigest != nil {
+            try? await registry.setIconDigest(bundleID: generated.bundleID, digest: iconDigest)
+        }
         guard let entry = await registry.entry(bundleID: generated.bundleID) else {
             throw .runtime("internal", message: "APKRun couldn't register the Mac app.")
         }
@@ -1641,6 +1684,36 @@ public actor RuntimeHost {
             lastValidatedAt: entry.lastValidatedAt,
             warnings: []
         )
+    }
+
+    /// Composes the wrapper icon from store-rendered layers: the `.icns`
+    /// bytes plus the SHA-256 hex digest of the 1024 px master
+    /// (wrapper.md §8.2–§8.5). The monochrome layer is stored but unused.
+    static func composedIcon(
+        kind: StoreIconKind, layers: [StoreIconLayer]
+    ) -> (icns: Data, digest: String)? {
+        func image(_ role: StoreIconRole) -> CGImage? {
+            guard let png = layers.first(where: { $0.role == role })?.png,
+                let source = CGImageSourceCreateWithData(png as CFData, nil)
+            else { return nil }
+            return CGImageSourceCreateImageAtIndex(source, 0, nil)
+        }
+        let master: CGImage?
+        switch kind {
+        case .adaptive:
+            guard let background = image(.background), let foreground = image(.foreground)
+            else { return nil }
+            master = try? IconComposer.composeAdaptive(
+                background: background, foreground: foreground)
+        case .legacy:
+            master = image(.legacy).flatMap { try? IconComposer.composeLegacy($0) }
+        }
+        guard let master,
+            let masterPNG = try? IconComposer.pngData(master),
+            let icns = try? IconsetWriter.icnsData(from: master)
+        else { return nil }
+        let digest = SHA256.hash(data: masterPNG).map { String(format: "%02x", $0) }.joined()
+        return (icns, digest)
     }
 
     /// Maps a registry entry to its wire summary.

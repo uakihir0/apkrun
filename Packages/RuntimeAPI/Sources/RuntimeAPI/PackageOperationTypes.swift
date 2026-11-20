@@ -593,6 +593,28 @@ public struct RuntimeInstallImportedRequest: Codable, Sendable, Equatable {
     }
 }
 
+/// Drops an import ticket and its private APK copies (runtime-api.md §10).
+public struct RuntimeDiscardImportRequest: Codable, Sendable, Equatable {
+    /// The import ticket returned by `importPackage`.
+    public var ticket: RuntimeImportTicket
+
+    /// Creates a discard request.
+    public init(ticket: RuntimeImportTicket) {
+        self.ticket = ticket
+    }
+}
+
+/// Adopts a package Android has but APKRun does not manage (package-store.md §9.3).
+public struct RuntimeAdoptPackageRequest: Codable, Sendable, Equatable {
+    /// The Android package name to adopt.
+    public var packageID: RuntimePackageID
+
+    /// Creates an adopt request.
+    public init(packageID: RuntimePackageID) {
+        self.packageID = packageID
+    }
+}
+
 /// Uninstall policy for app data and the APKRun package record.
 public struct RuntimeUninstallOptions: Codable, Sendable, Equatable {
     /// Whether to retain Android app data for a later reinstall.

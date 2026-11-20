@@ -71,6 +71,14 @@ import Testing
             + [
                 "disabled", "notSupportedOnImage", "guestUnavailable", "clipboardTooLarge",
             ].map { "integration.\($0)" }
+            + [
+                "unsupportedContainer", "unreadableArchive", "archiveLimitExceeded", "notAnAPK",
+                "missingBase", "multipleBases", "duplicateSplit", "inconsistentSplits",
+                "incompleteSplitSet", "unsignedAPK", "invalidSignature", "legacySignatureNotAllowed",
+                "unsupportedABI", "minSdkTooHigh", "targetSdkTooLow", "expansionFilesNotSupported",
+                "reservedPackage", "tooLarge", "resourcesArscNotAligned", "signerMismatch",
+                "alreadyInstalled", "downgradeRefused", "packageAlreadyManaged",
+            ].map { "store.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)
     #expect(
@@ -104,6 +112,7 @@ import Testing
                 || entry.code.hasPrefix("image.")
                 || entry.code.hasPrefix("wrapper.")
                 || entry.code.hasPrefix("integration.")
+                || entry.code.hasPrefix("store.")
         )
         for text in entry.message?.values ?? [String: String]().values {
             #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

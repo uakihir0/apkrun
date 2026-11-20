@@ -62,6 +62,43 @@ struct ListPackagesCommand: AsyncParsableCommand {
     }
 }
 
+/// `apkrun adopt <package>` — adopt a package Android has but APKRun does not manage
+/// (package-store.md §9.3).
+struct AdoptCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "adopt",
+        abstract: "Adopt an Android app installed outside APKRun."
+    )
+
+    @Argument(help: "The Android package name.")
+    var package: String
+
+    @Flag(name: .long, help: "Print the result as JSON.")
+    var json = false
+
+    mutating func run() async throws {
+        guard let packageID = RuntimePackageID(rawValue: package) else {
+            throw CLIFailure.invalidPackageName(package: package)
+        }
+        do {
+            let client = try RuntimeControlClient(clientKind: .cli)
+            let summary = try await client.adoptPackage(
+                RuntimeAdoptPackageRequest(packageID: packageID))
+            if json {
+                try PackageQueryOutput.writeJSON(summary)
+            } else {
+                Output.write(
+                    "Adopted \(PackageQueryOutput.safeTerminalText(summary.displayName)) "
+                        + "(\(summary.packageID.rawValue)). Updates stay external.")
+            }
+        } catch let failure as RuntimeWireError {
+            throw failure
+        } catch {
+            throw await RuntimeStatusOutput.commandFailure(error)
+        }
+    }
+}
+
 struct PackageInfoCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "info",

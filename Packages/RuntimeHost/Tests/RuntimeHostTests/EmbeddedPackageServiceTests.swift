@@ -77,7 +77,10 @@ func embeddedPackageServiceListsUnreadablePackagesAndReturnsTheirTypedError() as
     try FileManager.default.createDirectory(at: packageDirectory, withIntermediateDirectories: true)
     try Data("{invalid".utf8).write(to: packageDirectory.appendingPathComponent("metadata.json"))
 
-    let service = EmbeddedPackageService(paths: paths)
+    let service = EmbeddedPackageService(
+        paths: paths,
+        importVerifier: PackageStore.legacyImportVerifier
+    )
     try await service.open()
 
     let packages = try await service.listPackages(RuntimeListPackagesRequest())
@@ -107,7 +110,11 @@ func embeddedPackageServiceListsLastKnownUnmanagedPackagesWhileRuntimeIsStopped(
 
     let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": root.path])
     let packageID = try #require(PackageID(rawValue: "com.example.outside"))
-    let store = PackageStore(packagesDirectory: paths.packagesDirectory)
+    let store = PackageStore(
+        packagesDirectory: paths.packagesDirectory,
+        importVerifier: PackageStore.legacyImportVerifier
+
+    )
     try await store.open()
     _ = try await store.saveLastKnownAndroidInventory([
         StorePackageSummary(
@@ -119,7 +126,11 @@ func embeddedPackageServiceListsLastKnownUnmanagedPackagesWhileRuntimeIsStopped(
         )
     ])
 
-    let service = EmbeddedPackageService(paths: paths)
+    let service = EmbeddedPackageService(
+        paths: paths,
+        importVerifier: PackageStore.legacyImportVerifier
+
+    )
     try await service.open()
     let packages = try await service.listPackages(RuntimeListPackagesRequest(filter: .all))
 
@@ -144,7 +155,11 @@ func embeddedPackageServiceReportsUnreadableCachedAndroidInventory() async throw
     try FileManager.default.createDirectory(at: paths.packagesDirectory, withIntermediateDirectories: true)
     try Data("{invalid".utf8).write(to: paths.packagesDirectory.appendingPathComponent("android-inventory.json"))
 
-    let service = EmbeddedPackageService(paths: paths)
+    let service = EmbeddedPackageService(
+        paths: paths,
+        importVerifier: PackageStore.legacyImportVerifier
+
+    )
     try await service.open()
     do {
         _ = try await service.listPackages(RuntimeListPackagesRequest(filter: .all))
@@ -189,11 +204,19 @@ func embeddedPackageServiceMarksManagedPackagesMissingFromCachedInventory() asyn
     encoder.dateEncodingStrategy = .iso8601
     try encoder.encode(record).write(to: packageDirectory.appendingPathComponent("metadata.json"))
 
-    let store = PackageStore(packagesDirectory: paths.packagesDirectory)
+    let store = PackageStore(
+        packagesDirectory: paths.packagesDirectory,
+        importVerifier: PackageStore.legacyImportVerifier
+
+    )
     try await store.open()
     _ = try await store.saveLastKnownAndroidInventory([])
 
-    let service = EmbeddedPackageService(paths: paths)
+    let service = EmbeddedPackageService(
+        paths: paths,
+        importVerifier: PackageStore.legacyImportVerifier
+
+    )
     try await service.open()
     let result = try await service.listPackages(RuntimeListPackagesRequest(filter: .all))
 
@@ -207,7 +230,11 @@ func embeddedPackageServiceMarksManagedPackagesMissingFromCachedInventory() asyn
 func embeddedPackageServiceRoutesLaunchAndTerminateThroughRuntimeSessionService() async throws {
     let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
     let sessionService = FakePackageRuntimeSessionService()
-    let service = EmbeddedPackageService(sessionService: sessionService)
+    let service = EmbeddedPackageService(
+        sessionService: sessionService,
+        importVerifier: PackageStore.legacyImportVerifier
+
+    )
 
     let launch = try await service.launch(RuntimeLaunchRequest(packageID: package))
     #expect(launch.packageID == package)
@@ -248,7 +275,9 @@ func embeddedPackageServiceRejectsInstallWhileThePackageHasAnActiveSession() asy
                 nativeABIs: []
             )
         },
-        sessionService: sessionService
+        sessionService: sessionService,
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     await sessionService.setPackageService(service)
     try await service.open()
@@ -303,7 +332,9 @@ func embeddedPackageServiceImportsIndexedFileHandlesWithoutStartingAndroid() asy
                 targetSDK: 35,
                 nativeABIs: []
             )
-        }
+        },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await service.open()
 
@@ -412,7 +443,9 @@ func embeddedPackageServiceStagesSameSetPreviewForGuestVerification() async thro
                 targetSDK: 35,
                 nativeABIs: []
             )
-        }
+        },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await service.open()
     let preview = try await service.importPackage(
@@ -469,7 +502,9 @@ func embeddedPackageServiceKeepsTheStoreImportLimitAboveDaemonTransportLimit() a
                 targetSDK: 35,
                 nativeABIs: []
             )
-        }
+        },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await service.open()
 
@@ -494,7 +529,11 @@ func embeddedPackageServiceRequiresEveryImportHandleToBeMappedExactlyOnce() asyn
     defer { try? FileManager.default.removeItem(at: root) }
 
     let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": root.path])
-    let service = EmbeddedPackageService(paths: paths)
+    let service = EmbeddedPackageService(
+        paths: paths,
+        importVerifier: PackageStore.legacyImportVerifier
+
+    )
     try await service.open()
 
     let first = root.appendingPathComponent("first.apk")
@@ -613,7 +652,10 @@ func embeddedPackageServiceRejectsFileHandlePathTraversal() async throws {
         paths: paths,
         inspector: { _ in
             throw APKInspectionFailure.inputNotReadable
-        })
+        },
+        importVerifier: PackageStore.legacyImportVerifier
+
+    )
     let source = root.appendingPathComponent("source.apk")
     try Data("apk".utf8).write(to: source)
     let handle = try FileHandle(forReadingFrom: source)
@@ -656,7 +698,9 @@ func embeddedPackageServiceFailsClosedWhenHostSpaceCannotBeRead() async throws {
                 nativeABIs: []
             )
         },
-        hostFreeSpace: { _ in 0 }
+        hostFreeSpace: { _ in 0 },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await service.open()
 

@@ -491,6 +491,56 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Drops an import ticket and its private APK copies without starting Android.
+    public func discardImport(
+        _ request: RuntimeDiscardImportRequest
+    ) async throws(RuntimeControlClientError) {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeDiscardImportControlRequest(
+                header: makeHeader(),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.discardImport(data)
+            let reply = try Self.decode(RuntimeDiscardImportControlReply.self, from: response)
+            if let error = reply.error {
+                throw Self.clientError(from: error)
+            }
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Adopts a package Android has but APKRun does not manage (package-store.md §9.3).
+    public func adoptPackage(
+        _ request: RuntimeAdoptPackageRequest
+    ) async throws(RuntimeControlClientError) -> RuntimePackageSummary {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeAdoptPackageControlRequest(
+                header: makeHeader(),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.adoptPackage(data)
+            let reply = try Self.decode(RuntimeAdoptPackageControlReply.self, from: response)
+            if let error = reply.error {
+                throw Self.clientError(from: error)
+            }
+            guard let summary = reply.summary else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return summary
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
     /// Starts installation and returns a handle that can be polled or cancelled.
     ///
     /// The supplied operation ID makes an ambiguous begin reply recoverable. If the begin request
@@ -1863,6 +1913,8 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func packageInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func importPackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
     func installImported(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func discardImport(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func adoptPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func beginInstallImported(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func beginUninstallPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func cancelOperation(_ request: Data) async throws(RuntimeControlClientError) -> Data
@@ -2209,6 +2261,34 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.importPackage(request, files: files) { response in finish(.success(response)) }
+        }
+    }
+
+    func discardImport(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.discardImport(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func adoptPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.adoptPackage(request) { response in finish(.success(response)) }
         }
     }
 

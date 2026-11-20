@@ -1651,6 +1651,25 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return installImportedData
     }
 
+    func discardImport(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        let reply = RuntimeDiscardImportControlReply()
+        return (try? JSONEncoder().encode(reply)) ?? Data()
+    }
+
+    func adoptPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        guard let decoded = try? JSONDecoder().decode(RuntimeAdoptPackageControlRequest.self, from: request)
+        else {
+            let reply = RuntimeAdoptPackageControlReply(
+                error: .runtime("malformedRequest", message: "malformed request"))
+            return (try? JSONEncoder().encode(reply)) ?? Data()
+        }
+        let reply = RuntimeAdoptPackageControlReply(
+            summary: RuntimePackageSummary(
+                packageID: decoded.request.packageID, displayName: "Adopted", versionCode: 1)
+        )
+        return (try? JSONEncoder().encode(reply)) ?? Data()
+    }
+
     func beginInstallImported(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         let shouldFail = lock.withLock {
             beginInstallImportedRequestsValue.append(request)

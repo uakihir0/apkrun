@@ -127,6 +127,9 @@ public enum PackageStoreFailure: Error, Equatable, Sendable {
     case unreadablePackageRecord
     /// `authority == .apkrun` requires a configured update provider.
     case providerNotConfigured
+    /// The record's update authority installs nothing through APKRun
+    /// (`googlePlay`, `external`; update-system.md §2.1).
+    case authorityDoesNotAllowUpdates
     /// The package has an open runtime session; an update cannot start.
     case packageInUse(PackageID)
     /// The package has no staged update to install.
@@ -1319,7 +1322,12 @@ public actor PackageStore {
         if let detail = unreadableRecords[packageID] {
             throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
         }
-        guard records[packageID] != nil else { throw PackageStoreFailure.packageNotFound }
+        guard let record = records[packageID] else { throw PackageStoreFailure.packageNotFound }
+        // A download racing an authority change stops here: `googlePlay` and `external`
+        // never install through APKRun (update-system.md §2.1).
+        if record.updateAuthority == .googlePlay || record.updateAuthority == .external {
+            throw PackageStoreFailure.authorityDoesNotAllowUpdates
+        }
 
         let directory = directories[packageID] ?? directoryName(for: packageID)
         let incoming = incomingDirectory(packageID: packageID, directory: directory, ticket: ticket)
@@ -1447,6 +1455,11 @@ public actor PackageStore {
         }
         guard let existing = records[packageID] else { throw PackageStoreFailure.packageNotFound }
         guard existing.state == .installed else { throw PackageStoreFailure.packageNotFound }
+        // Re-checked here, under the lock, so a staged set staged before an authority
+        // change to `googlePlay` or `external` can never reach Android (§2.1).
+        if existing.updateAuthority == .googlePlay || existing.updateAuthority == .external {
+            throw PackageStoreFailure.authorityDoesNotAllowUpdates
+        }
 
         let directory = directories[packageID] ?? directoryName(for: packageID)
         let packageDirectory = packagesDirectory.appendingPathComponent(directory, isDirectory: true)

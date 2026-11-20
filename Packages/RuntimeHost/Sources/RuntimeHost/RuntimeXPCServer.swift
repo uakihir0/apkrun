@@ -934,7 +934,9 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
     }
 
     func requestApproval(_ request: Data, reply: @escaping (Data) -> Void) {
-        let admission = connectionRegistry.beginRequest(on: connectionID, allowDuringShutdown: true)
+        // Not allowed during shutdown: a new prompt could not be answered and
+        // would hold the request drain for the full ten-minute timeout.
+        let admission = connectionRegistry.beginRequest(on: connectionID)
         guard case .accepted(let pending) = admission else {
             let rejection = Self.rejection(for: admission)
             reply(

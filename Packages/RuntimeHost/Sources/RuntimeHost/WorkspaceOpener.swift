@@ -28,4 +28,15 @@ enum WorkspaceOpener {
             return false
         #endif
     }
+
+    /// The LaunchServices candidates for a bundle identifier (wrapper.md §9.1
+    /// step 1), used to find a wrapper the user moved or renamed.
+    static func applicationURLs(bundleIdentifier: String) -> [URL] {
+        #if canImport(AppKit)
+            return NSWorkspace.shared.urlsForApplications(
+                withBundleIdentifier: bundleIdentifier)
+        #else
+            return []
+        #endif
+    }
 }

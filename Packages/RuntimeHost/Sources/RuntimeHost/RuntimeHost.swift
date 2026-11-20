@@ -500,12 +500,12 @@ public actor RuntimeHost {
     public func launch(_ request: RuntimeLaunchRequest) async throws(RuntimeWireError) -> RuntimeLaunchResult {
         try beginPackageLaunch(request.packageID)
         defer { finishPackageLaunch(request.packageID) }
-        // runtime-daemon.md §7.2: open the window owner first — the registered
-        // wrapper when its checks pass, else the generic launcher --package.
-        await openWindowOwner(for: request.packageID)
         guard headlessLaunchHookIsEnabled else {
             throw Self.launchUnavailableError
         }
+        // runtime-daemon.md §7.2: open the window owner first — the registered
+        // wrapper when its checks pass, else the generic launcher --package.
+        await openWindowOwner(for: request.packageID)
         do {
             try await startRuntime(reason: .automatic)
         } catch {
@@ -1575,8 +1575,8 @@ public actor RuntimeHost {
         guard let registry = try? await wrapperRegistryInstance() else { return }
         if let entry = await registry.entry(packageID: packageID),
             entry.state == .active,
-            bundlePassesLaunchChecks(entry: entry),
-            await WorkspaceOpener.openApplication(at: URL(fileURLWithPath: entry.path))
+            let bundleURL = await launchBundleURL(for: entry, registry: registry),
+            await WorkspaceOpener.openApplication(at: bundleURL)
         {
             return
         }
@@ -1587,11 +1587,35 @@ public actor RuntimeHost {
             at: launcherURL, arguments: ["--package", packageID.rawValue])
     }
 
-    /// Checks 1–3 of wrapper.md §9.1 for the launch path: the bundle exists
+    /// Step 1 of wrapper.md §9.1 for the launch path: the bundle at the
+    /// registered path, else the LaunchServices candidates for the bundle ID,
+    /// keeping the first whose checks 2–3 pass. A found new location is written
+    /// back to the registry (§9.1's moved-wrapper rule).
+    private func launchBundleURL(
+        for entry: WrapperRegistryEntry,
+        registry: WrapperRegistry
+    ) async -> URL? {
+        let registeredURL = URL(fileURLWithPath: entry.path)
+        var candidates = [registeredURL]
+        if !FileManager.default.fileExists(atPath: registeredURL.path) {
+            candidates = WorkspaceOpener.applicationURLs(bundleIdentifier: entry.bundleId)
+        }
+        for candidate in candidates {
+            guard bundlePassesLaunchChecks(entry: entry, at: candidate) else { continue }
+            if candidate.path != entry.path {
+                let bookmark = (try? candidate.bookmarkData()) ?? Data()
+                try? await registry.updateLocation(
+                    bundleID: entry.bundleId, path: candidate, bookmark: bookmark)
+            }
+            return candidate
+        }
+        return nil
+    }
+
+    /// Checks 1–3 of wrapper.md §9.1 for one candidate: the bundle exists
     /// outside the Trash, is readable, and identifier and cdhash match the
     /// registry entry.
-    private func bundlePassesLaunchChecks(entry: WrapperRegistryEntry) -> Bool {
-        let url = URL(fileURLWithPath: entry.path)
+    private func bundlePassesLaunchChecks(entry: WrapperRegistryEntry, at url: URL) -> Bool {
         guard FileManager.default.fileExists(atPath: url.path),
             !url.path.contains("/.Trash/"),
             FileManager.default.isReadableFile(atPath: url.path)
@@ -2012,6 +2036,9 @@ public actor RuntimeHost {
         isShuttingDown = true
         runtimeSessionGeneration &+= 1
         hostState = "shuttingDown"
+        // Unanswered approval prompts must not hold the request drain:
+        // their launchers get `timedOut` instead of the ten-minute wait.
+        await approvalService?.cancelAll()
         guard hasStarted else {
             hostState = "stopped"
             completeShutdown()

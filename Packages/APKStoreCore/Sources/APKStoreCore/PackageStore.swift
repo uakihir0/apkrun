@@ -941,6 +941,24 @@ public actor PackageStore {
         return PackageRecordIssue(packageID: packageID, detail: detail)
     }
 
+    /// Returns the stored `settings.json` of a package, or nil when it has none
+    /// (package-metadata-json.md §3). Unmanaged and unconfigured packages take
+    /// their documented defaults.
+    public func packageSettings(for packageID: PackageID) async throws -> PackageSettings? {
+        try requireOpen()
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        let url = packagesDirectory.appendingPathComponent(directory, isDirectory: true)
+            .appendingPathComponent("settings.json")
+        guard fileManager.fileExists(atPath: url.path),
+            let data = try? Data(contentsOf: url)
+        else {
+            return nil
+        }
+        return try? Self.decoder().decode(PackageSettings.self, from: data)
+    }
+
     /// Returns the last Android package inventory observed by a live runtime.
     public func lastKnownAndroidInventory() async throws -> StoreAndroidInventorySnapshot? {
         try requireOpen()

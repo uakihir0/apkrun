@@ -2044,12 +2044,20 @@ public actor PackageStore {
             let directoryPackageID = Self.packageID(fromDirectoryName: directoryName)
             if !fileManager.fileExists(atPath: metadataURL.path) {
                 // A crash inside `moveReplacing` can leave only the `.old-*`
-                // backup of metadata.json; restore it so the record survives.
-                if let backup = (try? fileManager.contentsOfDirectory(atPath: child.path))?
-                    .first(where: { $0.hasPrefix(".metadata.json.old-") })
-                {
+                // backup of metadata.json; restore the newest one so the
+                // record survives without rolling back a later write.
+                let backups = (try? fileManager.contentsOfDirectory(atPath: child.path))?
+                    .filter { $0.hasPrefix(".metadata.json.old-") } ?? []
+                let newest = backups.max { lhs, rhs in
+                    let lhsDate = (try? fileManager.attributesOfItem(
+                        atPath: child.appendingPathComponent(lhs).path))?[.modificationDate] as? Date
+                    let rhsDate = (try? fileManager.attributesOfItem(
+                        atPath: child.appendingPathComponent(rhs).path))?[.modificationDate] as? Date
+                    return (lhsDate ?? .distantPast, lhs) < (rhsDate ?? .distantPast, rhs)
+                }
+                if let newest {
                     try? fileManager.moveItem(
-                        atPath: child.appendingPathComponent(backup).path,
+                        atPath: child.appendingPathComponent(newest).path,
                         toPath: metadataURL.path)
                 }
             }

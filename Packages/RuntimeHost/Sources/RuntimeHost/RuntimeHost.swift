@@ -2756,15 +2756,20 @@ public actor RuntimeHost {
         }
         record = try await step(.verifying, record) {
             setProvisioningState(.verifying)
-            guard let supervisor, await supervisor.state == .ready else {
-                throw ProvisioningStepFailure(
-                    step: .verifying,
-                    wireError: .runtime(
-                        "serviceUnavailable",
-                        message: "Android did not finish starting.",
-                        remediation: "Run setup again."
-                    )
-                )
+            let bootSupervisor: RuntimeSupervisor
+            do {
+                bootSupervisor = try supervisorInstance()
+            } catch {
+                throw fail(.verifying, error)
+            }
+            // After a daemon restart the recorded .firstBoot step is skipped even though
+            // Android is not running; finish the boot here instead of failing.
+            if await bootSupervisor.state != .ready {
+                do {
+                    try await bootSupervisor.ensureReady(.user)
+                } catch {
+                    throw fail(.verifying, error)
+                }
             }
         }
         if let image, let instanceStore,

@@ -16,16 +16,40 @@ public struct GlobalSettings: Equatable, Sendable {
     /// `integrations.defaults.*` — the global default of a per-app switch
     /// (desktop-integration.md §2.2).
     public var integrationsDefaults: [String: String]
+    /// `updates.checkIntervalHours` — §2.7, only 1/3/6/12/24/72/168.
+    public var updatesCheckIntervalHours: Int
+    /// `updates.downloadOnExpensiveNetwork` — §2.7.
+    public var updatesDownloadOnExpensiveNetwork: Bool
+    /// `updates.startRuntimeToInstall` — §2.7/§3.5.
+    public var updatesStartRuntimeToInstall: Bool
+    /// `updates.notifyInstalled` — §2.7.
+    public var updatesNotifyInstalled: Bool
+
+    /// `updates.checkIntervalHours` allowed values (configuration.md §2.7).
+    public static let allowedCheckIntervalHours = [1, 3, 6, 12, 24, 72, 168]
+    /// Default `updates.checkIntervalHours`.
+    public static let defaultCheckIntervalHours = 6
 
     /// Creates settings with the given flags.
     public init(
         developerEnabled: Bool = false,
         integrationsEnabled: [String: Bool] = [:],
-        integrationsDefaults: [String: String] = [:]
+        integrationsDefaults: [String: String] = [:],
+        updatesCheckIntervalHours: Int = GlobalSettings.defaultCheckIntervalHours,
+        updatesDownloadOnExpensiveNetwork: Bool = false,
+        updatesStartRuntimeToInstall: Bool = false,
+        updatesNotifyInstalled: Bool = false
     ) {
         self.developerEnabled = developerEnabled
         self.integrationsEnabled = integrationsEnabled
         self.integrationsDefaults = integrationsDefaults
+        self.updatesCheckIntervalHours =
+            Self.allowedCheckIntervalHours.contains(updatesCheckIntervalHours)
+            ? updatesCheckIntervalHours
+            : Self.defaultCheckIntervalHours
+        self.updatesDownloadOnExpensiveNetwork = updatesDownloadOnExpensiveNetwork
+        self.updatesStartRuntimeToInstall = updatesStartRuntimeToInstall
+        self.updatesNotifyInstalled = updatesNotifyInstalled
     }
 
     /// The global `integrations.enabled.<name>` switch; absent means on.
@@ -59,10 +83,16 @@ public struct GlobalSettings: Equatable, Sendable {
                 }
             }
         }
+        let updates = object["updates"] as? [String: Any]
         return GlobalSettings(
             developerEnabled: developer?["enabled"] as? Bool ?? false,
             integrationsEnabled: enabled,
-            integrationsDefaults: defaults)
+            integrationsDefaults: defaults,
+            updatesCheckIntervalHours: updates?["checkIntervalHours"] as? Int
+                ?? Self.defaultCheckIntervalHours,
+            updatesDownloadOnExpensiveNetwork: updates?["downloadOnExpensiveNetwork"] as? Bool ?? false,
+            updatesStartRuntimeToInstall: updates?["startRuntimeToInstall"] as? Bool ?? false,
+            updatesNotifyInstalled: updates?["notifyInstalled"] as? Bool ?? false)
     }
 
     /// Writes `settings.json` atomically (`apkrun config set`), mode 0600. Keys
@@ -91,6 +121,12 @@ public struct GlobalSettings: Equatable, Sendable {
             }
             object["integrations"] = integrations
         }
+        var updates = object["updates"] as? [String: Any] ?? [:]
+        updates["checkIntervalHours"] = settings.updatesCheckIntervalHours
+        updates["downloadOnExpensiveNetwork"] = settings.updatesDownloadOnExpensiveNetwork
+        updates["startRuntimeToInstall"] = settings.updatesStartRuntimeToInstall
+        updates["notifyInstalled"] = settings.updatesNotifyInstalled
+        object["updates"] = updates
         let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         let temporary = parent.appendingPathComponent(".\(fileURL.lastPathComponent).\(UUID().uuidString).tmp")
         try data.write(to: temporary, options: .withoutOverwriting)

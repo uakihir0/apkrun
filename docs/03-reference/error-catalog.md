@@ -477,6 +477,8 @@ Items of `runtime.hostRequirementsNotMet` (variant keys, with texts from [runtim
 | `serviceUnavailable(reason:)` | `runtime.serviceUnavailable` | RuntimeClient cannot reach the broker or a protected endpoint | RuntimeClient | "APKRun's background service isn't running." | "Open APKRun once, or restart its background service." `openTroubleshooting` | 69 | [runtime-api.md](runtime-api.md) §3.6 |
 | `vm(VMFailure)` | `runtime.vm` | the VM fails to start or fails while booting | RuntimeSupervisor | "" | — `none` | cause | [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 step 4 |
 | `vmConfiguration(VMConfigurationFailure)` | `runtime.vmConfiguration` | `VMDefinitionValidator` rejects the Android definition | RuntimeSupervisor | "" | — `none` | cause | [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 step 4 |
+| `unknownConfigKey(key)` | `runtime.unknownConfigKey` | `apkrun config get&#124;set` names a key that is not a known setting | apkrund | "Unknown setting {key}." | "Run `apkrun config get` to list the settings keys." `none` | 1 | [../03-reference/configuration.md](../03-reference/configuration.md) §2.7 |
+| `invalidConfigValue(key, value)` | `runtime.invalidConfigValue` | `apkrun config set` gets a value outside the key's allowed set | apkrund | "{value} is not a valid value for {key}." | "Check the accepted values for the setting in the configuration reference." `none` | 1 | [../03-reference/configuration.md](../03-reference/configuration.md) §2.7 |
 <!-- errorgen:end runtime -->
 
 ---

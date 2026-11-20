@@ -1155,6 +1155,8 @@ extension RuntimeSetUpdateAuthorityControlRequest: VersionedControlRequest {}
 extension RuntimeRollbackPackageControlRequest: VersionedControlRequest {}
 extension RuntimeUpdateSkipControlRequest: VersionedControlRequest {}
 extension RuntimeUpdatePackageControlRequest: VersionedControlRequest {}
+extension RuntimeConfigGetControlRequest: VersionedControlRequest {}
+extension RuntimeConfigSetControlRequest: VersionedControlRequest {}
 
 enum RuntimeControlOperation {
     case runtimeStatus
@@ -1199,6 +1201,8 @@ enum RuntimeControlOperation {
     case rollbackPackage
     case updateSkipped
     case updatePackage
+    case getConfig
+    case setConfig
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1290,7 +1294,8 @@ enum RuntimeControlOperation {
                 false
             }
         case .checkForUpdates, .listUpdates, .updateHistory, .setUpdatePolicy,
-            .setUpdateAuthority, .rollbackPackage, .updateSkipped, .updatePackage:
+            .setUpdateAuthority, .rollbackPackage, .updateSkipped, .updatePackage,
+            .getConfig, .setConfig:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -3299,6 +3304,92 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     private static func encode<T: Encodable>(_ value: T) -> Data {
         (try? JSONEncoder().encode(value)) ?? Data()
     }
+    func getConfig(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeConfigGetControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .getConfig,
+                as: RuntimeConfigGetControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeConfigGetControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeConfigGetControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeConfigGetControlReply(error: Self.malformedWireError)))
+                return
+            }
+            let values = await host.updateConfigValues(keys: decoded.keys)
+            response.send(Self.encode(RuntimeConfigGetControlReply(values: values)))
+        }
+    }
+
+    func setConfig(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeConfigSetControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .setConfig,
+                as: RuntimeConfigSetControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeConfigSetControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeConfigSetControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeConfigSetControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let values = try await host.updateConfigSet(
+                    key: decoded.key, value: decoded.value)
+                response.send(Self.encode(RuntimeConfigSetControlReply(values: values)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeConfigSetControlReply(error: wireError)))
+            }
+        }
+    }
+
 }
 
 private final class XPCDataReply: @unchecked Sendable {

@@ -1136,6 +1136,61 @@ public actor RuntimeControlClient {
     /// §9.1, update-system.md §8.5, cli.md §4.3). The reply's
     /// `rolledBackTo`/`unavailable` tells the CLI which §8.5 message to
     /// print.
+    /// Reads `updates.*` settings for `apkrun config get`
+    /// (configuration.md §2.7). `keys` nil lists every key.
+    public func getConfig(
+        keys: [String]? = nil
+    ) async throws(RuntimeControlClientError) -> [String: String] {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeConfigGetControlRequest(
+                header: makeHeader(), keys: keys)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.getConfig(data)
+            let reply = try Self.decode(RuntimeConfigGetControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message)
+            }
+            guard let values = reply.values else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return values
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Writes one `updates.*` setting for `apkrun config set`
+    /// (configuration.md §2.7) and returns the values after the write.
+    public func setConfig(
+        key: String, value: String
+    ) async throws(RuntimeControlClientError) -> [String: String] {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeConfigSetControlRequest(
+                header: makeHeader(), key: key, value: value)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.setConfig(data)
+            let reply = try Self.decode(RuntimeConfigSetControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message)
+            }
+            guard let values = reply.values else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return values
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Rolls the package back to its previous version (update-system §7).
     public func rollbackPackage(
         packageID: RuntimePackageID,
         allowDataLoss: Bool = false
@@ -2194,6 +2249,8 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func updateSkipped(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Checks and installs a package update now, optionally from files (runtime-api.md §9.1).
     func updatePackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
+    func getConfig(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func setConfig(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void)
     func invalidate()
 }
@@ -2975,6 +3032,34 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
         let callback: @Sendable () -> Void = { [relay] in relay.fire() }
         connection.interruptionHandler = callback
         connection.invalidationHandler = callback
+    }
+
+    func getConfig(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.getConfig(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func setConfig(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.setConfig(request) { response in finish(.success(response)) }
+        }
     }
 
     private static func transportFailure(_ error: any Error) -> RuntimeControlClientError {

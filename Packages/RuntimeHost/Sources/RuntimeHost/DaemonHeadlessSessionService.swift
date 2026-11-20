@@ -305,19 +305,27 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         } catch {
             return .launchFailed(detail: "\(error.code)")
         }
-        let deadline = ContinuousClock.now + timeouts.processAlive + timeouts.firstFrame
+        let aliveDeadline = ContinuousClock.now + timeouts.processAlive
+        let frameDeadline = aliveDeadline + timeouts.firstFrame
         var frameSeen = false
-        while ContinuousClock.now < deadline {
+        while ContinuousClock.now < frameDeadline {
             if let sessionID = sessionsByPackage[packageID.rawValue],
                 firstFrameMarked.contains(sessionID)
             {
                 frameSeen = true
-                break
             }
+            // §8.1: H3 watches the process for the whole survival window,
+            // even after a first frame — a crash inside it is a failure.
+            if frameSeen, ContinuousClock.now >= aliveDeadline { break }
             guard let current = await registry.session(packageID: packageID.rawValue),
                 !Self.isEnded(current.state)
             else {
-                return .processDied(detail: "session ended")
+                if ContinuousClock.now < aliveDeadline {
+                    return .processDied(detail: "session ended")
+                }
+                // The survival window already passed; no frame means H4
+                // fails, not H3.
+                break
             }
             try? await Task.sleep(for: .milliseconds(200))
         }

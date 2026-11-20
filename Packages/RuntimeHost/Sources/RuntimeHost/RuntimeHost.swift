@@ -668,6 +668,9 @@ public actor RuntimeHost {
     ) async throws(RuntimeWireError) -> RuntimePackageSummary {
         let service = packageQueryServiceInstance()
         try await service.open()
+        // Adoption queries Android live; attach the store-agent channel like every
+        // other package op so a freshly booted runtime is usable right away.
+        try await attachPackageQueriesIfRuntimeIsReady(to: service)
         return try await service.adoptPackage(request)
     }
 

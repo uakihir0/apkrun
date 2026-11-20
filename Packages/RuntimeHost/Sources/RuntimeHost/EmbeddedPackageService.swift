@@ -1148,6 +1148,105 @@ public actor EmbeddedPackageService: RuntimeService {
                     remediation: "Check disk space and permissions, then retry.")
             }
         }
+        if let failure = error as? StoreFailure {
+            // The wire code is the `store.*` error-catalog code without its prefix;
+            // keep messages in sync with ErrorsCatalog `store` entries (§10).
+            let code = String(failure.errorCode.dropFirst("store.".count))
+            switch failure {
+            case .unsupportedContainer(let kind):
+                return .store(
+                    code, message: "APKRun can't add this kind of file (\(kind.rawValue)).",
+                    remediation: "APKRun can add .apk, .apks, .xapk, and .apkm files, and .zip files that contain only APKs."
+                )
+            case .unreadableArchive:
+                return .store(
+                    code, message: "This file couldn't be read. It may be damaged or incomplete.",
+                    remediation: "Download the file again.")
+            case .archiveLimitExceeded(let limit):
+                return .store(
+                    code, message: "This file contains more than APKRun can safely unpack (\(limit.rawValue)).")
+            case .expansionFilesNotSupported:
+                return .store(
+                    code,
+                    message: "This file includes expansion files (OBB), which APKRun doesn't support yet.",
+                    remediation: "Get a build of the app without expansion files.")
+            case .notAnAPK(let file):
+                return .store(
+                    code, message: "\(file) isn't an Android app (APK).",
+                    remediation: "Choose the app's .apk, .apks, .xapk, or .apkm file.")
+            case .missingBase:
+                return .store(
+                    code, message: "The base APK is missing from this set.",
+                    remediation: "Add the base APK too, or use the complete .apks, .xapk, or .apkm file.")
+            case .multipleBases:
+                return .store(
+                    code, message: "This set contains more than one base APK.",
+                    remediation: "Add the APKs of one app version only.")
+            case .duplicateSplit(let split):
+                return .store(
+                    code, message: "The split \(split) appears more than once.",
+                    remediation: "Add each split APK only once.")
+            case .inconsistentSplits:
+                return .store(
+                    code, message: "The APKs in this set don't belong together.",
+                    remediation: "Add the APKs of one app version from one source.")
+            case .incompleteSplitSet(let missing):
+                return .store(
+                    code,
+                    message: "This set is missing parts that the app needs: \(missing.joined(separator: ", ")).",
+                    remediation: "Use the complete .apks, .xapk, or .apkm file of the app.")
+            case .unsignedAPK(let file):
+                return .store(
+                    code, message: "\(file) isn't signed.",
+                    remediation: "Android installs only signed apps. Get a signed copy from the app's developer.")
+            case .invalidSignature(let file, _):
+                return .store(
+                    code, message: "The signature of \(file) isn't valid.",
+                    remediation: "The file may have been changed after signing. Download it again from the app's developer.")
+            case .legacySignatureNotAllowed(let targetSdk):
+                return .store(
+                    code,
+                    message:
+                        "This app uses an old signature format that Android doesn't accept for apps that target API \(targetSdk).",
+                    remediation: "Get a newer build of the app from its developer.")
+            case .unsupportedABI(let found, let supported):
+                return .store(
+                    code,
+                    message:
+                        "This app is built only for \(found.joined(separator: ", ")), but Android in APKRun needs \(supported.joined(separator: ", ")).",
+                    remediation: "Get a build of the app for \(supported.joined(separator: ", ")).")
+            case .minSdkTooHigh(let required, let guest):
+                return .store(
+                    code,
+                    message: "This app needs Android API \(required) or later. Android in APKRun has API \(guest).",
+                    remediation: "Update Android, or get an older build of the app.")
+            case .targetSdkTooLow(let target, let floor):
+                return .store(
+                    code,
+                    message:
+                        "This app targets API \(target). Android in APKRun installs only apps that target API \(floor) or later.",
+                    remediation: "Get a newer build of the app from its developer.")
+            case .reservedPackage(let packageID):
+                return .store(
+                    code,
+                    message: "\(packageID.rawValue) is part of Android or APKRun and can't be added as an app.",
+                    remediation: "No action is needed.")
+            case .tooLarge(let bytes, let limit):
+                return .store(
+                    code, message: "This app is too large (\(bytes) bytes; the limit is \(limit) bytes).",
+                    remediation: "Get a smaller build of the app, for example one for fewer device types.")
+            case .resourcesArscNotAligned(let file):
+                return .store(
+                    code,
+                    message:
+                        "\(file) isn't packaged the way Android requires for apps that target API 30 or later.",
+                    remediation: "Get a build of the app made with current Android build tools from its developer.")
+            case .io:
+                return .store(
+                    code, message: "This file couldn't be read. It may be damaged or incomplete.",
+                    remediation: "Download the file again.")
+            }
+        }
         if let failure = error as? APKInspectionFailure {
             switch failure {
             case .inputNotReadable:

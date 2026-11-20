@@ -333,46 +333,17 @@ public actor EmbeddedUpdateService {
         else {
             throw PackageStoreFailure.packageNotFound
         }
-        if record.updateAuthority == .googlePlay || record.updateAuthority == .external {
-            throw UpdateFailure.authorityDoesNotAllowUpdates
-        }
+        // The §2.1–§2.4 authority rules live in UpdateCore.
+        let resolution = try UpdatePolicyRules.resolve(policy, for: record)
 
-        let provider: UpdateProviderRef?
-        let removeProvider: Bool
-        switch policy.provider {
-        case .keep:
-            provider = nil
-            removeProvider = false
-        case .remove:
-            provider = nil
-            removeProvider = true
-        case .set(let spec):
-            provider = try Self.providerRef(for: spec)
-            removeProvider = false
-        }
-
-        let effectiveProvider = removeProvider ? nil : (provider ?? record.updateProvider)
-        let authority: UpdateAuthority
-        switch (policy.choice, policy.provider) {
-        case (.manual, _):
-            authority = .manual
-        case (_, .remove):
-            authority = .manual
-        case (.automatic, _), (.notifyOnly, _):
-            guard effectiveProvider != nil else {
-                throw UpdateFailure.providerNotConfigured
-            }
-            authority = .apkrun
-        }
-
-        try await store.setUpdateMode(for: packageID, mode: Self.settingsMode(for: policy.choice))
+        try await store.setUpdateMode(for: packageID, mode: resolution.settingsMode)
         // `requireProvider` makes the provider requirement atomic inside the
-        // store's mutation lock; the pre-check above cannot see a concurrent
-        // removal.
+        // store's mutation lock; the pre-check in resolve cannot see a
+        // concurrent removal.
         try await store.setUpdatePolicy(
-            for: packageID, authority: authority,
-            provider: provider, removeProvider: removeProvider,
-            requireProvider: authority == .apkrun)
+            for: packageID, authority: resolution.authority,
+            provider: resolution.provider, removeProvider: resolution.removeProvider,
+            requireProvider: resolution.requireProvider)
         guard
             let updated = try await store.listManagedPackages()
                 .first(where: { $0.packageId == packageID })
@@ -382,59 +353,10 @@ public actor EmbeddedUpdateService {
         return updated
     }
 
-    /// The `settings.json` `update.mode` a wire choice maps to.
-    private static func settingsMode(for choice: UpdateChoice) -> String {
-        switch choice {
-        case .automatic: "automatic"
-        case .notifyOnly: "notifyOnly"
-        case .manual: "manual"
-        }
-    }
-
-    /// A wire provider spec parsed into a stored provider reference
-    /// (runtime-api.md §9.2). #38 only ships `local`; the other kinds land
-    /// with their providers (#51, #52, #53).
-    static func providerRef(for spec: ProviderSpec) throws -> UpdateProviderRef {
-        guard let colon = spec.spec.firstIndex(of: ":") else {
-            throw UpdateFailure.providerMetadataInvalid(detail: "provider spec has no scheme")
-        }
-        let scheme = spec.spec[..<colon]
-        let rest = spec.spec[spec.spec.index(after: colon)...]
-        switch scheme {
-        case "local":
-            guard let bookmark = spec.bookmark else {
-                throw UpdateFailure.providerMetadataInvalid(
-                    detail: "local provider needs a security-scoped bookmark")
-            }
-            return UpdateProviderRef(
-                type: .local,
-                configuration: .local(
-                    path: String(rest),
-                    bookmark: bookmark.base64EncodedString()))
-        case "direct", "fdroid", "github":
-            // Direct (#51), F-Droid (#52), GitHub (#53).
-            throw UpdateFailure.providerNotConfigured
-        default:
-            throw UpdateFailure.providerMetadataInvalid(
-                detail: "unknown provider scheme \"\(scheme)\"")
-        }
-    }
-
-    /// The wire `UpdateChoice` a record and its settings mode describe. Only
-    /// `apkrun` and `manual` authorities carry a choice (update-system.md §2.2).
+    /// The wire `UpdateChoice` a record and its settings mode describe. The
+    /// rule lives in UpdateCore (update-system.md §2.2).
     static func choice(authority: UpdateAuthority, mode: String?) -> UpdateChoice? {
-        switch authority {
-        case .googlePlay, .external:
-            return nil
-        case .manual:
-            return .manual
-        case .apkrun:
-            switch mode {
-            case "notifyOnly": return .notifyOnly
-            case "manual": return .manual
-            default: return .automatic
-            }
-        }
+        UpdatePolicyRules.choice(authority: authority, mode: mode)
     }
 
     /// The `ProviderSummary` a stored reference produces; never carries a token.

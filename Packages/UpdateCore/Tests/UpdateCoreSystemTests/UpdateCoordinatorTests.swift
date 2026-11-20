@@ -246,6 +246,7 @@ private actor ScriptedProvider: UpdateProvider {
 
     nonisolated let ref: UpdateProviderRef
     private var steps: [Step]
+    private(set) var checkCalls = 0
     private(set) var downloadCalls = 0
 
     init(ref: UpdateProviderRef, steps: [Step]) {
@@ -253,10 +254,11 @@ private actor ScriptedProvider: UpdateProvider {
         self.steps = steps
     }
 
-    nonisolated func check(
+    func check(
         _: InstalledPackage, context _: ProviderContext
     ) async throws(UpdateFailure) -> UpdateCandidate? {
-        nil
+        checkCalls += 1
+        return nil
     }
 
     func download(
@@ -802,4 +804,32 @@ extension CoordinatorChannel {
     let stateStore = UpdateStateStore(directory: root.appendingPathComponent("Updates"))
     let history = try await stateStore.history(packageID: record.packageId)
     #expect(history.last?.outcome == "keptAfterFailedHealthCheck")
+}
+
+@Test func checkOnManualPackageNeverCallsTheProvider() async throws {
+    let root = try makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let knobs = InspectKnobs()
+    let store = makeKnobbedStore(at: root, knobs: knobs)
+    try await store.open()
+    let record = try await installV1(store: store, repo: fixtureRepo())
+    #expect(record.updateAuthority == .manual)
+
+    let provider = ScriptedProvider(
+        ref: try #require(record.updateProvider ?? localRef()), steps: [])
+    let coordinator = makeV2Coordinator(store: store, root: root, provider: provider)
+    let outcome = await coordinator.check(
+        record.packageId, trigger: .scheduled, context: makeContext(at: fixtureRepo()))
+
+    guard case .failed(let failure) = outcome else {
+        Issue.record("expected .failed, got \(outcome)")
+        return
+    }
+    #expect(failure.errorCode == "update.authorityDoesNotAllowUpdates")
+    #expect(await provider.checkCalls == 0)
+}
+
+private func localRef() -> UpdateProviderRef? {
+    UpdateProviderRef(
+        type: .local, configuration: .local(path: "/tmp/repo", bookmark: ""))
 }

@@ -165,7 +165,9 @@ object SystemServices {
                 ),
         )
 
-    /** `ActivityManager`: stops a package and its background processes (guest-components.md §6.2). */
+    /**
+     * `ActivityManager`: stops a package and its background processes (guest-components.md §6.2).
+     */
     val activity =
         SystemServiceWrapper(
             serviceName = "activity",

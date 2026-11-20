@@ -1953,20 +1953,26 @@ public actor PackageStore {
                 )
 
             case ("relinquishOwnership", _):
-                // Post-boot task (§5.5, §6.3): replay the relinquish. The record
-                // already carries the new authority; a failure re-queues the task
-                // for the next boot and FAILED_PRECONDITION commits it.
-                do {
-                    try await runtimeAccess.withStoreAgent(UUID()) { channel in
-                        if channel.capabilities.contains(.updateOwnership) {
-                            try await channel.relinquishUpdateOwnership(packageID)
+                // Post-boot task (§5.5, §6.3): replay the relinquish only while the record
+                // still names a non-owning authority — a switch back to `apkrun` or `manual`
+                // while the runtime was down cancels the pending relinquish, and a missing
+                // record makes it moot. A failure re-queues the task for the next boot and
+                // FAILED_PRECONDITION commits it.
+                if let record = records[packageID], !record.updateAuthority.claimsUpdateOwnership {
+                    do {
+                        try await runtimeAccess.withStoreAgent(UUID()) { channel in
+                            if channel.capabilities.contains(.updateOwnership) {
+                                try await channel.relinquishUpdateOwnership(packageID)
+                            }
                         }
+                        try appendTerminal(transactionID, op: "commit")
+                    } catch StoreChannelFailure.updateOwnershipNotHeld(_) {
+                        try appendTerminal(transactionID, op: "commit")
+                    } catch {
+                        continue
                     }
+                } else {
                     try appendTerminal(transactionID, op: "commit")
-                } catch StoreChannelFailure.updateOwnershipNotHeld(_) {
-                    try appendTerminal(transactionID, op: "commit")
-                } catch {
-                    continue
                 }
 
             case ("firstInstall", "metadataWritten"), ("reinstall", "metadataWritten"):

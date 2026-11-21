@@ -238,15 +238,30 @@ struct NotificationCoordinatorTests {
         let c = coordinator(sink: sink, channel: channel)
         await c.posted(notification(key: "k1"))
         let identifier = NotificationCoordinator.identifier(package: "io.app", key: "k1")
-        await c.activated(identifier: identifier, actionIndex: 1, displayID: 5)
+        let ioApp = RuntimePackageID(rawValue: "io.app")!
+        await c.activated(identifier: identifier, actionIndex: 1, displayID: 5, fromPackage: ioApp)
         #expect(channel.activated.count == 1)
         #expect(channel.activated[0].key == "k1")
         #expect(channel.activated[0].actionIndex == 1)
         #expect(channel.activated[0].displayID == 5)
-        await c.dismissed(identifier: identifier)
+        await c.dismissed(identifier: identifier, fromPackage: ioApp)
         #expect(channel.dismissed == ["k1"])
-        await c.activated(identifier: "io.app|deadbeef", actionIndex: nil, displayID: 0)
+        await c.activated(
+            identifier: "io.app|deadbeef", actionIndex: nil, displayID: 0, fromPackage: ioApp)
         #expect(channel.activated.count == 1)
+    }
+
+    @Test func responsesOfAnotherPackageAreDropped() async {
+        let sink = FakeSink()
+        sink.open = ["io.app"]
+        let channel = FakeChannel()
+        let c = coordinator(sink: sink, channel: channel)
+        await c.posted(notification(key: "k1"))
+        let identifier = NotificationCoordinator.identifier(package: "io.app", key: "k1")
+        let other = RuntimePackageID(rawValue: "io.other")!
+        await c.activated(identifier: identifier, actionIndex: nil, displayID: 0, fromPackage: other)
+        await c.dismissed(identifier: identifier, fromPackage: other)
+        #expect(channel.activated.isEmpty && channel.dismissed.isEmpty)
     }
 
     @Test func replayRebuildRemovesStaleKeysWithoutBanners() async {

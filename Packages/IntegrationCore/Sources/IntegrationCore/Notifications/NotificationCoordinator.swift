@@ -196,18 +196,25 @@ public actor NotificationCoordinator {
 
     /// `activated(identifier, actionIndex?)` from a wrapper or the app:
     /// resolve the Android key and send `ActivateNotification` with the
-    /// session's display (§5.4).
-    public func activated(identifier: String, actionIndex: Int?, displayID: Int32) async {
-        guard let record = byIdentifier[identifier] else {
+    /// session's display (§5.4). `fromPackage` is the authenticated package
+    /// of the answering stream, or `nil` for the trusted APKRun.app host
+    /// stream; a wrapper's response for another package's notification is
+    /// dropped.
+    public func activated(
+        identifier: String, actionIndex: Int?, displayID: Int32,
+        fromPackage: RuntimePackageID?
+    ) async {
+        guard let record = byIdentifier[identifier], record.package == fromPackage else {
             return
         }
         try? await channel.activateNotification(
             key: record.key, actionIndex: actionIndex, displayID: displayID)
     }
 
-    /// `dismissed(identifier)`: send `DismissNotification` (§5.4).
-    public func dismissed(identifier: String) async {
-        guard let record = byIdentifier[identifier] else {
+    /// `dismissed(identifier)`: send `DismissNotification` (§5.4). The
+    /// stream's package must own the identifier, as in ``activated``.
+    public func dismissed(identifier: String, fromPackage: RuntimePackageID?) async {
+        guard let record = byIdentifier[identifier], record.package == fromPackage else {
             return
         }
         try? await channel.dismissNotification(key: record.key)

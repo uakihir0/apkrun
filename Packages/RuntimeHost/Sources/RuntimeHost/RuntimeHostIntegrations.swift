@@ -455,12 +455,20 @@ extension RuntimeHost {
             switch response {
             case .activated(let identifier, let actionIndex):
                 Task {
+                    // A relay stream without a package record is not a
+                    // wrapper answer; dropping it is the safe default.
+                    guard let package = center.relayPackageID(for: streamID) else { return }
                     await coordinator.activated(
                         identifier: identifier, actionIndex: actionIndex,
-                        displayID: await self.displayIDForActivation(of: identifier))
+                        displayID: await self.displayIDForActivation(of: identifier),
+                        fromPackage: package)
                 }
             case .dismissed(let identifier):
-                Task { await coordinator.dismissed(identifier: identifier) }
+                Task {
+                    guard let package = center.relayPackageID(for: streamID) else { return }
+                    await coordinator.dismissed(
+                        identifier: identifier, fromPackage: package)
+                }
             case .authorizationChanged(let state):
                 if let packageID = center.relayPackageID(for: streamID) {
                     Task { await coordinator.noteAuthorization(state, packageID: packageID) }
@@ -476,12 +484,15 @@ extension RuntimeHost {
                 let index: Int?
                 if case .android(let i, _) = action { index = i } else { index = nil }
                 Task {
+                    // The host stream belongs to APKRun.app itself: trusted,
+                    // not package-scoped (nil = unrestricted caller).
                     await coordinator.activated(
                         identifier: identifier, actionIndex: index,
-                        displayID: await self.displayIDForActivation(of: identifier))
+                        displayID: await self.displayIDForActivation(of: identifier),
+                        fromPackage: nil)
                 }
             case .dismissed(let identifier):
-                Task { await coordinator.dismissed(identifier: identifier) }
+                Task { await coordinator.dismissed(identifier: identifier, fromPackage: nil) }
             case .unknown:
                 break
             }

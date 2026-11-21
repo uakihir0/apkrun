@@ -158,9 +158,7 @@ public struct FDroidProvider: UpdateProvider {
                 continue
             }
             sawCompatibleShape = true
-            if best == nil
-                || version.manifest.versionCode > best!.version.manifest.versionCode
-            {
+            if version.manifest.versionCode > (best?.version.manifest.versionCode ?? 0) {
                 best = (key, version)
             }
         }

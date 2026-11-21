@@ -63,7 +63,7 @@ struct ManifestDocument {
                 _ = key
             } else {
                 guard let colon = line.firstIndex(of: UInt8(ascii: ":")),
-                    colon + 1 < line.count, line[colon + 1] == 0x20,
+                    colon + 1 < lineEnd, line[colon + 1] == 0x20,
                     let key = String(data: line[..<colon], encoding: .utf8),
                     let value = String(data: line[(colon + 2)...], encoding: .utf8)
                 else { return nil }

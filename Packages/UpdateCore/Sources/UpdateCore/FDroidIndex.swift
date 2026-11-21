@@ -157,8 +157,9 @@ enum JSONMemberScanner {
             return string(in: data, from: start, limit: limit)?.1
         default:
             var cursor = start
-            while cursor < limit, ![UInt8(ascii: ","), UInt8(ascii: "}"), UInt8(ascii: "]"), 0x20, 0x09, 0x0A, 0x0D]
-                .contains(data[cursor])
+            while cursor < limit,
+                ![UInt8(ascii: ","), UInt8(ascii: "}"), UInt8(ascii: "]"), 0x20, 0x09, 0x0A, 0x0D]
+                    .contains(data[cursor])
             {
                 cursor += 1
             }
@@ -193,8 +194,9 @@ enum JSONMemberScanner {
     /// The decoded string and the index one past it; nil on bad JSON.
     private static func string(in data: Data, from start: Int, limit: Int) -> (String, Int)? {
         guard let end = stringEnd(in: data, from: start, limit: limit) else { return nil }
-        guard let decoded = try? JSONDecoder().decode(
-            String.self, from: data[start..<end])
+        guard
+            let decoded = try? JSONDecoder().decode(
+                String.self, from: data[start..<end])
         else { return nil }
         return (decoded, end)
     }
@@ -385,7 +387,9 @@ public struct FDroidIndexReader: Sendable {
         func emit(_ name: String, _ raw: Data) {
             if !first { output.append(UInt8(ascii: ",")) }
             first = false
-            let key = (try? JSONSerialization.data(withJSONObject: name)) ?? Data()
+            let key =
+                (try? JSONSerialization.data(
+                    withJSONObject: name, options: [.fragmentsAllowed])) ?? Data()
             output.append(key)
             output.append(UInt8(ascii: ":"))
             output.append(raw)
@@ -402,7 +406,9 @@ public struct FDroidIndexReader: Sendable {
         packagesData.append(UInt8(ascii: "{"))
         for (index, pair) in mergedPackages.enumerated() {
             if index > 0 { packagesData.append(UInt8(ascii: ",")) }
-            let key = (try? JSONSerialization.data(withJSONObject: pair.0)) ?? Data()
+            let key =
+                (try? JSONSerialization.data(
+                    withJSONObject: pair.0, options: [.fragmentsAllowed])) ?? Data()
             packagesData.append(key)
             packagesData.append(UInt8(ascii: ":"))
             packagesData.append(pair.1)

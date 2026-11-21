@@ -196,6 +196,58 @@ private struct GuestClipboardChannel: IntegrationChannel {
     }
 }
 
+/// The channel that sends link ops to the Guest Agent
+/// (desktop-integration.md §7.2, guest-protocol.md §7.5).
+private struct GuestLinkChannel: LinkChannel {
+    /// Resolves the live agent supervisor; nil while no agent is connected.
+    let supervisor: @Sendable () async -> GuestAgentSupervisor?
+    /// Whether the image advertises `url.v1`.
+    let imageSupportsLinks: @Sendable () async -> Bool
+
+    func supportsLinks() async -> Bool {
+        await imageSupportsLinks()
+    }
+
+    func resolveUrl(requestID: UInt64, action: GPUrlAction) async throws(IntegrationFailure) {
+        try await send {
+            try await $0.send(GuestResolveUrl(requestID: requestID, action: action))
+        }
+    }
+
+    func setUrlRedirect(enabled: Bool, excludedPackages: [String]) async throws(IntegrationFailure)
+    {
+        try await send {
+            try await $0.send(
+                GuestSetUrlRedirect(enabled: enabled, excludedPackages: excludedPackages))
+        }
+    }
+
+    private func send(
+        _ body: @Sendable (GuestAgentSupervisor) async throws -> GPEmpty
+    ) async throws(IntegrationFailure) {
+        guard let agent = await supervisor() else {
+            throw .guestUnavailable
+        }
+        do {
+            _ = try await body(agent)
+        } catch let failure as GuestProtocolFailure {
+            if case .capabilityMissing(let capability) = failure {
+                throw .notSupportedOnImage(capability: capability)
+            }
+            throw .guestUnavailable
+        } catch {
+            throw .guestUnavailable
+        }
+    }
+}
+
+/// The `LinkOpener` over `NSWorkspace` (desktop-integration.md §7.2).
+private struct HostLinkOpener: LinkOpener {
+    func open(_ url: URL) async {
+        WorkspaceOpener.open(url)
+    }
+}
+
 extension RuntimeHost {
     /// The shared §2.3 policy and §4 coordinator, built on first use.
     func integrationCoordinator() -> ClipboardCoordinator {
@@ -441,7 +493,9 @@ extension RuntimeHost {
             return ClipboardCoordinator.requiredCapability
         case .notifications:
             return NotificationCoordinator.requiredCapability
-        case .links, .files, .sharedFolders, .microphone:
+        case .links:
+            return LinkForwarder.requiredCapability
+        case .files, .sharedFolders, .microphone:
             return nil
         }
     }
@@ -639,6 +693,184 @@ extension RuntimeHost {
         await notificationCoordinator().removed(removal)
     }
 
+    // MARK: - Links (desktop-integration.md §7.2)
+
+    /// The §7.2 forwarder, built on first use.
+    func linkForwarder() -> LinkForwarder {
+        if let linkForwarderLazy { return linkForwarderLazy }
+        let settings = integrationSettings
+        let policy = IntegrationPolicy(
+            source: IntegrationSettingsSource(
+                packageValue: { kind, packageID in
+                    settings.packageValue(packageID.rawValue, kind.rawValue)
+                },
+                globalEnabled: { kind in
+                    settings.globalEnabled(kind.rawValue)
+                },
+                supported: { capability in
+                    settings.supports(capability)
+                }
+            )
+        )
+        let sink = hostLogSink
+        let channel = GuestLinkChannel(
+            supervisor: { [weak self] in
+                await self?.runtimeSupervisorForIntegrations()?.developmentGuestAgent?.supervisor
+            },
+            imageSupportsLinks: { [weak self] in
+                self?.integrationSettings.supports(LinkForwarder.requiredCapability) ?? false
+            })
+        let forwarder = LinkForwarder(
+            policy: policy,
+            channel: channel,
+            opener: HostLinkOpener(),
+            linksValue: { packageID in
+                settings.packageValue(packageID.rawValue, IntegrationKind.links.rawValue)
+            },
+            windowState: { [weak self] packageID in
+                // A link lands only on the key window of the package
+                // (§7.2); input-within-5 s is not tracked separately.
+                // TODO(#82): feed last-input timestamps from InputCore.
+                guard let self else {
+                    return LinkWindowState(sessionID: nil, usable: false)
+                }
+                let key = await self.integrationCoordinator().currentKeySession
+                let isKey = key?.packageID == packageID
+                return LinkWindowState(sessionID: isKey ? key?.sessionID : nil, usable: isKey)
+            },
+            presentPrompt: { [weak self] sessionID, packageID, prompt in
+                self?.eventHub.publishIntegrationChange(
+                    .linkPrompt(sessionID: sessionID, packageID: packageID, prompt: prompt))
+            },
+            setLinksValue: { [weak self] packageID, value in
+                guard let self, let service = await self.packageServiceForIntegrations() else {
+                    return
+                }
+                _ = try? await service.updatePackageSettings(
+                    RuntimeUpdatePackageSettingsRequest(
+                        packageID: packageID,
+                        patch: RuntimePackageSettingsPatch(
+                            set: ["integrations.links": value])))
+                if let stored = try? await service.packageIntegrationSettings(
+                    for: packageID.rawValue)
+                {
+                    self.integrationSettings.setPackage(
+                        packageID.rawValue, values: stored.integrations)
+                }
+                await self.pushUrlRedirect()
+            },
+            excludedPackages: { [weak self] in
+                guard let self, let service = await self.packageServiceForIntegrations() else {
+                    return []
+                }
+                guard let result = try? await service.listPackages(RuntimeListPackagesRequest())
+                else {
+                    return []
+                }
+                var excluded: [String] = []
+                for summary in result.packages {
+                    let stored = try? await service.packageIntegrationSettings(
+                        for: summary.packageID.rawValue)
+                    let value = stored?.value("integrations.links")
+                    if value == "android" || value == "off" {
+                        excluded.append(summary.packageID.rawValue)
+                    }
+                }
+                return excluded
+            },
+            logDrop: { packageID, rejection, url in
+                Self.logLinkDrop(
+                    sink: sink, packageID: packageID, rejection: rejection, url: url)
+            })
+        linkForwarderLazy = forwarder
+        return forwarder
+    }
+
+    /// `resolveLinkPrompt`: the key window's answer to a link prompt
+    /// (runtime-api.md §11.2).
+    public func resolveLinkPrompt(
+        sessionID: UUID,
+        promptID: UUID,
+        choice: LinkChoice,
+        remember: Bool
+    ) async throws(RuntimeWireError) {
+        do {
+            try await linkForwarder().resolvePrompt(
+                sessionID: sessionID, promptID: promptID, choice: choice, remember: remember)
+        } catch let failure as IntegrationFailure {
+            throw Self.integrationWireError(failure)
+        } catch {
+            throw Self.integrationWireError(.guestUnavailable)
+        }
+    }
+
+    /// Starts the guest→forwarder `open_url_on_host` relay once the agent is
+    /// ready, and pushes SetUrlRedirect on each (re)connection (§3.2).
+    func startLinkRelay() {
+        guard linkRelayTask == nil, let supervisor = runtimeSupervisorForIntegrations() else {
+            return
+        }
+        linkRelayTask = Task.detached { [weak self] in
+            guard let self else { return }
+            var agent = await supervisor.developmentGuestAgent
+            while !Task.isCancelled, let current = agent {
+                await self.refreshIntegrationCapabilities()
+                await self.pushUrlRedirect()
+                for await event in current.urlEvents {
+                    guard !Task.isCancelled else { return }
+                    if let packageID = RuntimePackageID(rawValue: event.sourcePackage) {
+                        await self.refreshIntegrationSettings(for: packageID)
+                    }
+                    _ = await self.linkForwarder().openUrlOnHost(event)
+                }
+                // A stream that ended means an agent restart: wait for the
+                // next agent, then resubscribe and re-push (the forwarder
+                // stays; its pending prompts keep their 60 s expiry).
+                agent = nil
+                while !Task.isCancelled, agent == nil {
+                    try? await Task.sleep(for: .seconds(1))
+                    let next = await supervisor.developmentGuestAgent
+                    if let next, next !== current {
+                        agent = next
+                    }
+                }
+            }
+            await self.clearLinkRelayTask()
+        }
+    }
+
+    /// Clears the finished relay task so `startLinkRelay` re-arms.
+    private func clearLinkRelayTask() {
+        linkRelayTask = nil
+    }
+
+    /// Ends the link relay.
+    func stopLinkRelay() {
+        linkRelayTask?.cancel()
+        linkRelayTask = nil
+    }
+
+    /// Pushes the current SetUrlRedirect state: the global links switch and
+    /// the packages that keep their intents (§3.2).
+    func pushUrlRedirect() async {
+        await linkForwarder().pushUrlRedirect(
+            enabled: integrationSettings.globalEnabled(IntegrationKind.links.rawValue))
+    }
+
+    /// The §7.2 drop log: scheme and registrable domain, never the full URL.
+    private static func logLinkDrop(
+        sink: (any LogSink)?,
+        packageID: RuntimePackageID, rejection: LinkRejection, url: URL?
+    ) {
+        let logger = APKLogger(category: RuntimeLogCategory.host, sink: sink)
+        let host = url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.host }
+        let domain = host.map { LinkForwarder.registrableDomain(of: $0) } ?? "-"
+        let scheme =
+            url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.scheme } ?? "-"
+        logger.debug(
+            "Dropped a link from \(packageID.rawValue, .public): \(rejection.rawValue, .public) \(scheme, .public) \(domain, .public)")
+    }
+
     /// Maps an `IntegrationFailure` to its catalog wire error (§13.1).
     private static func integrationWireError(_ failure: IntegrationFailure) -> RuntimeWireError {
         switch failure {
@@ -696,6 +928,20 @@ extension RuntimeHost {
                 code: "integration.clipboardTooLarge",
                 message: "The copied item is too large for Android (\(bytes); the limit is \(limit)).",
                 remediation: "Copy a smaller item."
+            )
+        case .promptTimedOut:
+            return RuntimeWireError(
+                domain: "integration",
+                code: "integration.promptTimedOut",
+                message: "The link prompt is no longer open.",
+                remediation: nil
+            )
+        case .linkRejected(let reason):
+            return RuntimeWireError(
+                domain: "integration",
+                code: "integration.linkRejected",
+                message: "The link was dropped (\(reason.rawValue)).",
+                remediation: nil
             )
         }
     }

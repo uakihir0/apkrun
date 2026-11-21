@@ -14,7 +14,7 @@ public protocol LinkChannel: Sendable {
 
 /// Opens a URL on the Mac (desktop-integration.md §7.2). The NSWorkspace
 /// adapter lives in RuntimeHost; IntegrationCore does not use AppKit.
-public protocol WorkspaceOpener: Sendable {
+public protocol LinkOpener: Sendable {
     /// Opens the URL in the default browser or mail app.
     func open(_ url: URL) async
 }
@@ -83,7 +83,7 @@ public actor LinkForwarder {
 
     private let policy: IntegrationPolicy
     private let channel: any LinkChannel
-    private let opener: any WorkspaceOpener
+    private let opener: any LinkOpener
     /// The raw `integrations.links` value of a package (nil = default `ask`).
     private let linksValue: @Sendable (RuntimePackageID) async -> String?
     /// The window state of a package.
@@ -95,7 +95,7 @@ public actor LinkForwarder {
     /// The packages to exclude in the next SetUrlRedirect push.
     private let excludedPackages: @Sendable () async -> [String]
     /// Logs a dropped or denied link (scheme and registrable domain only).
-    private let logDrop: @Sendable (RuntimePackageID, LinkRejection) async -> Void
+    private let logDrop: @Sendable (RuntimePackageID, LinkRejection, URL?) async -> Void
 
     private var pending: [UUID: PendingPrompt] = [:]
     private var recent: [RuntimePackageID: [ContinuousClock.Instant]] = [:]
@@ -104,13 +104,15 @@ public actor LinkForwarder {
     public init(
         policy: IntegrationPolicy,
         channel: any LinkChannel,
-        opener: any WorkspaceOpener,
+        opener: any LinkOpener,
         linksValue: @escaping @Sendable (RuntimePackageID) async -> String?,
         windowState: @escaping @Sendable (RuntimePackageID) async -> LinkWindowState,
         presentPrompt: @escaping @Sendable (UUID, RuntimePackageID, LinkPrompt) async -> Void,
         setLinksValue: @escaping @Sendable (RuntimePackageID, String) async -> Void,
         excludedPackages: @escaping @Sendable () async -> [String] = { [] },
-        logDrop: @escaping @Sendable (RuntimePackageID, LinkRejection) async -> Void = { _, _ in }
+        logDrop: @escaping @Sendable (RuntimePackageID, LinkRejection, URL?) async -> Void = {
+            _, _, _ in
+        }
     ) {
         self.policy = policy
         self.channel = channel
@@ -133,7 +135,7 @@ public actor LinkForwarder {
         guard let url = Self.validatedURL(event.url) else {
             let rejection: LinkRejection =
                 event.url.utf8.count > Self.urlByteLimit ? .tooLong : .scheme
-            await logDrop(package, rejection)
+            await logDrop(package, rejection, URLComponents(string: event.url)?.url)
             try? await channel.resolveUrl(requestID: event.requestID, action: .drop)
             return .dropped(rejection)
         }
@@ -160,7 +162,7 @@ public actor LinkForwarder {
         var stamps = (recent[package] ?? []).filter { now - $0 < Self.rateWindow }
         guard stamps.count < Self.rateLimit else {
             recent[package] = stamps
-            await logDrop(package, .rateLimited)
+            await logDrop(package, .rateLimited, url)
             try? await channel.resolveUrl(requestID: event.requestID, action: .drop)
             return .dropped(.rateLimited)
         }
@@ -177,13 +179,22 @@ public actor LinkForwarder {
         case "android":
             try? await channel.resolveUrl(requestID: event.requestID, action: .openInGuest)
             return .openInGuest
+        case "off":
+            try? await channel.resolveUrl(requestID: event.requestID, action: .drop)
+            return .denied(.packageOff)
         default:
             break
         }
 
-        // `ask`, or an unknown value treated as ask.
+        // `ask`, or an unknown value treated as ask. The `url.v1`
+        // capability gates the whole path; the policy's `ask` short-circuit
+        // skips it, so the forwarder checks it here.
+        guard await channel.supportsLinks() else {
+            try? await channel.resolveUrl(requestID: event.requestID, action: .drop)
+            return .denied(.notSupported)
+        }
         guard let sessionID = state.sessionID else {
-            await logDrop(package, .notFocused)
+            await logDrop(package, .notFocused, url)
             try? await channel.resolveUrl(requestID: event.requestID, action: .drop)
             return .dropped(.notFocused)
         }
@@ -248,7 +259,7 @@ public actor LinkForwarder {
         try? await Task.sleep(for: lifetime)
         guard let entry = pending.removeValue(forKey: promptID) else { return }
         try? await channel.resolveUrl(requestID: entry.requestID, action: .drop)
-        await logDrop(entry.packageID, .notFocused)
+        await logDrop(entry.packageID, .notFocused, entry.url)
     }
 
     /// Validates a link (§7.2): parses, at most 8 KiB, scheme

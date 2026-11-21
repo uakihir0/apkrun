@@ -2013,6 +2013,15 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         }
     }
 
+    func resolveLinkPrompt(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                RuntimeResolveLinkPromptControlReply(result: RuntimeEmpty()))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
     func packageSettings(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         do {
             return try JSONEncoder().encode(

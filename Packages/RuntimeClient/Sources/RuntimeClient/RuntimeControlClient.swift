@@ -1415,6 +1415,30 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Answers a link prompt for the session's key window (runtime-api.md
+    /// §11.2); `integration.promptTimedOut` names an expired prompt.
+    public func resolveLinkPrompt(
+        sessionID: UUID, promptID: UUID, choice: LinkChoice, remember: Bool
+    ) async throws(RuntimeControlClientError) {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeResolveLinkPromptControlRequest(
+                header: makeHeader(), sessionID: sessionID, promptID: promptID,
+                choice: choice, remember: remember)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.resolveLinkPrompt(data)
+            let reply = try Self.decode(RuntimeResolveLinkPromptControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
     /// Returns the per-kind integration status of a package (runtime-api.md §11).
     public func integrationStatus(
         packageID: RuntimePackageID
@@ -2877,6 +2901,8 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func clipboardWritten(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Reports whether the session's window is the key window (§4.1).
     func focusChanged(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Answers a link prompt for the session's key window (runtime-api.md §11.2).
+    func resolveLinkPrompt(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Returns the per-kind integration status of a package (runtime-api.md §11).
     func integrationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Checks packages for updates (runtime-api.md §9.1).
@@ -3804,6 +3830,20 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.focusChanged(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func resolveLinkPrompt(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.resolveLinkPrompt(request) { response in finish(.success(response)) }
         }
     }
 

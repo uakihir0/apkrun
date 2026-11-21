@@ -796,6 +796,8 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func clipboardWritten(_ request: Data, reply: @escaping (Data) -> Void)
     /// Reports whether the session's window is the key window (desktop-integration.md §4.1).
     func focusChanged(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Answers a link prompt for the session's key window (runtime-api.md §11.2).
+    func resolveLinkPrompt(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns the per-kind integration status of a package (runtime-api.md §11).
     func integrationStatus(_ request: Data, reply: @escaping (Data) -> Void)
     /// Checks packages for updates (runtime-api.md §9.1).

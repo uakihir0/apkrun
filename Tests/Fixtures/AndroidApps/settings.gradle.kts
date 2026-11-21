@@ -29,3 +29,5 @@ include(":feature")
 
 project(":feature").projectDir = file("HelloSplitFeature")
 include(":HelloLinks")
+include(":HelloFiles")
+include(":HelloFilesPeer")

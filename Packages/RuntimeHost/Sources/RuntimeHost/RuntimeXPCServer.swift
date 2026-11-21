@@ -1137,6 +1137,7 @@ extension RuntimeSubscribeControlRequest: VersionedControlRequest {}
 extension RuntimeUnsubscribeControlRequest: VersionedControlRequest {}
 extension RuntimeVerifyWrapperControlRequest: VersionedControlRequest {}
 extension RuntimeCreateWrapperControlRequest: VersionedControlRequest {}
+extension RuntimePlaceStagedWrapperControlRequest: VersionedControlRequest {}
 extension RuntimePendingApprovalsControlRequest: VersionedControlRequest {}
 extension RuntimeDecideApprovalControlRequest: VersionedControlRequest {}
 extension RuntimeDeniedWrappersControlRequest: VersionedControlRequest {}
@@ -1183,6 +1184,7 @@ enum RuntimeControlOperation {
     case unsubscribe
     case verifyWrapper
     case createWrapper
+    case placeStagedWrapper
     case pendingApprovals
     case decideApproval
     case deniedWrappers
@@ -1266,7 +1268,7 @@ enum RuntimeControlOperation {
             case .wrapper:
                 false
             }
-        case .launch, .terminate, .verifyWrapper:
+        case .launch, .terminate, .verifyWrapper, .placeStagedWrapper:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -2375,6 +2377,59 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeCreateWrapperControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func placeStagedWrapper(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimePlaceStagedWrapperControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .placeStagedWrapper,
+                as: RuntimePlaceStagedWrapperControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimePlaceStagedWrapperControlReply(
+                            error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimePlaceStagedWrapperControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimePlaceStagedWrapperControlReply(error: Self.malformedWireError))
+                )
+                return
+            }
+            do {
+                let result = try await host.placeStagedWrapper(
+                    stagingToken: decoded.stagingToken,
+                    finalURL: decoded.finalURL,
+                    bookmark: decoded.bookmark
+                )
+                response.send(Self.encode(RuntimePlaceStagedWrapperControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(
+                    Self.encode(RuntimePlaceStagedWrapperControlReply(error: wireError)))
             }
         }
     }

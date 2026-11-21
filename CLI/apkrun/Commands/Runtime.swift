@@ -302,7 +302,7 @@ enum RuntimeStatusOutput {
                 fallbackMessage: "APKRun needs to be restarted.",
                 fallbackRemediation: "Quit and reopen APKRun."
             )
-        case .remoteFailure(let code, let message):
+        case .remoteFailure(let code, let message, _):
             return fromCatalog(code, fallbackMessage: message)
         case .requestTimedOut(let operation):
             let failure = fromCatalog(

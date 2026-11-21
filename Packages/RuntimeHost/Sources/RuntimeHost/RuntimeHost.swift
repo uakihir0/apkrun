@@ -1703,6 +1703,76 @@ public actor RuntimeHost {
         )
     }
 
+    /// Completes a deferred placement (wrapper.md §6.3): the client, which
+    /// the user already allowed to reach the protected folder, moved the
+    /// staged bundle to `finalURL`. This runs §6.2 steps 12–13.
+    public func placeStagedWrapper(
+        stagingToken: String,
+        finalURL: URL,
+        bookmark: String?
+    ) async throws(RuntimeWireError) -> WrapperInfo {
+        let registry = await wrapperRegistryInstance()
+        guard let pending = await registry.pendingEntry(stagingToken: stagingToken) else {
+            throw Self.wrapperWireError(for: .stagingExpired)
+        }
+        // Tokens die with the staging cleanup and with age (errors.json
+        // `wrapper.stagingExpired` documents 60 minutes).
+        guard let stagingPath = pending.stagingPath,
+            let created = try? FileManager.default.attributesOfItem(
+                atPath: stagingPath)[.creationDate] as? Date,
+            Date().timeIntervalSince(created) <= 60 * 60
+        else {
+            throw Self.wrapperWireError(for: .stagingExpired)
+        }
+        // The client moved the bundle; it must be where it says it is and
+        // still the wrapper the daemon signed (same package ID).
+        guard
+            FileManager.default.fileExists(atPath: finalURL.path),
+            InfoPlistWriter.identity(of: finalURL)?.packageID == pending.packageId,
+            WrapperCodeSign.cdhash(of: finalURL) == pending.cdhash
+        else {
+            throw Self.wrapperWireError(
+                for: .bundleInvalid(finalURL, reason: .signatureInvalid))
+        }
+        guard let packageID = RuntimePackageID(rawValue: pending.packageId) else {
+            throw .runtime("internal", message: "APKRun couldn't register the Mac app.")
+        }
+        let bookmarkData = bookmark.flatMap { Data(base64Encoded: $0) } ?? Data()
+        do {
+            try await registry.activate(
+                bundleID: pending.bundleId, path: finalURL, bookmark: bookmarkData)
+        } catch {
+            throw Self.wrapperWireError(for: .registryUnavailable)
+        }
+        let installer = WrapperInstaller(sink: diagnostics?.logSink)
+        let warning = installer.registerPlaced(at: finalURL)
+        try? FileManager.default.removeItem(
+            at: URL(fileURLWithPath: stagingPath).deletingLastPathComponent())
+        guard let entry = await registry.entry(bundleID: pending.bundleId) else {
+            throw .runtime("internal", message: "APKRun couldn't register the Mac app.")
+        }
+        let summary = Self.wrapperSummary(for: entry, packageID: packageID)
+        var warnings: [RuntimeWireError] = []
+        if let warning {
+            warnings.append(Self.wrapperWireError(for: warning))
+        }
+        return WrapperInfo(
+            summary: summary,
+            fileName: entry.fileName,
+            customization: WrapperCustomizationWire(
+                displayName: entry.customization.displayName,
+                customIcon: entry.customization.iconFile != nil
+            ),
+            signer: .adHoc,
+            cdhash: pending.cdhash,
+            launcherAPI: Self.launcherAPIVersion(entry.launcherAPI) ?? APIVersion(major: 1, minor: 0),
+            formatVersion: entry.formatVersion,
+            iconDigest: entry.iconDigest.flatMap { RuntimeSHA256Digest(rawValue: "sha256:\($0)") },
+            lastValidatedAt: entry.lastValidatedAt,
+            warnings: warnings
+        )
+    }
+
     /// Composes the wrapper icon from store-rendered layers: the `.icns`
     /// bytes plus the SHA-256 hex digest of the 1024 px master
     /// (wrapper.md §8.2–§8.5). The monochrome layer is stored but unused.
@@ -1754,7 +1824,7 @@ public actor RuntimeHost {
 
     /// The daemon's wrapper registry, created on first use with startup
     /// `recover()` applied (wrapper-json.md §4.4).
-    private func wrapperRegistryInstance() async -> WrapperRegistry {
+    func wrapperRegistryInstance() async -> WrapperRegistry {
         if let wrapperRegistry {
             return wrapperRegistry
         }
@@ -1780,6 +1850,7 @@ public actor RuntimeHost {
         wrapperHealthChecksRegistered = true
         Task {
             try? await checks.register(WrapperHealthChecks.registry(registry))
+            try? await checks.register(WrapperHealthChecks.registration(registry))
             if let build = launcherBuild() {
                 try? await checks.register(
                     WrapperHealthChecks.template(executableURL: build.executableURL))
@@ -2018,8 +2089,29 @@ public actor RuntimeHost {
             domain: "wrapper",
             code: failure.qualifiedCode,
             message: message,
-            remediation: remediation
+            remediation: remediation,
+            parameters: Self.wireParameters(for: failure)
         )
+    }
+
+    /// The error's catalog parameters as plain strings for the wire — the
+    /// `stagingToken` of `destinationNotAccessible` is how the client names
+    /// the staged bundle it must move (wrapper.md §6.3).
+    private static func wireParameters(
+        for failure: WrapperFailure
+    ) -> [String: String] {
+        failure.parameters.reduce(into: [:]) { result, entry in
+            switch entry.value {
+            case .text(let text), .fileName(let text):
+                result[entry.key] = text
+            case .count(let count):
+                result[entry.key] = String(count)
+            case .bytes(let bytes):
+                result[entry.key] = String(bytes)
+            case .duration:
+                break
+            }
+        }
     }
 
     private static func interpolate(

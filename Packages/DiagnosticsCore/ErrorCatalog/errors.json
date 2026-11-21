@@ -999,6 +999,200 @@
    }
   },
   {
+   "code": "integration.fileTooLarge",
+   "parameters": [
+    "file",
+    "bytes"
+   ],
+   "message": {
+    "en": "{file} is too large to drop into Android ({bytes}).",
+    "ja": "{file} は Android にドロップするには大きすぎます（{bytes}）。"
+   },
+   "remediation": {
+    "en": "Drop files of up to 2 GB each and 4 GB in total.",
+    "ja": "1 ファイル 2 GB まで、合計 4 GB までのファイルをドロップしてください。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "integration",
+    "case": "fileTooLarge(name:bytes:)",
+    "when": "a dropped file above 2 GiB, or a drop above 4 GiB in total",
+    "raisedBy": "DropTarget, FileTransferService",
+    "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.2"
+   }
+  },
+  {
+   "code": "integration.folderRefused",
+   "parameters": [
+    "file"
+   ],
+   "message": {
+    "en": "APKRun doesn't share {file}.",
+    "ja": "APKRun は {file} を共有しません。"
+   },
+   "action": "none",
+   "cliExit": 5,
+   "doc": {
+    "table": "integration",
+    "case": "folderRefused(FolderRefusal)",
+    "when": "addSharedFolder names a folder that can't be shared",
+    "raisedBy": "SharedFolderService",
+    "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+   },
+   "variants": {
+    "volumeRoot": {
+     "message": {
+      "en": "APKRun doesn't share a whole disk.",
+      "ja": "ディスク全体は共有できません。"
+     },
+     "remediation": {
+      "en": "Choose a folder on the disk instead.",
+      "ja": "ディスク内のフォルダを選んでください。"
+     },
+     "action": "none",
+     "doc": {
+      "when": "the folder is the root of a volume",
+      "raisedBy": "SharedFolderService",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+     }
+    },
+    "homeFolder": {
+     "message": {
+      "en": "APKRun doesn't share your whole home folder.",
+      "ja": "ホームフォルダ全体は共有できません。"
+     },
+     "remediation": {
+      "en": "Choose a folder inside it, such as Documents or Downloads.",
+      "ja": "Documents や Downloads など、その中のフォルダを選んでください。"
+     },
+     "action": "none",
+     "doc": {
+      "when": "the folder is the home folder",
+      "raisedBy": "SharedFolderService",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+     }
+    },
+    "insideLibrary": {
+     "message": {
+      "en": "APKRun doesn't share folders in your Library.",
+      "ja": "Library 内のフォルダは共有できません。"
+     },
+     "remediation": {
+      "en": "Choose a folder outside ~/Library.",
+      "ja": "~/Library の外にあるフォルダを選んでください。"
+     },
+     "action": "none",
+     "doc": {
+      "when": "the folder is ~/Library or inside it",
+      "raisedBy": "SharedFolderService",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+     }
+    },
+    "hidden": {
+     "message": {
+      "en": "APKRun doesn't share hidden folders.",
+      "ja": "隠しフォルダは共有できません。"
+     },
+     "remediation": {
+      "en": "Choose a folder that isn't hidden.",
+      "ja": "隠しフォルダでないフォルダを選んでください。"
+     },
+     "action": "none",
+     "doc": {
+      "when": "the folder, or a folder that contains it, is hidden",
+      "raisedBy": "SharedFolderService",
+      "ref": "[../02-design/desktop-integration.md](/02-design/desktop-integration.md) §6.4"
+     }
+    },
+    "limitReached": {
+     "message": {
+      "en": "You can share at most 32 folders.",
+      "ja": "共有できるのは 32 フォルダまでです。"
+     },
+     "remediation": {
+      "en": "Remove a shared folder in Settings → Files first.",
+      "ja": "先に設定 → ファイルで共有フォルダを削除してください。"
+     },
+     "action": "none",
+     "doc": {
+      "when": "32 folders are already added",
+      "raisedBy": "SharedFolderService",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+     }
+    }
+   }
+  },
+  {
+   "code": "integration.folderUnavailable",
+   "parameters": [
+    "file"
+   ],
+   "message": {
+    "en": "APKRun can't access the shared folder {file}.",
+    "ja": "共有フォルダ {file} にアクセスできません。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "integration",
+    "case": "folderUnavailable(FolderProblem)",
+    "when": "a root can't be used",
+    "raisedBy": "SharedFolderService",
+    "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+   },
+   "variants": {
+    "missing": {
+     "message": {
+      "en": "The shared folder {file} doesn't exist any more.",
+      "ja": "共有フォルダ {file} はもう存在しません。"
+     },
+     "remediation": {
+      "en": "Put the folder back, or remove it in Settings → Files.",
+      "ja": "フォルダを戻すか、設定 → ファイルで削除してください。"
+     },
+     "action": "none",
+     "doc": {
+      "when": "the folder no longer exists",
+      "raisedBy": "SharedFolderService",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+     }
+    },
+    "privacyDenied": {
+     "message": {
+      "en": "macOS doesn't allow APKRun to access the shared folder {file}.",
+      "ja": "macOS は APKRun の共有フォルダ {file} へのアクセスを許可していません。"
+     },
+     "remediation": {
+      "en": "Allow APKRun in System Settings → Privacy & Security → Files and Folders.",
+      "ja": "システム設定 → プライバシーとセキュリティ → ファイルとフォルダで APKRun を許可してください。"
+     },
+     "action": "none",
+     "doc": {
+      "when": "macOS privacy controls deny access",
+      "raisedBy": "SharedFolderService",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+     }
+    },
+    "offline": {
+     "message": {
+      "en": "The shared folder {file} isn't available right now.",
+      "ja": "共有フォルダ {file} は現在利用できません。"
+     },
+     "remediation": {
+      "en": "Connect the drive or network volume that contains it.",
+      "ja": "そのフォルダを含むドライブやネットワークボリュームを接続してください。"
+     },
+     "action": "none",
+     "doc": {
+      "when": "the volume is not mounted",
+      "raisedBy": "SharedFolderService",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+     }
+    }
+   }
+  },
+  {
    "code": "integration.guestUnavailable",
    "parameters": [],
    "message": {
@@ -1064,6 +1258,46 @@
    }
   },
   {
+   "code": "integration.pathRejected",
+   "parameters": [],
+   "message": {
+    "en": "Android asked for a file that APKRun doesn't share.",
+    "ja": "APKRun が共有しないファイルを Android が要求しました。"
+   },
+   "action": "none",
+   "cliExit": 5,
+   "doc": {
+    "table": "integration",
+    "case": "pathRejected(PathProblem)",
+    "when": "an Android request names a path outside the root, a hidden item, or an item that is not a regular file or folder",
+    "raisedBy": "SharedFolderService",
+    "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+   },
+   "variants": {
+    "outsideRoot": {
+     "doc": {
+      "when": "the path escapes the root (`..` or absolute)",
+      "raisedBy": "SharedFolderService",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+     }
+    },
+    "hidden": {
+     "doc": {
+      "when": "the path names a hidden item or a package that looks like one file",
+      "raisedBy": "SharedFolderService",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+     }
+    },
+    "notRegularFile": {
+     "doc": {
+      "when": "the path names a symlink, device, socket, or other non-file",
+      "raisedBy": "SharedFolderService",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+     }
+    }
+   }
+  },
+  {
    "code": "integration.promptTimedOut",
    "parameters": [
     "app"
@@ -1080,6 +1314,76 @@
     "when": "the link prompt got no answer in 60 s and was cancelled, or `resolveLinkPrompt` names an expired or unknown prompt. Logged only",
     "raisedBy": "LinkForwarder",
     "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §7.2"
+   }
+  },
+  {
+   "code": "integration.readOnly",
+   "parameters": [
+    "app"
+   ],
+   "message": {
+    "en": "{app} can only read files in the shared folders.",
+    "ja": "{app} が共有フォルダでできるのは読み取りだけです。"
+   },
+   "remediation": {
+    "en": "To allow changes, set Shared folders to Read and write in the app's settings, and give the folder Read and write access in Settings → Files.",
+    "ja": "変更を許可するには、アプリの設定で共有フォルダを「読み書き」にし、設定 → ファイルでフォルダに「読み書き」アクセスを与えてください。"
+   },
+   "action": "none",
+   "cliExit": 5,
+   "doc": {
+    "table": "integration",
+    "case": "readOnly",
+    "when": "a write, create, delete, or rename in a read-only root, or with read-only package access",
+    "raisedBy": "SharedFolderService",
+    "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+   }
+  },
+  {
+   "code": "integration.tooManyFiles",
+   "parameters": [
+    "count",
+    "limit"
+   ],
+   "message": {
+    "en": "Too many files at once ({count}).",
+    "ja": "一度にドロップするファイルが多すぎます（{count}）。"
+   },
+   "remediation": {
+    "en": "Drop at most 20 files at a time.",
+    "ja": "一度にドロップするのは 20 ファイルまでです。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "integration",
+    "case": "tooManyFiles(count:limit:)",
+    "when": "a drop of more than 20 files",
+    "raisedBy": "DropTarget, FileTransferService",
+    "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.2"
+   }
+  },
+  {
+   "code": "integration.transferFailed",
+   "parameters": [
+    "detail"
+   ],
+   "message": {
+    "en": "The file transfer didn't finish.",
+    "ja": "ファイル転送が完了しませんでした。"
+   },
+   "remediation": {
+    "en": "Try again.",
+    "ja": "もう一度お試しください。"
+   },
+   "action": "retry",
+   "cliExit": 1,
+   "doc": {
+    "table": "integration",
+    "case": "transferFailed(String)",
+    "when": "a bulk transfer aborts, the SHA-256 of BulkEnd differs, or a file system error occurs in SharedFolderService",
+    "raisedBy": "FileTransferService, SharedFolderService",
+    "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.2, §6.3"
    }
   },
   {

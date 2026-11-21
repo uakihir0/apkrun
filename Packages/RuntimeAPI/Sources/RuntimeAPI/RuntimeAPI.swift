@@ -28,7 +28,7 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.27 adds the notification relays and host notifications
     /// (runtime-api.md §11.3); 1.28 adds `linkPrompt` and
     /// `resolveLinkPrompt` (runtime-api.md §11.2).
-    public static let current = APIVersion(major: 1, minor: 28)
+    public static let current = APIVersion(major: 1, minor: 29)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -800,6 +800,26 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func resolveLinkPrompt(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns the per-kind integration status of a package (runtime-api.md §11).
     func integrationStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Imports files the user dropped on the session's window into Android
+    /// (runtime-api.md §11.2, desktop-integration.md §6.2). The open
+    /// `FileHandle`s travel beside the request, indexed by `fileIndex`.
+    func importFiles(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
+    /// Answers a "Save to Mac" offer for the session's window
+    /// (runtime-api.md §11.2, desktop-integration.md §6.3). Zero or one
+    /// `FileHandle` (the picked file, open for writing); none is the cancel.
+    func acceptExport(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
+    /// Lists the shared-folder roots (runtime-api.md §11.1). Reply:
+    /// `RuntimeSharedFoldersControlReply`.
+    func sharedFolders(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Adds a shared-folder root from a security bookmark (runtime-api.md
+    /// §11.1). Reply: `RuntimeSharedFolderControlReply`.
+    func addSharedFolder(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Removes a shared-folder root (runtime-api.md §11.1). Reply:
+    /// `RuntimeRemoveSharedFolderControlReply`.
+    func removeSharedFolder(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Changes a root's maximum access (runtime-api.md §11.1). Reply:
+    /// `RuntimeSharedFolderControlReply`.
+    func setSharedFolderAccess(_ request: Data, reply: @escaping (Data) -> Void)
     /// Checks packages for updates (runtime-api.md §9.1).
     func checkForUpdates(_ request: Data, reply: @escaping (Data) -> Void)
     /// Lists per-package update state (runtime-api.md §9.1).

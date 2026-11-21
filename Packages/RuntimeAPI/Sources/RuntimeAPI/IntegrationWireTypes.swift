@@ -215,17 +215,25 @@ public enum IntegrationChange: Codable, Sendable, Equatable {
     /// A link the guest wants opened; the key window asks the user where
     /// it goes (desktop-integration.md §7.2, `links = ask`).
     case linkPrompt(sessionID: UUID, packageID: RuntimePackageID, prompt: LinkPrompt)
+    /// An Android app offered a "Save to Mac" file; the session's window
+    /// shows the save panel (desktop-integration.md §6.3).
+    case exportOffered(sessionID: UUID, packageID: RuntimePackageID, offer: ExportOffer)
+    /// The shared-folder roots changed; clients refetch with `sharedFolders`
+    /// (desktop-integration.md §6.4).
+    case sharedFoldersChanged
     /// An event kind this client does not know.
     case unknown
 
     private enum Kind: String, Codable {
         case clipboardFromGuest
         case linkPrompt
+        case exportOffered
+        case sharedFoldersChanged
         case unknown
     }
 
     private enum CodingKeys: String, CodingKey {
-        case kind, sessionID, packageID, item, prompt
+        case kind, sessionID, packageID, item, prompt, offer
     }
 
     /// Creates the event from its coded form.
@@ -245,6 +253,14 @@ public enum IntegrationChange: Codable, Sendable, Equatable {
                 packageID: try container.decode(RuntimePackageID.self, forKey: .packageID),
                 prompt: try container.decode(LinkPrompt.self, forKey: .prompt)
             )
+        case .exportOffered:
+            self = .exportOffered(
+                sessionID: try container.decode(UUID.self, forKey: .sessionID),
+                packageID: try container.decode(RuntimePackageID.self, forKey: .packageID),
+                offer: try container.decode(ExportOffer.self, forKey: .offer)
+            )
+        case .sharedFoldersChanged:
+            self = .sharedFoldersChanged
         case .unknown:
             self = .unknown
         }
@@ -264,6 +280,13 @@ public enum IntegrationChange: Codable, Sendable, Equatable {
             try container.encode(sessionID, forKey: .sessionID)
             try container.encode(packageID, forKey: .packageID)
             try container.encode(prompt, forKey: .prompt)
+        case .exportOffered(let sessionID, let packageID, let offer):
+            try container.encode(Kind.exportOffered, forKey: .kind)
+            try container.encode(sessionID, forKey: .sessionID)
+            try container.encode(packageID, forKey: .packageID)
+            try container.encode(offer, forKey: .offer)
+        case .sharedFoldersChanged:
+            try container.encode(Kind.sharedFoldersChanged, forKey: .kind)
         case .unknown:
             try container.encode(Kind.unknown, forKey: .kind)
         }
@@ -592,5 +615,273 @@ public struct RuntimeIntegrationStatusControlReply: Codable, Sendable {
     public init(status: IntegrationStatus? = nil, error: RuntimeWireError? = nil) {
         self.status = status
         self.error = error
+    }
+}
+
+// MARK: - File transfers (runtime-api.md §11.2, desktop-integration.md §6)
+
+/// One dropped file's metadata (`ImportFileInfo`, runtime-api.md §11.2).
+/// `fileIndex` points at the matching handle in the op's file array.
+public struct ImportFileInfo: Codable, Sendable, Equatable {
+    /// The index into the request's `files` handles.
+    public var fileIndex: Int
+    /// The file's display name.
+    public var name: String
+    /// Its size in bytes.
+    public var size: Int64
+    /// Its uniform type identifier.
+    public var uti: String
+
+    /// Creates a file entry.
+    public init(fileIndex: Int, name: String, size: Int64, uti: String) {
+        self.fileIndex = fileIndex
+        self.name = name
+        self.size = size
+        self.uti = uti
+    }
+}
+
+/// The `importFiles` request body (runtime-api.md §11.2): the window's drop,
+/// sent with the open `FileHandle`s it names by index.
+public struct RuntimeImportFilesSessionRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The session the drop landed on.
+    public var sessionID: UUID
+    /// 1–20 files (desktop-integration.md §6.2).
+    public var files: [ImportFileInfo]
+    /// The import target; `shareToApp` is the only v1 target.
+    public var target: String
+
+    /// Creates an import request.
+    public init(
+        header: APIRequestHeader, sessionID: UUID,
+        files: [ImportFileInfo], target: String = "shareToApp"
+    ) {
+        self.header = header
+        self.sessionID = sessionID
+        self.files = files
+        self.target = target
+    }
+}
+
+/// The `ImportResult` of runtime-api.md §11.2 / guest-protocol.md §7.4.
+public struct ImportResult: Codable, Sendable, Equatable {
+    /// The shared content URIs, one per file.
+    public var contentURIs: [String]
+    /// `shared` or `savedToDownloads` when the package had no send target.
+    public var disposition: String
+
+    /// Creates an import result.
+    public init(contentURIs: [String], disposition: String) {
+        self.contentURIs = contentURIs
+        self.disposition = disposition
+    }
+
+    /// Whether the files went to Downloads instead of the app.
+    public var savedToDownloads: Bool { disposition == "savedToDownloads" }
+}
+
+/// The `importFiles` reply.
+public struct RuntimeImportFilesSessionReply: Codable, Sendable {
+    /// The import result on success.
+    public var result: ImportResult?
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates an import reply.
+    public init(result: ImportResult? = nil, error: RuntimeWireError? = nil) {
+        self.result = result
+        self.error = error
+    }
+}
+
+/// The `ExportOffer` a session event carries (`exportOffered`,
+/// runtime-api.md §11.2).
+public struct ExportOffer: Codable, Sendable, Equatable {
+    /// The offer identifier `acceptExport` answers.
+    public var offerID: String
+    /// The sanitized file name (wrapper.md §4.3).
+    public var name: String
+    /// The reported size, if Android knew it.
+    public var size: Int64?
+    /// The MIME type.
+    public var type: String
+
+    /// Creates an export offer.
+    public init(offerID: String, name: String, size: Int64?, type: String) {
+        self.offerID = offerID
+        self.name = name
+        self.size = size
+        self.type = type
+    }
+}
+
+/// The `acceptExport` request body (runtime-api.md §11.2): the save panel's
+/// answer, with 0 or 1 `FileHandle` beside it. A nil `fileIndex` is the
+/// panel's cancel.
+public struct RuntimeAcceptExportSessionRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The session answering.
+    public var sessionID: UUID
+    /// The offer being answered.
+    public var offerID: String
+    /// The index of the save handle in the op's file array, or nil to cancel.
+    public var fileIndex: Int?
+
+    /// Creates an accept request.
+    public init(header: APIRequestHeader, sessionID: UUID, offerID: String, fileIndex: Int?) {
+        self.header = header
+        self.sessionID = sessionID
+        self.offerID = offerID
+        self.fileIndex = fileIndex
+    }
+}
+
+/// The `acceptExport` reply (runtime-api.md §11.2).
+public struct RuntimeAcceptExportSessionReply: Codable, Sendable {
+    /// The empty success body.
+    public var result: RuntimeEmpty?
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates an accept reply.
+    public init(result: RuntimeEmpty? = nil, error: RuntimeWireError? = nil) {
+        self.result = result
+        self.error = error
+    }
+}
+
+// MARK: - Shared folders (runtime-api.md §11.1, desktop-integration.md §6.4)
+
+/// A `SharedFolder` root record (runtime-api.md §11.1).
+public struct SharedFolder: Codable, Sendable, Equatable {
+    /// `shared` for the built-in folder, else a generated id.
+    public var id: String
+    /// The title shown in the picker and Settings.
+    public var name: String
+    /// The resolved path (display only).
+    public var path: String
+    /// The most the root grants (`readOnly` or `readWrite`).
+    public var access: String
+    /// The built-in root cannot be removed.
+    public var builtIn: Bool
+    /// `available`, `missing`, `privacyDenied`, `offline`, or `unknown`.
+    public var availability: String
+
+    /// Creates a folder record.
+    public init(
+        id: String, name: String, path: String, access: String,
+        builtIn: Bool, availability: String
+    ) {
+        self.id = id
+        self.name = name
+        self.path = path
+        self.access = access
+        self.builtIn = builtIn
+        self.availability = availability
+    }
+}
+
+/// The `sharedFolders` control request; has no parameters (runtime-api.md §11.1).
+public struct RuntimeSharedFoldersControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+
+    /// Creates the request.
+    public init(header: APIRequestHeader) {
+        self.header = header
+    }
+}
+
+/// The `sharedFolders` reply (runtime-api.md §11.1).
+public struct RuntimeSharedFoldersControlReply: Codable, Sendable {
+    /// Every configured root on success.
+    public var result: [SharedFolder]?
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates a list reply.
+    public init(result: [SharedFolder]? = nil, error: RuntimeWireError? = nil) {
+        self.result = result
+        self.error = error
+    }
+}
+
+/// The `addSharedFolder` request body (runtime-api.md §11.1): a security
+/// bookmark the client made, plus the root's maximum access.
+public struct RuntimeAddSharedFolderControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The folder's security-scoped bookmark.
+    public var bookmark: Data
+    /// `readOnly` (default) or `readWrite`.
+    public var access: String
+
+    /// Creates an add request.
+    public init(header: APIRequestHeader, bookmark: Data, access: String = "readOnly") {
+        self.header = header
+        self.bookmark = bookmark
+        self.access = access
+    }
+}
+
+/// The `addSharedFolder` / `setSharedFolderAccess` reply: the updated root.
+public struct RuntimeSharedFolderControlReply: Codable, Sendable {
+    /// The root on success.
+    public var result: SharedFolder?
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates a folder reply.
+    public init(result: SharedFolder? = nil, error: RuntimeWireError? = nil) {
+        self.result = result
+        self.error = error
+    }
+}
+
+/// The `removeSharedFolder` request body (runtime-api.md §11.1).
+public struct RuntimeRemoveSharedFolderControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The root id to remove; `shared` is refused.
+    public var id: String
+
+    /// Creates a remove request.
+    public init(header: APIRequestHeader, id: String) {
+        self.header = header
+        self.id = id
+    }
+}
+
+/// The `removeSharedFolder` reply (runtime-api.md §11.1).
+public struct RuntimeRemoveSharedFolderControlReply: Codable, Sendable {
+    /// The empty success body.
+    public var result: RuntimeEmpty?
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates a remove reply.
+    public init(result: RuntimeEmpty? = nil, error: RuntimeWireError? = nil) {
+        self.result = result
+        self.error = error
+    }
+}
+
+/// The `setSharedFolderAccess` request body (runtime-api.md §11.1).
+public struct RuntimeSetSharedFolderAccessControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The root id to change.
+    public var id: String
+    /// The new maximum access (`readOnly` or `readWrite`).
+    public var access: String
+
+    /// Creates a set-access request.
+    public init(header: APIRequestHeader, id: String, access: String) {
+        self.header = header
+        self.id = id
+        self.access = access
     }
 }

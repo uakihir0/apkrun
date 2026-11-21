@@ -95,6 +95,23 @@ class Daemon(internal val scope: CoroutineScope) {
     internal val inboundTransfers = InboundTransfers(transfersDir())
     internal val clipboard =
         ClipboardBridge.create(SystemContext.get(), events, bulkTransfers, inboundTransfers)
+    internal val hostFileClient = io.apkrun.guest.files.HostFileClient()
+    internal val filesBridge =
+        io.apkrun.guest.files
+            .FilesBridge(
+                SystemContext.get(),
+                events,
+                inboundTransfers,
+                bulkTransfers,
+            )
+            .also {
+                // The share activity and the DocumentsProvider reach the bridge in-process only;
+                // in development the daemon runs under app_process and they stay unbound
+                // (TODO(#36)).
+                io.apkrun.guest.files.ExportRelay.bridge = it
+                io.apkrun.guest.files.MacFilesBridge.access = it
+                io.apkrun.guest.files.MacFilesBridge.client = hostFileClient
+            }
     internal val notifications =
         NotificationBridge(events, ApkRunNotificationListener.access()).also {
             ApkRunNotificationListener.bridge = it
@@ -142,6 +159,7 @@ class Daemon(internal val scope: CoroutineScope) {
                     clipboard,
                     notifications,
                     urlRedirect,
+                    filesBridge,
                 ),
             uptimeMillis = { SystemClock.elapsedRealtime() },
         )

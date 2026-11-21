@@ -1,6 +1,7 @@
 package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.v1.BulkFrame
+import io.apkrun.guest.protocol.v1.BulkKind
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.ConcurrentHashMap
@@ -16,6 +17,7 @@ class InboundTransfers(private val directory: File) {
     private class Assembly(
         val file: File,
         val stream: FileOutputStream,
+        val cap: Long,
         var received: Long = 0,
     )
 
@@ -29,14 +31,21 @@ class InboundTransfers(private val directory: File) {
             frame.hasBegin() -> {
                 val file = File(directory, "in-$id")
                 directory.mkdirs()
-                assemblies[id] = Assembly(file, FileOutputStream(file))
+                // The cap depends on what the host is sending: clipboard images stay at 16 MiB,
+                // while file drops and exports follow the 2 GiB of bulk.proto §10.
+                val cap =
+                    when (frame.begin.kind) {
+                        BulkKind.BULK_KIND_CLIPBOARD_IMAGE -> CAP_CLIPBOARD_BYTES
+                        else -> CAP_BYTES
+                    }
+                assemblies[id] = Assembly(file, FileOutputStream(file), cap)
             }
             frame.hasChunk() -> {
                 assemblies[id]?.let { assembly ->
                     val chunk = frame.chunk.toByteArray()
                     assembly.stream.write(chunk)
                     assembly.received += chunk.size
-                    if (assembly.received > CAP_BYTES) {
+                    if (assembly.received > assembly.cap) {
                         drop(id)
                     }
                 }
@@ -70,6 +79,9 @@ class InboundTransfers(private val directory: File) {
 
     companion object {
         /** A clipboard image is at most 16 MiB (runtime-api.md §11.4). */
-        private const val CAP_BYTES: Long = 16L * 1024 * 1024
+        private const val CAP_CLIPBOARD_BYTES: Long = 16L * 1024 * 1024
+
+        /** Every other transfer follows the 2 GiB bulk limit (bulk.proto §10). */
+        private const val CAP_BYTES: Long = 2L * 1024 * 1024 * 1024
     }
 }

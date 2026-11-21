@@ -72,6 +72,9 @@ public actor DevelopmentGuestAgent {
     public nonisolated let notificationEvents: AsyncStream<DevelopmentNotificationEvent>
     /// `open_url_on_host` events (desktop-integration.md §7.2).
     public nonisolated let urlEvents: AsyncStream<GPOpenUrlOnHost>
+    /// The guest's Save-to-Mac offers (integration.proto event 44,
+    /// desktop-integration.md §6.3).
+    public nonisolated let exportOfferedEvents: AsyncStream<GPExportFileOffered>
     /// Android reboot notifications inferred from consecutive supervisor snapshots.
     public nonisolated var androidRestartEvents: AsyncStream<GuestAndroidRestart> {
         supervisor.androidRestartEvents
@@ -100,6 +103,7 @@ public actor DevelopmentGuestAgent {
     private let clipboardEventContinuation: AsyncStream<GPClipData>.Continuation
     private let notificationEventContinuation: AsyncStream<DevelopmentNotificationEvent>.Continuation
     private let urlEventContinuation: AsyncStream<GPOpenUrlOnHost>.Continuation
+    private let exportOfferedContinuation: AsyncStream<GPExportFileOffered>.Continuation
     private var taskEventRelay: Task<Void, Never>?
 
     /// Creates the coordinator for `bundle`, reached through `adb`.
@@ -149,6 +153,10 @@ public actor DevelopmentGuestAgent {
         )
         self.notificationEvents = notificationEvents
         self.notificationEventContinuation = notificationEventContinuation
+        let (exportOfferedEvents, exportOfferedContinuation) = AsyncStream.makeStream(
+            of: GPExportFileOffered.self)
+        self.exportOfferedEvents = exportOfferedEvents
+        self.exportOfferedContinuation = exportOfferedContinuation
         let (urlEvents, urlEventContinuation) = AsyncStream.makeStream(
             of: GPOpenUrlOnHost.self,
             bufferingPolicy: .bufferingNewest(128)
@@ -282,6 +290,7 @@ public actor DevelopmentGuestAgent {
         displayEventContinuation.finish()
         clipboardEventContinuation.finish()
         urlEventContinuation.finish()
+        exportOfferedContinuation.finish()
         // The input and IME connections belong to the control session, so they end with it.
         await inputConnection?.close()
         inputConnection = nil
@@ -421,6 +430,7 @@ public actor DevelopmentGuestAgent {
         let clipboardContinuation = clipboardEventContinuation
         let notificationContinuation = notificationEventContinuation
         let urlContinuation = urlEventContinuation
+        let exportOfferedContinuation = exportOfferedContinuation
         taskEventRelay = Task {
             for await event in updates {
                 guard let kind = event.kind else {
@@ -447,6 +457,8 @@ public actor DevelopmentGuestAgent {
                     notificationContinuation.yield(.removed(removal))
                 case .openURLOnHost(let event):
                     urlContinuation.yield(event)
+                case .exportFileOffered(let offer):
+                    exportOfferedContinuation.yield(offer)
                 default:
                     break
                 }

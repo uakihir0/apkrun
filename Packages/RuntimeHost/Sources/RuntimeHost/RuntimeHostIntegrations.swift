@@ -874,7 +874,7 @@ extension RuntimeHost {
     }
 
     /// Maps an `IntegrationFailure` to its catalog wire error (§13.1).
-    private static func integrationWireError(_ failure: IntegrationFailure) -> RuntimeWireError {
+    static func integrationWireError(_ failure: IntegrationFailure) -> RuntimeWireError {
         switch failure {
         case .disabled(let kind, let reason):
             let messages: (String, String?)
@@ -944,6 +944,56 @@ extension RuntimeHost {
                 code: "integration.linkRejected",
                 message: "The link was dropped (\(reason.rawValue)).",
                 remediation: nil
+            )
+        case .tooManyFiles(let count, let limit):
+            return RuntimeWireError(
+                domain: "integration",
+                code: "integration.tooManyFiles",
+                message: "Too many files at once (\(count)).",
+                remediation: "Drop at most \(limit) files at a time."
+            )
+        case .fileTooLarge(let name, let bytes):
+            return RuntimeWireError(
+                domain: "integration",
+                code: "integration.fileTooLarge",
+                message: "\(name) is too large to drop into Android (\(bytes) bytes).",
+                remediation: "Drop files of up to 2 GB each and 4 GB in total."
+            )
+        case .transferFailed(let detail):
+            return RuntimeWireError(
+                domain: "integration",
+                code: "integration.transferFailed",
+                message: "The file transfer didn't finish (\(detail)).",
+                remediation: "Try again."
+            )
+        case .folderUnavailable(let problem):
+            return RuntimeWireError(
+                domain: "integration",
+                code: "integration.folderUnavailable",
+                message: "A shared folder can't be used (\(problem.rawValue)).",
+                remediation: nil
+            )
+        case .pathRejected(let problem):
+            return RuntimeWireError(
+                domain: "integration",
+                code: "integration.pathRejected",
+                message: "The file request was refused (\(problem.rawValue)).",
+                remediation: nil
+            )
+        case .folderRefused(let reason):
+            return RuntimeWireError(
+                domain: "integration",
+                code: "integration.folderRefused",
+                message: "The folder can't be shared (\(reason.rawValue)).",
+                remediation: nil
+            )
+        case .readOnly:
+            return RuntimeWireError(
+                domain: "integration",
+                code: "integration.readOnly",
+                message: "The app can only read files in the shared folders.",
+                remediation:
+                    "To allow changes, set Shared folders to Read and write in the app's settings, and give the folder Read and write access in Settings → Files."
             )
         }
     }
@@ -1040,7 +1090,7 @@ extension RuntimeHost {
     /// transfers/`, reads it back, and deletes the file
     /// (desktop-integration.md §4.4). A failure anywhere answers the bytes.
     nonisolated func readTransferOnce(_ transfer: GuestInboundTransfer) -> Data? {
-        guard !transfer.bytes.isEmpty else { return nil }
+        guard let bytes = transfer.bytes, !bytes.isEmpty else { return nil }
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         let directory =
             caches
@@ -1050,13 +1100,13 @@ extension RuntimeHost {
         do {
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true)
-            try transfer.bytes.write(to: file, options: .atomic)
-            let bytes = try Data(contentsOf: file)
+            try bytes.write(to: file, options: .atomic)
+            let read = try Data(contentsOf: file)
             try? FileManager.default.removeItem(at: file)
-            return bytes
+            return read
         } catch {
             try? FileManager.default.removeItem(at: file)
-            return transfer.bytes
+            return bytes
         }
     }
 }

@@ -7,15 +7,20 @@ import io.apkrun.guest.protocol.v1.ClipData
 import io.apkrun.guest.protocol.v1.CollectDiagnostics
 import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
 import io.apkrun.guest.protocol.v1.DismissNotification
+import io.apkrun.guest.protocol.v1.ExportStart
+import io.apkrun.guest.protocol.v1.ImportFiles
+import io.apkrun.guest.protocol.v1.ImportResult
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
 import io.apkrun.guest.protocol.v1.ListPackages
 import io.apkrun.guest.protocol.v1.PackageInfo
 import io.apkrun.guest.protocol.v1.PackageList
 import io.apkrun.guest.protocol.v1.QueryPackage
+import io.apkrun.guest.protocol.v1.ResolveExport
 import io.apkrun.guest.protocol.v1.ResolveUrl
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.SetNotificationForwarding
+import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
 import io.apkrun.guest.protocol.v1.SetUrlRedirect
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
@@ -70,4 +75,13 @@ interface AgentOperations {
 
     /** Collects the requested diagnostics items, each on the bulk channel (diagnostics.v1). */
     fun collectDiagnostics(request: CollectDiagnostics): CollectDiagnosticsResult
+
+    /** Shares host-dropped files into the target package or Downloads (files.v1, §6.1). */
+    fun importFiles(request: ImportFiles): ImportResult
+
+    /** Accepts or declines a pending export offer (files.v1, §6.2). */
+    fun resolveExport(request: ResolveExport): ExportStart
+
+    /** Replaces the shared-folder roots and per-package access map (files.shared.v1, §6.4). */
+    fun setSharedFolderAccess(request: SetSharedFolderAccess)
 }

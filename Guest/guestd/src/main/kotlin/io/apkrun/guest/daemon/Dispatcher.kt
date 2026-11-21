@@ -208,6 +208,18 @@ class Dispatcher(
                 operations.resolveUrl(request.resolveUrl)
                 Response.newBuilder().setResolveUrl(Empty.getDefaultInstance()).build()
             }
+            Request.OpCase.IMPORT_FILES ->
+                Response.newBuilder()
+                    .setImportFiles(operations.importFiles(request.importFiles))
+                    .build()
+            Request.OpCase.RESOLVE_EXPORT ->
+                Response.newBuilder()
+                    .setResolveExport(operations.resolveExport(request.resolveExport))
+                    .build()
+            Request.OpCase.SET_SHARED_FOLDER_ACCESS -> {
+                operations.setSharedFolderAccess(request.setSharedFolderAccess)
+                Response.newBuilder().setSetSharedFolderAccess(Empty.getDefaultInstance()).build()
+            }
             else ->
                 failure(
                     GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
@@ -265,6 +277,9 @@ class Dispatcher(
                 Request.OpCase.SET_NOTIFICATION_FORWARDING -> GuestCapability.NOTIFICATIONS
                 Request.OpCase.SET_URL_REDIRECT,
                 Request.OpCase.RESOLVE_URL -> GuestCapability.URL
+                Request.OpCase.IMPORT_FILES,
+                Request.OpCase.RESOLVE_EXPORT -> GuestCapability.FILES
+                Request.OpCase.SET_SHARED_FOLDER_ACCESS -> GuestCapability.FILES_SHARED
                 else -> null
             }
 

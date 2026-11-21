@@ -11,7 +11,7 @@ private final class Recorded: @unchecked Sendable {
     var requests: [(url: URL, headers: [String: String])] = []
 }
 
-private final class StubHTTP: UpdateHTTPClient, @unchecked Sendable {
+private final class StubHTTP: @unchecked Sendable, UpdateHTTPClient {
     let recorded = Recorded()
     var getBody: Data = Data()
     var getStatus = 200

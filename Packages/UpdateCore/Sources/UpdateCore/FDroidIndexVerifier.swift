@@ -235,7 +235,10 @@ public enum FDroidIndexVerifier {
         }
         // Per-section digests: each .SF entry section digests the manifest
         // section with the same `Name`, and the main section is covered by
-        // SHA-256-Digest-Manifest-Main-Attributes.
+        // SHA-256-Digest-Manifest-Main-Attributes. Without the whole-manifest
+        // digest every named manifest section must be covered, or a signed
+        // .SF that names other sections only would let the entry.json
+        // section change under a valid signature.
         guard let manifestDocument = ManifestDocument(manifest) else {
             throw .providerSignatureInvalid(detail: "entry.jar: malformed MANIFEST.MF")
         }
@@ -249,6 +252,7 @@ public enum FDroidIndexVerifier {
                     detail: ".SF: manifest main-attributes digest mismatch")
             }
         }
+        var covered = Set<String>()
         for section in sfDocument.sections.dropFirst() {
             guard let name = section.value("Name") else { continue }
             guard
@@ -264,6 +268,14 @@ public enum FDroidIndexVerifier {
             else {
                 throw .providerSignatureInvalid(
                     detail: ".SF: \(name) section digest mismatch")
+            }
+            covered.insert(name)
+        }
+        for section in manifestDocument.sections {
+            guard let name = section.value("Name") else { continue }
+            guard covered.contains(name) else {
+                throw .providerSignatureInvalid(
+                    detail: ".SF: manifest section \(name) is not signed")
             }
         }
     }

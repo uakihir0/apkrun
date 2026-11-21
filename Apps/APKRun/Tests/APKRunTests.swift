@@ -95,6 +95,11 @@ final class FakeRuntimeService: RuntimeService, @unchecked Sendable {
             versionName: nil, state: .installed, managed: true, updateAuthority: .apkrun)
     }
 
+    func createWrapper(packageID: RuntimePackageID) async throws -> OperationHandle {
+        count("createWrapper")
+        return OperationHandle(operationID: OperationID(), kind: .wrapperCreate)
+    }
+
     func refreshWrapper(packageID: RuntimePackageID) async throws -> OperationHandle {
         count("refreshWrapper")
         return OperationHandle(operationID: OperationID(), kind: .wrapperRefresh)
@@ -210,7 +215,8 @@ final class HomeRowStatusTests: XCTestCase {
         let failed = UpdateHistoryEntry(
             v: 1, time: Date(), packageID: RuntimePackageID(rawValue: "com.example.a")!,
             from: 3, to: 4, provider: nil, trigger: "scheduled",
-            outcome: "failed.checkFailed", failure: nil, phaseDurationsMs: [:])
+            outcome: "skipped.installFailed", failure: WireError(domain: "update", code: "installFailed"),
+            phaseDurationsMs: [:])
         XCTAssertEqual(status(outcome: failed).text, "Update failed")
         XCTAssertEqual(status(outcome: failed).actions, [.details])
         let rolled = UpdateHistoryEntry(

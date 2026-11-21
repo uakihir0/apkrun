@@ -14,6 +14,9 @@ class TopicPollingModel {
     private(set) var lastError: RuntimeWireError?
 
     private let topics: [EventTopic]
+    /// Reload on a timer even while subscriptions stay open — for topics the
+    /// daemon never publishes (§5.1 Updates).
+    private let refreshInterval: Duration?
     private let makeService: @Sendable () throws -> any RuntimeService
     private var service: (any RuntimeService)?
     private var loopTask: Task<Void, Never>?
@@ -25,11 +28,13 @@ class TopicPollingModel {
 
     init(
         topics: [EventTopic],
+        refreshInterval: Duration? = nil,
         makeService: @escaping @Sendable () throws -> any RuntimeService = {
             try RuntimeControlClient(clientKind: .app)
         }
     ) {
         self.topics = topics
+        self.refreshInterval = refreshInterval
         self.makeService = makeService
     }
 
@@ -91,6 +96,15 @@ class TopicPollingModel {
             if let service = try? requireService() {
                 do {
                     try await withThrowingTaskGroup(of: Void.self) { group in
+                        if let refreshInterval {
+                            group.addTask { [weak self] in
+                                while !Task.isCancelled {
+                                    try? await Task.sleep(for: refreshInterval)
+                                    if Task.isCancelled { return }
+                                    await self?.scheduleReload()
+                                }
+                            }
+                        }
                         for topic in topics {
                             group.addTask { [weak self] in
                                 let stream = try await service.subscribe(to: topic)

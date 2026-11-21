@@ -14,5 +14,15 @@
             </intent-filter>
             <meta-data android:name="android.view.im" android:resource="@xml/method" />
         </service>
+        <!-- The notification listener (desktop-integration.md §5.1): granted by DeviceSetup. -->
+        <service
+            android:name=".daemon.ApkRunNotificationListener"
+            android:label="APKRun Notification Listener"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

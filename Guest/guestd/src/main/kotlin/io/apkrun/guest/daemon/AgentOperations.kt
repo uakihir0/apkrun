@@ -1,10 +1,12 @@
 package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.GuestFailure
+import io.apkrun.guest.protocol.v1.ActivateNotification
 import io.apkrun.guest.protocol.v1.ClearDisplay
 import io.apkrun.guest.protocol.v1.ClipData
 import io.apkrun.guest.protocol.v1.CollectDiagnostics
 import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
+import io.apkrun.guest.protocol.v1.DismissNotification
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
 import io.apkrun.guest.protocol.v1.ListPackages
@@ -12,6 +14,7 @@ import io.apkrun.guest.protocol.v1.PackageInfo
 import io.apkrun.guest.protocol.v1.PackageList
 import io.apkrun.guest.protocol.v1.QueryPackage
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
+import io.apkrun.guest.protocol.v1.SetNotificationForwarding
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
 
@@ -47,6 +50,15 @@ interface AgentOperations {
 
     /** Applies a host clip to the Android clipboard (clipboard.*, desktop-integration.md §4.2). */
     fun setClipboard(request: ClipData)
+
+    /** Fires a notification's content or action intent on a display (notifications.v1, §5.4). */
+    fun activateNotification(request: ActivateNotification)
+
+    /** Dismisses a notification on Android (notifications.v1, §5.4). */
+    fun dismissNotification(request: DismissNotification)
+
+    /** Replaces the notification forwarding allowlist (notifications.v1, §5.1). */
+    fun setNotificationForwarding(request: SetNotificationForwarding)
 
     /** Collects the requested diagnostics items, each on the bulk channel (diagnostics.v1). */
     fun collectDiagnostics(request: CollectDiagnostics): CollectDiagnosticsResult

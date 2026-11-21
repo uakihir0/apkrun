@@ -271,6 +271,7 @@ class Connection(
                 GuestCapability.PACKAGES,
                 GuestCapability.DIAGNOSTICS,
                 GuestCapability.CLIPBOARD_TEXT,
+                GuestCapability.NOTIFICATIONS,
             )
     }
 }

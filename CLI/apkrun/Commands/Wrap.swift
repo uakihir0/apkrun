@@ -100,7 +100,8 @@
                 // which the user can grant folder access — moves it and
                 // calls placeStagedWrapper to finish.
                 info = try await WrapCommandSupport.placeStaged(
-                    after: failure, destination: destination, client: client)
+                    after: failure, destination: destination, replace: replace,
+                    client: client)
             }
             if json {
                 try OperationCommandOutput.writeJSON(info)
@@ -117,6 +118,7 @@
         static func placeStaged(
             after failure: RuntimeWireError,
             destination: WireWrapperDestination?,
+            replace: Bool,
             client: RuntimeControlClient
         ) async throws -> WrapperInfo {
             guard failure.code == "wrapper.destinationNotAccessible",
@@ -148,7 +150,15 @@
             let finalURL = directory.appendingPathComponent(
                 stagedBundle.lastPathComponent, isDirectory: true)
             do {
+                // The daemon skipped the conflict check on the deferred path;
+                // honor --replace here the way place() would have.
+                if FileManager.default.fileExists(atPath: finalURL.path) {
+                    guard replace else { throw failure }
+                    try FileManager.default.removeItem(at: finalURL)
+                }
                 try FileManager.default.moveItem(at: stagedBundle, to: finalURL)
+            } catch let moveError as RuntimeWireError {
+                throw moveError
             } catch {
                 throw failure
             }

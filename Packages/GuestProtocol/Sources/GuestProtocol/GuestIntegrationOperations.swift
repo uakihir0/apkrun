@@ -158,3 +158,90 @@ public struct GuestSetNotificationForwarding: GuestOperation {
         return nil
     }
 }
+
+/// SetUrlRedirect, guest protocol operation 44 (guest-protocol.md §7.6,
+/// desktop-integration.md §3.2). `enabled` is the global links switch;
+/// `excludedPackages` are the packages whose `integrations.links` value keeps
+/// links inside Android (`android` or `off`). The agent recomputes its
+/// browser-role answer from the push.
+public struct GuestSetUrlRedirect: GuestOperation {
+    /// The guest acknowledges the set with `Empty`.
+    public typealias Result = GPEmpty
+    /// The stable guest protocol operation number.
+    public static let number = 44
+
+    /// The global `integrations.enabled.links` switch.
+    public let enabled: Bool
+    /// The packages that keep links inside Android.
+    public let excludedPackages: [String]
+
+    /// Creates a set-redirect request.
+    public init(enabled: Bool, excludedPackages: [String]) {
+        self.enabled = enabled
+        self.excludedPackages = excludedPackages
+    }
+
+    /// The operation name used in diagnostics.
+    public var operationName: String { "SetUrlRedirect" }
+    /// The Guest Agent capability required for this operation.
+    public var capability: GuestCapability { .url }
+    /// The per-call timeout.
+    public var timeout: Duration { .seconds(5) }
+
+    /// Builds the versioned wire request.
+    public func request() -> GPRequest.OneOf_Op {
+        var request = GPSetUrlRedirect()
+        request.enabled = enabled
+        request.excludedPackages = excludedPackages
+        return .setURLRedirect(request)
+    }
+
+    /// Extracts the empty acknowledgement.
+    public static func decode(_ result: GPResponse.OneOf_Result) -> GPEmpty? {
+        if case .setURLRedirect(let empty) = result { return empty }
+        return nil
+    }
+}
+
+/// ResolveUrl, guest protocol operation 50 (guest-protocol.md §7.6,
+/// desktop-integration.md §7.2). Answers one `OpenUrlOnHost` event: the host
+/// opened it (`openedOnHost`), Android should open the kept intent
+/// (`openInGuest`), or the link is dropped (`drop`).
+public struct GuestResolveUrl: GuestOperation {
+    /// The guest acknowledges the answer with `Empty`.
+    public typealias Result = GPEmpty
+    /// The stable guest protocol operation number.
+    public static let number = 50
+
+    /// The `OpenUrlOnHost.request_id` being answered.
+    public let requestID: UInt64
+    /// What the host did with the link.
+    public let action: GPUrlAction
+
+    /// Creates a resolve-url request.
+    public init(requestID: UInt64, action: GPUrlAction) {
+        self.requestID = requestID
+        self.action = action
+    }
+
+    /// The operation name used in diagnostics.
+    public var operationName: String { "ResolveUrl" }
+    /// The Guest Agent capability required for this operation.
+    public var capability: GuestCapability { .url }
+    /// The per-call timeout.
+    public var timeout: Duration { .seconds(5) }
+
+    /// Builds the versioned wire request.
+    public func request() -> GPRequest.OneOf_Op {
+        var request = GPResolveUrl()
+        request.requestID = requestID
+        request.action = action
+        return .resolveURL(request)
+    }
+
+    /// Extracts the empty acknowledgement.
+    public static func decode(_ result: GPResponse.OneOf_Result) -> GPEmpty? {
+        if case .resolveURL(let empty) = result { return empty }
+        return nil
+    }
+}

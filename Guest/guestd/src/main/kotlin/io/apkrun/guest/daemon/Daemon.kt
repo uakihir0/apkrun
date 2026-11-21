@@ -79,8 +79,7 @@ class Daemon(internal val scope: CoroutineScope) {
     private val packages = PackageService(AndroidPackageCatalog(SystemContext.get().packageManager))
     internal val bulkTransfers = BulkTransfers()
     private val diagnostics = DiagnosticsService(bulkTransfers)
-    internal val inboundTransfers =
-        InboundTransfers(java.io.File(guestCacheDir(), "transfers"))
+    internal val inboundTransfers = InboundTransfers(transfersDir())
     internal val clipboard =
         ClipboardBridge.create(SystemContext.get(), events, bulkTransfers, inboundTransfers)
     internal val notifications =
@@ -144,12 +143,21 @@ class Daemon(internal val scope: CoroutineScope) {
     }
 
     /**
-     * The installed app's cache directory. The daemon's own context is the system context, which
-     * has no data directory; TransferFileProvider resolves files under this same directory in the
-     * app process.
+     * The directory inbound transfer files land in. In privileged mode the agent runs inside the
+     * `io.apkrun.guest` app, and TransferFileProvider resolves files under this same directory in
+     * the app process. The development agent runs as the shell uid (guest-components.md §3.2) and
+     * cannot write that private directory — it uses the shell-writable log directory instead; the
+     * provider path the URI grant needs is privileged-mode only (guest-components.md §5).
      */
-    private fun guestCacheDir(): java.io.File =
-        SystemContext.get().createPackageContext(GUEST_PACKAGE, 0).cacheDir
+    private fun transfersDir(): java.io.File =
+        if (android.os.Process.myUid() == android.os.Process.SHELL_UID) {
+            java.io.File("/data/local/tmp/apkrun/transfers")
+        } else {
+            java.io.File(
+                SystemContext.get().createPackageContext(GUEST_PACKAGE, 0).cacheDir,
+                "transfers",
+            )
+        }
 
     private fun serve(socket: LocalSocket, channel: ChannelKind) {
         scope.launch(Dispatchers.IO) { Connection(socket, channel, this@Daemon).run() }

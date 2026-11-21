@@ -49,16 +49,32 @@
             // landed. A package ID is wrapped as is; a file requires
             // --install.
             let inputURL = URL(fileURLWithPath: package).standardizedFileURL
+            let fileExists = FileManager.default.fileExists(atPath: inputURL.path)
+            let isValidPackageID =
+                !package.isEmpty && RuntimePackageID(rawValue: package) != nil
+            // A valid package ID names the installed package; a file wins only
+            // when it is no valid ID or it is a real `.apk` on disk (a path
+            // like ./com.example keeps working through the same rule).
             let isFile =
-                package.hasSuffix(".apk")
-                || (FileManager.default.fileExists(atPath: inputURL.path)
-                    && !package.isEmpty && RuntimePackageID(rawValue: package) == nil)
+                (fileExists && !isValidPackageID)
+                || (package.hasSuffix(".apk") && (fileExists || !isValidPackageID))
             guard isFile == install else {
                 throw CLIFailure.invalidArgument(
                     argument: isFile ? "install" : "package",
                     reason: isFile
                         ? "an APK file needs --install"
                         : "--install takes an APK file")
+            }
+            // wrapper.md §12.2: update settings apply only when this command
+            // installs the package.
+            if !install,
+                provider != nil || updates != nil || update != nil
+                    || updateProvider != nil || updateURL != nil
+            {
+                throw CLIFailure.invalidArgument(
+                    argument: "updates",
+                    reason: "update options apply when this command installs; "
+                        + "for an installed package use `apkrun update policy`")
             }
 
             let client: RuntimeControlClient
@@ -68,22 +84,9 @@
                 throw await RuntimeStatusOutput.commandFailure(error)
             }
 
-            var packageID: RuntimePackageID
-            if install {
-                let installOptions = try InstallUpdateOptions.options(
-                    provider: provider, updates: updates, update: update,
-                    updateProvider: updateProvider, updateURL: updateURL)
-                packageID = try await WrapCommandSupport.installFile(
-                    at: inputURL, options: installOptions, client: client)
-            } else {
-                guard let id = RuntimePackageID(rawValue: package) else {
-                    throw CLIFailure.invalidArgument(argument: "package", reason: "invalid")
-                }
-                packageID = id
-            }
-
             // The CLI resolves --output with the user's own file access;
-            // apkrund never does (cli.md §4.4, wrapper.md §12.2).
+            // apkrund never does (cli.md §4.4, wrapper.md §12.2). Validate it
+            // before any install so a bad path fails before the APK lands.
             let destination: WireWrapperDestination?
             if let output {
                 let url = URL(fileURLWithPath: output).standardizedFileURL
@@ -98,56 +101,81 @@
                 destination = nil
             }
 
-            let operationID = RuntimeAPI.OperationID()
-            let request = WrapperRequest(
-                packageID: packageID,
-                destination: destination,
-                replace: replace ? .sameWrapper : .never
-            )
-            let handle: OperationHandle
-            do {
-                handle = try await client.createWrapper(
-                    request,
-                    icon: nil,
-                    operationID: operationID
-                )
-            } catch {
-                throw await WrapCommandSupport.beginFailure(
-                    error,
-                    packageID: packageID,
-                    operationID: operationID
-                )
+            var packageID: RuntimePackageID
+            if install {
+                let installOptions = try InstallUpdateOptions.options(
+                    provider: provider, updates: updates, update: update,
+                    updateProvider: updateProvider, updateURL: updateURL)
+                packageID = try await WrapCommandSupport.installFile(
+                    at: inputURL, options: installOptions, json: json, client: client)
+            } else {
+                guard let id = RuntimePackageID(rawValue: package) else {
+                    throw CLIFailure.invalidArgument(argument: "package", reason: "invalid")
+                }
+                packageID = id
             }
 
-            let snapshot: OperationSnapshot
-            do {
-                snapshot = try await OperationCommandOutput.waitForTerminalSnapshot(
-                    using: client,
-                    operationID: handle.operationID,
-                    progressToStderr: OperationCommandOutput.shouldShowProgress
-                )
-            } catch {
-                throw await WrapCommandSupport.waitFailure(
-                    error,
-                    packageID: packageID,
-                    operationID: handle.operationID
-                )
-            }
             let info: WrapperInfo
             do {
-                info = try WrapCommandSupport.wrapperInfo(
-                    from: snapshot,
-                    expectedPackageID: packageID
+                let operationID = RuntimeAPI.OperationID()
+                let request = WrapperRequest(
+                    packageID: packageID,
+                    destination: destination,
+                    replace: replace ? .sameWrapper : .never
                 )
-            } catch let failure as RuntimeWireError {
-                // wrapper.md §6.3: when the daemon's probe hit EPERM the
-                // bundle waits in staging and the client — this process,
-                // which the user can grant folder access — moves it and
-                // calls placeStagedWrapper to finish.
-                info = try await WrapCommandSupport.placeStaged(
-                    after: failure, destination: destination, replace: replace,
-                    client: client)
+                let handle: OperationHandle
+                do {
+                    handle = try await client.createWrapper(
+                        request,
+                        icon: nil,
+                        operationID: operationID
+                    )
+                } catch {
+                    throw await WrapCommandSupport.beginFailure(
+                        error,
+                        packageID: packageID,
+                        operationID: operationID
+                    )
+                }
+
+                let snapshot: OperationSnapshot
+                do {
+                    snapshot = try await OperationCommandOutput.waitForTerminalSnapshot(
+                        using: client,
+                        operationID: handle.operationID,
+                        progressToStderr: OperationCommandOutput.shouldShowProgress
+                    )
+                } catch {
+                    throw await WrapCommandSupport.waitFailure(
+                        error,
+                        packageID: packageID,
+                        operationID: operationID
+                    )
+                }
+                do {
+                    info = try WrapCommandSupport.wrapperInfo(
+                        from: snapshot,
+                        expectedPackageID: packageID
+                    )
+                } catch let failure as RuntimeWireError {
+                    // wrapper.md §6.3: when the daemon's probe hit EPERM the
+                    // bundle waits in staging and the client — this process,
+                    // which the user can grant folder access — moves it and
+                    // calls placeStagedWrapper to finish.
+                    info = try await WrapCommandSupport.placeStaged(
+                        after: failure, destination: destination, replace: replace,
+                        client: client)
+                }
+            } catch {
+                // cli.md §3: installed but the Mac app could not be created
+                // is a partial success, exit code 2.
+                if install {
+                    ErrorOutput.write(error, json: json)
+                    throw ExitCode(Int32(ExitCodes.partial))
+                }
+                throw error
             }
+
             if json {
                 try OperationCommandOutput.writeJSON(info)
             } else {
@@ -262,6 +290,7 @@
         static func installFile(
             at url: URL,
             options: RuntimeInstallOptions,
+            json: Bool,
             client: RuntimeControlClient
         ) async throws -> RuntimePackageID {
             let urls = try DaemonInstallSupport.inputFiles([url.path])
@@ -306,10 +335,12 @@
             }
             let result = try OperationCommandOutput.installedPackage(
                 from: snapshot, expectedPackageID: preview.packageID)
-            Output.write(
-                "Installed \(DaemonInstallSupport.safeTerminalText(result.displayName)) "
-                    + "(\(result.packageID.rawValue)), version "
-                    + "\(result.versionCode.map(String.init) ?? "unknown").")
+            if !json {
+                Output.write(
+                    "Installed \(DaemonInstallSupport.safeTerminalText(result.displayName)) "
+                        + "(\(result.packageID.rawValue)), version "
+                        + "\(result.versionCode.map(String.init) ?? "unknown").")
+            }
             return result.packageID
         }
 

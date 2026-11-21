@@ -81,6 +81,14 @@ actor MaintenanceService {
         case .normal, .unknown:
             break
         }
+        if await imageMigratingProvider() {
+            // A coordinated host update may not overlap a guest image
+            // migration (runtime-maintenance.md §3.5).
+            throw .maintenance(
+                "hostUpdateBusy",
+                message: "An Android image update is in progress; try again when it finishes.",
+                remediation: "Check `apkrun image list` for the current update state.")
+        }
         if request.targetBuild <= build {
             throw .maintenance(
                 "selfUpdateNotNewer",

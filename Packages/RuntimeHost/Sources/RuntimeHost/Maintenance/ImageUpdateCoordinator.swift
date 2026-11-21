@@ -51,6 +51,7 @@ public actor ImageUpdateCoordinator {
     /// Settles a persisted `applying` phase against the image that is actually
     /// current after a restart (runtime-maintenance.md §4.3).
     public func reconcile(currentImage: ImageCore.ImageVersion?) {
+        pruneExpiredRejections()
         guard case .applying(let from, let to) = state.phase else { return }
         if currentImage == to {
             state.phase = .idle
@@ -103,6 +104,7 @@ public actor ImageUpdateCoordinator {
         }
         let task = Task { [self, migrate] in
             do {
+                logger.notice("IMAGE_MIGRATION_START \(version.description, .public) operation \(operationID.uuidString, .public)")
                 await self.setPhase(.applying(from: from, to: version))
                 try await migrate(version, operationID)
                 await self.noteInstalled(version)
@@ -136,6 +138,7 @@ public actor ImageUpdateCoordinator {
         operationID: UUID = UUID()
     ) async throws(ImageFailure) {
         try await apply(previous, from: abandoned, operationID: operationID, force: true)
+        logger.notice("IMAGE_ROLLBACK_END \(previous.description, .public) abandoned \(abandoned.description, .public)")
         state.rejected[abandoned.description] = RejectedImage(
             version: abandoned, at: clock(), reason: .userRolledBack
         )
@@ -178,6 +181,7 @@ public actor ImageUpdateCoordinator {
         for key in stale.keys {
             state.rejected.removeValue(forKey: key)
         }
+        logger.notice("Dropped \(stale.count, .public) expired image rejections (seven-day retention)")
         save()
     }
 
@@ -190,6 +194,7 @@ public actor ImageUpdateCoordinator {
     }
 
     private func noteInstalled(_ version: ImageCore.ImageVersion) {
+        logger.notice("IMAGE_MIGRATION_END \(version.description, .public) installed")
         state.phase = .idle
         state.lastResult = .installed(version)
         state.lastAutomaticApplyAt = clock()
@@ -201,6 +206,7 @@ public actor ImageUpdateCoordinator {
     private func noteApplyFailed(_ version: ImageCore.ImageVersion, error: any Error) {
         // The supervisor already restored the previous image; record the
         // rejection (§4.8).
+        logger.notice("IMAGE_MIGRATION_END \(version.description, .public) rejected: \(error.localizedDescription, .public)")
         state.phase = .failed(state.candidate, reason: error.localizedDescription, retryAt: nil)
         state.lastResult = .rejected(version, reason: .migrationFailed)
         state.rejected[version.description] = RejectedImage(

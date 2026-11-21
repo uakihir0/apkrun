@@ -571,11 +571,15 @@ public actor SharedFolderService {
         // case change on a case-insensitive volume — is still allowed.
         if faccessat(parentFD, clean, F_OK, AT_SYMLINK_NOFOLLOW) == 0 {
             var sourceInfo = Darwin.stat(), targetInfo = Darwin.stat()
+            // Same inode alone is not enough: a second hardlink of the same
+            // inode would make renameat a silent no-op that leaves the old
+            // name behind. Only a single-link entry is a true case change.
             let sameFile =
                 fstatat(parentFD, oldName, &sourceInfo, AT_SYMLINK_NOFOLLOW) == 0
                 && fstatat(parentFD, clean, &targetInfo, AT_SYMLINK_NOFOLLOW) == 0
                 && sourceInfo.st_ino == targetInfo.st_ino
                 && sourceInfo.st_dev == targetInfo.st_dev
+                && sourceInfo.st_nlink == 1
             guard sameFile else {
                 throw SharedFolderFailure(.invalidArgument)
             }

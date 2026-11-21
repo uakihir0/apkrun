@@ -54,6 +54,8 @@ struct RuntimeTrackedOperation {
 /// opens the current image, and creates one RuntimeSupervisor. Runtime start remains on demand.
 public actor RuntimeHost {
     nonisolated let eventHub = RuntimeEventHub()
+    /// Open notification/host streams (runtime-api.md §16.4).
+    nonisolated let streamCenter = RuntimeStreamCenter()
 
     let paths: APKRunPaths
     private let buildInfo: BuildInfo
@@ -70,6 +72,11 @@ public actor RuntimeHost {
     /// (`updates.waiting` in RuntimeHostUpdates.swift).
     var healthCheckRegistry: HealthCheckRegistry? {
         diagnostics?.healthChecks
+    }
+    /// The configured log sink, for loggers of sibling files
+    /// (RuntimeHostIntegrations's notification coordinator).
+    var hostLogSink: (any LogSink)? {
+        diagnostics?.logSink
     }
     private var logger: APKLogger?
     private var instanceLock: InstanceLock?
@@ -155,8 +162,16 @@ public actor RuntimeHost {
     /// The §2.3 policy and §4 clipboard coordinator (desktop-integration.md);
     /// internal so the RuntimeHostIntegrations extension can build it lazily.
     var clipboardCoordinator: ClipboardCoordinator?
+    /// The §5.3 notification coordinator; internal so the
+    /// RuntimeHostIntegrations extension can build it lazily.
+    var notificationCoordinatorLazy: NotificationCoordinator?
+    /// `integrations.notificationListener` registers once when the
+    /// notification coordinator is created.
+    var integrationHealthChecksRegistered = false
     /// The guest→coordinator clip relay; alive while the guest agent is.
     var clipboardRelayTask: Task<Void, Never>?
+    /// The guest→coordinator notification relay; alive while the agent is.
+    var notificationRelayTask: Task<Void, Never>?
     /// Cached settings and capabilities for the synchronous policy closures.
     let integrationSettings = IntegrationSettingsCache()
 
@@ -751,6 +766,14 @@ public actor RuntimeHost {
         {
             eventHub.publishPackageChange(
                 .windowPrefsChanged(request.packageID, prefs), operationID: nil)
+        }
+        // A changed `integrations.*` key may alter the guest's forwarding
+        // allowlist; push it so titles and text stop leaving Android at once.
+        if Set(request.patch.set.keys).union(request.patch.clear)
+            .contains(where: { $0.hasPrefix("integrations.") })
+        {
+            await refreshIntegrationSettings(for: request.packageID)
+            await pushNotificationForwarding()
         }
         return result
     }
@@ -3174,6 +3197,30 @@ public actor RuntimeHost {
         )
     }
 
+    /// The `.wrapper` endpoint credentials for a claimed bundle ID
+    /// (runtime-api.md §10.1): the code requirement built from the registry
+    /// and the package the wrapper may operate on. During a refresh the new
+    /// bundle's `pendingCdhash` is also accepted so the refreshed wrapper can
+    /// reconnect before validation finishes.
+    func wrapperEndpointCredentials(bundleID: String) async
+        -> (requirement: String, packageID: RuntimePackageID)?
+    {
+        let registry = await wrapperRegistryInstance()
+        guard
+            let entry = await registry.entry(bundleID: bundleID),
+            entry.state != .pending,
+            let packageID = RuntimePackageID(rawValue: entry.packageId)
+        else {
+            return nil
+        }
+        var cdhashes = "cdhash H\"\(entry.cdhash)\""
+        if let pending = entry.pendingCdhash {
+            cdhashes = "(\(cdhashes) or cdhash H\"\(pending)\")"
+        }
+        let requirement = "identifier \"\(bundleID)\" and \(cdhashes)"
+        return (requirement, packageID)
+    }
+
     /// The daemon's wrapper registry, created on first use with startup
     /// `recover()` applied (wrapper-json.md §4.4).
     func wrapperRegistryInstance() async -> WrapperRegistry {
@@ -3237,6 +3284,7 @@ public actor RuntimeHost {
         return LauncherBuild(
             launcherAPI: plist["APKRunLauncherAPI"] as? String ?? "1.0",
             launcherVersion: plist["CFBundleShortVersionString"] as? String ?? "0.1.0",
+            buildIdentity: plist["APKRunBuildIdentity"] as? String ?? "dev",
             executableURL: executable
         )
     }
@@ -3790,8 +3838,10 @@ public actor RuntimeHost {
         }
         if case .ready = snapshot.state {
             startClipboardRelay()
+            startNotificationRelay()
         } else if case .stopped = snapshot.state {
             stopClipboardRelay()
+            stopNotificationRelay()
         }
     }
 

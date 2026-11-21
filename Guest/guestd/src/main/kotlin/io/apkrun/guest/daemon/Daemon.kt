@@ -77,6 +77,10 @@ class Daemon(internal val scope: CoroutineScope) {
     internal val bulkTransfers = BulkTransfers()
     private val diagnostics = DiagnosticsService(bulkTransfers)
     internal val clipboard = ClipboardBridge.create(SystemContext.get(), events)
+    internal val notifications =
+        NotificationBridge(events, ApkRunNotificationListener.access()).also {
+            ApkRunNotificationListener.bridge = it
+        }
     internal val input =
         InputService(
             boundsOf = { displayId ->
@@ -93,7 +97,15 @@ class Daemon(internal val scope: CoroutineScope) {
     internal val dispatcher =
         Dispatcher(
             operations =
-                DeviceOperations(displays, tasks, launch, packages, diagnostics, clipboard),
+                DeviceOperations(
+                    displays,
+                    tasks,
+                    launch,
+                    packages,
+                    diagnostics,
+                    clipboard,
+                    notifications,
+                ),
             uptimeMillis = { SystemClock.elapsedRealtime() },
         )
 

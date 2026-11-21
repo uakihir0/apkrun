@@ -3,10 +3,12 @@ package io.apkrun.guest.daemon
 import android.os.SystemClock
 import android.provider.Settings
 import io.apkrun.guest.protocol.GuestFailure
+import io.apkrun.guest.protocol.v1.ActivateNotification
 import io.apkrun.guest.protocol.v1.ClearDisplay
 import io.apkrun.guest.protocol.v1.ClipData
 import io.apkrun.guest.protocol.v1.CollectDiagnostics
 import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
+import io.apkrun.guest.protocol.v1.DismissNotification
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
@@ -15,6 +17,7 @@ import io.apkrun.guest.protocol.v1.PackageInfo
 import io.apkrun.guest.protocol.v1.PackageList
 import io.apkrun.guest.protocol.v1.QueryPackage
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
+import io.apkrun.guest.protocol.v1.SetNotificationForwarding
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
 import io.apkrun.guest.protocol.v1.SystemState
@@ -32,6 +35,7 @@ internal class DeviceOperations(
     private val packages: PackageService,
     private val diagnostics: DiagnosticsService,
     private val clipboard: ClipboardBridge,
+    private val notifications: NotificationBridge,
 ) : AgentOperations {
     override fun snapshot(): Snapshot =
         Snapshot.newBuilder()
@@ -40,7 +44,7 @@ internal class DeviceOperations(
             .addAllTasks(tasks.list())
             .setFocusedDisplayId(tasks.focusedDisplayId())
             .setImeSelected(imeSelected())
-            .setNotificationListenerEnabled(false)
+            .setNotificationListenerEnabled(notifications.listenerEnabled())
             .setClipboardSeq(clipboard.currentSequence())
             .build()
 
@@ -69,6 +73,19 @@ internal class DeviceOperations(
     override fun listPackages(request: ListPackages): PackageList = packages.list(request)
 
     override fun setClipboard(request: ClipData) = clipboard.setClipboard(request)
+
+    override fun activateNotification(request: ActivateNotification) =
+        notifications.activate(
+            request.key,
+            if (request.hasActionIndex()) request.actionIndex else null,
+            request.displayId,
+        )
+
+    override fun dismissNotification(request: DismissNotification) =
+        notifications.dismiss(request.key)
+
+    override fun setNotificationForwarding(request: SetNotificationForwarding) =
+        notifications.setForwarding(request)
 
     override fun collectDiagnostics(request: CollectDiagnostics): CollectDiagnosticsResult =
         diagnostics.collect(request)

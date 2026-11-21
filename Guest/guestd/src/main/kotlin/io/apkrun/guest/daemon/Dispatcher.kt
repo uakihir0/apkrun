@@ -186,6 +186,20 @@ class Dispatcher(
                 operations.setClipboard(request.setClipboard)
                 Response.newBuilder().setSetClipboard(Empty.getDefaultInstance()).build()
             }
+            Request.OpCase.ACTIVATE_NOTIFICATION -> {
+                operations.activateNotification(request.activateNotification)
+                Response.newBuilder().setActivateNotification(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.DISMISS_NOTIFICATION -> {
+                operations.dismissNotification(request.dismissNotification)
+                Response.newBuilder().setDismissNotification(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.SET_NOTIFICATION_FORWARDING -> {
+                operations.setNotificationForwarding(request.setNotificationForwarding)
+                Response.newBuilder()
+                    .setSetNotificationForwarding(Empty.getDefaultInstance())
+                    .build()
+            }
             else ->
                 failure(
                     GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
@@ -231,6 +245,9 @@ class Dispatcher(
                 Request.OpCase.LIST_PACKAGES -> GuestCapability.PACKAGES
                 Request.OpCase.COLLECT_DIAGNOSTICS -> GuestCapability.DIAGNOSTICS
                 Request.OpCase.SET_CLIPBOARD -> GuestCapability.CLIPBOARD_TEXT
+                Request.OpCase.ACTIVATE_NOTIFICATION,
+                Request.OpCase.DISMISS_NOTIFICATION,
+                Request.OpCase.SET_NOTIFICATION_FORWARDING -> GuestCapability.NOTIFICATIONS
                 else -> null
             }
 

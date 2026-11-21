@@ -14,5 +14,21 @@
             </intent-filter>
             <meta-data android:name="android.view.im" android:resource="@xml/method" />
         </service>
+        <!-- The notification listener (desktop-integration.md §5.1): granted by DeviceSetup. -->
+        <!-- Development mode runs the daemon under app_process, a different
+             process (and uid) from this app, so the static NotificationBridge
+             cannot reach the listener. The listener stays disabled here;
+             the PRIVILEGED_APP agent enables it (guest-components.md §4.1).
+             TODO(#36): enable the listener component in PRIVILEGED_APP mode. -->
+        <service
+            android:name=".daemon.ApkRunNotificationListener"
+            android:label="APKRun Notification Listener"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true"
+            android:enabled="false">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

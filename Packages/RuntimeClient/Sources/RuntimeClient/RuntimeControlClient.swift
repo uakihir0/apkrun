@@ -76,6 +76,7 @@ public actor RuntimeControlClient {
     private let configuration: RuntimeControlClientConfiguration
     private let connectionFactory: any RuntimeXPCConnectionFactory
     private let eventStreamHub: RuntimeEventStreamHub
+    private let notificationStreamHub: RuntimeNotificationStreamHub
     private let eventSink: RuntimeEventSinkReceiver
     /// The closest stamp to this process's start (diagnostics.md §4.2,
     /// `WRAPPER_PROCESS_START`): taken when the client is created.
@@ -102,7 +103,12 @@ public actor RuntimeControlClient {
         connectionFactory = SystemRuntimeXPCConnectionFactory()
         let eventStreamHub = RuntimeEventStreamHub()
         self.eventStreamHub = eventStreamHub
-        eventSink = RuntimeEventSinkReceiver(streamHub: eventStreamHub)
+        let notificationStreamHub = RuntimeNotificationStreamHub()
+        self.notificationStreamHub = notificationStreamHub
+        eventSink = RuntimeEventSinkReceiver(
+            streamHub: eventStreamHub,
+            notificationStreamHub: notificationStreamHub
+        )
     }
 
     init(
@@ -113,7 +119,12 @@ public actor RuntimeControlClient {
         self.connectionFactory = connectionFactory
         let eventStreamHub = RuntimeEventStreamHub()
         self.eventStreamHub = eventStreamHub
-        eventSink = RuntimeEventSinkReceiver(streamHub: eventStreamHub)
+        let notificationStreamHub = RuntimeNotificationStreamHub()
+        self.notificationStreamHub = notificationStreamHub
+        eventSink = RuntimeEventSinkReceiver(
+            streamHub: eventStreamHub,
+            notificationStreamHub: notificationStreamHub
+        )
     }
 
     /// Completes broker hello and control-endpoint authentication, returning the daemon facts.
@@ -1831,6 +1842,129 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Opens (or reuses) this connection's `notificationRelay` stream
+    /// (runtime-api.md §11.3) and returns its handle plus the relay events.
+    public func notificationRelayStream(
+        background: Bool = false
+    ) async throws(RuntimeControlClientError) -> (
+        handle: StreamHandle, events: AsyncStream<StreamEnvelope>
+    ) {
+        let opened = try await ensureControl()
+        do {
+            let data = try Self.encode(
+                NotificationRelayRequest(header: makeHeader(), background: background))
+            let response = try await opened.channel.notificationRelay(data)
+            let reply = try Self.decode(RuntimeStreamHandleControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let handle = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return (handle, notificationStreamHub.register(handle.streamID))
+        } catch {
+            let failure = error as? RuntimeControlClientError ?? .malformedReply
+            invalidateAfterTransportFailure(opened.channel, error: failure)
+            throw failure
+        }
+    }
+
+    /// Sends a `RelayResponse` on an open notification relay stream (§11.3).
+    public func sendNotificationRelayResponse(
+        _ response: RelayResponse,
+        on streamID: StreamID
+    ) async throws(RuntimeControlClientError) {
+        let opened = try await ensureControl()
+        do {
+            let data = try Self.encode(
+                RelayResponseRequest(
+                    header: makeHeader(), streamID: streamID, response: response))
+            let replyData = try await opened.channel.notificationRelayResponse(data)
+            let reply = try Self.decode(RuntimeStreamControlReply.self, from: replyData)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+        } catch {
+            let failure = error as? RuntimeControlClientError ?? .malformedReply
+            invalidateAfterTransportFailure(opened.channel, error: failure)
+            throw failure
+        }
+    }
+
+    /// Opens the single `hostNotifications` stream (runtime-api.md §11.3);
+    /// an existing stream on the daemon side ends with `replaced`.
+    public func hostNotificationsStream(
+        background: Bool = false
+    ) async throws(RuntimeControlClientError) -> (
+        handle: StreamHandle, events: AsyncStream<StreamEnvelope>
+    ) {
+        let opened = try await ensureControl()
+        do {
+            let data = try Self.encode(
+                HostNotificationsRequest(header: makeHeader(), background: background))
+            let response = try await opened.channel.hostNotifications(data)
+            let reply = try Self.decode(RuntimeStreamHandleControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let handle = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return (handle, notificationStreamHub.register(handle.streamID))
+        } catch {
+            let failure = error as? RuntimeControlClientError ?? .malformedReply
+            invalidateAfterTransportFailure(opened.channel, error: failure)
+            throw failure
+        }
+    }
+
+    /// Sends a `HostNotificationResponse` on the host notifications stream
+    /// (§11.3).
+    public func sendHostNotificationResponse(
+        _ response: HostNotificationResponse,
+        on streamID: StreamID
+    ) async throws(RuntimeControlClientError) {
+        let opened = try await ensureControl()
+        do {
+            let data = try Self.encode(
+                HostNotificationResponseRequest(
+                    header: makeHeader(), streamID: streamID, response: response))
+            let replyData = try await opened.channel.hostNotificationResponse(data)
+            let reply = try Self.decode(RuntimeStreamControlReply.self, from: replyData)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+        } catch {
+            let failure = error as? RuntimeControlClientError ?? .malformedReply
+            invalidateAfterTransportFailure(opened.channel, error: failure)
+            throw failure
+        }
+    }
+
+    /// Closes one of this connection's streams (§16.4); idempotent.
+    public func closeStream(_ streamID: StreamID) async throws(RuntimeControlClientError) {
+        let opened = try await ensureControl()
+        do {
+            let data = try Self.encode(
+                CloseStreamRequest(header: makeHeader(), streamID: streamID))
+            let replyData = try await opened.channel.closeStream(data)
+            let reply = try Self.decode(RuntimeStreamControlReply.self, from: replyData)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            notificationStreamHub.remove(streamID)
+        } catch {
+            let failure = error as? RuntimeControlClientError ?? .malformedReply
+            invalidateAfterTransportFailure(opened.channel, error: failure)
+            throw failure
+        }
+    }
+
     private func makeHeader() -> APIRequestHeader {
         APIRequestHeader(clientKind: configuration.clientKind)
     }
@@ -1956,6 +2090,8 @@ public actor RuntimeControlClient {
     private func invalidateControlConnection(_ channel: any RuntimeControlChannel) {
         guard let openedControl, openedControl.channel === channel else { return }
         eventStreamHub.markResyncRequired(for: eventStreamHub.activeTopics())
+        // Open streams die with the connection; an `.ended` never arrives.
+        notificationStreamHub.finishAll()
         channel.invalidate()
         self.openedControl = nil
         remoteEventTopics = []
@@ -2757,6 +2893,16 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func rollbackPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Starts reinstalling a broken package from `current/` (package-store.md §11.1).
     func beginRepairPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Opens a `notificationRelay` stream (wrapper connections only, §11.3).
+    func notificationRelay(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Delivers a `RelayResponse` on an open relay stream (§11.3).
+    func notificationRelayResponse(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Opens the single `hostNotifications` stream (§11.3).
+    func hostNotifications(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Delivers a `HostNotificationResponse` on the host stream (§11.3).
+    func hostNotificationResponse(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Closes one of this connection's streams; idempotent (§16.4).
+    func closeStream(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Adds or removes a version on the package's skip list (§8.4).
     func updateSkipped(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Checks and installs a package update now, optionally from files (runtime-api.md §9.1).
@@ -3270,6 +3416,76 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.unsubscribe(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func notificationRelay(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.notificationRelay(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func notificationRelayResponse(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.notificationRelayResponse(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func hostNotifications(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.hostNotifications(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func hostNotificationResponse(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.hostNotificationResponse(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func closeStream(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.closeStream(request) { response in finish(.success(response)) }
         }
     }
 

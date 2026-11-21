@@ -1,3 +1,4 @@
+import DiagnosticsCore
 import Foundation
 import GuestProtocol
 import IntegrationCore
@@ -51,6 +52,105 @@ final class IntegrationSettingsCache: @unchecked Sendable {
     /// Whether the capability set has been read at least once this run.
     var capabilitiesAreKnown: Bool {
         lock.withLock { capabilitiesKnown }
+    }
+}
+
+/// The channel that sends notification ops to the Guest Agent
+/// (desktop-integration.md §5.1, guest-protocol.md §7.5).
+private struct GuestNotificationsChannel: NotificationGuestChannel {
+    /// Resolves the live agent supervisor; nil while no agent is connected.
+    let supervisor: @Sendable () async -> GuestAgentSupervisor?
+
+    func setNotificationForwarding(_ packages: [String]) async throws(IntegrationFailure) {
+        try await send { try await $0.send(GuestSetNotificationForwarding(packages: packages)) }
+    }
+
+    func activateNotification(
+        key: String, actionIndex: Int?, displayID: Int32
+    ) async throws(IntegrationFailure) {
+        try await send {
+            try await $0.send(
+                GuestActivateNotification(
+                    key: key, actionIndex: actionIndex.map(Int32.init), displayID: displayID))
+        }
+    }
+
+    func dismissNotification(key: String) async throws(IntegrationFailure) {
+        try await send { try await $0.send(GuestDismissNotification(key: key)) }
+    }
+
+    private func send(
+        _ body: @Sendable (GuestAgentSupervisor) async throws -> GPEmpty
+    ) async throws(IntegrationFailure) {
+        guard let agent = await supervisor() else {
+            throw .guestUnavailable
+        }
+        do {
+            _ = try await body(agent)
+        } catch let failure as GuestProtocolFailure {
+            if case .capabilityMissing(let capability) = failure {
+                throw .notSupportedOnImage(capability: capability)
+            }
+            throw .guestUnavailable
+        } catch {
+            throw .guestUnavailable
+        }
+    }
+}
+
+/// The §5.3 host deliveries over `RuntimeStreamCenter`, the wrapper registry,
+/// and `WorkspaceOpener`.
+private struct HostNotificationSink: NotificationSink {
+    /// The daemon; the sink outlives nothing it touches.
+    weak var host: RuntimeHost?
+
+    func relay(_ message: RelayMessage, to packageID: RuntimePackageID) async -> Bool {
+        host?.streamCenter.sendRelay(message, to: packageID) ?? false
+    }
+
+    func hostNotify(_ message: HostNotificationMessage) async -> Bool {
+        host?.streamCenter.sendHostNotification(message) ?? false
+    }
+
+    func wrapperExists(for packageID: RuntimePackageID) async -> Bool {
+        guard let host,
+            let entry = await host.wrapperRegistryInstance().entry(packageID: packageID)
+        else {
+            return false
+        }
+        return entry.state != .pending
+    }
+
+    func startWrapperInBackground(_ packageID: RuntimePackageID) async {
+        guard let host,
+            let entry = await host.wrapperRegistryInstance().entry(packageID: packageID),
+            entry.state != .pending
+        else {
+            return
+        }
+        let candidates = WorkspaceOpener.applicationURLs(bundleIdentifier: entry.bundleId)
+        guard let appURL = candidates.first else {
+            return
+        }
+        await WorkspaceOpener.openApplication(
+            at: appURL,
+            arguments: ["--apkrun-background", "notifications"],
+            activates: false,
+            hides: true,
+            addsToRecentItems: false
+        )
+    }
+
+    func displayName(for packageID: RuntimePackageID) async -> String? {
+        guard let host else { return nil }
+        if let entry = await host.wrapperRegistryInstance().entry(packageID: packageID),
+            !entry.displayName.isEmpty
+        {
+            return entry.displayName
+        }
+        return
+            (try? await host.packageServiceForIntegrations()?.packageInfo(
+                RuntimePackageRequest(packageID: packageID)))??.summary.displayName
     }
 }
 
@@ -117,7 +217,7 @@ extension RuntimeHost {
 
     /// Refreshes the synchronous policy inputs from settings.json and
     /// PackageStore before an evaluation (desktop-integration.md §2.3).
-    private func refreshIntegrationSettings(for packageID: RuntimePackageID) async {
+    func refreshIntegrationSettings(for packageID: RuntimePackageID) async {
         let globals = GlobalSettings.load(from: integrationSettingsFile)
         integrationSettings.setGlobals(globals.integrationsEnabled)
         if let service = packageServiceForIntegrations() {
@@ -218,7 +318,7 @@ extension RuntimeHost {
     public func integrationStatus(packageID: RuntimePackageID) async throws(RuntimeWireError)
         -> IntegrationStatus
     {
-        _ = try await packageInfo(RuntimePackageRequest(packageID: packageID))
+        let details = try await packageInfo(RuntimePackageRequest(packageID: packageID))
         await refreshIntegrationSettings(for: packageID)
         let coordinator = integrationCoordinator()
         let key = await coordinator.currentKeySession
@@ -244,11 +344,30 @@ extension RuntimeHost {
                     source: source,
                     decision: Self.wireDecision(decision),
                     support: supportState(kind: kind, capability: capability),
-                    capability: capability
+                    capability: capability,
+                    macPermission: await macPermissionText(
+                        for: kind, packageID: packageID,
+                        displayName: details.summary.displayName)
                 )
             )
         }
         return IntegrationStatus(packageID: packageID, items: items)
+    }
+
+    /// The host-ui §7.4 permission line of a kind, currently only
+    /// notifications: "Notifications for ‹App› are turned off in System
+    /// Settings." when the wrapper reported `.denied`.
+    private func macPermissionText(
+        for kind: IntegrationKind,
+        packageID: RuntimePackageID,
+        displayName: String
+    ) async -> String? {
+        guard kind == .notifications,
+            await notificationCoordinator().macPermission(for: packageID) == .denied
+        else {
+            return nil
+        }
+        return "Notifications for \(displayName) are turned off in System Settings."
     }
 
     /// The stored or default `integrations.<kind>` value and its source.
@@ -266,7 +385,9 @@ extension RuntimeHost {
         switch kind {
         case .clipboard:
             return ClipboardCoordinator.requiredCapability
-        case .notifications, .links, .files, .sharedFolders, .microphone:
+        case .notifications:
+            return NotificationCoordinator.requiredCapability
+        case .links, .files, .sharedFolders, .microphone:
             return nil
         }
     }
@@ -295,6 +416,173 @@ extension RuntimeHost {
             return nil
         }
         return RuntimePackageID(rawValue: raw)
+    }
+
+    // MARK: - Notifications (desktop-integration.md §5)
+
+    /// The §5.3 coordinator, built on first use. Also installs the stream
+    /// callbacks so relay responses reach it.
+    func notificationCoordinator() -> NotificationCoordinator {
+        if let notificationCoordinatorLazy { return notificationCoordinatorLazy }
+        let settings = integrationSettings
+        let policy = IntegrationPolicy(
+            source: IntegrationSettingsSource(
+                packageValue: { kind, packageID in
+                    settings.packageValue(packageID.rawValue, kind.rawValue)
+                },
+                globalEnabled: { kind in
+                    settings.globalEnabled(kind.rawValue)
+                },
+                supported: { capability in
+                    settings.supports(capability)
+                }
+            )
+        )
+        let channel = GuestNotificationsChannel { [weak self] in
+            await self?.runtimeSupervisorForIntegrations()?.developmentGuestAgent?.supervisor
+        }
+        let sink = HostNotificationSink(host: self)
+        let coordinator = NotificationCoordinator(
+            policy: policy, channel: channel, sink: sink,
+            logSink: hostLogSink)
+        registerIntegrationHealthChecks()
+        let center = streamCenter
+        center.onRelayStreamOpened = { packageID, _ in
+            Task { await coordinator.relayOpened(packageID: packageID) }
+        }
+        center.onRelayResponse = { [weak self] streamID, response in
+            guard let self else { return }
+            switch response {
+            case .activated(let identifier, let actionIndex):
+                Task {
+                    // A relay stream without a package record is not a
+                    // wrapper answer; dropping it is the safe default.
+                    guard let package = center.relayPackageID(for: streamID) else { return }
+                    await coordinator.activated(
+                        identifier: identifier, actionIndex: actionIndex,
+                        displayID: await self.displayIDForActivation(of: identifier),
+                        fromPackage: package)
+                }
+            case .dismissed(let identifier):
+                Task {
+                    guard let package = center.relayPackageID(for: streamID) else { return }
+                    await coordinator.dismissed(
+                        identifier: identifier, fromPackage: package)
+                }
+            case .authorizationChanged(let state):
+                if let packageID = center.relayPackageID(for: streamID) {
+                    Task { await coordinator.noteAuthorization(state, packageID: packageID) }
+                }
+            case .unknown:
+                break
+            }
+        }
+        center.onHostNotificationResponse = { [weak self] _, response in
+            guard let self else { return }
+            switch response {
+            case .activated(let identifier, let action):
+                let index: Int?
+                if case .android(let i, _) = action { index = i } else { index = nil }
+                Task {
+                    // The host stream belongs to APKRun.app itself: trusted,
+                    // not package-scoped (nil = unrestricted caller).
+                    await coordinator.activated(
+                        identifier: identifier, actionIndex: index,
+                        displayID: await self.displayIDForActivation(of: identifier),
+                        fromPackage: nil)
+                }
+            case .dismissed(let identifier):
+                Task { await coordinator.dismissed(identifier: identifier, fromPackage: nil) }
+            case .unknown:
+                break
+            }
+        }
+        notificationCoordinatorLazy = coordinator
+        return coordinator
+    }
+
+    /// The session display of the package a wire identifier belongs to (§5.4);
+    /// 0 when the package has no session (the primary display).
+    private func displayIDForActivation(of identifier: String) async -> Int32 {
+        guard let packageRaw = identifier.split(separator: "|").first.map(String.init) else {
+            return 0
+        }
+        let snapshots = await sessionServiceForIntegrations()?.sessionSnapshots() ?? []
+        return snapshots.first { $0.packageID == packageRaw }?.displayID ?? 0
+    }
+
+    /// Starts the guest→coordinator notification relay once the agent is
+    /// ready, and pushes the forwarding allowlist (§3.2, §5.1).
+    func startNotificationRelay() {
+        guard notificationRelayTask == nil, let supervisor = runtimeSupervisorForIntegrations() else {
+            return
+        }
+        notificationRelayTask = Task.detached { [weak self] in
+            guard let self else { return }
+            var agent = await supervisor.developmentGuestAgent
+            while !Task.isCancelled, let current = agent {
+                await self.pushNotificationForwarding()
+                for await event in current.notificationEvents {
+                    guard !Task.isCancelled else { return }
+                    switch event {
+                    case .posted(let notification):
+                        await self.notificationFromGuest(notification)
+                    case .removed(let removal):
+                        await self.removedFromGuest(removal)
+                    }
+                }
+                // The stream ended: an agent restart detaches it while
+                // Android keeps running. Wait for a different agent, then
+                // resubscribe — the allowlist went away with the old one.
+                agent = nil
+                while !Task.isCancelled, agent == nil {
+                    try? await Task.sleep(for: .seconds(1))
+                    let next = await supervisor.developmentGuestAgent
+                    if let next, next !== current {
+                        agent = next
+                    }
+                }
+            }
+            await self.clearNotificationRelayTask()
+        }
+    }
+
+    /// Clears the finished relay task so `startNotificationRelay` re-arms.
+    private func clearNotificationRelayTask() {
+        notificationRelayTask = nil
+    }
+
+    /// Ends the notification relay.
+    func stopNotificationRelay() {
+        notificationRelayTask?.cancel()
+        notificationRelayTask = nil
+    }
+
+    /// Pushes `SetNotificationForwarding` for every managed package (§5.1).
+    func pushNotificationForwarding() async {
+        guard let service = packageServiceForIntegrations() else { return }
+        guard let result = try? await service.listPackages(RuntimeListPackagesRequest()) else {
+            return
+        }
+        var candidates: [RuntimePackageID] = []
+        for summary in result.packages {
+            await refreshIntegrationSettings(for: summary.packageID)
+            candidates.append(summary.packageID)
+        }
+        try? await notificationCoordinator().pushForwardingList(candidates)
+    }
+
+    /// One `notification_posted` event for the coordinator (§5.3).
+    func notificationFromGuest(_ notification: GPNotification) async {
+        if let packageID = RuntimePackageID(rawValue: notification.package) {
+            await refreshIntegrationSettings(for: packageID)
+        }
+        await notificationCoordinator().posted(notification)
+    }
+
+    /// One `notification_removed` event for the coordinator (§5.3).
+    func removedFromGuest(_ removal: GPNotificationRemoved) async {
+        await notificationCoordinator().removed(removal)
     }
 
     /// Maps an `IntegrationFailure` to its catalog wire error (§13.1).
@@ -355,6 +643,72 @@ extension RuntimeHost {
                 message: "The copied item is too large for Android (\(bytes); the limit is \(limit)).",
                 remediation: "Copy a smaller item."
             )
+        }
+    }
+}
+
+/// `integrations.notificationListener` (diagnostics.md §7.3): the Guest
+/// Agent's notification listener access, read from the latest snapshot the
+/// supervisor holds. The guest re-grants access itself on loss
+/// (guest-components.md §5), so a failure is a warning, not a fix.
+struct NotificationListenerCheck: HealthCheck {
+    /// Resolves the live agent supervisor; nil while no agent is connected.
+    let supervisor: @Sendable () async -> GuestAgentSupervisor?
+
+    var id: HealthCheckID { "integrations.notificationListener" }
+    var group: HealthGroup { .integrations }
+    var requirement: HealthRequirement { .runningRuntime }
+    var cost: HealthCost { .quick }
+    var title: LocalizedText {
+        LocalizedText(
+            key: "health.integrations.notificationListener",
+            fallback: "Notification listener")
+    }
+
+    func run(_ context: HealthContext) async -> DiagnosticsCore.HealthResult {
+        let now = context.clock.now
+        guard let supervisor = await supervisor() else {
+            return DiagnosticsCore.HealthResult(
+                id: id, group: group, state: .skipped, title: title,
+                detail: "The Guest Agent is not connected.",
+                error: nil, measuredAt: now)
+        }
+        if await supervisor.snapshot.notificationListenerEnabled {
+            return DiagnosticsCore.HealthResult(
+                id: id, group: group, state: .pass, title: title,
+                detail: "The notification listener has access.",
+                error: nil, measuredAt: now)
+        }
+        return DiagnosticsCore.HealthResult(
+            id: id, group: group, state: .warning, title: title,
+            detail: "The notification listener lost its access.",
+            error: ErrorInfo(
+                code: "integration.notificationAccessMissing",
+                message: LocalizedText(
+                    key: "integration.notificationAccessMissing",
+                    fallback: "Android lost access to its notifications."),
+                remediation: LocalizedText(
+                    key: "integration.notificationAccessMissing.remediation",
+                    fallback: "The Guest Agent restores the access automatically; restart Android if the warning stays."
+                ),
+                action: .none),
+            measuredAt: now)
+    }
+}
+
+extension RuntimeHost {
+    /// Registers the integrations health checks once (diagnostics.md §7.3).
+    func registerIntegrationHealthChecks() {
+        guard !integrationHealthChecksRegistered,
+            let checks = healthCheckRegistry
+        else { return }
+        integrationHealthChecksRegistered = true
+        Task {
+            try? await checks.register(
+                NotificationListenerCheck(supervisor: { [weak self] in
+                    await self?.runtimeSupervisorForIntegrations()?
+                        .developmentGuestAgent?.supervisor
+                }))
         }
     }
 }

@@ -277,6 +277,8 @@ public enum EventPayload: Codable, Equatable, Sendable {
     case sessions(SessionChange)
     /// Events for the topic were dropped; fetch a fresh snapshot.
     case resyncRequired(EventTopic)
+    /// A sequenced event on an open stream (runtime-api.md §16.4).
+    case stream(StreamEnvelope)
     /// The daemon reported an event kind added by a newer API version.
     case unknown
 
@@ -288,6 +290,7 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case wrappers
         case integrations
         case sessions
+        case stream
     }
 
     private enum AssociatedKey: String, CodingKey {
@@ -324,6 +327,9 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case "sessions":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .sessions(try payload.decode(SessionChange.self, forKey: .first))
+        case "stream":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .stream(try payload.decode(StreamEnvelope.self, forKey: .first))
         default:
             self = .unknown
         }
@@ -354,6 +360,9 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case .resyncRequired(let topic):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .resyncRequired)
             try payload.encode(topic, forKey: .first)
+        case .stream(let envelope):
+            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .stream)
+            try payload.encode(envelope, forKey: .first)
         case .unknown:
             throw EncodingError.invalidValue(
                 self,

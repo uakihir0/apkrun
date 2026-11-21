@@ -95,11 +95,13 @@ struct IntegrationPolicyTests {
         let subject = policy(packageValues: ["clipboard": "false"])
         _ = await subject.evaluate(.clipboard, package: package, context: context())
         _ = await subject.evaluate(.clipboard, package: package, context: context(key: false))
-        _ = await subject.evaluate(.notifications, package: package, context: context(key: false))
+        // Notifications are event-driven and do not need a session or key
+        // window (§5.3); a no-session deny uses a kind that needs one.
+        _ = await subject.evaluate(.files, package: package, context: context(session: false))
         let counts = await subject.denialCounts
         #expect(counts.count(.clipboard, .packageOff) == 2)
-        #expect(counts.count(.notifications, .notFocused) == 1)
-        #expect(counts.count(.notifications, .packageOff) == 0)
+        #expect(counts.count(.files, .noSession) == 1)
+        #expect(counts.count(.notifications, .notFocused) == 0)
     }
 }
 

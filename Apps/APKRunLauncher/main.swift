@@ -101,6 +101,7 @@ private final class FrameStatisticsController {
 private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
     private var bootstrapInstall: BootstrapInstallController?
+    private var notificationPoster: NotificationPoster?
     private let frameStatistics = FrameStatisticsController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -142,6 +143,15 @@ private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
         // built by #45.
         let bootstrapInstall = BootstrapInstallController()
         self.bootstrapInstall = bootstrapInstall
+        // Foreground launchers relay notifications on a regular (not
+        // background) slot; the app keeps running when the stream ends.
+        if let client = try? RuntimeControlClient(
+            clientKind: .wrapper, claimedIdentity: nil)
+        {
+            let poster = NotificationPoster(client: client, background: false)
+            notificationPoster = poster
+            Task { await poster.run() }
+        }
         Task {
             // Screen N: `openSession` on an uninstalled portable package
             // returns `packageNotInstalled`; the launcher offers the bundled
@@ -158,9 +168,53 @@ private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+/// `--apkrun-background notifications` (wrapper.md §5.8): apkrund starts the
+/// wrapper only to relay Android notifications. `.accessory` is set before a
+/// Dock tile appears, no window or menu is created, and the app quits 30 s
+/// after the last delivered notification.
+@MainActor
+private final class BackgroundNotificationDelegate: NSObject, NSApplicationDelegate {
+    private var poster: NotificationPoster?
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // The wrapper claims its own bundle ID; the generic launcher claims
+        // the mapped ID of `--package <id>` (wrapper.md §5.2 step 1).
+        var claimedIdentity: String? = nil
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "--package"),
+            arguments.indices.contains(index + 1)
+        {
+            claimedIdentity = LauncherBundleIDMapper.map(arguments[index + 1])
+        }
+        let client: RuntimeControlClient
+        do {
+            client = try RuntimeControlClient(
+                clientKind: .wrapper, claimedIdentity: claimedIdentity)
+        } catch {
+            NSApp.terminate(nil)
+            return
+        }
+        let poster = NotificationPoster(client: client)
+        self.poster = poster
+        Task { await poster.run() }
+    }
+}
+
 let application = NSApplication.shared
-private let delegate: LauncherAppDelegate = MainActor.assumeIsolated {
+private let launchArguments = ProcessInfo.processInfo.arguments
+private let backgroundNotifications =
+    launchArguments.firstIndex(of: "--apkrun-background").map {
+        launchArguments.indices.contains($0 + 1) ? launchArguments[$0 + 1] : ""
+    } == "notifications"
+private let launcherDelegate: LauncherAppDelegate = MainActor.assumeIsolated {
     LauncherAppDelegate()
 }
-application.delegate = delegate
+private let backgroundDelegate: BackgroundNotificationDelegate = MainActor.assumeIsolated {
+    BackgroundNotificationDelegate()
+}
+application.delegate = backgroundNotifications ? backgroundDelegate : launcherDelegate
 application.run()

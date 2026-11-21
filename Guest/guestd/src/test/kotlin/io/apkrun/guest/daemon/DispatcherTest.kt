@@ -2,11 +2,13 @@ package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.GuestFailure
+import io.apkrun.guest.protocol.v1.ActivateNotification
 import io.apkrun.guest.protocol.v1.ClearDisplay
 import io.apkrun.guest.protocol.v1.ClearPolicy
 import io.apkrun.guest.protocol.v1.ClipData
 import io.apkrun.guest.protocol.v1.CollectDiagnostics
 import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
+import io.apkrun.guest.protocol.v1.DismissNotification
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.ImePolicy
 import io.apkrun.guest.protocol.v1.LaunchApplication
@@ -22,6 +24,7 @@ import io.apkrun.guest.protocol.v1.QueryPackage
 import io.apkrun.guest.protocol.v1.Request
 import io.apkrun.guest.protocol.v1.Response
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
+import io.apkrun.guest.protocol.v1.SetNotificationForwarding
 import io.apkrun.guest.protocol.v1.Shutdown
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
@@ -111,6 +114,12 @@ private class FakeOperations : AgentOperations {
         enter()
         lastClipboard = request
     }
+
+    override fun activateNotification(request: ActivateNotification) = enter()
+
+    override fun dismissNotification(request: DismissNotification) = enter()
+
+    override fun setNotificationForwarding(request: SetNotificationForwarding) = enter()
 
     override fun collectDiagnostics(request: CollectDiagnostics): CollectDiagnosticsResult {
         enter()

@@ -55,6 +55,17 @@ object DeviceSetup {
                 IME_COMPONENT,
             )
         }
+        step("notification listener") {
+            // The agent's listener service is granted access so notifications of forwarded
+            // packages can leave the guest (desktop-integration.md §5.1).
+            serviceCommand(
+                "settings",
+                "put",
+                "secure",
+                "enabled_notification_listeners",
+                LISTENER_COMPONENT,
+            )
+        }
     }
 
     /** Runs one command of the framework service [service] through its shell entry point. */
@@ -122,4 +133,8 @@ object DeviceSetup {
 
     /** Flat component of the development IME (input.md §5.6). */
     private const val IME_COMPONENT = "io.apkrun.guest/.ime.ApkRunInputMethodService"
+
+    /** Flattened component of the agent's listener (desktop-integration.md §5.1). */
+    private const val LISTENER_COMPONENT =
+        "io.apkrun.guest/io.apkrun.guest.daemon.ApkRunNotificationListener"
 }

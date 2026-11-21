@@ -1020,6 +1020,27 @@
    }
   },
   {
+   "code": "integration.notificationAccessMissing",
+   "parameters": [],
+   "message": {
+    "en": "Android lost access to its notifications.",
+    "ja": "Android が通知へのアクセスを失いました。"
+   },
+   "remediation": {
+    "en": "The Guest Agent restores the access automatically; restart Android if the warning stays.",
+    "ja": "ゲストエージェントが自動的にアクセスを復元します。警告が消えない場合は Android を再起動してください。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "integration",
+    "case": "listenerDisabled",
+    "when": "the health check `integrations.notificationListener` reads a snapshot whose listener access flag is off",
+    "raisedBy": "NotificationListenerCheck",
+    "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §5.1"
+   }
+  },
+  {
    "code": "integration.notSupportedOnImage",
    "parameters": [
     "capability"

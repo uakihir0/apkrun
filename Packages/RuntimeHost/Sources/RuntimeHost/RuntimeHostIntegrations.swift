@@ -217,7 +217,7 @@ extension RuntimeHost {
 
     /// Refreshes the synchronous policy inputs from settings.json and
     /// PackageStore before an evaluation (desktop-integration.md §2.3).
-    private func refreshIntegrationSettings(for packageID: RuntimePackageID) async {
+    func refreshIntegrationSettings(for packageID: RuntimePackageID) async {
         let globals = GlobalSettings.load(from: integrationSettingsFile)
         integrationSettings.setGlobals(globals.integrationsEnabled)
         if let service = packageServiceForIntegrations() {

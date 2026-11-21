@@ -926,6 +926,12 @@ extension RuntimeHost {
             throw Self.unknownConfigKey(key)
         }
         try GlobalSettings.store(globals, to: paths.settingsFile)
+        // A changed `integrations.enabled.*`/`defaults.*` may alter the
+        // guest's forwarding allowlist; push it so titles and text stop
+        // leaving Android at once.
+        if key.hasPrefix("integrations.") {
+            Task { await pushNotificationForwarding() }
+        }
         return updateConfigValues(keys: nil)
     }
 

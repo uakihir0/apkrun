@@ -9,7 +9,7 @@ import Testing
 
 private func coordinatorFixture(
     _ name: String,
-    migrate: @escaping @Sendable (ImageCore.ImageVersion, UUID) async throws -> Void = { _, _ in }
+    migrate: @escaping @Sendable (ImageCore.ImageVersion, UUID, Bool) async throws -> Void = { _, _, _ in }
 ) -> (URL, ImageUpdateCoordinator) {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("apkrun-imageupdate-\(name)-\(UUID().uuidString)", isDirectory: true)
@@ -54,7 +54,7 @@ final class VersionBox: @unchecked Sendable {
 
 @Test func applyRunsTheMigrationAndEndsIdle() async throws {
     let box = VersionBox()
-    let (directory, coordinator) = coordinatorFixture("apply") { version, _ in
+    let (directory, coordinator) = coordinatorFixture("apply") { version, _, _ in
         box.value = version
     }
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -71,7 +71,7 @@ final class VersionBox: @unchecked Sendable {
 }
 
 @Test func applyFailureRejectsTheVersion() async throws {
-    let (directory, coordinator) = coordinatorFixture("fails") { _, _ in
+    let (directory, coordinator) = coordinatorFixture("fails") { _, _, _ in
         throw ImageFailure.migrationHealthFailed(report: "handshake missing")
     }
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -96,7 +96,7 @@ final class VersionBox: @unchecked Sendable {
 }
 
 @Test func concurrentApplyIsRefused() async throws {
-    let (directory, coordinator) = coordinatorFixture("busy") { _, _ in
+    let (directory, coordinator) = coordinatorFixture("busy") { _, _, _ in
         try? await Task.sleep(for: .milliseconds(200))
     }
     defer { try? FileManager.default.removeItem(at: directory) }

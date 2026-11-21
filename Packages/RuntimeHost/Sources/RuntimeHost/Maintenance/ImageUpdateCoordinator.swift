@@ -19,7 +19,7 @@ public actor ImageUpdateCoordinator {
     /// Migrates Android to the given version: stops, migrates, boots the new
     /// image and runs its health check, restoring the previous image on
     /// failure. Throws `ImageFailure`.
-    private let migrate: @Sendable (ImageCore.ImageVersion, UUID) async throws -> Void
+    private let migrate: @Sendable (ImageCore.ImageVersion, UUID, Bool) async throws -> Void
     private var state: ImageUpdateState
     private let logger: APKLogger
     private let clock: @Sendable () -> Date
@@ -31,7 +31,7 @@ public actor ImageUpdateCoordinator {
         paths: APKRunPaths,
         diagnostics: DiagnosticsContext,
         publish: @escaping @Sendable (MaintenanceEvent) -> Void,
-        migrate: @escaping @Sendable (ImageCore.ImageVersion, UUID) async throws -> Void,
+        migrate: @escaping @Sendable (ImageCore.ImageVersion, UUID, Bool) async throws -> Void,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         stateFile = paths.imageUpdateStateFile
@@ -93,7 +93,8 @@ public actor ImageUpdateCoordinator {
         _ version: ImageCore.ImageVersion,
         from: ImageCore.ImageVersion,
         operationID: UUID = UUID(),
-        force: Bool = false
+        force: Bool = false,
+        restoring: Bool = false
     ) async throws(ImageFailure) {
         guard applyTask == nil else {
             throw .imageUpdateBusy(detail: "an apply is already running")
@@ -107,7 +108,7 @@ public actor ImageUpdateCoordinator {
                     "IMAGE_MIGRATION_START \(version.description, .public) operation \(operationID.uuidString, .public)"
                 )
                 await self.setPhase(.applying(from: from, to: version))
-                try await migrate(version, operationID)
+                try await migrate(version, operationID, restoring)
                 await self.noteInstalled(version)
             } catch let failure as ImageFailure {
                 await self.noteApplyFailed(version, error: failure)
@@ -138,7 +139,7 @@ public actor ImageUpdateCoordinator {
         abandoned: ImageCore.ImageVersion,
         operationID: UUID = UUID()
     ) async throws(ImageFailure) {
-        try await apply(previous, from: abandoned, operationID: operationID, force: true)
+        try await apply(previous, from: abandoned, operationID: operationID, force: true, restoring: true)
         logger.notice("IMAGE_ROLLBACK_END \(previous.description, .public) abandoned \(abandoned.description, .public)")
         state.rejected[abandoned.description] = RejectedImage(
             version: abandoned, at: clock(), reason: .userRolledBack

@@ -527,7 +527,7 @@ public actor RuntimeHost {
         if case .restartPending = maintenanceHostState {
             throw .hostUpdating("APKRun is restarting to finish an update.")
         }
-        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
+        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, !imageMigrating else {
             throw .invalidTransition
         }
         activeRuntimeStarts += 1
@@ -772,6 +772,9 @@ public actor RuntimeHost {
             activePackageMutations == 0
         else {
             throw .invalidTransition
+        }
+        guard !imageMigrating else {
+            throw RuntimeHostError.invalidTransition
         }
         isRuntimeResetting = true
         defer { isRuntimeResetting = false }
@@ -4327,6 +4330,23 @@ public actor RuntimeHost {
             && !updateDueSoon
     }
 
+    /// Drops the supervisor and its event subscription — the events task holds
+    /// the old supervisor's stream alive otherwise (image update replaces it).
+    func dropSupervisor() {
+        supervisorEventsTask?.cancel()
+        supervisorEventsTask = nil
+        supervisor = nil
+    }
+
+    /// Detaches services holding the old supervisor's Guest Agent and display
+    /// pool so the next launch recreates them on the new supervisor.
+    func dropRuntimeAttachedServices() async {
+        headlessSessionService = nil
+        if let packageQueryService {
+            await packageQueryService.detachRuntime()
+        }
+    }
+
     private func observeSupervisorEvents(from supervisor: RuntimeSupervisor) {
         guard supervisorEventsTask == nil else { return }
         let events = supervisor.events
@@ -4513,7 +4533,7 @@ public actor RuntimeHost {
         logger?.notice("Daemon control endpoint is ready")
     }
 
-    private func beginLifecycleOperation(
+    func beginLifecycleOperation(
         allowingReservedPackageMutation: Bool = false
     ) throws(RuntimeHostError) {
         guard hasStarted else {
@@ -4525,7 +4545,7 @@ public actor RuntimeHost {
         activeLifecycleOperations += 1
     }
 
-    private func finishLifecycleOperation() {
+    func finishLifecycleOperation() {
         activeLifecycleOperations -= 1
         guard activeLifecycleOperations == 0 else { return }
         let waiters = lifecycleWaiters
@@ -4536,7 +4556,7 @@ public actor RuntimeHost {
     }
 
     func beginPackageMutation() throws(RuntimeHostError) {
-        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
+        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, !imageMigrating else {
             throw .invalidTransition
         }
         try beginLifecycleOperation()
@@ -4555,7 +4575,7 @@ public actor RuntimeHost {
         finishLifecycleOperation()
     }
 
-    private func waitForPackageMutations() async {
+    func waitForPackageMutations() async {
         guard activePackageMutations > 0 else { return }
         await withCheckedContinuation { continuation in
             packageMutationWaiters.append(continuation)
@@ -5642,6 +5662,9 @@ public actor RuntimeHost {
         }
         // Reject new starts and package mutations for the whole reset, then let in-flight work
         // finish before the disks are erased.
+        guard !imageMigrating else {
+            throw RuntimeHostError.invalidTransition
+        }
         isRuntimeResetting = true
         defer { isRuntimeResetting = false }
         if let runtimeStartTask {

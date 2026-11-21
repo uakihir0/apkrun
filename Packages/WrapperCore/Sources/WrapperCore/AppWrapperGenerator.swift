@@ -317,6 +317,40 @@ public actor AppWrapperGenerator {
         )
     }
 
+    /// Builds and signs the refreshed bundle inside `stagingDirectory`
+    /// (wrapper.md §9.3 step 3). The caller swaps `Contents` into the live
+    /// bundle and finishes the registry update; nothing is placed or
+    /// registered here. Returns the staged bundle URL and its cdhash.
+    public func stageForRefresh(
+        _ request: WrapperGenerationRequest,
+        stagingDirectory: URL,
+        fileName: String
+    ) throws(WrapperFailure) -> (bundle: URL, cdhash: String) {
+        let configuration = request.configuration
+        guard configuration.kind == .local else {
+            throw .verificationFailed("\(configuration.kind.rawValue) wrappers are #89/#90")
+        }
+        let template = environment.launcher.executableURL
+        guard fileManager.fileExists(atPath: template.path),
+            WrapperCodeSign.isARM64(template),
+            WrapperCodeSign.signatureIsValid(bundleURL: template),
+            WrapperCodeSign.cdhash(of: template) != nil
+        else {
+            throw .launcherTemplateInvalid("missing, unsigned, or not arm64")
+        }
+        let bundleID = BundleIDMapper.map(configuration.packageID)
+        let stagedBundle = stagingDirectory.appendingPathComponent(
+            "\(fileName).app", isDirectory: true)
+        try writeBundle(
+            at: stagedBundle,
+            fileName: fileName,
+            bundleID: bundleID,
+            configuration: configuration
+        )
+        let cdhash = try WrapperSigner.sign(bundleURL: stagedBundle, bundleID: bundleID)
+        return (stagedBundle, cdhash)
+    }
+
     /// Writes the file tree of wrapper.md §2 for a non-portable wrapper.
     private func writeBundle(
         at bundle: URL,

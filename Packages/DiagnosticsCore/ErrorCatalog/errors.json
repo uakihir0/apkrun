@@ -4390,6 +4390,44 @@
    }
   },
   {
+   "code": "wrapper.wrapperRunning",
+   "parameters": ["packageID"],
+   "message": {
+    "en": "{packageID} is open, so its Mac app cannot be replaced."
+   },
+   "remediation": {
+    "en": "Quit the Mac app, then try again."
+   },
+   "action": "retry",
+   "cliExit": 75,
+   "doc": {
+    "table": "wrapperFailure",
+    "case": "wrapperRunning(String)",
+    "when": "refreshWrapper while the wrapper's app is running and closeRunningApp was not allowed",
+    "raisedBy": "RuntimeHost",
+    "ref": "wrapper.md §9.3"
+   }
+  },
+  {
+   "code": "wrapper.refreshBlocked",
+   "parameters": ["path", "stagingToken"],
+   "message": {
+    "en": "macOS didn't allow APKRun to update the Mac app."
+   },
+   "remediation": {
+    "en": "Allow APKRun in System Settings > Privacy & Security > App Management, then try again."
+   },
+   "action": "retry",
+   "cliExit": 1,
+   "doc": {
+    "table": "wrapperFailure",
+    "case": "refreshBlocked(String, stagingToken: String?)",
+    "when": "the Contents swap of a refresh is denied by macOS App Management",
+    "raisedBy": "RuntimeHost",
+    "ref": "wrapper.md §9.3"
+   }
+  },
+  {
    "code": "wrapper.launchServicesMissing",
    "parameters": [],
    "message": {

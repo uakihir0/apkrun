@@ -1875,6 +1875,14 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
     }
 
+    func refreshWrapper(_ request: Data, icon: FileHandle?) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func refreshAllWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
     func pendingApprovals(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
     }

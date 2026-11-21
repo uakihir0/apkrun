@@ -1142,6 +1142,8 @@ extension RuntimeWrapperInfoControlRequest: VersionedControlRequest {}
 extension RuntimeWrapperListControlRequest: VersionedControlRequest {}
 extension RuntimeRemoveWrapperControlRequest: VersionedControlRequest {}
 extension RuntimeRescanWrappersControlRequest: VersionedControlRequest {}
+extension RuntimeRefreshWrapperControlRequest: VersionedControlRequest {}
+extension RuntimeRefreshAllWrappersControlRequest: VersionedControlRequest {}
 extension RuntimePendingApprovalsControlRequest: VersionedControlRequest {}
 extension RuntimeDecideApprovalControlRequest: VersionedControlRequest {}
 extension RuntimeDeniedWrappersControlRequest: VersionedControlRequest {}
@@ -1193,6 +1195,8 @@ enum RuntimeControlOperation {
     case listWrappers
     case removeWrapper
     case rescanWrappers
+    case refreshWrapper
+    case refreshAllWrappers
     case pendingApprovals
     case decideApproval
     case deniedWrappers
@@ -1277,7 +1281,7 @@ enum RuntimeControlOperation {
                 false
             }
         case .launch, .terminate, .verifyWrapper, .placeStagedWrapper, .wrapperInfo,
-            .listWrappers, .removeWrapper, .rescanWrappers:
+            .listWrappers, .removeWrapper, .rescanWrappers, .refreshWrapper, .refreshAllWrappers:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -2619,6 +2623,113 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(
                     Self.encode(RuntimeRescanWrappersControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func refreshWrapper(_ request: Data, icon: FileHandle?, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeRefreshWrapperControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .refreshWrapper,
+                as: RuntimeRefreshWrapperControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeRefreshWrapperControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeRefreshWrapperControlRequest.self,
+                    from: request
+                ),
+                let operationID = RuntimeAPI.OperationID(rawValue: decoded.header.operationID)
+            else {
+                response.send(
+                    Self.encode(RuntimeRefreshWrapperControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let result = try await host.refreshWrapper(
+                    packageID: decoded.packageID,
+                    change: decoded.change,
+                    icon: icon,
+                    operationID: operationID,
+                    clientKind: decoded.header.clientKind
+                )
+                response.send(Self.encode(RuntimeRefreshWrapperControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeRefreshWrapperControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func refreshAllWrappers(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeRefreshAllWrappersControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .refreshAllWrappers,
+                as: RuntimeRefreshAllWrappersControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeRefreshAllWrappersControlReply(
+                            error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeRefreshAllWrappersControlRequest.self,
+                    from: request
+                ),
+                let operationID = RuntimeAPI.OperationID(rawValue: decoded.header.operationID)
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeRefreshAllWrappersControlReply(
+                            error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let result = try await host.refreshAllWrappers(
+                    scope: decoded.scope,
+                    launcherOnly: decoded.launcherOnly,
+                    operationID: operationID,
+                    clientKind: decoded.header.clientKind
+                )
+                response.send(Self.encode(RuntimeRefreshAllWrappersControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(
+                    Self.encode(RuntimeRefreshAllWrappersControlReply(error: wireError)))
             }
         }
     }

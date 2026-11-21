@@ -77,6 +77,15 @@ public enum WrapperFailure: APKRunError, Equatable {
     /// `decideApproval` named an unknown, answered, or expired prompt.
     case approvalNotFound
 
+    /// The wrapper's app is running, so its bundle cannot be replaced
+    /// (wrapper.md §9.3 step 1). Payload: the display name.
+    case wrapperRunning(String)
+
+    /// macOS App Management denied the `Contents` swap of a refresh
+    /// (wrapper.md §9.3, R-20). Payload: the bundle path and, when the new
+    /// Contents is staged for APKRun.app, its staging token.
+    case refreshBlocked(String, stagingToken: String?)
+
     /// More than 5 approval requests arrived within one minute
     /// (wrapper.md §7.3 step 3); reported as `runtime.busy`.
     case approvalBusy
@@ -107,7 +116,10 @@ public enum WrapperFailure: APKRunError, Equatable {
         case .approvalTimedOut: "approvalTimedOut"
         case .approvalNotFound: "approvalNotFound"
         case .approvalBusy: "busy"
+        case .wrapperRunning: "wrapperRunning"
+        case .refreshBlocked: "refreshBlocked"
         }
+
     }
 
     /// Safe values used by the catalog's messages.
@@ -149,6 +161,12 @@ public enum WrapperFailure: APKRunError, Equatable {
             ["reason": .text(reason)]
         case .registrationFailed(let status):
             ["status": .count(Int(status))]
+        case .wrapperRunning(let displayName):
+            ["app": .text(displayName)]
+        case .refreshBlocked(let path, let stagingToken):
+            stagingToken.map { token in
+                ["file": .fileName(path), "stagingToken": .text(token)]
+            } ?? ["file": .fileName(path)]
         case .registryUnavailable, .stagingExpired, .approvalDenied, .approvalTimedOut,
             .approvalNotFound, .approvalBusy:
             [:]

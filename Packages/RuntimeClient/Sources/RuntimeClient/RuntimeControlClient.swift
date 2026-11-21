@@ -521,6 +521,142 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Starts a wrapper refresh on the daemon and returns the operation
+    /// handle (wrapper.md §9.3). `icon` is the replacement icon file sent
+    /// next to the request when `change.icon` is true.
+    public func refreshWrapper(
+        packageID: RuntimePackageID,
+        change: WrapperRefreshWire,
+        icon: FileHandle?,
+        operationID: OperationID
+    ) async throws(RuntimeControlClientError) -> OperationHandle {
+        let request = RuntimeRefreshWrapperControlRequest(
+            header: APIRequestHeader(
+                operationID: operationID.rawValue,
+                clientKind: configuration.clientKind
+            ),
+            packageID: packageID,
+            change: change
+        )
+        let requestFingerprint: String
+        do {
+            requestFingerprint = try RuntimeOperationRequestFingerprint.make(for: request)
+        } catch {
+            throw .encodingFailure
+        }
+        let opened = try await ensureControl()
+        do {
+            let data = try Self.encode(request)
+            let response = try await opened.channel.refreshWrapper(data, icon: icon)
+            let reply = try Self.decode(RuntimeRefreshWrapperControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let handle = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            guard handle.operationID == operationID, handle.kind == .wrapperRefresh else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return handle
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            switch clientError {
+            case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply,
+                .invalidRemoteProxy:
+                do {
+                    let snapshot = try await operationStatus(operationID)
+                    guard snapshot.operationID == operationID,
+                        snapshot.kind == .wrapperRefresh,
+                        snapshot.packageID == packageID,
+                        snapshot.requestFingerprint == requestFingerprint
+                    else {
+                        throw RuntimeControlClientError.operationResultUnknown(
+                            operation: "refreshWrapper")
+                    }
+                    return OperationHandle(
+                        operationID: snapshot.operationID,
+                        parent: snapshot.parent,
+                        kind: snapshot.kind
+                    )
+                } catch {
+                    throw RuntimeControlClientError.operationResultUnknown(
+                        operation: "refreshWrapper")
+                }
+            default:
+                throw clientError
+            }
+        }
+    }
+
+    /// Starts a batch refresh of registered wrappers (wrapper.md §9.4).
+    public func refreshAllWrappers(
+        scope: RefreshAllScope,
+        launcherOnly: Bool,
+        operationID: OperationID
+    ) async throws(RuntimeControlClientError) -> OperationHandle {
+        let request = RuntimeRefreshAllWrappersControlRequest(
+            header: APIRequestHeader(
+                operationID: operationID.rawValue,
+                clientKind: configuration.clientKind
+            ),
+            scope: scope,
+            launcherOnly: launcherOnly
+        )
+        let requestFingerprint: String
+        do {
+            requestFingerprint = try RuntimeOperationRequestFingerprint.make(for: request)
+        } catch {
+            throw .encodingFailure
+        }
+        let opened = try await ensureControl()
+        do {
+            let data = try Self.encode(request)
+            let response = try await opened.channel.refreshAllWrappers(data)
+            let reply = try Self.decode(RuntimeRefreshAllWrappersControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let handle = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            guard handle.operationID == operationID, handle.kind == .wrapperRefreshAll else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return handle
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            switch clientError {
+            case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply,
+                .invalidRemoteProxy:
+                do {
+                    let snapshot = try await operationStatus(operationID)
+                    guard snapshot.operationID == operationID,
+                        snapshot.kind == .wrapperRefreshAll,
+                        snapshot.requestFingerprint == requestFingerprint
+                    else {
+                        throw RuntimeControlClientError.operationResultUnknown(
+                            operation: "refreshAllWrappers")
+                    }
+                    return OperationHandle(
+                        operationID: snapshot.operationID,
+                        parent: snapshot.parent,
+                        kind: snapshot.kind
+                    )
+                } catch {
+                    throw RuntimeControlClientError.operationResultUnknown(
+                        operation: "refreshAllWrappers")
+                }
+            default:
+                throw clientError
+            }
+        }
+    }
+
     /// Lists managed packages or the Android inventory already known to the daemon.
     public func listPackages(
         filter: RuntimePackageFilter = .managed
@@ -2403,6 +2539,12 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
 
     /// Scans the Applications folders for wrapper bundles (wrapper.md §7.2).
     func rescanWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data
+
+    /// Starts a wrapper refresh; the reply carries the operation handle.
+    func refreshWrapper(_ request: Data, icon: FileHandle?) async throws(RuntimeControlClientError) -> Data
+
+    /// Starts a batch wrapper refresh; the reply carries the operation handle.
+    func refreshAllWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Returns the approval prompts waiting for APKRun.app.
     func pendingApprovals(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Answers an approval prompt.
@@ -3017,6 +3159,36 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.rescanWrappers(request) { response in finish(.success(response)) }
+        }
+    }
+
+    /// Starts a wrapper refresh; the reply carries the operation handle.
+    func refreshWrapper(_ request: Data, icon: FileHandle?) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.refreshWrapper(request, icon: icon) { response in finish(.success(response)) }
+        }
+    }
+
+    /// Starts a batch wrapper refresh; the reply carries the operation handle.
+    func refreshAllWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.refreshAllWrappers(request) { response in finish(.success(response)) }
         }
     }
 

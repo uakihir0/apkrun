@@ -18,7 +18,7 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.19 adds `wrapperInfo` (runtime-api.md §10.2).
     /// 1.20 adds `listWrappers`, `removeWrapper`, and `rescanWrappers`
     /// (runtime-api.md §10.5).
-    public static let current = APIVersion(major: 1, minor: 20)
+    public static let current = APIVersion(major: 1, minor: 21)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -725,6 +725,14 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     /// Scans the Applications folders for APKRun wrapper bundles
     /// (wrapper.md §7.2). Reply: `RuntimeRescanWrappersControlReply`.
     func rescanWrappers(_ request: Data, reply: @escaping (Data) -> Void)
+
+    /// Starts a wrapper refresh (wrapper.md §9.3); replies with the
+    /// operation handle. An icon file handle accompanies `change.icon`.
+    func refreshWrapper(_ request: Data, icon: FileHandle?, reply: @escaping (Data) -> Void)
+
+    /// Starts a batch refresh (wrapper.md §9.4 Update All Mac Apps);
+    /// replies with the operation handle.
+    func refreshAllWrappers(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns the approval prompts waiting for APKRun.app.
     func pendingApprovals(_ request: Data, reply: @escaping (Data) -> Void)
     /// Answers an approval prompt (APKRun.app only).

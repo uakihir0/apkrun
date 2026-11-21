@@ -185,10 +185,11 @@ final class HostNotifier: NSObject, UNUserNotificationCenterDelegate {
             case nil, .open:
                 // A click on a package's notification launches the Android app
                 // (desktop-integration.md §5.4) and still navigates to its page.
-                if let packageRaw = self.payloads[identifier]?.packageID {
+                if let packageRaw = self.payloads[identifier]?.packageID,
+                    let packageID = RuntimePackageID(rawValue: packageRaw)
+                {
                     Task {
-                        try? await client.launch(
-                            RuntimeLaunchRequest(packageID: RuntimePackageID(rawValue: packageRaw)))
+                        try? await client.launch(RuntimeLaunchRequest(packageID: packageID))
                     }
                 }
                 if let target = self.payloads[identifier]?.targetURL,

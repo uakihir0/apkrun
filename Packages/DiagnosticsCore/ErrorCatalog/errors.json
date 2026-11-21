@@ -4586,7 +4586,7 @@
     "case": "unknownResult(operationID)",
     "when": "a tracked operation ends without reporting its result",
     "raisedBy": "apkrund",
-    "ref": "[../02-design/runtime-api.md](../02-design/runtime-api.md)"
+    "ref": "[runtime-api.md](runtime-api.md)"
    }
   },
   {

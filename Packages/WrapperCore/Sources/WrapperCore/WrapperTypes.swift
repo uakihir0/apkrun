@@ -401,6 +401,10 @@ public struct LauncherBuild: Sendable, Equatable {
     public var launcherAPI: String
     /// The APKRun version that built the launcher (`APKRunLauncherVersion`).
     public var launcherVersion: String
+    /// The `APKRunBuildIdentity` of the template app (`dev`, `release`, or
+    /// `updatetest`); the generated wrapper copies it so its
+    /// `RuntimeControlClient` reaches the matching apkrund.
+    public var buildIdentity: String
     /// The URL of the launcher executable inside the template app.
     public var executableURL: URL
 
@@ -409,11 +413,13 @@ public struct LauncherBuild: Sendable, Equatable {
         minimumRuntimeVersion: String = "1.0.0",
         launcherAPI: String,
         launcherVersion: String,
+        buildIdentity: String = "dev",
         executableURL: URL
     ) {
         self.minimumRuntimeVersion = minimumRuntimeVersion
         self.launcherAPI = launcherAPI
         self.launcherVersion = launcherVersion
+        self.buildIdentity = buildIdentity
         self.executableURL = executableURL
     }
 }

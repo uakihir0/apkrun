@@ -101,6 +101,7 @@ private final class FrameStatisticsController {
 private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
     private var bootstrapInstall: BootstrapInstallController?
+    private var notificationPoster: NotificationPoster?
     private let frameStatistics = FrameStatisticsController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -142,6 +143,15 @@ private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
         // built by #45.
         let bootstrapInstall = BootstrapInstallController()
         self.bootstrapInstall = bootstrapInstall
+        // Foreground launchers relay notifications on a regular (not
+        // background) slot; the app keeps running when the stream ends.
+        if let client = try? RuntimeControlClient(
+            clientKind: .wrapper, claimedIdentity: nil)
+        {
+            let poster = NotificationPoster(client: client, background: false)
+            notificationPoster = poster
+            Task { await poster.run() }
+        }
         Task {
             // Screen N: `openSession` on an uninstalled portable package
             // returns `packageNotInstalled`; the launcher offers the bundled

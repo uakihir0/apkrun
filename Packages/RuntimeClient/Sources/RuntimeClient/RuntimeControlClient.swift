@@ -2090,6 +2090,8 @@ public actor RuntimeControlClient {
     private func invalidateControlConnection(_ channel: any RuntimeControlChannel) {
         guard let openedControl, openedControl.channel === channel else { return }
         eventStreamHub.markResyncRequired(for: eventStreamHub.activeTopics())
+        // Open streams die with the connection; an `.ended` never arrives.
+        notificationStreamHub.finishAll()
         channel.invalidate()
         self.openedControl = nil
         remoteEventTopics = []

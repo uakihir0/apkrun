@@ -127,25 +127,57 @@ final class RuntimeEventStreamHub: @unchecked Sendable {
 /// Routes §16.4 stream envelopes (delivered inside event batches as
 /// `.stream` payloads) to the stream the client opened.
 final class RuntimeNotificationStreamHub: @unchecked Sendable {
+    /// Envelopes held for a stream the client has not registered yet (the
+    /// open reply arrives after the daemon already queued posts).
+    private static let pendingEnvelopeLimit = 256
+
     private let lock = NSLock()
     private var continuations: [StreamID: AsyncStream<StreamEnvelope>.Continuation] = [:]
+    private var pending: [StreamID: [StreamEnvelope]] = [:]
 
-    /// Registers a stream and returns its event stream.
+    /// Registers a stream and returns its event stream. Envelopes delivered
+    /// before the registration are replayed first.
     func register(_ streamID: StreamID) -> AsyncStream<StreamEnvelope> {
         let pair = AsyncStream<StreamEnvelope>.makeStream(bufferingPolicy: .unbounded)
-        lock.withLock {
+        let buffered = lock.withLock { () -> [StreamEnvelope] in
             continuations[streamID] = pair.continuation
+            return pending.removeValue(forKey: streamID) ?? []
         }
         pair.continuation.onTermination = { [weak self] _ in
             self?.remove(streamID)
+        }
+        for envelope in buffered {
+            pair.continuation.yield(envelope)
+            if case .ended = envelope.event {
+                remove(streamID)
+                break
+            }
         }
         return pair.stream
     }
 
     /// Finishes a stream locally, e.g. after `closeStream`.
     func remove(_ streamID: StreamID) {
-        lock.withLock {
-            continuations.removeValue(forKey: streamID)?.finish()
+        let continuation = lock.withLock { () -> AsyncStream<StreamEnvelope>.Continuation? in
+            pending[streamID] = nil
+            return continuations.removeValue(forKey: streamID)
+        }
+        // finish() runs onTermination synchronously; it must run outside the
+        // lock because the handler calls back into remove().
+        continuation?.finish()
+    }
+
+    /// Finishes every open stream, e.g. when the XPC connection drops.
+    func finishAll() {
+        let all = lock.withLock { () -> [AsyncStream<StreamEnvelope>.Continuation] in
+            defer {
+                continuations.removeAll()
+                pending.removeAll()
+            }
+            return Array(continuations.values)
+        }
+        for continuation in all {
+            continuation.finish()
         }
     }
 
@@ -158,6 +190,12 @@ final class RuntimeNotificationStreamHub: @unchecked Sendable {
                 guard case .stream(let streamEnvelope) = envelope.payload else { continue }
                 if let continuation = continuations[streamEnvelope.streamID] {
                     targets.append((continuation, streamEnvelope))
+                } else {
+                    var queue = pending[streamEnvelope.streamID] ?? []
+                    if queue.count < Self.pendingEnvelopeLimit {
+                        queue.append(streamEnvelope)
+                        pending[streamEnvelope.streamID] = queue
+                    }
                 }
             }
         }

@@ -44,9 +44,14 @@ final class NotificationPoster: NSObject, UNUserNotificationCenterDelegate {
     private var delivered: Set<String> = []
     private var identifierCategory: [String: String] = [:]
     private var idleQuitTask: Task<Void, Never>?
+    /// `--apkrun-background notifications` claims a background slot and quits
+    /// on stream end; the foreground launcher takes a regular slot and keeps
+    /// running when the stream dies with its connection.
+    private let background: Bool
 
-    init(client: RuntimeControlClient) {
+    init(client: RuntimeControlClient, background: Bool = true) {
         self.client = client
+        self.background = background
     }
 
     /// Connects, asks for authorization when `notDetermined`, and consumes
@@ -56,10 +61,12 @@ final class NotificationPoster: NSObject, UNUserNotificationCenterDelegate {
         await reportAuthorization()
         let stream: (handle: StreamHandle, events: AsyncStream<StreamEnvelope>)
         do {
-            stream = try await client.notificationRelayStream(background: true)
+            stream = try await client.notificationRelayStream(background: background)
         } catch {
-            // No daemon or a rejected endpoint: nothing can arrive.
-            NSApp.terminate(nil)
+            // No daemon or a rejected endpoint: nothing can arrive. A
+            // background-only launch exits; the foreground launcher just
+            // goes without notification relay.
+            if background { NSApp.terminate(nil) }
             return
         }
         streamID = stream.handle.streamID
@@ -69,13 +76,13 @@ final class NotificationPoster: NSObject, UNUserNotificationCenterDelegate {
             case .relay(let message):
                 handle(message)
             case .ended:
-                NSApp.terminate(nil)
+                if background { NSApp.terminate(nil) }
                 return
             default:
                 break
             }
         }
-        NSApp.terminate(nil)
+        if background { NSApp.terminate(nil) }
     }
 
     // MARK: - Relay messages
@@ -255,7 +262,7 @@ final class NotificationPoster: NSObject, UNUserNotificationCenterDelegate {
 
     /// wrapper.md §5.8: quit 30 s after the last delivered notification.
     private func scheduleIdleQuitIfEmpty() {
-        guard delivered.isEmpty, idleQuitTask == nil else { return }
+        guard background, delivered.isEmpty, idleQuitTask == nil else { return }
         idleQuitTask = Task {
             try? await Task.sleep(for: Self.idleQuitInterval)
             guard !Task.isCancelled, delivered.isEmpty else { return }

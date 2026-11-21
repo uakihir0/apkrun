@@ -126,11 +126,14 @@ public enum RelayResponse: Codable, Equatable, Sendable {
 /// `notificationRelay` (runtime-api.md §11.1): one relay per connection; a
 /// second request returns the existing handle.
 public struct NotificationRelayRequest: Codable, Equatable, Sendable {
+    /// The authenticated request metadata.
+    public var header: APIRequestHeader
     /// True when the wrapper was started only to relay notifications.
     public var background: Bool
 
     /// Creates a notification-relay request.
-    public init(background: Bool) {
+    public init(header: APIRequestHeader, background: Bool) {
+        self.header = header
         self.background = background
     }
 }
@@ -138,13 +141,16 @@ public struct NotificationRelayRequest: Codable, Equatable, Sendable {
 /// `notificationRelayResponse` (runtime-api.md §11.1): one-way; no reply is
 /// expected beyond the wire acknowledgement.
 public struct RelayResponseRequest: Codable, Equatable, Sendable {
+    /// The authenticated request metadata.
+    public var header: APIRequestHeader
     /// The stream the response belongs to.
     public var streamID: StreamID
     /// The response.
     public var response: RelayResponse
 
     /// Creates a relay-response request.
-    public init(streamID: StreamID, response: RelayResponse) {
+    public init(header: APIRequestHeader, streamID: StreamID, response: RelayResponse) {
+        self.header = header
         self.streamID = streamID
         self.response = response
     }
@@ -291,24 +297,30 @@ public enum HostNotificationResponse: Codable, Equatable, Sendable {
 /// `hostNotifications` (runtime-api.md §11.1). Only one stream is served; a
 /// new request replaces the old one, which ends with `replaced`.
 public struct HostNotificationsRequest: Codable, Equatable, Sendable {
+    /// The authenticated request metadata.
+    public var header: APIRequestHeader
     /// True when the app was started only to deliver notifications.
     public var background: Bool
 
     /// Creates a host-notifications request.
-    public init(background: Bool) {
+    public init(header: APIRequestHeader, background: Bool) {
+        self.header = header
         self.background = background
     }
 }
 
 /// `hostNotificationResponse` (runtime-api.md §11.1): one-way.
 public struct HostNotificationResponseRequest: Codable, Equatable, Sendable {
+    /// The authenticated request metadata.
+    public var header: APIRequestHeader
     /// The stream the response belongs to.
     public var streamID: StreamID
     /// The response.
     public var response: HostNotificationResponse
 
     /// Creates a host-notification-response request.
-    public init(streamID: StreamID, response: HostNotificationResponse) {
+    public init(header: APIRequestHeader, streamID: StreamID, response: HostNotificationResponse) {
+        self.header = header
         self.streamID = streamID
         self.response = response
     }

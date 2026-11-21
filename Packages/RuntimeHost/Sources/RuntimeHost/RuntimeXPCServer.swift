@@ -81,6 +81,9 @@ public final class RuntimeXPCServer: @unchecked Sendable {
         }
 
         let connectionRegistry = RuntimeXPCConnectionRegistry(eventHub: host.eventHub)
+        connectionRegistry.onConnectionRemoved = { [streamCenter = host.streamCenter] connectionID in
+            streamCenter.connectionClosed(connectionID)
+        }
         let brokerDelegate = BrokerListenerDelegate(
             host: host,
             buildInfo: buildInfo,
@@ -208,18 +211,29 @@ private final class RuntimeXPCControlListener: @unchecked Sendable {
         clientKind: RuntimeClientKind,
         requirement: String,
         reservationID: UUID,
-        connectionRegistry: RuntimeXPCConnectionRegistry
+        connectionRegistry: RuntimeXPCConnectionRegistry,
+        wrapperPackageID: RuntimePackageID? = nil
     ) {
         delegate = ControlListenerDelegate(
             host: host,
             clientKind: clientKind,
             reservationID: reservationID,
-            connectionRegistry: connectionRegistry
+            connectionRegistry: connectionRegistry,
+            wrapperPackageID: wrapperPackageID
         )
         listener = NSXPCListener.anonymous()
         listener.setConnectionCodeSigningRequirement(requirement)
         listener.delegate = delegate
         listener.resume()
+    }
+}
+
+/// Carries a non-Sendable XPC reply closure into an async grant path.
+private final class SendableReplyBox: @unchecked Sendable {
+    let reply: (Data, NSXPCListenerEndpoint?) -> Void
+
+    init(_ reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void) {
+        self.reply = reply
     }
 }
 
@@ -267,6 +281,8 @@ private enum RuntimeXPCRequestAdmission {
 private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
     private let lock = NSLock()
     private let eventHub: RuntimeEventHub
+    /// Extra cleanup run after a connection is invalidated (e.g. stream teardown).
+    var onConnectionRemoved: (@Sendable (ObjectIdentifier) -> Void)?
     private var connections: [ObjectIdentifier: RuntimeXPCConnectionRecord] = [:]
     private var acceptingNewConnections = true
     private var acceptingLifecycleRequests = true
@@ -518,6 +534,7 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         lock.unlock()
         record?.controlListener?.listener.invalidate()
         eventHub.remove(connectionID: identifier)
+        onConnectionRemoved?(identifier)
     }
 }
 
@@ -893,6 +910,13 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
             return
         }
 
+        // `.wrapper` has no static requirement (runtime-api.md §10.1): each
+        // registered wrapper gets `identifier "<bundleID>" and cdhash H"…"`
+        // built from `Wrappers/registry.json`.
+        if endpointRequest.clientKind == .wrapper {
+            requestWrapperEndpoint(endpointRequest, reply: reply)
+            return
+        }
         guard
             let identifier = Self.expectedIdentifier(
                 for: endpointRequest.clientKind,
@@ -903,17 +927,60 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
             reply(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
             return
         }
+        grantControlEndpoint(
+            clientKind: endpointRequest.clientKind,
+            requirement: requirement,
+            requestedVersion: endpointRequest.apiVersion,
+            reply: reply
+        )
+    }
+
+    /// Grants a control endpoint to a wrapper whose bundle ID and cdhash
+    /// match an active registry entry (runtime-api.md §10.1).
+    private func requestWrapperEndpoint(
+        _ endpointRequest: RuntimeEndpointRequest,
+        reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void
+    ) {
+        let replyBox = SendableReplyBox(reply)
+        Task {
+            guard
+                let credentials = await host.wrapperEndpointCredentials(
+                    bundleID: endpointRequest.claimedIdentity)
+            else {
+                replyBox.reply(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
+                return
+            }
+            grantControlEndpoint(
+                clientKind: .wrapper,
+                requirement: credentials.requirement,
+                requestedVersion: endpointRequest.apiVersion,
+                wrapperPackageID: credentials.packageID,
+                reply: replyBox.reply
+            )
+        }
+    }
+
+    /// Creates an anonymous control listener, reserves the connection, and
+    /// replies with its endpoint (runtime-api.md §3.3).
+    private func grantControlEndpoint(
+        clientKind: RuntimeClientKind,
+        requirement: String,
+        requestedVersion: APIVersion,
+        wrapperPackageID: RuntimePackageID? = nil,
+        reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void
+    ) {
         let reservationID = UUID()
         let controlListener = RuntimeXPCControlListener(
             host: host,
-            clientKind: endpointRequest.clientKind,
+            clientKind: clientKind,
             requirement: requirement,
             reservationID: reservationID,
-            connectionRegistry: connectionRegistry
+            connectionRegistry: connectionRegistry,
+            wrapperPackageID: wrapperPackageID
         )
         guard
             connectionRegistry.reserveControlConnection(
-                for: endpointRequest.clientKind,
+                for: clientKind,
                 on: connectionID,
                 reservationID: reservationID,
                 controlListener: controlListener
@@ -923,7 +990,7 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
             reply(
                 Self.encode(
                     RuntimeEndpointReply.rejected(
-                        Self.endpointRejection(.busy, requestedVersion: endpointRequest.apiVersion)
+                        Self.endpointRejection(.busy, requestedVersion: requestedVersion)
                     )
                 ),
                 nil
@@ -1043,17 +1110,20 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
     private let clientKind: RuntimeClientKind
     private let reservationID: UUID
     private let connectionRegistry: RuntimeXPCConnectionRegistry
+    private let wrapperPackageID: RuntimePackageID?
 
     init(
         host: RuntimeHost,
         clientKind: RuntimeClientKind,
         reservationID: UUID,
-        connectionRegistry: RuntimeXPCConnectionRegistry
+        connectionRegistry: RuntimeXPCConnectionRegistry,
+        wrapperPackageID: RuntimePackageID? = nil
     ) {
         self.host = host
         self.clientKind = clientKind
         self.reservationID = reservationID
         self.connectionRegistry = connectionRegistry
+        self.wrapperPackageID = wrapperPackageID
     }
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
@@ -1109,7 +1179,8 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
             clientKind: clientKind,
             connectionRegistry: connectionRegistry,
             connectionID: connectionID,
-            eventSink: remoteSink.map(RuntimeEventSinkReference.init(value:))
+            eventSink: remoteSink.map(RuntimeEventSinkReference.init(value:)),
+            wrapperPackageID: wrapperPackageID
         )
         connection.resume()
         listener.invalidate()
@@ -1178,6 +1249,11 @@ extension RuntimeUpdateSkipControlRequest: VersionedControlRequest {}
 extension RuntimeUpdatePackageControlRequest: VersionedControlRequest {}
 extension RuntimeConfigGetControlRequest: VersionedControlRequest {}
 extension RuntimeConfigSetControlRequest: VersionedControlRequest {}
+extension NotificationRelayRequest: VersionedControlRequest {}
+extension RelayResponseRequest: VersionedControlRequest {}
+extension HostNotificationsRequest: VersionedControlRequest {}
+extension HostNotificationResponseRequest: VersionedControlRequest {}
+extension CloseStreamRequest: VersionedControlRequest {}
 
 enum RuntimeControlOperation {
     case runtimeStatus
@@ -1237,6 +1313,11 @@ enum RuntimeControlOperation {
     case packageSettings
     case updatePackageSettings
     case importBootstrap
+    case notificationRelay
+    case notificationRelayResponse
+    case hostNotifications
+    case hostNotificationResponse
+    case closeStream
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1354,6 +1435,31 @@ enum RuntimeControlOperation {
             case .app, .menuBar, .cli:
                 false
             }
+        case .notificationRelay, .notificationRelayResponse:
+            // A wrapper relays Android notifications for its own package only
+            // (runtime-api.md §11.3).
+            switch clientKind {
+            case .wrapper:
+                true
+            case .app, .menuBar, .cli, .launcher:
+                false
+            }
+        case .hostNotifications, .hostNotificationResponse:
+            // The host-notification stream belongs to APKRun.app (§11.3).
+            switch clientKind {
+            case .app:
+                true
+            case .menuBar, .cli, .launcher, .wrapper:
+                false
+            }
+        case .closeStream:
+            // Any client may close its own streams (§16.4).
+            switch clientKind {
+            case .wrapper, .app, .menuBar, .cli:
+                true
+            case .launcher:
+                false
+            }
         }
     }
 }
@@ -1364,6 +1470,8 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     private let connectionRegistry: RuntimeXPCConnectionRegistry
     private let connectionID: ObjectIdentifier
     private let eventSink: RuntimeEventSinkReference?
+    /// The package a `.wrapper` connection may operate on (runtime-api.md §10.1).
+    private let wrapperPackageID: RuntimePackageID?
     private let outputQueue: DispatchQueue
 
     init(
@@ -1371,13 +1479,15 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         clientKind: RuntimeClientKind,
         connectionRegistry: RuntimeXPCConnectionRegistry,
         connectionID: ObjectIdentifier,
-        eventSink: RuntimeEventSinkReference?
+        eventSink: RuntimeEventSinkReference?,
+        wrapperPackageID: RuntimePackageID? = nil
     ) {
         self.host = host
         self.clientKind = clientKind
         self.connectionRegistry = connectionRegistry
         self.connectionID = connectionID
         self.eventSink = eventSink
+        self.wrapperPackageID = wrapperPackageID
         outputQueue =
             connectionRegistry.outputQueue(for: connectionID)
             ?? DispatchQueue(label: "io.apkrun.RuntimeHost.xpc-output-fallback.\(UUID().uuidString)")
@@ -2320,6 +2430,225 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 response.send(Self.encode(RuntimeSubscribeControlReply(error: Self.internalWireError)))
             }
+        }
+    }
+
+    /// `notificationRelay` (§11.3): opens (or reuses) the wrapper's relay
+    /// stream for its own package and returns the handle.
+    func notificationRelay(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeStreamHandleControlReply(
+                        error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task { [connectionRegistry = self.connectionRegistry, connectionID = self.connectionID] in
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .notificationRelay,
+                as: NotificationRelayRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeStreamHandleControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard clientKind == .wrapper, let packageID = wrapperPackageID else {
+                response.send(
+                    Self.encode(
+                        RuntimeStreamHandleControlReply(
+                            error: Self.wireError(
+                                for: RuntimeControlError(
+                                    code: "runtime.notAuthorized",
+                                    message: "This part of APKRun isn't allowed to do that.")))))
+                return
+            }
+            guard await verifyEventSink(eventSink) else {
+                response.send(
+                    Self.encode(
+                        RuntimeStreamHandleControlReply(
+                            error: .runtime(
+                                "malformedRequest",
+                                message: "The client event receiver is unavailable."))))
+                return
+            }
+            do {
+                let handle = try host.streamCenter.openNotificationRelay(
+                    connectionID: connectionID,
+                    packageID: packageID,
+                    sink: eventSink,
+                    outputQueue: outputQueue,
+                    isOpen: { [weak connectionRegistry, connectionID] in
+                        connectionRegistry?.isRegistered(connectionID) == true
+                    }
+                )
+                response.send(Self.encode(RuntimeStreamHandleControlReply(result: handle)))
+            } catch let error as RuntimeWireError {
+                response.send(Self.encode(RuntimeStreamHandleControlReply(error: error)))
+            } catch {
+                response.send(Self.encode(RuntimeStreamHandleControlReply(error: Self.internalWireError)))
+            }
+        }
+    }
+
+    /// `notificationRelayResponse` (§11.3): routes the wrapper's answer to
+    /// the coordinator.
+    func notificationRelayResponse(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeStreamControlReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .notificationRelayResponse,
+                as: RelayResponseRequest.self
+            ) {
+                response.send(Self.encode(RuntimeStreamControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RelayResponseRequest.self, from: request),
+                host.streamCenter.recordRelayResponse(
+                    decoded.streamID, decoded.response, from: connectionID)
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeStreamControlReply(
+                            error: .runtime(
+                                "malformedRequest",
+                                message: "The response names no live stream of this connection."))))
+                return
+            }
+            response.send(Self.encode(RuntimeStreamControlReply()))
+        }
+    }
+
+    /// `hostNotifications` (§11.3): opens the app's single stream; an existing
+    /// one ends with `replaced`.
+    func hostNotifications(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeStreamHandleControlReply(
+                        error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task { [connectionRegistry = self.connectionRegistry, connectionID = self.connectionID] in
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .hostNotifications,
+                as: HostNotificationsRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeStreamHandleControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard await verifyEventSink(eventSink) else {
+                response.send(
+                    Self.encode(
+                        RuntimeStreamHandleControlReply(
+                            error: .runtime(
+                                "malformedRequest",
+                                message: "The client event receiver is unavailable."))))
+                return
+            }
+            do {
+                let handle = try host.streamCenter.openHostNotifications(
+                    connectionID: connectionID,
+                    sink: eventSink,
+                    outputQueue: outputQueue,
+                    isOpen: { [weak connectionRegistry, connectionID] in
+                        connectionRegistry?.isRegistered(connectionID) == true
+                    }
+                )
+                response.send(Self.encode(RuntimeStreamHandleControlReply(result: handle)))
+            } catch let error as RuntimeWireError {
+                response.send(Self.encode(RuntimeStreamHandleControlReply(error: error)))
+            } catch {
+                response.send(Self.encode(RuntimeStreamHandleControlReply(error: Self.internalWireError)))
+            }
+        }
+    }
+
+    /// `hostNotificationResponse` (§11.3): routes the app's answer.
+    func hostNotificationResponse(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeStreamControlReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .hostNotificationResponse,
+                as: HostNotificationResponseRequest.self
+            ) {
+                response.send(Self.encode(RuntimeStreamControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    HostNotificationResponseRequest.self, from: request),
+                host.streamCenter.recordHostNotificationResponse(
+                    decoded.streamID, decoded.response, from: connectionID)
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeStreamControlReply(
+                            error: .runtime(
+                                "malformedRequest",
+                                message: "The response names no live stream of this connection."))))
+                return
+            }
+            response.send(Self.encode(RuntimeStreamControlReply()))
+        }
+    }
+
+    /// `closeStream` (§16.4): idempotent for unknown, ended, or foreign
+    /// streams.
+    func closeStream(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID, allowDuringShutdown: true)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeStreamControlReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .closeStream,
+                as: CloseStreamRequest.self
+            ) {
+                response.send(Self.encode(RuntimeStreamControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            if let decoded = try? JSONDecoder().decode(CloseStreamRequest.self, from: request) {
+                host.streamCenter.closeStream(decoded.streamID, from: connectionID)
+            }
+            response.send(Self.encode(RuntimeStreamControlReply()))
         }
     }
 

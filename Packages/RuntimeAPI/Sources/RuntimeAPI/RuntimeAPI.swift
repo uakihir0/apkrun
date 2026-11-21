@@ -825,6 +825,21 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     /// Starts reinstalling a broken package from its retained artifacts
     /// (package-store.md §11.1, runtime-api.md §8.4).
     func beginRepairPackage(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Opens a `notificationRelay` stream (wrapper connections only,
+    /// runtime-api.md §11.3/§16.4). Reply: `RuntimeStreamHandleControlReply`.
+    func notificationRelay(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Delivers a `RelayResponse` on an open notification relay stream
+    /// (runtime-api.md §11.3). Reply: `RuntimeStreamControlReply`.
+    func notificationRelayResponse(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Opens the single `hostNotifications` stream (APKRun.app only,
+    /// runtime-api.md §11.3/§16.4). Reply: `RuntimeStreamHandleControlReply`.
+    func hostNotifications(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Delivers a `HostNotificationResponse` on the host notifications stream
+    /// (runtime-api.md §11.3). Reply: `RuntimeStreamControlReply`.
+    func hostNotificationResponse(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Closes one of this connection's streams; idempotent
+    /// (runtime-api.md §16.4). Reply: `RuntimeStreamControlReply`.
+    func closeStream(_ request: Data, reply: @escaping (Data) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.

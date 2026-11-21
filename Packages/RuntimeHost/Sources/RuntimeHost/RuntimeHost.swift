@@ -54,6 +54,8 @@ struct RuntimeTrackedOperation {
 /// opens the current image, and creates one RuntimeSupervisor. Runtime start remains on demand.
 public actor RuntimeHost {
     nonisolated let eventHub = RuntimeEventHub()
+    /// Open notification/host streams (runtime-api.md §16.4).
+    nonisolated let streamCenter = RuntimeStreamCenter()
 
     let paths: APKRunPaths
     private let buildInfo: BuildInfo
@@ -3126,6 +3128,30 @@ public actor RuntimeHost {
             createdAt: entry.createdAt,
             refreshedAt: entry.refreshedAt
         )
+    }
+
+    /// The `.wrapper` endpoint credentials for a claimed bundle ID
+    /// (runtime-api.md §10.1): the code requirement built from the registry
+    /// and the package the wrapper may operate on. During a refresh the new
+    /// bundle's `pendingCdhash` is also accepted so the refreshed wrapper can
+    /// reconnect before validation finishes.
+    func wrapperEndpointCredentials(bundleID: String) async
+        -> (requirement: String, packageID: RuntimePackageID)?
+    {
+        let registry = await wrapperRegistryInstance()
+        guard
+            let entry = await registry.entry(bundleID: bundleID),
+            entry.state != .pending,
+            let packageID = RuntimePackageID(rawValue: entry.packageId)
+        else {
+            return nil
+        }
+        var cdhashes = "cdhash H\"\(entry.cdhash)\""
+        if let pending = entry.pendingCdhash {
+            cdhashes = "(\(cdhashes) or cdhash H\"\(pending)\")"
+        }
+        let requirement = "identifier \"\(bundleID)\" and \(cdhashes)"
+        return (requirement, packageID)
     }
 
     /// The daemon's wrapper registry, created on first use with startup

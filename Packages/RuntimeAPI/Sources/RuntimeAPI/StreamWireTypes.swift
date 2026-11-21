@@ -97,11 +97,52 @@ public struct GuestLogChunk: Codable, Equatable, Sendable {
 /// `closeStream` (runtime-api.md §16.4). Idempotent: an unknown, ended, or
 /// foreign stream returns `RuntimeEmpty` and changes nothing.
 public struct CloseStreamRequest: Codable, Equatable, Sendable {
+    /// The authenticated request metadata.
+    public var header: APIRequestHeader
     /// The stream to close.
     public var streamID: StreamID
 
     /// Creates a close-stream request.
-    public init(streamID: StreamID) {
+    public init(header: APIRequestHeader, streamID: StreamID) {
+        self.header = header
         self.streamID = streamID
+    }
+}
+
+/// Reply for `notificationRelay` and `hostNotifications` (runtime-api.md §16.4).
+public struct RuntimeStreamHandleControlReply: Codable, Equatable, Sendable {
+    /// The opened (or reused) stream handle.
+    public let result: StreamHandle?
+    /// The structured failure, present when the request was rejected.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: StreamHandle) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// Reply for `notificationRelayResponse`, `hostNotificationResponse`, and
+/// `closeStream` (runtime-api.md §16.4). Success is `RuntimeEmpty` — the reply
+/// carries only an optional error.
+public struct RuntimeStreamControlReply: Codable, Equatable, Sendable {
+    /// The structured failure; nil on success.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init() {
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        self.error = error
     }
 }

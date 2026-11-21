@@ -1064,6 +1064,94 @@
    }
   },
   {
+   "code": "integration.promptTimedOut",
+   "parameters": [
+    "app"
+   ],
+   "message": {
+    "en": "The link from {app} was cancelled because the question wasn't answered.",
+    "ja": "{app} からのリンクは、質問への回答がなかったためキャンセルされました。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "integration",
+    "case": "promptTimedOut",
+    "when": "the link prompt got no answer in 60 s and was cancelled, or `resolveLinkPrompt` names an expired or unknown prompt. Logged only",
+    "raisedBy": "LinkForwarder",
+    "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §7.2"
+   }
+  },
+  {
+   "code": "integration.linkRejected",
+   "parameters": [
+    "app"
+   ],
+   "message": {
+    "en": "APKRun didn't open a link from {app}.",
+    "ja": "{app} からのリンクを APKRun は開きませんでした。"
+   },
+   "action": "none",
+   "cliExit": 5,
+   "doc": {
+    "table": "integration",
+    "case": "linkRejected(app:LinkRejection)",
+    "when": "`LinkForwarder` drops a link (`ResolveUrl(DROP)`). Counted and logged only",
+    "raisedBy": "LinkForwarder",
+    "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §7.2"
+   },
+   "variants": {
+    "scheme": {
+     "message": {
+      "en": "APKRun opens only web and mail links from Android apps.",
+      "ja": "APKRun が Android アプリから開くのは Web とメールのリンクだけです。"
+     },
+     "action": "none",
+     "doc": {
+      "when": "the scheme is not `http`, `https`, or `mailto`, or an `http(s)` link has no host",
+      "raisedBy": "LinkForwarder",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §7.2"
+     }
+    },
+    "tooLong": {
+     "message": {
+      "en": "The link from {app} is too long to open.",
+      "ja": "{app} からのリンクは長すぎて開けません。"
+     },
+     "action": "none",
+     "doc": {
+      "when": "longer than 8 KiB",
+      "raisedBy": "LinkForwarder",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §7.2"
+     }
+    },
+    "notFocused": {
+     "message": {
+      "en": "APKRun opens links from {app} only while you use its window.",
+      "ja": "{app} からのリンクを開けるのは、そのウィンドウを使用中だけです。"
+     },
+     "action": "none",
+     "doc": {
+      "when": "the window is not key and had no input in the last 5 s",
+      "raisedBy": "LinkForwarder",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §7.2"
+     }
+    },
+    "rateLimited": {
+     "message": {
+      "en": "{app} opened too many links at once.",
+      "ja": "{app} が一度に開いたリンクが多すぎます。"
+     },
+     "action": "none",
+     "doc": {
+      "when": "more than 3 links in 10 s",
+      "raisedBy": "LinkForwarder",
+      "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §7.2"
+     }
+    }
+   }
+  },
+  {
    "code": "runtime.adb",
    "parameters": [],
    "transparent": true,

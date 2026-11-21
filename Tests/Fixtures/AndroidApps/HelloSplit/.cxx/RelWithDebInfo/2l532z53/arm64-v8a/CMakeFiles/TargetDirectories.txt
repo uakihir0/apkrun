@@ -1,0 +1,3 @@
+/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/CMakeFiles/hellosplit.dir
+/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/CMakeFiles/edit_cache.dir
+/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/CMakeFiles/rebuild_cache.dir

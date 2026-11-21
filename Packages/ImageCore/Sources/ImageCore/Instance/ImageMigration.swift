@@ -105,7 +105,7 @@ public actor ImageMigrationService {
 }
 
 /// Numeric compare of `MAJOR.MINOR.PATCH` (or `YYYY.MM.N`) strings; missing parts are 0.
-func compareVersions(_ lhs: String, _ rhs: String) -> Int {
+public func compareVersions(_ lhs: String, _ rhs: String) -> Int {
     func parts(_ string: String) -> [Int] {
         string.split(separator: ".").map { Int($0) ?? 0 }
     }

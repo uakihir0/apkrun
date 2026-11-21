@@ -4,6 +4,7 @@ import CoreGraphics
 import CryptoKit
 import DiagnosticsCore
 import Foundation
+import GuestProtocol
 import ImageCore
 import ImageIO
 import IntegrationCore
@@ -658,6 +659,27 @@ public actor RuntimeHost {
             if bootProgressGeneration == progressGeneration {
                 bootProgressGeneration &+= 1
                 bootPurpose = nil
+            }
+        }
+        // §4.10: an image whose manifest no longer covers this host never
+        // boots; Android stays stopped and the boot fails as an image error.
+        do {
+            let wanted = image.manifest.requirements
+            if compareVersions(buildIdentity.marketingVersion, wanted.minimumRuntimeVersion) < 0 {
+                throw .image(
+                    .incompatibleRuntime(
+                        minimum: wanted.minimumRuntimeVersion,
+                        found: buildIdentity.marketingVersion))
+            }
+            let range = wanted.guestProtocol
+            if range.max < Int(ProtocolVersion.supportedMajors.lowerBound)
+                || range.min > Int(ProtocolVersion.supportedMajors.upperBound)
+            {
+                throw .image(
+                    .incompatibleProtocol(
+                        minimum: range.min, maximum: range.max,
+                        hostMinimum: Int(ProtocolVersion.supportedMajors.lowerBound),
+                        hostMaximum: Int(ProtocolVersion.supportedMajors.upperBound)))
             }
         }
         do {

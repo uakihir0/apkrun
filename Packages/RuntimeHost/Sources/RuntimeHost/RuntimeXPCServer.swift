@@ -42,6 +42,7 @@ public final class RuntimeXPCServer: @unchecked Sendable {
     private let startLock = NSLock()
     private var hasStarted = false
     private var hasInvalidated = false
+    /// Live frozen maintenance listeners granted through the broker.
 
     /// Prepares protected endpoint listeners for every APKRun control client.
     ///
@@ -186,6 +187,7 @@ public final class RuntimeXPCServer: @unchecked Sendable {
 private enum RuntimeXPCConnectionKind: Equatable {
     case broker
     case control
+    case maintenance
 }
 
 private struct RuntimeXPCConnectionRecord {
@@ -200,6 +202,19 @@ private struct RuntimeXPCControlReservation {
     let brokerConnectionID: ObjectIdentifier
     let controlListener: RuntimeXPCControlListener
     let expiresAt: ContinuousClock.Instant
+}
+
+private final class RuntimeXPCMaintenanceListener: @unchecked Sendable {
+    let listener: NSXPCListener
+    let delegate: MaintenanceListenerDelegate
+
+    init(host: RuntimeHost, requirement: String) {
+        delegate = MaintenanceListenerDelegate(host: host)
+        listener = NSXPCListener.anonymous()
+        listener.setConnectionCodeSigningRequirement(requirement)
+        listener.delegate = delegate
+        listener.resume()
+    }
 }
 
 private final class RuntimeXPCControlListener: @unchecked Sendable {
@@ -831,6 +846,9 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
     private let connectionRegistry: RuntimeXPCConnectionRegistry
     private let connectionID: ObjectIdentifier
 
+    /// Live frozen maintenance listeners granted through this connection.
+    private var maintenanceListeners: [ObjectIdentifier: RuntimeXPCMaintenanceListener] = [:]
+
     init(
         host: RuntimeHost,
         buildInfo: BuildInfo,
@@ -901,7 +919,20 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
             request.count <= Self.maximumRequestSize,
             let endpointRequest = try? JSONDecoder().decode(RuntimeEndpointRequest.self, from: request),
             endpointRequest.apiVersion.major > 0,
-            endpointRequest.apiVersion.minor >= 0,
+            endpointRequest.apiVersion.minor >= 0
+        else {
+            reply(Self.encode(RuntimeEndpointReply.rejected(.malformedRequest)), nil)
+            return
+        }
+
+        // The frozen `.maintenance` endpoint answers in every host state and
+        // ignores the client's header version (runtime-api.md §12.1): only
+        // the code-signing requirement gates it.
+        if endpointRequest.kind == .maintenance {
+            requestMaintenanceEndpoint(endpointRequest, reply: reply)
+            return
+        }
+        guard
             endpointRequest.kind == .control,
             endpointRequest.apiVersion.major == runtimeAPIVersion.major,
             endpointRequest.apiVersion.minor <= runtimeAPIVersion.minor
@@ -933,6 +964,34 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
             requestedVersion: endpointRequest.apiVersion,
             reply: reply
         )
+    }
+
+    /// Grants the frozen maintenance endpoint (runtime-api.md §12.1): the
+    /// same code-signing requirement as control, but no version negotiation
+    /// and available in every host state.
+    private func requestMaintenanceEndpoint(
+        _ endpointRequest: RuntimeEndpointRequest,
+        reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void
+    ) {
+        guard
+            let identifier = Self.expectedIdentifier(
+                for: endpointRequest.clientKind,
+                buildIdentity: buildInfo.buildIdentity
+            ), endpointRequest.claimedIdentity == identifier,
+            let requirement = clientRequirements[endpointRequest.clientKind.rawValue]
+        else {
+            reply(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
+            return
+        }
+        let maintenanceListener = RuntimeXPCMaintenanceListener(
+            host: host,
+            requirement: requirement
+        )
+        maintenanceListeners[ObjectIdentifier(maintenanceListener)] = maintenanceListener
+        maintenanceListener.delegate.onAccepted = { [weak self, maintenanceListener] in
+            self?.maintenanceListeners.removeValue(forKey: ObjectIdentifier(maintenanceListener))
+        }
+        reply(Self.encode(RuntimeEndpointReply.granted), maintenanceListener.listener.endpoint)
     }
 
     /// Grants a control endpoint to a wrapper whose bundle ID and cdhash
@@ -4996,3 +5055,59 @@ private func safeMessage(for code: String) -> String {
 }
 extension CheckSelfUpdateRequest: VersionedControlRequest {}
 extension SelfUpdateNote: VersionedControlRequest {}
+extension MaintenanceControlRequest: VersionedControlRequest {}
+
+// MARK: - Frozen maintenance endpoint (runtime-api.md §12.1)
+
+/// Accepts one maintenance connection and exports a `MaintenanceControlService`
+/// whose `perform` envelope dispatches `MaintenanceControlOperation`s. New
+/// operations extend the request DTO, never this listener — the endpoint is
+/// additive-only and answers in every host state.
+private final class MaintenanceListenerDelegate: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
+    private let host: RuntimeHost
+
+    init(host: RuntimeHost) {
+        self.host = host
+    }
+
+    var onAccepted: @Sendable () -> Void = {}
+
+    func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
+        connection.exportedInterface = NSXPCInterface(with: RuntimeMaintenanceXPC.self)
+        connection.exportedObject = MaintenanceControlService(host: host)
+        connection.resume()
+        onAccepted()
+        listener.invalidate()
+        return true
+    }
+}
+
+/// Host-side implementation of the frozen maintenance XPC surface.
+private final class MaintenanceControlService: NSObject, RuntimeMaintenanceXPC, @unchecked Sendable {
+    private let host: RuntimeHost
+
+    init(host: RuntimeHost) {
+        self.host = host
+    }
+
+    func perform(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = XPCDataReply(reply)
+        Task {
+            let controlRequest: MaintenanceControlRequest
+            do {
+                controlRequest = try JSONDecoder().decode(MaintenanceControlRequest.self, from: request)
+            } catch {
+                response.send(Self.encode(MaintenanceControlReply(
+                    error: RuntimeWireError(domain: "maintenance", code: "malformedRequest", message: "")
+                )))
+                return
+            }
+            let replyValue = await host.maintenanceOperation(controlRequest)
+            response.send(Self.encode(replyValue))
+        }
+    }
+
+    private static func encode<T: Encodable>(_ value: T) -> Data {
+        (try? JSONEncoder().encode(value)) ?? Data()
+    }
+}

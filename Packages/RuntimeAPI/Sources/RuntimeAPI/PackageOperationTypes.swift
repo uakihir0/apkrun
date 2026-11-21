@@ -956,6 +956,11 @@ public struct RuntimeWireError: Error, Codable, Sendable, Equatable {
     public static func store(_ code: String, message: String, remediation: String? = nil) -> Self {
         Self(domain: "store", code: "store.\(code)", message: message, remediation: remediation)
     }
+
+    /// Creates a maintenance-domain error (runtime-api.md §12).
+    public static func maintenance(_ code: String, message: String, remediation: String? = nil) -> Self {
+        Self(domain: "maintenance", code: "maintenance.\(code)", message: message, remediation: remediation)
+    }
 }
 
 /// A `settings.json` patch of dotted keys (host-ui.md §7): `set` writes a

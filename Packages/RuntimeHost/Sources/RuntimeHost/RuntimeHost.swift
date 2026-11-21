@@ -177,6 +177,17 @@ public actor RuntimeHost {
     var updateBootedForInstall = false
     /// `updates.waiting` registers once when the update service is created.
     var updatesHealthChecksRegistered = false
+    /// The lazily built maintenance coordinator (runtime-api.md §12).
+    var _maintenanceService: MaintenanceService?
+    /// Whether an image migration is in progress (#59 reports it here).
+    var imageMigrating = false
+    /// `restartForUpdate` set this; the daemon exits at the next idle check.
+    var restartExitRequested = false
+
+    /// Version and build the maintenance endpoint reports (§12).
+    var buildIdentity: (marketingVersion: String, buildNumberInt: Int) {
+        (buildInfo.marketingVersion, Int(buildInfo.buildNumber) ?? 0)
+    }
     private var packageActivityReservations = PackageActivityReservations()
     /// The perf record writer (`perf/launches.jsonl`), created with `paths`.
     private var perfRecords: PerfRecordWriter?
@@ -4232,6 +4243,12 @@ public actor RuntimeHost {
 
     /// Whether the daemon can exit after its idle grace period without cancelling an operation.
     public func canExitWhenIdle() async -> Bool {
+        if restartExitRequested {
+            // `restartPending` only needs sessions gone: pending installs and
+            // scheduled update work do not hold the daemon (§3.7).
+            guard let service = sessionServiceForIntegrations() else { return true }
+            return await service.sessionSnapshots().isEmpty
+        }
         guard hasStarted, !isShuttingDown, activeLifecycleOperations == 0 else {
             return false
         }

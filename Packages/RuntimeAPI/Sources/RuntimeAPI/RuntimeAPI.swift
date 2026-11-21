@@ -937,3 +937,14 @@ public protocol RuntimeSessionService: Sendable {
 
 /// The package and application session operations shared by embedded and daemon clients.
 public protocol RuntimeService: RuntimePackageService, RuntimeSessionService {}
+
+/// Frozen maintenance endpoint implemented by apkrund (runtime-api.md §12.1).
+///
+/// One envelope method carries every maintenance operation so the endpoint
+/// stays additive-only: new operations extend `MaintenanceControlOperation`
+/// inside `MaintenanceControlRequest` without a new XPC selector. The server
+/// ignores the request header's API version and answers in every host state.
+@objc public protocol RuntimeMaintenanceXPC {
+    /// Performs a maintenance control operation.
+    func perform(_ request: Data, reply: @escaping (Data) -> Void)
+}

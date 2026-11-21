@@ -3230,6 +3230,7 @@ public actor RuntimeHost {
         return LauncherBuild(
             launcherAPI: plist["APKRunLauncherAPI"] as? String ?? "1.0",
             launcherVersion: plist["CFBundleShortVersionString"] as? String ?? "0.1.0",
+            buildIdentity: plist["APKRunBuildIdentity"] as? String ?? "dev",
             executableURL: executable
         )
     }

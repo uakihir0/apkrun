@@ -403,6 +403,37 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Returns the registry row of one package's wrapper (runtime-api.md §10.2).
+    public func wrapperInfo(
+        packageID: RuntimePackageID
+    ) async throws(RuntimeControlClientError) -> WrapperInfo {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeWrapperInfoControlRequest(
+                header: makeHeader(),
+                packageID: packageID
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.wrapperInfo(data)
+            let reply = try Self.decode(RuntimeWrapperInfoControlReply.self, from: response)
+            guard (reply.result != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let result = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return result
+        } catch {
+            let failure = error as? RuntimeControlClientError ?? .malformedReply
+            invalidateAfterTransportFailure(opened.channel, error: failure)
+            throw failure
+        }
+    }
+
     /// Lists managed packages or the Android inventory already known to the daemon.
     public func listPackages(
         filter: RuntimePackageFilter = .managed
@@ -2274,6 +2305,8 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func createWrapper(_ request: Data, icon: FileHandle?) async throws(RuntimeControlClientError) -> Data
     /// Finishes a staged wrapper placement (wrapper.md §6.3).
     func placeStagedWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Returns the registry row of one package's wrapper (runtime-api.md §10.2).
+    func wrapperInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Returns the approval prompts waiting for APKRun.app.
     func pendingApprovals(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Answers an approval prompt.
@@ -2828,6 +2861,21 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.createWrapper(request, icon: icon) { response in finish(.success(response)) }
+        }
+    }
+
+    /// Returns the registry row of one package's wrapper (runtime-api.md §10.2).
+    func wrapperInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.wrapperInfo(request) { response in finish(.success(response)) }
         }
     }
 

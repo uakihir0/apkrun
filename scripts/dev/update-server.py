@@ -7,8 +7,19 @@ Serves Tests/Fixtures/update-repos/ on http://127.0.0.1:<port>:
   /local/<package>/<versionCode>/<file>          artifact bytes
   /direct/<path>                                  fixtures under direct/
   /fdroid/<path>                                  the F-Droid v2 fixture repo
+  /github/<owner>/<name>/releases                 GitHub Releases fixture JSON
+  /github-limited/...                             403 with an exhausted rate limit
+  /github-assets/<file>                           release asset bytes
+  /github-needauth/<owner>/<name>/releases        releases only with Authorization
+  /github-probe-listing                           releases only without Authorization
+  /github-probe-asset                             asset bytes only without Authorization
+  /github-redirect/releases                       302 to the no-auth probe (localhost)
   /status/<code>                                  empty reply with that status
   /redirect/<code>/<path>                         3xx to /<path>
+
+The /github JSON fixtures substitute `__BASE__` and `__BASE_LOCALHOST__`
+(same server, different host) so asset URLs and redirects exercise the
+provider's cross-host Authorization handling.
 
 If-None-Match is honored: synthesized manifests and fixture files carry a
 weak ETag, and a matching request answers 304. `--delay <seconds>` holds
@@ -107,9 +118,20 @@ class Handler(BaseHTTPRequestHandler):
     root = "."
     delay = 0.0
     base_url = ""
+    base_localhost = ""
 
     def log_message(self, *_args):  # quiet
         pass
+
+    def github_listing(self, rel: str):
+        """A releases JSON fixture with __BASE__/__BASE_LOCALHOST__ filled in."""
+        data = read_file(self.root, rel)
+        if data is None:
+            return None
+        text = data.decode("utf-8")
+        text = text.replace("__BASE_LOCALHOST__", self.base_localhost)
+        text = text.replace("__BASE__", self.base_url)
+        return text.encode("utf-8")
 
     def do_GET(self):
         if self.delay:
@@ -150,6 +172,42 @@ class Handler(BaseHTTPRequestHandler):
             body = read_file(self.root, os.path.join(*parts))
             if parts[-1].endswith(".json"):
                 headers["Content-Type"] = "application/json"
+        elif parts[:1] == ["github-limited"]:
+            status = 403
+            headers["x-ratelimit-remaining"] = "0"
+            headers["x-ratelimit-reset"] = str(int(time.time()) + 3600)
+            body = b""
+        elif parts == ["github-probe-listing"]:
+            if self.headers.get("Authorization"):
+                status = 403
+                body = b""
+            else:
+                body = self.github_listing(os.path.join("github", "probe", "releases.json"))
+                headers["Content-Type"] = "application/json"
+        elif parts == ["github-probe-asset"]:
+            if self.headers.get("Authorization"):
+                status = 403
+                body = b""
+            else:
+                body = read_file(self.root, os.path.join("github-assets", "probe.apk"))
+        elif parts[:1] == ["github-needauth"] and parts[1:2] == ["repos"] \
+                and parts[-1] == "releases" and len(parts) == 5:
+            if not self.headers.get("Authorization"):
+                status = 403
+                body = b""
+            else:
+                body = self.github_listing(os.path.join("github", parts[2], parts[3], "releases.json"))
+                headers["Content-Type"] = "application/json"
+        elif parts[:1] == ["github-assets"]:
+            body = read_file(self.root, os.path.join(*parts))
+        elif parts[:2] == ["github", "repos"] and parts[2] == "redirect" \
+                and parts[-1] == "releases":
+            status = 302
+            headers["Location"] = "%s/github-probe-listing" % self.base_localhost
+            body = b""
+        elif parts[:2] == ["github", "repos"] and parts[-1] == "releases" and len(parts) == 5:
+            body = self.github_listing(os.path.join("github", parts[2], parts[3], "releases.json"))
+            headers["Content-Type"] = "application/json"
         else:
             body = None
 
@@ -206,6 +264,7 @@ def main():
     server.server_address = (host, port)
     Handler.base_url = "http://%s:%d" % (
         "127.0.0.1" if host == "localhost" else host, port)
+    Handler.base_localhost = "http://localhost:%d" % port
     print("update-server.py: %s serving %s" % (Handler.base_url, Handler.root), flush=True)
     try:
         server.serve_forever()

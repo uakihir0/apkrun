@@ -272,7 +272,7 @@ public actor UpdateCoordinator {
             // TODO(#39): automatic continues into downloading → validating → staged.
             let note: String? =
                 providerRef.type == .github
-                && candidate.artifacts.contains(where: { $0.sha256 == nil })
+                    && candidate.artifacts.contains(where: { $0.sha256 == nil })
                 ? "No checksum published" : nil
             await appendHistory(
                 record: record, to: candidate.declaredVersionCode,

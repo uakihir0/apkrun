@@ -15,7 +15,7 @@ private let fdroidSignerA =
 private let fdroidPackageID = "io.apkrun.fixture.helloupdate"
 
 /// The committed `update-repos/` fixture root — `update-server.py --root`.
-private func updateReposRoot() -> URL {
+func updateReposRoot() -> URL {
     URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent()
         .deletingLastPathComponent().deletingLastPathComponent()

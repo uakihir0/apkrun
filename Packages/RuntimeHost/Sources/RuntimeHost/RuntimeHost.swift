@@ -1920,6 +1920,15 @@ public actor RuntimeHost {
             } catch {
                 throw Self.wrapperWireError(for: .customIconInvalid(.unreadable))
             }
+        } else if change.androidIcon {
+            if let rendered = await service.renderedIconLayers(for: packageID),
+                let composed = Self.composedIcon(
+                    kind: rendered.manifest.kind, layers: rendered.layers)
+            {
+                iconSource = .rendered(composed.icns)
+                iconDigest = composed.digest
+            }
+            try? await registry.setCustomIconFile(bundleID: entry.bundleId, fileName: nil)
         } else if let iconFile = entry.customization.iconFile {
             iconSource = .custom(
                 paths.wrapperIconsDirectory.appendingPathComponent(iconFile))

@@ -1225,6 +1225,8 @@ public struct WrapperRefreshWire: Codable, Equatable, Sendable {
     public var displayName: String?
     /// A replacement icon arrives as the call's file handle.
     public var icon: Bool
+    /// Restore the current Android icon, dropping a custom icon file.
+    public var androidIcon: Bool
     /// Only the launcher executable is refreshed.
     public var launcherOnly: Bool
     /// Makes the package local (wrapper.md §10.2) — #90 rejects it for now.
@@ -1236,12 +1238,14 @@ public struct WrapperRefreshWire: Codable, Equatable, Sendable {
     public init(
         displayName: String? = nil,
         icon: Bool = false,
+        androidIcon: Bool = false,
         launcherOnly: Bool = false,
         makeLocal: Bool = false,
         closeRunningApp: Bool = false
     ) {
         self.displayName = displayName
         self.icon = icon
+        self.androidIcon = androidIcon
         self.launcherOnly = launcherOnly
         self.makeLocal = makeLocal
         self.closeRunningApp = closeRunningApp

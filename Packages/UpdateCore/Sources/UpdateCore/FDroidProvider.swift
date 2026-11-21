@@ -14,8 +14,12 @@ public struct FDroidProvider: UpdateProvider {
         "43238d512c1e5eb2d6569f4a3afbf5523418b82e0a3ed1552770abb9a9c9ccab"
     /// The `entry.jar` download cap; the archive itself is held to 16 MiB.
     static let entryByteLimit: Int64 = 16 * 1024 * 1024
-    /// One index file download cap (same as the decode budget).
-    static let indexByteLimit: Int64 = Int64(FDroidIndexReader.indexByteLimit)
+    /// One index file download cap (the file may exceed the decode budget;
+    /// the reader only materializes the kept packages).
+    static let indexByteLimit: Int64 = FDroidIndexReader.indexFileByteLimit
+    /// A diff download cap: a diff decodes wholesale, so it stays inside
+    /// the 64 MiB decode budget.
+    static let diffByteLimit: Int64 = Int64(FDroidIndexReader.indexByteLimit)
 
     /// The provider identity stored on the package record.
     public var ref: UpdateProviderRef
@@ -88,28 +92,62 @@ public struct FDroidProvider: UpdateProvider {
     }
 
     /// Fetches and verifies `entry.jar`; used by `setUpdatePolicy`'s one
-    /// test request (§2.3) and by `check`.
+    /// test request (§2.3) and by `check`. A conditional GET reuses the
+    /// verified jar in the cache on a 304 — each package's check costs one
+    /// cheap request instead of a refetch (§4.5: the index refreshes at
+    /// most once per check interval for all packages together).
     /// - Throws: the verification failure.
     public func fetchEntry(context: ProviderContext) async throws(UpdateFailure) -> FDroidEntry {
         let jarURL = repository.appendingPathComponent("entry.jar")
-        let jarFile = FileManager.default.temporaryDirectory
-            .appendingPathComponent("apkrun-fdroid-entry-\(UUID().uuidString).jar")
-        defer { try? FileManager.default.removeItem(at: jarFile) }
-        let response = try await context.http.download(
-            jarURL, headers: [:], into: jarFile, byteLimit: Self.entryByteLimit)
-        guard (200...299).contains(response.status), !response.limitHit else {
-            if !(200...299).contains(response.status) {
+        let directory = try cacheDirectory(context: context)
+        let cachedJar = directory.appendingPathComponent("entry.jar")
+        let etagFile = directory.appendingPathComponent("entry.etag")
+        var headers: [String: String] = [:]
+        if let stored = try? String(contentsOf: etagFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !stored.isEmpty,
+            FileManager.default.fileExists(atPath: cachedJar.path)
+        {
+            headers["If-None-Match"] = stored
+        }
+        let response = try await context.http.get(
+            jarURL, headers: headers, byteLimit: Self.entryByteLimit)
+        let jarData: Data
+        if response.status == 304 {
+            guard let cached = try? Data(contentsOf: cachedJar) else {
+                throw .providerUnreachable(reason: "cannot read the cached entry.jar")
+            }
+            jarData = cached
+        } else {
+            guard (200...299).contains(response.status) else {
                 throw DirectProvider.statusFailure(
                     response.status, retryAfter: response.retryAfter)
             }
-            throw .providerMetadataInvalid(detail: "entry.jar: over 16 MiB")
+            guard response.body.count <= Self.entryByteLimit else {
+                throw .providerMetadataInvalid(detail: "entry.jar: over 16 MiB")
+            }
+            jarData = response.body
+        }
+        // The jar is verified from bytes on every check, cached or fresh.
+        let jarFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("apkrun-fdroid-entry-\(UUID().uuidString).jar")
+        defer { try? FileManager.default.removeItem(at: jarFile) }
+        do {
+            try jarData.write(to: jarFile)
+        } catch {
+            throw .providerUnreachable(reason: "cannot stage entry.jar")
         }
         let entryData = try FDroidIndexVerifier.entryJSON(in: jarFile, fingerprint: fingerprint)
         guard let entry = try? JSONDecoder().decode(FDroidEntry.self, from: entryData) else {
             throw .providerMetadataInvalid(detail: "entry.json: not an F-Droid v2 entry")
         }
-        try validate(entry.index)
-        for file in entry.diffs.values { try validate(file) }
+        try validate(entry.index, byteLimit: Self.indexByteLimit)
+        for file in entry.diffs.values { try validate(file, byteLimit: Self.diffByteLimit) }
+        // The verified jar becomes the cache for the next 304.
+        try? jarData.write(to: cachedJar)
+        if let etag = response.etag, !etag.isEmpty {
+            try? Data(etag.utf8).write(to: etagFile)
+        }
         return entry
     }
 
@@ -141,7 +179,8 @@ public struct FDroidProvider: UpdateProvider {
         var sawCompatibleShape = false
         for (key, version) in fdroidPackage.versions {
             guard version.manifest.versionCode > package.versionCode else { continue }
-            guard Self.abiFits(version.manifest.nativecode, abis: package.guest.abis) else {
+            guard Self.abiFits(version.manifest.nativecode ?? [], abis: package.guest.abis)
+            else {
                 continue
             }
             guard (version.manifest.usesSdk?.minSdkVersion ?? 1) <= package.guest.sdk else {
@@ -175,12 +214,18 @@ public struct FDroidProvider: UpdateProvider {
         guard let fileSHA = version.file.sha256, APKStoreCore.SHA256Digest(hex: fileSHA) != nil else {
             throw .providerMetadataInvalid(detail: "index: chosen version has no file.sha256")
         }
-        let artifactURL = repository.appendingPathComponent(version.file.name)
+        let artifactName = try Self.fileName(version.file.name)
+        let artifactURL = repository.appendingPathComponent(artifactName)
         guard Self.isAllowed(artifactURL) else {
             throw .providerMetadataInvalid(detail: "index: artifact URL is not allowed")
         }
         let cursor = ProviderCursor(
             type: .fdroid, value: "\(entry.timestamp):\(best.key)")
+        // A candidate the store already processed (refused validation,
+        // failed install) is not offered again on the next check (§4.2).
+        if !context.userInitiated, package.lastCursor == cursor {
+            return nil
+        }
         return UpdateCandidate(
             packageID: package.id,
             provider: ref,
@@ -273,6 +318,7 @@ public struct FDroidProvider: UpdateProvider {
         let cached = try? JSONDecoder().decode(
             IndexMeta.self, from: Data(contentsOf: metaFile))
         if cached?.timestamp == entry.timestamp,
+            cached?.sha256 == entry.index.sha256,
             FileManager.default.fileExists(atPath: indexFile.path),
             let data = try? Data(contentsOf: indexFile)
         {
@@ -286,7 +332,8 @@ public struct FDroidProvider: UpdateProvider {
             FileManager.default.fileExists(atPath: indexFile.path)
         {
             do {
-                let diffFile = try await fetchFile(diff, context: context)
+                let diffFile = try await fetchFile(
+                    diff, byteLimit: Self.diffByteLimit, context: context)
                 let diffData = try Data(contentsOf: diffFile)
                 let indexData = try Data(contentsOf: indexFile)
                 let merged = try reader.merged(index: indexData, diff: diffData)
@@ -303,15 +350,16 @@ public struct FDroidProvider: UpdateProvider {
         }
 
         // Full index path.
-        let file = try await fetchFile(entry.index, context: context)
+        let file = try await fetchFile(
+            entry.index, byteLimit: Self.indexByteLimit, context: context)
         let data: Data
         do {
             data = try Data(contentsOf: file)
         } catch {
             throw .providerUnreachable(reason: "cannot read the downloaded index")
         }
-        guard data.count <= FDroidIndexReader.indexByteLimit else {
-            throw .providerMetadataInvalid(detail: "index: over 64 MiB")
+        guard Int64(data.count) <= Self.indexByteLimit else {
+            throw .providerMetadataInvalid(detail: "index: over the index file limit")
         }
         try write(data: data, to: indexFile)
         try write(
@@ -322,17 +370,18 @@ public struct FDroidProvider: UpdateProvider {
 
     /// Downloads `<repository>/<file.name>` to a temporary file and checks
     /// the declared size and SHA-256 (§4.5).
-    private func fetchFile(_ file: FDroidEntry.File, context: ProviderContext)
-        async throws(UpdateFailure) -> URL
-    {
-        let url = repository.appendingPathComponent(file.name)
+    private func fetchFile(
+        _ file: FDroidEntry.File, byteLimit: Int64, context: ProviderContext
+    ) async throws(UpdateFailure) -> URL {
+        let name = try Self.fileName(file.name)
+        let url = repository.appendingPathComponent(name)
         guard Self.isAllowed(url) else {
             throw .providerMetadataInvalid(detail: "index file URL is not allowed")
         }
         let destination = FileManager.default.temporaryDirectory
             .appendingPathComponent("apkrun-fdroid-\(UUID().uuidString).json")
         let response = try await context.http.download(
-            url, headers: [:], into: destination, byteLimit: Self.indexByteLimit)
+            url, headers: [:], into: destination, byteLimit: byteLimit)
         guard (200...299).contains(response.status) else {
             throw DirectProvider.statusFailure(response.status, retryAfter: response.retryAfter)
         }
@@ -356,16 +405,25 @@ public struct FDroidProvider: UpdateProvider {
         }
     }
 
-    private func validate(_ file: FDroidEntry.File) throws(UpdateFailure) {
-        guard !file.name.isEmpty, !file.name.hasPrefix("/"),
-            !file.name.split(separator: "/").contains("..")
+    /// The repository-relative file name: a leading `/` (which the real
+    /// repository writes) is stripped; `..` segments are refused.
+    static func fileName(_ raw: String) throws(UpdateFailure) -> String {
+        var name = raw
+        while name.hasPrefix("/") { name = String(name.dropFirst()) }
+        guard !name.isEmpty, !name.hasPrefix("/"),
+            !name.split(separator: "/", omittingEmptySubsequences: false).contains("..")
         else {
             throw .providerMetadataInvalid(detail: "entry.json: bad file name")
         }
+        return name
+    }
+
+    private func validate(_ file: FDroidEntry.File, byteLimit: Int64) throws(UpdateFailure) {
+        _ = try Self.fileName(file.name)
         guard APKStoreCore.SHA256Digest(hex: file.sha256.lowercased()) != nil else {
             throw .providerMetadataInvalid(detail: "entry.json: file sha256 is not 64 hex")
         }
-        guard file.size >= 0, file.size <= Self.indexByteLimit else {
+        guard file.size >= 0, file.size <= byteLimit else {
             throw .providerMetadataInvalid(detail: "entry.json: file size out of range")
         }
     }

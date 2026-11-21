@@ -254,20 +254,18 @@ public actor SharedFolderService {
         guard pageToken.isEmpty || Int(pageToken) != nil else {
             throw SharedFolderFailure(.invalidArgument)
         }
-        var dirFD: Int32 = -1
-        defer { if dirFD >= 0 { close(dirFD) } }
         let resolved = try resolve(root: root, path: path, requireDirectory: true)
-        dirFD = resolved
-
         var entries: [SharedDocInfo] = []
-        let stream = fdopendir(dirFD)
-        guard stream != nil else { throw SharedFolderFailure(.internal, .transferFailed(detail: "fdopendir")) }
-        // fdopendir takes ownership on success; re-point dirFD so defer does
-        // not close it twice.
-        dirFD = -1
+        let stream = fdopendir(resolved)
+        guard stream != nil else {
+            close(resolved)
+            throw SharedFolderFailure(.internal, .transferFailed(detail: "fdopendir"))
+        }
+        // fdopendir took ownership of the descriptor; it stays the anchor for
+        // fstatat so a renamed directory cannot redirect the stats (§6.4).
+        let dirFD = dirfd(stream)
         defer { closedir(stream) }
         var index = 0
-        let rootPath = root.url.path
         while let entry = readdir(stream) {
             let name = withUnsafePointer(to: entry.pointee.d_name) { ptr in
                 ptr.withMemoryRebound(to: CChar.self, capacity: 256) {
@@ -276,8 +274,7 @@ public actor SharedFolderService {
             }
             if name == "." || name == ".." || Self.isHiddenOrPackage(name) { continue }
             let childPath = path.isEmpty ? name : path + "/" + name
-            let full = rootPath + "/" + childPath
-            guard let info = Self.docInfo(path: childPath, name: name, fullPath: full) else {
+            guard let info = Self.docInfo(path: childPath, name: name, inDirectory: dirFD) else {
                 continue
             }
             if index >= offset {
@@ -303,10 +300,9 @@ public actor SharedFolderService {
                 mtimeMilliseconds: 0, mimeType: "")
         }
         let resolved = try resolve(root: root, path: path, requireDirectory: false)
-        close(resolved)
+        defer { close(resolved) }
         let name = path.split(separator: "/").last.map(String.init) ?? path
-        let full = root.url.path + "/" + path
-        guard let info = Self.docInfo(path: path, name: name, fullPath: full) else {
+        guard let info = Self.docInfo(path: path, name: name, descriptor: resolved) else {
             throw SharedFolderFailure(.notFound)
         }
         return info
@@ -405,17 +401,33 @@ public actor SharedFolderService {
         }
         if fsync { Darwin.fsync(entry.descriptor) }
         let fd = entry.descriptor
+        var quarantined = true
         if entry.written {
-            fsetxattr(
-                fd, "com.apple.quarantine", Self.quarantineValue(package: entry.package),
-                Self.quarantineValue(package: entry.package).utf8.count, 0, 0)
+            quarantined =
+                fsetxattr(
+                    fd, "com.apple.quarantine", Self.quarantineValue(package: entry.package),
+                    Self.quarantineValue(package: entry.package).utf8.count, 0, 0) == 0
         }
         close(fd)
+        // An Android-written file that cannot be quarantined must not end in
+        // a silent success (§6.1).
+        if !quarantined {
+            throw SharedFolderFailure(.internal, .transferFailed(detail: "quarantine"))
+        }
     }
 
-    /// Closes every open handle (runtime stop, §6.4).
+    /// Closes every open handle (runtime stop, §6.4). Written files still get
+    /// their quarantine attribute, like `closeFile`.
     public func closeAll() {
-        for (_, entry) in handles { close(entry.descriptor) }
+        for (_, entry) in handles {
+            if entry.written {
+                fsetxattr(
+                    entry.descriptor, "com.apple.quarantine",
+                    Self.quarantineValue(package: entry.package),
+                    Self.quarantineValue(package: entry.package).utf8.count, 0, 0)
+            }
+            close(entry.descriptor)
+        }
         handles.removeAll()
     }
 
@@ -430,8 +442,38 @@ public actor SharedFolderService {
         name: String,
         isDirectory: Bool
     ) async throws(SharedFolderFailure) -> SharedDocInfo {
+        // ACTION_CREATE_DOCUMENT reaches the provider through the picker
+        // (com.android.documentsui): the app that asked for the save is not
+        // visible here, and the picker's choice is itself the user's consent.
+        // The picker may therefore create in roots whose cap is readWrite;
+        // every other write op still requires the real package's access.
+        if package.rawValue == Self.browserOnlyPackage {
+            let roots = await source.roots()
+            guard let root = roots.first(where: { $0.rootID == rootID }) else {
+                throw SharedFolderFailure(.notFound)
+            }
+            guard root.maxAccess == .readWrite else {
+                throw SharedFolderFailure(.permissionDenied, .readOnly)
+            }
+            return try await create(
+                root: root, package: package,
+                parentPath: parentPath, name: name, isDirectory: isDirectory)
+        }
         let (root, _) = try await checkedAccess(
             package: package, rootID: rootID, write: true)
+        return try await create(
+            root: root, package: package,
+            parentPath: parentPath, name: name, isDirectory: isDirectory)
+    }
+
+    /// The `create` half of `createDocument` after access is settled.
+    private func create(
+        root: SharedFolderRoot,
+        package: RuntimePackageID,
+        parentPath: String,
+        name: String,
+        isDirectory: Bool
+    ) async throws(SharedFolderFailure) -> SharedDocInfo {
         guard let clean = Self.sanitizedName(name), !Self.isHiddenOrPackage(clean) else {
             throw SharedFolderFailure(.permissionDenied, .pathRejected(problem: .hidden))
         }
@@ -447,12 +489,17 @@ public actor SharedFolderService {
                 created = mkdirat(parentFD, candidate, 0o755) == 0
             } else {
                 let fd = openat(parentFD, candidate, O_WRONLY | O_CREAT | O_EXCL, 0o644)
-                if fd >= 0 { close(fd) }
+                if fd >= 0 {
+                    // A file Android created starts out quarantined (§6.1).
+                    fsetxattr(
+                        fd, "com.apple.quarantine", Self.quarantineValue(package: package),
+                        Self.quarantineValue(package: package).utf8.count, 0, 0)
+                    close(fd)
+                }
                 created = fd >= 0
             }
             if created {
-                let full = root.url.path + "/" + childPath
-                if let info = Self.docInfo(path: childPath, name: candidate, fullPath: full) {
+                if let info = Self.docInfo(path: childPath, name: candidate, inDirectory: parentFD) {
                     return info
                 }
                 throw SharedFolderFailure(.internal, .transferFailed(detail: "stat after create"))
@@ -482,8 +529,15 @@ public actor SharedFolderService {
         }
         let isDir = (info.st_mode & S_IFMT) == S_IFDIR
         close(resolved)
-        let result = unlinkat(
-            AT_FDCWD, root.url.path + "/" + path, isDir ? AT_REMOVEDIR : 0)
+        // The unlink goes through the directory descriptor the confinement
+        // check opened: a directory swapped for a link between the check and
+        // the delete cannot redirect it outside the root.
+        let parentPath = path.split(separator: "/", omittingEmptySubsequences: false)
+            .dropLast().joined(separator: "/")
+        let name = path.split(separator: "/").last.map(String.init) ?? path
+        let parentFD = try resolve(root: root, path: parentPath, requireDirectory: true)
+        defer { close(parentFD) }
+        let result = unlinkat(parentFD, name, isDir ? AT_REMOVEDIR : 0)
         guard result == 0 else {
             if errno == ENOTEMPTY {
                 throw SharedFolderFailure(.invalidArgument)
@@ -523,8 +577,7 @@ public actor SharedFolderService {
         guard renameat(parentFD, oldName, parentFD, clean) == 0 else {
             throw SharedFolderFailure(.internal, .transferFailed(detail: "rename"))
         }
-        let full = root.url.path + "/" + newPath
-        guard let info = Self.docInfo(path: newPath, name: clean, fullPath: full) else {
+        guard let info = Self.docInfo(path: newPath, name: clean, inDirectory: parentFD) else {
             throw SharedFolderFailure(.internal, .transferFailed(detail: "stat after rename"))
         }
         return info
@@ -617,7 +670,9 @@ public actor SharedFolderService {
             if !isLast || requireDirectory {
                 componentFlags |= O_DIRECTORY
             } else {
-                componentFlags = flags | O_NOFOLLOW
+                // O_NONBLOCK keeps a fifo or socket from wedging the open; the
+                // type check below still refuses anything but files and dirs.
+                componentFlags = flags | O_NOFOLLOW | O_NONBLOCK
             }
             let child = openat(fd, name, componentFlags)
             close(fd)
@@ -660,10 +715,31 @@ public actor SharedFolderService {
 
     /// `stat` metadata for one child entry; nil for non-regular, non-directory
     /// entries (devices, sockets, fifos, dangling symlinks), which §6.4
-    /// filters out. `lstat` is used so symlinks are never followed.
-    private static func docInfo(path: String, name: String, fullPath: String) -> SharedDocInfo? {
+    /// filters out. `fstatat` keeps the stat anchored to the descriptor the
+    /// path check opened, so a swapped directory cannot point it outside the
+    /// root. `descriptor` stats an already-open file (AT_FDCWD/AT_EMPTY_PATH).
+    private static func docInfo(
+        path: String, name: String, inDirectory dirFD: Int32
+    ) -> SharedDocInfo? {
         var info = Darwin.stat()
-        guard lstat(fullPath, &info) == 0 else { return nil }
+        guard fstatat(dirFD, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else { return nil }
+        return docInfo(path: path, name: name, info: info)
+    }
+
+    /// `stat` metadata for an entry whose descriptor is already open.
+    private static func docInfo(
+        path: String, name: String, descriptor fd: Int32
+    ) -> SharedDocInfo? {
+        var info = Darwin.stat()
+        guard fstat(fd, &info) == 0 else { return nil }
+        return docInfo(path: path, name: name, info: info)
+    }
+
+    /// `stat` metadata for one child entry; nil for non-regular, non-directory
+    /// entries (devices, sockets, fifos, dangling symlinks), which §6.4
+    /// filters out.
+    private static func docInfo(path: String, name: String, info: Darwin.stat) -> SharedDocInfo? {
+        var info = info
         let kind = info.st_mode & S_IFMT
         let isDir = kind == S_IFDIR
         guard isDir || kind == S_IFREG else { return nil }
@@ -718,12 +794,16 @@ public actor SharedFolderService {
         return name.isEmpty ? nil : name
     }
 
-    /// `name (n)` before the extension, for unique creates (§7.5).
+    /// `name (n)` before the extension, for unique creates (§7.5). The base
+    /// is shortened so the suffix always fits: a 200-byte name still produces
+    /// a distinct candidate, never the original again.
     private static func numberedName(_ name: String, _ n: Int) -> String {
         let ns = name as NSString
         let ext = ns.pathExtension
+        let suffix = " (\(n))" + (ext.isEmpty ? "" : ".\(ext)")
         let base = ext.isEmpty ? name : ns.deletingPathExtension
-        let numbered = "\(base) (\(n))" + (ext.isEmpty ? "" : ".\(ext)")
+        let budget = max(1, 200 - suffix.utf8.count)
+        let numbered = truncateToUTF8ByteLimit(base, limit: budget) + suffix
         return truncateToUTF8ByteLimit(numbered, limit: 200)
     }
 

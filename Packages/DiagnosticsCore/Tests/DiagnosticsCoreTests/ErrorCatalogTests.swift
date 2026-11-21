@@ -68,6 +68,7 @@ import Testing
                 "verificationFailed", "registrationFailed", "registryUnavailable",
                 "stagingExpired", "bundleInvalid",
                 "approvalDenied", "approvalTimedOut", "approvalNotFound",
+                "bootstrapInvalid", "bootstrapNotAllowed",
                 "launchServicesMissing", "refreshBlocked", "wrapperRunning",
             ].map { "wrapper.\($0)" }
             + [

@@ -20,6 +20,8 @@ final class ClipboardController {
     private var observers: [NSObjectProtocol] = []
     private var keyMonitor: Any?
     private var eventTask: Task<Void, Never>?
+    /// The window the controller serves; the limit message is a sheet on it.
+    private weak var window: NSWindow?
     /// True while a consumed ⌘V is being re-dispatched, so the monitor passes it.
     private var replayingPaste = false
 
@@ -38,6 +40,7 @@ final class ClipboardController {
 
     /// Starts watching `window`, the ⌘V monitor, and the integrations topic.
     func install(on window: NSWindow) {
+        self.window = window
         let center = NotificationCenter.default
         observers.append(
             center.addObserver(
@@ -133,7 +136,27 @@ final class ClipboardController {
         if ack == nil {
             adapter.pushFailed(changeCount: adapter.lastReadChangeCount)
         }
+        // An image the limits dropped still shows the limit message on the
+        // window (desktop-integration.md §4.4).
+        if adapter.droppedImageTooLarge != nil || ack?.droppedImageTooLarge == true {
+            showImageLimitMessage()
+        }
         return ack
+    }
+
+    /// "The window shows the limit message" (desktop-integration.md §4.4):
+    /// an image over 16 MiB or 8192 px per side does not cross.
+    private func showImageLimitMessage() {
+        let alert = NSAlert()
+        alert.messageText = "The image is too large to paste."
+        alert.informativeText =
+            "Images over 16 MB or 8192 pixels per side are not sent. The text still went through."
+        alert.alertStyle = .informational
+        if let window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
     }
 
     /// Applies `clipboardFromGuest` events for this session (§4.3).

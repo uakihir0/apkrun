@@ -5,7 +5,7 @@ import VirtualMachineCore
 /// Owns `Runtime/instance/`: provisioning, loading, Reset Android, and its 7-day recovery points
 /// (android-image.md §5, runtime-daemon.md §9.5).
 public actor InstanceStore {
-    private let paths: APKRunPaths
+    let paths: APKRunPaths
     private let provisioner: InstanceDiskProvisioner
     private let logger: APKLogger
 
@@ -176,7 +176,7 @@ public actor InstanceStore {
         try? FileManager.default.removeItem(at: paths.bootDirectory)
     }
 
-    private func write(_ configuration: InstanceConfiguration) throws(ImageFailure) {
+    func write(_ configuration: InstanceConfiguration) throws(ImageFailure) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         do {
@@ -196,7 +196,7 @@ public actor InstanceStore {
         image.manifest.userdata.schemaVersion
     }
 
-    private static func recoveryTimestamp(_ date: Date) -> String {
+    static func recoveryTimestamp(_ date: Date) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC") ?? .current
         let components = calendar.dateComponents(

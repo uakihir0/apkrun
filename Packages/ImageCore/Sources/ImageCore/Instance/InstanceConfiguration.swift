@@ -19,6 +19,23 @@ public struct InstanceConfiguration: Codable, Equatable, Sendable {
     public var userdataGeneration: UUID
     /// Whether the first-boot settings of android-image.md §7.6 have been applied.
     public var firstBootSettingsApplied: Bool
+    /// A migration in flight, `migrating(A, B)` (android-image.md §12.3). Written
+    /// before step 3 changes anything, removed by the last write of 6a/6b.
+    public var migration: Migration?
+
+    /// `RuntimeImageState.migrating(A, B)` persisted in `instance.json`.
+    public struct Migration: Codable, Equatable, Sendable {
+        /// The image the instance was on.
+        public var from: ImageVersion
+        /// The image being migrated to.
+        public var to: ImageVersion
+
+        /// Creates a record A → B.
+        public init(from: ImageVersion, to: ImageVersion) {
+            self.from = from
+            self.to = to
+        }
+    }
 
     /// Creates a value with every field.
     public init(
@@ -29,7 +46,8 @@ public struct InstanceConfiguration: Codable, Equatable, Sendable {
         imageVersion: ImageVersion,
         userdataSchemaVersion: Int,
         userdataGeneration: UUID,
-        firstBootSettingsApplied: Bool = false
+        firstBootSettingsApplied: Bool = false,
+        migration: Migration? = nil
     ) {
         self.instanceID = instanceID
         self.machineIdentifier = machineIdentifier
@@ -39,6 +57,7 @@ public struct InstanceConfiguration: Codable, Equatable, Sendable {
         self.userdataSchemaVersion = userdataSchemaVersion
         self.userdataGeneration = userdataGeneration
         self.firstBootSettingsApplied = firstBootSettingsApplied
+        self.migration = migration
     }
 
     /// `androidboot.serialno`: `APKRUN` and the first 10 hex digits of the instance UUID.

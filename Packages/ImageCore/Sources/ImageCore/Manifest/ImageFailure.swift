@@ -54,6 +54,27 @@ public enum ImageFailure: APKRunError, Equatable {
     /// No image is current yet, so there is nothing to boot (android-image.md §9.3).
     case noCurrentImage
 
+    /// The image needs a newer APKRun than the one running (§12.1).
+    case incompatibleRuntime(minimum: String, found: String)
+
+    /// The image's guest protocol range does not intersect the host's (§12.1).
+    case incompatibleProtocol(minimum: Int, maximum: Int, hostMinimum: Int, hostMaximum: Int)
+
+    /// The image cannot boot the instance's userdata schema (§12.1).
+    case userdataSchemaUnsupported(schema: Int, supported: [Int])
+
+    /// The current image is older than the target's `compatibility.upgradeFrom` floor (§12.1).
+    case migrationSourceTooOld(source: String, minimum: String)
+
+    /// An archive entry is not a plain relative file or directory (§12.4, manifest §8.3).
+    case imageArchiveUnsafeEntry(path: String)
+
+    /// apkrund found a `migration` record with no VM running (§12.3 crash safety).
+    case migrationInterrupted
+
+    /// The migrated image failed its health check and A was restored (§12.3 step 6b).
+    case migrationHealthFailed(report: String)
+
     /// The stable error-code namespace owned by ImageCore.
     public static let domain: ErrorDomain = .image
 
@@ -77,6 +98,13 @@ public enum ImageFailure: APKRunError, Equatable {
         case .downgradeRejected: "downgradeRejected"
         case .imageNotInstalled: "imageNotInstalled"
         case .noCurrentImage: "noCurrentImage"
+        case .incompatibleRuntime: "incompatibleRuntime"
+        case .incompatibleProtocol: "incompatibleProtocol"
+        case .userdataSchemaUnsupported: "userdataSchemaUnsupported"
+        case .migrationSourceTooOld: "migrationSourceTooOld"
+        case .imageArchiveUnsafeEntry: "imageArchiveUnsafeEntry"
+        case .migrationInterrupted: "migrationInterrupted"
+        case .migrationHealthFailed: "migrationHealthFailed"
         }
     }
 
@@ -113,6 +141,23 @@ public enum ImageFailure: APKRunError, Equatable {
             ["version": .text(version)]
         case .noCurrentImage:
             [:]
+        case .incompatibleRuntime(let minimum, let found):
+            ["minimum": .text(minimum), "found": .text(found)]
+        case .incompatibleProtocol(let minimum, let maximum, let hostMinimum, let hostMaximum):
+            [
+                "minimum": .count(minimum), "maximum": .count(maximum),
+                "hostMinimum": .count(hostMinimum), "hostMaximum": .count(hostMaximum),
+            ]
+        case .userdataSchemaUnsupported(let schema, let supported):
+            ["schema": .count(schema), "supported": .text(supported.map(String.init).joined(separator: ","))]
+        case .migrationSourceTooOld(let source, let minimum):
+            ["source": .text(source), "minimum": .text(minimum)]
+        case .imageArchiveUnsafeEntry(let path):
+            ["path": .fileName(path)]
+        case .migrationInterrupted:
+            [:]
+        case .migrationHealthFailed(let report):
+            ["report": .text(report)]
         }
     }
 

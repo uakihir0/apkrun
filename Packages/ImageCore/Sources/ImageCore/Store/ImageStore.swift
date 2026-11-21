@@ -3,10 +3,12 @@ import Darwin
 import DiagnosticsCore
 import Foundation
 
-/// Where an image comes from (android-image.md §9.1). The archive case arrives with #59.
+/// Where an image comes from (android-image.md §9.1, §12.4).
 public enum ImageSource: Sendable, Equatable {
     /// A bundle directory with the files of runtime-image-manifest.md §3.1 (a development install).
     case directory(URL)
+    /// A `.aar` archive of the bundle (runtime-image-manifest.md §8.3; android-image.md §12.4).
+    case archive(URL)
 }
 
 /// How much of an installed bundle to check (runtime-image-manifest.md §7.1).
@@ -131,8 +133,25 @@ public actor ImageStore {
     /// left as it is.
     @discardableResult
     public func install(from source: ImageSource) throws(ImageFailure) -> InstalledImage {
-        guard case .directory(let directory) = source else {
-            throw .manifestInvalid(path: "manifest.json", reason: "unsupported image source")
+        // Archives extract into a staging directory that is removed once the bundle has been
+        // cloned into `.installing-<version>/`.
+        var extractedStaging: URL?
+        let directory: URL
+        switch source {
+        case .directory(let source):
+            directory = source
+        case .archive(let archive):
+            let staging = paths.imageInstallStagingDirectory(name: "extract")
+            try remove(staging)
+            try makeDirectory(staging)
+            extractedStaging = staging
+            try ImageArchiveExtractor.extract(archive, to: staging)
+            directory = staging
+        }
+        defer {
+            if let extractedStaging {
+                try? FileManager.default.removeItem(at: extractedStaging)
+            }
         }
         let original = try checkedManifest(in: directory, cacheKey: nil)
         try checkFiles(in: directory, bundle: original, depth: .quick)
@@ -456,7 +475,7 @@ public actor ImageStore {
         }
     }
 
-    private func makeDirectory(_ url: URL) throws(ImageFailure) {
+    func makeDirectory(_ url: URL) throws(ImageFailure) {
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         } catch {
@@ -464,7 +483,7 @@ public actor ImageStore {
         }
     }
 
-    private func remove(_ url: URL) throws(ImageFailure) {
+    func remove(_ url: URL) throws(ImageFailure) {
         guard FileManager.default.fileExists(atPath: url.path) else {
             return
         }

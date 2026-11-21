@@ -58,12 +58,22 @@ final class AddFlowModel {
     /// (update-system.md §4.7). Nil when the host detected none.
     private(set) var suggestedProvider: ProviderSpec?
 
+    /// Whether a Mac app already exists for the inspected package. A
+    /// reinstall or update never regenerates one (AGENTS.md §4.13); the row
+    /// is offered again only when the previous one is gone.
+    private(set) var hasMacApp = false
+
     /// Whether the sheet offers **Create Mac app** (host-ui.md §6.1). Only a
     /// fresh or uninspected package may create one; an existing Mac app is
     /// never regenerated or moved by an update (AGENTS.md §4.13).
     var showsMacAppRow: Bool {
         guard let preview else { return false }
-        return preview.relation == .newPackage || preview.relation == .unknown
+        switch preview.relation {
+        case .newPackage, .unknown:
+            return true
+        default:
+            return !hasMacApp
+        }
     }
 
     /// Whether the installed app can be launched from the sheet.
@@ -99,6 +109,7 @@ final class AddFlowModel {
         wrapperError = nil
         wrapperStagingToken = nil
         installedPackageID = nil
+        hasMacApp = false
         Task { await inspect(supported, origin: origin) }
     }
 
@@ -121,6 +132,9 @@ final class AddFlowModel {
             let request = RuntimeImportPackageRequest(files: sources, origin: origin)
             let preview = try await serviceFactory().importPackage(request, files: handles)
             self.preview = preview
+            hasMacApp =
+                ((try? await serviceFactory().listWrappers()) ?? [])
+                .contains { $0.summary.packageID == preview.packageID }
             macAppName = preview.displayName
             location = defaultLocation
             stage = .review
@@ -130,8 +144,11 @@ final class AddFlowModel {
     }
 
     /// Feeds a preview into the review stage without file IO (T0 tests).
-    func inspectForTesting(_ preview: RuntimeImportPreview) async {
+    func inspectForTesting(
+        _ preview: RuntimeImportPreview, hasMacApp: Bool = false
+    ) async {
         self.preview = preview
+        self.hasMacApp = hasMacApp
         macAppName = preview.displayName
         location = defaultLocation
         stage = .review
@@ -357,6 +374,7 @@ final class AddFlowModel {
         wrapperError = nil
         wrapperStagingToken = nil
         installedPackageID = nil
+        hasMacApp = false
     }
 
     /// **Open ‹App›** on the installed stage.

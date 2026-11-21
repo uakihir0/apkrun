@@ -263,6 +263,23 @@ public struct FDroidIndexReader: Sendable {
     /// Creates a reader.
     public init() {}
 
+    /// The kept packages of an index file, read memory-mapped so the 64
+    /// MiB budget bounds heap use while the file itself may be larger
+    /// (§4.5).
+    /// - Throws: `providerMetadataInvalid` when the document is malformed or
+    ///   over the index file limit.
+    public func packages(in file: URL, keep: Set<PackageID>) throws(UpdateFailure) -> [PackageID:
+        FDroidPackage]
+    {
+        let data: Data
+        do {
+            data = try Data(contentsOf: file, options: .mappedIfSafe)
+        } catch {
+            throw .providerUnreachable(reason: "cannot read the index")
+        }
+        return try packages(in: data, keep: keep)
+    }
+
     /// The kept packages of an index document: only `keep` package IDs are
     /// decoded; other members are scanned byte-wise and skipped.
     /// - Throws: `providerMetadataInvalid` when the document is malformed or
@@ -304,16 +321,32 @@ public struct FDroidIndexReader: Sendable {
         JSONMemberScanner.objectValue(of: "repo", in: data, range: data.indices)
     }
 
-    /// Merges an RFC 7396 diff into the cached index bytes, one top-level
-    /// member at a time, and returns the merged index. Package members that
-    /// the diff does not touch are copied without decoding.
+    /// The buffered write chunk: package members pass through untouched
+    /// without decoding, so each is written in slices bounded by the
+    /// decode budget instead of copied whole.
+    private static let writeChunk = 8 * 1024 * 1024
+
+    /// Merges an RFC 7396 diff into the cached index file, one top-level
+    /// member at a time, streaming the merged index to `output`. The
+    /// input maps memory-mapped, untouched package members stream through
+    /// in chunks, and only touched members decode — the 64 MiB memory
+    /// budget holds even for a larger index file (§4.5).
     /// - Throws: `providerMetadataInvalid` on malformed input or an over-limit
-    ///   result.
-    public func merged(index data: Data, diff diffData: Data) throws(UpdateFailure) -> Data {
-        guard Int64(data.count) <= Self.indexFileByteLimit,
-            diffData.count <= Self.indexByteLimit
-        else {
-            throw .providerMetadataInvalid(detail: "index or diff: over the size limit")
+    ///   result; `providerUnreachable` when the files cannot be read/written.
+    public func merged(index indexFile: URL, diff diffData: Data, into output: URL)
+        throws(UpdateFailure)
+    {
+        guard diffData.count <= Self.indexByteLimit else {
+            throw .providerMetadataInvalid(detail: "diff: over the size limit")
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: indexFile, options: .mappedIfSafe)
+        } catch {
+            throw .providerUnreachable(reason: "cannot read the cached index")
+        }
+        guard Int64(data.count) <= Self.indexFileByteLimit else {
+            throw .providerMetadataInvalid(detail: "index: over the index file limit")
         }
         guard let patch = try? JSONSerialization.jsonObject(with: diffData),
             let patchObject = patch as? [String: Any]
@@ -324,13 +357,13 @@ public struct FDroidIndexReader: Sendable {
         // Top-level members other than `packages` merge wholesale (only
         // `repo` exists in IndexV2; unknown members merge or replace).
         var topLevel: [String: Any] = [:]
-        var packageSlices: [(String, Data)] = []
+        var packageRanges: [(String, Range<Int>)] = []
         for (name, range) in try Self.topLevelMembers(in: data) {
             if name == "packages" {
                 guard let members = JSONMemberScanner.members(in: data, range: range) else {
                     throw .providerMetadataInvalid(detail: "index: malformed packages object")
                 }
-                packageSlices = members.map { ($0.0, data.subdata(in: $0.1)) }
+                packageRanges = members
             } else {
                 guard
                     let value = try? JSONSerialization.jsonObject(
@@ -350,8 +383,6 @@ public struct FDroidIndexReader: Sendable {
             }
         }
 
-        // Merge packages member-wise so untouched members keep their raw
-        // bytes; decoding the whole map would defeat the byte budget.
         var packagePatch: [String: Any] = [:]
         if let value = patchObject["packages"] {
             guard let object = value as? [String: Any] else {
@@ -359,76 +390,136 @@ public struct FDroidIndexReader: Sendable {
             }
             packagePatch = object
         }
-        var patchedIDs = Set<String>()
-        var mergedPackages: [(String, Data)] = []
-        mergedPackages.reserveCapacity(packageSlices.count + packagePatch.count)
-        for (name, raw) in packageSlices {
-            guard let patchValue = packagePatch[name] else {
-                mergedPackages.append((name, raw))
-                continue
-            }
-            patchedIDs.insert(name)
-            if patchValue is NSNull { continue }
-            guard
-                let target = try? JSONSerialization.jsonObject(
-                    with: raw, options: [.fragmentsAllowed]),
-                let merged = try? JSONSerialization.data(
-                    withJSONObject: JSONMergePatch.apply(patchValue, to: target))
-            else {
-                throw .providerMetadataInvalid(detail: "diff: cannot merge package \(name)")
-            }
-            mergedPackages.append((name, merged))
-        }
-        for (name, patchValue) in packagePatch where !patchedIDs.contains(name) {
-            if patchValue is NSNull { continue }
-            let merged = JSONMergePatch.apply(patchValue, to: [String: Any]())
-            guard let encoded = try? JSONSerialization.data(withJSONObject: merged)
-            else {
-                throw .providerMetadataInvalid(detail: "diff: cannot add package \(name)")
-            }
-            mergedPackages.append((name, encoded))
-        }
 
-        var output = Data()
-        output.reserveCapacity(data.count)
-        output.append(UInt8(ascii: "{"))
-        var first = true
-        func emit(_ name: String, _ raw: Data) {
-            if !first { output.append(UInt8(ascii: ",")) }
-            first = false
+        do {
+            try Data().write(to: output)
+        } catch {
+            throw .providerUnreachable(reason: "cannot write the merged index")
+        }
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forWritingTo: output)
+        } catch {
+            throw .providerUnreachable(reason: "cannot write the merged index")
+        }
+        defer { try? handle.close() }
+        var written: Int64 = 0
+        func emit(_ bytes: Data) throws(UpdateFailure) {
+            written += Int64(bytes.count)
+            guard written <= Self.indexFileByteLimit else {
+                throw .providerMetadataInvalid(
+                    detail: "merged index: over the index file limit")
+            }
+            do {
+                try handle.write(contentsOf: bytes)
+            } catch {
+                throw .providerUnreachable(reason: "cannot write the merged index")
+            }
+        }
+        func emitMember(_ name: String, _ writeBody: () throws(UpdateFailure) -> Void)
+            throws(UpdateFailure)
+        {
             let key =
                 (try? JSONSerialization.data(
                     withJSONObject: name, options: [.fragmentsAllowed])) ?? Data()
-            output.append(key)
-            output.append(UInt8(ascii: ":"))
-            output.append(raw)
+            try emit(key)
+            try emit(Data([UInt8(ascii: ":")]))
+            try writeBody()
         }
+
+        try emit(Data([UInt8(ascii: "{")]))
+        var first = true
         for (key, value) in topLevel.sorted(by: { $0.key < $1.key }) {
             guard
-                let raw = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed])
+                let raw = try? JSONSerialization.data(
+                    withJSONObject: value, options: [.fragmentsAllowed])
             else {
                 throw .providerMetadataInvalid(detail: "index: cannot re-encode \(key)")
             }
-            emit(key, raw)
+            if !first { try emit(Data([UInt8(ascii: ",")])) }
+            first = false
+            try emitMember(key, { () throws(UpdateFailure) -> Void in try emit(raw) })
         }
-        var packagesData = Data()
-        packagesData.append(UInt8(ascii: "{"))
-        for (index, pair) in mergedPackages.enumerated() {
-            if index > 0 { packagesData.append(UInt8(ascii: ",")) }
-            let key =
-                (try? JSONSerialization.data(
-                    withJSONObject: pair.0, options: [.fragmentsAllowed])) ?? Data()
-            packagesData.append(key)
-            packagesData.append(UInt8(ascii: ":"))
-            packagesData.append(pair.1)
+        if !first { try emit(Data([UInt8(ascii: ",")])) }
+        first = false
+        try emitMember("packages", { () throws(UpdateFailure) -> Void in
+            try emit(Data([UInt8(ascii: "{")]))
+            var firstPackage = true
+            var patchedIDs = Set<String>()
+            for (name, range) in packageRanges {
+                if !firstPackage { try emit(Data([UInt8(ascii: ",")])) }
+                guard let patchValue = packagePatch[name] else {
+                    // Untouched: the mapped source streams through in chunks.
+                    try emitMember(name, { () throws(UpdateFailure) -> Void in
+                        var cursor = range.lowerBound
+                        while cursor < range.upperBound {
+                            let end = min(cursor + Self.writeChunk, range.upperBound)
+                            try emit(data.subdata(in: cursor..<end))
+                            cursor = end
+                        }
+                    })
+                    firstPackage = false
+                    continue
+                }
+                patchedIDs.insert(name)
+                if patchValue is NSNull {
+                    firstPackage = false
+                    continue
+                }
+                try emitMember(name, { () throws(UpdateFailure) -> Void in
+                    guard range.count <= Self.indexByteLimit,
+                        let target = try? JSONSerialization.jsonObject(
+                            with: data.subdata(in: range), options: [.fragmentsAllowed]),
+                        let merged = try? JSONSerialization.data(
+                            withJSONObject: JSONMergePatch.apply(patchValue, to: target))
+                    else {
+                        throw .providerMetadataInvalid(
+                            detail: "diff: cannot merge package \(name)")
+                    }
+                    try emit(merged)
+                })
+                firstPackage = false
+            }
+            for (name, patchValue) in packagePatch where !patchedIDs.contains(name) {
+                if patchValue is NSNull { continue }
+                if !firstPackage { try emit(Data([UInt8(ascii: ",")])) }
+                try emitMember(name, { () throws(UpdateFailure) -> Void in
+                    let merged = JSONMergePatch.apply(patchValue, to: [String: Any]())
+                    guard let encoded = try? JSONSerialization.data(withJSONObject: merged)
+                    else {
+                        throw .providerMetadataInvalid(
+                            detail: "diff: cannot add package \(name)")
+                    }
+                    try emit(encoded)
+                })
+                firstPackage = false
+            }
+            try emit(Data([UInt8(ascii: "}")]))
+        })
+        try emit(Data([UInt8(ascii: "}")]))
+    }
+
+    /// The in-memory convenience of `merged(index:diff:into:)` for callers
+    /// that already hold the index bytes (tests).
+    public func merged(index data: Data, diff diffData: Data) throws(UpdateFailure) -> Data {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("apkrun-fdroid-merge-\(UUID().uuidString)")
+        let input = directory.appendingPathComponent("index.json")
+        let output = directory.appendingPathComponent("merged.json")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        do {
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true)
+            try data.write(to: input)
+        } catch {
+            throw .providerUnreachable(reason: "cannot stage the index merge")
         }
-        packagesData.append(UInt8(ascii: "}"))
-        emit("packages", packagesData)
-        output.append(UInt8(ascii: "}"))
-        guard Int64(output.count) <= Self.indexFileByteLimit else {
-            throw .providerMetadataInvalid(detail: "merged index: over the index file limit")
+        try merged(index: input, diff: diffData, into: output)
+        do {
+            return try Data(contentsOf: output)
+        } catch {
+            throw .providerUnreachable(reason: "cannot read the merged index")
         }
-        return output
     }
 
     /// Every top-level member of the index object.

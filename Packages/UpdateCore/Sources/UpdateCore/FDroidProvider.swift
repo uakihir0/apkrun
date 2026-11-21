@@ -168,8 +168,8 @@ public struct FDroidProvider: UpdateProvider {
     ) async throws(UpdateFailure) -> UpdateCandidate? {
         let entry = try await fetchEntry(context: context)
         let reader = FDroidIndexReader()
-        let indexData = try await updateIndex(entry: entry, reader: reader, context: context)
-        let packages = try reader.packages(in: indexData, keep: [package.id])
+        let indexFile = try await updateIndex(entry: entry, reader: reader, context: context)
+        let packages = try reader.packages(in: indexFile, keep: [package.id])
         guard let fdroidPackage = packages[package.id], !fdroidPackage.versions.isEmpty else {
             return nil
         }
@@ -305,13 +305,14 @@ public struct FDroidProvider: UpdateProvider {
     }
 
     /// Ensures the cached index is at `entry.timestamp`, downloading a diff
-    /// or the full index as §4.5 says. Returns the index bytes (read back
-    /// from the cache file so decode memory is bounded by the file).
+    /// or the full index as §4.5 says, and returns the index file. The file
+    /// stays on disk: `packages(in:)` and the merge read it memory-mapped
+    /// so the 64 MiB decode budget holds.
     private func updateIndex(
         entry: FDroidEntry,
         reader: FDroidIndexReader,
         context: ProviderContext
-    ) async throws(UpdateFailure) -> Data {
+    ) async throws(UpdateFailure) -> URL {
         let directory = try cacheDirectory(context: context)
         let indexFile = directory.appendingPathComponent("index.json")
         let metaFile = directory.appendingPathComponent("index.meta.json")
@@ -319,10 +320,9 @@ public struct FDroidProvider: UpdateProvider {
             IndexMeta.self, from: Data(contentsOf: metaFile))
         if cached?.timestamp == entry.timestamp,
             cached?.sha256 == entry.index.sha256,
-            FileManager.default.fileExists(atPath: indexFile.path),
-            let data = try? Data(contentsOf: indexFile)
+            FileManager.default.fileExists(atPath: indexFile.path)
         {
-            return data
+            return indexFile
         }
         log.debug("fdroid index refresh host=\(repository.host ?? "-", .public)")
 
@@ -335,13 +335,14 @@ public struct FDroidProvider: UpdateProvider {
                 let diffFile = try await fetchFile(
                     diff, byteLimit: Self.diffByteLimit, context: context)
                 let diffData = try Data(contentsOf: diffFile)
-                let indexData = try Data(contentsOf: indexFile)
-                let merged = try reader.merged(index: indexData, diff: diffData)
-                try write(data: merged, to: indexFile)
+                let mergedFile = directory.appendingPathComponent("index.merged.json")
+                defer { try? FileManager.default.removeItem(at: mergedFile) }
+                try reader.merged(index: indexFile, diff: diffData, into: mergedFile)
+                try replace(indexFile, with: mergedFile)
                 try write(
                     data: metaJSON(timestamp: entry.timestamp, sha256: entry.index.sha256),
                     to: metaFile)
-                return merged
+                return indexFile
             } catch let failure as UpdateFailure {
                 throw failure
             } catch {
@@ -349,23 +350,26 @@ public struct FDroidProvider: UpdateProvider {
             }
         }
 
-        // Full index path.
+        // Full index path: move the verified download into the cache.
         let file = try await fetchFile(
             entry.index, byteLimit: Self.indexByteLimit, context: context)
-        let data: Data
-        do {
-            data = try Data(contentsOf: file)
-        } catch {
-            throw .providerUnreachable(reason: "cannot read the downloaded index")
-        }
-        guard Int64(data.count) <= Self.indexByteLimit else {
-            throw .providerMetadataInvalid(detail: "index: over the index file limit")
-        }
-        try write(data: data, to: indexFile)
+        try replace(indexFile, with: file)
         try write(
             data: metaJSON(timestamp: entry.timestamp, sha256: entry.index.sha256),
             to: metaFile)
-        return data
+        return indexFile
+    }
+
+    /// Atomically puts `source` at `destination`.
+    private func replace(_ destination: URL, with source: URL) throws(UpdateFailure) {
+        do {
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.moveItem(at: source, to: destination)
+        } catch {
+            throw .providerUnreachable(reason: "cannot write the F-Droid index cache")
+        }
     }
 
     /// Downloads `<repository>/<file.name>` to a temporary file and checks

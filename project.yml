@@ -345,6 +345,8 @@ targets:
         product: RuntimeCore
       - package: APKRun
         product: RuntimeHost
+      - package: APKRun
+        product: WrapperCore
     scheme:
       testTargets:
         - AcceptanceTests

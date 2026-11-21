@@ -214,6 +214,47 @@ private func sha256Tree(at url: URL) throws -> [String: String] {
     }
 }
 
+@Test func wrapperFileHashesGiveAStableSortedList() throws {
+    // #50 step 1: the G9 check compares this list before and after an
+    // update — a fixed directory must always produce the same sorted
+    // (path, sha256) entries.
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-hashes-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(
+        at: root.appendingPathComponent("Contents/Resources"),
+        withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+        at: root.appendingPathComponent("Contents/MacOS"),
+        withIntermediateDirectories: true)
+    try Data("launcher".utf8).write(
+        to: root.appendingPathComponent("Contents/MacOS/APKRunLauncher"))
+    try Data("plist".utf8).write(
+        to: root.appendingPathComponent("Contents/Info.plist"))
+    try Data("json".utf8).write(
+        to: root.appendingPathComponent("Contents/Resources/wrapper.json"))
+
+    let hashes = try WrapperFileHashes.compute(bundleURL: root)
+    #expect(
+        hashes.map(\.path) == [
+            "Contents/Info.plist",
+            "Contents/MacOS/APKRunLauncher",
+            "Contents/Resources/wrapper.json",
+        ])
+    let sha256 = { (bytes: String) in
+        SHA256.hash(data: Data(bytes.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+    #expect(hashes[0].sha256 == sha256("plist"))
+    #expect(hashes[1].sha256 == sha256("launcher"))
+    #expect(hashes[2].sha256 == sha256("json"))
+    // A second pass over the same directory is identical, and an xattr
+    // (the kind Spotlight adds) does not change the list.
+    setxattr(
+        root.appendingPathComponent("Contents/Info.plist").path,
+        "com.apple.FinderInfo", "x", 1, 0, 0)
+    #expect(try WrapperFileHashes.compute(bundleURL: root) == hashes)
+}
+
 @Test func generationIsByteIdentical() async throws {
     let fixture = try await Fixture()
     defer { fixture.cleanup() }

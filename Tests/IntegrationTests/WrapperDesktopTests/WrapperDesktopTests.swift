@@ -235,4 +235,43 @@ final class WrapperDesktopTests: XCTestCase {
             "bundle contains HelloText.apk: \(leaked)")
         _ = try run("/usr/bin/open", [app.path], timeout: 30)
     }
+
+    // MARK: - #50: the structural checks of the G9 check (wrapper.md §9.1)
+
+    /// The file-hash list is stable across passes and the bundle passes the
+    /// deep signature check — the two things G9 compares across an update.
+    func testFileHashListAndDeepValidation() throws {
+        let cli = try XCTUnwrap(cli())
+        _ = try run(
+            cli.path,
+            [
+                "wrap", "io.apkrun.fixture.hellotext", "--output", userApplications.path,
+                "--replace",
+            ],
+            timeout: 600)
+        let app = userApplications.appendingPathComponent(Self.appName)
+
+        func hashList() throws -> String {
+            try run(
+                "/bin/sh",
+                [
+                    "-c",
+                    "find '\(app.path)' -type f -print0 | sort -z "
+                        + "| xargs -0 shasum -a 256 | sort -k2",
+                ])
+        }
+        let first = try hashList()
+        let second = try hashList()
+        XCTAssertEqual(first, second, "the file-hash list is not stable")
+        XCTAssertTrue(
+            first.contains("Contents/MacOS/APKRunLauncher")
+                && first.contains("Contents/Info.plist"),
+            "the hash list misses bundle files:\n\(first)")
+
+        // The deep check of wrapper.md §9.1: strict, all architectures.
+        XCTAssertNoThrow(
+            try run(
+                "/usr/bin/codesign",
+                ["--verify", "--deep", "--strict", "--all-architectures", app.path]))
+    }
 }

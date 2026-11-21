@@ -5,6 +5,7 @@ import Foundation
 import RuntimeAPI
 import RuntimeCore
 import UpdateCore
+import WrapperCore
 
 typealias PackageMutationBoundary = @Sendable () async throws(RuntimeWireError) -> Void
 
@@ -200,6 +201,193 @@ public actor EmbeddedPackageService: RuntimeService {
             return result
         } catch {
             throw Self.wireError(for: error)
+        }
+    }
+
+    /// The `importBootstrap` op of an approved portable wrapper's launcher
+    /// (wrapper-json.md §3.4). `entry` passed B1 in the caller; B2–B8 run here
+    /// in order and the first failure decides.
+    public func importBootstrap(
+        entry: WrapperRegistryEntry,
+        wrapperDocument: WrapperDocument,
+        bootstrapJSON: Data,
+        files: [FileHandle]
+    ) async throws(RuntimeWireError) -> RuntimePackageSummary {
+        do {
+            try await ensureOpen()
+            guard let packageID = PackageID(rawValue: entry.packageId) else {
+                throw RuntimeHost.wrapperWireError(for: .bootstrapInvalid(.malformed))
+            }
+            // B2: only a first install or a retained-data reinstall may import.
+            let isFirstRecord = try await firstBootstrapRecord(for: packageID)
+            // B3: the document must fit 64 KiB, parse, carry formatVersion 1,
+            // and satisfy §3.5.
+            guard bootstrapJSON.count <= BootstrapDocument.maximumDocumentBytes,
+                let document = try? BootstrapDocumentCodec.decode(bootstrapJSON),
+                (try? BootstrapDocumentCodec.validate(document)) != nil
+            else {
+                throw RuntimeHost.wrapperWireError(for: .bootstrapInvalid(.malformed))
+            }
+            // A contradictory `updates` block is a malformed payload, checked
+            // before anything installs (wrapper-json.md §2.4).
+            if wrapperDocument.updates?.authority == .apkrun,
+                wrapperDocument.updates?.provider == nil
+            {
+                throw RuntimeHost.wrapperWireError(for: .bootstrapInvalid(.malformed))
+            }
+            // B4: the bootstrap must name the wrapper's package.
+            guard document.packageId == entry.packageId else {
+                throw RuntimeHost.wrapperWireError(for: .bootstrapInvalid(.packageMismatch))
+            }
+            // B5: one file handle per `files` item.
+            guard files.count == document.files.count else {
+                throw RuntimeHost.wrapperWireError(for: .bootstrapInvalid(.malformed))
+            }
+            let sources = document.files.enumerated().map {
+                RuntimeImportSourceFile(fileIndex: $0.offset, name: $0.element.name)
+            }
+            let staged = try stage(sources, from: files)
+            defer { try? fileManager.removeItem(at: staged.directory) }
+            let preview = try await store.importPackage(
+                files: staged.files, bootstrapBundleID: entry.bundleId)
+            do {
+                // B5–B7 compare the verified set — computed from the copied
+                // bytes — against the document; the document is never trusted.
+                let set = preview.artifactSet
+                guard set.files.count == document.files.count else {
+                    throw WrapperFailure.bootstrapInvalid(.malformed)
+                }
+                for (artifact, declared) in zip(set.files, document.files) {
+                    guard artifact.name == declared.name else {
+                        throw WrapperFailure.bootstrapInvalid(.malformed)
+                    }
+                    guard artifact.size == declared.size,
+                        declared.sha256 == "sha256:" + artifact.sha256.hexValue
+                    else {
+                        throw WrapperFailure.bootstrapInvalid(.hashMismatch)
+                    }
+                }
+                // B6: the set digest of the copied files equals `setDigest`.
+                guard "sha256:" + set.setDigest.hexValue == document.setDigest else {
+                    throw WrapperFailure.bootstrapInvalid(.hashMismatch)
+                }
+                // B7: the inspected APKs carry the declared identity, and the
+                // verified signer set equals `signers`.
+                guard set.packageID.rawValue == document.packageId,
+                    set.versionCode == document.versionCode,
+                    document.signers
+                        == set.signerDigests.map { "sha256:" + $0.hexValue }.sorted()
+                else {
+                    throw WrapperFailure.bootstrapInvalid(.packageMismatch)
+                }
+            } catch let failure as WrapperFailure {
+                try? await store.discardImport(ticket: preview.ticket)
+                throw RuntimeHost.wrapperWireError(for: failure)
+            } catch {
+                try? await store.discardImport(ticket: preview.ticket)
+                throw error
+            }
+            // B8: the ticket path runs the store's own install checks (for
+            // example the downgrade refusal when Android kept newer data).
+            guard let ticket = RuntimeImportTicket(rawValue: preview.ticket.uuidString) else {
+                throw Self.wireError(for: PackageStoreFailure.importTicketNotFound)
+            }
+            let result = try await installImportedWithChange(
+                RuntimeInstallImportedRequest(ticket: ticket, options: RuntimeInstallOptions()))
+            // wrapper.json `updates` supplies the initial authority, mode, and
+            // provider (wrapper-json.md §3.3).
+            if let updates = wrapperDocument.updates {
+                let choice: UpdateChoice = updates.mode == .notifyOnly ? .notifyOnly : .automatic
+                try await store.setUpdateMode(
+                    for: packageID, mode: UpdatePolicyRules.settingsMode(for: choice))
+                try await store.setUpdatePolicy(
+                    for: packageID,
+                    authority: updates.authority == .apkrun ? .apkrun : .manual,
+                    provider: updates.provider.flatMap(Self.providerRef(for:)),
+                    requireProvider: true)
+            }
+            // `window` and `integration` are first-record settings (§3.3).
+            if isFirstRecord {
+                var patch: [String: String?] = [:]
+                if let window = wrapperDocument.window {
+                    if let mode = window.mode {
+                        patch["window.mode"] =
+                            mode == .standard
+                            ? "secondaryDisplay" : "primaryDisplayCompatibility"
+                    }
+                    if let width = window.defaultWidth {
+                        patch["window.defaultWidth"] = String(width)
+                    }
+                    if let height = window.defaultHeight {
+                        patch["window.defaultHeight"] = String(height)
+                    }
+                    if let resizable = window.resizable {
+                        patch["window.resizable"] = resizable ? "true" : "false"
+                    }
+                }
+                if let integration = wrapperDocument.integration {
+                    if let clipboard = integration.clipboard {
+                        patch["integrations.clipboard"] = clipboard ? "true" : "false"
+                    }
+                    if let notifications = integration.notifications {
+                        patch["integrations.notifications"] = notifications ? "true" : "false"
+                    }
+                    if let links = integration.links {
+                        patch["integrations.links"] = links.rawValue
+                    }
+                    if let files = integration.files {
+                        patch["integrations.files"] = files ? "true" : "false"
+                    }
+                    if let sharedFolders = integration.sharedFolders {
+                        patch["integrations.sharedFolders"] = sharedFolders.rawValue
+                    }
+                    if let microphone = integration.microphone {
+                        patch["integrations.microphone"] = microphone ? "true" : "false"
+                    }
+                }
+                if !patch.isEmpty {
+                    _ = try await store.updatePackageSettings(packageID, patch: patch)
+                }
+            }
+            return result.summary
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
+    /// Whether no record exists for the package — the bootstrap import then
+    /// creates it and applies wrapper.json's first-record settings. A record
+    /// whose state is not `uninstalledKeepingData` fails B2.
+    private func firstBootstrapRecord(for packageID: PackageID) async throws -> Bool {
+        guard let record = try await store.listManagedPackages()
+            .first(where: { $0.packageId == packageID })
+        else {
+            return true
+        }
+        guard record.state == .uninstalledKeepingData else {
+            throw RuntimeHost.wrapperWireError(for: .bootstrapNotAllowed(.alreadyInstalled))
+        }
+        return false
+    }
+
+    /// Maps a parsed wrapper.json provider to the store's provider reference
+    /// (wrapper-json.md §2.4). `local` is never stored in wrapper.json, so it
+    /// never reaches the record.
+    private static func providerRef(for provider: WrapperUpdateProvider) -> UpdateProviderRef? {
+        switch provider.configuration {
+        case .direct(let url):
+            return UpdateProviderRef(
+                type: .direct, configuration: .direct(url: url))
+        case .fdroid(let repository, let fingerprint):
+            return UpdateProviderRef(
+                type: .fdroid,
+                configuration: .fdroid(repository: repository, fingerprint: fingerprint))
+        case .github(let repository, let assetPattern, let channel):
+            return UpdateProviderRef(
+                type: .github,
+                configuration: .github(
+                    repository: repository, assetPattern: assetPattern,
+                    channel: GitHubReleaseChannel(rawValue: channel) ?? .stable))
         }
     }
 

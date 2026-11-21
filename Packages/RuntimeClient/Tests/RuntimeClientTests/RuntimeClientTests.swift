@@ -1661,6 +1661,16 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return installImportedData
     }
 
+    func importBootstrap(
+        _ request: Data,
+        files: [FileHandle]
+    ) async throws(RuntimeControlClientError) -> Data {
+        let reply = RuntimeImportBootstrapControlReply(
+            result: OperationHandle(operationID: OperationID(), kind: .bootstrapImport)
+        )
+        return (try? JSONEncoder().encode(reply)) ?? Data()
+    }
+
     func discardImport(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         let reply = RuntimeDiscardImportControlReply()
         return (try? JSONEncoder().encode(reply)) ?? Data()

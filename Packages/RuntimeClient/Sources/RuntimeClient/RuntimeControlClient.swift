@@ -827,6 +827,38 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Starts the `bootstrapImport` operation of an approved portable
+    /// wrapper's launcher (wrapper-json.md §3.4). The bootstrap document and
+    /// one file handle per declared APK travel with the request.
+    public func importBootstrap(
+        bundleID: String,
+        bootstrapJSON: Data,
+        files: [FileHandle]
+    ) async throws(RuntimeControlClientError) -> OperationHandle {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeImportBootstrapControlRequest(
+                header: makeHeader(),
+                bundleID: bundleID,
+                bootstrapJSON: bootstrapJSON
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.importBootstrap(data, files: files)
+            let reply = try Self.decode(RuntimeImportBootstrapControlReply.self, from: response)
+            if let wireError = reply.error {
+                throw Self.clientError(from: wireError)
+            }
+            guard let handle = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return handle
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
     /// Installs a package import previously inspected by `importPackage`.
     ///
     /// The daemon may have installed the package even when the client loses the reply, so this
@@ -2649,6 +2681,7 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func listSessions(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func packageIcon(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func importPackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
+    func importBootstrap(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
     func installImported(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func discardImport(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func adoptPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data
@@ -2825,6 +2858,12 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
         interface.setClasses(
             fileClasses,
             for: #selector(RuntimeControlXPC.updatePackage(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
+        interface.setClasses(
+            fileClasses,
+            for: #selector(RuntimeControlXPC.importBootstrap(_:files:reply:)),
             argumentIndex: 1,
             ofReply: false
         )
@@ -3077,6 +3116,20 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.importPackage(request, files: files) { response in finish(.success(response)) }
+        }
+    }
+
+    func importBootstrap(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.importBootstrap(request, files: files) { response in finish(.success(response)) }
         }
     }
 

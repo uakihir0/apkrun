@@ -1089,6 +1089,14 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
             argumentIndex: 1,
             ofReply: false
         )
+        // `importBootstrap` carries one FileHandle per bootstrap.json file
+        // (wrapper-json.md §3.4); same whitelist as `importPackage`.
+        controlInterface.setClasses(
+            fileHandleClasses,
+            for: #selector(RuntimeControlXPC.importBootstrap(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
         connection.remoteObjectInterface = NSXPCInterface(with: RuntimeEventSink.self)
         let eventHub = host.eventHub
         let remoteSink =
@@ -1151,6 +1159,7 @@ extension RuntimePendingApprovalsControlRequest: VersionedControlRequest {}
 extension RuntimeDecideApprovalControlRequest: VersionedControlRequest {}
 extension RuntimeDeniedWrappersControlRequest: VersionedControlRequest {}
 extension RuntimeClearWrapperDenialControlRequest: VersionedControlRequest {}
+extension RuntimeImportBootstrapControlRequest: VersionedControlRequest {}
 extension RuntimePerfStatisticsControlRequest: VersionedControlRequest {}
 extension RuntimeFrameStatisticsControlRequest: VersionedControlRequest {}
 extension RuntimePushClipboardControlRequest: VersionedControlRequest {}
@@ -1227,6 +1236,7 @@ enum RuntimeControlOperation {
     case setConfig
     case packageSettings
     case updatePackageSettings
+    case importBootstrap
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1333,6 +1343,15 @@ enum RuntimeControlOperation {
             case .app, .menuBar, .cli:
                 true
             case .launcher, .wrapper:
+                false
+            }
+        case .importBootstrap:
+            // The wrapper endpoint op (wrapper-json.md §3.4): only the
+            // launcher inside a generated wrapper may import its bootstrap.
+            switch clientKind {
+            case .launcher, .wrapper:
+                true
+            case .app, .menuBar, .cli:
                 false
             }
         }
@@ -1784,6 +1803,49 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeImportPackageControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func importBootstrap(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeImportBootstrapControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .importBootstrap,
+                as: RuntimeImportBootstrapControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeImportBootstrapControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeImportBootstrapControlRequest.self, from: request),
+                !decoded.bundleID.isEmpty, decoded.bundleID.utf8.count <= 255,
+                !decoded.bootstrapJSON.isEmpty
+            else {
+                response.send(
+                    Self.encode(RuntimeImportBootstrapControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let handle = try await host.beginImportBootstrap(
+                    decoded, clientKind: clientKind, files: files)
+                response.send(Self.encode(RuntimeImportBootstrapControlReply(result: handle)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeImportBootstrapControlReply(error: wireError)))
             }
         }
     }

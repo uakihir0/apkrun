@@ -555,6 +555,46 @@ public struct RuntimeCreateWrapperControlReply: Codable, Equatable, Sendable {
     }
 }
 
+/// A launcher's `importBootstrap` control request (runtime-api.md §10.2):
+/// its bundle ID resolves the approved registry entry, `bootstrapJSON` is the
+/// `Contents/Resources/bootstrap/bootstrap.json` bytes, and the APK files
+/// ride alongside as `FileHandle`s (wrapper-json.md §3.4).
+public struct RuntimeImportBootstrapControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The requesting wrapper's bundle ID.
+    public let bundleID: String
+    /// The bootstrap document bytes.
+    public let bootstrapJSON: Data
+
+    /// Creates an import-bootstrap control request.
+    public init(header: APIRequestHeader, bundleID: String, bootstrapJSON: Data) {
+        self.header = header
+        self.bundleID = bundleID
+        self.bootstrapJSON = bootstrapJSON
+    }
+}
+
+/// The operation handle or typed error returned by `importBootstrap`.
+public struct RuntimeImportBootstrapControlReply: Codable, Equatable, Sendable {
+    /// The operation handle, present on acceptance.
+    public let result: OperationHandle?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates an accepted reply.
+    public init(result: OperationHandle) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
 /// A wrapper change published on the `wrappers` event topic
 /// (runtime-api.md §10, `WrapperChange`).
 public enum WrapperChange: Codable, Equatable, Sendable {

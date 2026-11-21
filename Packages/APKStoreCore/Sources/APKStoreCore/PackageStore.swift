@@ -382,6 +382,9 @@ public actor PackageStore {
         var createdAt: Date
         var facts: [PersistedAPKFacts]
         var origin: ImportOrigin?
+        /// Set for `importBootstrap`: the new record's `source.kind`
+        /// `wrapperBootstrap` and `source.wrapperBundleId` (wrapper-json.md §3.3).
+        var wrapperBundleId: String?
     }
 
     private struct PackageIDEnvelope: Decodable {
@@ -562,7 +565,8 @@ public actor PackageStore {
     /// ticket refers only to the private incoming set, so callers may release their source files.
     public func importPackage(
         files: [URL],
-        origin: ImportOrigin? = nil
+        origin: ImportOrigin? = nil,
+        bootstrapBundleID: String? = nil
     ) async throws -> PackageImportPreview {
         try requireWritable()
         let importsLock = try await acquireLock(at: importsLockURL)
@@ -762,7 +766,8 @@ public actor PackageStore {
             preview: preview,
             createdAt: clock(),
             facts: facts.map(PersistedAPKFacts.init),
-            origin: origin
+            origin: origin,
+            wrapperBundleId: bootstrapBundleID
         )
         do {
             try writeJSON(manifest, to: incoming.appendingPathComponent("ticket.json"))
@@ -1050,7 +1055,8 @@ public actor PackageStore {
             preview: preview,
             createdAt: clock(),
             facts: facts.map(PersistedAPKFacts.init),
-            origin: nil
+            origin: nil,
+            wrapperBundleId: nil
         )
         do {
             try writeJSON(manifest, to: incoming.appendingPathComponent("ticket.json"))
@@ -3146,11 +3152,12 @@ public actor PackageStore {
             android: android,
             source: existing?.source
                 ?? PackageSource(
-                    kind: .file,
+                    kind: manifest.wrapperBundleId == nil ? .file : .wrapperBootstrap,
                     at: startedAt,
                     origin: manifest.origin,
                     fileNames: manifest.preview.sourceFileNames,
-                    container: .apk
+                    container: .apk,
+                    wrapperBundleId: manifest.wrapperBundleId
                 ),
             lastOperation: OperationSummary(
                 kind: kind == "reinstall" ? .reinstall : .firstInstall,

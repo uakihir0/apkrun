@@ -3371,7 +3371,106 @@ public actor RuntimeHost {
         message: "Too many approval requests. Try again in a minute."
     )
 
+    /// Starts a `bootstrapImport` operation for a portable wrapper's own
+    /// launcher (wrapper-json.md §3.4). B1 runs here — the registry entry for
+    /// the claimed bundle ID must be an approved portable wrapper — and B2–B8
+    /// run inside the operation.
+    public func beginImportBootstrap(
+        _ request: RuntimeImportBootstrapControlRequest,
+        clientKind: RuntimeClientKind,
+        files: [FileHandle]
+    ) async throws(RuntimeWireError) -> OperationHandle {
+        let registry = try await wrapperRegistryInstance()
+        guard let entry = await registry.entry(bundleID: request.bundleID),
+            entry.state == .active, entry.kind == .portable
+        else {
+            throw Self.wrapperWireError(for: .bootstrapNotAllowed(.notApproved))
+        }
+        // The wrapper.json of the registered bundle supplies the first-record
+        // settings and the initial update defaults (wrapper-json.md §3.3).
+        guard let wrapperDocument = try? WrapperDocumentCodec.load(
+            from: URL(fileURLWithPath: entry.path))
+        else {
+            throw Self.wrapperWireError(for: .bootstrapInvalid(.malformed))
+        }
+        let operationID = WireOperationID()
+        let handle = OperationHandle(operationID: operationID, kind: .bootstrapImport)
+        let snapshot = OperationSnapshot(
+            operationID: operationID,
+            kind: .bootstrapImport,
+            packageID: RuntimePackageID(rawValue: entry.packageId),
+            requestFingerprint: nil,
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(
+                stage: "importing",
+                message: "Installing the app from this Mac app…"
+            )
+        )
+        trackedOperations[operationID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: Data(),
+            snapshot: snapshot,
+            isCancellable: false,
+            task: nil
+        )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: operationID)
+        do {
+            try beginLifecycleOperation()
+        } catch {
+            trackedOperations.removeValue(forKey: operationID)
+            throw Self.sessionWireError(for: error)
+        }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runImportBootstrapOperation(
+                entry: entry,
+                wrapperDocument: wrapperDocument,
+                bootstrapJSON: request.bootstrapJSON,
+                files: files,
+                operationID: operationID
+            )
+        }
+        trackedOperations[operationID]?.task = task
+        return handle
+    }
+
+    /// Runs a `bootstrapImport` operation to its terminal state.
+    private func runImportBootstrapOperation(
+        entry: WrapperRegistryEntry,
+        wrapperDocument: WrapperDocument,
+        bootstrapJSON: Data,
+        files: [FileHandle],
+        operationID: WireOperationID
+    ) async {
+        defer { finishLifecycleOperation() }
+        do {
+            let service = packageQueryServiceInstance()
+            let summary = try await service.importBootstrap(
+                entry: entry,
+                wrapperDocument: wrapperDocument,
+                bootstrapJSON: bootstrapJSON,
+                files: files
+            )
+            finishOperation(operationID, result: .succeeded(.package(summary)))
+            logger?.notice("Bootstrap import completed for \(entry.packageId, .public)")
+        } catch {
+            if Task.isCancelled {
+                finishOperation(operationID, result: .cancelled)
+            } else {
+                finishOperation(
+                    operationID,
+                    result: .failed(
+                        error as? RuntimeWireError
+                            ?? .runtime(
+                                "internalError",
+                                message: "APKRun's background service failed.")))
+            }
+        }
+    }
+
     /// Maps a wrapper failure to the wire error type of the control endpoint.
+    ///
     /// Builds the `bootstrap/` payload (wrapper-json.md §3.2) from a stored
     /// or incoming artifact set. `ArtifactSet.files` is already `base.apk`
     /// first then splits ordered by split name, and its stored names are the
@@ -3460,7 +3559,7 @@ public actor RuntimeHost {
             authority: authority, mode: mode, provider: provider)
     }
 
-    private static func wrapperWireError(for failure: WrapperFailure) -> RuntimeWireError {
+    static func wrapperWireError(for failure: WrapperFailure) -> RuntimeWireError {
         let entry = ErrorCatalog.entry(for: failure.qualifiedCode)
         let message =
             entry?.message?["en"].map {
@@ -3481,7 +3580,7 @@ public actor RuntimeHost {
     /// The error's catalog parameters as plain strings for the wire — the
     /// `stagingToken` of `destinationNotAccessible` is how the client names
     /// the staged bundle it must move (wrapper.md §6.3).
-    private static func wireParameters(
+    static func wireParameters(
         for failure: WrapperFailure
     ) -> [String: String] {
         failure.parameters.reduce(into: [:]) { result, entry in
@@ -3498,7 +3597,7 @@ public actor RuntimeHost {
         }
     }
 
-    private static func interpolate(
+    static func interpolate(
         _ template: String,
         parameters: [String: ErrorParameter]
     ) -> String {

@@ -23,7 +23,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.23 adds `listSessions`, `packageIcon`, and `sessions` topic events
     /// (host-ui.md §5.2–§5.3).
     /// 1.24 adds `packageSettings` and `updatePackageSettings` (host-ui.md §7).
-    public static let current = APIVersion(major: 1, minor: 25)
+    /// 1.25 adds `RuntimePackageDetails.previous`; 1.26 adds the wrapper
+    /// endpoint's `importBootstrap` (wrapper-json.md §3.4).
+    public static let current = APIVersion(major: 1, minor: 26)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -766,6 +768,9 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     /// Starts a wrapper refresh (wrapper.md §9.3); replies with the
     /// operation handle. An icon file handle accompanies `change.icon`.
     func refreshWrapper(_ request: Data, icon: FileHandle?, reply: @escaping (Data) -> Void)
+    /// Installs the embedded bootstrap package of an approved portable wrapper;
+    /// one file handle per `files` item of bootstrap.json (wrapper-json.md §3.4).
+    func importBootstrap(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
 
     /// Starts a batch refresh (wrapper.md §9.4 Update All Mac Apps);
     /// replies with the operation handle.

@@ -9,9 +9,10 @@ import java.io.FileOutputStream
 import java.lang.reflect.InvocationTargetException
 
 /**
- * The device setup of guest-components.md §3.4 without the IME rows: stay awake, and no keyguard.
- * The agent applies it once per start, and a step that fails is logged while the other steps still
- * run. The original values are not restored when the agent stops (guest-components.md §3.4).
+ * The device setup of guest-components.md §3.4: stay awake, no keyguard, and the development IME
+ * enabled and selected (input.md §5.6). The agent applies it once per start, and a step that fails
+ * is logged while the other steps still run. The original values are not restored when the agent
+ * stops (guest-components.md §3.4).
  *
  * The settings provider checks the caller's package, and the keyguard switch needs a permission
  * that the shell uid does not hold. The framework's own command services accept the shell uid for
@@ -34,6 +35,36 @@ object DeviceSetup {
         }
         step("no keyguard") {
             serviceCommand("lock_settings", "set-disabled", "true")
+        }
+        step("APKRun IME") {
+            // The development IME is enabled and selected so editors bind to it (input.md §5.6).
+            // The settings provider accepts these writes from the shell uid, and a bound
+            // InputMethodService is picked up without a reboot.
+            serviceCommand(
+                "settings",
+                "put",
+                "secure",
+                "enabled_input_methods",
+                IME_COMPONENT,
+            )
+            serviceCommand(
+                "settings",
+                "put",
+                "secure",
+                "default_input_method",
+                IME_COMPONENT,
+            )
+        }
+        step("notification listener") {
+            // The agent's listener service is granted access so notifications of forwarded
+            // packages can leave the guest (desktop-integration.md §5.1).
+            serviceCommand(
+                "settings",
+                "put",
+                "secure",
+                "enabled_notification_listeners",
+                LISTENER_COMPONENT,
+            )
         }
     }
 
@@ -99,4 +130,11 @@ object DeviceSetup {
      * sets it.
      */
     private const val STAY_ON_ALL_POWER_SOURCES = 7
+
+    /** Flat component of the development IME (input.md §5.6). */
+    private const val IME_COMPONENT = "io.apkrun.guest/.ime.ApkRunInputMethodService"
+
+    /** Flattened component of the agent's listener (desktop-integration.md §5.1). */
+    private const val LISTENER_COMPONENT =
+        "io.apkrun.guest/io.apkrun.guest.daemon.ApkRunNotificationListener"
 }

@@ -1,5 +1,8 @@
 package io.apkrun.guest.daemon
 
+import io.apkrun.guest.protocol.FrameReader
+import io.apkrun.guest.protocol.FrameWriter
+import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.ClearDisplay
 import io.apkrun.guest.protocol.v1.ClearPolicy
 import io.apkrun.guest.protocol.v1.Event

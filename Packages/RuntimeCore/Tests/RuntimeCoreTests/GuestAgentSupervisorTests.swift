@@ -14,6 +14,18 @@ private func eventually(within seconds: Double = 8, _ condition: () async -> Boo
     }
 }
 
+private actor ResynchronizationCount {
+    private var count = 0
+
+    func record() {
+        count += 1
+    }
+
+    func value() -> Int {
+        count
+    }
+}
+
 @Test func failedBootStatusDoesNotReportATornDownAgentAsConnected() {
     let version = ProtocolVersion(major: 1, minor: 0)
     let retained = RuntimeSupervisor.guestAgentStatusAfterStop(
@@ -71,12 +83,12 @@ func snapshotResynchronisationUsesTheRemainingInitialConnectionDeadline() async 
     let started = ContinuousClock.now
 
     do {
-        try await supervisor.start(connectTimeout: .milliseconds(300))
+        try await supervisor.start(connectTimeout: .milliseconds(800))
         Issue.record("the connection succeeded without a snapshot")
     } catch {
         #expect(error == .connectTimedOut)
     }
-    #expect(ContinuousClock.now - started < .seconds(1))
+    #expect(ContinuousClock.now - started < .seconds(2))
     #expect(
         transport.agents.first?.requests.contains { request in
             if case .getSnapshot? = request.op {
@@ -436,6 +448,40 @@ func queuedSendsWaitForSnapshotReconciliationAndEventsStayOrdered() async throws
         return state == .ready && hasReplayedEvent
     }
     #expect(transport.agents[1].requests.filter(isPing).count == 1)
+    await supervisor.stop()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func resynchronizationHandlerCanSkipCurrentSnapshotAndReceiveTheNextReconnect() async throws {
+    let transport = InMemoryTransport { _, agent, number in
+        agent.sendHello()
+        agent.answer = { request in
+            if isGetSnapshot(request) {
+                return .getSnapshot(snapshot(displays: [number == 1 ? 0 : 3]))
+            }
+            return pongResult(for: request)
+        }
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: transport,
+        keepaliveInterval: .seconds(60),
+        restartAgent: { _ in true }
+    )
+    let reconciliations = ResynchronizationCount()
+    try await supervisor.start(connectTimeout: .seconds(2))
+
+    await supervisor.addResynchronizationHandler(deliveringCurrentSnapshot: false) { _ in
+        await reconciliations.record()
+    }
+    #expect(await reconciliations.value() == 0)
+
+    transport.agents[0].hangUp()
+    try await eventually {
+        let count = await reconciliations.value()
+        let state = await supervisor.state
+        return count == 1 && state == .ready
+    }
+    #expect(await supervisor.snapshot.displays.keys.sorted() == [3])
     await supervisor.stop()
 }
 

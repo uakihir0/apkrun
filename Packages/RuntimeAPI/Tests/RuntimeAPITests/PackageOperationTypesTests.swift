@@ -201,7 +201,8 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     #expect(try roundTrip(installReply) == installReply)
     #expect(try roundTrip(RuntimeImportPackageControlReply(error: failure)).error == failure)
     #expect(try roundTrip(RuntimeInstallImportedControlReply(error: failure)).error == failure)
-    #expect(importRequest.header.apiVersion == APIVersion(major: 1, minor: 11))
+    #expect(importRequest.header.apiVersion == .current)
+    #expect(importRequest.header.apiVersion == .current)
 }
 
 private struct TestRuntimeService: RuntimeService {
@@ -222,6 +223,14 @@ private struct TestRuntimeService: RuntimeService {
     }
 
     func installImported(_ request: RuntimeInstallImportedRequest) async throws(RuntimeWireError)
+        -> RuntimePackageSummary
+    {
+        RuntimePackageSummary(packageID: packageID, displayName: "Test", versionCode: 1)
+    }
+
+    func discardImport(_ request: RuntimeDiscardImportRequest) async throws(RuntimeWireError) {}
+
+    func adoptPackage(_ request: RuntimeAdoptPackageRequest) async throws(RuntimeWireError)
         -> RuntimePackageSummary
     {
         RuntimePackageSummary(packageID: packageID, displayName: "Test", versionCode: 1)

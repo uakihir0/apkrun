@@ -4,6 +4,8 @@ import DiagnosticsCore
 import Foundation
 import RuntimeAPI
 import RuntimeCore
+import UpdateCore
+import WrapperCore
 
 typealias PackageMutationBoundary = @Sendable () async throws(RuntimeWireError) -> Void
 
@@ -42,7 +44,8 @@ public actor EmbeddedPackageService: RuntimeService {
     private let fileManager = FileManager.default
     private let inspector: PackageStore.Inspector
     private let runtimeAccess: AttachedStoreRuntimeAccess
-    private let store: PackageStore
+    /// Shared with `EmbeddedUpdateService` so a single store owns ticket cleanup.
+    public let store: PackageStore
     private var sessionService: any RuntimeSessionService
     private let hostFreeSpace: @Sendable (URL) -> Int64
 
@@ -59,19 +62,23 @@ public actor EmbeddedPackageService: RuntimeService {
         paths: APKRunPaths = APKRunPaths(allowingHomeOverride: true),
         inspector: @escaping PackageStore.Inspector = { apk in try await APKInspector().inspect(apk) },
         hostFreeSpace: (@Sendable (URL) -> Int64)? = nil,
-        sessionService: (any RuntimeSessionService)? = nil
+        sessionService: (any RuntimeSessionService)? = nil,
+        importVerifier: @escaping PackageStore.ImportVerifier = PackageStore.strictImportVerifier,
+        runtimeAccess: (any StoreRuntimeAccess)? = nil
     ) {
         self.paths = paths
         self.inspector = inspector
         self.hostFreeSpace = hostFreeSpace ?? Self.availableHostSpace
         self.sessionService = sessionService ?? EmbeddedRuntimeService()
-        let runtimeAccess = AttachedStoreRuntimeAccess()
+        self.runtimeAttached = runtimeAccess != nil
+        let runtimeAccess = AttachedStoreRuntimeAccess(initial: runtimeAccess)
         self.runtimeAccess = runtimeAccess
         store = PackageStore(
             packagesDirectory: paths.packagesDirectory,
             runtimeAccess: runtimeAccess,
             inspector: inspector,
-            fileManager: .default
+            fileManager: .default,
+            importVerifier: importVerifier
         )
     }
 
@@ -133,8 +140,56 @@ public actor EmbeddedPackageService: RuntimeService {
     }
 
     /// Reuses the daemon's session owner when package operations run over XPC.
+    /// Routes store-rendered icon changes to the caller's sink (package-store.md §10.2).
+    func setIconChangeHandler(_ handler: @escaping @Sendable (PackageID) async -> Void) async {
+        await store.setIconChangeHandler { packageID in await handler(packageID) }
+    }
+
+    /// The store-rendered icon set for a package: the manifest and the layer
+    /// PNGs under `Packages/<id>/icon/` (wrapper.md §8.2 `rendered`).
+    public func renderedIconLayers(for packageID: RuntimePackageID) async
+        -> (manifest: PackageIconManifest, layers: [StoreIconLayer])?
+    {
+        guard let storeID = PackageID(rawValue: packageID.rawValue),
+            let manifest = await store.iconManifest(for: storeID),
+            let directory = await store.iconDirectory(for: storeID)
+        else { return nil }
+        var layers: [StoreIconLayer] = []
+        for role in StoreIconRole.allCases {
+            guard let png = try? Data(contentsOf: directory.appendingPathComponent("\(role.rawValue).png"))
+            else { continue }
+            layers.append(StoreIconLayer(role: role, png: png))
+        }
+        guard !layers.isEmpty else { return nil }
+        return (manifest, layers)
+    }
+
     func setSessionService(_ sessionService: any RuntimeSessionService) {
         self.sessionService = sessionService
+    }
+
+    /// Refreshes managed package labels after the guest applies a new locale.
+    /// Wrapper registry entries keep the same label so validation flags the
+    /// wrapper for refresh instead of silently keeping the old name.
+    func refreshLocaleDependentPackageLabels(registry: WrapperRegistry) async throws(RuntimeWireError) {
+        do {
+            try await ensureOpen()
+            let changed = try await refreshAndroidInventory()
+            guard !changed.isEmpty else { return }
+            let changedSet = Set(changed)
+            for record in try await store.listManagedPackages()
+            where changedSet.contains(record.packageId) {
+                let runtimeID = try Self.runtimePackageID(record.packageId)
+                if let entry = await registry.entry(packageID: runtimeID),
+                    entry.displayName != record.displayName
+                {
+                    try await registry.setDisplayName(
+                        bundleID: entry.bundleId, displayName: record.displayName)
+                }
+            }
+        } catch {
+            throw Self.wireError(for: error)
+        }
     }
 
     /// Launches an installed package in the embedded runtime through the Guest Agent.
@@ -165,9 +220,384 @@ public actor EmbeddedPackageService: RuntimeService {
                 origin: Self.storeImportOrigin(request.origin)
             )
             let relation = try await relation(for: preview)
-            let result = try Self.runtimePreview(from: preview, relation: relation)
+            var result = try Self.runtimePreview(from: preview, relation: relation)
+            result.suggestedProvider = fdroidProviderSuggestion(for: result)
             importPreviews[preview.ticket] = result
             return result
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
+    /// The `importBootstrap` op of an approved portable wrapper's launcher
+    /// (wrapper-json.md §3.4). `entry` passed B1 in the caller; B2–B8 run here
+    /// in order and the first failure decides.
+    public func importBootstrap(
+        entry: WrapperRegistryEntry,
+        wrapperDocument: WrapperDocument,
+        bootstrapJSON: Data,
+        files: [FileHandle]
+    ) async throws(RuntimeWireError) -> RuntimePackageSummary {
+        do {
+            try await ensureOpen()
+            guard let packageID = PackageID(rawValue: entry.packageId) else {
+                throw RuntimeHost.wrapperWireError(for: .bootstrapInvalid(.malformed))
+            }
+            // B2: only a first install or a retained-data reinstall may import.
+            let isFirstRecord = try await firstBootstrapRecord(for: packageID)
+            // B3: the document must fit 64 KiB, parse, carry formatVersion 1,
+            // and satisfy §3.5.
+            guard bootstrapJSON.count <= BootstrapDocument.maximumDocumentBytes,
+                let document = try? BootstrapDocumentCodec.decode(bootstrapJSON),
+                (try? BootstrapDocumentCodec.validate(document)) != nil
+            else {
+                throw RuntimeHost.wrapperWireError(for: .bootstrapInvalid(.malformed))
+            }
+            // A contradictory `updates` block is a malformed payload, checked
+            // before anything installs (wrapper-json.md §2.4).
+            if wrapperDocument.updates?.authority == .apkrun,
+                wrapperDocument.updates?.provider == nil
+            {
+                throw RuntimeHost.wrapperWireError(for: .bootstrapInvalid(.malformed))
+            }
+            // B4: the bootstrap must name the wrapper's package.
+            guard document.packageId == entry.packageId else {
+                throw RuntimeHost.wrapperWireError(for: .bootstrapInvalid(.packageMismatch))
+            }
+            // B5: one file handle per `files` item.
+            guard files.count == document.files.count else {
+                throw RuntimeHost.wrapperWireError(for: .bootstrapInvalid(.malformed))
+            }
+            let sources = document.files.enumerated().map {
+                RuntimeImportSourceFile(fileIndex: $0.offset, name: $0.element.name)
+            }
+            let staged = try stage(sources, from: files)
+            defer { try? fileManager.removeItem(at: staged.directory) }
+            let preview = try await store.importPackage(
+                files: staged.files, bootstrapBundleID: entry.bundleId)
+            do {
+                // B5–B7 compare the verified set — computed from the copied
+                // bytes — against the document; the document is never trusted.
+                let set = preview.artifactSet
+                guard set.files.count == document.files.count else {
+                    throw WrapperFailure.bootstrapInvalid(.malformed)
+                }
+                for (artifact, declared) in zip(set.files, document.files) {
+                    guard artifact.name == declared.name else {
+                        throw WrapperFailure.bootstrapInvalid(.malformed)
+                    }
+                    guard artifact.size == declared.size,
+                        declared.sha256 == "sha256:" + artifact.sha256.hexValue
+                    else {
+                        throw WrapperFailure.bootstrapInvalid(.hashMismatch)
+                    }
+                }
+                // B6: the set digest of the copied files equals `setDigest`.
+                guard "sha256:" + set.setDigest.hexValue == document.setDigest else {
+                    throw WrapperFailure.bootstrapInvalid(.hashMismatch)
+                }
+                // B7: the inspected APKs carry the declared identity, and the
+                // verified signer set equals `signers`.
+                guard set.packageID.rawValue == document.packageId,
+                    set.versionCode == document.versionCode,
+                    document.signers
+                        == set.signerDigests.map { "sha256:" + $0.hexValue }.sorted()
+                else {
+                    throw WrapperFailure.bootstrapInvalid(.packageMismatch)
+                }
+            } catch let failure as WrapperFailure {
+                try? await store.discardImport(ticket: preview.ticket)
+                throw RuntimeHost.wrapperWireError(for: failure)
+            } catch {
+                try? await store.discardImport(ticket: preview.ticket)
+                throw error
+            }
+            // B8: the ticket path runs the store's own install checks (for
+            // example the downgrade refusal when Android kept newer data).
+            guard let ticket = RuntimeImportTicket(rawValue: preview.ticket.uuidString) else {
+                throw Self.wireError(for: PackageStoreFailure.importTicketNotFound)
+            }
+            let result = try await installImportedWithChange(
+                RuntimeInstallImportedRequest(ticket: ticket, options: RuntimeInstallOptions()))
+            // wrapper.json `updates` supplies the initial authority, mode, and
+            // provider (wrapper-json.md §3.3).
+            if let updates = wrapperDocument.updates {
+                let choice: UpdateChoice = updates.mode == .notifyOnly ? .notifyOnly : .automatic
+                try await store.setUpdateMode(
+                    for: packageID, mode: UpdatePolicyRules.settingsMode(for: choice))
+                try await store.setUpdatePolicy(
+                    for: packageID,
+                    authority: updates.authority == .apkrun ? .apkrun : .manual,
+                    provider: updates.provider.flatMap(Self.providerRef(for:)),
+                    requireProvider: true)
+            }
+            // `window` and `integration` are first-record settings (§3.3).
+            if isFirstRecord {
+                var patch: [String: String?] = [:]
+                if let window = wrapperDocument.window {
+                    if let mode = window.mode {
+                        patch["window.mode"] =
+                            mode == .standard
+                            ? "secondaryDisplay" : "primaryDisplayCompatibility"
+                    }
+                    if let width = window.defaultWidth {
+                        patch["window.defaultWidth"] = String(width)
+                    }
+                    if let height = window.defaultHeight {
+                        patch["window.defaultHeight"] = String(height)
+                    }
+                    if let resizable = window.resizable {
+                        patch["window.resizable"] = resizable ? "true" : "false"
+                    }
+                }
+                if let integration = wrapperDocument.integration {
+                    // A wrapper this Mac did not generate is capped by this
+                    // Mac's `integrations.defaults.*`: it can turn an
+                    // integration off or down, never on or up
+                    // (configuration.md §3.3, wrapper.md §3).
+                    let capped = entry.approval == .user
+                    let defaults =
+                        capped
+                        ? GlobalSettings.load(from: paths.settingsFile)
+                            .integrationsDefaults
+                        : [:]
+                    func cap(
+                        _ value: String, key: String, order: [String], fallback: String
+                    ) -> String {
+                        guard capped else { return value }
+                        let ceiling = defaults[key] ?? fallback
+                        guard let rank = order.firstIndex(of: value),
+                            let bound = order.firstIndex(of: ceiling)
+                        else { return ceiling }
+                        return rank <= bound ? value : ceiling
+                    }
+                    let boolOrder = ["false", "true"]
+                    if let clipboard = integration.clipboard {
+                        patch["integrations.clipboard"] = cap(
+                            clipboard ? "true" : "false",
+                            key: "clipboard", order: boolOrder, fallback: "true")
+                    }
+                    if let notifications = integration.notifications {
+                        patch["integrations.notifications"] = cap(
+                            notifications ? "true" : "false",
+                            key: "notifications", order: boolOrder, fallback: "true")
+                    }
+                    if let links = integration.links {
+                        patch["integrations.links"] = cap(
+                            links.rawValue, key: "links",
+                            order: ["android", "ask", "mac"], fallback: "ask")
+                    }
+                    if let files = integration.files {
+                        patch["integrations.files"] = cap(
+                            files ? "true" : "false",
+                            key: "files", order: boolOrder, fallback: "true")
+                    }
+                    if let sharedFolders = integration.sharedFolders {
+                        patch["integrations.sharedFolders"] = cap(
+                            sharedFolders.rawValue, key: "sharedFolders",
+                            order: ["off", "readOnly", "readWrite"], fallback: "off")
+                    }
+                    if let microphone = integration.microphone {
+                        patch["integrations.microphone"] = cap(
+                            microphone ? "true" : "false",
+                            key: "microphone", order: boolOrder, fallback: "false")
+                    }
+                }
+                if !patch.isEmpty {
+                    _ = try await store.updatePackageSettings(packageID, patch: patch)
+                }
+            }
+            return result.summary
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
+    /// Whether no record exists for the package — the bootstrap import then
+    /// creates it and applies wrapper.json's first-record settings. A record
+    /// whose state is not `uninstalledKeepingData` fails B2.
+    private func firstBootstrapRecord(for packageID: PackageID) async throws -> Bool {
+        guard
+            let record = try await store.listManagedPackages()
+                .first(where: { $0.packageId == packageID })
+        else {
+            return true
+        }
+        guard record.state == .uninstalledKeepingData else {
+            throw RuntimeHost.wrapperWireError(for: .bootstrapNotAllowed(.alreadyInstalled))
+        }
+        return false
+    }
+
+    /// Maps a parsed wrapper.json provider to the store's provider reference
+    /// (wrapper-json.md §2.4). `local` is never stored in wrapper.json, so it
+    /// never reaches the record.
+    private static func providerRef(for provider: WrapperUpdateProvider) -> UpdateProviderRef? {
+        switch provider.configuration {
+        case .direct(let url):
+            return UpdateProviderRef(
+                type: .direct, configuration: .direct(url: url))
+        case .fdroid(let repository, let fingerprint):
+            return UpdateProviderRef(
+                type: .fdroid,
+                configuration: .fdroid(repository: repository, fingerprint: fingerprint))
+        case .github(let repository, let assetPattern, let channel):
+            return UpdateProviderRef(
+                type: .github,
+                configuration: .github(
+                    repository: repository, assetPattern: assetPattern,
+                    channel: GitHubReleaseChannel(rawValue: channel) ?? .stable))
+        }
+    }
+
+    /// Drops an import ticket and its private APK copies without starting Android.
+    public func discardImport(
+        _ request: RuntimeDiscardImportRequest
+    ) async throws(RuntimeWireError) {
+        do {
+            try await ensureOpen()
+            guard let ticket = UUID(uuidString: request.ticket.rawValue) else {
+                throw PackageStoreFailure.importTicketNotFound
+            }
+            try await store.discardImport(ticket: ticket)
+            importPreviews.removeValue(forKey: ticket)
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
+    /// Marks every managed package as needing a reinstall on a new userdata generation
+    /// (package-store.md §9.2, runtime-daemon.md §9.5). Returns the managed package IDs that
+    /// must be reinstalled from their retained artifacts.
+    public func markForUserdataReset() async throws(RuntimeWireError) -> [RuntimePackageID] {
+        do {
+            try await ensureOpen()
+            return try await store.markForUserdataReset()
+                .compactMap { RuntimePackageID(rawValue: $0.rawValue) }
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
+    /// Managed packages still waiting for a reinstall after a userdata reset or restore.
+    /// The records stay marked when a reinstall could not run, so a later boot retries them.
+    public func pendingReinstalls() async throws(RuntimeWireError) -> [RuntimePackageID] {
+        do {
+            try await ensureOpen()
+            return try await store.listManagedPackages().compactMap { record in
+                switch record.state {
+                case .needsReinstall, .broken(.reinstallFailed):
+                    return RuntimePackageID(rawValue: record.packageId.rawValue)
+                default:
+                    return nil
+                }
+            }
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
+    /// The stored `integrations.*` settings of a package
+    /// (package-metadata-json.md §3); nil for unmanaged or unconfigured ones.
+    func packageIntegrationSettings(for packageID: String) async throws -> PackageSettings? {
+        try await ensureOpen()
+        guard let id = PackageID(rawValue: packageID) else {
+            return nil
+        }
+        return try await store.packageSettings(for: id)
+    }
+
+    /// The stored `settings.json` of a package on the wire (host-ui.md §7).
+    public func packageSettings(
+        for packageID: RuntimePackageID
+    ) async throws(RuntimeWireError) -> PackageSettingsWire? {
+        do {
+            try await ensureOpen()
+            guard let id = PackageID(rawValue: packageID.rawValue) else {
+                throw PackageStoreFailure.packageNotFound
+            }
+            let settings = try await store.packageSettings(for: id) ?? PackageSettings()
+            return wireSettings(settings)
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
+    /// Resolves every §3.1 key for the wire (configuration.md §3.2):
+    /// global switches of `settings.json` win, then the stored value,
+    /// then a compatibility recommendation (#91), then the default.
+    private func wireSettings(_ settings: PackageSettings) -> PackageSettingsWire {
+        let global = GlobalSettings.load(from: paths.settingsFile)
+        let resolver = PackageSettingsResolver(
+            globalIntegrationsEnabled: global.integrationsEnabled)
+        let entries = PackageSettingsSchema.keys.map { key -> PackageSettingWire in
+            let stored = settings.value(key.name)
+            let recommended = resolver.isRecommended(key.name, in: settings)
+            let forcedOff =
+                key.name.hasPrefix("integrations.")
+                && global.integrationsEnabled[String(key.name.dropFirst("integrations.".count))]
+                    == false
+            let source =
+                forcedOff
+                ? "globalSwitch"
+                : stored != nil
+                    ? "user"
+                    : recommended
+                        ? "recommended" : "default"
+            var allowed: [String]?
+            switch key.kind {
+            case .word(let words): allowed = words
+            case .flag: allowed = ["true", "false"]
+            default: break
+            }
+            return PackageSettingWire(
+                key: key.name,
+                value: resolver.effectiveValue(for: key.name, in: settings),
+                source: source,
+                appliesLive: key.appliesLive,
+                stored: stored,
+                allowed: allowed)
+        }
+        return PackageSettingsWire(
+            groups: settings.groups, recommended: resolver.recommendations, entries: entries)
+    }
+
+    /// Applies a `settings.json` patch and returns the stored settings
+    /// (host-ui.md §7, `updatePackageSettings`).
+    public func updatePackageSettings(
+        _ request: RuntimeUpdatePackageSettingsRequest
+    ) async throws(RuntimeWireError) -> PackageSettingsWire {
+        do {
+            try await ensureOpen()
+            guard let id = PackageID(rawValue: request.packageID.rawValue) else {
+                throw PackageStoreFailure.packageNotFound
+            }
+            var patch: [String: String?] = [:]
+            for (key, value) in request.patch.set {
+                patch[key] = value
+            }
+            for key in request.patch.clear {
+                // `[String: String?]` deletes on `= nil`; `.some(nil)` keeps the
+                // clear instruction for the store.
+                patch[key] = .some(nil)
+            }
+            let settings = try await store.updatePackageSettings(id, patch: patch)
+            return wireSettings(settings)
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
+    /// The `current/` artifact directory of a managed package (collision-aware; §9.5).
+    public func artifactCurrentDirectory(
+        for packageID: RuntimePackageID
+    ) async throws(RuntimeWireError) -> URL {
+        do {
+            try await ensureOpen()
+            guard let id = PackageID(rawValue: packageID.rawValue) else {
+                throw PackageStoreFailure.packageNotFound
+            }
+            return try await store.artifactCurrentDirectory(packageID: id)
         } catch {
             throw Self.wireError(for: error)
         }
@@ -189,6 +619,16 @@ public actor EmbeddedPackageService: RuntimeService {
             guard let ticket = UUID(uuidString: request.ticket.rawValue) else {
                 throw EmbeddedPackageServiceFailure.invalidTicket
             }
+            // An invalid `--provider` spec fails before anything installs
+            // (cli.md §4.2): parsing it later would leave the APK installed
+            // while the command reports an error.
+            let requestedProviderRef: UpdateProviderRef?
+            do {
+                requestedProviderRef = try request.options.provider.map(
+                    UpdatePolicyRules.providerRef(for:))
+            } catch {
+                throw Self.wireError(for: error)
+            }
             let packageID = try await store.packageIDForImportTicket(ticket)
             guard let runtimePackageID = RuntimePackageID(rawValue: packageID.rawValue) else {
                 throw EmbeddedPackageServiceFailure.invalidTicket
@@ -202,11 +642,17 @@ public actor EmbeddedPackageService: RuntimeService {
     /// Installs an import and reports the store change that occurred.
     func installImportedWithChange(
         _ request: RuntimeInstallImportedRequest,
-        beforeStoreMutation: PackageMutationBoundary? = nil
+        beforeStoreMutation: PackageMutationBoundary? = nil,
+        requiresReinstallMark: Bool = false
     ) async throws(RuntimeWireError) -> RuntimePackageInstallResult {
         do {
             try await ensureOpen()
-            guard request.options.authority == .manual else {
+            // A `--provider` install attaches the provider after the store
+            // commit; `apkrun` authority without one stays refused (§2.4).
+            guard
+                request.options.authority == .manual
+                    || (request.options.authority == .apkrun && request.options.provider != nil)
+            else {
                 throw EmbeddedPackageServiceFailure.unsupportedUpdateAuthority
             }
             guard !request.options.createWrapper else {
@@ -214,6 +660,16 @@ public actor EmbeddedPackageService: RuntimeService {
             }
             guard let ticket = UUID(uuidString: request.ticket.rawValue) else {
                 throw EmbeddedPackageServiceFailure.invalidTicket
+            }
+            // An invalid `--provider` spec fails before anything installs
+            // (cli.md §4.2): parsing it later would leave the APK installed
+            // while the command reports an error.
+            let requestedProviderRef: UpdateProviderRef?
+            do {
+                requestedProviderRef = try request.options.provider.map(
+                    UpdatePolicyRules.providerRef(for:))
+            } catch {
+                throw Self.wireError(for: error)
             }
             let packageID = try await store.packageIDForImportTicket(ticket)
             guard let runtimePackageID = RuntimePackageID(rawValue: packageID.rawValue) else {
@@ -240,17 +696,20 @@ public actor EmbeddedPackageService: RuntimeService {
                 if case .uninstalledWithData = preview.relation {
                     outcome = try await store.installImportedWithOutcome(
                         ticket: ticket,
-                        beforeGuestInstall: beforeStoreMutation
+                        beforeGuestInstall: beforeStoreMutation,
+                        requiresReinstallMark: requiresReinstallMark
                     )
                 } else if case .newPackage = preview.relation {
                     outcome = try await store.installImportedWithOutcome(
                         ticket: ticket,
-                        beforeGuestInstall: beforeStoreMutation
+                        beforeGuestInstall: beforeStoreMutation,
+                        requiresReinstallMark: requiresReinstallMark
                     )
                 } else {
                     outcome = try await store.reinstallWithOutcome(
                         ticket: ticket,
-                        beforeGuestInstall: beforeStoreMutation
+                        beforeGuestInstall: beforeStoreMutation,
+                        requiresReinstallMark: requiresReinstallMark
                     )
                 }
             } else {
@@ -258,10 +717,37 @@ public actor EmbeddedPackageService: RuntimeService {
                 // safely permits first installs and retained-data reinstalls in this case.
                 outcome = try await store.installImportedWithOutcome(
                     ticket: ticket,
-                    beforeGuestInstall: beforeStoreMutation
+                    beforeGuestInstall: beforeStoreMutation,
+                    requiresReinstallMark: requiresReinstallMark
                 )
             }
             importPreviews[ticket] = nil
+            // §2.4: the install flags land on the record whenever the user
+            // asked for them — a provider spec or a `--updates` mode. With
+            // no provider, the stored one is kept; `--updates manual` keeps
+            // authority `manual` and the provider stored unused.
+            if requestedProviderRef != nil || request.options.updateMode != nil {
+                let mode = UpdatePolicyRules.settingsMode(
+                    for: request.options.updateMode ?? .automatic)
+                // `--updates manual` demotes to manual; a provider spec
+                // promotes to apkrun. A mode-only flag leaves the stored
+                // authority alone, so reinstalling `--updates notify` on a
+                // package with a configured provider keeps APKRun checking.
+                let authority: UpdateAuthority? =
+                    if request.options.updateMode == .manual {
+                        .manual
+                    } else if requestedProviderRef != nil {
+                        .apkrun
+                    } else {
+                        nil
+                    }
+                try await store.setUpdateMode(for: packageID, mode: mode)
+                try await store.setUpdatePolicy(
+                    for: packageID,
+                    authority: authority,
+                    provider: requestedProviderRef,
+                    requireProvider: request.options.authority == .apkrun)
+            }
             try? await refreshAndroidInventory()
             let summary = try Self.summary(from: outcome.record)
             return RuntimePackageInstallResult(
@@ -336,6 +822,70 @@ public actor EmbeddedPackageService: RuntimeService {
             throw Self.wireError(for: error)
         }
     }
+
+    /// Reinstalls a `broken` package from its retained `current/` artifacts
+    /// (package-store.md §11.1) and returns the change to publish. The caller
+    /// starts Android first; `repairPackage` itself never launches the runtime.
+    public func repairPackage(
+        _ request: RuntimePackageRequest
+    ) async throws(RuntimeWireError) -> PackageChange {
+        do {
+            try await ensureOpen()
+            guard let packageID = PackageID(rawValue: request.packageID.rawValue) else {
+                throw EmbeddedPackageServiceFailure.invalidPackageID
+            }
+            let records = try await store.listManagedPackages()
+            guard let record = records.first(where: { $0.packageId == packageID }) else {
+                throw PackageStoreFailure.packageNotFound
+            }
+            guard case .broken = record.state else {
+                throw Self.notRepairableError
+            }
+            let current = try await store.artifactCurrentDirectory(packageID: packageID)
+            let names =
+                try fileManager.contentsOfDirectory(atPath: current.path)
+                .filter { $0.hasSuffix(".apk") }
+                .sorted()
+            guard !names.isEmpty else { throw Self.repairArtifactsMissingError }
+            var handles: [FileHandle] = []
+            var sourceFiles: [RuntimeImportSourceFile] = []
+            for (index, name) in names.enumerated() {
+                guard
+                    let handle = try? FileHandle(
+                        forReadingFrom: current.appendingPathComponent(name))
+                else {
+                    for handle in handles { try? handle.close() }
+                    throw Self.repairArtifactsMissingError
+                }
+                handles.append(handle)
+                sourceFiles.append(RuntimeImportSourceFile(fileIndex: index, name: name))
+            }
+            defer {
+                for handle in handles { try? handle.close() }
+            }
+            let preview = try await importPackage(
+                RuntimeImportPackageRequest(files: sourceFiles, origin: .cli),
+                files: handles
+            )
+            let result = try await installImportedWithChange(
+                RuntimeInstallImportedRequest(ticket: preview.ticket))
+            return result.change
+        } catch let error as RuntimeWireError {
+            throw error
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
+    private static let notRepairableError = RuntimeWireError.store(
+        "notRepairable",
+        message: "The package is not marked broken.",
+        remediation: "Repair applies only to a package APKRun lists as broken.")
+
+    private static let repairArtifactsMissingError = RuntimeWireError.store(
+        "notRepairable",
+        message: "APKRun has no retained APKs to reinstall.",
+        remediation: "Uninstall the package, then install it from a new APK file.")
 
     private static let packageInUseError = RuntimeWireError.store(
         "packageInUse",
@@ -531,8 +1081,43 @@ public actor EmbeddedPackageService: RuntimeService {
             return RuntimePackageDetails(
                 summary: try Self.summary(from: record),
                 files: files,
-                artifactBytes: bytes
+                artifactBytes: bytes,
+                staged: record.artifacts.staged.map {
+                    RuntimeStagedArtifact(
+                        versionCode: $0.versionCode,
+                        versionName: $0.versionName,
+                        size: $0.size,
+                        fileCount: $0.fileCount,
+                        origin: $0.origin.type.rawValue)
+                },
+                previous: record.artifacts.previous.map {
+                    RuntimeArtifactSlot(
+                        versionCode: $0.versionCode,
+                        versionName: $0.versionName,
+                        size: $0.size,
+                        fileCount: $0.fileCount)
+                }
             )
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
+    /// Adopts a package Android has but APKRun does not manage (package-store.md §9.3).
+    ///
+    /// The live Store Agent supplies the package facts; the runtime must be attached and Android
+    /// must report the package for adoption to succeed.
+    public func adoptPackage(
+        _ request: RuntimeAdoptPackageRequest
+    ) async throws(RuntimeWireError) -> RuntimePackageSummary {
+        do {
+            try await ensureOpen()
+            guard let packageID = PackageID(rawValue: request.packageID.rawValue) else {
+                throw EmbeddedPackageServiceFailure.invalidPackageID
+            }
+            guard runtimeAttached else { throw PackageStoreFailure.runtimeUnavailable }
+            let record = try await store.adoptPackage(packageID: packageID)
+            return try Self.summary(from: record)
         } catch {
             throw Self.wireError(for: error)
         }
@@ -769,33 +1354,24 @@ public actor EmbeddedPackageService: RuntimeService {
         }
     }
 
+    /// Maps the store's §4.7 classification onto the wire enum.
     private func relation(for preview: PackageImportPreview) async throws -> RuntimeImportRelation {
-        let records = try await store.listManagedPackages()
-        guard let record = records.first(where: { $0.packageId == preview.packageID }) else {
+        switch preview.relation {
+        case .newPackage:
             return .newPackage
-        }
-        if record.state == .uninstalledKeepingData {
-            return .uninstalledWithData(record.versionCode)
-        }
-        if !preview.artifactSet.signerDigests.isEmpty,
-            !record.signingCertificates.isEmpty,
-            preview.artifactSet.signerDigests != record.signingCertificates
-        {
-            return .otherSigner
-        }
-        if preview.versionCode < record.versionCode {
-            return .downgrade(from: record.versionCode)
-        }
-        if preview.versionCode > record.versionCode {
-            return .update(from: record.versionCode)
-        }
-        if preview.artifactSet.setDigest == record.artifacts.current?.setDigest {
-            if record.state == .installed {
-                return .sameAsInstalled
-            }
+        case .sameAsInstalled:
+            return .sameAsInstalled
+        case .reinstallSameVersion:
             return .reinstallSameVersion
+        case .update(let from):
+            return .update(from: from)
+        case .downgrade(let from):
+            return .downgrade(from: from)
+        case .otherSigner:
+            return .otherSigner
+        case .uninstalledWithData(let versionCode):
+            return .uninstalledWithData(versionCode)
         }
-        return .reinstallSameVersion
     }
 
     private func currentArtifactSet(for packageID: PackageID) throws -> ArtifactSet? {
@@ -848,9 +1424,47 @@ public actor EmbeddedPackageService: RuntimeService {
                 return runtimeDigest
             },
             files: try preview.artifactSet.files.map(runtimeArtifact),
+            excludedSplits: preview.excludedSplits,
             relation: relation,
-            warnings: [.signingNotChecked]
+            warnings: preview.warnings.map { warning in
+                switch warning {
+                case .missingHardwareFeature(let feature): .missingHardwareFeature(feature: feature)
+                case .certificateOnlyVerification: .certificateOnlyVerification
+                case .debuggable: .debuggable
+                case .lowTargetSDK(let target): .lowTargetSDK(target: target)
+                }
+            }
         )
+    }
+
+    /// The §4.7 Add-sheet suggestion: the cached main-repository index names
+    /// the package and a version carries the imported signer, so `fdroid` is
+    /// offered — off by default until the user enables it. Reads only the
+    /// on-disk cache; it never fetches.
+    private func fdroidProviderSuggestion(for preview: RuntimeImportPreview) -> String? {
+        // No suggestion for a package another authority manages or one the
+        // signer comparison already rejects.
+        guard preview.relation != .otherSigner else { return nil }
+        let hex = SHA256Digest(data: Data(FDroidProvider.mainRepository.utf8)).hexValue
+        let indexFile =
+            paths.updatesDirectory
+            .appendingPathComponent("cache/fdroid/\(hex.prefix(16))/index.json")
+        guard let data = try? Data(contentsOf: indexFile),
+            data.count <= FDroidIndexReader.indexByteLimit,
+            let packageID = PackageID(rawValue: preview.packageID.rawValue),
+            let packages = try? FDroidIndexReader().packages(in: data, keep: [packageID]),
+            let fdroidPackage = packages[packageID]
+        else {
+            return nil
+        }
+        let imported = Set(preview.signerDigests.map { $0.rawValue.lowercased() })
+        guard !imported.isEmpty else { return nil }
+        for version in fdroidPackage.versions.values {
+            guard let signer = version.manifest.signer?.sha256 else { continue }
+            let digests = Set(signer.map { "sha256:\($0.lowercased())" })
+            if digests == imported { return "fdroid" }
+        }
+        return nil
     }
 
     private static func storeImportOrigin(_ origin: RuntimeImportOrigin) -> ImportOrigin {
@@ -875,12 +1489,14 @@ public actor EmbeddedPackageService: RuntimeService {
         )
     }
 
-    private func refreshAndroidInventory() async throws {
-        guard runtimeAttached else { return }
+    @discardableResult
+    private func refreshAndroidInventory() async throws -> [PackageID] {
+        guard runtimeAttached else { return [] }
         let packages = try await runtimeAccess.withStoreAgent(UUID()) { channel in
             try await channel.listPackages(.all)
         }
         _ = try await store.saveLastKnownAndroidInventory(packages)
+        return try await store.updateManagedDisplayNames(from: packages)
     }
 
     private static func summary(from record: PackageRecord) throws -> RuntimePackageSummary {
@@ -916,6 +1532,7 @@ public actor EmbeddedPackageService: RuntimeService {
             case .signerChanged: .broken("signerChanged")
             case .artifactMissing: .broken("artifactMissing")
             case .reinstallFailed(let error): .broken("\(error.domain).\(error.code)")
+            case .rollbackFailed: .broken("rollbackFailed")
             }
         }
     }
@@ -963,6 +1580,10 @@ public actor EmbeddedPackageService: RuntimeService {
                 return .store(
                     "invalidSplitSet", message: "The APK files do not form a consistent split set.",
                     remediation: "Select the base APK and all matching split APKs.")
+            case .packageAlreadyManaged:
+                return .store(
+                    "packageAlreadyManaged", message: "This package is already managed by APKRun.",
+                    remediation: "The package needs no adoption. See it with `apkrun list`.")
             case .packageAlreadyInstalled:
                 return .store(
                     "packageAlreadyInstalled", message: "This package is already installed.",
@@ -982,6 +1603,18 @@ public actor EmbeddedPackageService: RuntimeService {
                 return .store(
                     "operationInProgress", message: "Another package operation is already running for this app.",
                     remediation: "Wait for it to finish, then retry.")
+            case .providerNotConfigured:
+                return RuntimeWireError(
+                    domain: "update",
+                    code: "update.providerNotConfigured",
+                    message: "Automatic updates need a configured update provider.",
+                    remediation: "Set a provider with `apkrun update policy <package> --provider <spec>`.")
+            case .authorityDoesNotAllowUpdates:
+                return RuntimeWireError(
+                    domain: "update",
+                    code: "update.authorityDoesNotAllowUpdates",
+                    message: "This package's update authority does not allow APKRun updates.",
+                    remediation: "Set the authority with `apkrun update authority <package> apkrun`.")
             case .importTicketNotFound, .importTicketExpired, .importTicketChanged:
                 return .store(
                     "importTicketExpired", message: "The APK preview is no longer valid.",
@@ -1001,6 +1634,14 @@ public actor EmbeddedPackageService: RuntimeService {
                     message:
                         "Version \(candidate) is older than installed version \(installed).",
                     remediation: "Choose a newer APK, or uninstall the app first."
+                )
+            case .signerMismatch(let packageID):
+                return .store(
+                    "signerMismatch",
+                    message:
+                        "The APK for \(packageID.rawValue) is signed by a different key than the installed app.",
+                    remediation:
+                        "Install the APK signed by the same key, or uninstall the app first (its data is removed)."
                 )
             case .downgradeReinstallUnavailable:
                 return .store(
@@ -1031,10 +1672,154 @@ public actor EmbeddedPackageService: RuntimeService {
                 return .store(
                     "unreadablePackageRecord", message: "A package record could not be read.",
                     remediation: "Run `apkrun doctor` for details.")
+            case .packageInUse(let packageID):
+                return .store(
+                    "packageInUse", message: "\(packageID.rawValue) is in use.",
+                    remediation: "Close the app's windows and try the update again.")
+            case .stagedUpdateMissing:
+                return .store(
+                    "stagedUpdateMissing", message: "No verified update is staged for this package.",
+                    remediation: "Run `apkrun update check` to download and stage an update first.")
+            case .rollbackUnavailable(let reason):
+                switch reason {
+                case .noPreviousSet:
+                    return .store(
+                        "rollbackUnavailable",
+                        message: "No previous APK set is retained for this package.",
+                        remediation: "Rollback is possible only after an update.")
+                case .noMechanism:
+                    return .store(
+                        "rollbackUnavailable",
+                        message: "Android cannot roll this package back automatically.",
+                        remediation:
+                            "Retry with `apkrun rollback <package> --allow-data-loss` to reinstall the previous version (its app data is deleted)."
+                    )
+                }
+            case .rollbackFailed(let detail):
+                return RuntimeWireError(
+                    domain: "update",
+                    code: "update.rollbackFailed",
+                    message: "The update rollback failed: \(detail).",
+                    remediation:
+                        "Repair the app with `apkrun repair <package>` or uninstall and install it again.")
+            case .unknownSettingKey(let key):
+                return RuntimeWireError(
+                    domain: "store", code: "store.unknownSetting",
+                    message: "There is no app setting named \(key).",
+                    remediation:
+                        "List the app's settings with: apkrun settings <package> list",
+                    parameters: ["key": key])
+            case .invalidSettingValue(let key, let allowed):
+                return RuntimeWireError(
+                    domain: "store", code: "store.invalidSettingValue",
+                    message: "\(key) can't be set to that value.",
+                    remediation: "Allowed values: \(allowed).",
+                    parameters: ["key": key, "allowed": allowed])
             case .io:
                 return .store(
                     "storageIO", message: "APKRun could not read or write package data.",
                     remediation: "Check disk space and permissions, then retry.")
+            }
+        }
+        if let failure = error as? StoreFailure {
+            // The wire code is the `store.*` error-catalog code without its prefix;
+            // keep messages in sync with ErrorsCatalog `store` entries (§10).
+            let code = String(failure.errorCode.dropFirst("store.".count))
+            switch failure {
+            case .unsupportedContainer(let kind):
+                return .store(
+                    code, message: "APKRun can't add this kind of file (\(kind.rawValue)).",
+                    remediation:
+                        "APKRun can add .apk, .apks, .xapk, and .apkm files, and .zip files that contain only APKs."
+                )
+            case .unreadableArchive:
+                return .store(
+                    code, message: "This file couldn't be read. It may be damaged or incomplete.",
+                    remediation: "Download the file again.")
+            case .archiveLimitExceeded(let limit):
+                return .store(
+                    code, message: "This file contains more than APKRun can safely unpack (\(limit.rawValue)).")
+            case .expansionFilesNotSupported:
+                return .store(
+                    code,
+                    message: "This file includes expansion files (OBB), which APKRun doesn't support yet.",
+                    remediation: "Get a build of the app without expansion files.")
+            case .notAnAPK(let file):
+                return .store(
+                    code, message: "\(file) isn't an Android app (APK).",
+                    remediation: "Choose the app's .apk, .apks, .xapk, or .apkm file.")
+            case .missingBase:
+                return .store(
+                    code, message: "The base APK is missing from this set.",
+                    remediation: "Add the base APK too, or use the complete .apks, .xapk, or .apkm file.")
+            case .multipleBases:
+                return .store(
+                    code, message: "This set contains more than one base APK.",
+                    remediation: "Add the APKs of one app version only.")
+            case .duplicateSplit(let split):
+                return .store(
+                    code, message: "The split \(split) appears more than once.",
+                    remediation: "Add each split APK only once.")
+            case .inconsistentSplits:
+                return .store(
+                    code, message: "The APKs in this set don't belong together.",
+                    remediation: "Add the APKs of one app version from one source.")
+            case .incompleteSplitSet(let missing):
+                return .store(
+                    code,
+                    message: "This set is missing parts that the app needs: \(missing.joined(separator: ", ")).",
+                    remediation: "Use the complete .apks, .xapk, or .apkm file of the app.")
+            case .unsignedAPK(let file):
+                return .store(
+                    code, message: "\(file) isn't signed.",
+                    remediation: "Android installs only signed apps. Get a signed copy from the app's developer.")
+            case .invalidSignature(let file, _):
+                return .store(
+                    code, message: "The signature of \(file) isn't valid.",
+                    remediation:
+                        "The file may have been changed after signing. Download it again from the app's developer.")
+            case .legacySignatureNotAllowed(let targetSdk):
+                return .store(
+                    code,
+                    message:
+                        "This app uses an old signature format that Android doesn't accept for apps that target API \(targetSdk).",
+                    remediation: "Get a newer build of the app from its developer.")
+            case .unsupportedABI(let found, let supported):
+                return .store(
+                    code,
+                    message:
+                        "This app is built only for \(found.joined(separator: ", ")), but Android in APKRun needs \(supported.joined(separator: ", ")).",
+                    remediation: "Get a build of the app for \(supported.joined(separator: ", ")).")
+            case .minSdkTooHigh(let required, let guest):
+                return .store(
+                    code,
+                    message: "This app needs Android API \(required) or later. Android in APKRun has API \(guest).",
+                    remediation: "Update Android, or get an older build of the app.")
+            case .targetSdkTooLow(let target, let floor):
+                return .store(
+                    code,
+                    message:
+                        "This app targets API \(target). Android in APKRun installs only apps that target API \(floor) or later.",
+                    remediation: "Get a newer build of the app from its developer.")
+            case .reservedPackage(let packageID):
+                return .store(
+                    code,
+                    message: "\(packageID.rawValue) is part of Android or APKRun and can't be added as an app.",
+                    remediation: "No action is needed.")
+            case .tooLarge(let bytes, let limit):
+                return .store(
+                    code, message: "This app is too large (\(bytes) bytes; the limit is \(limit) bytes).",
+                    remediation: "Get a smaller build of the app, for example one for fewer device types.")
+            case .resourcesArscNotAligned(let file):
+                return .store(
+                    code,
+                    message:
+                        "\(file) isn't packaged the way Android requires for apps that target API 30 or later.",
+                    remediation: "Get a build of the app made with current Android build tools from its developer.")
+            case .io:
+                return .store(
+                    code, message: "This file couldn't be read. It may be damaged or incomplete.",
+                    remediation: "Download the file again.")
             }
         }
         if let failure = error as? APKInspectionFailure {
@@ -1185,6 +1970,10 @@ private enum EmbeddedPackageServiceFailure: Error {
 
 private actor AttachedStoreRuntimeAccess: StoreRuntimeAccess {
     private var access: (any StoreRuntimeAccess)?
+
+    init(initial access: (any StoreRuntimeAccess)? = nil) {
+        self.access = access
+    }
 
     func attach(_ access: any StoreRuntimeAccess) {
         self.access = access

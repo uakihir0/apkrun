@@ -98,6 +98,12 @@ jobs:
         run: swift build -j 2
       - name: Build embedded runtime CLI
         run: swift build -j 2 --traits EmbeddedRuntime
+      - name: Build Guest Agent
+        run: |
+          if [ ! -x "$ANDROID_HOME/build-tools/37.0.0/apksigner" ]; then
+            sdkmanager "build-tools;37.0.0" >/dev/null
+          fi
+          scripts/build-guest.sh
       - name: Build Debug products
         run: >-
           xcodebuild -project APKRun.xcodeproj -scheme APKRun
@@ -108,6 +114,7 @@ jobs:
         run: rm -rf build/DebugDerivedData
       - name: Build Release products
         run: >-
+          APKRUN_GUEST_EMBED=off
           xcodebuild -project APKRun.xcodeproj -scheme APKRun
           -configuration Release -jobs 2 -derivedDataPath build/ReleaseDerivedData
           -resultBundlePath build/ci/APKRun-Release.xcresult

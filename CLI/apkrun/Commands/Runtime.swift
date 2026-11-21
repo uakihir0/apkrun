@@ -105,10 +105,32 @@ struct RuntimeRestartCommand: AsyncParsableCommand {
 struct RuntimeResetCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "reset",
-        abstract: "Clear the automatic boot-loop guard without deleting Android data."
+        abstract: "Reset the Android runtime."
     )
 
+    @Flag(name: .long, help: "Erase all Android data and reinstall managed apps (runtime-daemon.md §9.5).")
+    var erase = false
+
+    @Flag(name: .long, help: "Do not keep a 7-day recovery point of Android data.")
+    var noBackup = false
+
+    @Flag(name: .long, help: "Erase without typing the confirmation word.")
+    var yes = false
+
     mutating func run() async throws {
+        #if !APKRUN_EMBEDDED_RUNTIME
+            if erase {
+                try await runErase()
+                return
+            }
+        #else
+            if erase {
+                throw CLIFailure.invalidArgument(
+                    argument: "erase",
+                    reason: "not available in this build"
+                )
+            }
+        #endif
         do {
             let client = try RuntimeControlClient(clientKind: .cli)
             let status = try await client.resetRuntime()
@@ -117,6 +139,55 @@ struct RuntimeResetCommand: AsyncParsableCommand {
             throw await RuntimeStatusOutput.commandFailure(error)
         }
     }
+
+    #if !APKRUN_EMBEDDED_RUNTIME
+        /// The destructive reset: every Android app, its data, and settings are removed
+        /// and managed APKRun apps are reinstalled (runtime-daemon.md §9.5).
+        private func runErase() async throws {
+            try Self.confirmErase(yes: yes)
+            let client: RuntimeControlClient
+            do {
+                client = try RuntimeControlClient(clientKind: .cli)
+            } catch {
+                throw await RuntimeStatusOutput.commandFailure(error)
+            }
+            let operationID = RuntimeAPI.OperationID()
+            let handle = try await client.resetAndroid(
+                ResetAndroidRequest(keepBackup: !noBackup, confirmed: true),
+                operationID: operationID
+            )
+            let snapshot = try await OperationCommandOutput.waitForTerminalSnapshot(
+                using: client,
+                operationID: handle.operationID,
+                progressToStderr: OperationCommandOutput.shouldShowProgress
+            )
+            guard snapshot.kind == .resetAndroid else {
+                throw RuntimeWireError.runtime(
+                    "operationResultUnknown",
+                    message: "APKRun couldn't read the result of the reset operation."
+                )
+            }
+            try OperationCommandOutput.requireSuccess(snapshot)
+            Output.write("Android was reset. Managed apps are being reinstalled.")
+        }
+
+        /// The confirmation word the user must type, unless `--yes` was given.
+        static func confirmErase(yes: Bool) throws {
+            guard !yes else { return }
+            guard isatty(STDIN_FILENO) == 1 else {
+                throw CLIFailure.confirmationRequired(flag: "--yes")
+            }
+            FileHandle.standardError.write(
+                Data(
+                    "This erases all Android apps, their data, and settings. Type \"Reset\" to continue: "
+                        .utf8
+                )
+            )
+            guard let answer = readLine(), answer == "Reset" else {
+                throw CLIFailure.declined
+            }
+        }
+    #endif
 }
 
 enum RuntimeStatusOutput {
@@ -145,6 +216,9 @@ enum RuntimeStatusOutput {
             "Android: \(status.runtimeState)",
             "Owner: apkrund",
         ]
+        if let provisioning = status.provisioning {
+            lines.append("Setup: \(provisioningText(provisioning))")
+        }
         if let progress = status.bootProgress {
             lines.append("Boot progress: \(Int((progress * 100).rounded()))%")
         }
@@ -158,6 +232,32 @@ enum RuntimeStatusOutput {
             lines.append("Startup issue: step \(step) (\(code))")
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// The provisioning line of `apkrun runtime status` (runtime-daemon.md §9.2).
+    static func provisioningText(_ state: WireProvisioningState) -> String {
+        switch state {
+        case .notStarted:
+            return "not started"
+        case .checkingHost:
+            return "checking this Mac"
+        case .installingImage(let fraction):
+            return "installing image (\(Int((fraction * 100).rounded()))%)"
+        case .creatingInstance:
+            return "creating the Android instance"
+        case .firstBoot(_, let fraction):
+            return "first boot (\(Int((fraction * 100).rounded()))%)"
+        case .installingAgents:
+            return "installing agents"
+        case .verifying:
+            return "verifying"
+        case .complete:
+            return "complete"
+        case .failed(let step, let error):
+            return "failed at \(step.rawValue) (\(error.code))"
+        case .unknown:
+            return "unknown"
+        }
     }
 
     static func failure(
@@ -202,7 +302,7 @@ enum RuntimeStatusOutput {
                 fallbackMessage: "APKRun needs to be restarted.",
                 fallbackRemediation: "Quit and reopen APKRun."
             )
-        case .remoteFailure(let code, let message):
+        case .remoteFailure(let code, let message, _):
             return fromCatalog(code, fallbackMessage: message)
         case .requestTimedOut(let operation):
             let failure = fromCatalog(
@@ -297,6 +397,7 @@ private struct RuntimeStatusResult: Encodable {
     let imageVersion: String?
     let guestAgentState: GuestAgentConnectionState?
     let guestAgentProtocolVersion: String?
+    let provisioning: WireProvisioningState?
 
     init(status: RuntimeHostStatus) {
         hostState = status.hostState
@@ -309,5 +410,6 @@ private struct RuntimeStatusResult: Encodable {
         imageVersion = status.imageVersion
         guestAgentState = status.guestAgentState
         guestAgentProtocolVersion = status.guestAgentProtocolVersion
+        provisioning = status.provisioning
     }
 }

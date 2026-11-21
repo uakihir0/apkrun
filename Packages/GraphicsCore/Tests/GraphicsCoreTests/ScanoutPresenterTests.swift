@@ -286,12 +286,21 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
     #expect(destroyed.count == 3)
 }
 
-@Test func aPresenterCannotBeAttachedAfterTheGuestStarts() throws {
+@Test func aPresenterAttachesAfterTheGuestStarts() async throws {
+    // A scanout enabled while the guest runs (graphics.md §6.3) presents
+    // the flushes of a resource the guest binds afterwards.
     let harness = try PresenterHarness()
     harness.device.deviceDidStart(context: harness.context, negotiatedFeatures: 0)
-    #expect(throws: GraphicsFailure.self) {
-        _ = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)
-    }
+    let presenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)
+    var frames = presenter.frames.makeAsyncIterator()
+
+    let control = harness.send(
+        bindAndFlush(resource: 3, rect: fullRect) + [flushRequest(resource: 3, rect: fullRect)]
+    )
+    try await eventually { control.completionCounts == [1, 1, 1] }
+    #expect(blitCalls(harness.engine).count == 1)
+    #expect(await frames.next() == .frameReady(generation: 1, bufferIndex: 0, sequence: 1))
+    presenter.close()
 }
 
 @Test func livePresenterReplacementAdvancesGenerationAndClosesTheOldPresenterAfterItsBlit() async throws {

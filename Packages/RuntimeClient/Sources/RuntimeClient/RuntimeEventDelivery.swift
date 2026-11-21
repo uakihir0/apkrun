@@ -124,12 +124,101 @@ final class RuntimeEventStreamHub: @unchecked Sendable {
     }
 }
 
+/// Routes §16.4 stream envelopes (delivered inside event batches as
+/// `.stream` payloads) to the stream the client opened.
+final class RuntimeNotificationStreamHub: @unchecked Sendable {
+    /// Envelopes held for a stream the client has not registered yet (the
+    /// open reply arrives after the daemon already queued posts).
+    private static let pendingEnvelopeLimit = 256
+
+    private let lock = NSLock()
+    private var continuations: [StreamID: AsyncStream<StreamEnvelope>.Continuation] = [:]
+    private var pending: [StreamID: [StreamEnvelope]] = [:]
+
+    /// Registers a stream and returns its event stream. Envelopes delivered
+    /// before the registration are replayed first.
+    func register(_ streamID: StreamID) -> AsyncStream<StreamEnvelope> {
+        let pair = AsyncStream<StreamEnvelope>.makeStream(bufferingPolicy: .unbounded)
+        let buffered = lock.withLock { () -> [StreamEnvelope] in
+            continuations[streamID] = pair.continuation
+            return pending.removeValue(forKey: streamID) ?? []
+        }
+        pair.continuation.onTermination = { [weak self] _ in
+            self?.remove(streamID)
+        }
+        for envelope in buffered {
+            pair.continuation.yield(envelope)
+            if case .ended = envelope.event {
+                remove(streamID)
+                break
+            }
+        }
+        return pair.stream
+    }
+
+    /// Finishes a stream locally, e.g. after `closeStream`.
+    func remove(_ streamID: StreamID) {
+        let continuation = lock.withLock { () -> AsyncStream<StreamEnvelope>.Continuation? in
+            pending[streamID] = nil
+            return continuations.removeValue(forKey: streamID)
+        }
+        // finish() runs onTermination synchronously; it must run outside the
+        // lock because the handler calls back into remove().
+        continuation?.finish()
+    }
+
+    /// Finishes every open stream, e.g. when the XPC connection drops.
+    func finishAll() {
+        let all = lock.withLock { () -> [AsyncStream<StreamEnvelope>.Continuation] in
+            defer {
+                continuations.removeAll()
+                pending.removeAll()
+            }
+            return Array(continuations.values)
+        }
+        for continuation in all {
+            continuation.finish()
+        }
+    }
+
+    /// Yields each `.stream` envelope to its stream; an `.ended` event
+    /// finishes the stream afterwards.
+    func deliver(_ envelopes: [EventEnvelope]) {
+        var targets: [(AsyncStream<StreamEnvelope>.Continuation, StreamEnvelope)] = []
+        lock.withLock {
+            for envelope in envelopes {
+                guard case .stream(let streamEnvelope) = envelope.payload else { continue }
+                if let continuation = continuations[streamEnvelope.streamID] {
+                    targets.append((continuation, streamEnvelope))
+                } else {
+                    var queue = pending[streamEnvelope.streamID] ?? []
+                    if queue.count < Self.pendingEnvelopeLimit {
+                        queue.append(streamEnvelope)
+                        pending[streamEnvelope.streamID] = queue
+                    }
+                }
+            }
+        }
+        for (continuation, streamEnvelope) in targets {
+            continuation.yield(streamEnvelope)
+            if case .ended = streamEnvelope.event {
+                remove(streamEnvelope.streamID)
+            }
+        }
+    }
+}
+
 /// The client-exported XPC object that decodes event batches and acknowledges receipt.
 final class RuntimeEventSinkReceiver: NSObject, RuntimeEventSink, @unchecked Sendable {
     private let streamHub: RuntimeEventStreamHub
+    private let notificationStreamHub: RuntimeNotificationStreamHub
 
-    init(streamHub: RuntimeEventStreamHub) {
+    init(
+        streamHub: RuntimeEventStreamHub,
+        notificationStreamHub: RuntimeNotificationStreamHub
+    ) {
         self.streamHub = streamHub
+        self.notificationStreamHub = notificationStreamHub
     }
 
     func handshake(reply: @escaping (Bool) -> Void) {
@@ -142,7 +231,17 @@ final class RuntimeEventSinkReceiver: NSObject, RuntimeEventSink, @unchecked Sen
             reply()
             return
         }
-        streamHub.deliver(envelopes)
+        var topicEnvelopes: [EventEnvelope] = []
+        var streamEnvelopes: [EventEnvelope] = []
+        for envelope in envelopes {
+            if case .stream = envelope.payload {
+                streamEnvelopes.append(envelope)
+            } else {
+                topicEnvelopes.append(envelope)
+            }
+        }
+        notificationStreamHub.deliver(streamEnvelopes)
+        streamHub.deliver(topicEnvelopes)
         reply()
     }
 }

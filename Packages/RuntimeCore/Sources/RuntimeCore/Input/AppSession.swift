@@ -53,6 +53,9 @@ public enum SessionEndReason: Sendable, Equatable {
     case runtimeUpdating
     /// The package was uninstalled.
     case packageUninstalled
+    /// The update health-check session ended (update-system.md §8.2); the
+    /// app process is left running.
+    case updateHealthCheck
     /// A typed RuntimeCore failure code for the session.
     case error(SessionFailureCode)
 }

@@ -166,3 +166,53 @@ import Testing
 
     #expect(record.updateAuthority == .manual)
 }
+
+@Test func updateAuthorityClaimsOwnershipOnlyForApkrunAndManual() {
+    #expect(UpdateAuthority.apkrun.claimsUpdateOwnership)
+    #expect(UpdateAuthority.manual.claimsUpdateOwnership)
+    #expect(UpdateAuthority.googlePlay.claimsUpdateOwnership == false)
+    #expect(UpdateAuthority.external.claimsUpdateOwnership == false)
+}
+
+@Test func splitSelectorKeepsFeatureConfigSplitForGuestABI() throws {
+    let base = SplitCandidate(name: "base.apk", splitName: nil)
+    let feature = SplitCandidate(
+        name: "feature.apk", splitName: "feature",
+        attributes: SplitAttributes(isFeatureSplit: true))
+    let featureConfigARM = SplitCandidate(
+        name: "feature.config.arm64_v8a.apk", splitName: "feature.config.arm64_v8a",
+        attributes: SplitAttributes(configForSplit: "feature"))
+    let featureConfigX86 = SplitCandidate(
+        name: "feature.config.x86_64.apk", splitName: "feature.config.x86_64",
+        attributes: SplitAttributes(configForSplit: "feature"))
+    let orphan = SplitCandidate(
+        name: "orphan.apk", splitName: "orphan",
+        attributes: SplitAttributes(configForSplit: "missing"))
+
+    let selection = try SplitSelector().select(
+        [base, feature, featureConfigARM, featureConfigX86, orphan])
+
+    #expect(selection.included == ["base.apk", "feature.apk", "feature.config.arm64_v8a.apk"])
+    #expect(selection.excludedSplits == ["feature.config.x86_64", "orphan"])
+}
+
+@Test func splitSelectorPicksDensityPerModule() throws {
+    // The base only reaches hdpi while the feature only offers xhdpi+; each
+    // module keeps its own nearest bucket (guest density 320 dpi).
+    let base = SplitCandidate(name: "base.apk", splitName: nil)
+    let feature = SplitCandidate(
+        name: "feature.apk", splitName: "feature",
+        attributes: SplitAttributes(isFeatureSplit: true))
+    func config(_ name: String) -> SplitCandidate {
+        SplitCandidate(name: name, splitName: String(name.dropLast(4)))
+    }
+    let selection = try SplitSelector().select([
+        base, feature,
+        config("config.mdpi.apk"), config("config.hdpi.apk"),
+        config("feature.config.xhdpi.apk"), config("feature.config.xxhdpi.apk"),
+    ])
+    #expect(selection.included.contains("config.hdpi.apk"))
+    #expect(selection.included.contains("feature.config.xhdpi.apk"))
+    #expect(
+        selection.excludedSplits == ["config.mdpi", "feature.config.xxhdpi"])
+}

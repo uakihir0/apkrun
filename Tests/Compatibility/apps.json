@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "apps": [
+    {
+      "name": "Fennec F-Droid",
+      "url": "https://f-droid.org/repo/org.mozilla.fennec_fdroid_1600020.apk"
+    },
+    {
+      "name": "OsmAnd+",
+      "url": "https://f-droid.org/repo/net.osmand.plus_541103.apk"
+    }
+  ]
+}

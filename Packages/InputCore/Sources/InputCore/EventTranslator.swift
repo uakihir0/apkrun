@@ -1,3 +1,5 @@
+import DiagnosticsCore
+
 /// Translates pointer samples into the events of the guest (input.md §4.1 and §4.4; decisions D2 to D5).
 ///
 /// The translator is a value. It keeps the open gesture, the pressed buttons, whether the pointer hovers, and the
@@ -81,6 +83,15 @@ public struct EventTranslator: Sendable {
     ///
     /// A sample with a non-finite value is dropped. A time that goes backwards is replaced by the last time seen.
     public mutating func translate(_ sample: PointerSample) -> [InputEvent] {
+        let started = ContinuousClock.now
+        defer {
+            let components = (ContinuousClock.now - started).components
+            InputLatencyRecorder.shared.record(
+                segment: "input.translate",
+                microseconds: components.seconds * 1_000_000
+                    + components.attoseconds / 1_000_000_000_000
+            )
+        }
         guard sample.windowX.isFinite, sample.windowY.isFinite, sample.scrollX.isFinite, sample.scrollY.isFinite else {
             return []
         }

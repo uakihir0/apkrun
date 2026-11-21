@@ -220,6 +220,17 @@ let package = Package(
             path: "Packages/IntegrationCore/Sources/IntegrationCore"
         ),
         .executableTarget(
+            name: "apkrun-perf",
+            dependencies: [
+                "RuntimeClient",
+                "RuntimeAPI",
+                "DiagnosticsCore",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
+            path: "Tests/PerformanceTests",
+            exclude: ["baselines"]
+        ),
+        .executableTarget(
             name: "apkrun",
             dependencies: [
                 "RuntimeClient",
@@ -350,7 +361,7 @@ let package = Package(
         ),
         .testTarget(
             name: "RuntimeHostTests",
-            dependencies: ["RuntimeHost", "DiagnosticsCore"],
+            dependencies: ["RuntimeHost", "DiagnosticsCore", "IntegrationCore"],
             path: "Packages/RuntimeHost/Tests/RuntimeHostTests"
         ),
         .testTarget(
@@ -364,9 +375,22 @@ let package = Package(
             path: "Packages/APKStoreCore/Tests/APKStoreCoreTests"
         ),
         .testTarget(
+            name: "APKStoreCoreSystemTests",
+            dependencies: [
+                "APKStoreCore",
+                .product(name: "ZIPFoundation", package: "zipfoundation"),
+            ],
+            path: "Packages/APKStoreCore/Tests/APKStoreCoreSystemTests"
+        ),
+        .testTarget(
             name: "UpdateCoreTests",
             dependencies: ["UpdateCore"],
             path: "Packages/UpdateCore/Tests/UpdateCoreTests"
+        ),
+        .testTarget(
+            name: "UpdateCoreSystemTests",
+            dependencies: ["UpdateCore", "APKStoreCore"],
+            path: "Packages/UpdateCore/Tests/UpdateCoreSystemTests"
         ),
         .testTarget(
             name: "WrapperCoreTests",

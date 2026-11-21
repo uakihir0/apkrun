@@ -270,10 +270,14 @@ public actor UpdateCoordinator {
                 await stateStore.update(packageID) { $0.notifiedCursor = newCursor }
             }
             // TODO(#39): automatic continues into downloading → validating → staged.
+            let note: String? =
+                providerRef.type == .github
+                && candidate.artifacts.contains(where: { $0.sha256 == nil })
+                ? "No checksum published" : nil
             await appendHistory(
                 record: record, to: candidate.declaredVersionCode,
                 provider: providerRef.type, trigger: trigger,
-                outcome: "available", failure: nil, started: started)
+                outcome: "available", failure: nil, started: started, note: note)
             await stateStore.flush()
             return .available(candidate)
         } catch let failure {
@@ -1254,7 +1258,8 @@ public actor UpdateCoordinator {
         trigger: UpdateTrigger,
         outcome: String,
         failure: String?,
-        started: Date
+        started: Date,
+        note: String? = nil
     ) async {
         let finished = Date()
         try? await stateStore.appendHistory(
@@ -1269,7 +1274,8 @@ public actor UpdateCoordinator {
                 failure: failure,
                 phaseDurationsMs: [
                     "checking": Int(finished.timeIntervalSince(started) * 1_000)
-                ]))
+                ],
+                note: note))
     }
 
     /// `nextCheckAt = lastCheckAt + interval ± jitter`; failure backoff is

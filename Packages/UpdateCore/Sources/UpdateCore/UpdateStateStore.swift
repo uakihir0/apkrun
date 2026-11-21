@@ -154,6 +154,9 @@ public struct UpdateHistoryEntry: Codable, Sendable, Equatable {
     public var failure: String?
     /// Milliseconds spent per phase.
     public var phaseDurationsMs: [String: Int]
+    /// A free-form note (e.g. "No checksum published" for a GitHub
+    /// candidate whose asset has no digest, update-system.md §4.6).
+    public var note: String?
 
     /// Creates a history entry.
     public init(
@@ -165,7 +168,8 @@ public struct UpdateHistoryEntry: Codable, Sendable, Equatable {
         trigger: UpdateTrigger,
         outcome: String,
         failure: String? = nil,
-        phaseDurationsMs: [String: Int] = [:]
+        phaseDurationsMs: [String: Int] = [:],
+        note: String? = nil
     ) {
         self.v = 1
         self.time = time
@@ -177,6 +181,7 @@ public struct UpdateHistoryEntry: Codable, Sendable, Equatable {
         self.outcome = outcome
         self.failure = failure
         self.phaseDurationsMs = phaseDurationsMs
+        self.note = note
     }
 }
 

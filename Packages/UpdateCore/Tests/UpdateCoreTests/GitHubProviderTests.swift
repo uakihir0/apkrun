@@ -251,6 +251,42 @@ private func releaseJSON(
     #expect(http.recorded.requests.last?.headers["If-None-Match"] == "\"listing-1\"")
 }
 
+@Test func checkIgnoresAListingEditThatKeepsTheSameAsset() async throws {
+    var http = StubHTTP()
+    http.getBody = Data("[\(releaseJSON(id: 2))]".utf8)
+    http.getEtag = "\"listing-1\""
+    let provider = try GitHubProvider(ref: GitHubProvider.providerRef(for: "octo/hello"))
+    let context = githubContext(http: http)
+    let first = try #require(
+        try await provider.check(githubPackage(), context: context))
+    var package = try githubPackage()
+    package.lastCursor = first.cursor
+    // A release-note edit moves the listing ETag; the chosen release and
+    // asset are unchanged, so the processed release is not offered again.
+    http.getEtag = "\"listing-2\""
+    let second = try await provider.check(package, context: context)
+    #expect(second == nil)
+}
+
+@Test func checkRefetchesWhenTheChannelOrGlobChanged() async throws {
+    var http = StubHTTP()
+    http.getBody = Data("[\(releaseJSON(id: 2))]".utf8)
+    http.getEtag = "\"listing-1\""
+    let provider = try GitHubProvider(
+        ref: GitHubProvider.providerRef(for: "octo/hello@prerelease"))
+    var package = try githubPackage()
+    // A cursor written by a stable-channel check of an older release.
+    package.lastCursor = ProviderCursor(
+        type: .github,
+        value: "\"listing-0\"\t1:100:2026-01-01T00:00:00Z:100\tstable:app-*.apk")
+    let candidate = try #require(
+        try await provider.check(package, context: githubContext(http: http)))
+    // The changed config cannot reuse the old listing ETag, so the request
+    // is unconditional and the new channel's candidate is found.
+    #expect(http.recorded.requests.last?.headers["If-None-Match"] == nil)
+    #expect(candidate.cursor.value.contains(":2"))
+}
+
 @Test func checkMapsAnExhaustedLimitToRateLimited() async throws {
     var http = StubHTTP()
     http.getStatus = 403

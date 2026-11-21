@@ -241,7 +241,7 @@ For apps published as GitHub release assets (FR-UPD-13).
 - `check`: `GET https://api.github.com/repos/{owner}/{name}/releases?per_page=10` with `Accept: application/vnd.github+json`, `X-GitHub-Api-Version`, and `If-None-Match`. The chosen release is the newest non-draft release. Pre-releases count only on the `prerelease` channel. The asset is the one whose name matches `assetPattern` (glob). If several match, prefer names containing `arm64-v8a` or `arm64`, then `universal`. If several still match, fail with `ambiguousAsset(names)` so the user can narrow the pattern.
 - The tag and release name are **not** versions. `declaredVersionCode` is nil. The candidate is downloaded and inspected, and V2 (§6) decides.
 - Hash: the asset's `digest` (`sha256:…`) when the API provides it — release assets carry it today (OQ-18). Otherwise the download is protected only by TLS, and the history entry says "No checksum published".
-- Cursor = release ID + asset ID + asset `updated_at` + size. The cursor prevents a second download of a non-newer asset.
+- Cursor = the listing `ETag` + release ID + asset ID + asset `updated_at` + size + the channel and asset glob. The ETag only makes the next `check` conditional; the release/asset identity decides whether a candidate was already processed, so a listing edit does not re-offer the same asset. A channel or glob change invalidates the cached ETag and the listing is fetched again.
 - Rate limits: `403` or `429` with `x-ratelimit-remaining: 0` → `providerRateLimited(retryAfter: x-ratelimit-reset)`. `304` responses are cheap. Unauthenticated use (60 requests per hour per IP) is enough at the default interval for dozens of packages.
 
 ### 4.7 Provider detection in the Add sheet

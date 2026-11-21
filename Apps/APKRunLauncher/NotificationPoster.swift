@@ -87,7 +87,9 @@ final class NotificationPoster: NSObject, UNUserNotificationCenterDelegate {
         case .remove(let identifiers):
             center.removeDeliveredNotifications(withIdentifiers: identifiers)
             center.removePendingNotificationRequests(withIdentifiers: identifiers)
-            identifiers.forEach { delivered.remove($0) }
+            for identifier in identifiers {
+                delivered.remove(identifier)
+            }
             scheduleIdleQuitIfEmpty()
         case .setBadge(let count):
             NSApp.dockTile.badgeLabel = count.map(String.init)

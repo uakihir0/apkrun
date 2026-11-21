@@ -1,3 +1,4 @@
+import DiagnosticsCore
 import Foundation
 import GuestProtocol
 import IntegrationCore
@@ -147,8 +148,9 @@ private struct HostNotificationSink: NotificationSink {
         {
             return entry.displayName
         }
-        return (try? await host.packageServiceForIntegrations()?.packageInfo(
-            RuntimePackageRequest(packageID: packageID)))??.summary.displayName
+        return
+            (try? await host.packageServiceForIntegrations()?.packageInfo(
+                RuntimePackageRequest(packageID: packageID)))??.summary.displayName
     }
 }
 
@@ -316,7 +318,7 @@ extension RuntimeHost {
     public func integrationStatus(packageID: RuntimePackageID) async throws(RuntimeWireError)
         -> IntegrationStatus
     {
-        _ = try await packageInfo(RuntimePackageRequest(packageID: packageID))
+        let details = try await packageInfo(RuntimePackageRequest(packageID: packageID))
         await refreshIntegrationSettings(for: packageID)
         let coordinator = integrationCoordinator()
         let key = await coordinator.currentKeySession
@@ -342,11 +344,30 @@ extension RuntimeHost {
                     source: source,
                     decision: Self.wireDecision(decision),
                     support: supportState(kind: kind, capability: capability),
-                    capability: capability
+                    capability: capability,
+                    macPermission: await macPermissionText(
+                        for: kind, packageID: packageID,
+                        displayName: details.summary.displayName)
                 )
             )
         }
         return IntegrationStatus(packageID: packageID, items: items)
+    }
+
+    /// The host-ui §7.4 permission line of a kind, currently only
+    /// notifications: "Notifications for ‹App› are turned off in System
+    /// Settings." when the wrapper reported `.denied`.
+    private func macPermissionText(
+        for kind: IntegrationKind,
+        packageID: RuntimePackageID,
+        displayName: String
+    ) async -> String? {
+        guard kind == .notifications,
+            await notificationCoordinator().macPermission(for: packageID) == .denied
+        else {
+            return nil
+        }
+        return "Notifications for \(displayName) are turned off in System Settings."
     }
 
     /// The stored or default `integrations.<kind>` value and its source.
@@ -364,7 +385,9 @@ extension RuntimeHost {
         switch kind {
         case .clipboard:
             return ClipboardCoordinator.requiredCapability
-        case .notifications, .links, .files, .sharedFolders, .microphone:
+        case .notifications:
+            return NotificationCoordinator.requiredCapability
+        case .links, .files, .sharedFolders, .microphone:
             return nil
         }
     }
@@ -419,7 +442,10 @@ extension RuntimeHost {
             await self?.runtimeSupervisorForIntegrations()?.developmentGuestAgent?.supervisor
         }
         let sink = HostNotificationSink(host: self)
-        let coordinator = NotificationCoordinator(policy: policy, channel: channel, sink: sink)
+        let coordinator = NotificationCoordinator(
+            policy: policy, channel: channel, sink: sink,
+            logSink: hostLogSink)
+        registerIntegrationHealthChecks()
         let center = streamCenter
         center.onRelayStreamOpened = { packageID, _ in
             Task { await coordinator.relayOpened(packageID: packageID) }
@@ -436,8 +462,8 @@ extension RuntimeHost {
             case .dismissed(let identifier):
                 Task { await coordinator.dismissed(identifier: identifier) }
             case .authorizationChanged(let state):
-                if state == .denied, let packageID = center.relayPackageID(for: streamID) {
-                    Task { await coordinator.noteAuthorizationDenied(packageID: packageID) }
+                if let packageID = center.relayPackageID(for: streamID) {
+                    Task { await coordinator.noteAuthorization(state, packageID: packageID) }
                 }
             case .unknown:
                 break
@@ -586,6 +612,72 @@ extension RuntimeHost {
                 message: "The copied item is too large for Android (\(bytes); the limit is \(limit)).",
                 remediation: "Copy a smaller item."
             )
+        }
+    }
+}
+
+/// `integrations.notificationListener` (diagnostics.md §7.3): the Guest
+/// Agent's notification listener access, read from the latest snapshot the
+/// supervisor holds. The guest re-grants access itself on loss
+/// (guest-components.md §5), so a failure is a warning, not a fix.
+struct NotificationListenerCheck: HealthCheck {
+    /// Resolves the live agent supervisor; nil while no agent is connected.
+    let supervisor: @Sendable () async -> GuestAgentSupervisor?
+
+    var id: HealthCheckID { "integrations.notificationListener" }
+    var group: HealthGroup { .integrations }
+    var requirement: HealthRequirement { .runningRuntime }
+    var cost: HealthCost { .quick }
+    var title: LocalizedText {
+        LocalizedText(
+            key: "health.integrations.notificationListener",
+            fallback: "Notification listener")
+    }
+
+    func run(_ context: HealthContext) async -> DiagnosticsCore.HealthResult {
+        let now = context.clock.now
+        guard let supervisor = await supervisor() else {
+            return DiagnosticsCore.HealthResult(
+                id: id, group: group, state: .skipped, title: title,
+                detail: "The Guest Agent is not connected.",
+                error: nil, measuredAt: now)
+        }
+        if await supervisor.snapshot.notificationListenerEnabled {
+            return DiagnosticsCore.HealthResult(
+                id: id, group: group, state: .pass, title: title,
+                detail: "The notification listener has access.",
+                error: nil, measuredAt: now)
+        }
+        return DiagnosticsCore.HealthResult(
+            id: id, group: group, state: .warning, title: title,
+            detail: "The notification listener lost its access.",
+            error: ErrorInfo(
+                code: "integration.notificationAccessMissing",
+                message: LocalizedText(
+                    key: "integration.notificationAccessMissing",
+                    fallback: "Android lost access to its notifications."),
+                remediation: LocalizedText(
+                    key: "integration.notificationAccessMissing.remediation",
+                    fallback: "The Guest Agent restores the access automatically; restart Android if the warning stays."
+                ),
+                action: .none),
+            measuredAt: now)
+    }
+}
+
+extension RuntimeHost {
+    /// Registers the integrations health checks once (diagnostics.md §7.3).
+    func registerIntegrationHealthChecks() {
+        guard !integrationHealthChecksRegistered,
+            let checks = healthCheckRegistry
+        else { return }
+        integrationHealthChecksRegistered = true
+        Task {
+            try? await checks.register(
+                NotificationListenerCheck(supervisor: { [weak self] in
+                    await self?.runtimeSupervisorForIntegrations()?
+                        .developmentGuestAgent?.supervisor
+                }))
         }
     }
 }

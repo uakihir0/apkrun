@@ -1,4 +1,5 @@
 import CryptoKit
+import DiagnosticsCore
 import Foundation
 import GuestProtocol
 import RuntimeAPI
@@ -58,6 +59,8 @@ public actor NotificationCoordinator {
     private let policy: IntegrationPolicy
     private let channel: any NotificationGuestChannel
     private let sink: any NotificationSink
+    /// `io.apkrun.integration`/`notifications`; never logs titles or text.
+    private let log: APKLogger
 
     /// Active Android keys per package: key → wire identifier.
     private var forwarded: [RuntimePackageID: [String: String]] = [:]
@@ -73,16 +76,20 @@ public actor NotificationCoordinator {
     private var pendingTimers: [RuntimePackageID: Task<Void, Never>] = [:]
     /// Queues dropped on the 10 s timeout, per package (counted per §5.3).
     private var droppedQueues: [RuntimePackageID: Int] = [:]
+    /// The wrapper's last reported `authorizationChanged` state, per package.
+    private var macAuthorization: [RuntimePackageID: MacPermissionState] = [:]
 
     /// Creates a coordinator over the policy, guest channel, and host sink.
     public init(
         policy: IntegrationPolicy,
         channel: any NotificationGuestChannel,
-        sink: any NotificationSink
+        sink: any NotificationSink,
+        logSink: (any LogSink)? = nil
     ) {
         self.policy = policy
         self.channel = channel
         self.sink = sink
+        self.log = APKLogger(category: .notifications, sink: logSink)
     }
 
     // MARK: - Forwarding list (§3.2)
@@ -116,8 +123,9 @@ public actor NotificationCoordinator {
         let context = IntegrationContext(
             hasSession: false, windowIsKey: false,
             requiredCapability: Self.requiredCapability)
-        guard case .allow = await policy.evaluate(
-            .notifications, package: packageID, context: context)
+        guard
+            case .allow = await policy.evaluate(
+                .notifications, package: packageID, context: context)
         else {
             return
         }
@@ -133,7 +141,8 @@ public actor NotificationCoordinator {
         }
         let payload = Self.payload(from: notification, packageID: packageID, identifier: identifier)
         let count = forwarded[packageID]?.count ?? 0
-        await deliver(packageID: packageID, notification: notification, payload: payload, badge: count)
+        await deliver(
+            packageID: packageID, notification: notification, payload: payload, badge: count)
     }
 
     /// Handles one `notification_removed` event.
@@ -167,6 +176,8 @@ public actor NotificationCoordinator {
         for entry in queued {
             if await !sink.relay(entry.message, to: packageID) {
                 pending[packageID, default: []].append(entry)
+            } else {
+                noteDelivered(packageID: packageID)
             }
         }
         if (pending[packageID] ?? []).isEmpty {
@@ -202,10 +213,19 @@ public actor NotificationCoordinator {
         try? await channel.dismissNotification(key: record.key)
     }
 
-    /// `authorizationChanged(denied)` from a wrapper. The host reports it in
-    /// `integrationStatus`; the coordinator only has to stop pushing posts.
-    public func noteAuthorizationDenied(packageID: RuntimePackageID) {
-        // Kept for symmetry; denial state lives in settings/health reporting.
+    /// `authorizationChanged(state)` from a wrapper: remembered so
+    /// `integrationStatus` can report the macOS permission (§5.3).
+    public func noteAuthorization(_ state: MacPermissionState, packageID: RuntimePackageID) {
+        macAuthorization[packageID] = state
+        if state == .denied {
+            log.warning(
+                "The wrapper of \(packageID.rawValue, .public) lost its notification permission")
+        }
+    }
+
+    /// The wrapper's last reported macOS notification permission (§7.4).
+    public func macPermission(for packageID: RuntimePackageID) -> MacPermissionState? {
+        macAuthorization[packageID]
     }
 
     // MARK: - Status
@@ -261,6 +281,7 @@ public actor NotificationCoordinator {
     ) async {
         if await sink.relay(.post(payload), to: packageID) {
             await sendBadge(packageID: packageID, badge: badge)
+            noteDelivered(packageID: packageID)
             return
         }
         if await sink.wrapperExists(for: packageID) {
@@ -268,7 +289,16 @@ public actor NotificationCoordinator {
             return
         }
         let hostPayload = await hostPayload(from: notification, packageID: packageID, badge: badge)
-        _ = await sink.hostNotify(.post(hostPayload))
+        if await sink.hostNotify(.post(hostPayload)) {
+            noteDelivered(packageID: packageID)
+        }
+    }
+
+    /// NOTIFICATION_DELIVERED plus a log line; identifiers only, never a
+    /// title or text (desktop-integration.md §5.2).
+    private func noteDelivered(packageID: RuntimePackageID) {
+        Perf.mark(.notificationDelivered)
+        log.debug("Delivered a notification of \(packageID.rawValue, .public)")
     }
 
     private func queueForBackgroundStart(packageID: RuntimePackageID, message: RelayMessage) {

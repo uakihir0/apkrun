@@ -58,7 +58,10 @@ final class RuntimeStreamCenter: @unchecked Sendable {
         let stream = streams[streamID]
         let valid =
             stream?.connectionID == connectionID && stream?.ended == false
-            && stream.map { if case .notificationRelay = $0.kind { return true }; return false } == true
+            && stream.map {
+                if case .notificationRelay = $0.kind { return true }
+                return false
+            } == true
         let handler = onRelayResponse
         lock.unlock()
         guard valid else { return false }
@@ -77,7 +80,10 @@ final class RuntimeStreamCenter: @unchecked Sendable {
         let stream = streams[streamID]
         let valid =
             stream?.connectionID == connectionID && stream?.ended == false
-            && stream.map { if case .hostNotifications = $0.kind { return true }; return false } == true
+            && stream.map {
+                if case .hostNotifications = $0.kind { return true }
+                return false
+            } == true
         let handler = onHostNotificationResponse
         lock.unlock()
         guard valid else { return false }
@@ -158,10 +164,12 @@ final class RuntimeStreamCenter: @unchecked Sendable {
     func sendRelay(_ message: RelayMessage, to packageID: RuntimePackageID) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard let streamID = streams.first(where: {
-            if case .notificationRelay(let id) = $0.value.kind { return id == packageID && !$0.value.ended }
-            return false
-        })?.key else {
+        guard
+            let streamID = streams.first(where: {
+                if case .notificationRelay(let id) = $0.value.kind { return id == packageID && !$0.value.ended }
+                return false
+            })?.key
+        else {
             return false
         }
         enqueueLocked(.relay(message), on: streamID)

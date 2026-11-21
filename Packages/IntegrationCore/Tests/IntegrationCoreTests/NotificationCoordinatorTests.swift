@@ -155,10 +155,14 @@ struct NotificationCoordinatorTests {
         #expect(sink.hostPosted.isEmpty)
         sink.open = ["io.app"]
         await c.relayOpened(packageID: package)
-        #expect(sink.relayed.contains { $0.message == .post(
-            NotificationCoordinator.payload(
-                from: notification(key: "k1"), packageID: package,
-                identifier: NotificationCoordinator.identifier(package: "io.app", key: "k1"))) })
+        #expect(
+            sink.relayed.contains {
+                $0.message
+                    == .post(
+                        NotificationCoordinator.payload(
+                            from: notification(key: "k1"), packageID: package,
+                            identifier: NotificationCoordinator.identifier(package: "io.app", key: "k1")))
+            })
     }
 
     @Test func noWrapperFallsBackToHostNotification() async {
@@ -185,6 +189,15 @@ struct NotificationCoordinatorTests {
             packageValues: ["notifications": "false"], sink: sink)
         await c.posted(notification(key: "k1"))
         #expect(sink.relayed.isEmpty && sink.hostPosted.isEmpty && sink.started.isEmpty)
+    }
+
+    @Test func authorizationReportFeedsMacPermission() async {
+        let c = coordinator()
+        #expect(await c.macPermission(for: package) == nil)
+        await c.noteAuthorization(.denied, packageID: package)
+        #expect(await c.macPermission(for: package) == .denied)
+        await c.noteAuthorization(.authorized, packageID: package)
+        #expect(await c.macPermission(for: package) == .authorized)
     }
 
     @Test func pushForwardingListFiltersByPolicy() async throws {

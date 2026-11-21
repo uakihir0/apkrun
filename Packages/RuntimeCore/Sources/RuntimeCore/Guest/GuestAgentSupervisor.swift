@@ -33,6 +33,9 @@ public struct GuestSnapshotState: Equatable, Sendable {
     public private(set) var tasks: [Int32: GPTaskInfo] = [:]
     /// The display that has the focus.
     public private(set) var focusedDisplayID: Int32 = 0
+    /// The notification listener holds its access (control.proto `Health`,
+    /// diagnostics.md §7.3 `integrations.notificationListener`).
+    public private(set) var notificationListenerEnabled = false
 
     /// Creates an empty state.
     public init() {}
@@ -46,6 +49,7 @@ public struct GuestSnapshotState: Equatable, Sendable {
         displays = Dictionary(snapshot.displays.map { ($0.displayID, $0) }, uniquingKeysWith: { _, last in last })
         tasks = Dictionary(snapshot.tasks.map { ($0.taskID, $0) }, uniquingKeysWith: { _, last in last })
         focusedDisplayID = snapshot.focusedDisplayID
+        notificationListenerEnabled = snapshot.notificationListenerEnabled
     }
 
     /// Applies one event. Applying an event twice gives the same state, so the events that a snapshot already
@@ -65,6 +69,13 @@ public struct GuestSnapshotState: Equatable, Sendable {
             tasks[vanished.taskID] = nil
         case .focusedDisplayChanged(let focused):
             focusedDisplayID = focused.displayID
+        case .healthWarning(let warning):
+            // A `NOTIFICATION_LISTENER_DISABLED` warning means the grant is
+            // lost now; the flag stays off until the next snapshot reports
+            // the restored grant (desktop-integration.md §13).
+            if warning.kind == .notificationListenerDisabled {
+                notificationListenerEnabled = false
+            }
         default:
             break
         }

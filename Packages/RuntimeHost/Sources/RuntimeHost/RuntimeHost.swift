@@ -73,6 +73,11 @@ public actor RuntimeHost {
     var healthCheckRegistry: HealthCheckRegistry? {
         diagnostics?.healthChecks
     }
+    /// The configured log sink, for loggers of sibling files
+    /// (RuntimeHostIntegrations's notification coordinator).
+    var hostLogSink: (any LogSink)? {
+        diagnostics?.logSink
+    }
     private var logger: APKLogger?
     private var instanceLock: InstanceLock?
     private var stateStore: DaemonStateStore?
@@ -160,6 +165,9 @@ public actor RuntimeHost {
     /// The §5.3 notification coordinator; internal so the
     /// RuntimeHostIntegrations extension can build it lazily.
     var notificationCoordinatorLazy: NotificationCoordinator?
+    /// `integrations.notificationListener` registers once when the
+    /// notification coordinator is created.
+    var integrationHealthChecksRegistered = false
     /// The guest→coordinator clip relay; alive while the guest agent is.
     var clipboardRelayTask: Task<Void, Never>?
     /// The guest→coordinator notification relay; alive while the agent is.

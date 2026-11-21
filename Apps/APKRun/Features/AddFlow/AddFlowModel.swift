@@ -1,3 +1,4 @@
+import DiagnosticsCore
 import Foundation
 import RuntimeAPI
 import RuntimeClient
@@ -39,6 +40,9 @@ final class AddFlowModel {
     private(set) var installError: String?
     /// A wrapper failure after a successful install (§6.2).
     private(set) var wrapperError: String?
+    /// The token of a `wrapper.destinationNotAccessible` failure; while set,
+    /// the sheet offers **Choose Another Location…** (wrapper.md §6.3).
+    private(set) var wrapperStagingToken: String?
 
     // Review-stage controls.
     var updateChoice: UpdateChoice = .manual
@@ -53,6 +57,14 @@ final class AddFlowModel {
     /// Detected provider suggestion; stays off until the user turns it on
     /// (update-system.md §4.7). Nil when the host detected none.
     private(set) var suggestedProvider: ProviderSpec?
+
+    /// Whether the sheet offers **Create Mac app** (host-ui.md §6.1). Only a
+    /// fresh or uninspected package may create one; an existing Mac app is
+    /// never regenerated or moved by an update (AGENTS.md §4.13).
+    var showsMacAppRow: Bool {
+        guard let preview else { return false }
+        return preview.relation == .newPackage || preview.relation == .unknown
+    }
 
     /// Whether the installed app can be launched from the sheet.
     private(set) var installedPackageID: RuntimePackageID?
@@ -85,6 +97,7 @@ final class AddFlowModel {
         preview = nil
         installError = nil
         wrapperError = nil
+        wrapperStagingToken = nil
         installedPackageID = nil
         Task { await inspect(supported, origin: origin) }
     }
@@ -145,7 +158,37 @@ final class AddFlowModel {
         guard let packageID = installedPackageID else { return }
         stage = .installing
         wrapperError = nil
+        wrapperStagingToken = nil
         Task { await runWrapper(packageID: packageID) }
+    }
+
+    /// **Choose Another Location…**: the user picks a directory this process
+    /// can reach, moves the staged bundle there, and finishes with
+    /// `placeStagedWrapper` (wrapper.md §6.3).
+    func placeStagedWrapper(at directory: URL) {
+        guard let token = wrapperStagingToken else { return }
+        stage = .installing
+        wrapperError = nil
+        Task { await runPlaceStaged(token: token, directory: directory) }
+    }
+
+    private func runPlaceStaged(token: String, directory: URL) async {
+        do {
+            _ = directory.startAccessingSecurityScopedResource()
+            defer { directory.stopAccessingSecurityScopedResource() }
+            let service = try serviceFactory()
+            let finalURL = try Self.placeStagedBundle(token: token, in: directory)
+            let bookmark = try? finalURL.bookmarkData()
+            _ = try await service.placeStagedWrapper(
+                stagingToken: token,
+                finalURL: finalURL,
+                bookmark: bookmark?.base64EncodedString())
+            wrapperStagingToken = nil
+            stage = .installed
+        } catch {
+            wrapperError = Self.describe(error)
+            stage = .installed
+        }
     }
 
     private func runInstall(
@@ -153,19 +196,22 @@ final class AddFlowModel {
     ) async {
         do {
             let service = try serviceFactory()
-            let operationID = OperationID()
+            let operationID = RuntimeAPI.OperationID()
             let handle = try await service.beginInstallImported(
                 RuntimeInstallImportedRequest(ticket: ticket, options: options),
                 operationID: operationID)
             let snapshot = try await Self.awaitTerminal(handle.operationID, using: service)
             guard case .succeeded(.package(let summary))? = snapshot.result else {
                 if case .failed(let failure)? = snapshot.result { throw failure }
-                throw RuntimeWireError.runtime(
-                    "unknownResult",
-                    message: "The install finished without a result.")
+                throw RuntimeWireError(
+                    domain: "runtime",
+                    code: "runtime.unknownResult",
+                    message: "The install finished without a result.",
+                    remediation: "Try again. Report the operation ID if it keeps happening.",
+                    parameters: ["operationID": operationID.rawValue.uuidString])
             }
             installedPackageID = summary.packageID
-            if createMacApp {
+            if createMacApp && showsMacAppRow {
                 await runWrapper(packageID: summary.packageID)
             } else {
                 stage = .installed
@@ -194,6 +240,11 @@ final class AddFlowModel {
             case .succeeded:
                 stage = .installed
             case .failed(let failure):
+                if failure.code == "wrapper.destinationNotAccessible",
+                    let token = failure.parameters["stagingToken"]
+                {
+                    wrapperStagingToken = token
+                }
                 wrapperError = Self.describe(failure)
                 stage = .installed
             default:
@@ -216,9 +267,72 @@ final class AddFlowModel {
         }
     }
 
+    /// Moves the staged `.app` into a directory the user picked (the same
+    /// path `Wrap.placeStaged` takes for the CLI, wrapper.md §6.3): a temp
+    /// name in the destination folder, then an atomic swap. A conflicting
+    /// item is replaced only when it is this package's own wrapper.
+    private static func placeStagedBundle(token: String, in directory: URL) throws -> URL {
+        let stagingDir = APKRunPaths().wrapperStagingDirectory
+            .appendingPathComponent(token, isDirectory: true)
+        let stagedBundles =
+            (try? FileManager.default.contentsOfDirectory(
+                at: stagingDir, includingPropertiesForKeys: nil
+            ))?.filter { $0.pathExtension == "app" } ?? []
+        guard let stagedBundle = stagedBundles.first else {
+            throw RuntimeWireError(
+                domain: "wrapper",
+                code: "wrapper.destinationNotAccessible",
+                message: "The staged Mac app is no longer waiting to be placed.")
+        }
+        let finalURL = directory.appendingPathComponent(
+            stagedBundle.lastPathComponent, isDirectory: true)
+        let fileManager = FileManager.default
+        let destinationExists = fileManager.fileExists(atPath: finalURL.path)
+        if destinationExists {
+            let existingPackage = plistPackageID(of: finalURL)
+            guard existingPackage != nil,
+                existingPackage == plistPackageID(of: stagedBundle)
+            else {
+                throw RuntimeWireError(
+                    domain: "wrapper",
+                    code: "wrapper.nameConflict",
+                    message: "An item named \(finalURL.lastPathComponent) already exists there.",
+                    remediation: "Choose another name or location. APKRun never replaces it.",
+                    parameters: ["file": finalURL.lastPathComponent])
+            }
+        }
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let temp = directory.appendingPathComponent(
+            ".\(finalURL.lastPathComponent).apkrun-\(UUID().uuidString)",
+            isDirectory: true)
+        try fileManager.moveItem(at: stagedBundle, to: temp)
+        do {
+            if destinationExists {
+                _ = try fileManager.replaceItemAt(finalURL, withItemAt: temp)
+            } else {
+                try fileManager.moveItem(at: temp, to: finalURL)
+            }
+        } catch {
+            try? fileManager.removeItem(at: temp)
+            throw error
+        }
+        return finalURL
+    }
+
+    /// Reads `APKRunPackageID` from a bundle's Info.plist; nil means the item
+    /// is not an APKRun wrapper (or is unreadable).
+    private static func plistPackageID(of bundle: URL) -> String? {
+        let plistURL = bundle.appendingPathComponent("Contents/Info.plist")
+        guard let data = try? Data(contentsOf: plistURL),
+            let plist = try? PropertyListSerialization.propertyList(
+                from: data, format: nil) as? [String: Any]
+        else { return nil }
+        return plist["APKRunPackageID"] as? String
+    }
+
     /// Polls an operation until its snapshot carries a terminal result.
     private static func awaitTerminal(
-        _ operationID: OperationID, using service: any RuntimeService
+        _ operationID: RuntimeAPI.OperationID, using service: any RuntimeService
     ) async throws -> OperationSnapshot {
         while !Task.isCancelled {
             let snapshot = try await service.operationStatus(operationID)
@@ -241,6 +355,7 @@ final class AddFlowModel {
         preview = nil
         installError = nil
         wrapperError = nil
+        wrapperStagingToken = nil
         installedPackageID = nil
     }
 

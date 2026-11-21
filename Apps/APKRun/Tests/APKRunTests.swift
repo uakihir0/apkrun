@@ -149,6 +149,32 @@ final class FakeRuntimeService: RuntimeService, @unchecked Sendable {
     var installRequests: [RuntimeInstallImportedRequest] = []
     var wrapperRequests: [WrapperRequest] = []
 
+    var placeStagedCalls: [String] = []
+
+    func placeStagedWrapper(
+        stagingToken: String, finalURL: URL, bookmark: String?
+    ) async throws -> WrapperInfo {
+        count("placeStagedWrapper")
+        placeStagedCalls.append(stagingToken)
+        return WrapperInfo(
+            summary: WrapperSummary(
+                packageID: RuntimePackageID(rawValue: "com.example.a")!,
+                bundleID: "io.apkrun.android.com.example.a",
+                displayName: "Example",
+                kind: .local,
+                bundleURL: finalURL,
+                status: WrapperStatus(state: .valid),
+                approval: .generated,
+                launcherVersion: "1",
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000)),
+            fileName: "Example",
+            customization: WrapperCustomizationWire(),
+            signer: .adHoc,
+            cdhash: "0123456789abcdef0123456789abcdef01234567",
+            launcherAPI: APIVersion(major: 1, minor: 0),
+            formatVersion: 1)
+    }
+
     func discardImport(_ request: RuntimeDiscardImportRequest) async throws {
         count("discardImport")
     }

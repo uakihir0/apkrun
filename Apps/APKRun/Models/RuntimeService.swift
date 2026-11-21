@@ -39,6 +39,11 @@ protocol RuntimeService: Sendable {
     func operationStatus(_ operationID: OperationID) async throws -> OperationSnapshot
     /// Creates a wrapper with the review sheet's name and location (§6.1).
     func createWrapper(_ request: WrapperRequest) async throws -> OperationHandle
+    /// Finishes a wrapper generation the daemon could not place
+    /// (wrapper.md §6.3); the client already moved the staged bundle.
+    func placeStagedWrapper(
+        stagingToken: String, finalURL: URL, bookmark: String?
+    ) async throws -> WrapperInfo
     func discardImport(_ request: RuntimeDiscardImportRequest) async throws
     func subscribe(to topic: EventTopic) async throws -> AsyncStream<EventEnvelope>
 }

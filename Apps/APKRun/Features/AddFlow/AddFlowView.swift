@@ -96,7 +96,9 @@ struct AddFlowView: View {
 
         if sheet.showsOptions {
             updateChoices
-            macAppOptions
+            if model.showsMacAppRow {
+                macAppOptions
+            }
         }
 
         if let installError = model.installError {
@@ -195,6 +197,18 @@ struct AddFlowView: View {
                 Spacer()
                 if model.wrapperError != nil {
                     Button("Try Again") { model.retryWrapper() }
+                }
+                if model.wrapperStagingToken != nil {
+                    Button("Choose Another Location…") {
+                        let panel = NSOpenPanel()
+                        panel.canChooseDirectories = true
+                        panel.canChooseFiles = false
+                        panel.canCreateDirectories = true
+                        panel.prompt = "Choose"
+                        if panel.runModal() == .OK, let url = panel.url {
+                            model.placeStagedWrapper(at: url)
+                        }
+                    }
                 }
                 if model.installedPackageID != nil {
                     Button("Open") { model.openInstalled() }

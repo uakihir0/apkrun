@@ -4570,6 +4570,26 @@
    }
   },
   {
+   "code": "runtime.unknownResult",
+   "parameters": [
+    "operationID"
+   ],
+   "message": {
+    "en": "The operation ended without a result."
+   },
+   "remediation": {
+    "en": "Try again. Report the operation ID if it keeps happening."
+   },
+   "action": "retry",
+   "cliExit": 1,
+   "doc": {
+    "case": "unknownResult(operationID)",
+    "when": "a tracked operation ends without reporting its result",
+    "raisedBy": "apkrund",
+    "ref": "[../02-design/runtime-api.md](../02-design/runtime-api.md)"
+   }
+  },
+  {
    "code": "runtime.invalidConfigValue",
    "parameters": [
     "key",

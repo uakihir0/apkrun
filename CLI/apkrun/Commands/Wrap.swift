@@ -71,10 +71,15 @@
             // preview's relation decides the row of the import/install
             // table; a package ID is wrapped as is.
             let inputURL = URL(fileURLWithPath: package).standardizedFileURL
+            let fileExists = FileManager.default.fileExists(atPath: inputURL.path)
+            let isValidPackageID =
+                !package.isEmpty && RuntimePackageID(rawValue: package) != nil
+            // A valid package ID names the installed package; a file wins only
+            // when it is no valid ID or it is a real `.apk` on disk (a path
+            // like ./com.example keeps working through the same rule).
             let isFile =
-                package.hasSuffix(".apk")
-                || (FileManager.default.fileExists(atPath: inputURL.path)
-                    && !package.isEmpty && RuntimePackageID(rawValue: package) == nil)
+                (fileExists && !isValidPackageID)
+                || (package.lowercased().hasSuffix(".apk") && (fileExists || !isValidPackageID))
 
             let client: RuntimeControlClient
             do {
@@ -83,7 +88,8 @@
                 throw await RuntimeStatusOutput.commandFailure(error)
             }
 
-            let packageID: RuntimePackageID
+            var packageID: RuntimePackageID
+            var didInstall = false
             if isFile {
                 let preview = try await WrapCommandSupport.importFile(at: inputURL, client: client)
                 switch WrapCommandSupport.filePlan(relation: preview.relation, install: install) {
@@ -106,15 +112,19 @@
                     packageID = try await WrapCommandSupport.installPreview(
                         preview,
                         options: try updateOptions(),
+                        json: json,
                         client: client
                     )
+                    didInstall = true
                 case .installAndWrap:
                     DaemonInstallSupport.writePreview(preview)
                     packageID = try await WrapCommandSupport.installPreview(
                         preview,
                         options: try updateOptions(),
+                        json: json,
                         client: client
                     )
+                    didInstall = true
                 case .wrapInstalled(let note):
                     try rejectUpdateFlags()
                     Output.writeLogLine(note.text, toStandardError: true)
@@ -153,17 +163,28 @@
             }
             defer { try? iconHandle?.close() }
 
-            let info = try await WrapCommandSupport.createAndPlace(
-                packageID: packageID,
-                destination: destination,
-                fileName: nil,
-                displayName: name,
-                icon: iconChoice,
-                iconHandle: iconHandle,
-                replace: replace ? .sameWrapper : .never,
-                windowDefaults: try windowDefaults(),
-                client: client
-            )
+            let info: WrapperInfo
+            do {
+                info = try await WrapCommandSupport.createAndPlace(
+                    packageID: packageID,
+                    destination: destination,
+                    fileName: nil,
+                    displayName: name,
+                    icon: iconChoice,
+                    iconHandle: iconHandle,
+                    replace: replace ? .sameWrapper : .never,
+                    windowDefaults: try windowDefaults(),
+                    client: client
+                )
+            } catch {
+                // cli.md §3: installed but the Mac app could not be created
+                // is a partial success, exit code 2.
+                if didInstall {
+                    ErrorOutput.write(error, json: json)
+                    throw ExitCode(Int32(ExitCodes.partial))
+                }
+                throw error
+            }
             if open {
                 WrapCommandSupport.open(bundleURL: info.summary.bundleURL)
             }
@@ -394,6 +415,7 @@
         static func installPreview(
             _ preview: RuntimeImportPreview,
             options: RuntimeInstallOptions,
+            json: Bool,
             client: RuntimeControlClient
         ) async throws -> RuntimePackageID {
             let operationID = RuntimeAPI.OperationID()
@@ -418,10 +440,12 @@
             }
             let result = try OperationCommandOutput.installedPackage(
                 from: snapshot, expectedPackageID: preview.packageID)
-            Output.write(
-                "Installed \(DaemonInstallSupport.safeTerminalText(result.displayName)) "
-                    + "(\(result.packageID.rawValue)), version "
-                    + "\(result.versionCode.map(String.init) ?? "unknown").")
+            if !json {
+                Output.write(
+                    "Installed \(DaemonInstallSupport.safeTerminalText(result.displayName)) "
+                        + "(\(result.packageID.rawValue)), version "
+                        + "\(result.versionCode.map(String.init) ?? "unknown").")
+            }
             return result.packageID
         }
 

@@ -13,7 +13,7 @@ import java.security.MessageDigest
  * frames go to the one open bulk connection. A send while no bulk connection is open reports
  * failure instead of queueing, so the announcing reply and the frames never disagree.
  */
-class BulkTransfers {
+class BulkTransfers : ClipboardBridge.BulkImageSender {
     private val lock = Any()
     private var writer: FrameWriter? = null
     private var nextTransferId = 1L
@@ -38,7 +38,21 @@ class BulkTransfers {
      * Sends [payload] as a [BulkKind.BULK_KIND_DIAGNOSTICS_ITEM] transfer and returns its transfer
      * ID, or `null` when no bulk connection is open. The frames are whole before this returns.
      */
-    fun sendDiagnosticsItem(name: String, mimeType: String, payload: ByteArray): Long? {
+    fun sendDiagnosticsItem(name: String, mimeType: String, payload: ByteArray): Long? =
+        send(BulkKind.BULK_KIND_DIAGNOSTICS_ITEM, name, mimeType, payload)
+
+    /**
+     * Sends PNG bytes as a [BulkKind.BULK_KIND_CLIPBOARD_IMAGE] transfer and returns its transfer
+     * ID, or `null` when no bulk connection is open.
+     */
+    override fun sendClipboardImage(png: ByteArray): Long? =
+        send(BulkKind.BULK_KIND_CLIPBOARD_IMAGE, "clip.png", "image/png", png)
+
+    /**
+     * Sends [payload] as a transfer of [kind] and returns its transfer ID, or `null` when no bulk
+     * connection is open. The frames are whole before this returns.
+     */
+    fun send(kind: BulkKind, name: String, mimeType: String, payload: ByteArray): Long? {
         val digest = MessageDigest.getInstance("SHA-256").digest(payload)
         synchronized(lock) {
             val target = writer ?: return null
@@ -50,7 +64,7 @@ class BulkTransfers {
                         .setTransferId(transferId)
                         .setBegin(
                             BulkBegin.newBuilder()
-                                .setKind(BulkKind.BULK_KIND_DIAGNOSTICS_ITEM)
+                                .setKind(kind)
                                 .setName(name)
                                 .setMimeType(mimeType)
                                 .setSize(payload.size.toLong())

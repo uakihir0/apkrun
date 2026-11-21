@@ -30,5 +30,11 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+        <!-- Read-only transfer files for the clipboard image path (issue #81). -->
+        <provider
+            android:name=".daemon.TransferFileProvider"
+            android:authorities="io.apkrun.guest.files"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

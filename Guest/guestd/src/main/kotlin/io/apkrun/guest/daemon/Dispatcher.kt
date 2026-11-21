@@ -45,7 +45,7 @@ class Dispatcher(
      * did not enable, is answered with UNSUPPORTED (guest-protocol.md §5.2, §5.3).
      */
     suspend fun dispatch(id: Long, request: Request, enabled: Set<GuestCapability>): Response {
-        val capability = requiredCapability(request.opCase)
+        val capability = requiredCapability(request)
         if (capability == null) {
             return failure(
                 GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
@@ -232,8 +232,8 @@ class Dispatcher(
          * operation that this build does not implement has no capability here, so it is answered
          * with UNSUPPORTED.
          */
-        fun requiredCapability(operation: Request.OpCase): GuestCapability? =
-            when (operation) {
+        fun requiredCapability(request: Request): GuestCapability? =
+            when (request.opCase) {
                 Request.OpCase.PING,
                 Request.OpCase.GET_SNAPSHOT -> GuestCapability.CORE
                 Request.OpCase.SET_DISPLAY_POLICY,
@@ -244,7 +244,14 @@ class Dispatcher(
                 Request.OpCase.QUERY_PACKAGE,
                 Request.OpCase.LIST_PACKAGES -> GuestCapability.PACKAGES
                 Request.OpCase.COLLECT_DIAGNOSTICS -> GuestCapability.DIAGNOSTICS
-                Request.OpCase.SET_CLIPBOARD -> GuestCapability.CLIPBOARD_TEXT
+                // An image clip needs clipboard.image.v1; text and HTML move on
+                // clipboard.text.v1 alone (issue #81).
+                Request.OpCase.SET_CLIPBOARD ->
+                    if (request.setClipboard.hasImage()) {
+                        GuestCapability.CLIPBOARD_IMAGE
+                    } else {
+                        GuestCapability.CLIPBOARD_TEXT
+                    }
                 Request.OpCase.ACTIVATE_NOTIFICATION,
                 Request.OpCase.DISMISS_NOTIFICATION,
                 Request.OpCase.SET_NOTIFICATION_FORWARDING -> GuestCapability.NOTIFICATIONS

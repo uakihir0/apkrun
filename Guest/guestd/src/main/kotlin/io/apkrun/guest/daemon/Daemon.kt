@@ -76,7 +76,10 @@ class Daemon(internal val scope: CoroutineScope) {
     private val packages = PackageService(AndroidPackageCatalog(SystemContext.get().packageManager))
     internal val bulkTransfers = BulkTransfers()
     private val diagnostics = DiagnosticsService(bulkTransfers)
-    internal val clipboard = ClipboardBridge.create(SystemContext.get(), events)
+    internal val inboundTransfers =
+        InboundTransfers(java.io.File(SystemContext.get().cacheDir, "transfers"))
+    internal val clipboard =
+        ClipboardBridge.create(SystemContext.get(), events, bulkTransfers, inboundTransfers)
     internal val notifications =
         NotificationBridge(events, ApkRunNotificationListener.access()).also {
             ApkRunNotificationListener.bridge = it

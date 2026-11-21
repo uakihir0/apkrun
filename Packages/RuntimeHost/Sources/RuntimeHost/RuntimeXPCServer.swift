@@ -1236,6 +1236,7 @@ extension RuntimeFrameStatisticsControlRequest: VersionedControlRequest {}
 extension RuntimePushClipboardControlRequest: VersionedControlRequest {}
 extension RuntimeClipboardWrittenControlRequest: VersionedControlRequest {}
 extension RuntimeFocusChangedControlRequest: VersionedControlRequest {}
+extension RuntimeResolveLinkPromptControlRequest: VersionedControlRequest {}
 extension RuntimeIntegrationStatusControlRequest: VersionedControlRequest {}
 extension RuntimeCheckForUpdatesControlRequest: VersionedControlRequest {}
 extension RuntimeListUpdatesControlRequest: VersionedControlRequest {}
@@ -1298,6 +1299,7 @@ enum RuntimeControlOperation {
     case pushClipboard
     case clipboardWritten
     case focusChanged
+    case resolveLinkPrompt
     case integrationStatus
     case checkForUpdates
     case listUpdates
@@ -1400,9 +1402,9 @@ enum RuntimeControlOperation {
             // Developer-mode reads; the developer.enabled gate is enforced in
             // RuntimeHost (diagnostics.md §9.3, runtime-api.md §13.1).
             true
-        case .pushClipboard, .clipboardWritten, .focusChanged:
-            // Session-channel messages of desktop-integration.md §3.3: the
-            // window process reports for its own session.
+        case .pushClipboard, .clipboardWritten, .focusChanged, .resolveLinkPrompt:
+            // Session-channel messages of desktop-integration.md §3.3 and
+            // §7.2: the window process reports for its own session.
             switch clientKind {
             case .wrapper, .launcher:
                 true
@@ -3696,6 +3698,60 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeFocusChangedControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func resolveLinkPrompt(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeResolveLinkPromptControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .resolveLinkPrompt,
+                as: RuntimeResolveLinkPromptControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeResolveLinkPromptControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeResolveLinkPromptControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeResolveLinkPromptControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                // NFR-SEC-07: a wrapper connection may only answer prompts of
+                // its own package; the forwarder reports a mismatch as an
+                // expired prompt (runtime-api.md §10.1, §11.2).
+                try await host.resolveLinkPrompt(
+                    sessionID: decoded.sessionID,
+                    promptID: decoded.promptID,
+                    choice: decoded.choice,
+                    remember: decoded.remember,
+                    callerPackageID: wrapperPackageID)
+                response.send(Self.encode(RuntimeResolveLinkPromptControlReply(result: RuntimeEmpty())))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeResolveLinkPromptControlReply(error: wireError)))
             }
         }
     }

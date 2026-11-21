@@ -25,7 +25,10 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.24 adds `packageSettings` and `updatePackageSettings` (host-ui.md §7).
     /// 1.25 adds `RuntimePackageDetails.previous`; 1.26 adds the wrapper
     /// endpoint's `importBootstrap` (wrapper-json.md §3.4).
-    public static let current = APIVersion(major: 1, minor: 27)
+    /// 1.27 adds the notification relays and host notifications
+    /// (runtime-api.md §11.3); 1.28 adds `linkPrompt` and
+    /// `resolveLinkPrompt` (runtime-api.md §11.2).
+    public static let current = APIVersion(major: 1, minor: 28)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -793,6 +796,8 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func clipboardWritten(_ request: Data, reply: @escaping (Data) -> Void)
     /// Reports whether the session's window is the key window (desktop-integration.md §4.1).
     func focusChanged(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Answers a link prompt for the session's key window (runtime-api.md §11.2).
+    func resolveLinkPrompt(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns the per-kind integration status of a package (runtime-api.md §11).
     func integrationStatus(_ request: Data, reply: @escaping (Data) -> Void)
     /// Checks packages for updates (runtime-api.md §9.1).

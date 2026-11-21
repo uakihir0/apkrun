@@ -70,6 +70,8 @@ public actor DevelopmentGuestAgent {
     public nonisolated let clipboardEvents: AsyncStream<GPClipData>
     /// `notification_posted`/`notification_removed` events (desktop-integration.md §5.3).
     public nonisolated let notificationEvents: AsyncStream<DevelopmentNotificationEvent>
+    /// `open_url_on_host` events (desktop-integration.md §7.2).
+    public nonisolated let urlEvents: AsyncStream<GPOpenUrlOnHost>
     /// Android reboot notifications inferred from consecutive supervisor snapshots.
     public nonisolated var androidRestartEvents: AsyncStream<GuestAndroidRestart> {
         supervisor.androidRestartEvents
@@ -97,6 +99,7 @@ public actor DevelopmentGuestAgent {
     private let displayEventContinuation: AsyncStream<GuestDisplayEvent>.Continuation
     private let clipboardEventContinuation: AsyncStream<GPClipData>.Continuation
     private let notificationEventContinuation: AsyncStream<DevelopmentNotificationEvent>.Continuation
+    private let urlEventContinuation: AsyncStream<GPOpenUrlOnHost>.Continuation
     private var taskEventRelay: Task<Void, Never>?
 
     /// Creates the coordinator for `bundle`, reached through `adb`.
@@ -146,6 +149,12 @@ public actor DevelopmentGuestAgent {
         )
         self.notificationEvents = notificationEvents
         self.notificationEventContinuation = notificationEventContinuation
+        let (urlEvents, urlEventContinuation) = AsyncStream.makeStream(
+            of: GPOpenUrlOnHost.self,
+            bufferingPolicy: .bufferingNewest(128)
+        )
+        self.urlEvents = urlEvents
+        self.urlEventContinuation = urlEventContinuation
         relay.set { [weak self] loss in
             guard let self else {
                 return false
@@ -272,6 +281,7 @@ public actor DevelopmentGuestAgent {
         taskEventContinuation.finish()
         displayEventContinuation.finish()
         clipboardEventContinuation.finish()
+        urlEventContinuation.finish()
         // The input and IME connections belong to the control session, so they end with it.
         await inputConnection?.close()
         inputConnection = nil
@@ -410,6 +420,7 @@ public actor DevelopmentGuestAgent {
         let displayContinuation = displayEventContinuation
         let clipboardContinuation = clipboardEventContinuation
         let notificationContinuation = notificationEventContinuation
+        let urlContinuation = urlEventContinuation
         taskEventRelay = Task {
             for await event in updates {
                 guard let kind = event.kind else {
@@ -434,6 +445,8 @@ public actor DevelopmentGuestAgent {
                     notificationContinuation.yield(.posted(notification))
                 case .notificationRemoved(let removal):
                     notificationContinuation.yield(.removed(removal))
+                case .openURLOnHost(let event):
+                    urlContinuation.yield(event)
                 default:
                     break
                 }

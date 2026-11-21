@@ -1,29 +1,31 @@
-C/C++ Structured LogŒ
-‰
-†/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/additional_project_files.txtC
-A
-?com.android.build.gradle.internal.cxx.io.EncodedFileFingerPrint	ËËçÜŸ4 ­ËçÜŸ4‰
-†
-ƒ/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/android_gradle_build.json	ËËçÜŸ4è
- ±ËçÜŸ4
-‹
-ˆ/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/android_gradle_build_mini.json	ËËçÜŸ4Ä ºËçÜŸ4y
-w
-u/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/build.ninja	ËËçÜŸ4½á “ËçÜŸ4}
-{
-y/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/build.ninja.txt	ËËçÜŸ4ƒ
-€
-~/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/build_file_index.txt	ËËçÜŸ4^ »ËçÜŸ4„
-
-/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/compile_commands.json	ËËçÜŸ4Ù “ËçÜŸ4‰
-†
-ƒ/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/compile_commands.json.bin	ËËçÜŸ4	· “ËçÜŸ4
-Œ
-‰/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/metadata_generation_command.txt	ËËçÜŸ4
-Š	 »ËçÜŸ4€
-~
-|/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/prefab_config.json	ËËçÜŸ4( »ËçÜŸ4‡
-„
-/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/symbol_folder_index.txt	ËËçÜŸ4€ »ËçÜŸ4b
+C/C++ Structured Logb
 `
-^/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/src/main/cpp/CMakeLists.txt	ËËçÜŸ4¨ ¹†¬ÜŸ4
+^/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/src/main/cpp/CMakeLists.txtC
+A
+?com.android.build.gradle.internal.cxx.io.EncodedFileFingerPrint	çÅ„îŸ4¨ ¹†¬ÜŸ4Œ
+‰
+†/Users/devin/repos/apkrun-81/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/additional_project_files.txt	çÅ„îŸ4 ßÅ„îŸ4‰
+†
+ƒ/Users/devin/repos/apkrun-81/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/android_gradle_build.json	çÅ„îŸ4è
+ ßÅ„îŸ4
+‹
+ˆ/Users/devin/repos/apkrun-81/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/android_gradle_build_mini.json	çÅ„îŸ4Ä äÅ„îŸ4y
+w
+u/Users/devin/repos/apkrun-81/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/build.ninja	çÅ„îŸ4½á ĞÅ„îŸ4}
+{
+y/Users/devin/repos/apkrun-81/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/build.ninja.txt	çÅ„îŸ4ƒ
+€
+~/Users/devin/repos/apkrun-81/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/build_file_index.txt	çÅ„îŸ4^ äÅ„îŸ4„
+
+/Users/devin/repos/apkrun-81/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/compile_commands.json	çÅ„îŸ4	Ù ĞÅ„îŸ4‰
+†
+ƒ/Users/devin/repos/apkrun-81/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/compile_commands.json.bin	çÅ„îŸ4
+· ĞÅ„îŸ4
+Œ
+‰/Users/devin/repos/apkrun-81/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/metadata_generation_command.txt	çÅ„îŸ4Š	 äÅ„îŸ4€
+~
+|/Users/devin/repos/apkrun-81/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/prefab_config.json	çÅ„îŸ4( äÅ„îŸ4‡
+„
+/Users/devin/repos/apkrun-81/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/symbol_folder_index.txt	çÅ„îŸ4€ äÅ„îŸ4b
+`
+^/Users/devin/repos/apkrun-81/Tests/Fixtures/AndroidApps/HelloSplit/src/main/cpp/CMakeLists.txt	èÅ„îŸ4¨ ÌúÕéŸ4

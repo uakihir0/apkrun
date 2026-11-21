@@ -37,6 +37,17 @@ enum WorkspaceOpener {
         #endif
     }
 
+    /// Opens a URL in the default handler (desktop-integration.md §7.2):
+    /// the browser for http(s), the mail app for mailto.
+    @discardableResult
+    static func open(_ url: URL) -> Bool {
+        #if canImport(AppKit)
+            return NSWorkspace.shared.open(url)
+        #else
+            return false
+        #endif
+    }
+
     /// The LaunchServices candidates for a bundle identifier (wrapper.md §9.1
     /// step 1), used to find a wrapper the user moved or renamed.
     static func applicationURLs(bundleIdentifier: String) -> [URL] {

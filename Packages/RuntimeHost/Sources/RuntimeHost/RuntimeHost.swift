@@ -165,6 +165,11 @@ public actor RuntimeHost {
     /// The §5.3 notification coordinator; internal so the
     /// RuntimeHostIntegrations extension can build it lazily.
     var notificationCoordinatorLazy: NotificationCoordinator?
+    /// The §7.2 link forwarder; internal so the
+    /// RuntimeHostIntegrations extension can build it lazily.
+    var linkForwarderLazy: LinkForwarder?
+    /// The guest→forwarder open-url relay; alive while the agent is.
+    var linkRelayTask: Task<Void, Never>?
     /// `integrations.notificationListener` registers once when the
     /// notification coordinator is created.
     var integrationHealthChecksRegistered = false
@@ -771,12 +776,14 @@ public actor RuntimeHost {
                 .windowPrefsChanged(request.packageID, prefs), operationID: nil)
         }
         // A changed `integrations.*` key may alter the guest's forwarding
-        // allowlist; push it so titles and text stop leaving Android at once.
+        // allowlists; push them so titles, text, and links stop leaving
+        // Android at once (desktop-integration.md §3.2).
         if Set(request.patch.set.keys).union(request.patch.clear)
             .contains(where: { $0.hasPrefix("integrations.") })
         {
             await refreshIntegrationSettings(for: request.packageID)
             await pushNotificationForwarding()
+            await pushUrlRedirect()
         }
         return result
     }
@@ -3842,9 +3849,11 @@ public actor RuntimeHost {
         if case .ready = snapshot.state {
             startClipboardRelay()
             startNotificationRelay()
+            startLinkRelay()
         } else if case .stopped = snapshot.state {
             stopClipboardRelay()
             stopNotificationRelay()
+            stopLinkRelay()
         }
     }
 

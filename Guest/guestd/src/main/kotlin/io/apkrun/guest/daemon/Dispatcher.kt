@@ -200,6 +200,14 @@ class Dispatcher(
                     .setSetNotificationForwarding(Empty.getDefaultInstance())
                     .build()
             }
+            Request.OpCase.SET_URL_REDIRECT -> {
+                operations.setUrlRedirect(request.setUrlRedirect)
+                Response.newBuilder().setSetUrlRedirect(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.RESOLVE_URL -> {
+                operations.resolveUrl(request.resolveUrl)
+                Response.newBuilder().setResolveUrl(Empty.getDefaultInstance()).build()
+            }
             else ->
                 failure(
                     GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
@@ -255,6 +263,8 @@ class Dispatcher(
                 Request.OpCase.ACTIVATE_NOTIFICATION,
                 Request.OpCase.DISMISS_NOTIFICATION,
                 Request.OpCase.SET_NOTIFICATION_FORWARDING -> GuestCapability.NOTIFICATIONS
+                Request.OpCase.SET_URL_REDIRECT,
+                Request.OpCase.RESOLVE_URL -> GuestCapability.URL
                 else -> null
             }
 

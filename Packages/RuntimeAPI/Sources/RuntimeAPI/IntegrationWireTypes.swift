@@ -212,16 +212,20 @@ public struct RuntimeFocusChangedControlReply: Codable, Equatable, Sendable {
 public enum IntegrationChange: Codable, Sendable, Equatable {
     /// A guest clip that the key window should write to its pasteboard.
     case clipboardFromGuest(sessionID: UUID, packageID: RuntimePackageID, item: ClipItem)
+    /// A link the guest wants opened; the key window asks the user where
+    /// it goes (desktop-integration.md §7.2, `links = ask`).
+    case linkPrompt(sessionID: UUID, packageID: RuntimePackageID, prompt: LinkPrompt)
     /// An event kind this client does not know.
     case unknown
 
     private enum Kind: String, Codable {
         case clipboardFromGuest
+        case linkPrompt
         case unknown
     }
 
     private enum CodingKeys: String, CodingKey {
-        case kind, sessionID, packageID, item
+        case kind, sessionID, packageID, item, prompt
     }
 
     /// Creates the event from its coded form.
@@ -234,6 +238,12 @@ public enum IntegrationChange: Codable, Sendable, Equatable {
                 sessionID: try container.decode(UUID.self, forKey: .sessionID),
                 packageID: try container.decode(RuntimePackageID.self, forKey: .packageID),
                 item: try container.decode(ClipItem.self, forKey: .item)
+            )
+        case .linkPrompt:
+            self = .linkPrompt(
+                sessionID: try container.decode(UUID.self, forKey: .sessionID),
+                packageID: try container.decode(RuntimePackageID.self, forKey: .packageID),
+                prompt: try container.decode(LinkPrompt.self, forKey: .prompt)
             )
         case .unknown:
             self = .unknown
@@ -249,9 +259,110 @@ public enum IntegrationChange: Codable, Sendable, Equatable {
             try container.encode(sessionID, forKey: .sessionID)
             try container.encode(packageID, forKey: .packageID)
             try container.encode(item, forKey: .item)
+        case .linkPrompt(let sessionID, let packageID, let prompt):
+            try container.encode(Kind.linkPrompt, forKey: .kind)
+            try container.encode(sessionID, forKey: .sessionID)
+            try container.encode(packageID, forKey: .packageID)
+            try container.encode(prompt, forKey: .prompt)
         case .unknown:
             try container.encode(Kind.unknown, forKey: .kind)
         }
+    }
+}
+
+// MARK: - Link prompts (runtime-api.md §11.2, desktop-integration.md §7.2)
+
+/// The user's answer to a link prompt (runtime-api.md §11.2).
+public enum LinkChoice: String, Codable, Sendable, Equatable {
+    /// Open the URL on the Mac.
+    case openOnMac
+    /// Open it in Android's browser.
+    case keepInAndroid
+    /// Drop the link.
+    case cancel
+}
+
+/// A `linkPrompt` integration event: the key window asks where a link
+/// goes (runtime-api.md §11.2). The prompt expires after about 60 s; a
+/// window that does not answer means Cancel.
+public struct LinkPrompt: Codable, Sendable, Equatable {
+    /// The prompt this answer belongs to.
+    public var promptID: UUID
+    /// The Unicode host shown to the user; never the path or query.
+    public var host: String
+    /// The registrable part of `host`, rendered bold in the prompt.
+    public var registrableDomain: String
+    /// `http`, `https`, or `mailto`.
+    public var scheme: String
+    /// The URL looks like a sign-in redirect; the prompt says so.
+    public var signInHint: Bool
+    /// The guest supports opening the link inside Android.
+    public var keepInAndroidAvailable: Bool
+    /// The prompt's expiry; no answer by then means Cancel.
+    public var expiresAt: Date
+
+    /// Creates a link prompt.
+    public init(
+        promptID: UUID,
+        host: String,
+        registrableDomain: String,
+        scheme: String,
+        signInHint: Bool,
+        keepInAndroidAvailable: Bool,
+        expiresAt: Date
+    ) {
+        self.promptID = promptID
+        self.host = host
+        self.registrableDomain = registrableDomain
+        self.scheme = scheme
+        self.signInHint = signInHint
+        self.keepInAndroidAvailable = keepInAndroidAvailable
+        self.expiresAt = expiresAt
+    }
+}
+
+/// The `resolveLinkPrompt` request body (runtime-api.md §11.2): a
+/// session-channel op for the window that holds the prompt.
+public struct RuntimeResolveLinkPromptControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The session whose window answers.
+    public var sessionID: UUID
+    /// The prompt being answered.
+    public var promptID: UUID
+    /// The user's choice.
+    public var choice: LinkChoice
+    /// Write the choice to `integrations.links` for the package.
+    public var remember: Bool
+
+    /// Creates a resolve request.
+    public init(
+        header: APIRequestHeader,
+        sessionID: UUID,
+        promptID: UUID,
+        choice: LinkChoice,
+        remember: Bool
+    ) {
+        self.header = header
+        self.sessionID = sessionID
+        self.promptID = promptID
+        self.choice = choice
+        self.remember = remember
+    }
+}
+
+/// The `resolveLinkPrompt` reply: `integration.promptTimedOut` when the
+/// prompt already expired or is unknown (runtime-api.md §11.2).
+public struct RuntimeResolveLinkPromptControlReply: Codable, Sendable {
+    /// The empty success body.
+    public var result: RuntimeEmpty?
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates a resolve reply.
+    public init(result: RuntimeEmpty? = nil, error: RuntimeWireError? = nil) {
+        self.result = result
+        self.error = error
     }
 }
 

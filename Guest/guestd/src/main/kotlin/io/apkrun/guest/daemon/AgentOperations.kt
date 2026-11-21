@@ -13,8 +13,10 @@ import io.apkrun.guest.protocol.v1.ListPackages
 import io.apkrun.guest.protocol.v1.PackageInfo
 import io.apkrun.guest.protocol.v1.PackageList
 import io.apkrun.guest.protocol.v1.QueryPackage
+import io.apkrun.guest.protocol.v1.ResolveUrl
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.SetNotificationForwarding
+import io.apkrun.guest.protocol.v1.SetUrlRedirect
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
 
@@ -59,6 +61,12 @@ interface AgentOperations {
 
     /** Replaces the notification forwarding allowlist (notifications.v1, §5.1). */
     fun setNotificationForwarding(request: SetNotificationForwarding)
+
+    /** Applies the link redirect state (url.v1, desktop-integration.md §7.1). */
+    fun setUrlRedirect(request: SetUrlRedirect)
+
+    /** Answers a kept link: `OPEN_IN_GUEST` starts it, the rest finish it (url.v1). */
+    fun resolveUrl(request: ResolveUrl)
 
     /** Collects the requested diagnostics items, each on the bulk channel (diagnostics.v1). */
     fun collectDiagnostics(request: CollectDiagnostics): CollectDiagnosticsResult

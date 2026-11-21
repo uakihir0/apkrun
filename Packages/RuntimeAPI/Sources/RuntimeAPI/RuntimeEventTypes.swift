@@ -140,6 +140,9 @@ public enum PackageChange: Codable, Equatable, Sendable {
     case updated(RuntimePackageSummary, from: RuntimeVersionCode)
     /// An Android package uninstall committed; `keptData` records the requested data policy.
     case removed(RuntimePackageID, keptData: Bool)
+    /// The store rendered a different icon for the package (package-store.md §10.2, API 1.17).
+    /// Wrappers refresh their icon when their own icon is not custom ([wrapper.md](../../docs/02-design/wrapper.md) §8.5).
+    case iconChanged(RuntimePackageID)
     /// The daemon reported a package change added by a newer API version.
     case unknown
 
@@ -173,6 +176,9 @@ public enum PackageChange: Codable, Equatable, Sendable {
                 try payload.decode(RuntimePackageID.self, forKey: .first),
                 keptData: try payload.decode(Bool.self, forKey: .keptData)
             )
+        case "iconChanged":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .iconChanged(try payload.decode(RuntimePackageID.self, forKey: .first))
         default:
             self = .unknown
         }
@@ -202,6 +208,12 @@ public enum PackageChange: Codable, Equatable, Sendable {
             )
             try payload.encode(packageID, forKey: .first)
             try payload.encode(keptData, forKey: .keptData)
+        case .iconChanged(let packageID):
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self,
+                forKey: RuntimeEventCodingKey("iconChanged")
+            )
+            try payload.encode(packageID, forKey: .first)
         case .unknown:
             throw EncodingError.invalidValue(
                 self,

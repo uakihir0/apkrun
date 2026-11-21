@@ -397,6 +397,24 @@ public actor WrapperRegistry {
         try save()
     }
 
+    /// Records the SHA-256 hex digest of the 1024 px icon master written at
+    /// generation; `nil` clears it (custom icons carry no digest — §8.5).
+    public func setIconDigest(bundleID: String, digest: String?) throws {
+        guard var entry = entry(bundleID: bundleID) else { return }
+        entry.iconDigest = digest
+        upsert(entry)
+        try save()
+    }
+
+    /// Records the custom icon file name kept in `Wrappers/icons/`
+    /// (wrapper.md §4.2); `nil` restores the Android icon choice.
+    public func setCustomIconFile(bundleID: String, fileName: String?) throws {
+        guard var entry = entry(bundleID: bundleID) else { return }
+        entry.customization.iconFile = fileName
+        upsert(entry)
+        try save()
+    }
+
     /// Records the last full validation time (wrapper-json.md §4.2).
     public func markValidated(bundleID: String, at date: Date = Date()) throws {
         guard var entry = entry(bundleID: bundleID) else { return }

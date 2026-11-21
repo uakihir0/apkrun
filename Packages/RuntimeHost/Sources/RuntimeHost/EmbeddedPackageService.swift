@@ -139,6 +139,30 @@ public actor EmbeddedPackageService: RuntimeService {
     }
 
     /// Reuses the daemon's session owner when package operations run over XPC.
+    /// Routes store-rendered icon changes to the caller's sink (package-store.md §10.2).
+    func setIconChangeHandler(_ handler: @escaping @Sendable (PackageID) async -> Void) async {
+        await store.setIconChangeHandler { packageID in await handler(packageID) }
+    }
+
+    /// The store-rendered icon set for a package: the manifest and the layer
+    /// PNGs under `Packages/<id>/icon/` (wrapper.md §8.2 `rendered`).
+    public func renderedIconLayers(for packageID: RuntimePackageID) async
+        -> (manifest: PackageIconManifest, layers: [StoreIconLayer])?
+    {
+        guard let storeID = PackageID(rawValue: packageID.rawValue),
+            let manifest = await store.iconManifest(for: storeID),
+            let directory = await store.iconDirectory(for: storeID)
+        else { return nil }
+        var layers: [StoreIconLayer] = []
+        for role in StoreIconRole.allCases {
+            guard let png = try? Data(contentsOf: directory.appendingPathComponent("\(role.rawValue).png"))
+            else { continue }
+            layers.append(StoreIconLayer(role: role, png: png))
+        }
+        guard !layers.isEmpty else { return nil }
+        return (manifest, layers)
+    }
+
     func setSessionService(_ sessionService: any RuntimeSessionService) {
         self.sessionService = sessionService
     }

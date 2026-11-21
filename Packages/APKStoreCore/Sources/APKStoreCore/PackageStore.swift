@@ -486,6 +486,15 @@ public actor PackageStore {
     /// them into regular tickets. Maps the ticket to its package's directory.
     private var downloadTickets: [UUID: (packageID: PackageID, directory: String)] = [:]
     private var transactions: [String: JournalTransaction] = [:]
+    /// Called when a rendered icon's set digest changed (package-store.md §10.2).
+    /// RuntimeHost publishes `PackageChange.iconChanged` through it.
+    public var iconChangeHandler: (@Sendable (PackageID) async -> Void)?
+
+    /// Sets the rendered-icon change sink (package-store.md §10.2).
+    public func setIconChangeHandler(_ handler: (@Sendable (PackageID) async -> Void)?) {
+        iconChangeHandler = handler
+    }
+
     private var operationsInProgress = Set<PackageID>()
     private var sequence: Int64 = 0
     private var opened = false
@@ -1632,6 +1641,7 @@ public actor PackageStore {
         records[packageID] = record
         warnOnMissingUpdateOwner(record)
         try purgeTrash()
+        try? await refreshRenderedIcon(packageID, renderedForVersionCode: record.versionCode)
         return record
     }
 
@@ -1859,7 +1869,79 @@ public actor PackageStore {
         try appendTerminal(transaction, op: "commit")
         records[packageID] = record
         try purgeTrash()
+        try? await refreshRenderedIcon(packageID, renderedForVersionCode: record.versionCode)
         return record
+    }
+
+    /// The pixel size `RenderIcon` is asked for (guest-protocol.md §11.1).
+    static let renderedIconSizePx = 1536
+
+    /// The `icon/` directory of a managed package (package-store.md §10.2),
+    /// or `nil` for a package the store does not manage.
+    public func iconDirectory(for packageID: PackageID) -> URL? {
+        guard
+            let directory = directories[packageID]
+                ?? (records[packageID] != nil ? directoryName(for: packageID) : nil)
+        else { return nil }
+        return
+            packagesDirectory
+            .appendingPathComponent(directory, isDirectory: true)
+            .appendingPathComponent("icon", isDirectory: true)
+    }
+
+    /// The `icon.json` manifest written for a rendered icon set, if present.
+    public func iconManifest(for packageID: PackageID) -> PackageIconManifest? {
+        guard let iconDirectory = iconDirectory(for: packageID) else { return nil }
+        let manifestURL = iconDirectory.appendingPathComponent("icon.json")
+        guard let data = fileManager.contents(atPath: manifestURL.path) else { return nil }
+        return try? JSONDecoder().decode(PackageIconManifest.self, from: data)
+    }
+
+    /// Re-renders the package's icon through the channel and rewrites `icon/`
+    /// (package-store.md §10.2). A changed set digest calls `iconChangeHandler`.
+    /// Returns whether the rendered set differs from the stored one; callers
+    /// wrap this in `try?` because §10.2 makes rendering non-fatal.
+    @discardableResult
+    public func refreshRenderedIcon(
+        _ packageID: PackageID,
+        renderedForVersionCode: VersionCode
+    ) async throws -> Bool {
+        guard let runtimeAccess else { return false }
+        let icon = try await runtimeAccess.withStoreAgent(UUID()) { channel in
+            guard channel.capabilities.contains(.icons) else { return StoreIcon?.none }
+            return try await channel.renderIcon(packageID, sizePx: Self.renderedIconSizePx)
+        }
+        guard let icon, let iconDirectory = iconDirectory(for: packageID) else { return false }
+        let ordered = icon.layers.sorted { $0.role.rawValue < $1.role.rawValue }
+        var digestInput = Data()
+        for layer in ordered {
+            digestInput.append(Data(layer.role.rawValue.utf8))
+            digestInput.append(layer.png)
+        }
+        let setDigest = SHA256Digest(data: digestInput)
+        guard setDigest != iconManifest(for: packageID)?.setDigest else { return false }
+
+        try fileManager.createDirectory(at: iconDirectory, withIntermediateDirectories: true)
+        for role in StoreIconRole.allCases {
+            let layerURL = iconDirectory.appendingPathComponent("\(role.rawValue).png")
+            if let layer = ordered.first(where: { $0.role == role }) {
+                try layer.png.write(to: layerURL, options: .atomic)
+            } else {
+                try? fileManager.removeItem(at: layerURL)
+            }
+        }
+        let manifest = PackageIconManifest(
+            kind: icon.kind,
+            sizePx: Self.renderedIconSizePx,
+            renderedForVersionCode: renderedForVersionCode,
+            setDigest: setDigest
+        )
+        let manifestData = try JSONEncoder().encode(manifest)
+        try manifestData.write(
+            to: iconDirectory.appendingPathComponent("icon.json"), options: .atomic
+        )
+        await iconChangeHandler?(packageID)
+        return true
     }
 
     /// The managed packages whose Android update owner is not `io.apkrun.store`
@@ -2791,6 +2873,7 @@ public actor PackageStore {
             cleanupDeferred = true
         }
         let previousVersionCode = previouslyInstalled?.versionCode ?? previousRecord?.versionCode
+        try? await refreshRenderedIcon(packageID, renderedForVersionCode: record.versionCode)
         return PackageInstallOutcome(
             record: record,
             previousVersionCode: previousVersionCode,

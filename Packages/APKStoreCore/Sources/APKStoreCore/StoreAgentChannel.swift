@@ -191,6 +191,54 @@ public struct StoreInstallRequest: Sendable, Equatable {
     }
 }
 
+/// The kind of a Store Agent `RenderIcon` result (store.icon.v1).
+public enum StoreIconKind: String, Sendable, Equatable, Codable {
+    /// An adaptive icon: separate background, foreground, and monochrome layers.
+    case adaptive
+    /// A single bitmap layer from the package's highest-density icon.
+    case legacy
+}
+
+/// The layer roles a rendered icon carries (wrapper.md §8.1).
+public enum StoreIconRole: String, Sendable, Equatable, Codable, CaseIterable {
+    /// The adaptive foreground layer.
+    case foreground
+    /// The adaptive background layer.
+    case background
+    /// The adaptive monochrome (themed) layer.
+    case monochrome
+    /// The single bitmap of a legacy icon.
+    case legacy
+}
+
+/// One rendered icon layer: its role and PNG payload.
+public struct StoreIconLayer: Sendable, Equatable {
+    /// The layer's role.
+    public var role: StoreIconRole
+    /// The rendered PNG bytes at the requested pixel size.
+    public var png: Data
+
+    /// Creates a rendered layer.
+    public init(role: StoreIconRole, png: Data) {
+        self.role = role
+        self.png = png
+    }
+}
+
+/// The layers the guest rendered for `RenderIcon` (guest-protocol.md §11.1).
+public struct StoreIcon: Sendable, Equatable {
+    /// Whether the package ships an adaptive icon.
+    public var kind: StoreIconKind
+    /// The rendered layers.
+    public var layers: [StoreIconLayer]
+
+    /// Creates a rendered icon result.
+    public init(kind: StoreIconKind, layers: [StoreIconLayer]) {
+        self.kind = kind
+        self.layers = layers
+    }
+}
+
 /// The outcome of a `RollbackManager` rollback request (Store Agent op 108).
 public enum StoreRollbackResult: Sendable, Equatable {
     /// Android restored the package to the requested version.
@@ -245,6 +293,11 @@ public protocol StoreAgentChannel: Sendable {
     /// `rollback` are asked.
     func rollback(_ package: PackageID, from: VersionCode, to: VersionCode) async throws
         -> StoreRollbackResult
+
+    /// Asks the Store Agent to render the package's icon layers at `sizePx`
+    /// (Store Agent op 107, store.icon.v1). Only channels advertising `icons`
+    /// are asked; `nil` means the channel cannot render icons.
+    func renderIcon(_ package: PackageID, sizePx: Int) async throws -> StoreIcon?
 }
 
 extension StoreAgentChannel {
@@ -256,6 +309,8 @@ extension StoreAgentChannel {
     public func rollback(_ package: PackageID, from: VersionCode, to: VersionCode) async throws
         -> StoreRollbackResult
     { .unavailable }
+    /// Channels without `icons` cannot render: `nil` (package-store.md §10.2).
+    public func renderIcon(_ package: PackageID, sizePx: Int) async throws -> StoreIcon? { nil }
 }
 
 /// The runtime gate injected by RuntimeHost.

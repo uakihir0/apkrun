@@ -178,6 +178,45 @@ public struct InspectionProvenance: Codable, Sendable, Hashable {
     }
 }
 
+/// The capability flags one signing-lineage node grants to its signer's
+/// certificate (apksig's `PAST_CERT_*`; update-system.md §6).
+public struct SignerCapabilities: OptionSet, Codable, Sendable, Hashable {
+    /// The raw flag mask.
+    public let rawValue: UInt32
+
+    /// Creates the mask.
+    public init(rawValue: UInt32) {
+        self.rawValue = rawValue
+    }
+
+    /// The update may carry over data installed by this signer.
+    public static let installedData = SignerCapabilities(rawValue: 1)
+    /// The signer may share a sharedUserId package.
+    public static let sharedUserID = SignerCapabilities(rawValue: 2)
+    /// Signature-level permissions may be granted to this signer.
+    public static let permission = SignerCapabilities(rawValue: 4)
+    /// The package may update back to this signer.
+    public static let rollback = SignerCapabilities(rawValue: 8)
+    /// AccountManager authenticator access is preserved.
+    public static let auth = SignerCapabilities(rawValue: 16)
+}
+
+/// One node of an APK signing lineage, oldest signer first. Each node's
+/// signature is verified with the previous node's key when the verifier
+/// builds it, so the flags here can be trusted (package-store.md §4.5).
+public struct SignerLineageNode: Codable, Sendable, Hashable {
+    /// The SHA-256 of the node's DER certificate.
+    public var certificateDigest: SHA256Digest
+    /// The capabilities this node grants to its certificate.
+    public var capabilities: SignerCapabilities
+
+    /// Creates a lineage node.
+    public init(certificateDigest: SHA256Digest, capabilities: SignerCapabilities) {
+        self.certificateDigest = certificateDigest
+        self.capabilities = capabilities
+    }
+}
+
 /// The content of `artifact.json` in a package artifact slot.
 public struct ArtifactSet: Codable, Sendable, Hashable {
     /// The artifact metadata schema version.
@@ -196,6 +235,13 @@ public struct ArtifactSet: Codable, Sendable, Hashable {
     public var signerDigests: [SHA256Digest]
     /// The signing lineage, oldest signer first.
     public var lineage: [SHA256Digest]
+    /// The lineage nodes with their capability flags, matching `lineage`
+    /// one to one when a rotation attribute was present.
+    public var lineageNodes: [SignerLineageNode]
+    /// The `uses-permission` list of the base APK (§6 notes).
+    public var permissions: [String]
+    /// The base APK's target SDK, when inspection read it (§6 notes).
+    public var targetSdk: Int?
     /// The host inspection provenance for the set.
     public var inspection: InspectionProvenance
 
@@ -209,6 +255,9 @@ public struct ArtifactSet: Codable, Sendable, Hashable {
         setDigest: SHA256Digest,
         signerDigests: [SHA256Digest],
         lineage: [SHA256Digest],
+        lineageNodes: [SignerLineageNode] = [],
+        permissions: [String] = [],
+        targetSdk: Int? = nil,
         inspection: InspectionProvenance
     ) {
         self.schemaVersion = schemaVersion
@@ -219,7 +268,31 @@ public struct ArtifactSet: Codable, Sendable, Hashable {
         self.setDigest = setDigest
         self.signerDigests = signerDigests
         self.lineage = lineage
+        self.lineageNodes = lineageNodes
+        self.permissions = permissions
+        self.targetSdk = targetSdk
         self.inspection = inspection
+    }
+
+    /// Decodes a set, tolerating files written before `lineageNodes`,
+    /// `permissions`, and `targetSdk` existed.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        packageID = try container.decode(PackageID.self, forKey: .packageID)
+        versionCode = try container.decode(VersionCode.self, forKey: .versionCode)
+        versionName = try container.decodeIfPresent(String.self, forKey: .versionName)
+        files = try container.decode([ArtifactFile].self, forKey: .files)
+        setDigest = try container.decode(SHA256Digest.self, forKey: .setDigest)
+        signerDigests = try container.decode([SHA256Digest].self, forKey: .signerDigests)
+        lineage = try container.decode([SHA256Digest].self, forKey: .lineage)
+        lineageNodes =
+            try container.decodeIfPresent([SignerLineageNode].self, forKey: .lineageNodes)
+            ?? []
+        permissions =
+            try container.decodeIfPresent([String].self, forKey: .permissions) ?? []
+        targetSdk = try container.decodeIfPresent(Int.self, forKey: .targetSdk)
+        inspection = try container.decode(InspectionProvenance.self, forKey: .inspection)
     }
 
     /// Computes §3.3's digest from files sorted by their stored file name.

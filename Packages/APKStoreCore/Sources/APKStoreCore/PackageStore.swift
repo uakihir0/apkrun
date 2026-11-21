@@ -220,6 +220,8 @@ public actor PackageStore {
         public var signerDigests: [SHA256Digest]
         /// Signing lineage digests when a rotation proof was present.
         public var lineage: [SHA256Digest]
+        /// The lineage nodes with capability flags, matching `lineage`.
+        public var lineageNodes: [SignerLineageNode]
         /// Non-blocking observations of the intrinsic checks (§4.6).
         public var warnings: [ImportWarning]
         /// Split names excluded by ABI and density selection (§4.4).
@@ -231,6 +233,7 @@ public actor PackageStore {
             facts: [APKFacts],
             signerDigests: [SHA256Digest],
             lineage: [SHA256Digest],
+            lineageNodes: [SignerLineageNode] = [],
             warnings: [ImportWarning],
             excludedSplits: [String]
         ) {
@@ -238,6 +241,7 @@ public actor PackageStore {
             self.facts = facts
             self.signerDigests = signerDigests
             self.lineage = lineage
+            self.lineageNodes = lineageNodes
             self.warnings = warnings
             self.excludedSplits = excludedSplits
         }
@@ -329,6 +333,7 @@ public actor PackageStore {
             facts: facts,
             signerDigests: verified.signerDigests,
             lineage: verified.lineage,
+            lineageNodes: verified.lineageNodes,
             warnings: verified.warnings,
             excludedSplits: excludedSplits
         )
@@ -689,6 +694,9 @@ public actor PackageStore {
             setDigest: digest,
             signerDigests: verifiedImport.signerDigests,
             lineage: verifiedImport.lineage,
+            lineageNodes: verifiedImport.lineageNodes,
+            permissions: baseFacts.permissions,
+            targetSdk: baseFacts.targetSDK,
             inspection: InspectionProvenance(
                 aapt2Version: "unknown",
                 verifierVersion: "host-inspection-v1",
@@ -974,6 +982,9 @@ public actor PackageStore {
             setDigest: digest,
             signerDigests: verifiedImport.signerDigests,
             lineage: verifiedImport.lineage,
+            lineageNodes: verifiedImport.lineageNodes,
+            permissions: baseFacts.permissions,
+            targetSdk: baseFacts.targetSDK,
             inspection: InspectionProvenance(
                 aapt2Version: "unknown",
                 verifierVersion: "host-inspection-v1",
@@ -3559,6 +3570,21 @@ public actor PackageStore {
             return nil
         }
         return try? Self.decoder().decode(ArtifactSet.self, from: data)
+    }
+
+    /// The installed `current/artifact.json` for a managed package, or nil
+    /// when the slot is absent or unreadable. UpdateCore reads it for the
+    /// §6 signer-lineage and notes inputs.
+    public func installedArtifactSet(for packageID: PackageID) async throws -> ArtifactSet? {
+        try requireOpen()
+        guard let directory = directories[packageID] else {
+            return nil
+        }
+        let current =
+            packagesDirectory
+            .appendingPathComponent(directory, isDirectory: true)
+            .appendingPathComponent("current", isDirectory: true)
+        return try artifactSet(in: current)
     }
 
     /// Promotes `staged/` to `current/` for the `update` transaction

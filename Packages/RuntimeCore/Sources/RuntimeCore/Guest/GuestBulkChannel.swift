@@ -65,6 +65,12 @@ public actor GuestBulkChannel {
         var fileURL: URL?
         var fileHandle: FileHandle?
         var written: Int64 = 0
+        /// The size `BulkBegin` announced; `UInt64.max` means the sender did
+        /// not know it. A transfer that ends short of it is rejected.
+        var expectedSize: UInt64 = UInt64.max
+        /// The digest `BulkBegin` announced, when the sender put it there
+        /// instead of the end frame (bulk.proto allows either).
+        var expectedHash: Data?
 
         mutating func append(_ chunk: Data, cap: Int) -> Bool {
             if let handle = fileHandle {
@@ -77,6 +83,7 @@ public actor GuestBulkChannel {
                 }
             }
             bytes.append(chunk)
+            written += Int64(chunk.count)
             return bytes.count <= cap
         }
 
@@ -292,6 +299,10 @@ public actor GuestBulkChannel {
             tail.sha256 = Data(hasher.finalize())
             frame.kind = .end(tail)
             try await connection.sendBulkFrame(frame)
+            // A request sent right after on another endpoint must not
+            // overtake this file's bytes (bulk framing has no ordering
+            // guarantee across queues): wait until the writer drained.
+            try await connection.waitForOutboundDrain()
         } catch let failure as GuestProtocolFailure {
             var abort = GPBulkAbort()
             abort.reason = "send failed"
@@ -390,6 +401,8 @@ public actor GuestBulkChannel {
                 mimeType: begin.mimeType,
                 bytes: Data()
             )
+            assembly.expectedSize = begin.size
+            assembly.expectedHash = begin.sha256.isEmpty ? nil : begin.sha256
             if begin.kind == .file {
                 let url = Self.spoolURL(frame.transferID)
                 try? FileManager.default.createDirectory(
@@ -415,6 +428,16 @@ public actor GuestBulkChannel {
             }
         case .end(let end):
             guard var assembly = assemblies.removeValue(forKey: frame.transferID) else { return }
+            if assembly.expectedSize != UInt64.max,
+                UInt64(assembly.written) != assembly.expectedSize
+            {
+                // The announced size and the bytes received disagree: the
+                // payload is dropped and the sender told (bulk.proto §7.4).
+                try? assembly.fileHandle?.close()
+                if let url = assembly.fileURL { try? FileManager.default.removeItem(at: url) }
+                Self.reply(.rejected, to: frame.transferID, via: connection)
+                return
+            }
             let (bytes, fileURL) = assembly.finish()
             let transfer = GuestInboundTransfer(
                 transferID: frame.transferID,
@@ -423,7 +446,7 @@ public actor GuestBulkChannel {
                 mimeType: assembly.mimeType,
                 bytes: bytes,
                 fileURL: fileURL,
-                sha256: end.sha256.isEmpty ? nil : end.sha256
+                sha256: end.sha256.isEmpty ? assembly.expectedHash : end.sha256
             )
             Self.reply(.ok, to: frame.transferID, via: connection)
             if let waiter = waiters.removeValue(forKey: frame.transferID) {

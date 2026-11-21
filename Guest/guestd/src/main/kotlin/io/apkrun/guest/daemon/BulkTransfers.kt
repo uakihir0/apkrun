@@ -1,10 +1,13 @@
 package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.FrameWriter
+import io.apkrun.guest.protocol.v1.BulkAbort
 import io.apkrun.guest.protocol.v1.BulkBegin
 import io.apkrun.guest.protocol.v1.BulkEnd
 import io.apkrun.guest.protocol.v1.BulkFrame
 import io.apkrun.guest.protocol.v1.BulkKind
+import io.apkrun.guest.runtime.AgentLog
+import java.io.InputStream
 import java.security.MessageDigest
 
 /**
@@ -95,6 +98,92 @@ class BulkTransfers : ClipboardBridge.BulkImageSender {
                                 .setSha256(com.google.protobuf.ByteString.copyFrom(digest))
                         )
                         .build()
+            }
+            return transferId
+        }
+    }
+
+    /**
+     * Streams [input] as a transfer of [kind] and returns its transfer ID, or `null` when no bulk
+     * connection is open. Unlike [send] the payload never lands in memory whole: chunks of
+     * [CHUNK_BYTES] are framed as they are read and the digest is computed on the way. [size] is
+     * the announced total, or -1 when unknown.
+     */
+    fun sendStream(
+        kind: BulkKind,
+        name: String,
+        mimeType: String,
+        size: Long,
+        input: InputStream,
+    ): Long? {
+        val digest = MessageDigest.getInstance("SHA-256")
+        synchronized(lock) {
+            val target = writers.firstOrNull() ?: return null.also { input.close() }
+            val transferId = nextTransferId
+            nextTransferId += 2
+            var began = false
+            try {
+                input.use { stream ->
+                    target.send { envelope ->
+                        envelope.bulk =
+                            BulkFrame.newBuilder()
+                                .setTransferId(transferId)
+                                .setBegin(
+                                    BulkBegin.newBuilder()
+                                        .setKind(kind)
+                                        .setName(name)
+                                        .setMimeType(mimeType)
+                                        .setSize(if (size < 0) 0 else size)
+                                )
+                                .build()
+                    }
+                    began = true
+                    val buffer = ByteArray(CHUNK_BYTES)
+                    while (true) {
+                        val read = stream.read(buffer)
+                        if (read <= 0) break
+                        digest.update(buffer, 0, read)
+                        target.send { envelope ->
+                            envelope.bulk =
+                                BulkFrame.newBuilder()
+                                    .setTransferId(transferId)
+                                    .setChunk(
+                                        com.google.protobuf.ByteString.copyFrom(buffer, 0, read)
+                                    )
+                                    .build()
+                        }
+                    }
+                    target.send { envelope ->
+                        envelope.bulk =
+                            BulkFrame.newBuilder()
+                                .setTransferId(transferId)
+                                .setEnd(
+                                    BulkEnd.newBuilder()
+                                        .setSha256(
+                                            com.google.protobuf.ByteString.copyFrom(digest.digest())
+                                        )
+                                )
+                                .build()
+                    }
+                }
+            } catch (error: Exception) {
+                AgentLog.warning("a bulk stream failed: ${error.javaClass.simpleName}")
+                if (began) {
+                    // Tell the host to drop the partial assembly so its temp
+                    // file and handle do not linger (bulk.proto abort).
+                    try {
+                        target.send { envelope ->
+                            envelope.bulk =
+                                BulkFrame.newBuilder()
+                                    .setTransferId(transferId)
+                                    .setAbort(BulkAbort.newBuilder().setReason("send failed"))
+                                    .build()
+                        }
+                    } catch (abortError: Exception) {
+                        AgentLog.warning("a bulk abort failed: ${abortError.javaClass.simpleName}")
+                    }
+                }
+                return null
             }
             return transferId
         }

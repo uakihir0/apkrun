@@ -80,6 +80,7 @@ import Testing
                 "reservedPackage", "tooLarge", "resourcesArscNotAligned", "signerMismatch",
                 "alreadyInstalled", "downgradeRefused", "packageAlreadyManaged",
                 "packageInUse", "stagedUpdateMissing", "rollbackUnavailable", "notRepairable",
+                "packageInUse", "stagedUpdateMissing",
             ].map { "store.\($0)" }
             + [
                 "providerNotConfigured", "providerMetadataInvalid", "providerHTTPStatus",

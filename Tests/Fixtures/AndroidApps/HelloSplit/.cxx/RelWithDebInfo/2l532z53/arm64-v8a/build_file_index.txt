@@ -1,1 +1,1 @@
-/Users/devin/repos/apkrun-76/Tests/Fixtures/AndroidApps/HelloSplit/src/main/cpp/CMakeLists.txt
+/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/src/main/cpp/CMakeLists.txt

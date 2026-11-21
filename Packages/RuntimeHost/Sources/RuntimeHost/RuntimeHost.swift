@@ -2441,20 +2441,47 @@ public actor RuntimeHost {
             throw Self.wrapperWireError(for: .stagingExpired)
         }
         // Tokens die with the staging cleanup and with age (errors.json
-        // `wrapper.stagingExpired` documents 60 minutes).
-        guard let stagingPath = pending.stagingPath,
+        // `wrapper.stagingExpired` documents 60 minutes). The client moved
+        // the bundle out of `staging/<token>/`, so the age check reads the
+        // token directory, which the daemon still owns.
+        guard let stagingPath = pending.stagingPath else {
+            throw Self.wrapperWireError(for: .stagingExpired)
+        }
+        let tokenDirectory = URL(fileURLWithPath: stagingPath)
+            .deletingLastPathComponent()
+        guard tokenDirectory.lastPathComponent == stagingToken,
             let created = try? FileManager.default.attributesOfItem(
-                atPath: stagingPath)[.creationDate] as? Date,
+                atPath: tokenDirectory.path)[.creationDate] as? Date,
             Date().timeIntervalSince(created) <= 60 * 60
         else {
             throw Self.wrapperWireError(for: .stagingExpired)
         }
+        // The destination is the folder the daemon could not reach; the
+        // client's security-scoped bookmark grants access for the checks
+        // below (runtime-api.md §10.3).
+        var accessURL = finalURL
+        var securityScope: URL?
+        var staleBookmark = false
+        if let bookmarkData = bookmark.flatMap({ Data(base64Encoded: $0) }),
+            !bookmarkData.isEmpty,
+            let resolved = try? URL(
+                resolvingBookmarkData: bookmarkData,
+                options: [.withSecurityScope, .withoutUI],
+                relativeTo: nil,
+                bookmarkDataIsStale: &staleBookmark
+            ),
+            resolved.startAccessingSecurityScopedResource()
+        {
+            securityScope = resolved
+            accessURL = resolved
+        }
+        defer { securityScope?.stopAccessingSecurityScopedResource() }
         // The client moved the bundle; it must be where it says it is and
         // still the wrapper the daemon signed (same package ID).
         guard
-            FileManager.default.fileExists(atPath: finalURL.path),
-            InfoPlistWriter.identity(of: finalURL)?.packageID == pending.packageId,
-            WrapperCodeSign.cdhash(of: finalURL) == pending.cdhash
+            FileManager.default.fileExists(atPath: accessURL.path),
+            InfoPlistWriter.identity(of: accessURL)?.packageID == pending.packageId,
+            WrapperCodeSign.cdhash(of: accessURL) == pending.cdhash
         else {
             throw Self.wrapperWireError(
                 for: .bundleInvalid(finalURL, reason: .signatureInvalid))
@@ -2471,8 +2498,7 @@ public actor RuntimeHost {
         }
         let installer = WrapperInstaller(sink: diagnostics?.logSink)
         let warning = installer.registerPlaced(at: finalURL)
-        try? FileManager.default.removeItem(
-            at: URL(fileURLWithPath: stagingPath).deletingLastPathComponent())
+        try? FileManager.default.removeItem(at: tokenDirectory)
         guard let entry = await registry.entry(bundleID: pending.bundleId) else {
             throw .runtime("internal", message: "APKRun couldn't register the Mac app.")
         }

@@ -13,6 +13,7 @@ import com.google.protobuf.ByteString
 import io.apkrun.guest.protocol.v1.AccessLevel
 import io.apkrun.guest.protocol.v1.DocInfo
 import io.apkrun.guest.protocol.v1.HostCloseFile
+import io.apkrun.guest.protocol.v1.HostCreateDocument
 import io.apkrun.guest.protocol.v1.HostListRoots
 import io.apkrun.guest.protocol.v1.HostOpenFile
 import io.apkrun.guest.protocol.v1.HostQueryChildren
@@ -62,7 +63,18 @@ internal class MacFilesProvider : DocumentsProvider() {
             ) ?: return cursor
         for (info in list.rootsList) {
             val root = access?.roots()?.firstOrNull { it.rootId == info.rootId } ?: continue
-            val level = access?.accessFor(root, caller) ?: AccessLevel.ACCESS_LEVEL_UNSPECIFIED
+            val level =
+                if (caller == BROWSER_PACKAGE) {
+                    // The picker browses every root's names (§6.4); the root's
+                    // own cap still decides whether it offers create.
+                    if (root.maxAccess == AccessLevel.ACCESS_LEVEL_READ_WRITE) {
+                        AccessLevel.ACCESS_LEVEL_READ_WRITE
+                    } else {
+                        AccessLevel.ACCESS_LEVEL_READ_ONLY
+                    }
+                } else {
+                    access?.accessFor(root, caller) ?: AccessLevel.ACCESS_LEVEL_UNSPECIFIED
+                }
             if (level == AccessLevel.ACCESS_LEVEL_UNSPECIFIED) {
                 continue
             }
@@ -112,6 +124,7 @@ internal class MacFilesProvider : DocumentsProvider() {
         val caller = callerPackage()
         val (rootId, path) =
             splitDocumentId(parentDocumentId) ?: return MatrixCursor(documentColumns(projection))
+        val level = levelFor(caller, rootId)
         val cursor = MatrixCursor(documentColumns(projection))
         val page =
             hostCall(
@@ -127,7 +140,7 @@ internal class MacFilesProvider : DocumentsProvider() {
                 { it.hostQueryChildren },
             ) ?: return cursor
         for (entry in page.entriesList) {
-            addDocumentRow(cursor, rootId, entry)
+            addDocumentRow(cursor, rootId, entry, level)
         }
         if (page.nextPageToken.isNotEmpty()) {
             cursor.extras =
@@ -168,8 +181,46 @@ internal class MacFilesProvider : DocumentsProvider() {
                 },
                 { it.hostStat },
             ) ?: return cursor
-        addDocumentRow(cursor, rootId, info)
+        addDocumentRow(cursor, rootId, info, levelFor(caller, rootId))
         return cursor
+    }
+
+    /** The caller's level on [rootId]; the picker gets the root's own cap (§6.4). */
+    private fun levelFor(caller: String, rootId: String): AccessLevel {
+        val root =
+            access?.roots()?.firstOrNull { it.rootId == rootId }
+                ?: return AccessLevel.ACCESS_LEVEL_UNSPECIFIED
+        if (caller == BROWSER_PACKAGE) {
+            return root.maxAccess
+        }
+        return access?.accessFor(root, caller) ?: AccessLevel.ACCESS_LEVEL_UNSPECIFIED
+    }
+
+    // ---- creating -------------------------------------------------------------------
+
+    override fun createDocument(
+        parentDocumentId: String,
+        mimeType: String,
+        displayName: String,
+    ): String {
+        val caller = callerPackage()
+        val (rootId, parentPath) =
+            splitDocumentId(parentDocumentId) ?: throw FileNotFoundException(parentDocumentId)
+        val created =
+            hostCall(
+                {
+                    it.hostCreateDocument =
+                        HostCreateDocument.newBuilder()
+                            .setPackage(caller)
+                            .setRootId(rootId)
+                            .setParentPath(parentPath)
+                            .setName(displayName)
+                            .setIsDir(mimeType == DocumentsContract.Document.MIME_TYPE_DIR)
+                            .build()
+                },
+                { it.hostCreateDocument },
+            ) ?: throw FileNotFoundException(parentDocumentId)
+        return "$rootId/${created.path}"
     }
 
     // ---- opening --------------------------------------------------------------------
@@ -292,7 +343,9 @@ internal class MacFilesProvider : DocumentsProvider() {
             }
         }
             .start()
-        return pipe[0]
+        // The client gets the end for its side of the transfer: the write end
+        // when it writes into the pipe, the read end when it reads from it.
+        return if (write) pipe[1] else pipe[0]
     }
 
     private fun <T> hostCall(
@@ -306,7 +359,12 @@ internal class MacFilesProvider : DocumentsProvider() {
         return pick(response)
     }
 
-    private fun addDocumentRow(cursor: MatrixCursor, rootId: String, info: DocInfo) {
+    private fun addDocumentRow(
+        cursor: MatrixCursor,
+        rootId: String,
+        info: DocInfo,
+        level: AccessLevel,
+    ) {
         val row = cursor.newRow()
         row.add(DocumentsContract.Document.COLUMN_DOCUMENT_ID, "$rootId/${info.path}")
         row.add(DocumentsContract.Document.COLUMN_DISPLAY_NAME, info.name)
@@ -320,7 +378,24 @@ internal class MacFilesProvider : DocumentsProvider() {
         )
         row.add(DocumentsContract.Document.COLUMN_SIZE, if (info.isDir) 0L else info.size)
         row.add(DocumentsContract.Document.COLUMN_LAST_MODIFIED, info.mtimeMs)
-        row.add(DocumentsContract.Document.COLUMN_FLAGS, 0)
+        // A writable entry advertises it so pickers enable rename, delete, and
+        // create-inside (§6.4).
+        val writable = level == AccessLevel.ACCESS_LEVEL_READ_WRITE
+        row.add(
+            DocumentsContract.Document.COLUMN_FLAGS,
+            when {
+                info.isDir && writable ->
+                    DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE or
+                        DocumentsContract.Document.FLAG_SUPPORTS_WRITE or
+                        DocumentsContract.Document.FLAG_SUPPORTS_RENAME or
+                        DocumentsContract.Document.FLAG_SUPPORTS_DELETE
+                writable ->
+                    DocumentsContract.Document.FLAG_SUPPORTS_WRITE or
+                        DocumentsContract.Document.FLAG_SUPPORTS_RENAME or
+                        DocumentsContract.Document.FLAG_SUPPORTS_DELETE
+                else -> 0
+            },
+        )
     }
 
     private fun splitDocumentId(documentId: String): Pair<String, String>? {
@@ -366,6 +441,8 @@ internal class MacFilesProvider : DocumentsProvider() {
     companion object {
         private const val CHUNK = 1L shl 20
         private const val EXTRA_PAGE_TOKEN = "io.apkrun.guest.macfiles.nextPageToken"
+        /** The system picker: it browses names only and every content op still needs a package. */
+        private const val BROWSER_PACKAGE = "com.android.documentsui"
     }
 }
 

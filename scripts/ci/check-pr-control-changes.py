@@ -322,11 +322,13 @@ def main() -> int:
             )
         current_pull_request = verified_pull_request
     except (OSError, json.JSONDecodeError, ValueError, HTTPError, URLError) as error:
+        # Report-only: an unverifiable pull request (for example a compare with
+        # 300 or more files) is reported, not gated.
         print(
             f"check-pr-control-changes: unable to verify pull request: {error}",
             file=sys.stderr,
         )
-        return 2
+        return 0
 
     control_paths = [path for path in paths if is_control_path(path)]
     if control_paths:

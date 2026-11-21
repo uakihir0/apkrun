@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 {
   "buildFiles": [
     "/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/src/main/cpp/CMakeLists.txt"
@@ -26,33 +25,3 @@
     }
   }
 }
-||||||| 2662805e
-=======
-{
-  "buildFiles": [
-    "/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/src/main/cpp/CMakeLists.txt"
-  ],
-  "cleanCommandsComponents": [
-    [
-      "/Users/devin/Library/Android/sdk/cmake/3.22.1/bin/ninja",
-      "-C",
-      "/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a",
-      "clean"
-    ]
-  ],
-  "buildTargetsCommandComponents": [
-    "/Users/devin/Library/Android/sdk/cmake/3.22.1/bin/ninja",
-    "-C",
-    "/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a",
-    "{LIST_OF_TARGETS_TO_BUILD}"
-  ],
-  "libraries": {
-    "hellosplit::@6890427a1f51a3e7e1df": {
-      "artifactName": "hellosplit",
-      "abi": "arm64-v8a",
-      "output": "/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/build/intermediates/cxx/RelWithDebInfo/2l532z53/obj/arm64-v8a/libhellosplit.so",
-      "runtimeFiles": []
-    }
-  }
-}
->>>>>>> ae6869d4b97c76e0deea336c14244dd2a43250fc

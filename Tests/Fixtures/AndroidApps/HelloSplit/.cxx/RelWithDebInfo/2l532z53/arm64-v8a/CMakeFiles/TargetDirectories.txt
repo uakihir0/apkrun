@@ -1,10 +1,3 @@
-<<<<<<< HEAD
 /Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/CMakeFiles/hellosplit.dir
 /Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/CMakeFiles/edit_cache.dir
 /Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/CMakeFiles/rebuild_cache.dir
-||||||| 2662805e
-=======
-/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/CMakeFiles/hellosplit.dir
-/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/CMakeFiles/edit_cache.dir
-/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/CMakeFiles/rebuild_cache.dir
->>>>>>> ae6869d4b97c76e0deea336c14244dd2a43250fc

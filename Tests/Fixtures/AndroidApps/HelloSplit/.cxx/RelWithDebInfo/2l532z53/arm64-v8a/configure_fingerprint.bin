@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 C/C++ Structured LogŒ
 ‰
 †/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/additional_project_files.txtC
@@ -28,35 +27,3 @@ y/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWith
 /Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/symbol_folder_index.txt	ËËçÜŸ4€ »ËçÜŸ4b
 `
 ^/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/src/main/cpp/CMakeLists.txt	ËËçÜŸ4¨ ¹†¬ÜŸ4
-||||||| 2662805e
-=======
-C/C++ Structured Log†
-ƒ
-€/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/additional_project_files.txtC
-A
-?com.android.build.gradle.internal.cxx.io.EncodedFileFingerPrint	šãÏØŸ4 ‹ãÏØŸ4
-
-}/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/android_gradle_build.json	šãÏØŸ4À
- ãÏØŸ4ˆ
-…
-‚/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/android_gradle_build_mini.json	šãÏØŸ4œ “ãÏØŸ4s
-q
-o/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/build.ninja	šãÏØŸ4³ß øâÏØŸ4w
-u
-s/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/build.ninja.txt	šãÏØŸ4|
-z
-x/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/build_file_index.txt	šãÏØŸ4P ”ãÏØŸ4}
-{
-y/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/compile_commands.json	šãÏØŸ4¯ øâÏØŸ4
-
-}/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/compile_commands.json.bin	›ãÏØŸ4	› øâÏØŸ4‰
-†
-ƒ/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/metadata_generation_command.txt	›ãÏØŸ4
-ò ”ãÏØŸ4z
-x
-v/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/prefab_config.json	›ãÏØŸ4( ”ãÏØŸ4
-}
-{/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/symbol_folder_index.txt	›ãÏØŸ4z ”ãÏØŸ4\
-Z
-X/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/src/main/cpp/CMakeLists.txt	›ãÏØŸ4¨ þÌáÖŸ4
->>>>>>> ae6869d4b97c76e0deea336c14244dd2a43250fc

@@ -1,10 +1,3 @@
-<<<<<<< HEAD
 # ninja log v5
 0	81	1795222529639431967	CMakeFiles/hellosplit.dir/native-lib.cpp.o	9466e974d0e09e59
 81	124	1795222529682051099	/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/build/intermediates/cxx/RelWithDebInfo/2l532z53/obj/arm64-v8a/libhellosplit.so	93aba4844cc787b8
-||||||| 2662805e
-=======
-# ninja log v5
-0	92	1795213750827317815	CMakeFiles/hellosplit.dir/native-lib.cpp.o	e31bbcd13742cf7
-92	132	1795213750867075446	/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/build/intermediates/cxx/RelWithDebInfo/2l532z53/obj/arm64-v8a/libhellosplit.so	cf237f15d08b5518
->>>>>>> ae6869d4b97c76e0deea336c14244dd2a43250fc

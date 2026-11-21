@@ -1,6 +1,1 @@
-<<<<<<< HEAD
 /Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/build/intermediates/cxx/RelWithDebInfo/2l532z53/obj/arm64-v8a
-||||||| 2662805e
-=======
-/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/build/intermediates/cxx/RelWithDebInfo/2l532z53/obj/arm64-v8a
->>>>>>> ae6869d4b97c76e0deea336c14244dd2a43250fc

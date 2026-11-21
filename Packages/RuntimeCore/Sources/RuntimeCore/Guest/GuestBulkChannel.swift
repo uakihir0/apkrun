@@ -68,6 +68,9 @@ public actor GuestBulkChannel {
         /// The size `BulkBegin` announced; `UInt64.max` means the sender did
         /// not know it. A transfer that ends short of it is rejected.
         var expectedSize: UInt64 = UInt64.max
+        /// The digest `BulkBegin` announced, when the sender put it there
+        /// instead of the end frame (bulk.proto allows either).
+        var expectedHash: Data?
 
         mutating func append(_ chunk: Data, cap: Int) -> Bool {
             if let handle = fileHandle {
@@ -399,6 +402,7 @@ public actor GuestBulkChannel {
                 bytes: Data()
             )
             assembly.expectedSize = begin.size
+            assembly.expectedHash = begin.sha256.isEmpty ? nil : begin.sha256
             if begin.kind == .file {
                 let url = Self.spoolURL(frame.transferID)
                 try? FileManager.default.createDirectory(
@@ -442,7 +446,7 @@ public actor GuestBulkChannel {
                 mimeType: assembly.mimeType,
                 bytes: bytes,
                 fileURL: fileURL,
-                sha256: end.sha256.isEmpty ? nil : end.sha256
+                sha256: end.sha256.isEmpty ? assembly.expectedHash : end.sha256
             )
             Self.reply(.ok, to: frame.transferID, via: connection)
             if let waiter = waiters.removeValue(forKey: frame.transferID) {

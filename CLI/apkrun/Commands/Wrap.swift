@@ -96,7 +96,13 @@
                     // package embeds the ticket's files; the icon is the
                     // placeholder until the package is installed.
                     portableTicket = preview.ticket
-                    portableDefaults = try updateDefaultsWire()
+                    // `updateDefaults` is only valid when the user asked for
+                    // update defaults; the host rejects it otherwise.
+                    if provider != nil || updates != nil || update != nil
+                        || updateProvider != nil || updateURL != nil
+                    {
+                        portableDefaults = try updateDefaultsWire()
+                    }
                     packageID = preview.packageID
                     if preview.relation == .newPackage || preview.relation == .unknown {
                         Output.writeLogLine(

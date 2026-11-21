@@ -159,7 +159,7 @@ public struct GuestSetNotificationForwarding: GuestOperation {
     }
 }
 
-/// SetUrlRedirect, guest protocol operation 44 (guest-protocol.md §7.6,
+/// SetUrlRedirect, guest protocol operation 44 (guest-protocol.md §7.1,
 /// desktop-integration.md §3.2). `enabled` is the global links switch;
 /// `excludedPackages` are the packages whose `integrations.links` value keeps
 /// links inside Android (`android` or `off`). The agent recomputes its
@@ -203,7 +203,7 @@ public struct GuestSetUrlRedirect: GuestOperation {
     }
 }
 
-/// ResolveUrl, guest protocol operation 50 (guest-protocol.md §7.6,
+/// ResolveUrl, guest protocol operation 50 (guest-protocol.md §7.1,
 /// desktop-integration.md §7.2). Answers one `OpenUrlOnHost` event: the host
 /// opened it (`openedOnHost`), Android should open the kept intent
 /// (`openInGuest`), or the link is dropped (`drop`).

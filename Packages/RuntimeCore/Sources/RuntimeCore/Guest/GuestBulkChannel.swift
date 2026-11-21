@@ -177,6 +177,11 @@ public actor GuestBulkChannel {
                 return nil
             }
             let result = await group.next() ?? nil
+            if result == nil {
+                // The continuation ignores cancellation: evict the waiter so
+                // it resumes and this group scope can actually exit.
+                await self.evictWaiter(transferID)
+            }
             group.cancelAll()
             return result ?? nil
         }
@@ -190,14 +195,30 @@ public actor GuestBulkChannel {
         Task { await self.registerWaiter(transferID, continuation) }
     }
 
+    /// Transfer IDs whose fetch already timed out; a waiter registered late
+    /// for one is answered at once instead of waiting forever.
+    private var timedOut: Set<UInt64> = []
+
     private func registerWaiter(
         _ transferID: UInt64,
         _ continuation: CheckedContinuation<GuestInboundTransfer?, Never>
     ) {
-        if let index = completed.firstIndex(where: { $0.id == transferID }) {
+        if timedOut.remove(transferID) != nil {
+            continuation.resume(returning: nil)
+        } else if let index = completed.firstIndex(where: { $0.id == transferID }) {
             continuation.resume(returning: completed.remove(at: index).transfer)
         } else {
             waiters[transferID, default: []].append(continuation)
+        }
+    }
+
+    /// Answers every waiter of `transferID` with nil (a fetch timeout).
+    private func evictWaiter(_ transferID: UInt64) {
+        timedOut.insert(transferID)
+        if let waiter = waiters.removeValue(forKey: transferID) {
+            for continuation in waiter {
+                continuation.resume(returning: nil)
+            }
         }
     }
 
@@ -220,6 +241,7 @@ public actor GuestBulkChannel {
                 assemblies[frame.transferID] = assembly
             }
         case .end:
+            timedOut.remove(frame.transferID)
             guard let assembly = assemblies.removeValue(forKey: frame.transferID) else { return }
             let transfer = GuestInboundTransfer(
                 transferID: frame.transferID,

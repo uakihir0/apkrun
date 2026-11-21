@@ -1072,3 +1072,307 @@ public struct RuntimeApprovalBrokerReply: Codable, Equatable, Sendable {
         self.error = error
     }
 }
+
+// MARK: - wrapper lifecycle (runtime-api.md §10.5, wrapper.md §9)
+
+/// One row of `listWrappers`: the registry summary plus the status the
+/// validator computed (wrapper.md §9.1). The status is never stored.
+public struct WrapperListEntryWire: Codable, Equatable, Sendable {
+    /// The registry row.
+    public var summary: WrapperSummary
+    /// The validator's state, or nil when validation could not run.
+    public var state: WrapperState?
+    /// Why the wrapper wants a refresh (check 6 of §9.1).
+    public var refreshReasons: [WrapperRefreshReason]
+
+    /// Creates a list entry.
+    public init(
+        summary: WrapperSummary,
+        state: WrapperState? = nil,
+        refreshReasons: [WrapperRefreshReason] = []
+    ) {
+        self.summary = summary
+        self.state = state
+        self.refreshReasons = refreshReasons
+    }
+}
+
+/// A `listWrappers` control request; has no parameters.
+public struct RuntimeWrapperListControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+
+    /// Creates a list-wrappers control request.
+    public init(header: APIRequestHeader) {
+        self.header = header
+    }
+}
+
+/// The result or typed error returned by a control list-wrappers request.
+public struct RuntimeWrapperListControlReply: Codable, Equatable, Sendable {
+    /// The wrapper rows, present on success.
+    public let result: [WrapperListEntryWire]?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: [WrapperListEntryWire]) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// A `removeWrapper` control request (wrapper.md §9.5): drops the registry
+/// entry, and with `trash` moves the bundle to the Trash first.
+public struct RuntimeRemoveWrapperControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The installed package whose wrapper to remove.
+    public let packageID: RuntimePackageID
+    /// Move the bundle to the Trash before dropping the entry.
+    public let trash: Bool
+
+    /// Creates a remove-wrapper control request.
+    public init(header: APIRequestHeader, packageID: RuntimePackageID, trash: Bool) {
+        self.header = header
+        self.packageID = packageID
+        self.trash = trash
+    }
+}
+
+/// The result or typed error returned by a control remove-wrapper request.
+public struct RuntimeRemoveWrapperControlReply: Codable, Equatable, Sendable {
+    /// Whether an entry was removed, present on success.
+    public let result: Bool?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: Bool) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// A `rescanWrappers` control request (wrapper.md §7.2): lists, or with
+/// `register` also registers, the valid `APKRunPackageID` bundles in
+/// `~/Applications` and `/Applications`.
+public struct RuntimeRescanWrappersControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// Register the found bundles, not just list them.
+    public let register: Bool
+
+    /// Creates a rescan-wrappers control request.
+    public init(header: APIRequestHeader, register: Bool) {
+        self.header = header
+        self.register = register
+    }
+}
+
+/// The result or typed error returned by a control rescan-wrappers request.
+public struct RuntimeRescanWrappersControlReply: Codable, Equatable, Sendable {
+    /// The bundle paths found and registered, present on success.
+    public let result: RescanWrappersResult?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: RescanWrappersResult) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// The `rescanWrappers` outcome: the bundle paths the scan found, and the
+/// ones `register = true` newly registered.
+public struct RescanWrappersResult: Codable, Equatable, Sendable {
+    /// Every wrapper bundle found, as a path.
+    public var found: [String]
+    /// The bundles that were registered by this call.
+    public var registered: [String]
+
+    /// Creates a rescan result.
+    public init(found: [String], registered: [String]) {
+        self.found = found
+        self.registered = registered
+    }
+}
+
+// MARK: - wrapper refresh (runtime-api.md §10.5, wrapper.md §9.3)
+
+/// What a refresh changes (wrapper.md §9.3): name, icon, or launcher.
+public struct WrapperRefreshWire: Codable, Equatable, Sendable {
+    /// The new display name; `""` resets it to the package name.
+    public var displayName: String?
+    /// A replacement icon arrives as the call's file handle.
+    public var icon: Bool
+    /// Restore the current Android icon, dropping a custom icon file.
+    public var androidIcon: Bool
+    /// Only the launcher executable is refreshed.
+    public var launcherOnly: Bool
+    /// Makes the package local (wrapper.md §10.2) — #90 rejects it for now.
+    public var makeLocal: Bool
+    /// Answers "Quit ‹App› to update its Mac app?" with yes.
+    public var closeRunningApp: Bool
+
+    /// Creates the refresh options.
+    public init(
+        displayName: String? = nil,
+        icon: Bool = false,
+        androidIcon: Bool = false,
+        launcherOnly: Bool = false,
+        makeLocal: Bool = false,
+        closeRunningApp: Bool = false
+    ) {
+        self.displayName = displayName
+        self.icon = icon
+        self.androidIcon = androidIcon
+        self.launcherOnly = launcherOnly
+        self.makeLocal = makeLocal
+        self.closeRunningApp = closeRunningApp
+    }
+}
+
+/// The `refreshWrapper` request (runtime-api.md §10.5).
+public struct RuntimeRefreshWrapperControlRequest: Codable, Equatable, Sendable {
+    /// The request header.
+    public var header: APIRequestHeader
+    /// The package whose wrapper refreshes.
+    public var packageID: RuntimePackageID
+    /// What the refresh changes.
+    public var change: WrapperRefreshWire
+
+    /// Creates the request.
+    public init(
+        header: APIRequestHeader,
+        packageID: RuntimePackageID,
+        change: WrapperRefreshWire
+    ) {
+        self.header = header
+        self.packageID = packageID
+        self.change = change
+    }
+}
+
+/// The `refreshWrapper` reply: an operation handle or a typed error.
+public struct RuntimeRefreshWrapperControlReply: Codable, Equatable, Sendable {
+    /// The started operation.
+    public var result: OperationHandle?
+    /// The rejection.
+    public var error: RuntimeWireError?
+
+    /// Creates a success reply.
+    public init(result: OperationHandle) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a rejection reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// The `refreshAllWrappers` selection (runtime-api.md §10.5).
+public enum RefreshAllScope: String, Codable, Sendable {
+    /// Only wrappers with a refresh reason.
+    case needingRefresh
+    /// Every registered wrapper.
+    case all
+}
+
+/// The `refreshAllWrappers` request (runtime-api.md §10.5).
+public struct RuntimeRefreshAllWrappersControlRequest: Codable, Equatable, Sendable {
+    /// The request header.
+    public var header: APIRequestHeader
+    /// Which wrappers are selected.
+    public var scope: RefreshAllScope
+    /// Only refresh launcher executables.
+    public var launcherOnly: Bool
+
+    /// Creates the request.
+    public init(
+        header: APIRequestHeader,
+        scope: RefreshAllScope,
+        launcherOnly: Bool
+    ) {
+        self.header = header
+        self.scope = scope
+        self.launcherOnly = launcherOnly
+    }
+}
+
+/// The `refreshAllWrappers` reply: an operation handle or a typed error.
+public struct RuntimeRefreshAllWrappersControlReply: Codable, Equatable, Sendable {
+    /// The started operation.
+    public var result: OperationHandle?
+    /// The rejection.
+    public var error: RuntimeWireError?
+
+    /// Creates a success reply.
+    public init(result: OperationHandle) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a rejection reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// One refresh failure inside a `refreshAllWrappers` batch.
+public struct WrapperBatchFailure: Codable, Equatable, Sendable {
+    /// The package whose refresh failed.
+    public var packageID: RuntimePackageID
+    /// The failure.
+    public var error: RuntimeWireError
+
+    /// Creates the failure record.
+    public init(packageID: RuntimePackageID, error: RuntimeWireError) {
+        self.packageID = packageID
+        self.error = error
+    }
+}
+
+/// The `refreshAllWrappers` outcome (runtime-api.md §10.5).
+public struct WrapperBatchResult: Codable, Equatable, Sendable {
+    /// The wrappers that refreshed successfully.
+    public var refreshed: [RuntimePackageID]
+    /// The wrappers skipped because their app is running.
+    public var skippedRunning: [RuntimePackageID]
+    /// The wrappers whose refresh failed.
+    public var failed: [WrapperBatchFailure]
+
+    /// Creates the batch result.
+    public init(
+        refreshed: [RuntimePackageID],
+        skippedRunning: [RuntimePackageID],
+        failed: [WrapperBatchFailure]
+    ) {
+        self.refreshed = refreshed
+        self.skippedRunning = skippedRunning
+        self.failed = failed
+    }
+}

@@ -90,6 +90,12 @@
 
         @Flag(
             name: .long,
+            help: "Keep the generated Mac app instead of moving it to the Trash."
+        )
+        var keepWrapper = false
+
+        @Flag(
+            name: .long,
             help: ArgumentHelp(
                 "Forget APKRun's record and stored APKs without contacting Android or determining the app-data outcome."
             )
@@ -108,7 +114,8 @@
                 throw CLIFailure.invalidArgument(argument: "--keep-data", reason: "incompatibleWithForget")
             }
             let service = EmbeddedPackageService()
-            let options = RuntimeUninstallOptions(keepData: keepData, forget: forget)
+            let options = RuntimeUninstallOptions(
+                keepData: keepData, trashWrappers: !keepWrapper, forget: forget)
             let request = RuntimeUninstallPackageRequest(packageID: packageID, options: options)
             try PackageCommandSupport.confirm(
                 forget
@@ -367,6 +374,36 @@
 
         func load() -> Value? {
             value
+        }
+    }
+
+    /// `apkrun repair <package> [--yes]` in the embedded build (package-store.md
+    /// §11.1, cli.md §4.3): reinstalls a `broken` package from its retained
+    /// `current/` artifacts through the in-process store.
+    struct RepairCommand: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "repair",
+            abstract: "Reinstall a broken app from APKRun's retained APKs."
+        )
+
+        @Argument(help: "The Android package name.")
+        var package: String
+
+        @Flag(name: .long, help: "Repair without asking for confirmation.")
+        var yes = false
+
+        mutating func run() async throws {
+            let packageID = try PackageCommandSupport.packageID(package)
+            try PackageCommandSupport.confirm(
+                "Reinstall \(packageID.rawValue) from APKRun's retained APKs?",
+                yes: yes
+            )
+            let service = EmbeddedPackageService()
+            _ = try await PackageCommandSupport.withReadyRuntime(service) {
+                try await service.repairPackage(RuntimePackageRequest(packageID: packageID))
+                return true
+            }
+            Output.write("\(packageID.rawValue): reinstalled from the retained APKs.")
         }
     }
 #endif

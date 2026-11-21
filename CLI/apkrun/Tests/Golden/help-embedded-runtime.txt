@@ -13,6 +13,7 @@ SUBCOMMANDS:
   install                 Inspect and install one APK or a set of APK splits.
   uninstall               Remove an installed Android app.
   rollback                Roll an app back to its previous version.
+  repair                  Reinstall a broken app from APKRun's retained APKs.
   list                    List installed Android apps.
   info                    Show runtime status or details for one Android app.
   launch                  Launch an installed Android app.

@@ -399,6 +399,59 @@ public actor WrapperRegistry {
         }
     }
 
+    /// Marks the entry `refreshing` for a regeneration (wrapper.md §9.3
+    /// step 4): `pendingCdhash` lets the launch path accept both cdhashes
+    /// until `finishRefresh` runs.
+    public func beginRefresh(
+        bundleID: String,
+        stagingPath: String,
+        pendingCdhash: String
+    ) throws {
+        guard var entry = entry(bundleID: bundleID) else {
+            throw WrapperFailure.verificationFailed("no registry entry for \(bundleID)")
+        }
+        entry.state = .refreshing
+        entry.stagingPath = stagingPath
+        entry.pendingCdhash = pendingCdhash
+        upsert(entry)
+        try save()
+    }
+
+    /// Returns a `refreshing` entry to `active` after a refresh that
+    /// never reached the swap (wrapper.md §9.3 crash safety).
+    public func abortRefresh(bundleID: String) throws {
+        guard var entry = entry(bundleID: bundleID) else { return }
+        entry.state = .active
+        entry.stagingPath = nil
+        entry.pendingCdhash = nil
+        upsert(entry)
+        try save()
+    }
+
+    /// Ends a refresh (wrapper.md §9.3 step 7): the new cdhash becomes the
+    /// entry's, and the path/bookmark track a possible rename.
+    public func finishRefresh(
+        bundleID: String,
+        path: URL,
+        bookmark: Data
+    ) throws {
+        guard var entry = entry(bundleID: bundleID) else {
+            throw WrapperFailure.verificationFailed("no registry entry for \(bundleID)")
+        }
+        entry.state = .active
+        if let pendingCdhash = entry.pendingCdhash {
+            entry.cdhash = pendingCdhash
+        }
+        entry.pendingCdhash = nil
+        entry.stagingPath = nil
+        entry.path = path.path
+        entry.fileName = path.deletingPathExtension().lastPathComponent
+        entry.bookmark = bookmark.isEmpty ? entry.bookmark : bookmark.base64EncodedString()
+        entry.refreshedAt = Date()
+        upsert(entry)
+        try save()
+    }
+
     /// Records the moved or renamed location of an entry (wrapper-json.md §4.3).
     public func updateLocation(bundleID: String, path: URL, bookmark: Data) throws {
         guard var entry = entry(bundleID: bundleID) else { return }

@@ -247,8 +247,185 @@
         static let configuration = CommandConfiguration(
             commandName: "wrapper",
             abstract: "Inspect the Mac apps APKRun created.",
-            subcommands: [WrapperVerifyCommand.self, WrapperInfoCommand.self]
+            subcommands: [
+                WrapperListCommand.self,
+                WrapperInfoCommand.self,
+                WrapperRefreshCommand.self,
+                WrapperRemoveCommand.self,
+                WrapperVerifyCommand.self,
+            ]
         )
+    }
+
+    /// `apkrun wrapper list` (wrapper.md §12.2): the registry's wrappers
+    /// with their current status.
+    struct WrapperListCommand: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "list",
+            abstract: "List the Mac apps APKRun created."
+        )
+
+        @Flag(name: .long, help: "Print the result as JSON.")
+        var json = false
+
+        mutating func run() async throws {
+            let client: RuntimeControlClient
+            do {
+                client = try RuntimeControlClient(clientKind: .cli)
+            } catch {
+                throw await RuntimeStatusOutput.commandFailure(error)
+            }
+            let entries = try await client.listWrappers()
+            if json {
+                try OperationCommandOutput.writeJSON(entries.map(\.summary))
+            } else {
+                Output.write(WrapCommandSupport.listText(entries))
+            }
+        }
+    }
+
+    /// `apkrun wrapper refresh` (wrapper.md §12.2, §9.3): regenerates the
+    /// Mac app of one or more packages, or `--all`.
+    struct WrapperRefreshCommand: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "refresh",
+            abstract: "Regenerate the Mac app of a package, or all Mac apps."
+        )
+
+        @Argument(help: "The Android package IDs to refresh.")
+        var packages: [String] = []
+
+        @Flag(name: .long, help: "Refresh every registered Mac app.")
+        var all = false
+
+        @Option(name: .long, help: "The new display name; an empty string resets it.")
+        var name: String?
+
+        @Option(name: .long, help: "A PNG file that replaces the icon.")
+        var icon: String?
+
+        @Flag(name: .long, help: "Restore the current Android icon.")
+        var androidIcon = false
+
+        @Flag(name: .long, help: "Only refresh the launcher executable.")
+        var launcherOnly = false
+
+        @Flag(name: .long, help: "Print the result as JSON.")
+        var json = false
+
+        mutating func run() async throws {
+            guard all == packages.isEmpty else {
+                throw CLIFailure.invalidArgument(
+                    argument: "packages",
+                    reason: "name package IDs or pass --all, not both")
+            }
+            if all {
+                guard name == nil, icon == nil, !androidIcon else {
+                    throw CLIFailure.invalidArgument(
+                        argument: "--all",
+                        reason: "--name, --icon and --android-icon refresh one package")
+                }
+            }
+            guard icon == nil || !androidIcon else {
+                throw CLIFailure.invalidArgument(
+                    argument: "--icon",
+                    reason: "--icon and --android-icon exclude each other")
+            }
+            let client: RuntimeControlClient
+            do {
+                client = try RuntimeControlClient(clientKind: .cli)
+            } catch {
+                throw await RuntimeStatusOutput.commandFailure(error)
+            }
+            if all {
+                let result = try await WrapCommandSupport.runRefreshAll(
+                    launcherOnly: launcherOnly, client: client)
+                if json {
+                    try OperationCommandOutput.writeJSON(result)
+                } else {
+                    Output.write(WrapCommandSupport.batchText(result))
+                }
+                if !result.failed.isEmpty {
+                    throw ExitCode(2)
+                }
+                return
+            }
+            var infos: [WrapperInfo] = []
+            for package in packages {
+                guard let packageID = RuntimePackageID(rawValue: package) else {
+                    throw CLIFailure.invalidPackageName(package: package)
+                }
+                let info = try await WrapCommandSupport.runRefresh(
+                    packageID: packageID,
+                    name: name,
+                    icon: icon,
+                    androidIcon: androidIcon,
+                    launcherOnly: launcherOnly,
+                    client: client
+                )
+                infos.append(info)
+            }
+            if json {
+                try OperationCommandOutput.writeJSON(infos)
+            } else {
+                for info in infos {
+                    Output.write(WrapCommandSupport.refreshText(info))
+                }
+            }
+        }
+    }
+
+    /// `apkrun wrapper remove` (wrapper.md §12.2, §9.5): drops the registry
+    /// entry; `--trash` also moves the bundle to the Trash.
+    struct WrapperRemoveCommand: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "remove",
+            abstract: "Remove a package's Mac app."
+        )
+
+        @Argument(help: "The Android package ID.")
+        var package: String
+
+        @Flag(name: .long, help: "Move the Mac app to the Trash.")
+        var trash = false
+
+        @Flag(name: .long, help: "Answer confirmation prompts with yes.")
+        var yes = false
+
+        @Flag(name: .long, help: "Print the result as JSON.")
+        var json = false
+
+        mutating func run() async throws {
+            guard let packageID = RuntimePackageID(rawValue: package) else {
+                throw CLIFailure.invalidPackageName(package: package)
+            }
+            try CLIConfirmation.confirm(
+                trash
+                    ? "Move the Mac app of \(package) to the Trash?"
+                    : "Remove the Mac app of \(package) from the list?",
+                yes: yes)
+            let client: RuntimeControlClient
+            do {
+                client = try RuntimeControlClient(clientKind: .cli)
+            } catch {
+                throw await RuntimeStatusOutput.commandFailure(error)
+            }
+            let removed = try await client.removeWrapper(packageID: packageID, trash: trash)
+            guard removed else {
+                throw CLIFailure.invalidArgument(
+                    argument: "package",
+                    reason: "\(package) has no Mac app")
+            }
+            if json {
+                try OperationCommandOutput.writeJSON(
+                    RemoveResult(package: packageID.rawValue))
+            } else {
+                Output.write(
+                    trash
+                        ? "Moved the Mac app of \(packageID.rawValue) to the Trash."
+                        : "Removed the Mac app of \(packageID.rawValue) from the list.")
+            }
+        }
     }
 
     struct WrapperVerifyCommand: AsyncParsableCommand {
@@ -318,6 +495,12 @@
                 Output.write(WrapCommandSupport.infoText(info))
             }
         }
+    }
+
+    /// The `wrapper remove --json` payload.
+    struct RemoveResult: Codable {
+        var package: String
+        var removed = true
     }
 
     enum WrapCommandSupport {
@@ -632,7 +815,7 @@
             from snapshot: OperationSnapshot,
             expectedPackageID: RuntimePackageID
         ) throws -> WrapperInfo {
-            guard snapshot.kind == .wrapperCreate else {
+            guard snapshot.kind == .wrapperCreate || snapshot.kind == .wrapperRefresh else {
                 throw RuntimeWireError.runtime(
                     "operationResultUnknown",
                     message: "APKRun couldn't read the result of the wrap operation."
@@ -648,6 +831,190 @@
                 )
             }
             return info
+        }
+
+        /// The human `wrapper list` report: one row per wrapper.
+        static func listText(_ entries: [WrapperListEntryWire]) -> String {
+            guard !entries.isEmpty else {
+                return "No Mac apps."
+            }
+            let rows = entries.map { entry in
+                let state = entry.state.map(stateText) ?? "unknownPackage"
+                return [
+                    DaemonInstallSupport.safeTerminalText(entry.summary.displayName),
+                    entry.summary.packageID.rawValue,
+                    state,
+                    DaemonInstallSupport.safeTerminalText(entry.summary.bundleURL.path),
+                ].joined(separator: "\t")
+            }
+            return (["NAME\tPACKAGE\tSTATUS\tPATH"] + rows).joined(separator: "\n")
+        }
+
+        /// The one-line human result of `wrapper refresh` for one package.
+        static func refreshText(_ info: WrapperInfo) -> String {
+            "Updated \(DaemonInstallSupport.safeTerminalText(info.summary.bundleURL.path))"
+        }
+
+        /// The human `wrapper refresh --all` report.
+        static func batchText(_ result: WrapperBatchResult) -> String {
+            var lines = ["Updated \(result.refreshed.count) Mac app(s)."]
+            for packageID in result.skippedRunning {
+                lines.append("Skipped \(packageID.rawValue) (the app is running).")
+            }
+            for failure in result.failed {
+                lines.append(
+                    "Failed \(failure.packageID.rawValue): \(failure.error.message)")
+            }
+            return lines.joined(separator: "\n")
+        }
+
+        /// Runs `refreshWrapper` for one package and waits for the result;
+        /// `wrapper.wrapperRunning` asks "Quit ‹App›?" and retries with
+        /// `closeRunningApp` (wrapper.md §9.3 step 1).
+        static func runRefresh(
+            packageID: RuntimePackageID,
+            name: String?,
+            icon: String?,
+            androidIcon: Bool,
+            launcherOnly: Bool,
+            client: RuntimeControlClient
+        ) async throws -> WrapperInfo {
+            var iconHandle: FileHandle?
+            if let icon {
+                let url = URL(fileURLWithPath: icon).standardizedFileURL
+                do {
+                    iconHandle = try FileHandle(forReadingFrom: url)
+                } catch {
+                    throw CLIFailure.fileNotAccessible(file: url.path, .notFound)
+                }
+            }
+            defer { try? iconHandle?.close() }
+            let operationID = RuntimeAPI.OperationID()
+            do {
+                return try await refreshAndWait(
+                    packageID: packageID,
+                    change: WrapperRefreshWire(
+                        displayName: name,
+                        icon: icon != nil,
+                        androidIcon: androidIcon,
+                        launcherOnly: launcherOnly
+                    ),
+                    icon: iconHandle,
+                    operationID: operationID,
+                    client: client
+                )
+            } catch {
+                guard Self.isWrapperRunning(error) else { throw error }
+                let app = errorWrapperApp(error) ?? packageID.rawValue
+                try CLIConfirmation.confirm(
+                    "Quit \(app) to update its Mac app?", yes: false)
+                return try await refreshAndWait(
+                    packageID: packageID,
+                    change: WrapperRefreshWire(
+                        displayName: name,
+                        icon: icon != nil,
+                        androidIcon: androidIcon,
+                        launcherOnly: launcherOnly,
+                        closeRunningApp: true
+                    ),
+                    icon: iconHandle,
+                    operationID: RuntimeAPI.OperationID(),
+                    client: client
+                )
+            }
+        }
+
+        /// Whether an error is `wrapper.wrapperRunning`, whether it came
+        /// from begin, wait, or the operation result.
+        static func isWrapperRunning(_ error: any Error) -> Bool {
+            if let wire = error as? RuntimeWireError {
+                return wire.code == "wrapper.wrapperRunning"
+            }
+            if let failure = error as? RuntimeControlClientError,
+                case .remoteFailure(let code, _, _) = failure
+            {
+                return code == "wrapper.wrapperRunning"
+            }
+            return false
+        }
+
+        /// The app name a `wrapper.wrapperRunning` error carries.
+        static func errorWrapperApp(_ error: any Error) -> String? {
+            if let wire = error as? RuntimeWireError {
+                return wire.parameters["app"]
+            }
+            if let failure = error as? RuntimeControlClientError,
+                case .remoteFailure(_, _, let parameters) = failure
+            {
+                return parameters["app"]
+            }
+            return nil
+        }
+
+        private static func refreshAndWait(
+            packageID: RuntimePackageID,
+            change: WrapperRefreshWire,
+            icon: FileHandle?,
+            operationID: RuntimeAPI.OperationID,
+            client: RuntimeControlClient
+        ) async throws -> WrapperInfo {
+            let handle: OperationHandle
+            do {
+                handle = try await client.refreshWrapper(
+                    packageID: packageID,
+                    change: change,
+                    icon: icon,
+                    operationID: operationID
+                )
+            } catch {
+                throw await beginFailure(error, packageID: packageID, operationID: operationID)
+            }
+            let snapshot: OperationSnapshot
+            do {
+                snapshot = try await OperationCommandOutput.waitForTerminalSnapshot(
+                    using: client,
+                    operationID: handle.operationID,
+                    progressToStderr: OperationCommandOutput.shouldShowProgress
+                )
+            } catch {
+                throw await waitFailure(error, packageID: packageID, operationID: operationID)
+            }
+            return try wrapperInfo(from: snapshot, expectedPackageID: packageID)
+        }
+
+        /// Runs `refreshAllWrappers` and waits for the batch result.
+        static func runRefreshAll(
+            launcherOnly: Bool,
+            client: RuntimeControlClient
+        ) async throws -> WrapperBatchResult {
+            let operationID = RuntimeAPI.OperationID()
+            let handle: OperationHandle
+            do {
+                handle = try await client.refreshAllWrappers(
+                    scope: .all,
+                    launcherOnly: launcherOnly,
+                    operationID: operationID
+                )
+            } catch {
+                throw await RuntimeStatusOutput.commandFailure(error)
+            }
+            let snapshot = try await OperationCommandOutput.waitForTerminalSnapshot(
+                using: client,
+                operationID: handle.operationID,
+                progressToStderr: OperationCommandOutput.shouldShowProgress
+            )
+            guard case .succeeded(let output)? = snapshot.result,
+                case .wrapperBatch(let result) = output
+            else {
+                if case .failed(let wireError)? = snapshot.result {
+                    throw wireError
+                }
+                throw RuntimeWireError.runtime(
+                    "operationResultUnknown",
+                    message: "APKRun couldn't read the result of the refresh operation."
+                )
+            }
+            return result
         }
 
         /// The one-line human result: the bundle path (cli.md §4.4).

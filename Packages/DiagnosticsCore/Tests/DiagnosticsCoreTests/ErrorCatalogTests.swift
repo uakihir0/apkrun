@@ -67,7 +67,7 @@ import Testing
                 "verificationFailed", "registrationFailed", "registryUnavailable",
                 "stagingExpired", "bundleInvalid",
                 "approvalDenied", "approvalTimedOut", "approvalNotFound",
-                "launchServicesMissing",
+                "launchServicesMissing", "refreshBlocked", "wrapperRunning",
             ].map { "wrapper.\($0)" }
             + [
                 "disabled", "notSupportedOnImage", "guestUnavailable", "clipboardTooLarge",
@@ -79,7 +79,8 @@ import Testing
                 "unsupportedABI", "minSdkTooHigh", "targetSdkTooLow", "expansionFilesNotSupported",
                 "reservedPackage", "tooLarge", "resourcesArscNotAligned", "signerMismatch",
                 "alreadyInstalled", "downgradeRefused", "packageAlreadyManaged",
-                "packageInUse", "stagedUpdateMissing", "rollbackUnavailable",
+                "packageInUse", "stagedUpdateMissing", "rollbackUnavailable", "notRepairable",
+                "packageInUse", "stagedUpdateMissing",
             ].map { "store.\($0)" }
             + [
                 "providerNotConfigured", "providerMetadataInvalid", "providerHTTPStatus",

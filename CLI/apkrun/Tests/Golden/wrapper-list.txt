@@ -1,0 +1,3 @@
+NAME	PACKAGE	STATUS	PATH
+HelloText	io.apkrun.fixture.hellotext	valid	/Applications/HelloText.app
+Other	com.example.other	missing	/Applications/Other.app

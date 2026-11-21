@@ -1339,6 +1339,58 @@ private let releaseBuildInfo = BuildInfo(
         #expect(parsed.output == "/tmp/apps")
     }
 
+    @Test func wrapperSubcommandsParseListRefreshRemove() async throws {
+        #expect(
+            try await APKRunCommand.asyncParseAsRoot(["wrapper", "list", "--json"])
+                is WrapperListCommand)
+        #expect(
+            try await APKRunCommand.asyncParseAsRoot(
+                ["wrapper", "refresh", "com.example.app", "--name", "New", "--launcher-only"])
+                is WrapperRefreshCommand)
+        #expect(
+            try await APKRunCommand.asyncParseAsRoot(["wrapper", "refresh", "--all"])
+                is WrapperRefreshCommand)
+        #expect(
+            try await APKRunCommand.asyncParseAsRoot(
+                ["wrapper", "remove", "com.example.app", "--trash", "--yes"])
+                is WrapperRemoveCommand)
+    }
+
+    @Test func wrapGoldenListAndBatchTexts() throws {
+        let entries = [
+            WrapperListEntryWire(
+                summary: helloWrapperInfo().summary, state: .valid, refreshReasons: []),
+            WrapperListEntryWire(
+                summary: WrapperSummary(
+                    packageID: RuntimePackageID(rawValue: "com.example.other")!,
+                    bundleID: "io.apkrun.android.com.example.other",
+                    displayName: "Other",
+                    kind: .local,
+                    bundleURL: URL(fileURLWithPath: "/Applications/Other.app"),
+                    status: WrapperStatus(state: .missing),
+                    approval: .generated,
+                    launcherVersion: "1",
+                    createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+                ),
+                state: .missing,
+                refreshReasons: []
+            ),
+        ]
+        #expect(WrapCommandSupport.listText(entries) == golden("wrapper-list.txt"))
+        let batch = WrapperBatchResult(
+            refreshed: [RuntimePackageID(rawValue: "com.example.one")!],
+            skippedRunning: [RuntimePackageID(rawValue: "com.example.busy")!],
+            failed: [
+                WrapperBatchFailure(
+                    packageID: RuntimePackageID(rawValue: "com.example.broken")!,
+                    error: .runtime(
+                        "internalError",
+                        message: "APKRun's background service failed."))
+            ]
+        )
+        #expect(WrapCommandSupport.batchText(batch) == golden("wrapper-batch.txt"))
+    }
+
     @Test func wrapGoldenVerificationAndInfoTexts() throws {
         let verification = WrapperVerification(
             bundleURL: URL(fileURLWithPath: "/Applications/HelloText.app"),

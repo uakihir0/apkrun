@@ -1,4 +1,5 @@
 import APKStoreCore
+import AppKit
 import CoreGraphics
 import CryptoKit
 import DiagnosticsCore
@@ -84,6 +85,8 @@ public actor RuntimeHost {
     private var wrapperHealthChecksRegistered = false
     /// Package IDs with a `wrapperCreate` operation in flight.
     private var wrapperCreationsInFlight: Set<String> = []
+    /// The wrapper statuses of the last sweep or list pass (wrapper.md §9.1).
+    private var latestWrapperStatuses: [String: WrapperStatus] = [:]
     var headlessSessionService: (any RuntimeSessionService)?
     private var runtimeSessionGeneration: UInt64 = 0
     private var bootProgressEstimator: BootProgressEstimator?
@@ -246,6 +249,11 @@ public actor RuntimeHost {
         // Load the wrapper registry and recover pending/refreshing entries at
         // daemon start (wrapper.md §6.2), independent of the first verify call.
         Task { _ = await self.wrapperRegistryInstance() }
+        // Quick wrapper sweep at apkrund start + 60 s (wrapper.md §9.1).
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(60))
+            await self?.runWrapperSweep()
+        }
         // apkrund-start trigger (update-system.md §3.3): arm the scheduler.
         Task { await self.updateSchedulerInstance().start() }
 
@@ -934,6 +942,88 @@ public actor RuntimeHost {
         return handle
     }
 
+    /// Starts a package repair asynchronously (package-store.md §11.1): a
+    /// `broken` package is reinstalled from its retained `current/` artifacts.
+    func beginRepairPackage(
+        _ request: RuntimePackageRequest,
+        operationID requestedID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) throws(RuntimeWireError) -> OperationHandle {
+        let requestPayload: Data
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            requestPayload = try encoder.encode(request)
+        } catch {
+            throw .runtime(
+                "malformedRequest",
+                message: "APKRun's background service couldn't read the request."
+            )
+        }
+
+        if let existing = trackedOperations[requestedID] {
+            guard existing.handle.kind == .repair, existing.requestPayload == requestPayload else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The operation ID is already being used for a different request."
+                )
+            }
+            return existing.handle
+        }
+
+        do {
+            try packageActivityReservations.beginInstall(packageID: request.packageID.rawValue)
+        } catch {
+            throw Self.packageOperationInProgressError
+        }
+        do {
+            try beginPackageMutation()
+        } catch {
+            packageActivityReservations.finishInstall(packageID: request.packageID.rawValue)
+            throw Self.sessionWireError(for: error)
+        }
+
+        let handle = OperationHandle(operationID: requestedID, kind: .repair)
+        let snapshot = OperationSnapshot(
+            operationID: requestedID,
+            kind: .repair,
+            packageID: request.packageID,
+            requestFingerprint: RuntimeOperationRequestFingerprint.make(from: requestPayload),
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(
+                stage: "startingRuntime",
+                message: "Starting Android…"
+            )
+        )
+        trackedOperations[requestedID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: requestPayload,
+            snapshot: snapshot,
+            isCancellable: true,
+            task: nil
+        )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: requestedID)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            if let diagnosticsID = DiagnosticsCore.OperationID(wire: requestedID.wireValue) {
+                let context = OperationContext(operationID: diagnosticsID)
+                await OperationContext.$current.withValue(context) {
+                    await self.runRepairPackageOperation(
+                        request,
+                        operationID: requestedID,
+                        clientKind: clientKind
+                    )
+                }
+            } else {
+                await self.runRepairPackageOperation(
+                    request, operationID: requestedID, clientKind: clientKind)
+            }
+        }
+        trackedOperations[requestedID]?.task = task
+        return handle
+    }
+
     /// Returns running operations and up to fifty recently finished operations.
     func listOperations(
         beginSnapshotBarrier: @Sendable () -> Void = {}
@@ -1052,6 +1142,57 @@ public actor RuntimeHost {
             let wireError = Self.operationWireError(for: error)
             finishOperation(operationID, result: .failed(wireError))
             logger?.error("Package uninstall operation failed", errorCode: wireError.code)
+        }
+    }
+
+    private func runRepairPackageOperation(
+        _ request: RuntimePackageRequest,
+        operationID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) async {
+        defer {
+            packageActivityReservations.finishInstall(packageID: request.packageID.rawValue)
+            finishPackageMutation()
+        }
+        do {
+            let service = packageQueryServiceInstance()
+            do {
+                try await service.open()
+            } catch {
+                throw Self.operationWireError(for: error)
+            }
+            try await startRuntimeForPackageMutation(reason: clientKind == .cli ? .cli : .user)
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+            guard !Task.isCancelled else {
+                throw Self.cancelledOperationError
+            }
+            try await enterPackageStoreMutation(
+                operationID: operationID,
+                stage: "repairing",
+                message: "Reinstalling the Android package…"
+            )
+            let change = try await service.repairPackage(request)
+            let summary: RuntimePackageSummary
+            switch change {
+            case .installed(let installed), .updated(let installed, _):
+                summary = installed
+            default:
+                throw Self.operationWireError(for: CancellationError())
+            }
+            eventHub.publishPackageChange(change, operationID: operationID)
+            finishOperation(operationID, result: .succeeded(.package(summary)))
+            logger?.notice(
+                "Package repair operation completed for \(request.packageID.rawValue, .public)"
+            )
+        } catch {
+            if Task.isCancelled {
+                finishOperation(operationID, result: .cancelled)
+                logger?.notice("Package repair operation was cancelled")
+                return
+            }
+            let wireError = Self.operationWireError(for: error)
+            finishOperation(operationID, result: .failed(wireError))
+            logger?.error("Package repair operation failed", errorCode: wireError.code)
         }
     }
 
@@ -1174,6 +1315,16 @@ public actor RuntimeHost {
         }
         if let change = result.change {
             eventHub.publishPackageChange(change, operationID: operationID)
+        }
+        // §8: the Mac app goes to the Trash unless the caller asked to keep
+        // it (`--keep-wrapper`); a missing wrapper is fine.
+        if request.options.trashWrappers {
+            do {
+                _ = try await removeWrapper(packageID: request.packageID, trash: true)
+            } catch {
+                logger?.info(
+                    "Uninstall had no wrapper to trash for \(request.packageID.rawValue, .public)")
+            }
         }
     }
 
@@ -1699,6 +1850,626 @@ public actor RuntimeHost {
         return Self.wrapperInfo(for: entry, packageID: request.packageID)
     }
 
+    /// Starts a `wrapperRefresh` operation (wrapper.md §9.3).
+    func refreshWrapper(
+        packageID: RuntimePackageID,
+        change: WrapperRefreshWire,
+        icon: FileHandle?,
+        operationID requestedID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) throws(RuntimeWireError) -> OperationHandle {
+        guard !change.makeLocal else {
+            throw .runtime(
+                "malformedRequest",
+                message: "makeLocal is not supported yet.")
+        }
+        let request = RuntimeRefreshWrapperControlRequest(
+            header: APIRequestHeader(
+                operationID: requestedID.rawValue, clientKind: clientKind),
+            packageID: packageID,
+            change: change
+        )
+        let requestPayload: Data
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            requestPayload = try encoder.encode(request)
+        } catch {
+            throw .runtime(
+                "malformedRequest",
+                message: "APKRun's background service couldn't read the request.")
+        }
+        if let existing = trackedOperations[requestedID] {
+            guard existing.handle.kind == .wrapperRefresh, existing.requestPayload == requestPayload
+            else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The operation ID is already being used for a different request.")
+            }
+            return existing.handle
+        }
+        guard wrapperCreationsInFlight.insert(packageID.rawValue).inserted else {
+            throw Self.packageOperationInProgressError
+        }
+        do {
+            try beginLifecycleOperation()
+        } catch {
+            wrapperCreationsInFlight.remove(packageID.rawValue)
+            throw Self.sessionWireError(for: error)
+        }
+        let handle = OperationHandle(operationID: requestedID, kind: .wrapperRefresh)
+        let snapshot = OperationSnapshot(
+            operationID: requestedID,
+            kind: .wrapperRefresh,
+            packageID: packageID,
+            requestFingerprint: RuntimeOperationRequestFingerprint.make(from: requestPayload),
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(stage: "refreshing", message: "Updating the Mac app…")
+        )
+        trackedOperations[requestedID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: requestPayload,
+            snapshot: snapshot,
+            isCancellable: false,
+            task: nil
+        )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: requestedID)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runRefreshWrapperOperation(
+                packageID: packageID, change: change, icon: icon, operationID: requestedID)
+        }
+        trackedOperations[requestedID]?.task = task
+        return handle
+    }
+
+    /// Runs a `wrapperRefresh` operation to its terminal state.
+    private func runRefreshWrapperOperation(
+        packageID: RuntimePackageID,
+        change: WrapperRefreshWire,
+        icon: FileHandle?,
+        operationID: WireOperationID
+    ) async {
+        defer {
+            wrapperCreationsInFlight.remove(packageID.rawValue)
+            finishLifecycleOperation()
+        }
+        do {
+            let info = try await performRefreshWrapper(
+                packageID: packageID, change: change, icon: icon, operationID: operationID)
+            finishOperation(operationID, result: .succeeded(.wrapper(info)))
+            logger?.notice("Wrapper refresh completed for \(packageID.rawValue, .public)")
+        } catch {
+            if Task.isCancelled {
+                finishOperation(operationID, result: .cancelled)
+                return
+            }
+            let wireError = Self.operationWireError(for: error)
+            finishOperation(operationID, result: .failed(wireError))
+            logger?.error("Wrapper refresh failed", errorCode: wireError.code)
+        }
+    }
+
+    /// Regenerates the wrapper of one package (wrapper.md §9.3 steps 1–8).
+    private func performRefreshWrapper(
+        packageID: RuntimePackageID,
+        change: WrapperRefreshWire,
+        icon: FileHandle?,
+        operationID: WireOperationID
+    ) async throws(RuntimeWireError) -> WrapperInfo {
+        guard let launcher = launcherBuild() else {
+            throw Self.wrapperWireError(for: .launcherTemplateInvalid("missing"))
+        }
+        let registry = await wrapperRegistryInstance()
+        guard let entry = await registry.entry(packageID: packageID) else {
+            throw Self.wrapperWireError(for: .wrapperNotFound(packageID))
+        }
+        // 1. the wrapper must not be running.
+        let runningApps =
+            NSRunningApplication
+            .runningApplications(withBundleIdentifier: entry.bundleId)
+            .filter { !$0.isTerminated }
+        if !runningApps.isEmpty {
+            guard change.closeRunningApp else {
+                throw Self.wrapperWireError(for: .wrapperRunning(entry.displayName))
+            }
+            for app in runningApps {
+                app.terminate()
+            }
+            let deadline = Date().addingTimeInterval(30)
+            while Date() < deadline {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                let stillRunning =
+                    NSRunningApplication
+                    .runningApplications(withBundleIdentifier: entry.bundleId)
+                    .contains { !$0.isTerminated }
+                if !stillRunning {
+                    break
+                }
+            }
+            if NSRunningApplication
+                .runningApplications(withBundleIdentifier: entry.bundleId)
+                .contains(where: { !$0.isTerminated })
+            {
+                throw Self.wrapperWireError(for: .wrapperRunning(entry.displayName))
+            }
+        }
+
+        // 2. the entry must be valid or have refresh reasons.
+        let (bundleURL, _) = await resolvedWrapperURL(entry: entry, registry: registry)
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        try await attachPackageQueriesIfRuntimeIsReady(to: service)
+        var knownPackages: Set<String>?
+        if let list = try? await service.listPackages(
+            RuntimeListPackagesRequest(filter: .all))
+        {
+            knownPackages = Set(list.packages.map(\.packageID.rawValue))
+        }
+        let validator = wrapperValidator(
+            registry: registry, service: service, knownPackages: knownPackages)
+        let verification: WrapperValidator.Verification
+        do {
+            verification = try await validator.verify(url: bundleURL, deep: false)
+        } catch {
+            throw Self.wrapperWireError(
+                for: .verificationFailed("the wrapper could not be read"))
+        }
+        switch verification.state {
+        case .valid:
+            break
+        case .missing, .inaccessible:
+            // Missing regenerates through createWrapper (wrapper.md §9.3 step 2).
+            throw Self.wrapperWireError(for: .wrapperNotFound(packageID))
+        default:
+            guard !verification.refreshReasons.isEmpty else {
+                throw Self.wrapperWireError(
+                    for: .verificationFailed("the wrapper is not updatable"))
+            }
+        }
+
+        let displayNameOverride: String?
+        if let displayName = change.displayName {
+            displayNameOverride = displayName.isEmpty ? nil : displayName
+        } else {
+            displayNameOverride = entry.customization.displayName
+        }
+        let details = try? await service.packageInfo(
+            RuntimePackageRequest(packageID: packageID))
+        let displayName =
+            displayNameOverride ?? details?.summary.displayName ?? entry.displayName
+
+        // Icons (wrapper.md §8.2): a new custom icon wins; otherwise the
+        // recorded custom icon file, the stored Android icon, or the
+        // placeholder — `launcherOnly` keeps whatever the entry records.
+        var iconDigest: String? = nil
+        var customIconPNG: Data? = nil
+        var iconSource: WrapperIconSource = .placeholder
+        if change.icon {
+            let data = icon.flatMap { try? $0.readToEnd() }
+            guard let data, !data.isEmpty else {
+                throw Self.wrapperWireError(for: .customIconInvalid(.unreadable))
+            }
+            let customURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("apkrun-custom-icon-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: customURL) }
+            do {
+                try data.write(to: customURL)
+                iconSource = .rendered(try IconComposer.customIconData(at: customURL))
+                customIconPNG = try? IconComposer.customIconPNG(at: customURL)
+            } catch let failure as WrapperFailure {
+                throw Self.wrapperWireError(for: failure)
+            } catch {
+                throw Self.wrapperWireError(for: .customIconInvalid(.unreadable))
+            }
+        } else if change.androidIcon {
+            if let rendered = await service.renderedIconLayers(for: packageID),
+                let composed = Self.composedIcon(
+                    kind: rendered.manifest.kind, layers: rendered.layers)
+            {
+                iconSource = .rendered(composed.icns)
+                iconDigest = composed.digest
+            }
+            try? await registry.setCustomIconFile(bundleID: entry.bundleId, fileName: nil)
+        } else if let iconFile = entry.customization.iconFile {
+            iconSource = .custom(
+                paths.wrapperIconsDirectory.appendingPathComponent(iconFile))
+        } else if let rendered = await service.renderedIconLayers(for: packageID),
+            let composed = Self.composedIcon(
+                kind: rendered.manifest.kind, layers: rendered.layers)
+        {
+            iconSource = .rendered(composed.icns)
+            iconDigest = composed.digest
+        }
+
+        // wrapper.json carries the previous defaults.
+        var window = WindowDefaults()
+        var updates = WrapperUpdateDefaults(
+            authority: .manual, mode: .automatic, provider: nil)
+        var integrations = IntegrationDefaults()
+        if let document = try? JSONDecoder().decode(
+            WrapperDocument.self,
+            from: (try? Data(
+                contentsOf: bundleURL.appendingPathComponent(
+                    "Contents/Resources/wrapper.json"))) ?? Data())
+        {
+            if let docWindow = document.window {
+                window.defaultWidth = docWindow.defaultWidth ?? window.defaultWidth
+                window.defaultHeight = docWindow.defaultHeight ?? window.defaultHeight
+                window.resizable = docWindow.resizable ?? window.resizable
+            }
+            if let docUpdates = document.updates {
+                updates = WrapperUpdateDefaults(
+                    authority: docUpdates.authority == .apkrun ? .apkrun : .manual,
+                    mode: docUpdates.mode ?? .automatic,
+                    provider: docUpdates.provider
+                )
+            }
+            // Integration defaults regenerate unchanged: wrapper.json holds
+            // the same fields the configuration produces.
+            integrations = IntegrationDefaults()
+        }
+
+        // 3. build and sign the new bundle inside the parent folder so the
+        //    swap stays on one volume.
+        let fileName =
+            displayNameOverride.map {
+                WrapperFileName.sanitize(displayName: $0, packageID: packageID.rawValue)
+            } ?? entry.fileName
+        let stagingDirectory = bundleURL.deletingLastPathComponent()
+            .appendingPathComponent(".apkrun-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(
+                at: stagingDirectory, withIntermediateDirectories: true)
+        } catch {
+            throw Self.wrapperWireError(for: .destinationNotWritable(bundleURL))
+        }
+        let generator = AppWrapperGenerator(
+            environment: AppWrapperGenerator.Environment(
+                launcher: launcher,
+                registry: registry,
+                installer: WrapperInstaller(sink: diagnostics?.logSink),
+                stagingRoot: paths.wrapperStagingDirectory
+            )
+        )
+        let staged: (bundle: URL, cdhash: String)
+        do {
+            staged = try await generator.stageForRefresh(
+                WrapperGenerationRequest(
+                    configuration: WrapperConfiguration(
+                        packageID: packageID,
+                        displayName: displayName,
+                        icon: iconSource,
+                        window: window,
+                        updates: updates,
+                        integrations: integrations,
+                        kind: entry.kind
+                    ),
+                    fileName: fileName
+                ),
+                stagingDirectory: stagingDirectory,
+                fileName: fileName
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: stagingDirectory)
+            throw Self.wrapperWireError(for: error)
+        }
+
+        // 4. registry: refreshing + pendingCdhash.
+        do {
+            try await registry.beginRefresh(
+                bundleID: entry.bundleId,
+                stagingPath: stagingDirectory.path,
+                pendingCdhash: staged.cdhash
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: stagingDirectory)
+            throw Self.wrapperWireError(for: .registryUnavailable)
+        }
+
+        // 5. the atomic Contents swap; an App Management denial stages the
+        //    new Contents for APKRun.app and reports refreshBlocked (R-20).
+        //
+        //    A new display name renames the bundle after the swap (§6.4).
+        //    The destination is checked before mutating the installed bundle
+        //    so a conflict cannot strand the registry with a stale cdhash.
+        let newContents = staged.bundle.appendingPathComponent("Contents")
+        let liveContents = bundleURL.appendingPathComponent("Contents")
+        let renamed = bundleURL.deletingLastPathComponent()
+            .appendingPathComponent("\(fileName).app", isDirectory: true)
+        let wantsRename =
+            displayNameOverride != nil
+            && bundleURL.deletingPathExtension().lastPathComponent != fileName
+            && renamed != bundleURL
+        if wantsRename, FileManager.default.fileExists(atPath: renamed.path) {
+            try? FileManager.default.removeItem(at: stagingDirectory)
+            try? await abortRefresh(bundleID: entry.bundleId, registry: registry)
+            let kind =
+                WrapperInstaller(sink: diagnostics?.logSink)
+                .classifyConflict(at: renamed, packageID: packageID)
+                ?? .otherApp
+            throw Self.wrapperWireError(for: .nameConflict(renamed, existing: kind))
+        }
+        if renamex_np(newContents.path, liveContents.path, UInt32(RENAME_SWAP)) != 0 {
+            let token = UUID().uuidString
+            let fallback = paths.wrapperStagingDirectory
+                .appendingPathComponent(token, isDirectory: true)
+            try? FileManager.default.createDirectory(
+                at: fallback, withIntermediateDirectories: true)
+            try? FileManager.default.moveItem(
+                at: staged.bundle,
+                to: fallback.appendingPathComponent(
+                    "\(fileName).app", isDirectory: true))
+            try? FileManager.default.removeItem(at: stagingDirectory)
+            try? await abortRefresh(bundleID: entry.bundleId, registry: registry)
+            throw Self.wrapperWireError(
+                for: .refreshBlocked(bundleURL.path, stagingToken: token))
+        }
+
+        // 6. a new display name renames the bundle (conflict rules of §6.4).
+        //    A destination that appeared after step 5, or a failed rename,
+        //    puts the swapped contents back first so the registry cdhash
+        //    still matches the installed bundle.
+        var finalURL = bundleURL
+        if wantsRename {
+            if FileManager.default.fileExists(atPath: renamed.path) {
+                await undoContentsSwap(
+                    newContents: newContents, liveContents: liveContents,
+                    stagingDirectory: stagingDirectory, finalURL: bundleURL,
+                    bundleID: entry.bundleId, registry: registry)
+                let kind =
+                    WrapperInstaller(sink: diagnostics?.logSink)
+                    .classifyConflict(at: renamed, packageID: packageID)
+                    ?? .otherApp
+                throw Self.wrapperWireError(for: .nameConflict(renamed, existing: kind))
+            }
+            do {
+                try FileManager.default.moveItem(at: bundleURL, to: renamed)
+                finalURL = renamed
+            } catch {
+                await undoContentsSwap(
+                    newContents: newContents, liveContents: liveContents,
+                    stagingDirectory: stagingDirectory, finalURL: bundleURL,
+                    bundleID: entry.bundleId, registry: registry)
+                throw .runtime(
+                    "internalError",
+                    message: "APKRun couldn't rename the Mac app.")
+            }
+        }
+
+        // 7. registry: cdhash = pendingCdhash, active, refreshedAt, bookmark.
+        let bookmark = (try? finalURL.bookmarkData()) ?? Data()
+        do {
+            try await registry.finishRefresh(
+                bundleID: entry.bundleId, path: finalURL, bookmark: bookmark)
+        } catch {
+            throw Self.wrapperWireError(for: .registryUnavailable)
+        }
+        if let iconDigest {
+            try? await registry.setIconDigest(bundleID: entry.bundleId, digest: iconDigest)
+        } else if entry.customization.iconFile == nil {
+            try? await registry.setIconDigest(bundleID: entry.bundleId, digest: nil)
+        }
+        if let customIconPNG {
+            let iconFile = "\(entry.bundleId).png"
+            let iconURL = paths.wrapperIconsDirectory.appendingPathComponent(iconFile)
+            do {
+                try FileManager.default.createDirectory(
+                    at: paths.wrapperIconsDirectory, withIntermediateDirectories: true)
+                try customIconPNG.write(to: iconURL)
+                try await registry.setCustomIconFile(
+                    bundleID: entry.bundleId, fileName: iconFile)
+            } catch {
+            }
+        }
+
+        // 8. delete the old Contents and the staging dir; register the bundle.
+        try? FileManager.default.removeItem(at: stagingDirectory)
+        _ = WrapperInstaller(sink: diagnostics?.logSink).registerPlaced(at: finalURL)
+        try? FileManager.default.setAttributes(
+            [.modificationDate: Date()], ofItemAtPath: finalURL.path)
+
+        guard let refreshed = await registry.entry(bundleID: entry.bundleId) else {
+            throw .runtime("internal", message: "APKRun couldn't register the Mac app.")
+        }
+        let summary = Self.wrapperSummary(for: refreshed, packageID: packageID)
+        eventHub.publishWrapperChange(.refreshed(summary), operationID: operationID)
+        return Self.wrapperInfo(for: refreshed, packageID: packageID)
+    }
+
+    /// Returns a `refreshing` entry to `active` after a failed refresh.
+    private func abortRefresh(bundleID: String, registry: WrapperRegistry) async {
+        try? await registry.abortRefresh(bundleID: bundleID)
+    }
+
+    /// Restores a bundle's pre-swap contents after a post-swap step failed
+    /// (wrapper.md §9.3). When the restore swap itself fails, the refresh is
+    /// finished against the already-installed new contents instead of being
+    /// aborted, so cdhash and bundle never disagree.
+    private func undoContentsSwap(
+        newContents: URL,
+        liveContents: URL,
+        stagingDirectory: URL,
+        finalURL: URL,
+        bundleID: String,
+        registry: WrapperRegistry
+    ) async {
+        if renamex_np(newContents.path, liveContents.path, UInt32(RENAME_SWAP)) == 0 {
+            try? FileManager.default.removeItem(at: stagingDirectory)
+            await abortRefresh(bundleID: bundleID, registry: registry)
+        } else {
+            let bookmark = (try? finalURL.bookmarkData()) ?? Data()
+            try? await registry.finishRefresh(
+                bundleID: bundleID, path: finalURL, bookmark: bookmark)
+        }
+    }
+
+    /// Starts a `wrapperRefreshAll` operation (wrapper.md §9.4).
+    func refreshAllWrappers(
+        scope: RefreshAllScope,
+        launcherOnly: Bool,
+        operationID requestedID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) throws(RuntimeWireError) -> OperationHandle {
+        let request = RuntimeRefreshAllWrappersControlRequest(
+            header: APIRequestHeader(
+                operationID: requestedID.rawValue, clientKind: clientKind),
+            scope: scope,
+            launcherOnly: launcherOnly
+        )
+        let requestPayload: Data
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            requestPayload = try encoder.encode(request)
+        } catch {
+            throw .runtime(
+                "malformedRequest",
+                message: "APKRun's background service couldn't read the request.")
+        }
+        if let existing = trackedOperations[requestedID] {
+            guard existing.handle.kind == .wrapperRefreshAll,
+                existing.requestPayload == requestPayload
+            else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The operation ID is already being used for a different request.")
+            }
+            return existing.handle
+        }
+        do {
+            try beginLifecycleOperation()
+        } catch {
+            throw Self.sessionWireError(for: error)
+        }
+        let handle = OperationHandle(operationID: requestedID, kind: .wrapperRefreshAll)
+        let snapshot = OperationSnapshot(
+            operationID: requestedID,
+            kind: .wrapperRefreshAll,
+            requestFingerprint: RuntimeOperationRequestFingerprint.make(from: requestPayload),
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(stage: "refreshing", message: "Updating Mac apps…")
+        )
+        trackedOperations[requestedID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: requestPayload,
+            snapshot: snapshot,
+            isCancellable: false,
+            task: nil
+        )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: requestedID)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runRefreshAllWrappersOperation(
+                scope: scope, launcherOnly: launcherOnly, operationID: requestedID)
+        }
+        trackedOperations[requestedID]?.task = task
+        return handle
+    }
+
+    /// Runs a `wrapperRefreshAll` operation to its terminal state.
+    private func runRefreshAllWrappersOperation(
+        scope: RefreshAllScope,
+        launcherOnly: Bool,
+        operationID: WireOperationID
+    ) async {
+        defer { finishLifecycleOperation() }
+        do {
+            let result = try await performRefreshAllWrappers(
+                scope: scope, launcherOnly: launcherOnly, operationID: operationID)
+            finishOperation(operationID, result: .succeeded(.wrapperBatch(result)))
+            logger?.notice("Wrapper batch refresh completed")
+        } catch {
+            if Task.isCancelled {
+                finishOperation(operationID, result: .cancelled)
+                return
+            }
+            let wireError = Self.operationWireError(for: error)
+            finishOperation(operationID, result: .failed(wireError))
+            logger?.error("Wrapper batch refresh failed", errorCode: wireError.code)
+        }
+    }
+
+    /// Refreshes every selected wrapper (wrapper.md §9.4); a running
+    /// wrapper is skipped and listed, a failing one lands in `failed`.
+    private func performRefreshAllWrappers(
+        scope: RefreshAllScope,
+        launcherOnly: Bool,
+        operationID: WireOperationID
+    ) async throws(RuntimeWireError) -> WrapperBatchResult {
+        guard launcherBuild() != nil else {
+            throw Self.wrapperWireError(for: .launcherTemplateInvalid("missing"))
+        }
+        let registry = await wrapperRegistryInstance()
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        try await attachPackageQueriesIfRuntimeIsReady(to: service)
+        var knownPackages: Set<String>?
+        if let list = try? await service.listPackages(
+            RuntimeListPackagesRequest(filter: .all))
+        {
+            knownPackages = Set(list.packages.map(\.packageID.rawValue))
+        }
+        let validator = wrapperValidator(
+            registry: registry, service: service, knownPackages: knownPackages)
+        var refreshed: [RuntimePackageID] = []
+        var skippedRunning: [RuntimePackageID] = []
+        var failed: [WrapperBatchFailure] = []
+        for entry in await registry.entries() {
+            guard let packageID = RuntimePackageID(rawValue: entry.packageId) else {
+                continue
+            }
+            if scope == .needingRefresh {
+                let (url, _) = await resolvedWrapperURL(entry: entry, registry: registry)
+                let needs =
+                    (try? await validator.verify(url: url, deep: false))
+                    .map { !$0.refreshReasons.isEmpty } ?? false
+                if !needs {
+                    continue
+                }
+            }
+            if NSRunningApplication
+                .runningApplications(withBundleIdentifier: entry.bundleId)
+                .contains(where: { !$0.isTerminated })
+            {
+                skippedRunning.append(packageID)
+                continue
+            }
+            guard wrapperCreationsInFlight.insert(packageID.rawValue).inserted else {
+                skippedRunning.append(packageID)
+                continue
+            }
+            do {
+                _ = try await performRefreshWrapper(
+                    packageID: packageID,
+                    change: WrapperRefreshWire(launcherOnly: launcherOnly),
+                    icon: nil,
+                    operationID: operationID
+                )
+                refreshed.append(packageID)
+            } catch {
+                failed.append(
+                    WrapperBatchFailure(
+                        packageID: packageID,
+                        error: error as? RuntimeWireError
+                            ?? .runtime(
+                                "internalError",
+                                message: "APKRun's background service failed.")))
+            }
+            wrapperCreationsInFlight.remove(packageID.rawValue)
+        }
+        wrapperListCache = nil
+        return WrapperBatchResult(
+            refreshed: refreshed, skippedRunning: skippedRunning, failed: failed)
+    }
+
+    /// The latest statuses for the `wrappers.status` health check.
+    private func wrapperStatusesSnapshot() -> [String: WrapperStatus] {
+        latestWrapperStatuses
+    }
+
     /// Completes a deferred placement (wrapper.md §6.3): the client, which
     /// the user already allowed to reach the protected folder, moved the
     /// staged bundle to `finalURL`. This runs §6.2 steps 12–13.
@@ -1821,6 +2592,343 @@ public actor RuntimeHost {
         return Self.wrapperInfo(for: entry, packageID: request.packageID)
     }
 
+    /// The `listWrappers` result cache (wrapper.md §9.1: 60 s).
+    private var wrapperListCache: (at: Date, entries: [WrapperListEntryWire])?
+
+    /// Lists every registered wrapper with the status the validator
+    /// computes (runtime-api.md §10.5, wrapper.md §9.1). Results are
+    /// cached for 60 seconds; a bundle found at a new location updates
+    /// its registry path and is reported `moved` once.
+    public func listWrappers() async throws(RuntimeWireError) -> [WrapperListEntryWire] {
+        if let cache = wrapperListCache,
+            Date().timeIntervalSince(cache.at) < 60
+        {
+            return cache.entries
+        }
+        let registry = await wrapperRegistryInstance()
+        let service = packageQueryServiceInstance()
+        var knownPackages: Set<String>?
+        do {
+            try await service.open()
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+            let list = try await service.listPackages(RuntimeListPackagesRequest(filter: .all))
+            knownPackages = Set(list.packages.map(\.packageID.rawValue))
+        } catch {
+            knownPackages = nil
+        }
+        let validator = wrapperValidator(registry: registry, service: service, knownPackages: knownPackages)
+        var entries: [WrapperListEntryWire] = []
+        for entry in await registry.entries() {
+            let result = await verifyWrapperEntry(
+                entry: entry, registry: registry, validator: validator)
+            guard let runtimeID = RuntimePackageID(rawValue: entry.packageId) else {
+                continue
+            }
+            var summary = Self.wrapperSummary(for: entry, packageID: runtimeID)
+            summary.bundleURL = result.url
+            summary.status = WrapperStatus(
+                state: result.state ?? .unknownPackage,
+                refreshReasons: Set(result.reasons))
+            entries.append(
+                WrapperListEntryWire(
+                    summary: summary, state: result.state, refreshReasons: result.reasons))
+        }
+        recordWrapperStatuses(
+            entries.map {
+                (packageID: $0.summary.packageID, status: $0.summary.status)
+            })
+        wrapperListCache = (Date(), entries)
+        return entries
+    }
+
+    /// Verifies one registry entry (wrapper.md §9.1 checks 1–6): the path or
+    /// a relocated bundle, with a foreign-bundle guard and an `.inaccessible`
+    /// fallback for unreadable bundles.
+    private func verifyWrapperEntry(
+        entry: WrapperRegistryEntry,
+        registry: WrapperRegistry,
+        validator: WrapperValidator
+    ) async -> (url: URL, state: WrapperState?, reasons: [WrapperRefreshReason]) {
+        var (url, moved) = await resolvedWrapperURL(entry: entry, registry: registry)
+        var state: WrapperState? = nil
+        var reasons: [WrapperRefreshReason] = []
+        do {
+            var verification = try await validator.verify(url: url, deep: false)
+            // A bundle that is not this entry's (e.g. another package's
+            // wrapper now occupies the path) does not prove this entry's
+            // state; relocate once by bundle ID + cdhash, then recheck.
+            if (verification.bundleID != nil && verification.bundleID != entry.bundleId)
+                || (verification.packageID != nil && verification.packageID != entry.packageId)
+            {
+                let relocated = await relocatedWrapperURL(
+                    entry: entry, registry: registry, excluding: url)
+                if let relocated {
+                    url = relocated
+                    moved = true
+                    verification = try await validator.verify(url: url, deep: false)
+                }
+                if (verification.bundleID != nil && verification.bundleID != entry.bundleId)
+                    || (verification.packageID != nil
+                        && verification.packageID != entry.packageId)
+                {
+                    verification = WrapperValidator.Verification(bundleURL: url)
+                    verification.state = .missing
+                }
+            }
+            state = moved ? .moved(url) : verification.state
+            reasons = verification.refreshReasons.sorted {
+                String(describing: $0) < String(describing: $1)
+            }
+        } catch {
+            // The bundle exists but could not be read or parsed — that
+            // is a broken bundle, not an unknown package.
+            state = .inaccessible
+        }
+        return (url, state, reasons)
+    }
+
+    /// Stores the latest wrapper statuses and posts `statusChanged` for the
+    /// entries whose status changed (wrapper.md §12.1, coalesced per package).
+    private func recordWrapperStatuses(
+        _ statuses: [(packageID: RuntimePackageID, status: WrapperStatus)]
+    ) {
+        for item in statuses {
+            let previous = latestWrapperStatuses[item.packageID.rawValue]
+            latestWrapperStatuses[item.packageID.rawValue] = item.status
+            if previous != item.status {
+                eventHub.publishWrapperChange(
+                    .statusChanged(item.packageID, item.status))
+            }
+        }
+    }
+
+    /// The apkrund-start + 60 s sweep (wrapper.md §9.1): a quick verification
+    /// of every entry, refreshing `latestWrapperStatuses` and posting
+    /// `statusChanged` for entries that changed. Low priority and quiet:
+    /// failures only drop the sweep until the next list pass.
+    private func runWrapperSweep() async {
+        let registry = await wrapperRegistryInstance()
+        let service = packageQueryServiceInstance()
+        var knownPackages: Set<String>?
+        do {
+            try await service.open()
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+            let list = try await service.listPackages(
+                RuntimeListPackagesRequest(filter: .all))
+            knownPackages = Set(list.packages.map(\.packageID.rawValue))
+        } catch {
+            knownPackages = nil
+        }
+        let validator = wrapperValidator(
+            registry: registry, service: service, knownPackages: knownPackages)
+        var statuses: [(packageID: RuntimePackageID, status: WrapperStatus)] = []
+        for entry in await registry.entries() {
+            guard let runtimeID = RuntimePackageID(rawValue: entry.packageId) else {
+                continue
+            }
+            let result = await verifyWrapperEntry(
+                entry: entry, registry: registry, validator: validator)
+            statuses.append(
+                (
+                    packageID: runtimeID,
+                    status: WrapperStatus(
+                        state: result.state ?? .unknownPackage,
+                        refreshReasons: Set(result.reasons))
+                ))
+        }
+        recordWrapperStatuses(statuses)
+        wrapperListCache = nil
+    }
+
+    /// Removes a wrapper's registry entry, and with `trash` moves the
+    /// bundle to the Trash first (wrapper.md §9.5). Wrappers are never
+    /// deleted.
+    public func removeWrapper(
+        packageID: RuntimePackageID,
+        trash: Bool
+    ) async throws(RuntimeWireError) -> Bool {
+        let registry = await wrapperRegistryInstance()
+        guard let entry = await registry.entry(packageID: packageID) else {
+            throw Self.wrapperWireError(for: .wrapperNotFound(packageID))
+        }
+        if trash {
+            let (url, _) = await resolvedWrapperURL(entry: entry, registry: registry)
+            // Only the registered wrapper itself goes to the Trash; anything
+            // else placed at the recorded path stays untouched (§9.5).
+            let isWrapper = WrapperInstaller(sink: diagnostics?.logSink)
+                .isWrapperOf(packageID, at: url)
+            if isWrapper, FileManager.default.fileExists(atPath: url.path) {
+                var trashed: NSURL?
+                do {
+                    try FileManager.default.trashItem(at: url, resultingItemURL: &trashed)
+                } catch {
+                    throw .runtime(
+                        "internalError",
+                        message: "APKRun couldn't move the Mac app to the Trash.")
+                }
+            }
+        }
+        do {
+            try await registry.remove(bundleID: entry.bundleId)
+        } catch {
+            throw .runtime(
+                "internalError",
+                message: "APKRun couldn't update the wrapper registry.")
+        }
+        wrapperListCache = nil
+        eventHub.publishWrapperChange(.removed(packageID))
+        return true
+    }
+
+    /// Scans `~/Applications` and `/Applications` for APKRun wrapper
+    /// bundles (wrapper.md §7.2); with `register` the valid ones get a
+    /// registry entry, which is how **Re-register Mac Apps** recovers a
+    /// lost `registry.json`.
+    public func rescanWrappers(
+        register: Bool
+    ) async throws(RuntimeWireError) -> RescanWrappersResult {
+        let registry = await wrapperRegistryInstance()
+        let directories = [
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Applications", isDirectory: true),
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+        ]
+        var found: [String] = []
+        var registered: [String] = []
+        let service = packageQueryServiceInstance()
+        var knownPackages: Set<String>?
+        do {
+            try await service.open()
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+            let list = try await service.listPackages(RuntimeListPackagesRequest(filter: .all))
+            knownPackages = Set(list.packages.map(\.packageID.rawValue))
+        } catch {
+            knownPackages = nil
+        }
+        let validator = wrapperValidator(registry: registry, service: service, knownPackages: knownPackages)
+        for directory in directories {
+            let bundles =
+                (try? FileManager.default.contentsOfDirectory(
+                    at: directory, includingPropertiesForKeys: nil
+                ))?.filter { $0.pathExtension == "app" } ?? []
+            for bundle in bundles {
+                guard let plist = InfoPlistWriter.infoDictionary(of: bundle),
+                    let packageID = plist["APKRunPackageID"] as? String,
+                    let bundleID = plist["CFBundleIdentifier"] as? String
+                else { continue }
+                guard
+                    let verification = try? await validator.verify(url: bundle, deep: false),
+                    verification.state == .valid || verification.state == .unknownPackage,
+                    verification.bundleID == nil || verification.bundleID == bundleID,
+                    verification.packageID == nil || verification.packageID == packageID
+                else { continue }
+                found.append(bundle.path)
+                // Registration marks the bundle trusted, so it needs the
+                // strict deep signature check (wrapper.md §9.1 check 6).
+                guard register,
+                    await registry.entry(bundleID: bundleID) == nil,
+                    let package = RuntimePackageID(rawValue: packageID),
+                    (try? await validator.verify(url: bundle, deep: true))?.state == .valid,
+                    let cdhash = verification.cdhash
+                else { continue }
+                var entry = WrapperRegistryEntry(
+                    bundleId: bundleID,
+                    packageId: packageID,
+                    kind: verification.kind ?? .local,
+                    state: .active,
+                    path: bundle.path,
+                    cdhash: cdhash,
+                    launcherVersion: verification.launcherVersion ?? "0",
+                    launcherAPI: verification.launcherAPI ?? "1.0",
+                    fileName: bundle.deletingPathExtension().lastPathComponent,
+                    displayName: (plist["CFBundleDisplayName"] as? String)
+                        ?? bundle.deletingPathExtension().lastPathComponent,
+                    createdAt: Date()
+                )
+                entry.approval = .user
+                do {
+                    try await registry.markPending(entry)
+                    try await registry.activate(bundleID: bundleID, path: bundle, bookmark: Data())
+                    registered.append(bundle.path)
+                } catch {
+                    logger?.error(
+                        "wrapper rescan registration failed: \(bundle.path, .public)")
+                }
+            }
+        }
+        wrapperListCache = nil
+        return RescanWrappersResult(found: found, registered: registered)
+    }
+
+    /// The validator verifyWrapper and listWrappers share; `knownPackages`
+    /// nil (store unreachable) means the package check is skipped.
+    private func wrapperValidator(
+        registry: WrapperRegistry,
+        service: EmbeddedPackageService,
+        knownPackages: Set<String>?
+    ) -> WrapperValidator {
+        WrapperValidator(
+            registry: registry,
+            currentLauncher: launcherBuild(),
+            packageExists: { knownPackages?.contains($0) ?? true },
+            iconDigest: { packageID in
+                guard let runtimeID = RuntimePackageID(rawValue: packageID) else {
+                    return nil
+                }
+                guard
+                    let rendered = await service.renderedIconLayers(for: runtimeID),
+                    let composed = RuntimeHost.composedIcon(
+                        kind: rendered.manifest.kind, layers: rendered.layers)
+                else { return nil }
+                return composed.digest
+            },
+            sink: diagnostics?.logSink
+        )
+    }
+
+    /// The bundle URL of a registry entry: its recorded path, or a
+    /// LaunchServices lookup by bundle ID when the path went missing
+    /// (wrapper.md §9.1 check 1). `moved` is true when the registry path
+    /// was updated to a new location — callers report `state.moved` once.
+    private func resolvedWrapperURL(
+        entry: WrapperRegistryEntry,
+        registry: WrapperRegistry
+    ) async -> (url: URL, moved: Bool) {
+        let path = URL(fileURLWithPath: entry.path)
+        if FileManager.default.fileExists(atPath: path.path),
+            !path.path.contains("/.Trash/")
+        {
+            return (path, false)
+        }
+        if let relocated = await relocatedWrapperURL(
+            entry: entry, registry: registry, excluding: nil)
+        {
+            return (relocated, true)
+        }
+        return (path, false)
+    }
+
+    /// The wrapper's real location when its recorded path does not hold
+    /// its bundle: LaunchServices knows apps by bundle ID, and the
+    /// cdhash keeps a same-ID impostor from being adopted.
+    private func relocatedWrapperURL(
+        entry: WrapperRegistryEntry,
+        registry: WrapperRegistry,
+        excluding: URL?
+    ) async -> URL? {
+        for candidate in NSWorkspace.shared.urlsForApplications(
+            withBundleIdentifier: entry.bundleId)
+        {
+            guard candidate != excluding else { continue }
+            guard WrapperCodeSign.cdhash(of: candidate) == entry.cdhash else { continue }
+            let bookmark = try? candidate.bookmarkData()
+            try? await registry.updateLocation(
+                bundleID: entry.bundleId, path: candidate, bookmark: bookmark ?? Data())
+            return candidate
+        }
+        return nil
+    }
+
     /// Builds the wire record from a registry entry; `warnings` carries
     /// non-fatal outcomes such as a registration failure.
     private static func wrapperInfo(
@@ -1897,6 +3005,13 @@ public actor RuntimeHost {
                 try? await checks.register(
                     WrapperHealthChecks.template(executableURL: build.executableURL))
             }
+            try? await checks.register(
+                WrapperStatusCheck { [weak self] in
+                    await self?.wrapperStatusesSnapshot() ?? [:]
+                })
+            let launcherAPI = self.launcherBuild()?.launcherAPI
+            try? await checks.register(
+                WrapperLauncherCheck(registry: registry) { launcherAPI })
         }
     }
 
@@ -3592,18 +4707,22 @@ public actor RuntimeHost {
         }
     }
 
-    /// Reinstalls one managed package from `Packages/<id>/current/` after a userdata reset.
+    /// Reinstalls a managed package from its retained `current/` artifacts
+    /// (package-store.md §9.2). Returns the install result so callers that
+    /// run a user-visible repair can publish the change; the silent §9.2
+    /// reconcile ignores it.
+    @discardableResult
     private func reinstallManagedPackage(
         packageID: RuntimePackageID,
         service: EmbeddedPackageService
-    ) async throws {
+    ) async throws -> RuntimePackageInstallResult? {
         let current = try await service.artifactCurrentDirectory(for: packageID)
         guard
             let names = try? FileManager.default.contentsOfDirectory(atPath: current.path)
                 .filter({ $0.hasSuffix(".apk") }).sorted(),
             !names.isEmpty
         else {
-            return
+            return nil
         }
         var handles: [FileHandle] = []
         var sourceFiles: [RuntimeImportSourceFile] = []
@@ -3616,7 +4735,7 @@ public actor RuntimeHost {
                 for handle in handles {
                     try? handle.close()
                 }
-                return
+                return nil
             }
             handles.append(handle)
             sourceFiles.append(RuntimeImportSourceFile(fileIndex: index, name: name))
@@ -3634,7 +4753,7 @@ public actor RuntimeHost {
         // `uninstall --forget` or uninstall committed between the reconcile's
         // snapshot and the install removes the mark or the record, and without
         // the guard the retained APKs would resurrect the app.
-        _ = try await service.installImportedWithChange(
+        return try await service.installImportedWithChange(
             RuntimeInstallImportedRequest(ticket: preview.ticket),
             requiresReinstallMark: true
         )

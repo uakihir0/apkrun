@@ -16,7 +16,11 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.17 adds the `iconChanged` package change (package-store.md §10.2);
     /// 1.18 adds `placeStagedWrapper` for TCC-protected destinations (wrapper.md §6.3);
     /// 1.19 adds `wrapperInfo` (runtime-api.md §10.2).
-    public static let current = APIVersion(major: 1, minor: 19)
+    /// 1.20 adds `listWrappers`, `removeWrapper`, and `rescanWrappers`
+    /// (runtime-api.md §10.5).
+    /// 1.21 adds `refreshWrapper` and `refreshAllWrappers` (wrapper.md §9.3).
+    /// 1.22 adds `repairPackage` (package-store.md §11.1).
+    public static let current = APIVersion(major: 1, minor: 22)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -711,6 +715,26 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func placeStagedWrapper(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns the registry row of one package's wrapper (runtime-api.md §10.2).
     func wrapperInfo(_ request: Data, reply: @escaping (Data) -> Void)
+
+    /// Lists every registered wrapper with the status the validator
+    /// computed (wrapper.md §9.1). Reply: `RuntimeWrapperListControlReply`.
+    func listWrappers(_ request: Data, reply: @escaping (Data) -> Void)
+
+    /// Removes a wrapper's registry entry, optionally trashing the bundle
+    /// (wrapper.md §9.5). Reply: `RuntimeRemoveWrapperControlReply`.
+    func removeWrapper(_ request: Data, reply: @escaping (Data) -> Void)
+
+    /// Scans the Applications folders for APKRun wrapper bundles
+    /// (wrapper.md §7.2). Reply: `RuntimeRescanWrappersControlReply`.
+    func rescanWrappers(_ request: Data, reply: @escaping (Data) -> Void)
+
+    /// Starts a wrapper refresh (wrapper.md §9.3); replies with the
+    /// operation handle. An icon file handle accompanies `change.icon`.
+    func refreshWrapper(_ request: Data, icon: FileHandle?, reply: @escaping (Data) -> Void)
+
+    /// Starts a batch refresh (wrapper.md §9.4 Update All Mac Apps);
+    /// replies with the operation handle.
+    func refreshAllWrappers(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns the approval prompts waiting for APKRun.app.
     func pendingApprovals(_ request: Data, reply: @escaping (Data) -> Void)
     /// Answers an approval prompt (APKRun.app only).
@@ -752,6 +776,9 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     /// Checks and installs a package update now, optionally from files
     /// (runtime-api.md §9.1). File handles travel like `importPackage`.
     func updatePackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
+    /// Starts reinstalling a broken package from its retained artifacts
+    /// (package-store.md §11.1, runtime-api.md §8.4).
+    func beginRepairPackage(_ request: Data, reply: @escaping (Data) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.

@@ -329,6 +329,16 @@
                     + "\(summary.versionCode.map(String.init) ?? "unknown")."
             case .wrapper(let info):
                 return "Created \(DaemonInstallSupport.safeTerminalText(info.summary.bundleURL.path))"
+            case .wrapperBatch(let result):
+                var text =
+                    "Updated \(result.refreshed.count) Mac app(s)."
+                if !result.skippedRunning.isEmpty {
+                    text += " Skipped \(result.skippedRunning.count) running app(s)."
+                }
+                if !result.failed.isEmpty {
+                    text += " \(result.failed.count) failed."
+                }
+                return text
             case .unknown:
                 return "The result of operation \(snapshot.operationID.wireValue) is unknown."
             }

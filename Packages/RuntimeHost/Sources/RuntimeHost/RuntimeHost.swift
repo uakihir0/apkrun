@@ -2616,6 +2616,7 @@ public actor RuntimeHost {
         } catch {
             throw Self.wrapperWireError(for: .registryUnavailable)
         }
+        wrapperListCache = nil
         let installer = WrapperInstaller(sink: diagnostics?.logSink)
         let warning = installer.registerPlaced(at: finalURL)
         try? FileManager.default.removeItem(at: tokenDirectory)

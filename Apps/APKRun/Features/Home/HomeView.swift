@@ -67,13 +67,9 @@ struct HomeView: View {
         ) { result in
             if case .success(let urls) = result { model.importFiles(urls) }
         }
-        .alert(
-            "APKRun can't add that file", isPresented: .constant(model.dropError != nil),
-            actions: { Button("OK") { model.dropError = nil } },
-            message: { Text(model.dropError ?? "") }
-        )
-        .sheet(item: .constant(model.pendingImport.map(ImportPreviewBox.init))) { box in
-            importPreviewSheet(box.preview)
+        .sheet(isPresented: Bindable(model.addFlow).isPresented) {
+            AddFlowView()
+                .environment(model.addFlow)
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             for provider in providers {
@@ -111,35 +107,6 @@ struct HomeView: View {
         .padding(8)
         .background(.yellow.opacity(0.2))
     }
-
-    /// §5.5: until #79, a drop shows only the ImportPreview summary.
-    private func importPreviewSheet(_ preview: RuntimeImportPreview) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(preview.displayName).font(.headline)
-            Text(
-                "\(preview.packageID.rawValue) · version \(preview.versionName ?? String(preview.versionCode)) (\(preview.versionCode))"
-            )
-            if let digest = preview.signerDigests.first {
-                Text("Signed by: \(digest.rawValue.prefix(19))…")
-                    .font(.caption)
-            }
-            Text("The full add flow arrives with #79.")
-                .foregroundStyle(.secondary)
-            HStack {
-                Spacer()
-                Button("Done") { model.discardPendingImport() }
-                    .keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(24)
-        .frame(minWidth: 360)
-    }
-}
-
-/// A sheet item wrapper so `pendingImport` drives `.sheet(item:)`.
-private struct ImportPreviewBox: Identifiable {
-    let preview: RuntimeImportPreview
-    var id: String { preview.packageID.rawValue + String(describing: preview.ticket) }
 }
 
 /// §5.2 runtime header.

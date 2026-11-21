@@ -110,11 +110,69 @@ final class FakeRuntimeService: RuntimeService, @unchecked Sendable {
         return OperationHandle(operationID: OperationID(), kind: .repair)
     }
 
+    var previewToReturn: RuntimeImportPreview?
+
     func importPackage(_ request: RuntimeImportPackageRequest, files: [FileHandle])
         async throws -> RuntimeImportPreview
     {
         count("importPackage")
+        if let previewToReturn { return previewToReturn }
         throw RuntimeWireError(domain: "package", code: "refused", message: "stub")
+    }
+
+    func beginInstallImported(
+        _ request: RuntimeInstallImportedRequest, operationID: OperationID
+    ) async throws -> OperationHandle {
+        count("installImported")
+        installRequests.append(request)
+        return OperationHandle(operationID: operationID, kind: .install)
+    }
+
+    func operationStatus(_ operationID: OperationID) async throws -> OperationSnapshot {
+        count("operationStatus")
+        return OperationSnapshot(
+            operationID: operationID, kind: .install, startedAt: Date(),
+            result: .succeeded(
+                .package(
+                    RuntimePackageSummary(
+                        packageID: RuntimePackageID(rawValue: "com.example.a")!,
+                        displayName: "Example", versionCode: 1, versionName: "1.0",
+                        state: .installed, managed: true, updateAuthority: .apkrun))))
+    }
+
+    func createWrapper(_ request: WrapperRequest) async throws -> OperationHandle {
+        count("createWrapper")
+        wrapperRequests.append(request)
+        return OperationHandle(operationID: OperationID(), kind: .wrapperCreate)
+    }
+
+    var installRequests: [RuntimeInstallImportedRequest] = []
+    var wrapperRequests: [WrapperRequest] = []
+
+    var placeStagedCalls: [String] = []
+
+    func placeStagedWrapper(
+        stagingToken: String, finalURL: URL, bookmark: String?
+    ) async throws -> WrapperInfo {
+        count("placeStagedWrapper")
+        placeStagedCalls.append(stagingToken)
+        return WrapperInfo(
+            summary: WrapperSummary(
+                packageID: RuntimePackageID(rawValue: "com.example.a")!,
+                bundleID: "io.apkrun.android.com.example.a",
+                displayName: "Example",
+                kind: .local,
+                bundleURL: finalURL,
+                status: WrapperStatus(state: .valid),
+                approval: .generated,
+                launcherVersion: "1",
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000)),
+            fileName: "Example",
+            customization: WrapperCustomizationWire(),
+            signer: .adHoc,
+            cdhash: "0123456789abcdef0123456789abcdef01234567",
+            launcherAPI: APIVersion(major: 1, minor: 0),
+            formatVersion: 1)
     }
 
     func discardImport(_ request: RuntimeDiscardImportRequest) async throws {
@@ -199,7 +257,8 @@ final class HomeRowStatusTests: XCTestCase {
         let failed = UpdateHistoryEntry(
             v: 1, time: Date(), packageID: RuntimePackageID(rawValue: "com.example.a")!,
             from: 3, to: 4, provider: nil, trigger: "scheduled",
-            outcome: "failed.checkFailed", failure: nil, phaseDurationsMs: [:])
+            outcome: "skipped.installFailed", failure: WireError(domain: "update", code: "installFailed"),
+            phaseDurationsMs: [:])
         XCTAssertEqual(status(outcome: failed).text, "Update failed")
         XCTAssertEqual(status(outcome: failed).actions, [.details])
         let rolled = UpdateHistoryEntry(
@@ -369,5 +428,116 @@ final class HomeModelTests: XCTestCase {
         XCTAssertEqual(m.missingPackageID, "com.absent.z")
         m.apply(.updates)
         XCTAssertEqual(m.selection, .updates)
+    }
+}
+
+@MainActor
+final class AddFlowModelTests: XCTestCase {
+    private func flow(with service: FakeRuntimeService) -> AddFlowModel {
+        AddFlowModel { service }
+    }
+
+    private func preview(
+        relation: RuntimeImportRelation = .newPackage,
+        name: String = "Hello Text"
+    ) -> RuntimeImportPreview {
+        RuntimeImportPreview(
+            ticket: RuntimeImportTicket(rawValue: "1d83472f-3568-4c16-84a0-267fa5b3d534")!,
+            packageID: RuntimePackageID(rawValue: "com.example.a")!,
+            displayName: name,
+            versionCode: 3,
+            versionName: "1.2",
+            signerDigests: [],
+            files: [],
+            excludedSplits: [],
+            relation: relation,
+            warnings: [])
+    }
+
+    // Every §6.1 relation maps to its sheet and button.
+    func testRelationSheets() {
+        func sheet(_ r: RuntimeImportRelation) -> AddFlowSheet {
+            AddFlowSheet(relation: r, displayName: "Discord", version: "2.0")
+        }
+        XCTAssertEqual(sheet(.newPackage).action, "Install")
+        XCTAssertTrue(sheet(.newPackage).showsOptions)
+        let same = sheet(.sameAsInstalled)
+        XCTAssertEqual(same.headline, "Discord 2.0 is already installed.")
+        XCTAssertNil(same.action)
+        XCTAssertFalse(same.showsOptions)
+        XCTAssertEqual(sheet(.reinstallSameVersion).action, "Reinstall")
+        let update = sheet(.update(from: 1))
+        XCTAssertEqual(update.headline, "Update Discord from 1 to 2.0?")
+        XCTAssertEqual(update.action, "Update")
+        let downgrade = sheet(.downgrade(from: 9))
+        XCTAssertNil(downgrade.action)
+        XCTAssertFalse(downgrade.showsOptions)
+        let other = sheet(.otherSigner)
+        XCTAssertNil(other.action)
+        XCTAssertFalse(other.showsOptions)
+        XCTAssertEqual(sheet(.uninstalledWithData(1)).action, "Reinstall")
+    }
+
+    // Update modes: Manual-only without a source; suggestion off by default.
+    func testUpdateChoiceDefaults() {
+        let m = flow(with: FakeRuntimeService())
+        XCTAssertEqual(m.updateChoice, .manual)
+        XCTAssertNil(m.suggestedProvider)
+    }
+
+    // §6.1: Mac app name starts with the host label; location starts at the
+    // configured default.
+    func testMacAppDefaults() async {
+        let service = FakeRuntimeService()
+        service.previewToReturn = preview(name: "OddName App")
+        let m = flow(with: service)
+        // Feed the preview directly: begin() opens real files, so tests
+        // inject through the seam below instead.
+        await m.inspectForTesting(preview(name: "OddName App"))
+        XCTAssertEqual(m.macAppName, "OddName App")
+        XCTAssertEqual(m.location, .userApplications)
+        XCTAssertTrue(m.createMacApp)
+    }
+
+    // Install sends the ticket; the wrapper goes through its own operation
+    // with the chosen name and location (§6.1).
+    func testInstallPassesOptions() async {
+        let service = FakeRuntimeService()
+        let m = flow(with: service)
+        await m.inspectForTesting(preview(name: "OddName App"))
+        m.createMacApp = true
+        m.location = .allApplications
+        m.install()
+        // The install + wrapper run on a Task; give them a tick.
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(service.installRequests.count, 1)
+        let request = service.installRequests[0]
+        XCTAssertFalse(request.options.createWrapper)
+        XCTAssertEqual(request.options.authority, .manual)
+        XCTAssertEqual(service.wrapperRequests.count, 1)
+        let wrapper = service.wrapperRequests[0]
+        XCTAssertEqual(wrapper.destination, .applications)
+        XCTAssertEqual(wrapper.fileName, "OddName App")
+        XCTAssertEqual(wrapper.displayName, "OddName App")
+    }
+
+    // §6.1: without an update source only Manual can be sent (the daemon
+    // refuses apkrun authority without a provider).
+    func testAutomaticWithoutProviderFallsBackToManual() async {
+        let service = FakeRuntimeService()
+        let m = flow(with: service)
+        await m.inspectForTesting(preview())
+        m.updateChoice = .automatic
+        m.install()
+        try? await Task.sleep(for: .milliseconds(50))
+        let request = service.installRequests[0]
+        XCTAssertEqual(request.options.authority, .manual)
+        XCTAssertEqual(m.updateChoice, .manual)
+    }
+
+    func testRefusedFilesFailFast() async {
+        let m = flow(with: FakeRuntimeService())
+        m.begin(urls: [URL(fileURLWithPath: "/tmp/photo.png")])
+        XCTAssertEqual(m.stage, .failed("APKRun can add .apk, .apks, .xapk, and .apkm files."))
     }
 }

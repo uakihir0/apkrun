@@ -28,6 +28,12 @@ struct APKRunApp: App {
         Task { @MainActor in
             ApprovalCenter.shared.start()
         }
+        let home = homeModel
+        Task { @MainActor in
+            OpenFileRouter.handler = { urls in
+                home.importFiles(urls)
+            }
+        }
 
         do {
             if try RuntimeRegistrationCommand.registerRuntimeAgentIfNeeded() {
@@ -54,8 +60,13 @@ struct APKRunApp: App {
                     runtimeStatus.start()
                     homeModel.start()
                 }
-                // apkrun:// URLs only navigate (host-ui.md §3.1).
+                // apkrun:// URLs only navigate (host-ui.md §3.1); file
+                // opens (§3.2) start the add flow.
                 .onOpenURL { url in
+                    if url.isFileURL {
+                        homeModel.importFiles([url])
+                        return
+                    }
                     guard let route = AppRouter.route(url) else { return }
                     homeModel.apply(route)
                 }
@@ -103,6 +114,13 @@ struct APKRunApp: App {
 private final class ApprovalWindowDelegate: NSObject, NSApplicationDelegate {
     private var windowController: NSWindowController?
     private var cancellable: AnyCancellable?
+
+    /// Double-click, Open With, `open -a APKRun file.apk` (host-ui.md §3.2).
+    func application(_ application: NSApplication, open urls: [URL]) {
+        Task { @MainActor in
+            OpenFileRouter.open(urls)
+        }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         cancellable = ApprovalCenter.shared.$current.sink { [weak self] prompt in

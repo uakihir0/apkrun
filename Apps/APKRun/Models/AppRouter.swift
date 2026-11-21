@@ -18,6 +18,18 @@ enum AppRoute: Equatable {
     case setup
 }
 
+/// Delivers document opens (double-click, Open With, `open -a APKRun file.apk`)
+/// from the app delegate to the add flow (host-ui.md §3.2).
+enum OpenFileRouter {
+    /// Set by the app once `HomeModel` exists.
+    @MainActor static var handler: (([URL]) -> Void)?
+
+    /// Forwards opened file URLs to the add flow.
+    @MainActor static func open(_ urls: [URL]) {
+        handler?(urls)
+    }
+}
+
 /// Routes `apkrun://` URLs. URLs only navigate — they never perform an
 /// action, because any process can open a URL (host-ui.md §3.1).
 enum AppRouter {

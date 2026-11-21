@@ -300,21 +300,15 @@ final class HomeModel {
     /// The package a `package/<id>` route selects, or an "isn't installed" id.
     var selectedPackage: RuntimePackageID?
     var missingPackageID: String?
-    /// The ImportPreview a drop or Add App… shows (full add flow is #79).
-    var pendingImport: RuntimeImportPreview?
+    /// The add flow (#79) opened by a drop, Add App…, or a document open.
+    let addFlow: AddFlowModel
     /// Settings pane a `settings/<pane>` route asks for.
     var requestedSettingsPane: String?
-    /// A refused drop's message (§5.5).
-    var dropError: String?
-
-    private let serviceFactory: @Sendable () throws -> any RuntimeService
-
     init(
         makeService: @escaping @Sendable () throws -> any RuntimeService = {
             try RuntimeControlClient(clientKind: .app)
         }
     ) {
-        serviceFactory = makeService
         // One shared control connection: the daemon caps a client at eight
         // (RuntimeXPCServer), and one connection per model would use them all.
         let source = SharedServiceSource(factory: makeService)
@@ -324,6 +318,7 @@ final class HomeModel {
         sessions = SessionsModel(makeService: shared)
         operations = OperationCenter(makeService: shared)
         wrappers = WrapperListModel(makeService: shared)
+        addFlow = AddFlowModel(makeService: shared)
         runtimeStatus = RuntimeStatusModel()
     }
 
@@ -384,41 +379,9 @@ final class HomeModel {
         }
     }
 
-    /// Imports dropped or picked files and shows the preview summary (§5.5);
-    /// the real add sheet is #79.
+    /// Routes dropped or picked files into the add flow (#79).
     func importFiles(_ urls: [URL]) {
-        let allowed: Set<String> = ["apk", "apks", "xapk", "apkm"]
-        let supported = urls.filter { allowed.contains($0.pathExtension.lowercased()) }
-        guard !supported.isEmpty else {
-            dropError = "APKRun can add .apk, .apks, .xapk, and .apkm files."
-            return
-        }
-        do {
-            let handles = try supported.map { try FileHandle(forReadingFrom: $0) }
-            let sources = handles.enumerated().map {
-                RuntimeImportSourceFile(fileIndex: $0.offset, name: supported[$0.offset].lastPathComponent)
-            }
-            let request = RuntimeImportPackageRequest(files: sources, origin: .dropOnHome)
-            Task {
-                do {
-                    let preview = try await serviceFactory().importPackage(request, files: handles)
-                    pendingImport = preview
-                } catch {
-                    dropError = error.localizedDescription
-                }
-                for handle in handles {
-                    try? handle.close()
-                }
-            }
-        } catch {
-            dropError = error.localizedDescription
-        }
+        addFlow.begin(urls: urls, origin: .dropOnHome)
     }
 
-    /// Discards a preview the user dismissed.
-    func discardPendingImport() {
-        guard let ticket = pendingImport?.ticket else { return }
-        pendingImport = nil
-        Task { try? await serviceFactory().discardImport(RuntimeDiscardImportRequest(ticket: ticket)) }
-    }
 }

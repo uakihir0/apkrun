@@ -1312,10 +1312,12 @@ private let releaseBuildInfo = BuildInfo(
     }
 
     @Test func wrapUpdateAliasMapsToAutomatic() throws {
+        // update-system.md §2.4: without a provider the authority stays
+        // manual and the automatic mode sits unused.
         let options = try InstallUpdateOptions.options(
             provider: nil, updates: nil, update: "auto",
             updateProvider: nil, updateURL: nil)
-        #expect(options.authority == .apkrun)
+        #expect(options.authority == .manual)
         #expect(options.updateMode == .automatic)
     }
 

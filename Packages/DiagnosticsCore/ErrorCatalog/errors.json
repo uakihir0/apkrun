@@ -3387,6 +3387,26 @@
       }
     },
     {
+      "code": "runtime.invalidSettingValue",
+      "parameters": [
+        "key"
+      ],
+      "message": {
+        "en": "The value for {key} is not valid."
+      },
+      "remediation": {
+        "en": "Send a boolean or null for this setting."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "invalidSettingValue(String)",
+        "when": "a configuration update carries a non-boolean, non-null value for a system.sync* setting",
+        "raisedBy": "apkrund",
+        "ref": "[../03-reference/configuration.md](../03-reference/configuration.md)"
+      }
+    },
+    {
       "code": "runtime.notProvisioned",
       "parameters": [],
       "message": {
@@ -3444,6 +3464,26 @@
         "when": "a tracked operation ends without reporting its result",
         "raisedBy": "apkrund",
         "ref": "[runtime-api.md](runtime-api.md)"
+      }
+    },
+    {
+      "code": "runtime.unknownSetting",
+      "parameters": [
+        "key"
+      ],
+      "message": {
+        "en": "Unknown setting {key}."
+      },
+      "remediation": {
+        "en": "Check the setting name in the configuration reference; only the documented keys are writable."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "unknownSetting(String)",
+        "when": "a configuration update names a group or key the runtime does not implement",
+        "raisedBy": "apkrund",
+        "ref": "[../03-reference/configuration.md](../03-reference/configuration.md)"
       }
     },
     {

@@ -172,6 +172,12 @@ private class AndroidLocaleTimeBackend : LocaleTimeBackend {
 
     private val timeZones: Set<String> by lazy { TimeZone.getAvailableIDs().toSet() }
 
+    // A shell process never rebuilds its Resources configuration or process TimeZone
+    // after updatePersistentConfiguration/setTimeZone, so read-back is stale. Keep the
+    // last values this process applied instead (the daemon is the only writer).
+    private var appliedLocaleTags: List<String>? = null
+    private var appliedTimeZoneId: String? = null
+
     private val activity =
         SystemServiceWrapper(
             serviceName = "activity",
@@ -198,10 +204,11 @@ private class AndroidLocaleTimeBackend : LocaleTimeBackend {
     }
 
     override fun currentLocaleTags(): List<String> =
-        context.resources.configuration.locales
-            .toLanguageTags()
-            .split(',')
-            .filter(String::isNotEmpty)
+        appliedLocaleTags
+            ?: context.resources.configuration.locales
+                .toLanguageTags()
+                .split(',')
+                .filter(String::isNotEmpty)
 
     override fun updateLocaleTags(tags: List<String>) {
         val configuration = Configuration(context.resources.configuration)
@@ -212,14 +219,16 @@ private class AndroidLocaleTimeBackend : LocaleTimeBackend {
             context.packageName,
             null,
         )
+        appliedLocaleTags = tags
     }
 
     override fun isKnownTimeZone(zoneId: String): Boolean = zoneId in timeZones
 
-    override fun currentTimeZoneId(): String = TimeZone.getDefault().id
+    override fun currentTimeZoneId(): String = appliedTimeZoneId ?: TimeZone.getDefault().id
 
     override fun updateTimeZone(zoneId: String) {
         alarmManager.setTimeZone(zoneId)
+        appliedTimeZoneId = zoneId
     }
 
     override fun currentClockFormat(): String? =

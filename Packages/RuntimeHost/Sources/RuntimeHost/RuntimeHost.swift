@@ -74,7 +74,7 @@ public actor RuntimeHost {
     nonisolated let streamCenter = RuntimeStreamCenter()
 
     let paths: APKRunPaths
-    private let configurationStore: RuntimeConfigurationStore
+    let configurationStore: RuntimeConfigurationStore
     private let buildInfo: BuildInfo
     private let environment: [String: String]
     private let executableURL: URL
@@ -762,10 +762,6 @@ public actor RuntimeHost {
             }
             finishPackageLaunch(request.packageID)
         }
-        guard headlessLaunchHookIsEnabled else {
-            throw Self.launchUnavailableError
-        }
-        defer { finishPackageLaunch(request.packageID) }
         let launchTracking = await beginLaunchRecord(request)
         do {
             guard headlessLaunchHookIsEnabled else {
@@ -1822,7 +1818,7 @@ public actor RuntimeHost {
         }
     }
 
-    private func enqueueLocaleTimeTrigger(_ trigger: LocaleTimeSyncTrigger) {
+    func enqueueLocaleTimeTrigger(_ trigger: LocaleTimeSyncTrigger) {
         guard !isShuttingDown, !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else { return }
         let previous = localeTimeSyncTask
         localeTimeSyncTask = Task { [weak self] in
@@ -1917,7 +1913,8 @@ public actor RuntimeHost {
         let service = packageQueryServiceInstance()
         do {
             try await attachPackageQueriesIfRuntimeIsReady(to: service)
-            try await service.refreshLocaleDependentPackageLabels()
+            try await service.refreshLocaleDependentPackageLabels(
+                registry: await wrapperRegistryInstance())
         } catch {
             logger?.warning(
                 "Android package labels may not reflect the current locale.",

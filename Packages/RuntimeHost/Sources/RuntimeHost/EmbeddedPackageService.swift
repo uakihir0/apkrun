@@ -169,10 +169,24 @@ public actor EmbeddedPackageService: RuntimeService {
     }
 
     /// Refreshes managed package labels after the guest applies a new locale.
-    func refreshLocaleDependentPackageLabels() async throws(RuntimeWireError) {
+    /// Wrapper registry entries keep the same label so validation flags the
+    /// wrapper for refresh instead of silently keeping the old name.
+    func refreshLocaleDependentPackageLabels(registry: WrapperRegistry) async throws(RuntimeWireError) {
         do {
             try await ensureOpen()
-            try await refreshAndroidInventory()
+            let changed = try await refreshAndroidInventory()
+            guard !changed.isEmpty else { return }
+            let changedSet = Set(changed)
+            for record in try await store.listManagedPackages()
+            where changedSet.contains(record.packageId) {
+                let runtimeID = try Self.runtimePackageID(record.packageId)
+                if let entry = await registry.entry(packageID: runtimeID),
+                    entry.displayName != record.displayName
+                {
+                    try await registry.setDisplayName(
+                        bundleID: entry.bundleId, displayName: record.displayName)
+                }
+            }
         } catch {
             throw Self.wireError(for: error)
         }
@@ -1475,13 +1489,14 @@ public actor EmbeddedPackageService: RuntimeService {
         )
     }
 
-    private func refreshAndroidInventory() async throws {
-        guard runtimeAttached else { return }
+    @discardableResult
+    private func refreshAndroidInventory() async throws -> [PackageID] {
+        guard runtimeAttached else { return [] }
         let packages = try await runtimeAccess.withStoreAgent(UUID()) { channel in
             try await channel.listPackages(.all)
         }
         _ = try await store.saveLastKnownAndroidInventory(packages)
-        _ = try await store.updateManagedDisplayNames(from: packages)
+        return try await store.updateManagedDisplayNames(from: packages)
     }
 
     private static func summary(from record: PackageRecord) throws -> RuntimePackageSummary {

@@ -151,12 +151,30 @@
                 stagedBundle.lastPathComponent, isDirectory: true)
             do {
                 // The daemon skipped the conflict check on the deferred path;
-                // honor --replace here the way place() would have.
+                // honor it here the way place() does (wrapper.md §6.4):
+                // --replace swaps only this package's own wrapper, never an
+                // item that belongs to anything else.
                 if FileManager.default.fileExists(atPath: finalURL.path) {
-                    guard replace else { throw failure }
-                    try FileManager.default.removeItem(at: finalURL)
+                    let existingPackage = plistPackageID(of: finalURL)
+                    guard replace, existingPackage != nil,
+                        existingPackage == plistPackageID(of: stagedBundle)
+                    else {
+                        throw RuntimeWireError(
+                            domain: "wrapper",
+                            code: "wrapper.nameConflict",
+                            message: "An item named \(finalURL.lastPathComponent) "
+                                + "already exists there.",
+                            remediation: "Choose another name or location. "
+                                + "APKRun never replaces it.",
+                            parameters: ["file": finalURL.lastPathComponent])
+                    }
+                    // replaceItemAt swaps atomically: the existing wrapper
+                    // survives a failed move instead of being deleted first.
+                    _ = try FileManager.default.replaceItemAt(
+                        finalURL, withItemAt: stagedBundle)
+                } else {
+                    try FileManager.default.moveItem(at: stagedBundle, to: finalURL)
                 }
-                try FileManager.default.moveItem(at: stagedBundle, to: finalURL)
             } catch let moveError as RuntimeWireError {
                 throw moveError
             } catch {
@@ -175,6 +193,17 @@
                 }
                 throw RuntimeWireError(domain: "wrapper", code: code, message: message)
             }
+        }
+
+        /// Reads `APKRunPackageID` from a bundle's Info.plist; nil means the
+        /// item is not an APKRun wrapper (or is unreadable).
+        static func plistPackageID(of bundle: URL) -> String? {
+            let plistURL = bundle.appendingPathComponent("Contents/Info.plist")
+            guard let data = try? Data(contentsOf: plistURL),
+                let plist = try? PropertyListSerialization.propertyList(
+                    from: data, format: nil) as? [String: Any]
+            else { return nil }
+            return plist["APKRunPackageID"] as? String
         }
 
         /// The `wrapper` output of a finished `wrapperCreate` operation.

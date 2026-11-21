@@ -1,4 +1,5 @@
 import APKStoreCore
+import AppKit
 import CoreGraphics
 import CryptoKit
 import DiagnosticsCore
@@ -1793,6 +1794,212 @@ public actor RuntimeHost {
             throw Self.wrapperWireError(for: .wrapperNotFound(request.packageID))
         }
         return Self.wrapperInfo(for: entry, packageID: request.packageID)
+    }
+
+    /// The `listWrappers` result cache (wrapper.md §9.1: 60 s).
+    private var wrapperListCache: (at: Date, entries: [WrapperListEntryWire])?
+
+    /// Lists every registered wrapper with the status the validator
+    /// computes (runtime-api.md §10.5, wrapper.md §9.1). Results are
+    /// cached for 60 seconds; a bundle found at a new location updates
+    /// its registry path and is reported `moved` once.
+    public func listWrappers() async throws(RuntimeWireError) -> [WrapperListEntryWire] {
+        if let cache = wrapperListCache,
+            Date().timeIntervalSince(cache.at) < 60
+        {
+            return cache.entries
+        }
+        let registry = await wrapperRegistryInstance()
+        let service = packageQueryServiceInstance()
+        var knownPackages: Set<String>?
+        do {
+            try await service.open()
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+            let list = try await service.listPackages(RuntimeListPackagesRequest(filter: .all))
+            knownPackages = Set(list.packages.map(\.packageID.rawValue))
+        } catch {
+            knownPackages = nil
+        }
+        let validator = wrapperValidator(registry: registry, service: service, knownPackages: knownPackages)
+        var entries: [WrapperListEntryWire] = []
+        for entry in await registry.entries() {
+            let url = await resolvedWrapperURL(entry: entry, registry: registry)
+            var state: WrapperState? = nil
+            var reasons: [WrapperRefreshReason] = []
+            do {
+                let verification = try await validator.verify(url: url, deep: false)
+                state = verification.state
+                reasons = verification.refreshReasons.sorted {
+                    String(describing: $0) < String(describing: $1)
+                }
+            } catch {
+                state = nil
+            }
+            guard let runtimeID = RuntimePackageID(rawValue: entry.packageId) else {
+                continue
+            }
+            var summary = Self.wrapperSummary(for: entry, packageID: runtimeID)
+            summary.bundleURL = url
+            summary.status = WrapperStatus(state: state ?? .unknownPackage, refreshReasons: Set(reasons))
+            entries.append(WrapperListEntryWire(summary: summary, state: state, refreshReasons: reasons))
+        }
+        wrapperListCache = (Date(), entries)
+        return entries
+    }
+
+    /// Removes a wrapper's registry entry, and with `trash` moves the
+    /// bundle to the Trash first (wrapper.md §9.5). Wrappers are never
+    /// deleted.
+    public func removeWrapper(
+        packageID: RuntimePackageID,
+        trash: Bool
+    ) async throws(RuntimeWireError) -> Bool {
+        let registry = await wrapperRegistryInstance()
+        guard let entry = await registry.entry(packageID: packageID) else {
+            throw Self.wrapperWireError(for: .wrapperNotFound(packageID))
+        }
+        if trash {
+            let url = URL(fileURLWithPath: entry.path)
+            if FileManager.default.fileExists(atPath: url.path) {
+                var trashed: NSURL?
+                try? FileManager.default.trashItem(at: url, resultingItemURL: &trashed)
+            }
+        }
+        do {
+            try await registry.remove(bundleID: entry.bundleId)
+        } catch {
+            throw .runtime(
+                "internalError",
+                message: "APKRun couldn't update the wrapper registry.")
+        }
+        wrapperListCache = nil
+        return true
+    }
+
+    /// Scans `~/Applications` and `/Applications` for APKRun wrapper
+    /// bundles (wrapper.md §7.2); with `register` the valid ones get a
+    /// registry entry, which is how **Re-register Mac Apps** recovers a
+    /// lost `registry.json`.
+    public func rescanWrappers(
+        register: Bool
+    ) async throws(RuntimeWireError) -> RescanWrappersResult {
+        let registry = await wrapperRegistryInstance()
+        let directories = [
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Applications", isDirectory: true),
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+        ]
+        var found: [String] = []
+        var registered: [String] = []
+        let service = packageQueryServiceInstance()
+        var knownPackages: Set<String>?
+        do {
+            try await service.open()
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+            let list = try await service.listPackages(RuntimeListPackagesRequest(filter: .all))
+            knownPackages = Set(list.packages.map(\.packageID.rawValue))
+        } catch {
+            knownPackages = nil
+        }
+        let validator = wrapperValidator(registry: registry, service: service, knownPackages: knownPackages)
+        for directory in directories {
+            let bundles =
+                (try? FileManager.default.contentsOfDirectory(
+                    at: directory, includingPropertiesForKeys: nil
+                ))?.filter { $0.pathExtension == "app" } ?? []
+            for bundle in bundles {
+                guard let plist = InfoPlistWriter.infoDictionary(of: bundle),
+                    let packageID = plist["APKRunPackageID"] as? String,
+                    let bundleID = plist["CFBundleIdentifier"] as? String
+                else { continue }
+                guard let verification = try? await validator.verify(url: bundle, deep: false),
+                    verification.state == .valid || verification.state == .unknownPackage
+                else { continue }
+                found.append(bundle.path)
+                guard register,
+                    await registry.entry(bundleID: bundleID) == nil,
+                    let package = RuntimePackageID(rawValue: packageID),
+                    let cdhash = verification.cdhash
+                else { continue }
+                var entry = WrapperRegistryEntry(
+                    bundleId: bundleID,
+                    packageId: packageID,
+                    kind: verification.kind ?? .local,
+                    state: .active,
+                    path: bundle.path,
+                    cdhash: cdhash,
+                    launcherVersion: verification.launcherVersion ?? "0",
+                    launcherAPI: verification.launcherAPI ?? "1.0",
+                    fileName: bundle.deletingPathExtension().lastPathComponent,
+                    displayName: (plist["CFBundleDisplayName"] as? String)
+                        ?? bundle.deletingPathExtension().lastPathComponent,
+                    createdAt: Date()
+                )
+                entry.approval = .user
+                do {
+                    try await registry.markPending(entry)
+                    try await registry.activate(bundleID: bundleID, path: bundle, bookmark: Data())
+                    registered.append(bundle.path)
+                } catch {
+                    logger?.error(
+                        "wrapper rescan registration failed: \(bundle.path, .public)")
+                }
+            }
+        }
+        wrapperListCache = nil
+        return RescanWrappersResult(found: found, registered: registered)
+    }
+
+    /// The validator verifyWrapper and listWrappers share; `knownPackages`
+    /// nil (store unreachable) means the package check is skipped.
+    private func wrapperValidator(
+        registry: WrapperRegistry,
+        service: EmbeddedPackageService,
+        knownPackages: Set<String>?
+    ) -> WrapperValidator {
+        WrapperValidator(
+            registry: registry,
+            currentLauncher: launcherBuild(),
+            packageExists: { knownPackages?.contains($0) ?? true },
+            iconDigest: { packageID in
+                guard let runtimeID = RuntimePackageID(rawValue: packageID) else {
+                    return nil
+                }
+                guard
+                    let rendered = await service.renderedIconLayers(for: runtimeID),
+                    let composed = RuntimeHost.composedIcon(
+                        kind: rendered.manifest.kind, layers: rendered.layers)
+                else { return nil }
+                return composed.digest
+            },
+            sink: diagnostics?.logSink
+        )
+    }
+
+    /// The bundle URL of a registry entry: its recorded path, or a
+    /// LaunchServices lookup by bundle ID when the path went missing
+    /// (wrapper.md §9.1 check 1). A moved bundle updates the registry
+    /// path and bookmark.
+    private func resolvedWrapperURL(
+        entry: WrapperRegistryEntry,
+        registry: WrapperRegistry
+    ) async -> URL {
+        let path = URL(fileURLWithPath: entry.path)
+        if FileManager.default.fileExists(atPath: path.path),
+            !path.path.contains("/.Trash/")
+        {
+            return path
+        }
+        for candidate in NSWorkspace.shared.urlsForApplications(
+            withBundleIdentifier: entry.bundleId)
+        {
+            guard WrapperCodeSign.cdhash(of: candidate) == entry.cdhash else { continue }
+            let bookmark = try? candidate.bookmarkData()
+            try? await registry.updateLocation(
+                bundleID: entry.bundleId, path: candidate, bookmark: bookmark ?? Data())
+            return candidate
+        }
+        return path
     }
 
     /// Builds the wire record from a registry entry; `warnings` carries

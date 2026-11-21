@@ -16,7 +16,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.17 adds the `iconChanged` package change (package-store.md §10.2);
     /// 1.18 adds `placeStagedWrapper` for TCC-protected destinations (wrapper.md §6.3);
     /// 1.19 adds `wrapperInfo` (runtime-api.md §10.2).
-    public static let current = APIVersion(major: 1, minor: 19)
+    /// 1.20 adds `listWrappers`, `removeWrapper`, and `rescanWrappers`
+    /// (runtime-api.md §10.5).
+    public static let current = APIVersion(major: 1, minor: 20)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -711,6 +713,18 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func placeStagedWrapper(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns the registry row of one package's wrapper (runtime-api.md §10.2).
     func wrapperInfo(_ request: Data, reply: @escaping (Data) -> Void)
+
+    /// Lists every registered wrapper with the status the validator
+    /// computed (wrapper.md §9.1). Reply: `RuntimeWrapperListControlReply`.
+    func listWrappers(_ request: Data, reply: @escaping (Data) -> Void)
+
+    /// Removes a wrapper's registry entry, optionally trashing the bundle
+    /// (wrapper.md §9.5). Reply: `RuntimeRemoveWrapperControlReply`.
+    func removeWrapper(_ request: Data, reply: @escaping (Data) -> Void)
+
+    /// Scans the Applications folders for APKRun wrapper bundles
+    /// (wrapper.md §7.2). Reply: `RuntimeRescanWrappersControlReply`.
+    func rescanWrappers(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns the approval prompts waiting for APKRun.app.
     func pendingApprovals(_ request: Data, reply: @escaping (Data) -> Void)
     /// Answers an approval prompt (APKRun.app only).

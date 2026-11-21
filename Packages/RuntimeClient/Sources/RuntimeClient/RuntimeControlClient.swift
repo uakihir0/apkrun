@@ -434,6 +434,93 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Lists every registered wrapper with its status (wrapper.md §9.1).
+    public func listWrappers() async throws(RuntimeControlClientError) -> [WrapperListEntryWire] {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeWrapperListControlRequest(header: makeHeader())
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.listWrappers(data)
+            let reply = try Self.decode(RuntimeWrapperListControlReply.self, from: response)
+            guard (reply.result != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let result = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return result
+        } catch {
+            let failure = error as? RuntimeControlClientError ?? .malformedReply
+            invalidateAfterTransportFailure(opened.channel, error: failure)
+            throw failure
+        }
+    }
+
+    /// Removes a wrapper's registry entry, optionally trashing the bundle
+    /// (wrapper.md §9.5). Returns whether an entry was removed.
+    public func removeWrapper(
+        packageID: RuntimePackageID,
+        trash: Bool
+    ) async throws(RuntimeControlClientError) -> Bool {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeRemoveWrapperControlRequest(
+                header: makeHeader(), packageID: packageID, trash: trash)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.removeWrapper(data)
+            let reply = try Self.decode(RuntimeRemoveWrapperControlReply.self, from: response)
+            guard (reply.result != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let result = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return result
+        } catch {
+            let failure = error as? RuntimeControlClientError ?? .malformedReply
+            invalidateAfterTransportFailure(opened.channel, error: failure)
+            throw failure
+        }
+    }
+
+    /// Scans the Applications folders for APKRun wrapper bundles
+    /// (wrapper.md §7.2); `register` also registers them.
+    public func rescanWrappers(
+        register: Bool
+    ) async throws(RuntimeControlClientError) -> RescanWrappersResult {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeRescanWrappersControlRequest(
+                header: makeHeader(), register: register)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.rescanWrappers(data)
+            let reply = try Self.decode(RuntimeRescanWrappersControlReply.self, from: response)
+            guard (reply.result != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let result = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return result
+        } catch {
+            let failure = error as? RuntimeControlClientError ?? .malformedReply
+            invalidateAfterTransportFailure(opened.channel, error: failure)
+            throw failure
+        }
+    }
+
     /// Lists managed packages or the Android inventory already known to the daemon.
     public func listPackages(
         filter: RuntimePackageFilter = .managed
@@ -2307,6 +2394,15 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func placeStagedWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Returns the registry row of one package's wrapper (runtime-api.md §10.2).
     func wrapperInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data
+
+    /// Lists every registered wrapper (wrapper.md §9.1).
+    func listWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data
+
+    /// Removes a wrapper's registry entry (wrapper.md §9.5).
+    func removeWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data
+
+    /// Scans the Applications folders for wrapper bundles (wrapper.md §7.2).
+    func rescanWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Returns the approval prompts waiting for APKRun.app.
     func pendingApprovals(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Answers an approval prompt.
@@ -2876,6 +2972,51 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.wrapperInfo(request) { response in finish(.success(response)) }
+        }
+    }
+
+    /// Lists every registered wrapper (wrapper.md §9.1).
+    func listWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.listWrappers(request) { response in finish(.success(response)) }
+        }
+    }
+
+    /// Removes a wrapper's registry entry (wrapper.md §9.5).
+    func removeWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.removeWrapper(request) { response in finish(.success(response)) }
+        }
+    }
+
+    /// Scans the Applications folders for wrapper bundles (wrapper.md §7.2).
+    func rescanWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.rescanWrappers(request) { response in finish(.success(response)) }
         }
     }
 

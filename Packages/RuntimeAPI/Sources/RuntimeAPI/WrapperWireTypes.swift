@@ -1072,3 +1072,147 @@ public struct RuntimeApprovalBrokerReply: Codable, Equatable, Sendable {
         self.error = error
     }
 }
+
+// MARK: - wrapper lifecycle (runtime-api.md §10.5, wrapper.md §9)
+
+/// One row of `listWrappers`: the registry summary plus the status the
+/// validator computed (wrapper.md §9.1). The status is never stored.
+public struct WrapperListEntryWire: Codable, Equatable, Sendable {
+    /// The registry row.
+    public var summary: WrapperSummary
+    /// The validator's state, or nil when validation could not run.
+    public var state: WrapperState?
+    /// Why the wrapper wants a refresh (check 6 of §9.1).
+    public var refreshReasons: [WrapperRefreshReason]
+
+    /// Creates a list entry.
+    public init(
+        summary: WrapperSummary,
+        state: WrapperState? = nil,
+        refreshReasons: [WrapperRefreshReason] = []
+    ) {
+        self.summary = summary
+        self.state = state
+        self.refreshReasons = refreshReasons
+    }
+}
+
+/// A `listWrappers` control request; has no parameters.
+public struct RuntimeWrapperListControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+
+    /// Creates a list-wrappers control request.
+    public init(header: APIRequestHeader) {
+        self.header = header
+    }
+}
+
+/// The result or typed error returned by a control list-wrappers request.
+public struct RuntimeWrapperListControlReply: Codable, Equatable, Sendable {
+    /// The wrapper rows, present on success.
+    public let result: [WrapperListEntryWire]?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: [WrapperListEntryWire]) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// A `removeWrapper` control request (wrapper.md §9.5): drops the registry
+/// entry, and with `trash` moves the bundle to the Trash first.
+public struct RuntimeRemoveWrapperControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The installed package whose wrapper to remove.
+    public let packageID: RuntimePackageID
+    /// Move the bundle to the Trash before dropping the entry.
+    public let trash: Bool
+
+    /// Creates a remove-wrapper control request.
+    public init(header: APIRequestHeader, packageID: RuntimePackageID, trash: Bool) {
+        self.header = header
+        self.packageID = packageID
+        self.trash = trash
+    }
+}
+
+/// The result or typed error returned by a control remove-wrapper request.
+public struct RuntimeRemoveWrapperControlReply: Codable, Equatable, Sendable {
+    /// Whether an entry was removed, present on success.
+    public let result: Bool?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: Bool) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// A `rescanWrappers` control request (wrapper.md §7.2): lists, or with
+/// `register` also registers, the valid `APKRunPackageID` bundles in
+/// `~/Applications` and `/Applications`.
+public struct RuntimeRescanWrappersControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// Register the found bundles, not just list them.
+    public let register: Bool
+
+    /// Creates a rescan-wrappers control request.
+    public init(header: APIRequestHeader, register: Bool) {
+        self.header = header
+        self.register = register
+    }
+}
+
+/// The result or typed error returned by a control rescan-wrappers request.
+public struct RuntimeRescanWrappersControlReply: Codable, Equatable, Sendable {
+    /// The bundle paths found and registered, present on success.
+    public let result: RescanWrappersResult?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: RescanWrappersResult) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// The `rescanWrappers` outcome: the bundle paths the scan found, and the
+/// ones `register = true` newly registered.
+public struct RescanWrappersResult: Codable, Equatable, Sendable {
+    /// Every wrapper bundle found, as a path.
+    public var found: [String]
+    /// The bundles that were registered by this call.
+    public var registered: [String]
+
+    /// Creates a rescan result.
+    public init(found: [String], registered: [String]) {
+        self.found = found
+        self.registered = registered
+    }
+}

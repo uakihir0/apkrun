@@ -79,7 +79,7 @@
             // like ./com.example keeps working through the same rule).
             let isFile =
                 (fileExists && !isValidPackageID)
-                || (package.hasSuffix(".apk") && (fileExists || !isValidPackageID))
+                || (package.lowercased().hasSuffix(".apk") && (fileExists || !isValidPackageID))
 
             let client: RuntimeControlClient
             do {

@@ -398,6 +398,11 @@ extension RuntimeHost {
         guard let abandoned = image?.version else {
             throw ImageFailure.noCurrentImage
         }
+        guard let instanceStore,
+            (try? await instanceStore.listRecoveryPoints())?.isEmpty == false
+        else {
+            throw ImageFailure.noRecoveryPoint
+        }
         try await imageUpdateCoordinator.rollback(to: previous.version, abandoned: abandoned)
         return "Rolled back to \(previous.version)."
     }

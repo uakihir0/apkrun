@@ -111,11 +111,11 @@ public actor ImageUpdateCoordinator {
                 try await migrate(version, operationID, restoring)
                 await self.noteInstalled(version)
             } catch let failure as ImageFailure {
-                await self.noteApplyFailed(version, error: failure)
+                await self.noteApplyFailed(version, error: failure, restoreFailure: restoring)
                 throw failure
             } catch {
                 let failure = ImageFailure.imageUpdateBusy(detail: "\(error)")
-                await self.noteApplyFailed(version, error: failure)
+                await self.noteApplyFailed(version, error: failure, restoreFailure: restoring)
                 throw failure
             }
         }
@@ -205,17 +205,22 @@ public actor ImageUpdateCoordinator {
         publish(.imageUpdateChanged(WireImageUpdatePhase(state.phase)))
     }
 
-    private func noteApplyFailed(_ version: ImageCore.ImageVersion, error: any Error) {
+    private func noteApplyFailed(
+        _ version: ImageCore.ImageVersion, error: any Error, restoreFailure: Bool = false
+    ) {
         // The supervisor already restored the previous image; record the
-        // rejection (§4.8).
+        // rejection (§4.8). A failed *restore* leaves Android on the abandoned
+        // image, so the rollback target is not rejected.
         logger.notice(
             "IMAGE_MIGRATION_END \(version.description, .public) rejected: \(error.localizedDescription, .public)")
         state.phase = .failed(state.candidate, reason: error.localizedDescription, retryAt: nil)
-        state.lastResult = .rejected(version, reason: .migrationFailed)
-        state.rejected[version.description] = RejectedImage(
-            version: version, at: clock(), reason: .migrationFailed,
-            detail: error.localizedDescription
-        )
+        if !restoreFailure {
+            state.lastResult = .rejected(version, reason: .migrationFailed)
+            state.rejected[version.description] = RejectedImage(
+                version: version, at: clock(), reason: .migrationFailed,
+                detail: error.localizedDescription
+            )
+        }
         save()
         publish(.imageUpdateChanged(WireImageUpdatePhase(state.phase)))
     }

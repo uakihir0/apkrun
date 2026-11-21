@@ -2248,8 +2248,27 @@ public actor RuntimeHost {
 
         // 5. the atomic Contents swap; an App Management denial stages the
         //    new Contents for APKRun.app and reports refreshBlocked (R-20).
+        //
+        //    A new display name renames the bundle after the swap (§6.4).
+        //    The destination is checked before mutating the installed bundle
+        //    so a conflict cannot strand the registry with a stale cdhash.
         let newContents = staged.bundle.appendingPathComponent("Contents")
         let liveContents = bundleURL.appendingPathComponent("Contents")
+        let renamed = bundleURL.deletingLastPathComponent()
+            .appendingPathComponent("\(fileName).app", isDirectory: true)
+        let wantsRename =
+            displayNameOverride != nil
+            && bundleURL.deletingPathExtension().lastPathComponent != fileName
+            && renamed != bundleURL
+        if wantsRename, FileManager.default.fileExists(atPath: renamed.path) {
+            try? FileManager.default.removeItem(at: stagingDirectory)
+            try? await abortRefresh(bundleID: entry.bundleId, registry: registry)
+            let kind =
+                WrapperInstaller(sink: diagnostics?.logSink)
+                .classifyConflict(at: renamed, packageID: packageID)
+                ?? .otherApp
+            throw Self.wrapperWireError(for: .nameConflict(renamed, existing: kind))
+        }
         if renamex_np(newContents.path, liveContents.path, UInt32(RENAME_SWAP)) != 0 {
             let token = UUID().uuidString
             let fallback = paths.wrapperStagingDirectory
@@ -2267,32 +2286,33 @@ public actor RuntimeHost {
         }
 
         // 6. a new display name renames the bundle (conflict rules of §6.4).
+        //    A destination that appeared after step 5, or a failed rename,
+        //    puts the swapped contents back first so the registry cdhash
+        //    still matches the installed bundle.
         var finalURL = bundleURL
-        if displayNameOverride != nil,
-            bundleURL.deletingPathExtension().lastPathComponent != fileName
-        {
-            let renamed = bundleURL.deletingLastPathComponent()
-                .appendingPathComponent("\(fileName).app", isDirectory: true)
-            if renamed != bundleURL {
-                if FileManager.default.fileExists(atPath: renamed.path) {
-                    try? FileManager.default.removeItem(at: stagingDirectory)
-                    try? await abortRefresh(bundleID: entry.bundleId, registry: registry)
-                    let kind =
-                        WrapperInstaller(sink: diagnostics?.logSink)
-                        .classifyConflict(at: renamed, packageID: packageID)
-                        ?? .otherApp
-                    throw Self.wrapperWireError(for: .nameConflict(renamed, existing: kind))
-                }
-                do {
-                    try FileManager.default.moveItem(at: bundleURL, to: renamed)
-                    finalURL = renamed
-                } catch {
-                    try? FileManager.default.removeItem(at: stagingDirectory)
-                    try? await abortRefresh(bundleID: entry.bundleId, registry: registry)
-                    throw .runtime(
-                        "internalError",
-                        message: "APKRun couldn't rename the Mac app.")
-                }
+        if wantsRename {
+            if FileManager.default.fileExists(atPath: renamed.path) {
+                await undoContentsSwap(
+                    newContents: newContents, liveContents: liveContents,
+                    stagingDirectory: stagingDirectory, finalURL: bundleURL,
+                    bundleID: entry.bundleId, registry: registry)
+                let kind =
+                    WrapperInstaller(sink: diagnostics?.logSink)
+                    .classifyConflict(at: renamed, packageID: packageID)
+                    ?? .otherApp
+                throw Self.wrapperWireError(for: .nameConflict(renamed, existing: kind))
+            }
+            do {
+                try FileManager.default.moveItem(at: bundleURL, to: renamed)
+                finalURL = renamed
+            } catch {
+                await undoContentsSwap(
+                    newContents: newContents, liveContents: liveContents,
+                    stagingDirectory: stagingDirectory, finalURL: bundleURL,
+                    bundleID: entry.bundleId, registry: registry)
+                throw .runtime(
+                    "internalError",
+                    message: "APKRun couldn't rename the Mac app.")
             }
         }
 
@@ -2339,6 +2359,28 @@ public actor RuntimeHost {
     /// Returns a `refreshing` entry to `active` after a failed refresh.
     private func abortRefresh(bundleID: String, registry: WrapperRegistry) async {
         try? await registry.abortRefresh(bundleID: bundleID)
+    }
+
+    /// Restores a bundle's pre-swap contents after a post-swap step failed
+    /// (wrapper.md §9.3). When the restore swap itself fails, the refresh is
+    /// finished against the already-installed new contents instead of being
+    /// aborted, so cdhash and bundle never disagree.
+    private func undoContentsSwap(
+        newContents: URL,
+        liveContents: URL,
+        stagingDirectory: URL,
+        finalURL: URL,
+        bundleID: String,
+        registry: WrapperRegistry
+    ) async {
+        if renamex_np(newContents.path, liveContents.path, UInt32(RENAME_SWAP)) == 0 {
+            try? FileManager.default.removeItem(at: stagingDirectory)
+            await abortRefresh(bundleID: bundleID, registry: registry)
+        } else {
+            let bookmark = (try? finalURL.bookmarkData()) ?? Data()
+            try? await registry.finishRefresh(
+                bundleID: bundleID, path: finalURL, bookmark: bookmark)
+        }
     }
 
     /// Starts a `wrapperRefreshAll` operation (wrapper.md §9.4).
@@ -2794,7 +2836,11 @@ public actor RuntimeHost {
         }
         if trash {
             let (url, _) = await resolvedWrapperURL(entry: entry, registry: registry)
-            if FileManager.default.fileExists(atPath: url.path) {
+            // Only the registered wrapper itself goes to the Trash; anything
+            // else placed at the recorded path stays untouched (§9.5).
+            let isWrapper = WrapperInstaller(sink: diagnostics?.logSink)
+                .isWrapperOf(packageID, at: url)
+            if isWrapper, FileManager.default.fileExists(atPath: url.path) {
                 var trashed: NSURL?
                 do {
                     try FileManager.default.trashItem(at: url, resultingItemURL: &trashed)

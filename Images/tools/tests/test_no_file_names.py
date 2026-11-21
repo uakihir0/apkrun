@@ -20,6 +20,14 @@ def test_apkrun_image_sources_do_not_embed_image_file_names() -> None:
         # The refreshed top-level vbmeta is written under this fixed name (#99, IR-745). The
         # input names come from the stock bundle and the manifest, not from this name.
         "vendor_reseal.py": {"vbmeta_a.img"},
+        # The vbmeta-reseal work directory names the tool's own staging files. Input
+        # names come from the stock bundle manifest and the refresh record.
+        "bundle_variant.py": {
+            "injected-vendor_a.img",
+            "refreshed-vbmeta_a.img",
+            "resealed-vendor_a.img",
+            "stock-vbmeta_a.img",
+        },
     }
 
     for path in sorted(package_directory.glob("*.py")):

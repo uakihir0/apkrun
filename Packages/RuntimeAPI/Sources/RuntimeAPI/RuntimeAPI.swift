@@ -111,6 +111,9 @@ public struct RuntimeHelloReply: Codable, Equatable, Sendable {
 public enum RuntimeEndpointKind: String, Codable, Equatable, Sendable {
     /// APKRun.app, menu bar, CLI, and launcher control surface.
     case control
+    /// The frozen maintenance endpoint (runtime-api.md §12.1): available in
+    /// every host state so any two APKRun builds can coordinate an update.
+    case maintenance
 }
 
 /// Requests one authenticated endpoint from the broker.

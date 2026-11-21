@@ -4994,3 +4994,5 @@ private func safeMessage(for code: String) -> String {
         "Something went wrong in APKRun's background service."
     }
 }
+extension CheckSelfUpdateRequest: VersionedControlRequest {}
+extension SelfUpdateNote: VersionedControlRequest {}

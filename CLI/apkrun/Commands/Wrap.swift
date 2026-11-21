@@ -154,7 +154,9 @@
                 // honor it here the way place() does (wrapper.md §6.4):
                 // --replace swaps only this package's own wrapper, never an
                 // item that belongs to anything else.
-                if FileManager.default.fileExists(atPath: finalURL.path) {
+                let destinationExists = FileManager.default.fileExists(
+                    atPath: finalURL.path)
+                if destinationExists {
                     let existingPackage = plistPackageID(of: finalURL)
                     guard replace, existingPackage != nil,
                         existingPackage == plistPackageID(of: stagedBundle)
@@ -168,12 +170,27 @@
                                 + "APKRun never replaces it.",
                             parameters: ["file": finalURL.lastPathComponent])
                     }
-                    // replaceItemAt swaps atomically: the existing wrapper
-                    // survives a failed move instead of being deleted first.
-                    _ = try FileManager.default.replaceItemAt(
-                        finalURL, withItemAt: stagedBundle)
-                } else {
-                    try FileManager.default.moveItem(at: stagedBundle, to: finalURL)
+                }
+                // Move via a temp name in the destination folder, the same
+                // path moveIntoPlace takes: it survives a different volume
+                // (replaceItemAt requires one) and keeps the existing wrapper
+                // in place until the swap.
+                try FileManager.default.createDirectory(
+                    at: directory, withIntermediateDirectories: true)
+                let temp = directory.appendingPathComponent(
+                    ".\(finalURL.lastPathComponent).apkrun-\(UUID().uuidString)",
+                    isDirectory: true)
+                try FileManager.default.moveItem(at: stagedBundle, to: temp)
+                do {
+                    if destinationExists {
+                        _ = try FileManager.default.replaceItemAt(
+                            finalURL, withItemAt: temp)
+                    } else {
+                        try FileManager.default.moveItem(at: temp, to: finalURL)
+                    }
+                } catch {
+                    try? FileManager.default.removeItem(at: temp)
+                    throw error
                 }
             } catch let moveError as RuntimeWireError {
                 throw moveError

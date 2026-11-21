@@ -1,5 +1,6 @@
 #if !APKRUN_EMBEDDED_RUNTIME
     import ArgumentParser
+    import DiagnosticsCore
     import Foundation
     import RuntimeAPI
     import RuntimeClient
@@ -52,7 +53,7 @@
                 throw await RuntimeStatusOutput.commandFailure(error)
             }
 
-            let operationID = OperationID()
+            let operationID = RuntimeAPI.OperationID()
             let request = WrapperRequest(
                 packageID: packageID,
                 destination: destination,
@@ -87,10 +88,20 @@
                     operationID: handle.operationID
                 )
             }
-            let info = try WrapCommandSupport.wrapperInfo(
-                from: snapshot,
-                expectedPackageID: packageID
-            )
+            let info: WrapperInfo
+            do {
+                info = try WrapCommandSupport.wrapperInfo(
+                    from: snapshot,
+                    expectedPackageID: packageID
+                )
+            } catch let failure as RuntimeWireError {
+                // wrapper.md §6.3: when the daemon's probe hit EPERM the
+                // bundle waits in staging and the client — this process,
+                // which the user can grant folder access — moves it and
+                // calls placeStagedWrapper to finish.
+                info = try await WrapCommandSupport.placeStaged(
+                    after: failure, destination: destination, client: client)
+            }
             if json {
                 try OperationCommandOutput.writeJSON(info)
             } else {
@@ -100,6 +111,62 @@
     }
 
     enum WrapCommandSupport {
+        /// Moves a staged bundle into place after
+        /// `wrapper.destinationNotAccessible` (wrapper.md §6.3) and finishes
+        /// with `placeStagedWrapper`. Re-throws any other error.
+        static func placeStaged(
+            after failure: RuntimeWireError,
+            destination: WireWrapperDestination?,
+            client: RuntimeControlClient
+        ) async throws -> WrapperInfo {
+            guard failure.code == "wrapper.destinationNotAccessible",
+                let token = failure.parameters["stagingToken"]
+            else {
+                throw failure
+            }
+            // The target folder the daemon could not reach; the staged
+            // bundle keeps the name the daemon chose (the sole .app in the
+            // token's staging directory).
+            let directory: URL
+            switch destination {
+            case .directory(let url):
+                directory = url
+            case nil, .applications, .userApplications:
+                directory = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Applications", isDirectory: true)
+            }
+            let paths = APKRunPaths()
+            let stagingDir = paths.wrapperStagingDirectory
+                .appendingPathComponent(token, isDirectory: true)
+            let stagedBundles =
+                (try? FileManager.default.contentsOfDirectory(
+                    at: stagingDir, includingPropertiesForKeys: nil
+                ))?.filter { $0.pathExtension == "app" } ?? []
+            guard let stagedBundle = stagedBundles.first else {
+                throw failure
+            }
+            let finalURL = directory.appendingPathComponent(
+                stagedBundle.lastPathComponent, isDirectory: true)
+            do {
+                try FileManager.default.moveItem(at: stagedBundle, to: finalURL)
+            } catch {
+                throw failure
+            }
+            let bookmark = try? finalURL.bookmarkData()
+            do {
+                return try await client.placeStagedWrapper(
+                    stagingToken: token,
+                    finalURL: finalURL,
+                    bookmark: bookmark?.base64EncodedString()
+                )
+            } catch let clientError as RuntimeControlClientError {
+                guard case .remoteFailure(let code, let message, _) = clientError else {
+                    throw clientError
+                }
+                throw RuntimeWireError(domain: "wrapper", code: code, message: message)
+            }
+        }
+
         /// The `wrapper` output of a finished `wrapperCreate` operation.
         static func wrapperInfo(
             from snapshot: OperationSnapshot,
@@ -131,7 +198,7 @@
         static func beginFailure(
             _ error: any Error,
             packageID: RuntimePackageID,
-            operationID: OperationID
+            operationID: RuntimeAPI.OperationID
         ) async -> any Error {
             if let wireError = error as? RuntimeWireError {
                 return wireError
@@ -147,7 +214,7 @@
         static func waitFailure(
             _ error: any Error,
             packageID: RuntimePackageID,
-            operationID: OperationID
+            operationID: RuntimeAPI.OperationID
         ) async -> any Error {
             if let wireError = error as? RuntimeWireError {
                 return wireError

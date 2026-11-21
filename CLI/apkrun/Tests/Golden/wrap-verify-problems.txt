@@ -1,0 +1,4 @@
+Bundle ID: io.apkrun.android.io.apkrun.fixture.hellotext
+Package: io.apkrun.fixture.hellotext
+Problem: signatureInvalid
+Problem: bundleIDMismatch

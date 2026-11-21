@@ -38,6 +38,12 @@
         @Option(name: .long, help: "Provider URL used with --update-provider.")
         var updateURL: String?
 
+        @Flag(name: .long, help: "Create the Mac app after the install, as `apkrun wrap` would.")
+        var wrap = false
+
+        @Option(name: .long, help: "Directory the Mac app is placed in with --wrap (default: ~/Applications).")
+        var output: String?
+
         mutating func run() async throws {
             let installOptions = try InstallUpdateOptions.options(
                 provider: provider, updates: updates, update: update,
@@ -137,6 +143,33 @@
                         + "(\(result.packageID.rawValue)), version "
                         + "\(result.versionCode.map(String.init) ?? "unknown")."
                 )
+            }
+
+            // cli.md §3.3: the install already succeeded, so a wrapper
+            // failure is reported and the command exits 2 (partial).
+            if wrap {
+                do {
+                    let info = try await WrapCommandSupport.createAndPlace(
+                        packageID: result.packageID,
+                        destination: try WrapCommandSupport.destination(for: output),
+                        fileName: nil,
+                        displayName: nil,
+                        icon: nil,
+                        iconHandle: nil,
+                        replace: .never,
+                        windowDefaults: nil,
+                        client: client
+                    )
+                    if json {
+                        try OperationCommandOutput.writeJSON(info)
+                    } else {
+                        Output.write(WrapCommandSupport.resultText(info))
+                    }
+                } catch {
+                    Output.writeLogLine(
+                        ErrorOutput.render(error, json: json), toStandardError: true)
+                    throw ExitCode(2)
+                }
             }
         }
     }

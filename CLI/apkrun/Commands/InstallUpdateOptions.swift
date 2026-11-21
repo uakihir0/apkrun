@@ -77,8 +77,10 @@ enum InstallUpdateOptions {
             options.provider = try providerSpec(specString)
             options.authority = choice == .manual ? .manual : .apkrun
         }
-        if choice == .manual {
-            options.authority = .manual
+        switch choice {
+        case .manual: options.authority = .manual
+        case .automatic, .notifyOnly: options.authority = .apkrun
+        case nil: break
         }
         options.updateMode = choice
         return options

@@ -1,0 +1,5 @@
+Bundle ID: io.apkrun.android.io.apkrun.fixture.hellotext
+Package: io.apkrun.fixture.hellotext
+Kind: local
+CDHash: 0123456789abcdef0123456789abcdef01234567
+Valid

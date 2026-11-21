@@ -24,7 +24,9 @@ SUBCOMMANDS:
   integrations            Inspect desktop integrations of an Android app.
   update                  Check for, list, and manage Android app updates.
   operations              Inspect or cancel long-running APKRun operations.
-  wrap                    Create the Mac app of an installed Android app.
+  wrap                    Install an APK and create its Mac app, or wrap an
+                          installed app.
+  wrapper                 Inspect the Mac apps APKRun created.
   config                  Read and write daemon settings.
 
   See 'apkrun help <subcommand>' for detailed help.

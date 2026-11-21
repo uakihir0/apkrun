@@ -518,6 +518,9 @@ public struct RuntimePackageDetails: Codable, Sendable, Equatable {
     /// A verified update waiting for installation, when one is staged
     /// (package-store.md §7.1).
     public var staged: RuntimeStagedArtifact?
+    /// The last known-good set kept for rollback, when one exists
+    /// (package-store.md §7.2; API 1.25).
+    public var previous: RuntimeArtifactSlot?
 
     /// Creates package details.
     public init(
@@ -525,13 +528,40 @@ public struct RuntimePackageDetails: Codable, Sendable, Equatable {
         files: [RuntimeArtifactFile],
         artifactBytes: Int64,
         androidDataBytes: Int64? = nil,
-        staged: RuntimeStagedArtifact? = nil
+        staged: RuntimeStagedArtifact? = nil,
+        previous: RuntimeArtifactSlot? = nil
     ) {
         self.summary = summary
         self.files = files
         self.artifactBytes = artifactBytes
         self.androidDataBytes = androidDataBytes
         self.staged = staged
+        self.previous = previous
+    }
+}
+
+/// The rollback slot `packageInfo` reports (package-store.md §7.2).
+public struct RuntimeArtifactSlot: Codable, Sendable, Equatable {
+    /// Android's long version code of the slot's set.
+    public var versionCode: RuntimeVersionCode
+    /// The display-only version string, if present.
+    public var versionName: String?
+    /// The combined size of the APK files in bytes.
+    public var size: Int64
+    /// The number of APK files.
+    public var fileCount: Int
+
+    /// Creates a slot summary.
+    public init(
+        versionCode: RuntimeVersionCode,
+        versionName: String? = nil,
+        size: Int64,
+        fileCount: Int
+    ) {
+        self.versionCode = versionCode
+        self.versionName = versionName
+        self.size = size
+        self.fileCount = fileCount
     }
 }
 

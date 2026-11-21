@@ -842,6 +842,13 @@ public actor EmbeddedPackageService: RuntimeService {
                         size: $0.size,
                         fileCount: $0.fileCount,
                         origin: $0.origin.type.rawValue)
+                },
+                previous: record.artifacts.previous.map {
+                    RuntimeArtifactSlot(
+                        versionCode: $0.versionCode,
+                        versionName: $0.versionName,
+                        size: $0.size,
+                        fileCount: $0.fileCount)
                 }
             )
         } catch {

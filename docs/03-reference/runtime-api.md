@@ -121,6 +121,9 @@ Target constants (not in code): `wrapperMajors = [1]` (served on the wrapper end
 | 1.20 | `listWrappers`, `removeWrapper`, `rescanWrappers` |
 | 1.21 | `refreshWrapper`, `refreshAllWrappers` |
 | 1.22 | `beginRepairPackage` |
+| 1.23 | `listSessions`, `packageIcon`, the `sessions` topic |
+| 1.24 | `updatePackageSettings`, `packageSettings` |
+| 1.25 | `RuntimePackageDetails.previous` (the rollback slot) |
 
 ### 2.2 Rules per endpoint
 

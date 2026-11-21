@@ -23,7 +23,7 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.23 adds `listSessions`, `packageIcon`, and `sessions` topic events
     /// (host-ui.md §5.2–§5.3).
     /// 1.24 adds `packageSettings` and `updatePackageSettings` (host-ui.md §7).
-    public static let current = APIVersion(major: 1, minor: 24)
+    public static let current = APIVersion(major: 1, minor: 25)
 
     /// The incompatible protocol generation.
     public let major: Int

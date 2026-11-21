@@ -104,9 +104,12 @@ struct UpdatesSection: View {
                 }
             }
         }
-        if model.details?.staged != nil {
+        if let previous = model.details?.previous {
             Section {
-                Button("Roll Back to the Previous Version…", role: .destructive) {
+                Button(
+                    "Roll Back to \(previous.versionName ?? String(previous.versionCode))…",
+                    role: .destructive
+                ) {
                     model.confirmRollback = true
                 }
             }

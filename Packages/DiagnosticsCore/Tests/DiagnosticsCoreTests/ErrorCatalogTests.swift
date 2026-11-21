@@ -46,7 +46,7 @@ import Testing
                 "guestAgentConnectTimedOut", "guestAgentHandshakeFailed", "requiredAgentUnavailable",
                 "guestAgentOperationFailed", "inputNotBound",
                 "busy", "operationNotFound", "notProvisioned", "hostRequirementsNotMet",
-                "developerModeRequired",
+                "developerModeRequired", "invalidConfigValue", "unknownConfigKey",
             ].map { "runtime.\($0)" }
             + [
                 "rendererInitFailed", "rendererOperationFailed", "rendererLost", "libraryMissing",
@@ -67,6 +67,7 @@ import Testing
                 "verificationFailed", "registrationFailed", "registryUnavailable",
                 "stagingExpired", "bundleInvalid",
                 "approvalDenied", "approvalTimedOut", "approvalNotFound",
+                "launchServicesMissing",
             ].map { "wrapper.\($0)" }
             + [
                 "disabled", "notSupportedOnImage", "guestUnavailable", "clipboardTooLarge",
@@ -78,7 +79,7 @@ import Testing
                 "unsupportedABI", "minSdkTooHigh", "targetSdkTooLow", "expansionFilesNotSupported",
                 "reservedPackage", "tooLarge", "resourcesArscNotAligned", "signerMismatch",
                 "alreadyInstalled", "downgradeRefused", "packageAlreadyManaged",
-                "packageInUse", "stagedUpdateMissing",
+                "packageInUse", "stagedUpdateMissing", "rollbackUnavailable",
             ].map { "store.\($0)" }
             + [
                 "providerNotConfigured", "providerMetadataInvalid", "providerHTTPStatus",

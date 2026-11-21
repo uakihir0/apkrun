@@ -21,8 +21,10 @@ final class UpdateServer: @unchecked Sendable {
         self.process = process
     }
 
-    static func start() throws -> UpdateServer {
-        let root = FileManager.default.temporaryDirectory
+    static func start(root: URL? = nil) throws -> UpdateServer {
+        let root =
+            root
+            ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("apkrun-update-server-\(UUID().uuidString)")
         try FileManager.default.createDirectory(
             at: root.appendingPathComponent("local"), withIntermediateDirectories: true)

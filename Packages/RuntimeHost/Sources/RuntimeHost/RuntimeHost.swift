@@ -4429,6 +4429,8 @@ public actor RuntimeHost {
     private func noteSessionEnded(_ sessionID: UUID, reason: String) {
         firstFramesBeforeRecord.remove(sessionID)
         Task { await clipboardCoordinator?.noteSessionEnded(sessionID: sessionID) }
+        // Pending "Save to Mac" offers die with their session (§6.5).
+        Task { await fileTransferServiceLazy?.discardOffers(of: sessionID) }
         guard let pending = pendingLaunchRecords.removeValue(forKey: sessionID) else {
             return
         }

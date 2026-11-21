@@ -166,10 +166,11 @@ public actor GuestBulkChannel {
         if let index = completed.firstIndex(where: { $0.id == transferID }) {
             return completed.remove(at: index).transfer
         }
+        let deadline = now.advanced(by: timeout)
         return await withTaskGroup(of: GuestInboundTransfer?.self) { group in
             group.addTask {
                 await withCheckedContinuation { continuation in
-                    self.addWaiter(transferID, continuation)
+                    self.addWaiter(transferID, deadline: deadline, continuation)
                 }
             }
             group.addTask {
@@ -187,23 +188,24 @@ public actor GuestBulkChannel {
         }
     }
 
-    /// Registers a fetcher under `transferID` on this actor.
+    /// Registers a fetcher under `transferID` on this actor. A registration
+    /// that lands past its own deadline — the losing arm of the fetch's task
+    /// group — answers nil at once; a fresh fetch carries a fresh deadline
+    /// and waits normally.
     private nonisolated func addWaiter(
         _ transferID: UInt64,
+        deadline: ContinuousClock.Instant,
         _ continuation: CheckedContinuation<GuestInboundTransfer?, Never>
     ) {
-        Task { await self.registerWaiter(transferID, continuation) }
+        Task { await self.registerWaiter(transferID, deadline: deadline, continuation) }
     }
-
-    /// Transfer IDs whose fetch already timed out; a waiter registered late
-    /// for one is answered at once instead of waiting forever.
-    private var timedOut: Set<UInt64> = []
 
     private func registerWaiter(
         _ transferID: UInt64,
+        deadline: ContinuousClock.Instant,
         _ continuation: CheckedContinuation<GuestInboundTransfer?, Never>
     ) {
-        if timedOut.remove(transferID) != nil {
+        if ContinuousClock.now >= deadline {
             continuation.resume(returning: nil)
         } else if let index = completed.firstIndex(where: { $0.id == transferID }) {
             continuation.resume(returning: completed.remove(at: index).transfer)
@@ -214,7 +216,6 @@ public actor GuestBulkChannel {
 
     /// Answers every waiter of `transferID` with nil (a fetch timeout).
     private func evictWaiter(_ transferID: UInt64) {
-        timedOut.insert(transferID)
         if let waiter = waiters.removeValue(forKey: transferID) {
             for continuation in waiter {
                 continuation.resume(returning: nil)
@@ -241,7 +242,6 @@ public actor GuestBulkChannel {
                 assemblies[frame.transferID] = assembly
             }
         case .end:
-            timedOut.remove(frame.transferID)
             guard let assembly = assemblies.removeValue(forKey: frame.transferID) else { return }
             let transfer = GuestInboundTransfer(
                 transferID: frame.transferID,

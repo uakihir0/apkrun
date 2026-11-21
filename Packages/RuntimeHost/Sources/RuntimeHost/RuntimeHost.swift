@@ -182,6 +182,12 @@ public actor RuntimeHost {
     /// The lazily built maintenance coordinator (runtime-api.md §12).
     var _maintenanceService: MaintenanceService?
     var _bundleWatcher: BundleWatcher?
+    /// The lazily built background appcast probe (§3.4).
+    var _selfUpdateProbe: SelfUpdateProbe?
+    /// The 24 h probe task, started after startup (§3.4).
+    var selfUpdateProbeTask: Task<Void, Never>?
+    /// Whether APKRun.app reported during this daemon run (§3.4 pitfall).
+    var apkrunAppReported = false
     /// Whether an image migration is in progress (#59 reports it here).
     var imageMigrating = false
     /// `restartForUpdate` set this; the daemon exits at the next idle check.
@@ -189,7 +195,17 @@ public actor RuntimeHost {
 
     /// Synchronous mirror of `MaintenanceService.state` for gates that run
     /// off the async path (runtime-api.md §3.7). Updated after every op.
-    var maintenanceHostState: HostState = .normal
+    var maintenanceHostState: HostState = .normal {
+        didSet {
+            if maintenanceHostState != oldValue {
+                maintenanceHostStateSince = Date()
+            }
+        }
+    }
+    /// When `maintenanceHostState` last changed (§12 health check).
+    var maintenanceHostStateSince = Date()
+    /// The on-disk bundle build `BundleWatcher` last saw (§3.6/§12).
+    var lastOnDiskBundleBuild: Int?
 
     /// Version and build the maintenance endpoint reports (§12).
     var buildIdentity: (marketingVersion: String, buildNumberInt: Int) {
@@ -346,6 +362,7 @@ public actor RuntimeHost {
         )
         observeLocaleTimeChanges()
         startLocaleTimeRefreshLoop()
+        Task { await self.registerSelfUpdateHealthCheck() }
         recordedBootOperationIDs = Set(
             BootRecordLog.read(from: paths.bootPerformanceFile).map(\.operationID)
         )
@@ -495,6 +512,7 @@ public actor RuntimeHost {
         hostState = startupFailure == nil ? "running" : "degraded"
         logger.notice("Daemon startup completed with host state \(hostState, .public)")
         startBundleWatcher()
+        startSelfUpdateProbeLoop()
         completeStartup()
     }
 
@@ -5042,7 +5060,7 @@ public actor RuntimeHost {
     // MARK: - First-run provisioning and Reset Android (#67)
 
     /// The `state.json` provisioning record under the data root.
-    private var provisioningStore: RuntimeStateStore {
+    var provisioningStore: RuntimeStateStore {
         RuntimeStateStore(fileURL: paths.stateFile)
     }
 

@@ -1919,6 +1919,32 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Runs the self-update probe as a user-initiated check (runtime-api.md §12.2).
+    public func checkSelfUpdate(
+        userInitiated: Bool = true
+    ) async throws(RuntimeControlClientError) -> SelfUpdateStatus {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = CheckSelfUpdateRequest(
+                header: makeHeader(), userInitiated: userInitiated)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.checkSelfUpdate(data)
+            let reply = try Self.decode(SelfUpdateStatusReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let status = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return status
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
     /// Rolls the package back to its previous version (update-system §7).
     public func rollbackPackage(
         packageID: RuntimePackageID,
@@ -3230,6 +3256,7 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func setConfig(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func selfUpdateStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func noteSelfUpdateStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func checkSelfUpdate(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void)
     func invalidate()
 }
@@ -4494,6 +4521,20 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.noteSelfUpdateStatus(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func checkSelfUpdate(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.checkSelfUpdate(request) { response in finish(.success(response)) }
         }
     }
 

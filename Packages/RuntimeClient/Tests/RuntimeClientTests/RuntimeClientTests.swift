@@ -1977,6 +1977,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
     }
 
+    func checkSelfUpdate(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void) {
         lock.withLock { connectionEventHandlerValue = handler }
     }

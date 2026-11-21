@@ -1405,6 +1405,7 @@ enum RuntimeControlOperation {
     case setConfig
     case selfUpdateStatus
     case noteSelfUpdateStatus
+    case checkSelfUpdate
     case packageSettings
     case updatePackageSettings
     case importBootstrap
@@ -1571,6 +1572,15 @@ enum RuntimeControlOperation {
             case .app:
                 true
             case .menuBar, .cli, .launcher, .wrapper:
+                false
+            }
+        case .checkSelfUpdate:
+            // User-initiated probe checks come from the app, the menu bar,
+            // and the CLI (§12.2).
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
                 false
             }
         case .hostNotifications, .hostNotificationResponse:
@@ -5027,6 +5037,43 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             }
             await host.noteSelfUpdate(note)
             response.send(Self.encode(SelfUpdateNoteReply(result: RuntimeEmpty())))
+        }
+    }
+
+    func checkSelfUpdate(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    SelfUpdateStatusReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .checkSelfUpdate,
+                as: CheckSelfUpdateRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        SelfUpdateStatusReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let check = try? JSONDecoder().decode(CheckSelfUpdateRequest.self, from: request)
+            else {
+                response.send(
+                    Self.encode(
+                        SelfUpdateStatusReply(error: Self.malformedWireError)))
+                return
+            }
+            let status = await host.checkSelfUpdate(userInitiated: check.userInitiated)
+            response.send(Self.encode(SelfUpdateStatusReply(result: status)))
         }
     }
 

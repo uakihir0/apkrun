@@ -81,6 +81,11 @@ actor MaintenanceService {
         case .normal, .unknown:
             break
         }
+        if request.targetBuild <= build {
+            throw .maintenance(
+                "selfUpdateNotNewer",
+                message: "The update is not newer than the running build.")
+        }
         if !request.closeSessions, await !sessionsProvider().isEmpty {
             throw .maintenance(
                 "hostUpdateSessionsOpen",
@@ -161,9 +166,15 @@ actor MaintenanceService {
         selfUpdate
     }
 
+    /// Whether APKRun.app reported a Sparkle result during this daemon run
+    /// (§3.4: the probe only notifies while APKRun.app is not connected; a
+    /// `--notify` launch never calls `noteSelfUpdateStatus`).
+    private(set) var appReportedThisRun = false
+
     /// Records Sparkle's result from APKRun.app and publishes the change
     /// (runtime-api.md §12.2).
     func noteSelfUpdate(_ note: SelfUpdateNote) {
+        appReportedThisRun = true
         selfUpdate = SelfUpdateStatus(
             currentVersion: version,
             currentBuild: build,

@@ -32,6 +32,7 @@ public struct SchemaMigrator: Sendable {
     /// The current schema version per file.
     private let current: [String: Int]
 
+    /// Creates a migrator; the default maps come from `DataSchemas.current`.
     public init(
         steps: [String: [Int: MigrationStep]] = [:],
         current: [String: Int] = DataSchemas.current

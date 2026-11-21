@@ -854,6 +854,9 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     /// APKRun.app reports Sparkle's result (runtime-api.md §12.2). Reply:
     /// `RuntimeEmptyReply`.
     func noteSelfUpdateStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Runs the self-update probe (runtime-api.md §12.2). Reply:
+    /// `SelfUpdateStatusReply`.
+    func checkSelfUpdate(_ request: Data, reply: @escaping (Data) -> Void)
     /// Adds or removes a version on the package's skip list (§8.4).
     func updateSkipped(_ request: Data, reply: @escaping (Data) -> Void)
     /// Checks and installs a package update now, optionally from files

@@ -1132,6 +1132,62 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Rolls a package back to its previous artifact set (runtime-api.md
+    /// §9.1, update-system.md §8.5, cli.md §4.3). The reply's
+    /// `rolledBackTo`/`unavailable` tells the CLI which §8.5 message to
+    /// print.
+    public func rollbackPackage(
+        packageID: RuntimePackageID,
+        allowDataLoss: Bool = false
+    ) async throws(RuntimeControlClientError) -> RuntimeRollbackPackageControlReply {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeRollbackPackageControlRequest(
+                header: makeHeader(), packageID: packageID, allowDataLoss: allowDataLoss)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.rollbackPackage(data)
+            let reply = try Self.decode(RuntimeRollbackPackageControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message)
+            }
+            guard (reply.rolledBackTo != nil) != (reply.unavailable == true) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return reply
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Adds or removes a versionCode on the package's skip list
+    /// (runtime-api.md §9.1, update-system.md §8.4, cli.md §4.3).
+    public func updateSkipped(
+        packageID: RuntimePackageID,
+        versionCode: RuntimeVersionCode,
+        skipped: Bool
+    ) async throws(RuntimeControlClientError) {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeUpdateSkipControlRequest(
+                header: makeHeader(), packageID: packageID,
+                versionCode: versionCode, skipped: skipped)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.updateSkipped(data)
+            let reply = try Self.decode(RuntimeUpdateSkipControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message)
+            }
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
     /// Checks and installs a package update now (runtime-api.md §9.1).
     /// `options.files` turns the request into a manual file update; the
     /// matching file handles travel like `importPackage`'s.
@@ -2132,6 +2188,10 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func setUpdatePolicy(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Sets a package's update authority (runtime-api.md §9.1).
     func setUpdateAuthority(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Rolls a package back to `previous/` (runtime-api.md §9.1, update-system.md §8.5).
+    func rollbackPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Adds or removes a version on the package's skip list (§8.4).
+    func updateSkipped(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Checks and installs a package update now, optionally from files (runtime-api.md §9.1).
     func updatePackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void)
@@ -2860,6 +2920,34 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.setUpdateAuthority(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func rollbackPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.rollbackPackage(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func updateSkipped(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.updateSkipped(request) { response in finish(.success(response)) }
         }
     }
 

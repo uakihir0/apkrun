@@ -877,6 +877,9 @@ public enum BrokenReason: Sendable, Equatable {
     case signerChanged
     case artifactMissing
     case reinstallFailed(StoredError)
+    /// A rollback after a failed health check could not restore the
+    /// previous set; the failed update stays installed (update-system.md §8.3).
+    case rollbackFailed
 
     private enum CodingKeys: String, CodingKey {
         case reinstallFailed
@@ -894,6 +897,7 @@ extension BrokenReason: Codable {
             case "removedInAndroid": self = .removedInAndroid
             case "signerChanged": self = .signerChanged
             case "artifactMissing": self = .artifactMissing
+            case "rollbackFailed": self = .rollbackFailed
             default:
                 throw DecodingError.dataCorruptedError(
                     in: container,
@@ -925,6 +929,9 @@ extension BrokenReason: Codable {
         case .artifactMissing:
             var container = encoder.singleValueContainer()
             try container.encode("artifactMissing")
+        case .rollbackFailed:
+            var container = encoder.singleValueContainer()
+            try container.encode("rollbackFailed")
         case .reinstallFailed(let error):
             var container = encoder.container(keyedBy: CodingKeys.self)
             var payload = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .reinstallFailed)

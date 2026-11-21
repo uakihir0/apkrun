@@ -10,6 +10,9 @@ import io.apkrun.guest.protocol.v1.InstallRequest
 import io.apkrun.guest.protocol.v1.ListManagedPackages
 import io.apkrun.guest.protocol.v1.PackageConstraint
 import io.apkrun.guest.protocol.v1.Request
+import io.apkrun.guest.protocol.v1.RollbackPackage
+import io.apkrun.guest.protocol.v1.RollbackResult
+import io.apkrun.guest.protocol.v1.RollbackStatus
 import io.apkrun.guest.protocol.v1.StorePackageInfo
 import io.apkrun.guest.protocol.v1.StorePackageList
 import io.apkrun.guest.protocol.v1.Uninstall
@@ -43,6 +46,16 @@ private class FakeStoreOperations : StoreOperations {
 
     override fun relinquishUpdateOwnership(packageName: String) {
         relinquished.incrementAndGet()
+    }
+
+    val rolledBack = AtomicInteger(0)
+
+    override fun rollbackPackage(request: RollbackPackage): RollbackResult {
+        rolledBack.incrementAndGet()
+        return RollbackResult.newBuilder()
+            .setStatus(RollbackStatus.ROLLBACK_STATUS_SUCCESS)
+            .setInstalledVersionCode(request.toVersionCode)
+            .build()
     }
 
     val constrained = AtomicInteger(0)
@@ -113,6 +126,28 @@ class StoreDispatcherTest {
             )
         assertEquals(GuestErrorCode.GUEST_ERROR_CODE_INVALID_ARGUMENT, response.error.code)
         assertEquals(0, operations.began.get())
+    }
+
+    @Test
+    fun rollbackPackageNeedsStoreRollback() = runBlocking {
+        val request =
+            Request.newBuilder()
+                .setRollbackPackage(
+                    RollbackPackage.newBuilder()
+                        .setPackage("io.example.app")
+                        .setFromVersionCode(2)
+                        .setToVersionCode(1)
+                )
+                .build()
+        val denied =
+            dispatcher.dispatch(1, request, enabled = setOf(GuestCapability.STORE_METADATA))
+        assertEquals(GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED, denied.error.code)
+        assertEquals(0, operations.rolledBack.get())
+
+        val allowed =
+            dispatcher.dispatch(1, request, enabled = setOf(GuestCapability.STORE_ROLLBACK))
+        assertTrue(allowed.hasRollbackPackage())
+        assertEquals(1, operations.rolledBack.get())
     }
 
     @Test

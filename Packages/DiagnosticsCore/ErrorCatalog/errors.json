@@ -2771,6 +2771,27 @@
    }
   },
   {
+   "code": "store.rollbackUnavailable",
+   "parameters": [],
+   "message": {
+    "en": "The previous version cannot be restored automatically.",
+    "ja": "前のバージョンを自動で復元できません。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeUpdate",
+    "case": "rollbackUnavailable(reason:)",
+    "when": "a rollback is requested but no mechanism applies, or no previous set is retained",
+    "raisedBy": "PackageStore",
+    "ref": "package-store.md §7.3"
+   },
+   "remediation": {
+    "en": "Rollback is possible only after an update. On images without rollback support, retry with `apkrun rollback <package> --allow-data-loss` (the app's data is deleted).",
+    "ja": "ロールバックは更新後にのみ可能です。ロールバック非対応のイメージでは `apkrun rollback <package> --allow-data-loss` で再試行してください（アプリデータは削除されます）。"
+   }
+  },
+  {
    "code": "store.targetSdkTooLow",
    "parameters": [
     "target",

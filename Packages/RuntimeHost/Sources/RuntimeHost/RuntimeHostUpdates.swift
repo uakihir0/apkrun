@@ -183,6 +183,8 @@ public actor EmbeddedUpdateService {
             {
             case .installed(let from, let to):
                 return .updated(from: from, to: to)
+            case .rolledBack(let failure):
+                return .rolledBack(reason: failure.errorCode)
             case .keptAfterFailedHealthCheck(let failure):
                 return .keptAfterFailedHealthCheck(reason: failure.errorCode)
             case .staged:
@@ -205,8 +207,9 @@ public actor EmbeddedUpdateService {
             storeBusy: { [store] packageID in
                 await store.packageMutationInProgress(packageID)
             },
-            // TODO(#42): launch health checks need a DisplayPool slot; v1's
-            // H1 is `versionOnly` for every package.
+            // §8.2: the health launch reuses the session's display lease; a
+            // pool with no free scanout answers `.launchFailed` rather than
+            // blocking the install queue on a display slot.
             requiresDisplaySlot: { _ in false },
             displaySlotFree: { true })
         serviceGate = gate
@@ -484,6 +487,30 @@ public actor EmbeddedUpdateService {
             throw PackageStoreFailure.packageNotFound
         }
         return updated
+    }
+
+    /// §8.5: rolls the package back to `previous/`. The coordinator
+    /// decides which §7.3 mechanism can run.
+    public func rollbackPackage(
+        packageID: PackageID,
+        allowDataLoss: Bool = false
+    ) async throws -> UpdateCoordinator.UpdateRollbackOutcome {
+        try await coordinator.rollbackPackage(packageID, allowDataLoss: allowDataLoss)
+    }
+
+    /// §8.4: adds (`skipped` true) or removes a version on the skip list.
+    /// Skipping discards any staged set (update-system.md §8.4).
+    public func setSkippedVersion(
+        packageID: PackageID,
+        versionCode: VersionCode,
+        skipped: Bool
+    ) async throws {
+        if skipped {
+            try await store.discardStaged(packageID: packageID)
+            await stateStore.skipVersion(packageID, versionCode: versionCode)
+        } else {
+            await stateStore.unskipVersion(packageID, versionCode: versionCode)
+        }
     }
 
     /// The wire `UpdateChoice` a record and its settings mode describe. The
@@ -934,6 +961,77 @@ extension RuntimeHost {
             throw EmbeddedUpdateService.wireError(for: error)
         }
     }
+
+    /// `rollbackPackage` (update-system.md §8.5, cli.md §4.3).
+    public func rollbackPackage(
+        packageID wireID: RuntimePackageID,
+        allowDataLoss: Bool
+    ) async throws(RuntimeWireError) -> RuntimeRollbackPackageControlReply {
+        let service = updateServiceInstance()
+        do {
+            try await service.open()
+        } catch {
+            throw EmbeddedPackageService.wireError(for: error)
+        }
+        guard let packageID = PackageID(rawValue: wireID.rawValue) else {
+            throw .store(
+                "packageNotFound",
+                message: "The package is not managed by APKRun.",
+                remediation: "Use `apkrun list` to see managed packages.")
+        }
+        // A rollback is a package mutation: it blocks stop/restart/reset
+        // like installs and uninstalls do (update-system.md §8.5).
+        do {
+            try beginPackageMutation()
+        } catch {
+            throw Self.sessionWireError(for: error)
+        }
+        defer { finishPackageMutation() }
+        do {
+            switch try await service.rollbackPackage(
+                packageID: packageID, allowDataLoss: allowDataLoss)
+            {
+            case .rolledBack(let to):
+                return RuntimeRollbackPackageControlReply(rolledBackTo: to)
+            case .unavailable:
+                return RuntimeRollbackPackageControlReply(unavailable: true)
+            case .failed(let failure):
+                throw EmbeddedUpdateService.wireError(for: failure)
+            }
+        } catch let error as RuntimeWireError {
+            throw error
+        } catch {
+            throw EmbeddedUpdateService.wireError(for: error)
+        }
+    }
+
+    /// `updateSkipped` (update-system.md §8.4, cli.md §4.3).
+    public func setSkippedVersion(
+        packageID wireID: RuntimePackageID,
+        versionCode: RuntimeVersionCode,
+        skipped: Bool
+    ) async throws(RuntimeWireError) {
+        let service = updateServiceInstance()
+        do {
+            try await service.open()
+        } catch {
+            throw EmbeddedPackageService.wireError(for: error)
+        }
+        guard let packageID = PackageID(rawValue: wireID.rawValue) else {
+            throw .store(
+                "packageNotFound",
+                message: "The package is not managed by APKRun.",
+                remediation: "Use `apkrun list` to see managed packages.")
+        }
+        do {
+            try await service.setSkippedVersion(
+                packageID: packageID, versionCode: versionCode, skipped: skipped)
+        } catch let error as RuntimeWireError {
+            throw error
+        } catch {
+            throw EmbeddedUpdateService.wireError(for: error)
+        }
+    }
 }
 
 /// The `UpdateRuntimeAccess` the host supplies to UpdateCore (update-system.md
@@ -949,6 +1047,8 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
     private let reopenPackage: @Sendable (PackageID) async throws -> Void
     private let ready: @Sendable (UpdateStartReason) async throws -> Void
     private let assertOperation: @Sendable () async throws -> UpdateActivityAssertion
+    private let healthLaunch: @Sendable (PackageID, UpdateHealthCheckTimeouts) async -> HealthLaunchResult
+    private let drawnFrame: @Sendable (PackageID) async -> Bool
 
     init(
         stateOf: @escaping @Sendable () async -> WireRuntimeState,
@@ -959,7 +1059,9 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         endAll: @escaping @Sendable (PackageID) async -> Void,
         reopenPackage: @escaping @Sendable (PackageID) async throws -> Void,
         ready: @escaping @Sendable (UpdateStartReason) async throws -> Void,
-        assertOperation: @escaping @Sendable () async throws -> UpdateActivityAssertion
+        assertOperation: @escaping @Sendable () async throws -> UpdateActivityAssertion,
+        healthLaunch: @escaping @Sendable (PackageID, UpdateHealthCheckTimeouts) async -> UpdateCore.HealthLaunchResult,
+        drawnFrame: @escaping @Sendable (PackageID) async -> Bool
     ) {
         self.stateOf = stateOf
         self.inUse = inUse
@@ -970,6 +1072,8 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         self.reopenPackage = reopenPackage
         self.ready = ready
         self.assertOperation = assertOperation
+        self.healthLaunch = healthLaunch
+        self.drawnFrame = drawnFrame
     }
 
     var runtimeState: WireRuntimeState {
@@ -1006,6 +1110,19 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
 
     func assertStoreOperation() async throws -> UpdateActivityAssertion {
         try await assertOperation()
+    }
+
+    /// §8.2: the session service runs the health launch when it knows how;
+    /// a service without health-launch support answers `.launchFailed`, the
+    /// same as no channel.
+    func healthCheckLaunch(_ packageID: PackageID, timeouts: UpdateHealthCheckTimeouts) async
+        -> HealthLaunchResult
+    {
+        await healthLaunch(packageID, timeouts)
+    }
+
+    func hasDrawnFrame(_ packageID: PackageID) async -> Bool {
+        await drawnFrame(packageID)
     }
 }
 
@@ -1214,6 +1331,35 @@ extension RuntimeHost {
                     inner.release()
                     Task { await self.finishPackageMutation() }
                 }
+            },
+            // §8.2: the session service runs the health-check launch; a
+            // service without it answers `.launchFailed`, the same as no
+            // channel.
+            healthLaunch: { [weak self] packageID, timeouts in
+                guard let self,
+                    let service = await self.headlessSessionService
+                        as? DaemonHeadlessSessionService,
+                    let wireID = RuntimePackageID(rawValue: packageID.rawValue)
+                else {
+                    return .launchFailed(detail: "noSessionService")
+                }
+                return await service.healthCheckLaunch(
+                    packageID: wireID, timeouts: timeouts)
+            },
+            drawnFrame: { [weak self] packageID in
+                guard let self else { return false }
+                if let service = await self.headlessSessionService
+                    as? DaemonHeadlessSessionService,
+                    let wireID = RuntimePackageID(rawValue: packageID.rawValue),
+                    await service.hasDrawnFrame(packageID: wireID)
+                {
+                    return true
+                }
+                // §8.1: any earlier session that drew a frame — a FIRST_FRAME
+                // marker persisted in perf/launches.jsonl — also proves the
+                // app can draw, including across daemon restarts.
+                return PerfRecordWriter.read(from: self.paths.launchPerformanceFile)
+                    .contains { $0.packageID == packageID.rawValue && $0.outcome == "shown" }
             })
     }
 
@@ -1228,8 +1374,9 @@ extension RuntimeHost {
                 return await self.packageQueryServiceInstance().store
                     .packageMutationInProgress(packageID)
             },
-            // TODO(#42): launch health checks need a DisplayPool slot; v1's
-            // H1 is `versionOnly` for every package.
+            // §8.2: the health launch reuses the session's display lease; a
+            // pool with no free scanout answers `.launchFailed` rather than
+            // blocking the install queue on a display slot.
             requiresDisplaySlot: { _ in false },
             displaySlotFree: { true })
         updateGate = gate

@@ -1152,6 +1152,8 @@ extension RuntimeListUpdatesControlRequest: VersionedControlRequest {}
 extension RuntimeUpdateHistoryControlRequest: VersionedControlRequest {}
 extension RuntimeSetUpdatePolicyControlRequest: VersionedControlRequest {}
 extension RuntimeSetUpdateAuthorityControlRequest: VersionedControlRequest {}
+extension RuntimeRollbackPackageControlRequest: VersionedControlRequest {}
+extension RuntimeUpdateSkipControlRequest: VersionedControlRequest {}
 extension RuntimeUpdatePackageControlRequest: VersionedControlRequest {}
 
 enum RuntimeControlOperation {
@@ -1194,6 +1196,8 @@ enum RuntimeControlOperation {
     case updateHistory
     case setUpdatePolicy
     case setUpdateAuthority
+    case rollbackPackage
+    case updateSkipped
     case updatePackage
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
@@ -1286,7 +1290,7 @@ enum RuntimeControlOperation {
                 false
             }
         case .checkForUpdates, .listUpdates, .updateHistory, .setUpdatePolicy,
-            .setUpdateAuthority, .updatePackage:
+            .setUpdateAuthority, .rollbackPackage, .updateSkipped, .updatePackage:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -3039,6 +3043,103 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeSetUpdateAuthorityControlReply(error: wireError)))
+            }
+        }
+    }
+
+    /// `rollbackPackage` (update-system.md §8.5, cli.md §4.3).
+    func rollbackPackage(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeRollbackPackageControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .rollbackPackage,
+                as: RuntimeRollbackPackageControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeRollbackPackageControlReply(
+                            error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeRollbackPackageControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeRollbackPackageControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let outcome = try await host.rollbackPackage(
+                    packageID: decoded.packageID, allowDataLoss: decoded.allowDataLoss)
+                response.send(Self.encode(outcome))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeRollbackPackageControlReply(error: wireError)))
+            }
+        }
+    }
+
+    /// `updateSkipped` (update-system.md §8.4, cli.md §4.3).
+    func updateSkipped(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeUpdateSkipControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .updateSkipped,
+                as: RuntimeUpdateSkipControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeUpdateSkipControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeUpdateSkipControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeUpdateSkipControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try await host.setSkippedVersion(
+                    packageID: decoded.packageID,
+                    versionCode: decoded.versionCode,
+                    skipped: decoded.skipped)
+                response.send(Self.encode(RuntimeUpdateSkipControlReply()))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeUpdateSkipControlReply(error: wireError)))
             }
         }
     }

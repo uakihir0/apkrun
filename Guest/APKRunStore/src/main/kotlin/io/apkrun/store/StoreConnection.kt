@@ -202,6 +202,7 @@ class StoreConnection(
                 GuestCapability.STORE_METADATA,
                 GuestCapability.STORE_OWNERSHIP,
                 GuestCapability.STORE_CONSTRAINTS,
+                GuestCapability.STORE_ROLLBACK,
             )
     }
 }

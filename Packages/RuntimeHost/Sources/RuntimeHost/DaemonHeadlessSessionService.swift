@@ -3,6 +3,7 @@ import DiagnosticsCore
 import Foundation
 import RuntimeAPI
 import RuntimeCore
+import UpdateCore
 
 /// Launches CLI-owned sessions on secondary displays before the daemon has a window client (#33).
 ///
@@ -289,6 +290,62 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         _ = await registry.stopCompleted(sessionID: current.id)
         forgetSession(packageID: packageID, sessionID: current.id)
         return RuntimeTerminateResult(packageID: request.packageID, hadSession: true)
+    }
+
+    /// update-system.md §8.2: launches the package and watches for its
+    /// first frame or a process death within `timeouts`. The health-check
+    /// session then ends without force-stopping the app — the display
+    /// lease releases and Android keeps or reclaims the process on its own.
+    func healthCheckLaunch(
+        packageID: RuntimePackageID,
+        timeouts: UpdateHealthCheckTimeouts
+    ) async -> HealthLaunchResult {
+        do {
+            _ = try await launch(RuntimeLaunchRequest(packageID: packageID))
+        } catch {
+            return .launchFailed(detail: "\(error.code)")
+        }
+        let aliveDeadline = ContinuousClock.now + timeouts.processAlive
+        let frameDeadline = aliveDeadline + timeouts.firstFrame
+        var frameSeen = false
+        while ContinuousClock.now < frameDeadline {
+            if let sessionID = sessionsByPackage[packageID.rawValue],
+                firstFrameMarked.contains(sessionID)
+            {
+                frameSeen = true
+            }
+            // §8.1: H3 watches the process for the whole survival window,
+            // even after a first frame — a crash inside it is a failure.
+            if frameSeen, ContinuousClock.now >= aliveDeadline { break }
+            guard let current = await registry.session(packageID: packageID.rawValue),
+                !Self.isEnded(current.state)
+            else {
+                if ContinuousClock.now < aliveDeadline {
+                    return .processDied(detail: "session ended")
+                }
+                // The survival window already passed; no frame means H4
+                // fails, not H3.
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        // §8.2: the health session ends; the app process is not stopped.
+        if let current = await registry.session(packageID: packageID.rawValue) {
+            _ = try? await registry.transition(current.id, to: .closing)
+            await stopDrainingFrames(for: current.id)
+            _ = await registry.stopCompleted(
+                sessionID: current.id, endReason: .updateHealthCheck)
+            forgetSession(packageID: packageID.rawValue, sessionID: current.id)
+        }
+        return frameSeen ? .frameDrawn : .processAlive
+    }
+
+    /// Whether the package's session has already drawn a frame
+    /// (update-system.md §8.1: a drawn frame downgrades the level to
+    /// `processOnly`).
+    func hasDrawnFrame(packageID: RuntimePackageID) async -> Bool {
+        guard let sessionID = sessionsByPackage[packageID.rawValue] else { return false }
+        return firstFrameMarked.contains(sessionID)
     }
 
     /// Reports whether this package still owns a live app session.

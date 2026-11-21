@@ -15,6 +15,7 @@ SUBCOMMANDS:
   inspect                 Inspect an APK, split set, or container without
                           installing.
   uninstall               Remove an installed Android app.
+  rollback                Roll an app back to its previous version.
   list                    List installed Android apps.
   info                    Show runtime status or details for one Android app.
   adopt                   Adopt an Android app installed outside APKRun.

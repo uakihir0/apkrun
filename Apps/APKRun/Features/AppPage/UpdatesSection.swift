@@ -70,7 +70,7 @@ struct UpdatesSection: View {
                         } else {
                             Text("Never").foregroundStyle(.secondary)
                         }
-                        Button("Check Now") { model.updateNow() }
+                        Button("Check Now") { model.checkNow() }
                     }
                 }
                 if let next = status.nextCheckAt {

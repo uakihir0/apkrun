@@ -131,7 +131,7 @@ struct AppPageView: View {
                     }
                 }
                 .disabled(model.wrapper == nil)
-                Button("Check for Updates") { model.updateNow() }
+                Button("Check for Updates") { model.checkNow() }
                 Button("Repair…") { model.showsRepair = true }
                 Divider()
                 Button("Uninstall…", role: .destructive) { model.showsUninstall = true }

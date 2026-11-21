@@ -173,11 +173,23 @@ final class PackageDetailModel {
         }
     }
 
-    /// **Update Now** / **Check for Updates** (§7 header, §7.5).
+    /// **Update Now** (§7 header, §7.5): installs the ready update.
     func updateNow() {
         Task {
             do {
                 _ = try await service().updatePackage(packageID: packageID)
+            } catch {
+                loadError = Self.describe(error)
+            }
+        }
+    }
+
+    /// **Check Now** / **Check for Updates** (§7.5, §7 header menu): runs a
+    /// check only; installing stays with **Update Now**.
+    func checkNow() {
+        Task {
+            do {
+                _ = try await service().checkForUpdates(packages: [packageID])
             } catch {
                 loadError = Self.describe(error)
             }

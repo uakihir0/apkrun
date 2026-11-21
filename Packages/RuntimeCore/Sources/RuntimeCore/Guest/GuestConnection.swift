@@ -79,6 +79,8 @@ public actor GuestConnection {
     private var outbound: AsyncStream<Data>.Continuation?
     /// The bytes that the frames yielded to `outbound` hold, until the transport has written them.
     private var outboundBacklog = 0
+    /// Waiters of ``waitForOutboundDrain``, resumed when the backlog empties or the connection dies.
+    private var drainWaiters: [CheckedContinuation<Void, Never>] = []
     private var decoder = FrameDecoder()
     private var nextEnvelopeID: UInt64 = 1
     private var lastAgentEnvelopeID: UInt64 = 0
@@ -182,6 +184,10 @@ public actor GuestConnection {
                             try await opened.write(frame)
                             // The task runs on this actor, so the backlog is updated in isolation.
                             self.outboundBacklog -= frame.count
+                            if self.outboundBacklog == 0 {
+                                for waiter in self.drainWaiters { waiter.resume() }
+                                self.drainWaiters.removeAll()
+                            }
                         } catch {
                             // A write that fails ends the connection, and the requests that wait on it get the reason.
                             self.logger.warning(
@@ -580,6 +586,17 @@ public actor GuestConnection {
     }
 
     /// Queues a frame for the writer task, and counts its bytes as backlog until the transport has written them.
+    /// Waits until every queued frame has been written to the transport. A
+    /// request on another endpoint that must not overtake these bytes waits
+    /// here first (guest-protocol.md §10).
+    public func waitForOutboundDrain() async throws(GuestProtocolFailure) {
+        while outboundBacklog > 0 {
+            guard isUsable else { throw failure ?? .disconnected }
+            await withCheckedContinuation { drainWaiters.append($0) }
+        }
+        guard isUsable else { throw failure ?? .disconnected }
+    }
+
     private func yieldFrame(_ frame: Data) {
         guard let outbound, case .enqueued = outbound.yield(frame) else {
             return
@@ -596,6 +613,8 @@ public actor GuestConnection {
     /// Ends the connection once: the handshake and every pending request fail with `reason`, and the streams end.
     /// The writer task closes the byte stream after the frames already queued, such as a rejection, have gone out.
     private func connectionLost(_ reason: GuestProtocolFailure) {
+        for waiter in drainWaiters { waiter.resume() }
+        drainWaiters.removeAll()
         guard failure == nil else {
             return
         }

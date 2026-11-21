@@ -71,7 +71,7 @@ actor MaintenanceService {
                 }
             } else {
                 hostState = .updating(targetBuild: marker.targetBuild)
-                Task { await self.expireFinishingMarker() }
+                Task { await self.expireFinishingMarker(marker) }
             }
         }
     }
@@ -209,10 +209,11 @@ actor MaintenanceService {
     }
 
     /// §3.6 finishing wait of the new build: past 60 seconds without a
-    /// `completeHostUpdate`, drop the marker and resume `normal` work.
-    private func expireFinishingMarker() async {
+    /// `completeHostUpdate`, drop the marker and resume `normal` work. A
+    /// different marker on disk is a newer update's, and is left alone.
+    private func expireFinishingMarker(_ marker: HostUpdateMarker) async {
         try? await Task.sleep(for: .seconds(Self.finishingMarkerAge))
-        guard readMarker() != nil, case .updating = hostState else { return }
+        guard readMarker() == marker, case .updating = hostState else { return }
         removeMarker()
         hostState = .normal
         publish(.hostStateChanged(hostState))

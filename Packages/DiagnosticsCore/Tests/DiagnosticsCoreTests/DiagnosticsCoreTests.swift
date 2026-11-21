@@ -80,3 +80,32 @@ import Testing
         paths.recoveryPointInstanceInfoFile(timestamp: "20260929T120000Z", imageVersion: "2026.10.0").lastPathComponent
             == "instance.json")
 }
+
+@Test func componentManifestDecodesPackagedComponentsJSON() throws {
+    let fixtureURL = try #require(
+        Bundle.module.url(forResource: "components", withExtension: "json", subdirectory: "Fixtures")
+    )
+    let manifest = try JSONDecoder().decode(ComponentManifest.self, from: Data(contentsOf: fixtureURL))
+
+    #expect(manifest.version == "1.2.0")
+    #expect(manifest.build == "1200")
+    #expect(manifest.channel == "stable")
+    #expect(manifest.commit == "89abcde")
+    #expect(manifest.runtimeAPI == "1.30")
+    #expect(manifest.guestProtocol == "1.1")
+    #expect(manifest.dataSchemas["settings.json"] == 1)
+    #expect(manifest.agentPlistSHA256.count == 64)
+    #expect(manifest.components["devGuestAgentVersionCode"] == "7")
+}
+
+@Test func dataSchemasDeclaresEveryOwnedFile() {
+    // runtime-maintenance.md §5: every JSON file under the data root has a
+    // schema entry. New files join DataSchemas.current with version 1.
+    #expect(DataSchemas.current["settings.json"] == 1)
+    #expect(DataSchemas.current["Runtime/state.json"] == 1)
+    #expect(DataSchemas.current["Runtime/instance/instance.json"] == 1)
+    #expect(DataSchemas.current["Packages/journal.jsonl"] == 1)
+    #expect(DataSchemas.current["Updates/state.json"] == 1)
+    #expect(DataSchemas.current["Updates/history.jsonl"] == 1)
+    #expect(DataSchemas.current["Images/update-state.json"] == 1)
+}

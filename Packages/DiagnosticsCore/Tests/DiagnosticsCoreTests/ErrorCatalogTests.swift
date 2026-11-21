@@ -48,6 +48,7 @@ import Testing
                 "guestAgentOperationFailed", "inputNotBound",
                 "busy", "operationNotFound", "notProvisioned", "hostRequirementsNotMet",
                 "developerModeRequired", "invalidConfigValue", "unknownConfigKey",
+                "invalidSettingValue", "unknownSetting",
                 "unknownResult",
             ].map { "runtime.\($0)" }
             + [

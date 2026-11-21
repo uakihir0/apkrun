@@ -33,6 +33,7 @@ settings:
     ALWAYS_SEARCH_USER_PATHS: NO
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
+    APKRUN_CHANNEL: "dev"
     ENABLE_HARDENED_RUNTIME: YES
     SWIFT_TREAT_WARNINGS_AS_ERRORS: "$(APKRUN_CI)"
     GCC_TREAT_WARNINGS_AS_ERRORS: "$(APKRUN_CI)"
@@ -153,6 +154,17 @@ targets:
           /usr/bin/ditto "$BUILT_PRODUCTS_DIR/APKRunMenuBar.app" "$login_items_directory/APKRunMenuBar.app"
         outputFiles:
           - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/LoginItems/APKRunMenuBar.app"
+      - name: Write Components
+        basedOnDependencyAnalysis: false
+        script: "$SRCROOT/scripts/build/write-components.py"
+        inputFiles:
+          - "$(SRCROOT)/scripts/build/write-components.py"
+          - "$(SRCROOT)/ThirdParty/ThirdParty.lock.json"
+          - "$(SRCROOT)/Packages/RuntimeAPI/Sources/RuntimeAPI/RuntimeAPI.swift"
+          - "$(SRCROOT)/Packages/GuestProtocol/Sources/GuestProtocol/ProtocolVersion.swift"
+          - "$(SRCROOT)/Packages/DiagnosticsCore/Sources/DiagnosticsCore/Build/ComponentManifest.swift"
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/components.json"
     scheme:
       testTargets:
         - APKRunTests

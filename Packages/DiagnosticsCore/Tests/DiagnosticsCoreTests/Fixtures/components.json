@@ -1,0 +1,17 @@
+{
+  "version": "1.2.0",
+  "build": "1200",
+  "channel": "stable",
+  "commit": "89abcde",
+  "runtimeAPI": "1.30",
+  "guestProtocol": "1.1",
+  "dataSchemas": {
+    "settings.json": 1,
+    "Runtime/state.json": 1
+  },
+  "agentPlistSHA256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "components": {
+    "virglrenderer": "1.2.0+apkrun.1",
+    "devGuestAgentVersionCode": "7"
+  }
+}

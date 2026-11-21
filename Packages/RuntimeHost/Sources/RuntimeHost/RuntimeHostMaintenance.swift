@@ -57,10 +57,13 @@ extension RuntimeHost {
             } catch {
                 return Self.maintenanceErrorReply(error)
             }
+            maintenanceHostState = await maintenanceService.state
         case .abortHostUpdate:
             await maintenanceService.abortHostUpdate()
+            maintenanceHostState = await maintenanceService.state
         case .completeHostUpdate:
             await maintenanceService.completeHostUpdate()
+            maintenanceHostState = await maintenanceService.state
         case .restartForUpdate:
             do throws(RuntimeWireError) {
                 try await maintenanceService.restartForUpdate(
@@ -101,5 +104,28 @@ extension RuntimeHost {
     /// Marks the daemon exit-eligible once idle (`restartPending`, §3.7).
     func requestRestartExit() {
         restartExitRequested = true
+    }
+}
+
+
+extension RuntimeHost {
+    /// The §3.7 gate: `updating` refuses every non-maintenance operation and
+    /// `restartPending` refuses Android-starting work and bundle readers.
+    /// The maintenance endpoint itself never consults this gate.
+    func assertMaintenanceGateAllowsWork() throws(RuntimeWireError) {
+        switch maintenanceHostState {
+        case .updating:
+            throw .runtime(
+                "hostUpdating",
+                message: "APKRun is updating itself.",
+                remediation: "Wait for the update to finish, then try again.")
+        case .restartPending:
+            throw .runtime(
+                "hostUpdating",
+                message: "APKRun is restarting to finish an update.",
+                remediation: "Wait a moment and try again.")
+        case .normal, .unknown:
+            return
+        }
     }
 }

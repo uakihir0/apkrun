@@ -46,6 +46,8 @@ public enum RuntimeHostError: Error, Equatable, Sendable {
     case shuttingDown
     /// The requested lifecycle change is not valid in the current runtime state.
     case invalidTransition
+    /// The daemon is updating or restarting to update (runtime-api.md §3.7).
+    case hostUpdating(String)
     /// The Guest Agent bundle is missing or invalid.
     case guestAgentBundle(String)
     /// Runtime boot failed.
@@ -183,6 +185,10 @@ public actor RuntimeHost {
     var imageMigrating = false
     /// `restartForUpdate` set this; the daemon exits at the next idle check.
     var restartExitRequested = false
+
+    /// Synchronous mirror of `MaintenanceService.state` for gates that run
+    /// off the async path (runtime-api.md §3.7). Updated after every op.
+    var maintenanceHostState: HostState = .normal
 
     /// Version and build the maintenance endpoint reports (§12).
     var buildIdentity: (marketingVersion: String, buildNumberInt: Int) {
@@ -492,6 +498,10 @@ public actor RuntimeHost {
 
     /// Boots Android on demand. An explicit start is allowed after the crash-loop guard activates.
     public func startRuntime(reason: StartReason = .user) async throws(RuntimeHostError) {
+        // §3.7: restarting to finish an update refuses Android-starting ops.
+        if case .restartPending = maintenanceHostState {
+            throw .hostUpdating("APKRun is restarting to finish an update.")
+        }
         guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
             throw .invalidTransition
         }
@@ -1653,6 +1663,7 @@ public actor RuntimeHost {
         guard !Task.isCancelled else {
             throw Self.cancelledOperationError
         }
+        try assertMaintenanceGateAllowsWork()
         if let operationID {
             // PackageStore reconciles ambiguous guest results and journals the transaction to a
             // terminal state once its Store Agent operation begins.
@@ -5846,6 +5857,8 @@ public actor RuntimeHost {
         switch error {
         case .notStarted, .alreadyStarted, .crashLoopActive, .stateStore:
             code = "runtime.hostStartupFailed"
+        case .hostUpdating:
+            code = "runtime.hostUpdating"
         case .startupFailed(_, let startupCode):
             code = startupCode.contains(".") ? startupCode : "runtime.hostStartupFailed"
         case .runtimeFailure(let failure):

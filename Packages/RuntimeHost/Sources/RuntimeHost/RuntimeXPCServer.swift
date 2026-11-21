@@ -4790,6 +4790,8 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 code = "runtime.hostShuttingDown"
             case .invalidTransition:
                 code = "runtime.invalidTransition"
+            case .hostUpdating:
+                code = "runtime.hostUpdating"
             case .alreadyStarted:
                 code = "runtime.internal"
             case .startupFailed(_, let startupCode):

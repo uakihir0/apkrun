@@ -431,44 +431,44 @@ struct RollbackCommand: AsyncParsableCommand {
 }
 
 #if !APKRUN_EMBEDDED_RUNTIME
-/// `apkrun repair <package> [--yes]` (package-store.md §11.1, cli.md §4.3):
-/// reinstalls a `broken` package from its retained `current/` artifacts.
-/// The daemon refuses when the package is not broken.
-struct RepairCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(
-        commandName: "repair",
-        abstract: "Reinstall a broken app from APKRun's retained APKs."
-    )
+    /// `apkrun repair <package> [--yes]` (package-store.md §11.1, cli.md §4.3):
+    /// reinstalls a `broken` package from its retained `current/` artifacts.
+    /// The daemon refuses when the package is not broken.
+    struct RepairCommand: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "repair",
+            abstract: "Reinstall a broken app from APKRun's retained APKs."
+        )
 
-    @Argument(help: "The Android package name.")
-    var package: String
+        @Argument(help: "The Android package name.")
+        var package: String
 
-    @Flag(name: .long, help: "Repair without asking for confirmation.")
-    var yes = false
+        @Flag(name: .long, help: "Repair without asking for confirmation.")
+        var yes = false
 
-    mutating func run() async throws {
-        guard let packageID = RuntimePackageID(rawValue: package) else {
-            throw CLIFailure.invalidPackageName(package: package)
-        }
-        try CLIConfirmation.confirm(
-            "Reinstall \(package) from APKRun's retained APKs?", yes: yes)
-        do {
-            let client = try RuntimeControlClient(clientKind: .cli)
-            let handle = try await client.repairPackage(packageID: packageID)
-            let snapshot = try await OperationCommandOutput.waitForTerminalSnapshot(
-                using: client,
-                operationID: handle.operationID,
-                progressToStderr: OperationCommandOutput.shouldShowProgress
-            )
-            if case .failed(let wireError)? = snapshot.result {
-                throw wireError
+        mutating func run() async throws {
+            guard let packageID = RuntimePackageID(rawValue: package) else {
+                throw CLIFailure.invalidPackageName(package: package)
             }
-            Output.write("\(package): reinstalled from the retained APKs.")
-        } catch let failure as RuntimeWireError {
-            throw failure
-        } catch {
-            throw await RuntimeStatusOutput.commandFailure(error)
+            try CLIConfirmation.confirm(
+                "Reinstall \(package) from APKRun's retained APKs?", yes: yes)
+            do {
+                let client = try RuntimeControlClient(clientKind: .cli)
+                let handle = try await client.repairPackage(packageID: packageID)
+                let snapshot = try await OperationCommandOutput.waitForTerminalSnapshot(
+                    using: client,
+                    operationID: handle.operationID,
+                    progressToStderr: OperationCommandOutput.shouldShowProgress
+                )
+                if case .failed(let wireError)? = snapshot.result {
+                    throw wireError
+                }
+                Output.write("\(package): reinstalled from the retained APKs.")
+            } catch let failure as RuntimeWireError {
+                throw failure
+            } catch {
+                throw await RuntimeStatusOutput.commandFailure(error)
+            }
         }
     }
-}
 #endif

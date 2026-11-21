@@ -44,11 +44,13 @@ struct UninstallDialog: View {
                     Text("\(displayName) is open and will be closed.")
                         .foregroundStyle(.secondary)
                 }
-                Toggle("Keep app data (reinstalling \(displayName) later restores it)",
-                       isOn: $choices.keepData)
+                Toggle(
+                    "Keep app data (reinstalling \(displayName) later restores it)",
+                    isOn: $choices.keepData)
                 if hasWrapper {
-                    Toggle("Also move the Mac app to the Trash",
-                           isOn: $choices.trashWrapper)
+                    Toggle(
+                        "Also move the Mac app to the Trash",
+                        isOn: $choices.trashWrapper)
                 }
             }
             HStack {

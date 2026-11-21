@@ -1,8 +1,8 @@
 import AppKit
-import UniformTypeIdentifiers
 import RuntimeAPI
 import RuntimeClient
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The Storage pane of the Settings scene (host-ui.md §9.7).
 ///
@@ -95,10 +95,12 @@ struct StoragePane: View {
                 defer { try? handle.close() }
                 let preview = try await client.importPackage(
                     RuntimeImportPackageRequest(
-                        files: [RuntimeImportSourceFile(
-                            fileIndex: 0,
-                            name: url.lastPathComponent
-                        )],
+                        files: [
+                            RuntimeImportSourceFile(
+                                fileIndex: 0,
+                                name: url.lastPathComponent
+                            )
+                        ],
                         origin: .addFlow
                     ),
                     files: [handle]

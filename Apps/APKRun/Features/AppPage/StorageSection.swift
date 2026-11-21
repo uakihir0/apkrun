@@ -27,7 +27,9 @@ struct StorageSection: View {
             }
         }
         Section {
-            Button("Repair…") { model.showsRepair = true }
+            if case .broken = model.details?.summary.state {
+                Button("Repair…") { model.showsRepair = true }
+            }
             Button("Uninstall…", role: .destructive) { model.showsUninstall = true }
             if model.wrapper != nil {
                 Button("Remove Mac App…", role: .destructive) {

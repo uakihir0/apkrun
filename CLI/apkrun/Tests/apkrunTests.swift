@@ -1149,6 +1149,100 @@ private final class CLIOutputRecorder: @unchecked Sendable {
     }
 #endif
 
+// MARK: - install update flags (cli.md §4.2)
+
+@Test func installProviderFlagMapsToApkrunAuthority() throws {
+    let options = try InstallUpdateOptions.options(
+        provider: "direct:https://updates.example.com/app.json",
+        updates: nil, update: nil, updateProvider: nil, updateURL: nil)
+    #expect(options.authority == .apkrun)
+    #expect(options.updateMode == nil)
+    #expect(options.provider?.spec == "direct:https://updates.example.com/app.json")
+    #expect(options.provider?.bookmark == nil)
+}
+
+@Test func installUpdateProviderURLPairMapsToSameSpec() throws {
+    let options = try InstallUpdateOptions.options(
+        provider: nil, updates: nil, update: nil,
+        updateProvider: "direct", updateURL: "https://updates.example.com/app.json")
+    #expect(options.authority == .apkrun)
+    #expect(options.provider?.spec == "direct:https://updates.example.com/app.json")
+}
+
+@Test func installUpdatesNotifyMapsToNotifyOnly() throws {
+    let options = try InstallUpdateOptions.options(
+        provider: "direct:https://updates.example.com/app.json",
+        updates: "notify", update: nil, updateProvider: nil, updateURL: nil)
+    #expect(options.authority == .apkrun)
+    #expect(options.updateMode == .notifyOnly)
+}
+
+@Test func installUpdatesManualLeavesProviderUnused() throws {
+    let options = try InstallUpdateOptions.options(
+        provider: "direct:https://updates.example.com/app.json",
+        updates: nil, update: "manual", updateProvider: nil, updateURL: nil)
+    #expect(options.authority == .manual)
+    #expect(options.updateMode == .manual)
+    #expect(options.provider != nil)
+}
+
+@Test func installUpdateAliasConflictsFail() throws {
+    #expect(throws: CLIFailure.self) {
+        _ = try InstallUpdateOptions.options(
+            provider: nil, updates: "notify", update: "manual",
+            updateProvider: nil, updateURL: nil)
+    }
+    #expect(throws: CLIFailure.self) {
+        _ = try InstallUpdateOptions.options(
+            provider: "direct:https://a.example/m.json", updates: nil, update: nil,
+            updateProvider: "direct", updateURL: "https://b.example/m.json")
+    }
+    #expect(throws: CLIFailure.self) {
+        _ = try InstallUpdateOptions.options(
+            provider: nil, updates: nil, update: nil,
+            updateProvider: "direct", updateURL: nil)
+    }
+    #expect(throws: CLIFailure.self) {
+        _ = try InstallUpdateOptions.options(
+            provider: nil, updates: "bogus", update: nil,
+            updateProvider: nil, updateURL: nil)
+    }
+}
+
+@Test func updatePolicyParsesDirectProviderSpec() async throws {
+    let command = try await APKRunCommand.asyncParseAsRoot(
+        [
+            "update", "policy", "com.example.app", "--mode", "automatic",
+            "--provider", "direct:https://updates.example.com/app.json",
+        ])
+    let policy = try #require(command as? UpdatePolicyCommand)
+    #expect(policy.provider == "direct:https://updates.example.com/app.json")
+}
+
+#if !APKRUN_EMBEDDED_RUNTIME
+    @Test func installParsesDirectProviderAndAliasFlags() async throws {
+        let plain = try await APKRunCommand.asyncParseAsRoot(
+            [
+                "install", "app.apk", "--provider",
+                "direct:https://updates.example.com/app.json",
+            ])
+        let aliased = try await APKRunCommand.asyncParseAsRoot(
+            [
+                "install", "app.apk", "--update-provider", "direct",
+                "--update-url", "https://updates.example.com/app.json",
+                "--updates", "notify",
+            ])
+        #expect(
+            (plain as? InstallCommand)?.provider
+                == "direct:https://updates.example.com/app.json")
+        #expect((aliased as? InstallCommand)?.updateProvider == "direct")
+        #expect(
+            (aliased as? InstallCommand)?.updateURL
+                == "https://updates.example.com/app.json")
+        #expect((aliased as? InstallCommand)?.updates == "notify")
+    }
+#endif
+
 private func golden(_ name: String) -> String {
     let contents = try! String(
         contentsOf: goldenDirectory.appendingPathComponent(name), encoding: .utf8)

@@ -118,8 +118,13 @@ public enum UpdatePolicyRules {
                 configuration: .local(
                     path: String(rest),
                     bookmark: bookmark.base64EncodedString()))
-        case "direct", "fdroid", "github":
-            // Direct (#51), F-Droid (#52), GitHub (#53).
+        case "direct":
+            return UpdateProviderRef(
+                type: .direct,
+                configuration: .direct(
+                    url: try ProviderRegistry.directURL(String(rest))))
+        case "fdroid", "github":
+            // F-Droid (#52), GitHub (#53).
             throw UpdateFailure.providerNotConfigured
         default:
             throw UpdateFailure.providerMetadataInvalid(

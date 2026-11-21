@@ -3,16 +3,35 @@ import Foundation
 import RuntimeAPI
 import RuntimeClient
 
-/// `apkrun update` (cli.md §4.3): checks managed packages for updates and
-/// prints one line per package. Exit code is 2 when any package failed.
+/// `apkrun update` (cli.md §4.3): group command. The positional `<package>`
+/// and the check flags live on the hidden `check` default subcommand: a
+/// positional on this level would swallow the subcommand names.
 struct UpdateCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "update",
         abstract: "Check for, list, and manage Android app updates.",
+        discussion: """
+            `apkrun update [<package>] [--file <file> …] [--check-only] [--now] \
+            [--json]` checks managed packages for updates and installs them; \
+            see `apkrun help update check`.
+            """,
         subcommands: [
+            UpdateCheckCommand.self,
             UpdatePolicyCommand.self, UpdateAuthorityCommand.self, UpdateHistoryCommand.self,
             UpdateSkipCommand.self, UpdateUnskipCommand.self,
-        ]
+        ],
+        defaultSubcommand: UpdateCheckCommand.self
+    )
+}
+
+/// `apkrun update [<package>]` (cli.md §4.3): checks managed packages for
+/// updates and prints one line per package. Exit code is 2 when any package
+/// failed.
+struct UpdateCheckCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "check",
+        abstract: "Check managed packages for updates.",
+        shouldDisplay: false
     )
 
     @Argument(help: "The Android package name. Omit it to check every package.")
@@ -203,7 +222,7 @@ struct UpdatePolicyCommand: AsyncParsableCommand {
         if noProvider {
             providerChange = .remove
         } else if let provider {
-            providerChange = .set(try Self.providerSpec(provider))
+            providerChange = .set(try InstallUpdateOptions.providerSpec(provider))
         } else {
             providerChange = .keep
         }
@@ -224,29 +243,6 @@ struct UpdatePolicyCommand: AsyncParsableCommand {
         }
     }
 
-    /// Parses `local:<path>` into a provider spec carrying a security-scoped
-    /// bookmark of the folder (runtime-api.md §9.2). Other schemes land with
-    /// their providers (#51–#53).
-    private static func providerSpec(_ spec: String) throws -> ProviderSpec {
-        if spec.hasPrefix("local:") {
-            let path = String(spec.dropFirst("local:".count))
-            let url = URL(fileURLWithPath: path)
-            guard url.isFileURL else {
-                throw CLIFailure.invalidArgument(argument: "--provider", reason: "invalidValue")
-            }
-            let bookmark: Data
-            do {
-                bookmark = try url.bookmarkData(
-                    options: [.withSecurityScope],
-                    includingResourceValuesForKeys: nil,
-                    relativeTo: nil)
-            } catch {
-                throw CLIFailure.fileNotAccessible(file: path, .permissionDenied)
-            }
-            return ProviderSpec(spec: spec, bookmark: bookmark)
-        }
-        return ProviderSpec(spec: spec)
-    }
 }
 
 /// `apkrun update history [<package>]` (cli.md §4.3): the update history.

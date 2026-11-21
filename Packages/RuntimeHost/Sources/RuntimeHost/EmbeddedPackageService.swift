@@ -4,6 +4,7 @@ import DiagnosticsCore
 import Foundation
 import RuntimeAPI
 import RuntimeCore
+import UpdateCore
 
 typealias PackageMutationBoundary = @Sendable () async throws(RuntimeWireError) -> Void
 
@@ -61,13 +62,15 @@ public actor EmbeddedPackageService: RuntimeService {
         inspector: @escaping PackageStore.Inspector = { apk in try await APKInspector().inspect(apk) },
         hostFreeSpace: (@Sendable (URL) -> Int64)? = nil,
         sessionService: (any RuntimeSessionService)? = nil,
-        importVerifier: @escaping PackageStore.ImportVerifier = PackageStore.strictImportVerifier
+        importVerifier: @escaping PackageStore.ImportVerifier = PackageStore.strictImportVerifier,
+        runtimeAccess: (any StoreRuntimeAccess)? = nil
     ) {
         self.paths = paths
         self.inspector = inspector
         self.hostFreeSpace = hostFreeSpace ?? Self.availableHostSpace
         self.sessionService = sessionService ?? EmbeddedRuntimeService()
-        let runtimeAccess = AttachedStoreRuntimeAccess()
+        self.runtimeAttached = runtimeAccess != nil
+        let runtimeAccess = AttachedStoreRuntimeAccess(initial: runtimeAccess)
         self.runtimeAccess = runtimeAccess
         store = PackageStore(
             packagesDirectory: paths.packagesDirectory,
@@ -264,6 +267,16 @@ public actor EmbeddedPackageService: RuntimeService {
             guard let ticket = UUID(uuidString: request.ticket.rawValue) else {
                 throw EmbeddedPackageServiceFailure.invalidTicket
             }
+            // An invalid `--provider` spec fails before anything installs
+            // (cli.md §4.2): parsing it later would leave the APK installed
+            // while the command reports an error.
+            let requestedProviderRef: UpdateProviderRef?
+            do {
+                requestedProviderRef = try request.options.provider.map(
+                    UpdatePolicyRules.providerRef(for:))
+            } catch {
+                throw Self.wireError(for: error)
+            }
             let packageID = try await store.packageIDForImportTicket(ticket)
             guard let runtimePackageID = RuntimePackageID(rawValue: packageID.rawValue) else {
                 throw EmbeddedPackageServiceFailure.invalidTicket
@@ -282,7 +295,12 @@ public actor EmbeddedPackageService: RuntimeService {
     ) async throws(RuntimeWireError) -> RuntimePackageInstallResult {
         do {
             try await ensureOpen()
-            guard request.options.authority == .manual else {
+            // A `--provider` install attaches the provider after the store
+            // commit; `apkrun` authority without one stays refused (§2.4).
+            guard
+                request.options.authority == .manual
+                    || (request.options.authority == .apkrun && request.options.provider != nil)
+            else {
                 throw EmbeddedPackageServiceFailure.unsupportedUpdateAuthority
             }
             guard !request.options.createWrapper else {
@@ -290,6 +308,16 @@ public actor EmbeddedPackageService: RuntimeService {
             }
             guard let ticket = UUID(uuidString: request.ticket.rawValue) else {
                 throw EmbeddedPackageServiceFailure.invalidTicket
+            }
+            // An invalid `--provider` spec fails before anything installs
+            // (cli.md §4.2): parsing it later would leave the APK installed
+            // while the command reports an error.
+            let requestedProviderRef: UpdateProviderRef?
+            do {
+                requestedProviderRef = try request.options.provider.map(
+                    UpdatePolicyRules.providerRef(for:))
+            } catch {
+                throw Self.wireError(for: error)
             }
             let packageID = try await store.packageIDForImportTicket(ticket)
             guard let runtimePackageID = RuntimePackageID(rawValue: packageID.rawValue) else {
@@ -342,6 +370,32 @@ public actor EmbeddedPackageService: RuntimeService {
                 )
             }
             importPreviews[ticket] = nil
+            // §2.4: the install flags land on the record whenever the user
+            // asked for them — a provider spec or a `--updates` mode. With
+            // no provider, the stored one is kept; `--updates manual` keeps
+            // authority `manual` and the provider stored unused.
+            if requestedProviderRef != nil || request.options.updateMode != nil {
+                let mode = UpdatePolicyRules.settingsMode(
+                    for: request.options.updateMode ?? .automatic)
+                // `--updates manual` demotes to manual; a provider spec
+                // promotes to apkrun. A mode-only flag leaves the stored
+                // authority alone, so reinstalling `--updates notify` on a
+                // package with a configured provider keeps APKRun checking.
+                let authority: UpdateAuthority? =
+                    if request.options.updateMode == .manual {
+                        .manual
+                    } else if requestedProviderRef != nil {
+                        .apkrun
+                    } else {
+                        nil
+                    }
+                try await store.setUpdateMode(for: packageID, mode: mode)
+                try await store.setUpdatePolicy(
+                    for: packageID,
+                    authority: authority,
+                    provider: requestedProviderRef,
+                    requireProvider: request.options.authority == .apkrun)
+            }
             try? await refreshAndroidInventory()
             let summary = try Self.summary(from: outcome.record)
             return RuntimePackageInstallResult(
@@ -1448,6 +1502,10 @@ private enum EmbeddedPackageServiceFailure: Error {
 
 private actor AttachedStoreRuntimeAccess: StoreRuntimeAccess {
     private var access: (any StoreRuntimeAccess)?
+
+    init(initial access: (any StoreRuntimeAccess)? = nil) {
+        self.access = access
+    }
 
     func attach(_ access: any StoreRuntimeAccess) {
         self.access = access

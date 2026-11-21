@@ -1,16 +1,12 @@
 OVERVIEW: Check for, list, and manage Android app updates.
 
-USAGE: update [<package>] [--file <file> ...] [--check-only] [--now] [--json] <subcommand>
+`apkrun update [<package>] [--file <file> …] [--check-only] [--now] [--json]`
+checks managed packages for updates and installs them; see `apkrun help update
+check`.
 
-ARGUMENTS:
-  <package>               The Android package name. Omit it to check every
-                          package.
+USAGE: update <subcommand>
 
 OPTIONS:
-  --file <file>           APK files for a manual update.
-  --check-only            Report only; do not download or notify.
-  --now                   End the running app and install now (§7.3 Update Now).
-  --json                  Print the results as JSON.
   -h, --help              Show help information.
 
 SUBCOMMANDS:

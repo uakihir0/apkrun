@@ -449,9 +449,9 @@ public actor UpdateCoordinator {
         // Hash every artifact the provider declared a digest for (§5): the
         // digest covers the file as streamed, so a file that differs on disk
         // after the download is a mismatch.
-        for declared in candidate.artifacts where declared.sha256 != nil {
+        for (index, declared) in candidate.artifacts.enumerated() where declared.sha256 != nil {
             let file = ticketInfo.directory.appendingPathComponent(
-                declared.url.lastPathComponent)
+                declared.storedFileName(index: index, in: candidate.artifacts))
             let observed = Self.fileDigest(at: file)
             guard let observed, observed == declared.sha256 else {
                 try? await store.discardDownload(ticket: ticket)

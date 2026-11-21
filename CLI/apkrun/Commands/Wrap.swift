@@ -74,10 +74,15 @@
             // preview's relation decides the row of the import/install
             // table; a package ID is wrapped as is.
             let inputURL = URL(fileURLWithPath: package).standardizedFileURL
+            let fileExists = FileManager.default.fileExists(atPath: inputURL.path)
+            let isValidPackageID =
+                !package.isEmpty && RuntimePackageID(rawValue: package) != nil
+            // A valid package ID names the installed package; a file wins only
+            // when it is no valid ID or it is a real `.apk` on disk (a path
+            // like ./com.example keeps working through the same rule).
             let isFile =
-                package.hasSuffix(".apk")
-                || (FileManager.default.fileExists(atPath: inputURL.path)
-                    && !package.isEmpty && RuntimePackageID(rawValue: package) == nil)
+                (fileExists && !isValidPackageID)
+                || (package.lowercased().hasSuffix(".apk") && (fileExists || !isValidPackageID))
 
             let client: RuntimeControlClient
             do {
@@ -86,7 +91,13 @@
                 throw await RuntimeStatusOutput.commandFailure(error)
             }
 
+            // The CLI resolves --output with the user's own file access;
+            // apkrund never does (cli.md §4.4, wrapper.md §12.2). Validate it
+            // before any install so a bad path fails before the APK lands.
+            let destination = try WrapCommandSupport.destination(for: output)
+
             let packageID: RuntimePackageID
+            var installedByThisRun = false
             var portableTicket: RuntimeImportTicket?
             var portableDefaults: WrapperUpdateDefaultsWire?
             if isFile {
@@ -96,7 +107,13 @@
                     // package embeds the ticket's files; the icon is the
                     // placeholder until the package is installed.
                     portableTicket = preview.ticket
-                    portableDefaults = try updateDefaultsWire()
+                    // `updateDefaults` is only valid when the user asked for
+                    // update defaults; the host rejects it otherwise.
+                    if provider != nil || updates != nil || update != nil
+                        || updateProvider != nil || updateURL != nil
+                    {
+                        portableDefaults = try updateDefaultsWire()
+                    }
                     packageID = preview.packageID
                     if preview.relation == .newPackage || preview.relation == .unknown {
                         Output.writeLogLine(
@@ -127,15 +144,19 @@
                         packageID = try await WrapCommandSupport.installPreview(
                             preview,
                             options: try updateOptions(),
+                            json: json,
                             client: client
                         )
+                        installedByThisRun = true
                     case .installAndWrap:
                         DaemonInstallSupport.writePreview(preview)
                         packageID = try await WrapCommandSupport.installPreview(
                             preview,
                             options: try updateOptions(),
+                            json: json,
                             client: client
                         )
+                        installedByThisRun = true
                     case .wrapInstalled(let note):
                         try rejectUpdateFlags()
                         Output.writeLogLine(note.text, toStandardError: true)
@@ -155,10 +176,6 @@
                 packageID = id
             }
 
-            // The CLI resolves --output with the user's own file access;
-            // apkrund never does (cli.md §4.4, wrapper.md §12.2).
-            let destination = try WrapCommandSupport.destination(for: output)
-
             // --icon is a PNG the user's process reads; the daemon never
             // opens the path (cli.md §4.4).
             var iconHandle: FileHandle?
@@ -175,20 +192,31 @@
             }
             defer { try? iconHandle?.close() }
 
-            let info = try await WrapCommandSupport.createAndPlace(
-                packageID: packageID,
-                destination: destination,
-                fileName: nil,
-                displayName: name,
-                icon: iconChoice,
-                iconHandle: iconHandle,
-                replace: replace ? .sameWrapper : .never,
-                windowDefaults: try windowDefaults(),
-                portable: portable,
-                importTicket: portableTicket,
-                updateDefaults: portableDefaults,
-                client: client
-            )
+            let info: WrapperInfo
+            do {
+                info = try await WrapCommandSupport.createAndPlace(
+                    packageID: packageID,
+                    destination: destination,
+                    fileName: nil,
+                    displayName: name,
+                    icon: iconChoice,
+                    iconHandle: iconHandle,
+                    replace: replace ? .sameWrapper : .never,
+                    windowDefaults: try windowDefaults(),
+                    portable: portable,
+                    importTicket: portableTicket,
+                    updateDefaults: portableDefaults,
+                    client: client
+                )
+            } catch {
+                // cli.md §3: installed but the Mac app could not be created
+                // is a partial success, exit code 2.
+                if installedByThisRun {
+                    ErrorOutput.write(error, json: json)
+                    throw ExitCode(Int32(ExitCodes.partial))
+                }
+                throw error
+            }
             if portable {
                 WrapCommandSupport.writePortableNote(info)
             }
@@ -579,9 +607,12 @@
         }
 
         /// Resolves `--output` to the wire destination with the user's own
-        /// file access (cli.md §4.4).
+        /// file access (cli.md §4.4). Without `--output` the CLI asks for
+        /// `~/Applications` explicitly (wrapper.md §12.2); the
+        /// `wrappers.defaultLocation` setting only governs the GUI's nil
+        /// destination (runtime-api.md §10.3).
         static func destination(for output: String?) throws -> WireWrapperDestination? {
-            guard let output else { return nil }
+            guard let output else { return .userApplications }
             let url = URL(fileURLWithPath: output).standardizedFileURL
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
@@ -622,6 +653,7 @@
         static func installPreview(
             _ preview: RuntimeImportPreview,
             options: RuntimeInstallOptions,
+            json: Bool,
             client: RuntimeControlClient
         ) async throws -> RuntimePackageID {
             let operationID = RuntimeAPI.OperationID()
@@ -646,10 +678,12 @@
             }
             let result = try OperationCommandOutput.installedPackage(
                 from: snapshot, expectedPackageID: preview.packageID)
-            Output.write(
-                "Installed \(DaemonInstallSupport.safeTerminalText(result.displayName)) "
-                    + "(\(result.packageID.rawValue)), version "
-                    + "\(result.versionCode.map(String.init) ?? "unknown").")
+            if !json {
+                Output.write(
+                    "Installed \(DaemonInstallSupport.safeTerminalText(result.displayName)) "
+                        + "(\(result.packageID.rawValue)), version "
+                        + "\(result.versionCode.map(String.init) ?? "unknown").")
+            }
             return result.packageID
         }
 

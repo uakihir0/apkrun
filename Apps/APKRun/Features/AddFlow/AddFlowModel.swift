@@ -132,9 +132,14 @@ final class AddFlowModel {
             let request = RuntimeImportPackageRequest(files: sources, origin: origin)
             let preview = try await serviceFactory().importPackage(request, files: handles)
             self.preview = preview
-            hasMacApp =
-                ((try? await serviceFactory().listWrappers()) ?? [])
-                .contains { $0.summary.packageID == preview.packageID }
+            // A list failure stays conservative: only a fresh or uninspected
+            // package offers Create Mac app without a confirmed empty list
+            // (wrapper.md §9.1, AGENTS.md §4.13).
+            if let wrappers = try? await serviceFactory().listWrappers() {
+                hasMacApp = wrappers.contains { $0.summary.packageID == preview.packageID }
+            } else {
+                hasMacApp = true
+            }
             macAppName = preview.displayName
             location = defaultLocation
             stage = .review

@@ -325,9 +325,9 @@ public actor LinkForwarder {
     }
 }
 
-private extension Duration {
+extension Duration {
     /// The whole seconds of the duration, for `Date` arithmetic.
-    var timeInterval: TimeInterval {
+    fileprivate var timeInterval: TimeInterval {
         TimeInterval(components.seconds) + TimeInterval(components.attoseconds) / 1e18
     }
 }

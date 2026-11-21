@@ -214,8 +214,7 @@ private struct GuestLinkChannel: LinkChannel {
         }
     }
 
-    func setUrlRedirect(enabled: Bool, excludedPackages: [String]) async throws(IntegrationFailure)
-    {
+    func setUrlRedirect(enabled: Bool, excludedPackages: [String]) async throws(IntegrationFailure) {
         try await send {
             try await $0.send(
                 GuestSetUrlRedirect(enabled: enabled, excludedPackages: excludedPackages))
@@ -868,7 +867,8 @@ extension RuntimeHost {
         let scheme =
             url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.scheme } ?? "-"
         logger.debug(
-            "Dropped a link from \(packageID.rawValue, .public): \(rejection.rawValue, .public) \(scheme, .public) \(domain, .public)")
+            "Dropped a link from \(packageID.rawValue, .public): \(rejection.rawValue, .public) \(scheme, .public) \(domain, .public)"
+        )
     }
 
     /// Maps an `IntegrationFailure` to its catalog wire error (§13.1).

@@ -260,7 +260,9 @@ internal class FilesBridge(
                 val sizeColumn = cursor.getColumnIndex(OpenableColumns.SIZE)
                 if (cursor.moveToFirst()) {
                     if (nameColumn >= 0) cursor.getString(nameColumn)?.let { name = it }
-                    if (sizeColumn >= 0) size = cursor.getLong(sizeColumn)
+                    if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) {
+                        size = cursor.getLong(sizeColumn)
+                    }
                 }
             }
         } catch (error: Exception) {

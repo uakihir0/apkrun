@@ -258,7 +258,10 @@
             } else {
                 Output.write(WrapCommandSupport.verificationText(verification))
             }
-            guard verification.problems.isEmpty else {
+            // A bundle that is missing, unreadable, modified, or not the
+            // package's wrapper is not valid (wrapper.md §9.1).
+            guard verification.state == .valid, verification.problems.isEmpty
+            else {
                 throw ExitCode(2)
             }
         }
@@ -582,13 +585,30 @@
             if let cdhash = verification.cdhash {
                 lines.append("CDHash: \(cdhash)")
             }
+            if let state = verification.state, state != .valid {
+                lines.append("State: \(Self.stateText(state))")
+            }
             for problem in verification.problems {
                 lines.append("Problem: \(problem.rawValue)")
             }
-            if verification.problems.isEmpty {
+            if verification.problems.isEmpty,
+                verification.state == nil || verification.state == .valid
+            {
                 lines.append("Valid")
             }
             return lines.joined(separator: "\n")
+        }
+
+        /// The one-word state name of a `wrapper verify` report.
+        static func stateText(_ state: WrapperState) -> String {
+            switch state {
+            case .valid: "valid"
+            case .moved(let url): "moved(\(url.path))"
+            case .missing: "missing"
+            case .inaccessible: "inaccessible"
+            case .signatureInvalid: "signatureInvalid"
+            case .unknownPackage: "unknownPackage"
+            }
         }
 
         /// The human `wrapper info` report.

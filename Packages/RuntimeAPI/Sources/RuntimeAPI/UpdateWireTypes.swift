@@ -858,3 +858,63 @@ public struct RuntimeUpdateSkipControlReply: Codable, Sendable {
         self.error = error
     }
 }
+
+/// A `getConfig` control request (configuration.md §2.7). `keys` nil means
+/// every known `updates.*` key.
+public struct RuntimeConfigGetControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// Keys to read; nil selects every `updates.*` key.
+    public var keys: [String]?
+
+    /// Creates a control request.
+    public init(header: APIRequestHeader, keys: [String]? = nil) {
+        self.header = header
+        self.keys = keys
+    }
+}
+
+/// The `getConfig` reply: the current values.
+public struct RuntimeConfigGetControlReply: Codable, Sendable {
+    /// The settings values keyed by name.
+    public var values: [String: String]?
+    /// The failure on error, for example `config.unknownKey`.
+    public var error: RuntimeWireError?
+
+    /// Creates a control reply.
+    public init(values: [String: String]? = nil, error: RuntimeWireError? = nil) {
+        self.values = values
+        self.error = error
+    }
+}
+
+/// A `setConfig` control request (configuration.md §2.7).
+public struct RuntimeConfigSetControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The `updates.*` key to write.
+    public var key: String
+    /// The new value.
+    public var value: String
+
+    /// Creates a control request.
+    public init(header: APIRequestHeader, key: String, value: String) {
+        self.header = header
+        self.key = key
+        self.value = value
+    }
+}
+
+/// The `setConfig` reply: the values after the write.
+public struct RuntimeConfigSetControlReply: Codable, Sendable {
+    /// The settings values keyed by name.
+    public var values: [String: String]?
+    /// The failure on error, for example `config.invalidValue`.
+    public var error: RuntimeWireError?
+
+    /// Creates a control reply.
+    public init(values: [String: String]? = nil, error: RuntimeWireError? = nil) {
+        self.values = values
+        self.error = error
+    }
+}

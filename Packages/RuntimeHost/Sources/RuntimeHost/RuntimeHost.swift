@@ -99,7 +99,7 @@ public actor RuntimeHost {
     private var shutdownCompleted = false
     private var activeLifecycleOperations = 0
     private var activeRuntimeStarts = 0
-    private var activePackageMutations = 0
+    var activePackageMutations = 0
     private var runtimeStartTask: Task<Result<Void, RuntimeHostError>, Never>?
     /// Managed-package reinstalls still pending after the last userdata reset (§9.5).
     private var pendingReinstallIDs: Set<RuntimePackageID> = []
@@ -115,6 +115,8 @@ public actor RuntimeHost {
     /// The lazily created update service (update-system.md). Internal for
     /// `RuntimeHostUpdates.swift`.
     var updateService: EmbeddedUpdateService?
+    /// The §3 update scheduler (RuntimeHostUpdates.swift).
+    var updateScheduler: UpdateScheduler?
     /// The §7.1 gentle-update gate shared by update installs, created with
     /// the pump tasks below on first use.
     var updateGate: GentleUpdateGate?
@@ -130,6 +132,9 @@ public actor RuntimeHost {
     /// The idle controller the `storeOperation` assertion holds (#75 wires
     /// its suspend/stop deadlines).
     let updateIdleController = IdleController()
+    /// §3.5: set when `ensureReady(.update)` booted a stopped runtime so
+    /// it stops again once the admitted installs finish (update-system.md).
+    var updateBootedForInstall = false
     /// `updates.waiting` registers once when the update service is created.
     var updatesHealthChecksRegistered = false
     private var packageActivityReservations = PackageActivityReservations()
@@ -237,6 +242,8 @@ public actor RuntimeHost {
         // Load the wrapper registry and recover pending/refreshing entries at
         // daemon start (wrapper.md §6.2), independent of the first verify call.
         Task { _ = await self.wrapperRegistryInstance() }
+        // apkrund-start trigger (update-system.md §3.3): arm the scheduler.
+        Task { await self.updateSchedulerInstance().start() }
 
         // Startup step 2: the kernel releases this lock automatically after a crash.
         do {
@@ -550,7 +557,7 @@ public actor RuntimeHost {
         try await startRuntimeBody(reason: reason)
     }
 
-    private func stopRuntimeBody(reason: StopReason) async throws(RuntimeHostError) {
+    func stopRuntimeBody(reason: StopReason) async throws(RuntimeHostError) {
         try await waitForStartupCompletion()
         try beginLifecycleOperation()
         defer { finishLifecycleOperation() }
@@ -2004,9 +2011,21 @@ public actor RuntimeHost {
             return false
         }
         let runtimeState = await supervisor?.state
+        // runtime-daemon.md §2.4: do not exit while update work is due
+        // inside the idle grace window — a check that would start before
+        // the grace ends keeps the daemon alive.
+        let updateDueSoon: Bool
+        if let scheduler = updateScheduler,
+            let next = await scheduler.earliestWakeAt()
+        {
+            updateDueSoon = next < Date().addingTimeInterval(120)
+        } else {
+            updateDueSoon = false
+        }
         return !isShuttingDown
             && activeLifecycleOperations == 0
             && (runtimeState == nil || runtimeState == .stopped)
+            && !updateDueSoon
     }
 
     private func observeSupervisorEvents(from supervisor: RuntimeSupervisor) {
@@ -2199,6 +2218,7 @@ public actor RuntimeHost {
         isShuttingDown = true
         runtimeSessionGeneration &+= 1
         hostState = "shuttingDown"
+        await updateScheduler?.stop()
         // Unanswered approval prompts must not hold the request drain:
         // their launchers get `timedOut` instead of the ten-minute wait.
         await approvalService?.cancelAll()
@@ -2296,7 +2316,7 @@ public actor RuntimeHost {
         }
     }
 
-    private func waitForStartupCompletion(
+    func waitForStartupCompletion(
         allowingReservedPackageMutation: Bool = false
     ) async throws(RuntimeHostError) {
         guard hasStarted else {
@@ -2447,7 +2467,7 @@ public actor RuntimeHost {
         #endif
     }
 
-    private func makeHeadlessSessionService() async throws(RuntimeWireError) -> any RuntimeSessionService {
+    func makeHeadlessSessionService() async throws(RuntimeWireError) -> any RuntimeSessionService {
         if let headlessSessionService {
             return headlessSessionService
         }

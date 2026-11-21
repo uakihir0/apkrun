@@ -59,6 +59,10 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
         /// install reopens it (persists so a gate-resumed install
         /// reopens too).
         public var reopenAfterInstall: Bool
+        /// The user asked for this install (`trigger` `userInitiated` or
+        /// `manual`). A `notifyOnly` package never stages automatically,
+        /// so only a row with this set may auto-resume after a restart.
+        public var userRequested: Bool
 
         /// Creates a summary.
         public init(
@@ -67,7 +71,8 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
             provider: ProviderType,
             signerDigests: [SHA256Digest]? = nil,
             cursor: ProviderCursor? = nil,
-            reopenAfterInstall: Bool = false
+            reopenAfterInstall: Bool = false,
+            userRequested: Bool = false
         ) {
             self.versionCode = versionCode
             self.versionName = versionName
@@ -75,6 +80,7 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
             self.signerDigests = signerDigests
             self.cursor = cursor
             self.reopenAfterInstall = reopenAfterInstall
+            self.userRequested = userRequested
         }
 
         /// Decodes a summary, tolerating rows written before
@@ -89,6 +95,8 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
             cursor = try container.decodeIfPresent(ProviderCursor.self, forKey: .cursor)
             reopenAfterInstall =
                 try container.decodeIfPresent(Bool.self, forKey: .reopenAfterInstall) ?? false
+            userRequested =
+                try container.decodeIfPresent(Bool.self, forKey: .userRequested) ?? false
         }
     }
 

@@ -15,6 +15,8 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     private let registry: SessionRegistry
     private let displayConfiguration: DisplayConfiguration
     private var sessionsByPackage: [String: SessionID] = [:]
+    /// Whether any session is still live; the §3.5 idle stop asks this.
+    var hasLiveSessions: Bool { !sessionsByPackage.isEmpty }
     private var frameDrainers: [SessionID: Task<Void, Never>] = [:]
     private var taskEventMonitor: Task<Void, Never>?
     private var guestResynchronizationHandlerID: UUID?

@@ -80,6 +80,10 @@ public protocol UpdateRuntimeAccess: Sendable {
     /// Brings the runtime up for an update (§3.5, §7.3). Automatic runs
     /// need a ready runtime.
     func ensureReady(_ reason: UpdateStartReason) async throws
+    /// GU1: whether a stopped runtime may boot for an automatic install —
+    /// the §3.5 headless-boot conditions (setting, staged wait, AC power,
+    /// idle user). The gate asks this only while the runtime is `stopped`.
+    func mayStartForUpdateInstall() async -> Bool
     /// Ends every session of the package (Update Now, §7.3).
     func endSessions(for package: PackageID, reason: UpdateSessionEndReason) async
     /// Reopens the package after Update Now (§7.3).
@@ -88,6 +92,11 @@ public protocol UpdateRuntimeAccess: Sendable {
     /// duration (§7.2; runtime-daemon.md §5.1). Throws when the runtime is
     /// already stopping — the install fails instead of racing shutdown.
     func assertStoreOperation() async throws -> UpdateActivityAssertion
+    /// Reports that the caller finished its follow-ups (reopen, queue
+    /// drain) after an install. The §3.5 stop runs here — after a reopen
+    /// could claim a session — and on the assertion's release as a
+    /// fallback.
+    func updatesIdle() async
     /// Launches the package on the health-check display for H2–H4
     /// (§8.2): a system-session DisplayPool lease, no window, no
     /// force-stop afterwards.
@@ -107,12 +116,16 @@ extension UpdateRuntimeAccess {
     public func androidAllowsGentleInstall(_ package: PackageID) async -> Bool { true }
     /// Ending sessions is a no-op when nothing can run sessions.
     public func endSessions(for package: PackageID, reason: UpdateSessionEndReason) async {}
+    /// A channel that cannot boot Android never allows an automatic start.
+    public func mayStartForUpdateInstall() async -> Bool { false }
     /// Reopening is a no-op when the channel cannot launch sessions.
     public func reopen(_ package: PackageID) async {}
     /// Runtimes without an idle controller return a no-op assertion.
     public func assertStoreOperation() async -> UpdateActivityAssertion {
         UpdateActivityAssertion()
     }
+    /// Nothing to settle on a channel that cannot boot Android.
+    public func updatesIdle() async {}
     /// A channel that cannot launch answers like a missing launcher: the
     /// H2–H4 steps then fail as a launch failure.
     public func healthCheckLaunch(_ package: PackageID, timeouts: UpdateHealthCheckTimeouts) async

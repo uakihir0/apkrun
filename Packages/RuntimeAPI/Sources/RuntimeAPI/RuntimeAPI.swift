@@ -729,6 +729,10 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func setUpdateAuthority(_ request: Data, reply: @escaping (Data) -> Void)
     /// Rolls a package back to `previous/` (update-system.md §8.5).
     func rollbackPackage(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Reads `updates.*` settings (configuration.md §2.7).
+    func getConfig(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Writes one `updates.*` setting (configuration.md §2.7).
+    func setConfig(_ request: Data, reply: @escaping (Data) -> Void)
     /// Adds or removes a version on the package's skip list (§8.4).
     func updateSkipped(_ request: Data, reply: @escaping (Data) -> Void)
     /// Checks and installs a package update now, optionally from files

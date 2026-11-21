@@ -96,7 +96,9 @@ actor SharedFolderRegistry {
         guard let url = resolve(bookmark) else {
             throw .folderUnavailable(problem: .missing)
         }
-        let standardized = url.standardizedFileURL
+        // Resolving links is part of the check: a picked folder that links to
+        // a refused place is refused too (desktop-integration.md §6.4).
+        let standardized = url.resolvingSymlinksInPath().standardizedFileURL
         try refuse(unacceptable: standardized)
         let path = standardized.path
         let level = access == "readWrite" ? "readWrite" : "readOnly"
@@ -293,7 +295,18 @@ struct HostFileTransferChannel: FileTransferChannel {
             try? handle.truncate(atOffset: 0)
             throw .transferFailed(detail: "write")
         }
-        Self.quarantine(handle: handle, agent: "APKRun")
+        do throws(IntegrationFailure) {
+            try Self.quarantine(handle: handle, agent: "APKRun")
+        } catch {
+            // A save that cannot carry quarantine is deleted rather than left
+            // unmarked (desktop-integration.md §6.3).
+            try? handle.truncate(atOffset: 0)
+            var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+            if fcntl(handle.fileDescriptor, F_GETPATH, &path) == 0 {
+                try? FileManager.default.removeItem(atPath: String(cString: path))
+            }
+            throw error
+        }
     }
 
     /// Streams the transfer into the save file and verifies its digest
@@ -312,21 +325,27 @@ struct HostFileTransferChannel: FileTransferChannel {
             hasher.update(data: bytes)
             try handle.write(contentsOf: bytes)
         }
-        if let expected = transfer.sha256, !expected.isEmpty,
-            Data(hasher.finalize()) != expected
-        {
+        // A transfer without a digest is a protocol violation, not a file to
+        // keep: the §7.4 sender always signs its end frame.
+        guard let expected = transfer.sha256, !expected.isEmpty,
+            Data(hasher.finalize()) == expected
+        else {
             throw CocoaError(.fileWriteFileExists)
         }
         try handle.synchronize()
     }
 
-    /// `com.apple.quarantine` "APKRun" (desktop-integration.md §6.3).
-    static func quarantine(handle: FileHandle, agent: String) {
+    /// `com.apple.quarantine` "APKRun" (desktop-integration.md §6.3); a
+    /// destination that cannot carry the attribute fails the save.
+    static func quarantine(handle: FileHandle, agent: String) throws(IntegrationFailure) {
         let value = "0003;\(String(UInt(Date().timeIntervalSince1970), radix: 16));\(agent);"
-        value.withCString { pointer in
-            _ = fsetxattr(
+        let applied = value.withCString { pointer in
+            fsetxattr(
                 handle.fileDescriptor, "com.apple.quarantine", pointer,
                 strlen(pointer) + 1, 0, 0)
+        }
+        guard applied == 0 else {
+            throw .transferFailed(detail: "quarantine")
         }
     }
 
@@ -416,25 +435,6 @@ extension RuntimeHost {
                             size: offer.size, type: offer.type)))
             })
         fileTransferServiceLazy = service
-        return service
-    }
-
-    /// The §6.4 document provider the agent's `Host*` ops call.
-    func sharedFolderService() -> SharedFolderService {
-        if let sharedFolderServiceLazy { return sharedFolderServiceLazy }
-        let settings = integrationSettings
-        let service = SharedFolderService(
-            source: SharedFolderService.Source(
-                roots: { [weak self] in
-                    await self?.sharedFolderRegistry().roots() ?? []
-                },
-                valueForPackage: { packageID in
-                    // The global switch wins over the stored package value
-                    // (configuration.md §2.2).
-                    guard settings.globalEnabled("sharedFolders") else { return "off" }
-                    return settings.packageValue(packageID.rawValue, "sharedFolders") ?? "off"
-                }))
-        sharedFolderServiceLazy = service
         return service
     }
 
@@ -675,13 +675,19 @@ extension RuntimeHost {
             guard let self else { return }
             do {
                 let channel = try await self.clipboardBulkChannel()
+                // One service per channel: its handle table belongs to this
+                // connection, so a second connection can never act on a file
+                // it did not open (§7.5).
+                let service = SharedFolderService(source: self.sharedFolderSource())
+                defer { Task { await service.closeAll() } }
                 let budget = RequestBudget(limit: 16)
                 for await (id, request) in channel.agentRequests {
                     guard !Task.isCancelled else { return }
                     await budget.acquire()
                     Task {
                         await self.answerSharedFolderRequest(
-                            id: id, request: request, channel: channel)
+                            id: id, request: request, channel: channel,
+                            service: service)
                         await budget.release()
                     }
                 }
@@ -691,12 +697,27 @@ extension RuntimeHost {
         }
     }
 
+    /// The `SharedFolderService.Source` of the current settings.
+    private nonisolated func sharedFolderSource() -> SharedFolderService.Source {
+        let settings = integrationSettings
+        return SharedFolderService.Source(
+            roots: { [weak self] in
+                await self?.sharedFolderRegistry().roots() ?? []
+            },
+            valueForPackage: { packageID in
+                // The global switch wins over the stored package value
+                // (configuration.md §2.2).
+                guard settings.globalEnabled("sharedFolders") else { return "off" }
+                return settings.packageValue(packageID.rawValue, "sharedFolders") ?? "off"
+            })
+    }
+
     /// Maps one `Host*` request to its service call and replies with the
     /// response payload or `GPGuestError` (§7.5).
     private func answerSharedFolderRequest(
-        id: UInt64, request: GPRequest, channel: GuestBulkChannel
+        id: UInt64, request: GPRequest, channel: GuestBulkChannel,
+        service: SharedFolderService
     ) async {
-        let service = sharedFolderService()
         var result: GPResponse.OneOf_Result
         do {
             switch request.op {
@@ -728,12 +749,18 @@ extension RuntimeHost {
                 opened.size = UInt64(max(0, size))
                 result = .hostOpenFile(opened)
             case .hostReadRange(let op):
+                guard op.offset <= UInt64(Int64.max) else {
+                    throw SharedFolderFailure(.invalidArgument)
+                }
                 let data = try await service.readRange(
                     handle: op.handle, offset: Int64(op.offset), length: Int(op.length))
                 var range = GPReadRangeResult()
                 range.data = data
                 result = .hostReadRange(range)
             case .hostWriteRange(let op):
+                guard op.offset <= UInt64(Int64.max) else {
+                    throw SharedFolderFailure(.invalidArgument)
+                }
                 try await service.writeRange(
                     handle: op.handle, offset: Int64(op.offset), data: op.data)
                 result = .hostWriteRange(GPEmpty())

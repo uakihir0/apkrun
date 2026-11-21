@@ -96,6 +96,7 @@ public actor LinkForwarder {
     private let excludedPackages: @Sendable () async -> [String]
     /// Logs a dropped or denied link (scheme and registrable domain only).
     private let logDrop: @Sendable (RuntimePackageID, LinkRejection, URL?) async -> Void
+    private let promptLifetime: Duration
 
     private var pending: [UUID: PendingPrompt] = [:]
     private var recent: [RuntimePackageID: [ContinuousClock.Instant]] = [:]
@@ -112,7 +113,8 @@ public actor LinkForwarder {
         excludedPackages: @escaping @Sendable () async -> [String] = { [] },
         logDrop: @escaping @Sendable (RuntimePackageID, LinkRejection, URL?) async -> Void = {
             _, _, _ in
-        }
+        },
+        promptLifetime: Duration = LinkForwarder.promptLifetime
     ) {
         self.policy = policy
         self.channel = channel
@@ -123,6 +125,7 @@ public actor LinkForwarder {
         self.setLinksValue = setLinksValue
         self.excludedPackages = excludedPackages
         self.logDrop = logDrop
+        self.promptLifetime = promptLifetime
     }
 
     /// Handles one `OpenUrlOnHost` guest event (§7.2).
@@ -209,9 +212,9 @@ public actor LinkForwarder {
             packageID: package,
             requestID: event.requestID,
             url: url,
-            expiresAt: now.advanced(by: Self.promptLifetime)
+            expiresAt: now.advanced(by: promptLifetime)
         )
-        Task { await self.expirePrompt(prompt.promptID, after: Self.promptLifetime) }
+        Task { await self.expirePrompt(prompt.promptID, after: promptLifetime) }
         await presentPrompt(sessionID, package, prompt)
         return .prompted(prompt)
     }

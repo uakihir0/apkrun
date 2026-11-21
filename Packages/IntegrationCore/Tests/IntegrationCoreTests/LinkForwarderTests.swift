@@ -33,7 +33,7 @@ struct LinkForwarderTests {
         func open(_ url: URL) async { opened.append(url) }
     }
 
-    private struct Rig {
+    private struct Rig: Sendable {
         let channel = FakeChannel()
         let opener = FakeOpener()
         var packageValues: [String: String] = [:]
@@ -74,9 +74,9 @@ struct LinkForwarderTests {
             return forwarder
         }
 
-        var presentedHook: () -> [(UUID, RuntimePackageID, LinkPrompt)] = { [] }
-        var writesHook: () -> [(RuntimePackageID, String)] = { [] }
-        var dropsHook: () -> [(RuntimePackageID, LinkRejection)] = { [] }
+        var presentedHook: @Sendable () -> [(UUID, RuntimePackageID, LinkPrompt)] = { [] }
+        var writesHook: @Sendable () -> [(RuntimePackageID, String)] = { [] }
+        var dropsHook: @Sendable () -> [(RuntimePackageID, LinkRejection)] = { [] }
     }
 
     private final class Box<T>: @unchecked Sendable {
@@ -291,6 +291,40 @@ struct LinkForwarderTests {
             remember: true)
         #expect(rig.channel.resolves.map(\.1) == [.drop])
         #expect(rig.writesHook().isEmpty)
+    }
+
+    @Test("an unanswered prompt expires, drops, and refuses late answers")
+    func promptExpiry() async throws {
+        let rig = Rig()
+        let forwarder = LinkForwarder(
+            policy: IntegrationPolicy(
+                source: IntegrationSettingsSource(
+                    packageValue: { _, _ in nil },
+                    globalEnabled: { _ in true },
+                    supported: { _ in true }
+                )),
+            channel: rig.channel,
+            opener: rig.opener,
+            linksValue: { _ in nil },
+            windowState: { _ in rig.state },
+            presentPrompt: { _, _, _ in },
+            setLinksValue: { _, _ in },
+            promptLifetime: .milliseconds(50)
+        )
+        let outcome = await forwarder.openUrlOnHost(event(url: "https://example.com/"))
+        guard case .prompted(let prompt) = outcome else {
+            Issue.record("expected a prompt")
+            return
+        }
+        try await Task.sleep(for: .milliseconds(120))
+        #expect(rig.channel.resolves.map(\.1) == [.drop])
+        await #expect(throws: IntegrationFailure.promptTimedOut) {
+            try await forwarder.resolvePrompt(
+                sessionID: rig.state.sessionID!,
+                promptID: prompt.promptID,
+                choice: .openOnMac,
+                remember: false)
+        }
     }
 
     @Test("an unknown prompt throws promptTimedOut")

@@ -22,6 +22,9 @@ const val INPUT_SOCKET = "apkrun-guestd-input"
 /** The abstract socket of the bulk channel. */
 const val BULK_SOCKET = "apkrun-guestd-bulk"
 
+/** The installed package whose cache directory stores inbound transfers. */
+private const val GUEST_PACKAGE = "io.apkrun.guest"
+
 /**
  * The daemon: the three sockets, the sessions, the dispatcher, and the services
  * (guest-components.md §6.1). It is built once per process. [start] binds the sockets, starts the
@@ -77,7 +80,7 @@ class Daemon(internal val scope: CoroutineScope) {
     internal val bulkTransfers = BulkTransfers()
     private val diagnostics = DiagnosticsService(bulkTransfers)
     internal val inboundTransfers =
-        InboundTransfers(java.io.File(SystemContext.get().cacheDir, "transfers"))
+        InboundTransfers(java.io.File(guestCacheDir(), "transfers"))
     internal val clipboard =
         ClipboardBridge.create(SystemContext.get(), events, bulkTransfers, inboundTransfers)
     internal val notifications =
@@ -139,6 +142,14 @@ class Daemon(internal val scope: CoroutineScope) {
         sockets.forEach { it.start() }
         AgentLog.info("apkrun_guestd is serving the control, input, and bulk sockets")
     }
+
+    /**
+     * The installed app's cache directory. The daemon's own context is the system context, which
+     * has no data directory; TransferFileProvider resolves files under this same directory in the
+     * app process.
+     */
+    private fun guestCacheDir(): java.io.File =
+        SystemContext.get().createPackageContext(GUEST_PACKAGE, 0).cacheDir
 
     private fun serve(socket: LocalSocket, channel: ChannelKind) {
         scope.launch(Dispatchers.IO) { Connection(socket, channel, this@Daemon).run() }

@@ -932,6 +932,23 @@ extension RuntimeHost {
         if key.hasPrefix("integrations.") {
             Task { await pushNotificationForwarding() }
         }
+        // `system.sync*` is owned by the configuration store (the extras
+        // write above only keeps `apkrun config` read-back consistent):
+        // persist it there too and fan the change out to subscribers and
+        // the locale/time synchronizer like `updateConfiguration` does.
+        if [
+            LocaleTimeConfigurationValues.syncLocaleKey,
+            LocaleTimeConfigurationValues.syncTimeZoneKey,
+            LocaleTimeConfigurationValues.syncClockFormatKey,
+        ].contains(key),
+            let flag = Self.configBool(value, key: key)
+        {
+            let update = try configurationStore.updateLocaleTimeSettings([key: .set(flag)])
+            if !update.changedKeys.isEmpty {
+                eventHub.publishRuntimeChange(.configurationChanged(keys: update.changedKeys))
+                enqueueLocaleTimeTrigger(.hostPreferencesChanged)
+            }
+        }
         return updateConfigValues(keys: nil)
     }
 

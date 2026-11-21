@@ -26,6 +26,8 @@ protocol RuntimeService: Sendable {
     ) async throws -> (operation: OperationHandle, results: [UpdateCheckResult])
     func adoptPackage(_ request: RuntimeAdoptPackageRequest) async throws -> RuntimePackageSummary
     func refreshWrapper(packageID: RuntimePackageID) async throws -> OperationHandle
+    /// Regenerates a missing or modified wrapper (§5.3 row 6).
+    func createWrapper(packageID: RuntimePackageID) async throws -> OperationHandle
     func repairPackage(packageID: RuntimePackageID) async throws -> OperationHandle
     func importPackage(
         _ request: RuntimeImportPackageRequest, files: [FileHandle]
@@ -45,6 +47,14 @@ extension RuntimeControlClient: RuntimeService {
         packages: [RuntimePackageID]?
     ) async throws -> (operation: OperationHandle, results: [UpdateCheckResult]) {
         try await checkForUpdates(packages: packages, checkOnly: false)
+    }
+
+    func createWrapper(packageID: RuntimePackageID) async throws -> OperationHandle {
+        try await createWrapper(
+            WrapperRequest(packageID: packageID),
+            icon: nil,
+            operationID: OperationID()
+        )
     }
 
     func refreshWrapper(packageID: RuntimePackageID) async throws -> OperationHandle {

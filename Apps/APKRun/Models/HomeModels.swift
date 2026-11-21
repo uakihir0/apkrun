@@ -80,7 +80,12 @@ final class UpdatesModel: TopicPollingModel {
             try RuntimeControlClient(clientKind: .app)
         }
     ) {
-        super.init(topics: [.updates], makeService: makeService)
+        // The daemon never publishes `updates` today, so `.packages` covers
+        // installs and the interval covers external checks (CLI, scheduler).
+        super.init(
+            topics: [.updates, .packages],
+            refreshInterval: .seconds(30),
+            makeService: makeService)
     }
 
     override func reload() async {
@@ -90,7 +95,8 @@ final class UpdatesModel: TopicPollingModel {
             updates = Dictionary(uniqueKeysWithValues: list.map { ($0.packageID, $0) })
             let history = try await service.updateHistory(packageID: nil, limit: 50)
             var outcomes: [RuntimePackageID: UpdateHistoryEntry] = [:]
-            for entry in history where outcomes[entry.packageID] == nil {
+            // History comes oldest first; the newest outcome wins.
+            for entry in history {
                 outcomes[entry.packageID] = entry
             }
             lastOutcomes = outcomes
@@ -112,13 +118,15 @@ final class UpdatesModel: TopicPollingModel {
         await reload()
     }
 
-    /// Whether the newest history outcome is a failure kind (§5.3 row 3).
+    /// Whether the newest history outcome is a failure kind (§5.3 row 3):
+    /// rollbacks, failed health checks, and entries carrying an error.
+    /// `skipped.*` is a normal check result, not a failure.
     nonisolated static func isFailed(_ entry: UpdateHistoryEntry?) -> Bool {
         guard let outcome = entry?.outcome else { return false }
         return entry?.failure != nil
-            || outcome.hasPrefix("failed")
             || outcome.hasPrefix("rolledBack")
-            || outcome.hasPrefix("skipped")
+            || outcome.hasPrefix("rollback")
+            || outcome.hasPrefix("kept")
     }
 }
 
@@ -223,9 +231,18 @@ final class WrapperListModel: TopicPollingModel {
         entries[packageID]
     }
 
-    /// **Update Mac App** (§5.3 row 7) / **Create Mac App** (row 6).
+    /// **Update Mac App** (§5.3 row 7).
     func refreshWrapper(packageID: RuntimePackageID) async {
         _ = try? await requireService().refreshWrapper(packageID: packageID)
+        await reload()
+    }
+
+    /// **Create Mac App** / **Create It Again** (§5.3 row 6): regenerates a
+    /// missing or modified wrapper through `createWrapper` — `refreshWrapper`
+    /// refuses those states (wrapper.md §9.3).
+    func createWrapper(packageID: RuntimePackageID) async {
+        _ = try? await requireService().createWrapper(packageID: packageID)
+        await reload()
         invalidateService()
         await reload()
     }
@@ -243,6 +260,28 @@ enum HomeSort: String, CaseIterable {
     case name = "Name"
     case recentlyUsed = "Recently Used"
     case recentlyUpdated = "Recently Updated"
+}
+
+/// One control connection shared by every home model: the daemon caps a
+/// client at eight control connections, and one per model would use them all.
+final class SharedServiceSource: @unchecked Sendable {
+    private let lock = NSLock()
+    private let factory: @Sendable () throws -> any RuntimeService
+    private var service: (any RuntimeService)?
+
+    init(factory: @escaping @Sendable () throws -> any RuntimeService) {
+        self.factory = factory
+    }
+
+    /// The shared service, created on first use.
+    func require() throws -> any RuntimeService {
+        lock.lock()
+        defer { lock.unlock() }
+        if let service { return service }
+        let created = try factory()
+        service = created
+        return created
+    }
 }
 
 /// The shared home-screen state: the models of §5.2 plus the router.
@@ -276,11 +315,15 @@ final class HomeModel {
         }
     ) {
         serviceFactory = makeService
-        packages = PackageListModel(makeService: makeService)
-        updates = UpdatesModel(makeService: makeService)
-        sessions = SessionsModel(makeService: makeService)
-        operations = OperationCenter(makeService: makeService)
-        wrappers = WrapperListModel(makeService: makeService)
+        // One shared control connection: the daemon caps a client at eight
+        // (RuntimeXPCServer), and one connection per model would use them all.
+        let source = SharedServiceSource(factory: makeService)
+        let shared: @Sendable () throws -> any RuntimeService = { try source.require() }
+        packages = PackageListModel(makeService: shared)
+        updates = UpdatesModel(makeService: shared)
+        sessions = SessionsModel(makeService: shared)
+        operations = OperationCenter(makeService: shared)
+        wrappers = WrapperListModel(makeService: shared)
         runtimeStatus = RuntimeStatusModel()
     }
 
@@ -296,8 +339,9 @@ final class HomeModel {
 
     /// Whether the unreachable-service banner shows (§5.2 Restart Service).
     var serviceUnreachable: Bool {
-        packages.serviceUnreachable && runtimeStatus.status == nil
-            && runtimeStatus.lastError != nil
+        // `status` can hold a stale snapshot after the daemon stopped; a
+        // failed status round trip is the real signal.
+        packages.serviceUnreachable && runtimeStatus.lastError != nil
     }
 
     /// Applies an `apkrun://` route. URLs only navigate (§3.1).

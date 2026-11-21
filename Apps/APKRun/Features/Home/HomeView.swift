@@ -386,12 +386,13 @@ private struct AppRowView: View {
                 Button("Update Now") {
                     Task { await model.updates.updateNow(packageID: package.packageID) }
                 }
-            case .createMacApp, .createItAgain, .updateMacApp:
-                Button(
-                    action == .updateMacApp
-                        ? "Update Mac App" : (action == .createMacApp ? "Create Mac App" : "Create It Again")
-                ) {
+            case .updateMacApp:
+                Button("Update Mac App") {
                     Task { await model.wrappers.refreshWrapper(packageID: package.packageID) }
+                }
+            case .createMacApp, .createItAgain:
+                Button(action == .createMacApp ? "Create Mac App" : "Create It Again") {
+                    Task { await model.wrappers.createWrapper(packageID: package.packageID) }
                 }
             case .trashMacApp:
                 Button("Move Mac App to Trash") {

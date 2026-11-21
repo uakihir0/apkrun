@@ -95,6 +95,11 @@ final class FakeRuntimeService: RuntimeService, @unchecked Sendable {
             versionName: nil, state: .installed, managed: true, updateAuthority: .apkrun)
     }
 
+    func createWrapper(packageID: RuntimePackageID) async throws -> OperationHandle {
+        count("createWrapper")
+        return OperationHandle(operationID: OperationID(), kind: .wrapperCreate)
+    }
+
     func refreshWrapper(packageID: RuntimePackageID) async throws -> OperationHandle {
         count("refreshWrapper")
         return OperationHandle(operationID: OperationID(), kind: .wrapperRefresh)

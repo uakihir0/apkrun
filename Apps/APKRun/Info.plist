@@ -291,5 +291,25 @@
 			</dict>
 		</dict>
 	</array>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+	<key>SUAllowsAutomaticUpdates</key>
+	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUEnableSystemProfiling</key>
+	<false/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
+	<key>SURequireSignedFeed</key>
+	<true/>
+#if APKRUN_SELF_UPDATE
+	<key>SUFeedURL</key>
+	<string>$(APKRUN_SU_FEED_URL)</string>
+	<key>SUPublicEDKey</key>
+	<string>$(APKRUN_SU_PUBLIC_ED_KEY)</string>
+#endif
 </dict>
 </plist>

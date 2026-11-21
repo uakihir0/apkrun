@@ -823,6 +823,16 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         backgroundTasks.contains(packageID.rawValue)
     }
 
+    /// Package IDs of all sessions that have not ended (§3.6 status).
+    func maintenanceSessionPackageIDs() -> [RuntimePackageID] {
+        sessionsByPackage.keys.sorted().compactMap { RuntimePackageID(rawValue: $0) }
+    }
+
+    /// Package IDs with a keepRunning background task (§3.6 status).
+    func maintenanceBackgroundTaskPackageIDs() -> [RuntimePackageID] {
+        backgroundTasks.sorted().compactMap { RuntimePackageID(rawValue: $0) }
+    }
+
     func observeSessionActivity(
         _ observer: @escaping @Sendable (RuntimePackageID, PackageSessionActivity) -> Void
     ) {

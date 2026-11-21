@@ -212,6 +212,18 @@ final class RuntimeEventHub: @unchecked Sendable {
         )
     }
 
+    /// Publishes a maintenance event on the `maintenance` topic (runtime-api.md §8.3).
+    func publishMaintenanceEvent(_ event: MaintenanceEvent) {
+        publish(
+            QueuedEvent(
+                topic: .maintenance,
+                time: Date(),
+                operationID: nil,
+                payload: .maintenance(event)
+            )
+        )
+    }
+
     /// Publishes an integration event on the `integrations` topic (§16.2).
     func publishIntegrationChange(_ change: IntegrationChange) {
         publish(

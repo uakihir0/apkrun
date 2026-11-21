@@ -949,6 +949,12 @@ extension RuntimeHost {
                 enqueueLocaleTimeTrigger(.hostPreferencesChanged)
             }
         }
+        // `maintenance.*` is read live by APKRun.app's self-update wiring
+        // (configuration.md §2.6); the change event reaches it on the
+        // runtime topic like `updateConfiguration` does.
+        if key.hasPrefix("maintenance.") {
+            eventHub.publishRuntimeChange(.configurationChanged(keys: [key]))
+        }
         return updateConfigValues(keys: nil)
     }
 

@@ -178,7 +178,7 @@ Generated files are committed. The `codegen` job runs `scripts/ci/codegen.sh`, w
 
 ## 5. Build metadata: components.json
 
-The `APKRun` target runs `scripts/build/write-components.py` as a build phase (planned, #58). It writes `Contents/Resources/components.json` ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.1):
+The `APKRun` target runs `scripts/build/write-components.py` as a build phase. It writes `Contents/Resources/components.json` ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.1):
 
 | Field | Taken from |
 |---|---|
@@ -467,7 +467,7 @@ The layout is fixed by [filesystem-layout.md](../01-architecture/filesystem-layo
 | Embed Frameworks (planned, #58) | `Contents/Frameworks/Sparkle.framework` | Sparkle |
 | `scripts/build/embed-tools.sh` (planned, #28) | `Contents/Resources/tools/aapt2` | pinned Maven artifact, hash-checked |
 | Copy resources (planned, #91) | `compatibility.json` | `Tests/Compatibility/database/compatibility.json` ([diagnostics.md](../02-design/diagnostics.md) §10) |
-| `scripts/build/write-components.py` (planned, #58) | `Contents/Resources/components.json` | §5 |
+| `scripts/build/write-components.py` | `Contents/Resources/components.json` | §5 |
 
 Release assembly is `scripts/release/assemble-bundle.sh` (planned, #89): `xcodebuild -configuration Release` with `CODE_SIGNING_ALLOWED=NO`, then `scripts/release/sign-bundle.sh` (§12.3). The runtime image is never inside the app bundle ([decisions/0011-runtime-image-bundle.md](../01-architecture/decisions/0011-runtime-image-bundle.md)).
 

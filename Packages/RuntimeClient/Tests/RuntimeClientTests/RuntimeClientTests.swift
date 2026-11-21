@@ -1407,6 +1407,7 @@ private struct BrokerErrorEnvelope: Encodable {
 }
 
 private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBrokerChannel, RuntimeControlChannel,
+    RuntimeMaintenanceChannel,
     @unchecked Sendable
 {
     private let helloData: Data
@@ -1469,6 +1470,9 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var failNextBeginInstallImportedValue = false
     private var failNextBeginUninstallPackageValue = false
     private var failNextOperationStatusValue = false
+    private var maintenanceConnectionsValue = 0
+    private var maintenanceRequestsValue: [Data] = []
+    private let maintenanceReplyData: Data
     private var endpointBusyRejectionsValue: Int
     private var eventSinkValue: RuntimeEventSinkReceiver?
     private var connectionEventHandlerValue: (@Sendable () -> Void)?
@@ -1507,6 +1511,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
             endpoint = RuntimeXPCListenerEndpoint(value: NSObject())
         }
         endpointBusyData = try JSONEncoder().encode(RuntimeEndpointReply.rejected(.busy))
+        maintenanceReplyData = try JSONEncoder().encode(MaintenanceControlReply())
         endpointBusyRejectionsValue = endpointBusyRejections
         if let status {
             statusData = try JSONEncoder().encode(RuntimeControlReply(status: status))
@@ -1609,6 +1614,22 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
             brokerRequirementValue = signingRequirement
         }
         return self
+    }
+
+    func makeMaintenance(
+        endpoint: RuntimeXPCListenerEndpoint,
+        signingRequirement: String
+    ) throws(RuntimeControlClientError) -> any RuntimeMaintenanceChannel {
+        guard endpoint.value is NSObject else {
+            throw .malformedReply
+        }
+        lock.withLock { maintenanceConnectionsValue += 1 }
+        return self
+    }
+
+    func perform(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { maintenanceRequestsValue.append(request) }
+        return maintenanceReplyData
     }
 
     func makeControl(
@@ -1948,6 +1969,18 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
     }
 
+    func selfUpdateStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func noteSelfUpdateStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func checkSelfUpdate(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void) {
         lock.withLock { connectionEventHandlerValue = handler }
     }
@@ -2246,7 +2279,9 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 resetRequests: resetRequestsValue,
                 brokerConnections: brokerConnectionsValue,
                 controlConnections: controlConnectionsValue,
-                brokerInvalidations: brokerInvalidationsValue
+                brokerInvalidations: brokerInvalidationsValue,
+                maintenanceRequests: maintenanceRequestsValue,
+                maintenanceConnections: maintenanceConnectionsValue
             )
         }
     }
@@ -2332,5 +2367,43 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let brokerConnections: Int
         let controlConnections: Int
         let brokerInvalidations: Int
+        let maintenanceRequests: [Data]
+        let maintenanceConnections: Int
     }
+}
+
+@Test func maintenanceClientSendsFrozenOperationToMaintenanceEndpoint() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .app,
+        claimedIdentity: "io.apkrun.APKRun.dev",
+        buildIdentity: .development,
+        clientVersion: "0.1.0",
+        clientBuild: 1
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "updating"
+    )
+    let transport = try MockRuntimeTransport(hello: hello, status: nil)
+    let client = MaintenanceControlClient(
+        configuration: configuration, connectionFactory: transport)
+
+    _ = try await client.completeHostUpdate()
+
+    let snapshot = transport.snapshot()
+    let requests = snapshot.maintenanceRequests
+    #expect(requests.count == 1)
+    let decoded = try JSONDecoder().decode(
+        MaintenanceControlRequest.self, from: requests[0])
+    #expect(decoded.operation == .completeHostUpdate)
+
+    // The frozen endpoint is requested without a control endpoint, in every
+    // host state (runtime-api.md §12.1).
+    let endpointRequests = snapshot.endpointRequests
+    #expect(endpointRequests.count == 1)
+    let endpointRequest = try JSONDecoder().decode(
+        RuntimeEndpointRequest.self, from: endpointRequests[0])
+    #expect(endpointRequest.kind == .maintenance)
 }

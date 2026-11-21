@@ -284,6 +284,11 @@ public actor IdleController {
         assertions.count
     }
 
+    /// Returns the kinds of the currently held assertions (§3.6 maintenance status).
+    public var activeActivities: [ActivityKind] {
+        assertions.values.sorted { $0.rawValue < $1.rawValue }
+    }
+
     /// Returns the current settings.
     public var currentSettings: RuntimeIdleSettings {
         settings

@@ -46,6 +46,8 @@ public enum RuntimeHostError: Error, Equatable, Sendable {
     case shuttingDown
     /// The requested lifecycle change is not valid in the current runtime state.
     case invalidTransition
+    /// The daemon is updating or restarting to update (runtime-api.md §3.7).
+    case hostUpdating(String)
     /// The Guest Agent bundle is missing or invalid.
     case guestAgentBundle(String)
     /// Runtime boot failed.
@@ -177,6 +179,38 @@ public actor RuntimeHost {
     var updateBootedForInstall = false
     /// `updates.waiting` registers once when the update service is created.
     var updatesHealthChecksRegistered = false
+    /// The lazily built maintenance coordinator (runtime-api.md §12).
+    var _maintenanceService: MaintenanceService?
+    var _bundleWatcher: BundleWatcher?
+    /// The lazily built background appcast probe (§3.4).
+    var _selfUpdateProbe: SelfUpdateProbe?
+    /// The 24 h probe task, started after startup (§3.4).
+    var selfUpdateProbeTask: Task<Void, Never>?
+    /// Whether APKRun.app reported during this daemon run (§3.4 pitfall).
+    var apkrunAppReported = false
+    /// Whether an image migration is in progress (#59 reports it here).
+    var imageMigrating = false
+    /// `restartForUpdate` set this; the daemon exits at the next idle check.
+    var restartExitRequested = false
+
+    /// Synchronous mirror of `MaintenanceService.state` for gates that run
+    /// off the async path (runtime-api.md §3.7). Updated after every op.
+    var maintenanceHostState: HostState = .normal {
+        didSet {
+            if maintenanceHostState != oldValue {
+                maintenanceHostStateSince = Date()
+            }
+        }
+    }
+    /// When `maintenanceHostState` last changed (§12 health check).
+    var maintenanceHostStateSince = Date()
+    /// The on-disk bundle build `BundleWatcher` last saw (§3.6/§12).
+    var lastOnDiskBundleBuild: Int?
+
+    /// Version and build the maintenance endpoint reports (§12).
+    var buildIdentity: (marketingVersion: String, buildNumberInt: Int) {
+        (buildInfo.marketingVersion, Int(buildInfo.buildNumber) ?? 0)
+    }
     private var packageActivityReservations = PackageActivityReservations()
     /// The perf record writer (`perf/launches.jsonl`), created with `paths`.
     private var perfRecords: PerfRecordWriter?
@@ -328,6 +362,7 @@ public actor RuntimeHost {
         )
         observeLocaleTimeChanges()
         startLocaleTimeRefreshLoop()
+        Task { await self.registerSelfUpdateHealthCheck() }
         recordedBootOperationIDs = Set(
             BootRecordLog.read(from: paths.bootPerformanceFile).map(\.operationID)
         )
@@ -476,11 +511,23 @@ public actor RuntimeHost {
         }
         hostState = startupFailure == nil ? "running" : "degraded"
         logger.notice("Daemon startup completed with host state \(hostState, .public)")
+        startBundleWatcher()
+        startSelfUpdateProbeLoop()
         completeStartup()
     }
 
     /// Boots Android on demand. An explicit start is allowed after the crash-loop guard activates.
     public func startRuntime(reason: StartReason = .user) async throws(RuntimeHostError) {
+        // §3.7: a host update in flight or a restart to finish one refuses
+        // Android-starting ops (maintenance gate §3.7 for `updating`).
+        switch maintenanceHostState {
+        case .restartPending:
+            throw .hostUpdating("APKRun is restarting to finish an update.")
+        case .updating:
+            throw .hostUpdating("APKRun is updating itself.")
+        case .normal, .unknown:
+            break
+        }
         guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
             throw .invalidTransition
         }
@@ -1642,6 +1689,7 @@ public actor RuntimeHost {
         guard !Task.isCancelled else {
             throw Self.cancelledOperationError
         }
+        try assertMaintenanceGateAllowsWork()
         if let operationID {
             // PackageStore reconciles ambiguous guest results and journals the transaction to a
             // terminal state once its Store Agent operation begins.
@@ -2199,6 +2247,7 @@ public actor RuntimeHost {
         operationID requestedID: WireOperationID,
         clientKind: RuntimeClientKind
     ) throws(RuntimeWireError) -> OperationHandle {
+        try assertMaintenanceGateAllowsWork()
         guard request.importTicket == nil || request.portable else {
             throw .runtime(
                 "malformedRequest",
@@ -4232,6 +4281,12 @@ public actor RuntimeHost {
 
     /// Whether the daemon can exit after its idle grace period without cancelling an operation.
     public func canExitWhenIdle() async -> Bool {
+        if restartExitRequested {
+            // `restartPending` only needs sessions gone: pending installs and
+            // scheduled update work do not hold the daemon (§3.7).
+            guard let service = sessionServiceForIntegrations() else { return true }
+            return await service.sessionSnapshots().isEmpty
+        }
         guard hasStarted, !isShuttingDown, activeLifecycleOperations == 0 else {
             return false
         }
@@ -5012,7 +5067,7 @@ public actor RuntimeHost {
     // MARK: - First-run provisioning and Reset Android (#67)
 
     /// The `state.json` provisioning record under the data root.
-    private var provisioningStore: RuntimeStateStore {
+    var provisioningStore: RuntimeStateStore {
         RuntimeStateStore(fileURL: paths.stateFile)
     }
 
@@ -5829,6 +5884,8 @@ public actor RuntimeHost {
         switch error {
         case .notStarted, .alreadyStarted, .crashLoopActive, .stateStore:
             code = "runtime.hostStartupFailed"
+        case .hostUpdating:
+            code = "runtime.hostUpdating"
         case .startupFailed(_, let startupCode):
             code = startupCode.contains(".") ? startupCode : "runtime.hostStartupFailed"
         case .runtimeFailure(let failure):

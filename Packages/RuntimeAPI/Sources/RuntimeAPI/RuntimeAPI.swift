@@ -24,8 +24,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// `resolveLinkPrompt` (runtime-api.md §11.2).
     /// 1.29 adds the shared-folder and file operations of §11; 1.30 adds
     /// `SettingApplies` on `updateGlobalConfiguration` (desktop-integration.md
-    /// §9).
-    public static let current = APIVersion(major: 1, minor: 30)
+    /// §9). 1.31 adds `selfUpdateStatus` and `noteSelfUpdateStatus`
+    /// (runtime-api.md §12.2).
+    public static let current = APIVersion(major: 1, minor: 31)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -111,6 +112,9 @@ public struct RuntimeHelloReply: Codable, Equatable, Sendable {
 public enum RuntimeEndpointKind: String, Codable, Equatable, Sendable {
     /// APKRun.app, menu bar, CLI, and launcher control surface.
     case control
+    /// The frozen maintenance endpoint (runtime-api.md §12.1): available in
+    /// every host state so any two APKRun builds can coordinate an update.
+    case maintenance
 }
 
 /// Requests one authenticated endpoint from the broker.
@@ -844,6 +848,15 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func getConfig(_ request: Data, reply: @escaping (Data) -> Void)
     /// Writes one `updates.*` setting (configuration.md §2.7).
     func setConfig(_ request: Data, reply: @escaping (Data) -> Void)
+    /// The self-update probe snapshot (runtime-api.md §12.2). Reply:
+    /// `SelfUpdateStatusReply`.
+    func selfUpdateStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// APKRun.app reports Sparkle's result (runtime-api.md §12.2). Reply:
+    /// `RuntimeEmptyReply`.
+    func noteSelfUpdateStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Runs the self-update probe (runtime-api.md §12.2). Reply:
+    /// `SelfUpdateStatusReply`.
+    func checkSelfUpdate(_ request: Data, reply: @escaping (Data) -> Void)
     /// Adds or removes a version on the package's skip list (§8.4).
     func updateSkipped(_ request: Data, reply: @escaping (Data) -> Void)
     /// Checks and installs a package update now, optionally from files
@@ -934,3 +947,14 @@ public protocol RuntimeSessionService: Sendable {
 
 /// The package and application session operations shared by embedded and daemon clients.
 public protocol RuntimeService: RuntimePackageService, RuntimeSessionService {}
+
+/// Frozen maintenance endpoint implemented by apkrund (runtime-api.md §12.1).
+///
+/// One envelope method carries every maintenance operation so the endpoint
+/// stays additive-only: new operations extend `MaintenanceControlOperation`
+/// inside `MaintenanceControlRequest` without a new XPC selector. The server
+/// ignores the request header's API version and answers in every host state.
+@objc public protocol RuntimeMaintenanceXPC {
+    /// Performs a maintenance control operation.
+    func perform(_ request: Data, reply: @escaping (Data) -> Void)
+}

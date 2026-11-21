@@ -178,12 +178,12 @@ public actor GuestBulkChannel {
                 return nil
             }
             let result = await group.next() ?? nil
+            group.cancelAll()
             if result == nil {
                 // The continuation ignores cancellation: evict the waiter so
                 // it resumes and this group scope can actually exit.
                 await self.evictWaiter(transferID)
             }
-            group.cancelAll()
             return result ?? nil
         }
     }
@@ -205,7 +205,10 @@ public actor GuestBulkChannel {
         deadline: ContinuousClock.Instant,
         _ continuation: CheckedContinuation<GuestInboundTransfer?, Never>
     ) {
-        if ContinuousClock.now >= deadline {
+        // A registration that lands after its fetch gave up — cancelled or
+        // past its deadline — answers nil at once; a fresh fetch carries a
+        // fresh deadline and waits normally.
+        if Task.isCancelled || ContinuousClock.now >= deadline {
             continuation.resume(returning: nil)
         } else if let index = completed.firstIndex(where: { $0.id == transferID }) {
             continuation.resume(returning: completed.remove(at: index).transfer)

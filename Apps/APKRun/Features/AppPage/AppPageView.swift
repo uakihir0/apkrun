@@ -174,6 +174,7 @@ struct AppPageView: View {
                 entry: model.wrapper,
                 onShowInFinder: { NSWorkspace.shared.activateFileViewerSelecting([$0]) },
                 onRefresh: { model.refreshWrapper() },
+                onMakeLocal: { model.makeLocal() },
                 onCreate: { model.createWrapper() },
                 onRemove: { model.removeWrapper() })
         case .storage:

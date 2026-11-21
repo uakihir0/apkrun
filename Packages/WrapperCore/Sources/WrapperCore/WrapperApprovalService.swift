@@ -150,7 +150,7 @@ public actor WrapperApprovalService {
             displayName: displayName,
             signer: signer(of: bundleURL),
             packageInstalled: await packageInstalled(packageID),
-            bundledVersion: nil,
+            bundledVersion: Self.bundledVersion(of: bundleURL),
             replacesURL: replacesURL,
             integrations: Self.integrations(of: document),
             icon: iconProvider(bundleURL),
@@ -428,6 +428,18 @@ public actor WrapperApprovalService {
         else { return }
         announce(.resolved(approvalID))
         for waiter in pending.waiters { waiter.resume(returning: .timedOut) }
+    }
+
+    /// The version the wrapper carries in `Contents/Resources/bootstrap/`
+    /// (wrapper-json.md §3.4). Approval names it so the user can compare it
+    /// against an installed copy of the package.
+    private static func bundledVersion(of bundleURL: URL) -> String? {
+        let url = bundleURL.appendingPathComponent(
+            "Contents/Resources/bootstrap/bootstrap.json")
+        guard let data = try? Data(contentsOf: url),
+            let document = try? BootstrapDocumentCodec.decode(data)
+        else { return nil }
+        return document.versionName ?? String(document.versionCode)
     }
 
     /// The integration values the wrapper asks for (configuration.md §3.3).

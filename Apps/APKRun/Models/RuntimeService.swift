@@ -50,6 +50,12 @@ protocol RuntimeService: Sendable {
     func placeStagedWrapper(
         stagingToken: String, finalURL: URL, bookmark: String?
     ) async throws -> WrapperInfo
+    /// **Install from This App / Install from Mac App** — the portable
+    /// wrapper's `bootstrap/` payload installs through `importBootstrap`
+    /// (wrapper-json.md §3.4).
+    func importBootstrap(
+        bundleID: String, bootstrapJSON: Data, files: [FileHandle]
+    ) async throws -> OperationHandle
     func discardImport(_ request: RuntimeDiscardImportRequest) async throws
     func subscribe(to topic: EventTopic) async throws -> AsyncStream<EventEnvelope>
     func packageInfo(packageID: RuntimePackageID) async throws -> RuntimePackageDetails

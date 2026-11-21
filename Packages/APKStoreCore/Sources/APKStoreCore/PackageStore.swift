@@ -382,6 +382,9 @@ public actor PackageStore {
         var createdAt: Date
         var facts: [PersistedAPKFacts]
         var origin: ImportOrigin?
+        /// Set for `importBootstrap`: the new record's `source.kind`
+        /// `wrapperBootstrap` and `source.wrapperBundleId` (wrapper-json.md §3.3).
+        var wrapperBundleId: String?
     }
 
     private struct PackageIDEnvelope: Decodable {
@@ -562,7 +565,8 @@ public actor PackageStore {
     /// ticket refers only to the private incoming set, so callers may release their source files.
     public func importPackage(
         files: [URL],
-        origin: ImportOrigin? = nil
+        origin: ImportOrigin? = nil,
+        bootstrapBundleID: String? = nil
     ) async throws -> PackageImportPreview {
         try requireWritable()
         let importsLock = try await acquireLock(at: importsLockURL)
@@ -762,7 +766,8 @@ public actor PackageStore {
             preview: preview,
             createdAt: clock(),
             facts: facts.map(PersistedAPKFacts.init),
-            origin: origin
+            origin: origin,
+            wrapperBundleId: bootstrapBundleID
         )
         do {
             try writeJSON(manifest, to: incoming.appendingPathComponent("ticket.json"))
@@ -1050,7 +1055,8 @@ public actor PackageStore {
             preview: preview,
             createdAt: clock(),
             facts: facts.map(PersistedAPKFacts.init),
-            origin: nil
+            origin: nil,
+            wrapperBundleId: nil
         )
         do {
             try writeJSON(manifest, to: incoming.appendingPathComponent("ticket.json"))
@@ -3146,11 +3152,12 @@ public actor PackageStore {
             android: android,
             source: existing?.source
                 ?? PackageSource(
-                    kind: .file,
+                    kind: manifest.wrapperBundleId == nil ? .file : .wrapperBootstrap,
                     at: startedAt,
                     origin: manifest.origin,
                     fileNames: manifest.preview.sourceFileNames,
-                    container: .apk
+                    container: .apk,
+                    wrapperBundleId: manifest.wrapperBundleId
                 ),
             lastOperation: OperationSummary(
                 kind: kind == "reinstall" ? .reinstall : .firstInstall,
@@ -4120,6 +4127,45 @@ public actor PackageStore {
             .appendingPathComponent(directory, isDirectory: true)
             .appendingPathComponent("current", isDirectory: true)
         return try artifactSet(in: current)
+    }
+
+    /// The installed `current/` set and its directory for a portable
+    /// wrapper's `bootstrap/` (wrapper.md §10.1). The files live beside
+    /// `artifact.json` under their `ArtifactFile.name`s.
+    public func bootstrapSet(for packageID: PackageID) async throws -> (
+        set: ArtifactSet, directory: URL
+    ) {
+        try requireOpen()
+        guard let directory = directories[packageID] else {
+            throw PackageStoreFailure.packageNotFound
+        }
+        let current =
+            packagesDirectory
+            .appendingPathComponent(directory, isDirectory: true)
+            .appendingPathComponent("current", isDirectory: true)
+        guard let set = try artifactSet(in: current) else {
+            throw PackageStoreFailure.packageNotFound
+        }
+        return (set, current)
+    }
+
+    /// An open import ticket's inspected set, `incoming/` directory, and
+    /// display name for a portable wrapper's `bootstrap/` (wrapper.md
+    /// §10.1). Throws `importTicketNotFound` when the ticket is unknown.
+    public func bootstrapSet(ticket: UUID) async throws -> (
+        set: ArtifactSet, directory: URL, displayName: String
+    ) {
+        try requireOpen()
+        guard let manifest = tickets[ticket] else {
+            throw PackageStoreFailure.importTicketNotFound
+        }
+        let packageID = manifest.preview.packageID
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        return (
+            manifest.preview.artifactSet,
+            incomingDirectory(packageID: packageID, directory: directory, ticket: ticket),
+            manifest.preview.displayName
+        )
     }
 
     /// Promotes `staged/` to `current/` for the `update` transaction

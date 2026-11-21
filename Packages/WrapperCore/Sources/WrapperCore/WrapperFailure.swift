@@ -90,6 +90,14 @@ public enum WrapperFailure: APKRunError, Equatable {
     /// (wrapper.md §7.3 step 3); reported as `runtime.busy`.
     case approvalBusy
 
+    /// A `bootstrap.json` or one of its files failed a §3.4 check
+    /// (B3–B7: malformed, package mismatch, hash mismatch).
+    case bootstrapInvalid(BootstrapProblem)
+
+    /// `importBootstrap` was refused before the payload was read
+    /// (B1–B2: not approved, already installed).
+    case bootstrapNotAllowed(BootstrapRefusal)
+
     /// The stable error catalog namespace for wrappers.
     public static let domain: ErrorDomain = .wrapper
 
@@ -116,6 +124,8 @@ public enum WrapperFailure: APKRunError, Equatable {
         case .approvalTimedOut: "approvalTimedOut"
         case .approvalNotFound: "approvalNotFound"
         case .approvalBusy: "busy"
+        case .bootstrapInvalid: "bootstrapInvalid"
+        case .bootstrapNotAllowed: "bootstrapNotAllowed"
         case .wrapperRunning: "wrapperRunning"
         case .refreshBlocked: "refreshBlocked"
         }
@@ -167,6 +177,10 @@ public enum WrapperFailure: APKRunError, Equatable {
             stagingToken.map { token in
                 ["file": .fileName(path), "stagingToken": .text(token)]
             } ?? ["file": .fileName(path)]
+        case .bootstrapInvalid(let problem):
+            ["reason": .text(problem.rawValue)]
+        case .bootstrapNotAllowed(let refusal):
+            ["reason": .text(refusal.rawValue)]
         case .registryUnavailable, .stagingExpired, .approvalDenied, .approvalTimedOut,
             .approvalNotFound, .approvalBusy:
             [:]

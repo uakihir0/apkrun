@@ -319,6 +319,9 @@ public struct WrapperConfiguration: Sendable, Equatable {
     public var integrations: IntegrationDefaults
     /// The wrapper kind.
     public var kind: WrapperKind
+    /// The APK set a portable wrapper bundles (wrapper.md §10). Required for
+    /// `.portable`, ignored otherwise.
+    public var bootstrap: BootstrapSet?
 
     /// Creates a generation configuration.
     public init(
@@ -329,7 +332,8 @@ public struct WrapperConfiguration: Sendable, Equatable {
         window: WindowDefaults = WindowDefaults(),
         updates: WrapperUpdateDefaults = WrapperUpdateDefaults(),
         integrations: IntegrationDefaults = IntegrationDefaults(),
-        kind: WrapperKind = .local
+        kind: WrapperKind = .local,
+        bootstrap: BootstrapSet? = nil
     ) {
         self.packageID = packageID
         self.displayName = displayName
@@ -339,6 +343,7 @@ public struct WrapperConfiguration: Sendable, Equatable {
         self.updates = updates
         self.integrations = integrations
         self.kind = kind
+        self.bootstrap = bootstrap
     }
 }
 

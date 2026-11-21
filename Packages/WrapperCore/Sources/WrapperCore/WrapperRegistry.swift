@@ -433,12 +433,14 @@ public actor WrapperRegistry {
     public func finishRefresh(
         bundleID: String,
         path: URL,
-        bookmark: Data
+        bookmark: Data,
+        kind: WrapperKind? = nil
     ) throws {
         guard var entry = entry(bundleID: bundleID) else {
             throw WrapperFailure.verificationFailed("no registry entry for \(bundleID)")
         }
         entry.state = .active
+        if let kind { entry.kind = kind }
         if let pendingCdhash = entry.pendingCdhash {
             entry.cdhash = pendingCdhash
         }

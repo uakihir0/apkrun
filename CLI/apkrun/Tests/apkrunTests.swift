@@ -1064,6 +1064,17 @@ private final class CLIOutputRecorder: @unchecked Sendable {
         #expect(command.output == "/tmp")
         #expect(command.replace == true)
         #expect(command.json == true)
+        #expect(command.portable == false)
+    }
+
+    @Test func wrapCommandParsesPortable() async throws {
+        let parsed = try await APKRunCommand.asyncParseAsRoot([
+            "wrap", "app.apk", "--portable", "--updates", "notify",
+        ])
+        let command = try #require(parsed as? WrapCommand)
+        #expect(command.portable == true)
+        #expect(command.install == false)
+        #expect(command.updates == "notify")
     }
 
     @Test func wrapSuccessResultPrintsTheBundlePath() {

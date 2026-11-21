@@ -246,6 +246,46 @@ final class WrapperListModel: TopicPollingModel {
         invalidateService()
         await reload()
     }
+
+    /// **Install from Mac App** (§5.3 row 6 `unknownPackage`, portable
+    /// wrapper): installs the wrapper's bundled package through
+    /// `importBootstrap` (wrapper-json.md §3.4).
+    func installFromMacApp(entry: WrapperListEntryWire) async {
+        let directory = entry.summary.bundleURL
+            .appendingPathComponent("Contents/Resources/bootstrap")
+        guard
+            let json = try? Data(
+                contentsOf: directory.appendingPathComponent("bootstrap.json")),
+            let payload = try? JSONDecoder().decode(
+                BootstrapPayload.self, from: json)
+        else {
+            return
+        }
+        let handles = payload.files.compactMap {
+            try? FileHandle(
+                forReadingFrom: directory.appendingPathComponent($0.name))
+        }
+        guard handles.count == payload.files.count else { return }
+        defer {
+            for handle in handles {
+                try? handle.close()
+            }
+        }
+        _ = try? await requireService().importBootstrap(
+            bundleID: entry.summary.bundleID,
+            bootstrapJSON: json,
+            files: handles)
+        invalidateService()
+        await reload()
+    }
+
+    /// The `bootstrap.json` fields this flow reads (wrapper-json.md §3.2).
+    private struct BootstrapPayload: Decodable {
+        struct File: Decodable {
+            var name: String
+        }
+        var files: [File]
+    }
 }
 
 /// The sidebar sections of the main window (host-ui.md §5.1).

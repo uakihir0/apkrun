@@ -142,8 +142,20 @@ public actor AppWrapperGenerator {
         _ request: WrapperGenerationRequest
     ) async throws(WrapperFailure) -> GeneratedWrapper {
         let configuration = request.configuration
-        guard configuration.kind == .local else {
-            throw .verificationFailed("\(configuration.kind.rawValue) wrappers are #89/#90")
+        switch configuration.kind {
+        case .local:
+            guard configuration.bootstrap == nil else {
+                throw .verificationFailed("local wrapper carries a bootstrap set")
+            }
+        case .portable:
+            guard let payload = configuration.bootstrap,
+                payload.files.map(\.name) == payload.document.files.map(\.name)
+            else {
+                throw .verificationFailed("portable wrapper needs a matching bootstrap set")
+            }
+            try BootstrapDocumentCodec.validate(payload.document)
+        case .distribution:
+            throw .verificationFailed("distribution wrappers are #89")
         }
 
         // 1. validate the package ID syntax, the name, the icon, the template.
@@ -327,8 +339,20 @@ public actor AppWrapperGenerator {
         fileName: String
     ) throws(WrapperFailure) -> (bundle: URL, cdhash: String) {
         let configuration = request.configuration
-        guard configuration.kind == .local else {
-            throw .verificationFailed("\(configuration.kind.rawValue) wrappers are #89/#90")
+        switch configuration.kind {
+        case .local:
+            guard configuration.bootstrap == nil else {
+                throw .verificationFailed("local wrapper carries a bootstrap set")
+            }
+        case .portable:
+            guard let payload = configuration.bootstrap,
+                payload.files.map(\.name) == payload.document.files.map(\.name)
+            else {
+                throw .verificationFailed("portable wrapper needs a matching bootstrap set")
+            }
+            try BootstrapDocumentCodec.validate(payload.document)
+        case .distribution:
+            throw .verificationFailed("distribution wrappers are #89")
         }
         let template = environment.launcher.executableURL
         guard fileManager.fileExists(atPath: template.path),
@@ -406,6 +430,11 @@ public actor AppWrapperGenerator {
                 to: resources.appendingPathComponent("AppIcon.icns"), options: .atomic)
 
             // The launcher executable by clonefile(2), keeping its signature.
+            // Contents/Resources/bootstrap/ for a portable wrapper (§10.1).
+            if let payload = configuration.bootstrap {
+                try Self.writeBootstrap(payload, into: resources)
+            }
+
             let executable = macos.appendingPathComponent("APKRunLauncher")
             if clonefile(environment.launcher.executableURL.path, executable.path, 0) != 0 {
                 // FAT filesystems lack clonefile; fall back to a byte copy.
@@ -419,10 +448,40 @@ public actor AppWrapperGenerator {
 
         // File modes: 0644 for data, 0755 for the executable.
         setMode(0o644, at: contents.appendingPathComponent("Info.plist"))
+        if configuration.bootstrap != nil {
+            let bootstrap = resources.appendingPathComponent("bootstrap")
+            setMode(0o644, at: bootstrap.appendingPathComponent("bootstrap.json"))
+            for file in configuration.bootstrap?.files ?? [] {
+                setMode(0o644, at: bootstrap.appendingPathComponent(file.name))
+            }
+        }
         setMode(0o644, at: contents.appendingPathComponent("PkgInfo"))
         setMode(0o644, at: resources.appendingPathComponent("wrapper.json"))
         setMode(0o644, at: resources.appendingPathComponent("AppIcon.icns"))
         setMode(0o755, at: macos.appendingPathComponent("APKRunLauncher"))
+    }
+
+    /// Writes `bootstrap.json` (sorted keys) and clones the payload files
+    /// into `bootstrap/` (wrapper.md §10.1).
+    private static func writeBootstrap(
+        _ payload: BootstrapSet, into resources: URL
+    ) throws(WrapperFailure) {
+        let bootstrap = resources.appendingPathComponent("bootstrap")
+        do {
+            try FileManager.default.createDirectory(at: bootstrap, withIntermediateDirectories: true)
+            try BootstrapDocumentCodec.encode(payload.document).write(
+                to: bootstrap.appendingPathComponent("bootstrap.json"), options: .atomic)
+            for file in payload.files {
+                let destination = bootstrap.appendingPathComponent(file.name)
+                if clonefile(file.sourceURL.path, destination.path, 0) != 0 {
+                    try FileManager.default.copyItem(at: file.sourceURL, to: destination)
+                }
+            }
+        } catch let error as WrapperFailure {
+            throw error
+        } catch {
+            throw .verificationFailed("bootstrap write failed: \(error.localizedDescription)")
+        }
     }
 
     /// Wraps an already-finished PNG in an `icns` container.

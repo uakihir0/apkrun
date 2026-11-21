@@ -80,7 +80,7 @@ import Testing
 
 // MARK: - T1: generation, conflicts, registry, validator
 
-private func makeLauncherStub(at dir: URL) throws -> URL {
+func makeLauncherStub(at dir: URL) throws -> URL {
     let executable = dir.appendingPathComponent("APKRunLauncher")
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/clang")
@@ -100,7 +100,7 @@ private func makeLauncherStub(at dir: URL) throws -> URL {
     return executable
 }
 
-private struct Fixture {
+struct Fixture {
     let root: URL
     let destination: URL
     let staging: URL

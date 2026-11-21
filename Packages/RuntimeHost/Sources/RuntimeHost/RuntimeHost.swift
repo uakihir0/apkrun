@@ -1719,19 +1719,19 @@ public actor RuntimeHost {
         }
     }
 
-    /// Starts a `wrapperCreate` operation for an installed package
-    /// (runtime-api.md §10.3). Portable wrappers and `importTicket` are #90;
-    /// `updateDefaults` is only valid with an import ticket.
+    /// Starts a `wrapperCreate` operation (runtime-api.md §10.3). An
+    /// `importTicket` builds the portable wrapper of an uninstalled package
+    /// (#90); `updateDefaults` is only valid with one.
     func createWrapper(
         _ request: WrapperRequest,
         icon: FileHandle?,
         operationID requestedID: WireOperationID,
         clientKind: RuntimeClientKind
     ) throws(RuntimeWireError) -> OperationHandle {
-        guard !request.portable, request.importTicket == nil else {
+        guard request.importTicket == nil || request.portable else {
             throw .runtime(
                 "malformedRequest",
-                message: "Portable wrappers are not supported yet."
+                message: "An import ticket makes a portable wrapper."
             )
         }
         guard request.updateDefaults == nil else {
@@ -1854,20 +1854,38 @@ public actor RuntimeHost {
         let registry = await wrapperRegistryInstance()
 
         // The package record supplies the display name, the update authority,
-        // and (with #56) the Android icon.
+        // and (with #56) the Android icon. A portable wrapper of an
+        // uninstalled package takes them from its import ticket instead
+        // (wrapper.md §10.1).
         let service = packageQueryServiceInstance()
         try await service.open()
         try await attachPackageQueriesIfRuntimeIsReady(to: service)
-        let details: RuntimePackageDetails
-        do {
-            details = try await service.packageInfo(
-                RuntimePackageRequest(packageID: request.packageID))
-        } catch {
-            guard error.code == "store.packageNotFound" else { throw error }
-            throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
-        }
-        guard details.summary.managed, details.summary.state == .installed else {
-            throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
+        var details: RuntimePackageDetails?
+        var ticketBootstrap: (set: ArtifactSet, directory: URL, displayName: String)?
+        if let importTicket = request.importTicket {
+            guard let ticketID = UUID(uuidString: importTicket.rawValue) else {
+                throw .runtime(
+                    "malformedRequest", message: "The import ticket is not readable.")
+            }
+            do {
+                ticketBootstrap = try await service.store.bootstrapSet(ticket: ticketID)
+            } catch {
+                throw EmbeddedPackageService.wireError(for: error)
+            }
+            guard ticketBootstrap?.set.packageID.rawValue == request.packageID.rawValue else {
+                throw Self.wrapperWireError(for: .bootstrapInvalid(.packageMismatch))
+            }
+        } else {
+            do {
+                details = try await service.packageInfo(
+                    RuntimePackageRequest(packageID: request.packageID))
+            } catch {
+                guard error.code == "store.packageNotFound" else { throw error }
+                throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
+            }
+            guard details?.summary.managed == true, details?.summary.state == .installed else {
+                throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
+            }
         }
 
         var iconDigest: String?
@@ -1914,18 +1932,39 @@ public actor RuntimeHost {
             window.defaultHeight = windowDefaults.defaultHeight ?? window.defaultHeight
             window.resizable = windowDefaults.resizable ?? window.resizable
         }
-        let updates = WrapperUpdateDefaults(
-            authority: details.summary.updateAuthority == .apkrun ? .apkrun : .manual,
-            mode: .automatic,
-            provider: nil
-        )
+        var bootstrap: BootstrapSet?
+        let updates: WrapperUpdateDefaults
+        if let ticketBootstrap {
+            bootstrap = Self.bootstrapSet(
+                from: ticketBootstrap.set, in: ticketBootstrap.directory)
+            updates = try Self.wrapperUpdateDefaults(from: request.updateDefaults)
+        } else {
+            updates = WrapperUpdateDefaults(
+                authority: details?.summary.updateAuthority == .apkrun ? .apkrun : .manual,
+                mode: .automatic,
+                provider: nil
+            )
+            if request.portable {
+                guard let packageID = PackageID(rawValue: request.packageID.rawValue) else {
+                    throw .runtime("malformedRequest", message: "The package ID is not readable.")
+                }
+                do {
+                    let installed = try await service.store.bootstrapSet(for: packageID)
+                    bootstrap = Self.bootstrapSet(from: installed.set, in: installed.directory)
+                } catch {
+                    throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
+                }
+            }
+        }
         let configuration = WrapperConfiguration(
             packageID: request.packageID,
-            displayName: request.displayName ?? details.summary.displayName,
+            displayName: request.displayName ?? ticketBootstrap?.displayName
+                ?? details?.summary.displayName ?? request.packageID.rawValue,
             icon: iconSource,
             window: window,
             updates: updates,
-            kind: .local
+            kind: request.portable ? .portable : .local,
+            bootstrap: bootstrap
         )
         let destination: WrapperDestination
         switch request.destination {
@@ -1998,11 +2037,6 @@ public actor RuntimeHost {
         operationID requestedID: WireOperationID,
         clientKind: RuntimeClientKind
     ) throws(RuntimeWireError) -> OperationHandle {
-        guard !change.makeLocal else {
-            throw .runtime(
-                "malformedRequest",
-                message: "makeLocal is not supported yet.")
-        }
         let request = RuntimeRefreshWrapperControlRequest(
             header: APIRequestHeader(
                 operationID: requestedID.rawValue, clientKind: clientKind),
@@ -2273,6 +2307,26 @@ public actor RuntimeHost {
                 stagingRoot: paths.wrapperStagingDirectory
             )
         )
+        // `makeLocal` converts a portable wrapper to `local` and drops
+        // `bootstrap/` (host-ui.md §7.6); keeping `portable` rebuilds the
+        // payload from the installed package (wrapper-json.md §3.2).
+        let targetKind: WrapperKind = change.makeLocal ? .local : entry.kind
+        var bootstrap: BootstrapSet? = nil
+        if targetKind == .portable {
+            guard let storePackageID = PackageID(rawValue: entry.packageId) else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The package ID is not readable.")
+            }
+            do {
+                let installed = try await service.store.bootstrapSet(
+                    for: storePackageID)
+                bootstrap = Self.bootstrapSet(
+                    from: installed.set, in: installed.directory)
+            } catch {
+                throw Self.wrapperWireError(for: .packageNotInstalled(packageID))
+            }
+        }
         let staged: (bundle: URL, cdhash: String)
         do {
             staged = try await generator.stageForRefresh(
@@ -2284,7 +2338,8 @@ public actor RuntimeHost {
                         window: window,
                         updates: updates,
                         integrations: integrations,
-                        kind: entry.kind
+                        kind: targetKind,
+                        bootstrap: bootstrap
                     ),
                     fileName: fileName
                 ),
@@ -2382,7 +2437,8 @@ public actor RuntimeHost {
         let bookmark = (try? finalURL.bookmarkData()) ?? Data()
         do {
             try await registry.finishRefresh(
-                bundleID: entry.bundleId, path: finalURL, bookmark: bookmark)
+                bundleID: entry.bundleId, path: finalURL, bookmark: bookmark,
+                kind: targetKind)
         } catch {
             throw Self.wrapperWireError(for: .registryUnavailable)
         }
@@ -3378,8 +3434,196 @@ public actor RuntimeHost {
         message: "Too many approval requests. Try again in a minute."
     )
 
+    /// Starts a `bootstrapImport` operation for a portable wrapper's own
+    /// launcher (wrapper-json.md §3.4). B1 runs here — the registry entry for
+    /// the claimed bundle ID must be an approved portable wrapper — and B2–B8
+    /// run inside the operation.
+    public func beginImportBootstrap(
+        _ request: RuntimeImportBootstrapControlRequest,
+        clientKind: RuntimeClientKind,
+        files: [FileHandle]
+    ) async throws(RuntimeWireError) -> OperationHandle {
+        let registry = try await wrapperRegistryInstance()
+        guard let entry = await registry.entry(bundleID: request.bundleID),
+            entry.state == .active, entry.kind == .portable
+        else {
+            throw Self.wrapperWireError(for: .bootstrapNotAllowed(.notApproved))
+        }
+        // The wrapper.json of the registered bundle supplies the first-record
+        // settings and the initial update defaults (wrapper-json.md §3.3).
+        guard
+            let wrapperDocument = try? WrapperDocumentCodec.load(
+                from: URL(fileURLWithPath: entry.path))
+        else {
+            throw Self.wrapperWireError(for: .bootstrapInvalid(.malformed))
+        }
+        let operationID = WireOperationID()
+        let handle = OperationHandle(operationID: operationID, kind: .bootstrapImport)
+        let snapshot = OperationSnapshot(
+            operationID: operationID,
+            kind: .bootstrapImport,
+            packageID: RuntimePackageID(rawValue: entry.packageId),
+            requestFingerprint: nil,
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(
+                stage: "importing",
+                message: "Installing the app from this Mac app…"
+            )
+        )
+        trackedOperations[operationID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: Data(),
+            snapshot: snapshot,
+            isCancellable: false,
+            task: nil
+        )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: operationID)
+        do {
+            try beginLifecycleOperation()
+        } catch {
+            trackedOperations.removeValue(forKey: operationID)
+            throw Self.sessionWireError(for: error)
+        }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runImportBootstrapOperation(
+                entry: entry,
+                wrapperDocument: wrapperDocument,
+                bootstrapJSON: request.bootstrapJSON,
+                files: files,
+                operationID: operationID
+            )
+        }
+        trackedOperations[operationID]?.task = task
+        return handle
+    }
+
+    /// Runs a `bootstrapImport` operation to its terminal state.
+    private func runImportBootstrapOperation(
+        entry: WrapperRegistryEntry,
+        wrapperDocument: WrapperDocument,
+        bootstrapJSON: Data,
+        files: [FileHandle],
+        operationID: WireOperationID
+    ) async {
+        defer { finishLifecycleOperation() }
+        do {
+            let service = packageQueryServiceInstance()
+            let summary = try await service.importBootstrap(
+                entry: entry,
+                wrapperDocument: wrapperDocument,
+                bootstrapJSON: bootstrapJSON,
+                files: files
+            )
+            finishOperation(operationID, result: .succeeded(.package(summary)))
+            logger?.notice("Bootstrap import completed for \(entry.packageId, .public)")
+        } catch {
+            if Task.isCancelled {
+                finishOperation(operationID, result: .cancelled)
+            } else {
+                finishOperation(
+                    operationID,
+                    result: .failed(
+                        error as? RuntimeWireError
+                            ?? .runtime(
+                                "internalError",
+                                message: "APKRun's background service failed.")))
+            }
+        }
+    }
+
     /// Maps a wrapper failure to the wire error type of the control endpoint.
-    private static func wrapperWireError(for failure: WrapperFailure) -> RuntimeWireError {
+    ///
+    /// Builds the `bootstrap/` payload (wrapper-json.md §3.2) from a stored
+    /// or incoming artifact set. `ArtifactSet.files` is already `base.apk`
+    /// first then splits ordered by split name, and its stored names are the
+    /// bootstrap file names.
+    private static func bootstrapSet(
+        from set: ArtifactSet, in directory: URL
+    ) -> BootstrapSet {
+        let document = BootstrapDocument(
+            packageId: set.packageID.rawValue,
+            versionCode: set.versionCode,
+            versionName: set.versionName,
+            setDigest: "sha256:" + set.setDigest.hexValue,
+            signers: set.signerDigests.map { "sha256:" + $0.hexValue }.sorted(),
+            files: set.files.map {
+                BootstrapFileEntry(
+                    name: $0.name,
+                    sha256: "sha256:" + $0.sha256.hexValue,
+                    size: $0.size)
+            })
+        let files = set.files.map {
+            BootstrapSet.SourceFile(
+                name: $0.name,
+                sourceURL: directory.appendingPathComponent($0.name),
+                sha256: "sha256:" + $0.sha256.hexValue,
+                size: $0.size)
+        }
+        return BootstrapSet(document: document, files: files)
+    }
+
+    /// Maps the wire `updateDefaults` (runtime-api.md §10.3) to the
+    /// wrapper.json update defaults. A `local` provider is never written —
+    /// it resolves to manual authority (wrapper-json.md §2.5) — and `apkrun`
+    /// authority without a provider is refused like an install is.
+    private static func wrapperUpdateDefaults(
+        from wire: WrapperUpdateDefaultsWire?
+    ) throws(RuntimeWireError) -> WrapperUpdateDefaults {
+        guard let wire else { return WrapperUpdateDefaults() }
+        var provider: WrapperUpdateProvider?
+        if let spec = wire.provider {
+            let ref: UpdateProviderRef
+            do {
+                ref = try UpdatePolicyRules.providerRef(for: ProviderSpec(spec: spec))
+            } catch {
+                throw EmbeddedPackageService.wireError(for: error)
+            }
+            switch ref.configuration {
+            case .local:
+                provider = nil
+            case .direct(let url):
+                provider = WrapperUpdateProvider(
+                    type: "direct", configuration: .direct(url: url))
+            case .fdroid(let repository, let fingerprint):
+                provider = WrapperUpdateProvider(
+                    type: "fdroid",
+                    configuration: .fdroid(
+                        repository: repository, fingerprint: fingerprint))
+            case .github(let repository, let assetPattern, let channel):
+                provider = WrapperUpdateProvider(
+                    type: "github",
+                    configuration: .github(
+                        repository: repository, assetPattern: assetPattern,
+                        channel: channel.rawValue))
+            }
+        }
+        var authority: WrapperUpdateAuthority =
+            wire.authority == .apkrun ? .apkrun : .manual
+        let mode: WrapperUpdateMode
+        switch wire.choice {
+        case nil, "automatic":
+            mode = .automatic
+        case "notify", "notifyOnly":
+            mode = .notifyOnly
+        case "manual":
+            authority = .manual
+            mode = .automatic
+        default:
+            throw .runtime(
+                "malformedRequest",
+                message: "Unknown update mode \"\(wire.choice ?? "")\".")
+        }
+        if authority == .apkrun && provider == nil {
+            throw EmbeddedPackageService.wireError(
+                for: UpdateFailure.providerNotConfigured)
+        }
+        return WrapperUpdateDefaults(
+            authority: authority, mode: mode, provider: provider)
+    }
+
+    static func wrapperWireError(for failure: WrapperFailure) -> RuntimeWireError {
         let entry = ErrorCatalog.entry(for: failure.qualifiedCode)
         let message =
             entry?.message?["en"].map {
@@ -3400,7 +3644,7 @@ public actor RuntimeHost {
     /// The error's catalog parameters as plain strings for the wire — the
     /// `stagingToken` of `destinationNotAccessible` is how the client names
     /// the staged bundle it must move (wrapper.md §6.3).
-    private static func wireParameters(
+    static func wireParameters(
         for failure: WrapperFailure
     ) -> [String: String] {
         failure.parameters.reduce(into: [:]) { result, entry in
@@ -3417,7 +3661,7 @@ public actor RuntimeHost {
         }
     }
 
-    private static func interpolate(
+    static func interpolate(
         _ template: String,
         parameters: [String: ErrorParameter]
     ) -> String {

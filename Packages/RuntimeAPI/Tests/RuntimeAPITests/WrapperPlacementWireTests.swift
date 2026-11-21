@@ -12,7 +12,7 @@ private func placementRoundTrip<Value: Codable & Equatable>(_ value: Value) thro
 @Test func placeStagedWrapperRequestAndReplyRoundTrip() throws {
     let request = RuntimePlaceStagedWrapperControlRequest(
         header: APIRequestHeader(
-            apiVersion: APIVersion(major: 1, minor: 25),
+            apiVersion: APIVersion(major: 1, minor: 26),
             operationID: UUID(),
             clientKind: .cli
         ),

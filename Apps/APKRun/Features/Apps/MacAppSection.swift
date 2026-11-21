@@ -12,6 +12,7 @@ struct MacAppSection: View {
     let entry: WrapperListEntryWire?
     let onShowInFinder: (URL) -> Void
     let onRefresh: () -> Void
+    let onMakeLocal: () -> Void
     let onCreate: () -> Void
     let onRemove: () -> Void
 
@@ -33,6 +34,11 @@ struct MacAppSection: View {
                     }
                     if entry.refreshReasons.isEmpty == false {
                         Button("Update Mac App") { onRefresh() }
+                    }
+                    if entry.summary.kind == .portable {
+                        // §7.6: rebuilds the wrapper as `local` without
+                        // `bootstrap/` (wrapper-json.md §3.1).
+                        Button("Make Local Mac App") { onMakeLocal() }
                     }
                     Button("Remove Mac App…", role: .destructive) {
                         confirmRemove = true

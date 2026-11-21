@@ -326,23 +326,56 @@ public actor EmbeddedPackageService: RuntimeService {
                     }
                 }
                 if let integration = wrapperDocument.integration {
+                    // A wrapper this Mac did not generate is capped by this
+                    // Mac's `integrations.defaults.*`: it can turn an
+                    // integration off or down, never on or up
+                    // (configuration.md §3.3, wrapper.md §3.1).
+                    let capped = entry.approval == .user
+                    let defaults =
+                        capped
+                        ? GlobalSettings.load(from: paths.settingsFile)
+                            .integrationsDefaults
+                        : [:]
+                    func cap(
+                        _ value: String, key: String, order: [String], fallback: String
+                    ) -> String {
+                        guard capped else { return value }
+                        let ceiling = defaults[key] ?? fallback
+                        guard let rank = order.firstIndex(of: value),
+                            let bound = order.firstIndex(of: ceiling)
+                        else { return ceiling }
+                        return rank <= bound ? value : ceiling
+                    }
+                    let boolOrder = ["false", "true"]
                     if let clipboard = integration.clipboard {
-                        patch["integrations.clipboard"] = clipboard ? "true" : "false"
+                        patch["integrations.clipboard"] = cap(
+                            clipboard ? "true" : "false",
+                            key: "clipboard", order: boolOrder, fallback: "true")
                     }
                     if let notifications = integration.notifications {
-                        patch["integrations.notifications"] = notifications ? "true" : "false"
+                        patch["integrations.notifications"] = cap(
+                            notifications ? "true" : "false",
+                            key: "notifications", order: boolOrder, fallback: "true")
                     }
                     if let links = integration.links {
-                        patch["integrations.links"] = links.rawValue
+                        patch["integrations.links"] = cap(
+                            links.rawValue, key: "links",
+                            order: ["android", "ask", "mac"], fallback: "ask")
                     }
                     if let files = integration.files {
-                        patch["integrations.files"] = files ? "true" : "false"
+                        patch["integrations.files"] = cap(
+                            files ? "true" : "false",
+                            key: "files", order: boolOrder, fallback: "true")
                     }
                     if let sharedFolders = integration.sharedFolders {
-                        patch["integrations.sharedFolders"] = sharedFolders.rawValue
+                        patch["integrations.sharedFolders"] = cap(
+                            sharedFolders.rawValue, key: "sharedFolders",
+                            order: ["off", "readOnly", "readWrite"], fallback: "off")
                     }
                     if let microphone = integration.microphone {
-                        patch["integrations.microphone"] = microphone ? "true" : "false"
+                        patch["integrations.microphone"] = cap(
+                            microphone ? "true" : "false",
+                            key: "microphone", order: boolOrder, fallback: "false")
                     }
                 }
                 if !patch.isEmpty {

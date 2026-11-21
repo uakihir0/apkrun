@@ -1,3 +1,4 @@
+<<<<<<< HEAD
                         -H/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/src/main/cpp
 -DCMAKE_SYSTEM_NAME=Android
 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
@@ -16,3 +17,24 @@
 -GNinja
                         Build command args: []
                         Version: 2
+||||||| 2662805e
+=======
+                        -H/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/src/main/cpp
+-DCMAKE_SYSTEM_NAME=Android
+-DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+-DCMAKE_SYSTEM_VERSION=29
+-DANDROID_PLATFORM=android-29
+-DANDROID_ABI=arm64-v8a
+-DCMAKE_ANDROID_ARCH_ABI=arm64-v8a
+-DANDROID_NDK=/Users/devin/Library/Android/sdk/ndk/28.2.13676358
+-DCMAKE_ANDROID_NDK=/Users/devin/Library/Android/sdk/ndk/28.2.13676358
+-DCMAKE_TOOLCHAIN_FILE=/Users/devin/Library/Android/sdk/ndk/28.2.13676358/build/cmake/android.toolchain.cmake
+-DCMAKE_MAKE_PROGRAM=/Users/devin/Library/Android/sdk/cmake/3.22.1/bin/ninja
+-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/build/intermediates/cxx/RelWithDebInfo/2l532z53/obj/arm64-v8a
+-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/build/intermediates/cxx/RelWithDebInfo/2l532z53/obj/arm64-v8a
+-DCMAKE_BUILD_TYPE=RelWithDebInfo
+-B/private/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a
+-GNinja
+                        Build command args: []
+                        Version: 2
+>>>>>>> ae6869d4b97c76e0deea336c14244dd2a43250fc

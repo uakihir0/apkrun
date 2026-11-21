@@ -114,13 +114,13 @@ public actor UpdateScheduler {
         // must never auto-install. A notifyOnly package never stages on
         // its own, so a user-requested staged row still resumes — it is
         // the "Update" the user already approved.
-        var staged: [PackageID] = []
+        var staged: [(PackageID, Bool)] = []
         for (packageID, row) in stagedRows {
             let mode = (try? await store.packageSettings(for: packageID))?.updateMode
             if mode == "notifyOnly", row.candidate?.userRequested != true {
                 continue
             }
-            staged.append(packageID)
+            staged.append((packageID, row.candidate?.userRequested == true))
         }
         guard !staged.isEmpty else { return }
         guard let runtime = await runtimeProvider(),
@@ -129,8 +129,10 @@ public actor UpdateScheduler {
         // Admit every staged row, not just the first: a row that never
         // enters the queue never reaches a §7.2 pump trigger and its
         // update is left behind.
-        for packageID in staged {
-            if await gate.requestInstall(packageID) {
+        for (packageID, userRequested) in staged {
+            // A user-approved update keeps its user-initiated gate path so a
+            // stopped runtime doesn't block its resume (GU1, §7.2).
+            if await gate.requestInstall(packageID, userInitiated: userRequested) {
                 if await coordinator.resumeStagedInstall(
                     packageID, trigger: .scheduled, runtime: runtime, gate: gate
                 ) != nil {

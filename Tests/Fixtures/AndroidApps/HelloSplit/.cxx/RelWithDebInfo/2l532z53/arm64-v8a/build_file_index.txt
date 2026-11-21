@@ -1,1 +1,6 @@
+<<<<<<< HEAD
 /Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/src/main/cpp/CMakeLists.txt
+||||||| 2662805e
+=======
+/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/src/main/cpp/CMakeLists.txt
+>>>>>>> ae6869d4b97c76e0deea336c14244dd2a43250fc

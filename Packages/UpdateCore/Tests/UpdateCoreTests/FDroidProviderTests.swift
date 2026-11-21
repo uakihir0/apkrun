@@ -350,6 +350,22 @@ private func serveRepo(
     #expect(mergedObject as NSDictionary == newObject as NSDictionary)
 }
 
+@Test func diffRemovingTheFirstPackageLeavesValidJSON() throws {
+    // A removed member must not emit a separator for a member it skipped:
+    // deleting the first package used to leave a dangling comma.
+    let index = Data(
+        #"{"packages":{"a":{"x":1},"b":{"y":2},"c":{"z":3}}}"#.utf8)
+    let diff = Data(#"{"packages":{"a":null}}"#.utf8)
+    let merged = try FDroidIndexReader().merged(index: index, diff: diff)
+    let object = try #require(
+        try JSONSerialization.jsonObject(with: merged) as? [String: Any])
+    let packages = try #require(object["packages"] as? [String: Any])
+    #expect(packages.count == 2)
+    #expect(packages["a"] == nil)
+    #expect(packages["b"] != nil)
+    #expect(packages["c"] != nil)
+}
+
 @Test func checkSeedsCacheFromOldIndexThenAppliesTheDiff() async throws {
     let cache = FileManager.default.temporaryDirectory
         .appendingPathComponent("fdroid-test-\(UUID().uuidString)")

@@ -447,9 +447,9 @@ public struct FDroidIndexReader: Sendable {
             var firstPackage = true
             var patchedIDs = Set<String>()
             for (name, range) in packageRanges {
-                if !firstPackage { try emit(Data([UInt8(ascii: ",")])) }
                 guard let patchValue = packagePatch[name] else {
                     // Untouched: the mapped source streams through in chunks.
+                    if !firstPackage { try emit(Data([UInt8(ascii: ",")])) }
                     try emitMember(name, { () throws(UpdateFailure) -> Void in
                         var cursor = range.lowerBound
                         while cursor < range.upperBound {
@@ -462,10 +462,9 @@ public struct FDroidIndexReader: Sendable {
                     continue
                 }
                 patchedIDs.insert(name)
-                if patchValue is NSNull {
-                    firstPackage = false
-                    continue
-                }
+                // A removed member emits nothing — no separator either.
+                if patchValue is NSNull { continue }
+                if !firstPackage { try emit(Data([UInt8(ascii: ",")])) }
                 try emitMember(name, { () throws(UpdateFailure) -> Void in
                     guard range.count <= Self.indexByteLimit,
                         let target = try? JSONSerialization.jsonObject(

@@ -116,7 +116,7 @@ final class HostNotifier: NSObject, UNUserNotificationCenterDelegate {
                 identifier: key, actions: unActions, intentIdentifiers: [],
                 options: [.customDismissAction])
             center.setNotificationCategories(
-                Set(categories.values) + [Self.defaultCategory])
+                Set(categories.values).union([Self.defaultCategory]))
         }
         return key
     }

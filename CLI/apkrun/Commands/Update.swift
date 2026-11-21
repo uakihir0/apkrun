@@ -430,6 +430,7 @@ struct RollbackCommand: AsyncParsableCommand {
     }
 }
 
+#if !APKRUN_EMBEDDED_RUNTIME
 /// `apkrun repair <package> [--yes]` (package-store.md §11.1, cli.md §4.3):
 /// reinstalls a `broken` package from its retained `current/` artifacts.
 /// The daemon refuses when the package is not broken.
@@ -470,3 +471,4 @@ struct RepairCommand: AsyncParsableCommand {
         }
     }
 }
+#endif

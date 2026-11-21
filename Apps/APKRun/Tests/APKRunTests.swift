@@ -154,8 +154,14 @@ final class FakeRuntimeService: RuntimeService, @unchecked Sendable {
         return OperationHandle(operationID: operationID, kind: .install)
     }
 
+    var operationResultOverride: OperationResult?
     func operationStatus(_ operationID: OperationID) async throws -> OperationSnapshot {
         count("operationStatus")
+        if let operationResultOverride {
+            return OperationSnapshot(
+                operationID: operationID, kind: .install, startedAt: Date(),
+                result: operationResultOverride)
+        }
         return OperationSnapshot(
             operationID: operationID, kind: .install, startedAt: Date(),
             result: .succeeded(
@@ -269,11 +275,14 @@ final class FakeRuntimeService: RuntimeService, @unchecked Sendable {
             lastCheckAt: nil, nextCheckAt: nil, consecutiveFailures: 0, waiting: [])
     }
 
+    var rollbackCalls: [Bool] = []
+    var rollbackReply = RuntimeRollbackPackageControlReply(rolledBackTo: 2)
     func rollbackPackage(packageID: RuntimePackageID, allowDataLoss: Bool)
         async throws -> RuntimeRollbackPackageControlReply
     {
         count("rollbackPackage")
-        return RuntimeRollbackPackageControlReply(rolledBackTo: 2)
+        rollbackCalls.append(allowDataLoss)
+        return rollbackReply
     }
 
     func updateSkipped(packageID: RuntimePackageID, versionCode: RuntimeVersionCode, skipped: Bool)
@@ -677,6 +686,28 @@ final class AddFlowModelTests: XCTestCase {
         m.begin(urls: [URL(fileURLWithPath: "/tmp/photo.png")])
         XCTAssertEqual(m.stage, .failed("APKRun can add .apk, .apks, .xapk, and .apkm files."))
     }
+
+    // §6.1 + configuration.md §2.10: "Ask each time"
+    // (`wrappers.defaultLocation = ask`) leaves the location unselected and
+    // Install waits for a choice.
+    func testAskLocationWaitsForChoice() async {
+        XCTAssertNil(AddFlowModel.location(for: "ask"))
+        let service = FakeRuntimeService()
+        let m = flow(with: service)
+        m.defaultLocation = AddFlowModel.location(for: "ask")
+        await m.inspectForTesting(preview())
+        XCTAssertNil(m.location)
+        XCTAssertTrue(m.needsLocationChoice)
+        m.install()
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(service.installRequests.isEmpty)
+        m.location = .allApplications
+        XCTAssertFalse(m.needsLocationChoice)
+        m.install()
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(service.installRequests.count, 1)
+        XCTAssertEqual(service.wrapperRequests.first?.destination, .applications)
+    }
 }
 
 // MARK: - #80 app page and settings panes
@@ -797,6 +828,52 @@ final class PackageDetailModelTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertEqual(service.callCounts["launch"], 1)
         XCTAssertEqual(service.callCounts["updatePackage"], 1)
+    }
+
+    /// Check Now reloads the page so a found update surfaces (§5.3 row 5).
+    func testCheckNowReloadsPage() async {
+        let service = FakeRuntimeService()
+        let m = model(service: service)
+        m.checkNow()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(service.callCounts["checkForUpdates"], 1)
+        XCTAssertEqual(service.callCounts["packageInfo"] ?? 0, 1)
+    }
+
+    /// §8.5: a `rollbackUnavailable` reply asks for the erases-data
+    /// confirmation, and confirming retries with `allowDataLoss`.
+    func testRollbackUnavailableAsksDataLoss() async {
+        let service = FakeRuntimeService()
+        service.rollbackReply = RuntimeRollbackPackageControlReply(unavailable: true)
+        let m = model(service: service)
+        m.rollback()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertTrue(m.confirmDataLossRollback)
+        XCTAssertEqual(service.rollbackCalls, [false])
+        service.rollbackReply = RuntimeRollbackPackageControlReply(rolledBackTo: 2)
+        m.rollback(allowDataLoss: true)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(service.rollbackCalls, [false, true])
+    }
+
+    /// A staged §7.1 edit clears only after the refresh op ends in
+    /// success; a failure keeps it and reports the error.
+    func testRefreshKeepsPendingsOnFailure() async {
+        let service = FakeRuntimeService()
+        let m = model(service: service)
+        m.pendingDisplayName = "New Name"
+        service.operationResultOverride = .failed(
+            RuntimeWireError(
+                domain: "wrapper", code: "wrapper.wrapperRunning",
+                message: "The app is running."))
+        m.refreshWrapper()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(m.pendingDisplayName, "New Name")
+        XCTAssertNotNil(m.loadError)
+        service.operationResultOverride = nil
+        m.refreshWrapper()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertNil(m.pendingDisplayName)
     }
 }
 

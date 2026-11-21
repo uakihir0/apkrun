@@ -337,7 +337,8 @@ public struct FDroidProvider: UpdateProvider {
                 let diffData = try Data(contentsOf: diffFile)
                 // Unique per check: two packages sharing this repository may
                 // merge concurrently, and a shared work file would be clobbered.
-                let mergedFile = directory
+                let mergedFile =
+                    directory
                     .appendingPathComponent("index.merged-\(UUID().uuidString).json")
                 defer { try? FileManager.default.removeItem(at: mergedFile) }
                 try reader.merged(index: indexFile, diff: diffData, into: mergedFile)

@@ -442,59 +442,67 @@ public struct FDroidIndexReader: Sendable {
         }
         if !first { try emit(Data([UInt8(ascii: ",")])) }
         first = false
-        try emitMember("packages", { () throws(UpdateFailure) -> Void in
-            try emit(Data([UInt8(ascii: "{")]))
-            var firstPackage = true
-            var patchedIDs = Set<String>()
-            for (name, range) in packageRanges {
-                guard let patchValue = packagePatch[name] else {
-                    // Untouched: the mapped source streams through in chunks.
+        try emitMember(
+            "packages",
+            { () throws(UpdateFailure) -> Void in
+                try emit(Data([UInt8(ascii: "{")]))
+                var firstPackage = true
+                var patchedIDs = Set<String>()
+                for (name, range) in packageRanges {
+                    guard let patchValue = packagePatch[name] else {
+                        // Untouched: the mapped source streams through in chunks.
+                        if !firstPackage { try emit(Data([UInt8(ascii: ",")])) }
+                        try emitMember(
+                            name,
+                            { () throws(UpdateFailure) -> Void in
+                                var cursor = range.lowerBound
+                                while cursor < range.upperBound {
+                                    let end = min(cursor + Self.writeChunk, range.upperBound)
+                                    try emit(data.subdata(in: cursor..<end))
+                                    cursor = end
+                                }
+                            })
+                        firstPackage = false
+                        continue
+                    }
+                    patchedIDs.insert(name)
+                    // A removed member emits nothing — no separator either.
+                    if patchValue is NSNull { continue }
                     if !firstPackage { try emit(Data([UInt8(ascii: ",")])) }
-                    try emitMember(name, { () throws(UpdateFailure) -> Void in
-                        var cursor = range.lowerBound
-                        while cursor < range.upperBound {
-                            let end = min(cursor + Self.writeChunk, range.upperBound)
-                            try emit(data.subdata(in: cursor..<end))
-                            cursor = end
-                        }
-                    })
+                    try emitMember(
+                        name,
+                        { () throws(UpdateFailure) -> Void in
+                            guard range.count <= Self.indexByteLimit,
+                                let target = try? JSONSerialization.jsonObject(
+                                    with: data.subdata(in: range), options: [.fragmentsAllowed]),
+                                let merged = try? JSONSerialization.data(
+                                    withJSONObject: JSONMergePatch.apply(patchValue, to: target))
+                            else {
+                                throw .providerMetadataInvalid(
+                                    detail: "diff: cannot merge package \(name)")
+                            }
+                            try emit(merged)
+                        })
                     firstPackage = false
-                    continue
                 }
-                patchedIDs.insert(name)
-                // A removed member emits nothing — no separator either.
-                if patchValue is NSNull { continue }
-                if !firstPackage { try emit(Data([UInt8(ascii: ",")])) }
-                try emitMember(name, { () throws(UpdateFailure) -> Void in
-                    guard range.count <= Self.indexByteLimit,
-                        let target = try? JSONSerialization.jsonObject(
-                            with: data.subdata(in: range), options: [.fragmentsAllowed]),
-                        let merged = try? JSONSerialization.data(
-                            withJSONObject: JSONMergePatch.apply(patchValue, to: target))
-                    else {
-                        throw .providerMetadataInvalid(
-                            detail: "diff: cannot merge package \(name)")
-                    }
-                    try emit(merged)
-                })
-                firstPackage = false
-            }
-            for (name, patchValue) in packagePatch where !patchedIDs.contains(name) {
-                if patchValue is NSNull { continue }
-                if !firstPackage { try emit(Data([UInt8(ascii: ",")])) }
-                try emitMember(name, { () throws(UpdateFailure) -> Void in
-                    let merged = JSONMergePatch.apply(patchValue, to: [String: Any]())
-                    guard let encoded = try? JSONSerialization.data(withJSONObject: merged)
-                    else {
-                        throw .providerMetadataInvalid(
-                            detail: "diff: cannot add package \(name)")
-                    }
-                    try emit(encoded)
-                })
-                firstPackage = false
-            }
-            try emit(Data([UInt8(ascii: "}")]))
-        })
+                for (name, patchValue) in packagePatch where !patchedIDs.contains(name) {
+                    if patchValue is NSNull { continue }
+                    if !firstPackage { try emit(Data([UInt8(ascii: ",")])) }
+                    try emitMember(
+                        name,
+                        { () throws(UpdateFailure) -> Void in
+                            let merged = JSONMergePatch.apply(patchValue, to: [String: Any]())
+                            guard let encoded = try? JSONSerialization.data(withJSONObject: merged)
+                            else {
+                                throw .providerMetadataInvalid(
+                                    detail: "diff: cannot add package \(name)")
+                            }
+                            try emit(encoded)
+                        })
+                    firstPackage = false
+                }
+                try emit(Data([UInt8(ascii: "}")]))
+            })
         try emit(Data([UInt8(ascii: "}")]))
     }
 

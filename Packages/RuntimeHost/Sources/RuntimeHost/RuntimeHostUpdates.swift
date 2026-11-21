@@ -449,8 +449,17 @@ public actor EmbeddedUpdateService {
                     context: providerContext(userInitiated: true))
             case .github:
                 let provider = try GitHubProvider(ref: providerRef)
+                // The connection test runs with the effective token — the
+                // request's token when present (`""` means none) — so a
+                // stale stored token cannot block a replacement or deletion.
+                let effectiveToken: String?
+                if case .set(let spec) = policy.provider, let token = spec.token {
+                    effectiveToken = token.isEmpty ? nil : token
+                } else {
+                    effectiveToken = credentials.token(for: GitHubProvider.tokenService)
+                }
                 try await provider.testConnection(
-                    context: providerContext(userInitiated: true))
+                    context: providerContext(userInitiated: true), token: effectiveToken)
             case .local, .direct:
                 break
             }

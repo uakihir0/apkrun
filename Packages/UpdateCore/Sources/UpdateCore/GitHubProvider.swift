@@ -275,11 +275,16 @@ public struct GitHubProvider: UpdateProvider {
 
     /// The one §2.3 test request of `setUpdatePolicy`: fetch the release
     /// listing so a wrong repository or token fails before anything writes.
-    public func testConnection(context: ProviderContext) async throws(UpdateFailure) {
+    /// `token` is the effective token the caller is about to store: nil
+    /// means none, so a replacement or deletion is tested with the new
+    /// credentials, not the possibly stale stored ones.
+    public func testConnection(context: ProviderContext, token: String?) async throws(UpdateFailure) {
         guard let releasesURL else { throw .providerNotConfigured }
+        var requestHeaders = headers(context: context)
+        requestHeaders["Authorization"] = token.map { "Bearer \($0)" }
         let response = try await context.http.get(
             releasesURL,
-            headers: headers(context: context),
+            headers: requestHeaders,
             byteLimit: Self.listingByteLimit)
         guard (200...299).contains(response.status) else {
             throw Self.failure(

@@ -48,6 +48,8 @@ targets:
     platform: macOS
     sources:
       - path: Apps/APKRun
+        excludes:
+          - Tests
     settings:
       base:
         PRODUCT_NAME: APKRun
@@ -150,7 +152,33 @@ targets:
         outputFiles:
           - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/LoginItems/APKRunMenuBar.app"
     scheme:
-      testTargets: []
+      testTargets:
+        - APKRunTests
+
+  APKRunTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Apps/APKRun/Tests
+      - path: Apps/APKRun/Models/RuntimeService.swift
+      - path: Apps/APKRun/Models/TopicPollingModel.swift
+      - path: Apps/APKRun/Models/HomeModels.swift
+      - path: Apps/APKRun/Models/AppRouter.swift
+      - path: Apps/APKRun/Models/RuntimeStatusModel.swift
+      - path: Apps/APKRun/Features/Home/HomeRowStatus.swift
+    settings:
+      base:
+        PRODUCT_NAME: APKRunTests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: BuildStamp
+        embed: false
+        link: false
+      - package: APKRun
+        product: RuntimeClient
+      - package: APKRun
+        product: RuntimeAPI
+    scheme: {}
 
   APKRunMenuBar:
     type: application

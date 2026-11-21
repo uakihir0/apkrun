@@ -84,6 +84,11 @@ public actor SessionRegistry {
     private var displayReleaseWaiters: [CheckedContinuation<Void, Never>] = []
     private let logSink: (any LogSink)?
 
+    /// Called once for every session the registry commits: creation, state change,
+    /// and task reconciliation (host-ui.md §5.2). The RuntimeHost turns these
+    /// snapshots into `sessions` topic events.
+    public var onChange: (@Sendable (AppSessionSnapshot) -> Void)?
+
     /// Creates an empty registry for embedded and leased-display sessions.
     public init(logSink: (any LogSink)? = nil) {
         self.logSink = logSink
@@ -115,6 +120,7 @@ public actor SessionRegistry {
             taskIDs: []
         )
         entries[id] = entry
+        emit(entry)
         log("session requested", entry: entry)
         return entry.snapshot
     }
@@ -157,6 +163,7 @@ public actor SessionRegistry {
             displayAcquisitionPending: true
         )
         entries[id] = entry
+        emit(entry)
         log("leased session requested", entry: entry)
 
         let lease: DisplayLease
@@ -164,6 +171,11 @@ public actor SessionRegistry {
             lease = try await displayPool.acquire(for: id, configuration: configuration)
         } catch {
             entries[id] = nil
+            emit(
+                Entry(
+                    id: id, packageID: packageID, displayID: 0,
+                    displayMode: configuration.mode, state: .ended(.error(.displayLost)),
+                    taskIDs: []))
             throw .displayPool(error)
         }
 
@@ -176,6 +188,7 @@ public actor SessionRegistry {
         current.displayPool = displayPool
         current.displayAcquisitionPending = false
         entries[id] = current
+        emit(current)
         log("leased display acquired", entry: current)
         return current.snapshot
     }
@@ -204,6 +217,7 @@ public actor SessionRegistry {
         }
         let allocationToRelease = Self.takeDisplayAllocationIfEnded(from: &entry)
         entries[id] = entry
+        emit(entry)
         log("session state \(String(describing: previous)) -> \(String(describing: next))", entry: entry)
         if let allocationToRelease {
             await allocationToRelease.pool.release(allocationToRelease.lease)
@@ -231,6 +245,7 @@ public actor SessionRegistry {
         entry.state = .ended(endReason)
         let allocationToRelease = Self.takeDisplayAllocationIfEnded(from: &entry)
         entries[entry.id] = entry
+        emit(entry)
         log("session state \(String(describing: previous)) -> \(String(describing: entry.state))", entry: entry)
         if let allocationToRelease {
             await allocationToRelease.pool.release(allocationToRelease.lease)
@@ -249,6 +264,7 @@ public actor SessionRegistry {
         entry.state = previous
         entry.stateBeforeClosing = nil
         entries[entry.id] = entry
+        emit(entry)
         log("session close failed; restored \(String(describing: previous))", entry: entry)
         return entry.snapshot
     }
@@ -264,6 +280,7 @@ public actor SessionRegistry {
         entry.vanishedDuringLaunch.remove(taskID)
         let inserted = entry.taskIDs.insert(taskID).inserted
         entries[entry.id] = entry
+        emit(entry)
         if inserted {
             log("task appeared id=\(taskID)", entry: entry)
         }
@@ -289,6 +306,7 @@ public actor SessionRegistry {
             entry.state = .ended(.appExited)
             let allocationToRelease = Self.takeDisplayAllocationIfEnded(from: &entry)
             entries[entry.id] = entry
+            emit(entry)
             log("session state \(String(describing: previous)) -> \(String(describing: entry.state))", entry: entry)
             if let allocationToRelease {
                 await allocationToRelease.pool.release(allocationToRelease.lease)
@@ -298,6 +316,7 @@ public actor SessionRegistry {
 
         let inserted = entry.taskIDs.insert(taskID).inserted
         entries[entry.id] = entry
+        emit(entry)
         if inserted {
             log("task appeared id=\(taskID)", entry: entry)
         }
@@ -320,6 +339,7 @@ public actor SessionRegistry {
         if entry.launchReplyPending {
             entry.vanishedDuringLaunch.insert(taskID)
             entries[entry.id] = entry
+            emit(entry)
             return entry.snapshot
         }
         if entry.taskIDs.isEmpty {
@@ -345,6 +365,7 @@ public actor SessionRegistry {
         }
         let allocationToRelease = Self.takeDisplayAllocationIfEnded(from: &entry)
         entries[entry.id] = entry
+        emit(entry)
         if let allocationToRelease {
             await allocationToRelease.pool.release(allocationToRelease.lease)
         }
@@ -389,6 +410,7 @@ public actor SessionRegistry {
             entry.stateBeforeClosing = nil
             let allocationToRelease = Self.takeDisplayAllocationIfEnded(from: &entry)
             entries[entry.id] = entry
+            emit(entry)
             log("session state \(String(describing: previous)) -> \(String(describing: entry.state))", entry: entry)
             if let allocationToRelease {
                 releaseDisplayAfterReconciliation(allocationToRelease)
@@ -409,6 +431,7 @@ public actor SessionRegistry {
                 entry.vanishedDuringLaunch.removeAll()
             }
             entries[entry.id] = entry
+            emit(entry)
             return SessionReconciliationResult(
                 session: entry.snapshot,
                 action: packageTaskIDs.isEmpty ? .relaunchApplication : .none
@@ -423,12 +446,14 @@ public actor SessionRegistry {
                 entry.vanishedDuringLaunch.removeAll()
                 let allocationToRelease = Self.takeDisplayAllocationIfEnded(from: &entry)
                 entries[entry.id] = entry
+                emit(entry)
                 log("session state \(String(describing: previous)) -> \(String(describing: entry.state))", entry: entry)
                 if let allocationToRelease {
                     releaseDisplayAfterReconciliation(allocationToRelease)
                 }
             } else {
                 entries[entry.id] = entry
+                emit(entry)
             }
             return SessionReconciliationResult(session: entry.snapshot, action: .none)
         case .requested, .waitingForRuntime, .acquiringDisplay, .closing, .ended:
@@ -548,6 +573,15 @@ public actor SessionRegistry {
         }
     }
 
+    /// Registers the callback invoked for every committed session change.
+    public func setOnChange(_ handler: (@Sendable (AppSessionSnapshot) -> Void)?) {
+        onChange = handler
+    }
+
+    private func emit(_ entry: Entry) {
+        onChange?(entry.snapshot)
+    }
+
     private func log(_ event: String, entry: Entry) {
         let logger = APKLogger(
             category: RuntimeLogCategory.sessions,
@@ -563,7 +597,8 @@ public actor SessionRegistry {
 }
 
 extension AppSessionState {
-    fileprivate var isEnded: Bool {
+    /// Whether the session reached its terminal state.
+    public var isEnded: Bool {
         if case .ended = self { true } else { false }
     }
 

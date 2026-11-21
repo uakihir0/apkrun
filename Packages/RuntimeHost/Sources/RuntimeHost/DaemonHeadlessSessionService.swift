@@ -1072,6 +1072,16 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         )
     )
 
+    /// Snapshots of all sessions that have not ended (host-ui.md §5.2).
+    func sessionSnapshots() async -> [AppSessionSnapshot] {
+        await registry.snapshot().filter { !$0.state.isEnded }
+    }
+
+    /// Registers the callback invoked for every committed session change.
+    func setSessionChangeObserver(_ handler: (@Sendable (AppSessionSnapshot) -> Void)?) async {
+        await registry.setOnChange(handler)
+    }
+
     private static func wireError(for failure: SessionRegistryFailure) -> RuntimeWireError {
         switch failure {
         case .invalidPackageIdentifier:

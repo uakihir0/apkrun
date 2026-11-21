@@ -428,9 +428,19 @@ public actor EmbeddedUpdateService {
         // The §2.1–§2.4 authority rules live in UpdateCore.
         let resolution = try UpdatePolicyRules.resolve(policy, for: record)
 
+        // §9.2: a token travels only in `ProviderSpec.token` and is
+        // GitHub-only; it is validated before anything writes (below).
+        if case .set(let spec) = policy.provider, spec.token != nil {
+            guard resolution.provider?.type == .github else {
+                throw UpdateFailure.providerMetadataInvalid(
+                    detail: "provider token is GitHub-only")
+            }
+        }
+
         // §11.1: a signed-remote provider makes one test request before the
         // policy is written — for F-Droid it fetches and verifies entry.jar,
-        // so a wrong URL or fingerprint fails here, not on the first check.
+        // for GitHub the release listing — so a wrong source fails here, not
+        // on the first check.
         if let providerRef = resolution.provider {
             switch providerRef.type {
             case .fdroid:
@@ -438,11 +448,19 @@ public actor EmbeddedUpdateService {
                 _ = try await provider.fetchEntry(
                     context: providerContext(userInitiated: true))
             case .github:
-                // #53.
-                break
+                let provider = try GitHubProvider(ref: providerRef)
+                try await provider.testConnection(
+                    context: providerContext(userInitiated: true))
             case .local, .direct:
                 break
             }
+        }
+
+        // The provider validated: the token goes to the Keychain (service
+        // `io.apkrun.provider.github`), never settings.json or the record.
+        // A request without `token` keeps the stored one; `""` deletes it.
+        if case .set(let spec) = policy.provider, let token = spec.token {
+            try credentials.setToken(token, for: GitHubProvider.tokenService)
         }
 
         try await store.setUpdateMode(for: packageID, mode: resolution.settingsMode)

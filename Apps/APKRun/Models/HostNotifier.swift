@@ -13,6 +13,10 @@ final class HostNotifier: NSObject, UNUserNotificationCenterDelegate {
     /// Category identifiers are per process; host notifications are few, so
     /// categories keyed by the action-titles digest need no eviction.
     private static let reconnectDelay: Duration = .seconds(2)
+    /// The category for a notification with no actions. It exists so the
+    /// dismiss callback (`UNNotificationDismissActionIdentifier`) fires — a
+    /// notification without a category reports no dismissal.
+    private static let defaultCategoryIdentifier = "apkrun-host-default"
 
     private let client: RuntimeControlClient?
     private let openRoute: (AppRoute) -> Void
@@ -34,6 +38,7 @@ final class HostNotifier: NSObject, UNUserNotificationCenterDelegate {
         guard task == nil else { return }
         center.delegate = self
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        center.setNotificationCategories([Self.defaultCategory])
         task = Task { [weak self] in await self?.consume() }
     }
 
@@ -87,9 +92,9 @@ final class HostNotifier: NSObject, UNUserNotificationCenterDelegate {
         content.sound = payload.sound && !payload.replay ? .default : nil
         content.interruptionLevel =
             payload.replay || payload.interruption == .passive ? .passive : .active
-        if !payload.actions.isEmpty {
-            content.categoryIdentifier = categoryIdentifier(for: payload.actions)
-        }
+        content.categoryIdentifier =
+            payload.actions.isEmpty
+            ? Self.defaultCategoryIdentifier : categoryIdentifier(for: payload.actions)
         let request = UNNotificationRequest(
             identifier: payload.identifier, content: content, trigger: nil)
         payloads[payload.identifier] = payload
@@ -108,10 +113,17 @@ final class HostNotifier: NSObject, UNUserNotificationCenterDelegate {
                     options: [])
             }
             categories[key] = UNNotificationCategory(
-                identifier: key, actions: unActions, intentIdentifiers: [])
+                identifier: key, actions: unActions, intentIdentifiers: [],
+                options: [.customDismissAction])
+            center.setNotificationCategories(
+                Set(categories.values) + [Self.defaultCategory])
         }
         return key
     }
+
+    private static let defaultCategory = UNNotificationCategory(
+        identifier: defaultCategoryIdentifier, actions: [], intentIdentifiers: [],
+        options: [.customDismissAction])
 
     /// The button title of a host action (runtime-api.md §11.3).
     private static func title(of action: HostNotificationAction, index: Int) -> String {
@@ -129,6 +141,18 @@ final class HostNotifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     // MARK: - UNUserNotificationCenterDelegate
+
+    /// Banners still arrive while APKRun.app is frontmost (desktop-integration.md §5.4).
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        // A replay restores an already-seen notification: list only, no banner.
+        guard notification.request.content.interruptionLevel != .passive else {
+            return [.list]
+        }
+        return notification.request.content.sound != nil ? [.banner, .list, .sound] : [.banner, .list]
+    }
 
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
@@ -162,7 +186,23 @@ final class HostNotifier: NSObject, UNUserNotificationCenterDelegate {
             // `targetURL` opens on activation: the banner itself, and Open
             // actions (runtime-api.md §11.3).
             switch action {
-            case nil, .open, .openAPKRun:
+            case nil, .open:
+                // A click on a package's notification launches the Android app
+                // (desktop-integration.md §5.4) and still navigates to its page.
+                if let packageRaw = self.payloads[identifier]?.packageID,
+                    let packageID = RuntimePackageID(rawValue: packageRaw)
+                {
+                    Task {
+                        try? await client.launch(RuntimeLaunchRequest(packageID: packageID))
+                    }
+                }
+                if let target = self.payloads[identifier]?.targetURL,
+                    let url = URL(string: target), let route = AppRouter.route(url)
+                {
+                    NSApp.activate(ignoringOtherApps: true)
+                    self.openRoute(route)
+                }
+            case .openAPKRun:
                 if let target = self.payloads[identifier]?.targetURL,
                     let url = URL(string: target), let route = AppRouter.route(url)
                 {

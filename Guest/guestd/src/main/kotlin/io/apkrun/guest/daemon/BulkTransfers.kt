@@ -15,22 +15,23 @@ import java.security.MessageDigest
  */
 class BulkTransfers : ClipboardBridge.BulkImageSender {
     private val lock = Any()
-    private var writer: FrameWriter? = null
+
+    /** The open bulk connections, newest first; sends go to the newest. */
+    private val writers = ArrayDeque<FrameWriter>()
     private var nextTransferId = 1L
 
     /** Makes [writer] the bulk connection's sink until [detach]. Only one is kept. */
     fun attach(writer: FrameWriter) {
         synchronized(lock) {
-            this.writer = writer
+            writers.remove(writer)
+            writers.addFirst(writer)
         }
     }
 
-    /** Stops sending on [writer]. */
+    /** Stops sending on [writer]; an older connection becomes the sink again. */
     fun detach(writer: FrameWriter) {
         synchronized(lock) {
-            if (this.writer === writer) {
-                this.writer = null
-            }
+            writers.remove(writer)
         }
     }
 
@@ -55,7 +56,7 @@ class BulkTransfers : ClipboardBridge.BulkImageSender {
     fun send(kind: BulkKind, name: String, mimeType: String, payload: ByteArray): Long? {
         val digest = MessageDigest.getInstance("SHA-256").digest(payload)
         synchronized(lock) {
-            val target = writer ?: return null
+            val target = writers.firstOrNull() ?: return null
             val transferId = nextTransferId
             nextTransferId += 2
             target.send { envelope ->

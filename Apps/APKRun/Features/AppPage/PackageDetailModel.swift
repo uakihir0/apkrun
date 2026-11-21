@@ -53,6 +53,9 @@ final class PackageDetailModel {
     /// (§7.5, update-system.md §2.1).
     var confirmExternalAuthority = false
     var confirmRollback = false
+    /// The §8.5 "Restore ‹old version› (Erases Data)…" confirmation that
+    /// follows a `rollbackUnavailable` reply.
+    var confirmDataLossRollback = false
     var showsUninstall = false
     var showsRepair = false
     /// Set briefly after a write to a next-session key (§7).
@@ -185,11 +188,14 @@ final class PackageDetailModel {
     }
 
     /// **Check Now** / **Check for Updates** (§7.5, §7 header menu): runs a
-    /// check only; installing stays with **Update Now**.
+    /// check only; installing stays with **Update Now**. The page reloads
+    /// afterwards so a found update surfaces as "Update available" (§5.3
+    /// row 5).
     func checkNow() {
         Task {
             do {
                 _ = try await service().checkForUpdates(packages: [packageID])
+                await load()
             } catch {
                 loadError = Self.describe(error)
             }
@@ -247,13 +253,22 @@ final class PackageDetailModel {
         }
     }
 
-    /// **Roll Back to ‹version›…** (§7.5).
-    func rollback() {
+    /// **Roll Back to ‹version›…** (§7.5). When the data-preserving
+    /// rollback is unavailable the daemon reports `unavailable`, and the
+    /// §8.5 "Restore ‹old version› (Erases Data)…" confirmation shows
+    /// before the retry with `allowDataLoss`.
+    func rollback(allowDataLoss: Bool = false) {
         confirmRollback = false
+        confirmDataLossRollback = false
         Task {
             do {
-                _ = try await service().rollbackPackage(
-                    packageID: packageID, allowDataLoss: false)
+                let reply = try await service().rollbackPackage(
+                    packageID: packageID, allowDataLoss: allowDataLoss)
+                if reply.unavailable == true {
+                    confirmDataLossRollback = true
+                } else if reply.rolledBackTo != nil {
+                    await load()
+                }
             } catch {
                 loadError = Self.describe(error)
             }
@@ -272,7 +287,9 @@ final class PackageDetailModel {
     var renameText = ""
 
     /// **Update Mac App** = `refreshWrapper` (§7.6), carrying the pending
-    /// §7.1 name/icon edit when one is staged.
+    /// §7.1 name/icon edit when one is staged. The pendings clear only
+    /// after the operation ends in success — the accept reply only means
+    /// the refresh was queued, so a later failure must not lose the edit.
     func refreshWrapper() {
         let change = WrapperRefreshWire(
             displayName: pendingDisplayName,
@@ -281,8 +298,13 @@ final class PackageDetailModel {
         let iconFile = pendingIconFile
         Task {
             do {
-                _ = try await service().refreshWrapper(
+                let handle = try await service().refreshWrapper(
                     packageID: packageID, change: change, iconFile: iconFile)
+                let snapshot = try await Self.awaitTerminal(
+                    handle.operationID, using: service())
+                if case .failed(let failure)? = snapshot.result {
+                    throw failure
+                }
                 pendingDisplayName = nil
                 pendingIconFile = nil
                 pendingAndroidIcon = false
@@ -311,6 +333,18 @@ final class PackageDetailModel {
                 loadError = Self.describe(error)
             }
         }
+    }
+
+    /// Polls an operation until its snapshot carries a terminal result.
+    private static func awaitTerminal(
+        _ operationID: OperationID, using service: any RuntimeService
+    ) async throws -> OperationSnapshot {
+        while !Task.isCancelled {
+            let snapshot = try await service.operationStatus(operationID)
+            if snapshot.result != nil { return snapshot }
+            try await Task.sleep(for: .milliseconds(300))
+        }
+        throw CancellationError()
     }
 
     func createWrapper() {

@@ -145,7 +145,8 @@
                 // which the user can grant folder access — moves it and
                 // calls placeStagedWrapper to finish.
                 info = try await WrapCommandSupport.placeStaged(
-                    after: failure, destination: destination, client: client)
+                    after: failure, destination: destination, replace: replace,
+                    client: client)
             }
             if json {
                 try OperationCommandOutput.writeJSON(info)
@@ -162,6 +163,7 @@
         static func placeStaged(
             after failure: RuntimeWireError,
             destination: WireWrapperDestination?,
+            replace: Bool,
             client: RuntimeControlClient
         ) async throws -> WrapperInfo {
             guard failure.code == "wrapper.destinationNotAccessible",
@@ -193,7 +195,50 @@
             let finalURL = directory.appendingPathComponent(
                 stagedBundle.lastPathComponent, isDirectory: true)
             do {
-                try FileManager.default.moveItem(at: stagedBundle, to: finalURL)
+                // The daemon skipped the conflict check on the deferred path;
+                // honor it here the way place() does (wrapper.md §6.4):
+                // --replace swaps only this package's own wrapper, never an
+                // item that belongs to anything else.
+                let destinationExists = FileManager.default.fileExists(
+                    atPath: finalURL.path)
+                if destinationExists {
+                    let existingPackage = plistPackageID(of: finalURL)
+                    guard replace, existingPackage != nil,
+                        existingPackage == plistPackageID(of: stagedBundle)
+                    else {
+                        throw RuntimeWireError(
+                            domain: "wrapper",
+                            code: "wrapper.nameConflict",
+                            message: "An item named \(finalURL.lastPathComponent) "
+                                + "already exists there.",
+                            remediation: "Choose another name or location. "
+                                + "APKRun never replaces it.",
+                            parameters: ["file": finalURL.lastPathComponent])
+                    }
+                }
+                // Move via a temp name in the destination folder, the same
+                // path moveIntoPlace takes: it survives a different volume
+                // (replaceItemAt requires one) and keeps the existing wrapper
+                // in place until the swap.
+                try FileManager.default.createDirectory(
+                    at: directory, withIntermediateDirectories: true)
+                let temp = directory.appendingPathComponent(
+                    ".\(finalURL.lastPathComponent).apkrun-\(UUID().uuidString)",
+                    isDirectory: true)
+                try FileManager.default.moveItem(at: stagedBundle, to: temp)
+                do {
+                    if destinationExists {
+                        _ = try FileManager.default.replaceItemAt(
+                            finalURL, withItemAt: temp)
+                    } else {
+                        try FileManager.default.moveItem(at: temp, to: finalURL)
+                    }
+                } catch {
+                    try? FileManager.default.removeItem(at: temp)
+                    throw error
+                }
+            } catch let moveError as RuntimeWireError {
+                throw moveError
             } catch {
                 throw failure
             }
@@ -266,6 +311,17 @@
                     + "(\(result.packageID.rawValue)), version "
                     + "\(result.versionCode.map(String.init) ?? "unknown").")
             return result.packageID
+        }
+
+        /// Reads `APKRunPackageID` from a bundle's Info.plist; nil means the
+        /// item is not an APKRun wrapper (or is unreadable).
+        static func plistPackageID(of bundle: URL) -> String? {
+            let plistURL = bundle.appendingPathComponent("Contents/Info.plist")
+            guard let data = try? Data(contentsOf: plistURL),
+                let plist = try? PropertyListSerialization.propertyList(
+                    from: data, format: nil) as? [String: Any]
+            else { return nil }
+            return plist["APKRunPackageID"] as? String
         }
 
         /// The `wrapper` output of a finished `wrapperCreate` operation.

@@ -23,6 +23,9 @@ struct UpdateCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Report only; do not download or notify.")
     var checkOnly = false
 
+    @Flag(name: .long, help: "End the running app and install now (§7.3 Update Now).")
+    var now = false
+
     @Flag(name: .long, help: "Print the results as JSON.")
     var json = false
 
@@ -97,7 +100,7 @@ struct UpdateCommand: AsyncParsableCommand {
                 try? handle.close()
             }
         }
-        let options = UpdateNowOptions(files: files)
+        let options = UpdateNowOptions(closeRunningApp: now, files: files)
         let (_, outcome) = try await client.updatePackage(
             packageID: packageID, options: options, files: handles)
         if json {

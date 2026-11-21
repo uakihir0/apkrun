@@ -33,6 +33,8 @@ public struct UpdateNotification: Sendable, Equatable {
 public protocol HostNotificationSink: Sendable {
     /// Posts an "Update available" notification.
     func notifyUpdateAvailable(_ notification: UpdateNotification) async
+    /// Posts the §7.4 "ready to install; quit to update" notification.
+    func notifyUpdateWaiting(_ notification: UpdateNotification) async
 }
 
 /// The result of one coordinator check run.
@@ -596,13 +598,17 @@ public actor UpdateCoordinator {
         candidate: UpdateCandidate,
         trigger: UpdateTrigger,
         runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate,
         started: Date = Date(),
-        origin: ArtifactOrigin? = nil
+        origin: ArtifactOrigin? = nil,
+        closeRunningApp: Bool = false
     ) async -> UpdateInstallOutcome {
         let records = (try? await store.listManagedPackages()) ?? []
         guard let record = records.first(where: { $0.packageId == packageID }) else {
             return await finishFailedInstall(
-                packageID, record: nil, candidate: candidate,
+                packageID, record: nil, cursor: candidate.cursor,
+                candidateVersionCode: candidate.declaredVersionCode,
+                provider: candidate.provider.type,
                 failure: .providerMetadataInvalid(
                     detail: "package is not managed"),
                 trigger: trigger, started: started)
@@ -623,49 +629,268 @@ public actor UpdateCoordinator {
             try await store.stage(ticket: validated.ticket, candidate: staged)
         } catch {
             return await finishFailedInstall(
-                packageID, record: record, candidate: candidate,
+                packageID, record: record, cursor: candidate.cursor,
+                candidateVersionCode: candidate.declaredVersionCode,
+                provider: candidate.provider.type,
                 failure: .installFailed(detail: "stage(\(error))"),
                 trigger: trigger, started: started)
         }
         setPhase(packageID, .staged)
         await stateStore.update(packageID) { state in
             state.phase = "staged"
+            state.stagedAt = started
             state.candidate = PackageUpdateState.CandidateSummary(
                 versionCode: preview.versionCode,
                 versionName: preview.versionName,
-                provider: candidate.provider.type)
+                provider: candidate.provider.type,
+                signerDigests: preview.artifactSet.signerDigests,
+                cursor: candidate.cursor,
+                reopenAfterInstall: closeRunningApp)
         }
         await stateStore.flush()
 
-        // §7: the install waits until the app is not in use; a package with a
-        // session stays staged.
-        if await runtime.hasActiveUse(packageID) {
-            return .staged
+        // §7.3 "Update Now": end the package's sessions with `.updating`
+        // before the gate evaluates, so GU2/GU3 see the app as closed.
+        if closeRunningApp {
+            await runtime.endSessions(for: packageID, reason: .updating)
         }
 
+        // §7.1–§7.2: the gentle gate admits the install or queues it as
+        // `staged`; user-initiated runs jump ahead of automatic ones.
+        let userInitiated = trigger == .userInitiated || trigger == .manual
+        // §7.3: a user-initiated update brings Android up before the gate
+        // evaluates GU1; an automatic run waits for a ready runtime.
+        if userInitiated, await runtime.runtimeState != .ready {
+            try? await runtime.ensureReady(.user)
+        }
+        guard await gate.requestInstall(packageID, userInitiated: userInitiated) else {
+            // A request queued behind an in-flight admission is not
+            // re-evaluated when that admission fails; drain the queue in
+            // the background so an open package does not wait for the
+            // 10-minute tick.
+            Task.detached {
+                await self.drainQueuedInstalls(
+                    trigger: trigger, runtime: runtime, gate: gate)
+            }
+            return .staged
+        }
+        return await runGatedInstall(
+            packageID, record: record,
+            expectedVersionCode: preview.versionCode,
+            expectedSigners: Set(preview.artifactSet.signerDigests),
+            provider: candidate.provider.type, cursor: candidate.cursor,
+            trigger: trigger, runtime: runtime, gate: gate, started: started,
+            reopenAfterInstall: closeRunningApp)
+    }
+
+    /// §7.2 trigger: resumes a staged install the gate now admits.
+    /// Returns `nil` while the gate stays closed or the package has no
+    /// staged candidate.
+    @discardableResult
+    public func resumeStagedInstall(
+        _ packageID: PackageID,
+        trigger: UpdateTrigger = .scheduled,
+        runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate,
+        started: Date = Date()
+    ) async -> UpdateInstallOutcome? {
+        guard let row = await stateStore.state(for: packageID),
+            row.phase == "staged",
+            let summary = row.candidate,
+            let expectedVersionCode = summary.versionCode
+        else {
+            return nil
+        }
+        let records = (try? await store.listManagedPackages()) ?? []
+        guard let record = records.first(where: { $0.packageId == packageID }) else {
+            return nil
+        }
+        // The pump already admitted the package via `nextReadyPackage`;
+        // install it without re-entering the queue.
+        return await runGatedInstall(
+            packageID, record: record,
+            expectedVersionCode: expectedVersionCode,
+            expectedSigners: Set(summary.signerDigests ?? []),
+            provider: summary.provider, cursor: summary.cursor,
+            trigger: trigger, runtime: runtime, gate: gate, started: started,
+            reopenAfterInstall: summary.reopenAfterInstall)
+    }
+
+    /// §7.4: a candidate staged longer than `stagedNoticeAfter` gets one
+    /// "ready to install; quit to update" notification per stage. The
+    /// trigger pump calls this every §7.2 tick.
+    public func notifyOverdueStagedUpdates(now: Date = Date()) async {
+        guard let notifier else { return }
+        for (packageID, row) in await stateStore.allStates() {
+            guard row.phase == "staged",
+                let stagedAt = row.stagedAt,
+                stagedAt.addingTimeInterval(Self.stagedNoticeAfter) < now,
+                row.waitingNotifiedAt == nil
+            else {
+                continue
+            }
+            let records = (try? await store.listManagedPackages()) ?? []
+            guard let record = records.first(where: { $0.packageId == packageID }) else {
+                continue
+            }
+            await notifier.notifyUpdateWaiting(
+                UpdateNotification(
+                    packageID: packageID,
+                    displayName: record.displayName,
+                    versionCode: row.candidate?.versionCode,
+                    versionName: row.candidate?.versionName))
+            await stateStore.update(packageID) { $0.waitingNotifiedAt = now }
+        }
+    }
+
+    /// §7.4's waiting period before the one-time notice fires.
+    static let stagedNoticeAfter: TimeInterval = 7 * 24 * 3600
+
+    /// The post-gate portion of an install: ensure the runtime is up,
+    /// hold the `storeOperation` assertion, run `installStaged`, then H1 —
+    /// Android reporting the staged versionCode and signer set within the
+    /// health-check budget.
+    private func runGatedInstall(
+        _ packageID: PackageID,
+        record: PackageRecord,
+        expectedVersionCode: VersionCode,
+        expectedSigners: Set<SHA256Digest>,
+        provider: ProviderType,
+        cursor: ProviderCursor?,
+        trigger: UpdateTrigger,
+        runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate,
+        started: Date,
+        reopenAfterInstall: Bool = false
+    ) async -> UpdateInstallOutcome {
         // Automatic runs need a ready runtime (§3.5).
         do {
-            try await runtime.ensureReadyForUpdate()
+            try await runtime.ensureReady(.update)
         } catch {
+            Task.detached {
+                await self.pumpQueuedInstalls(
+                    after: packageID, trigger: trigger, runtime: runtime, gate: gate)
+            }
             return await finishFailedInstall(
-                packageID, record: record, candidate: candidate,
+                packageID, record: record, cursor: cursor,
+                candidateVersionCode: expectedVersionCode, provider: provider,
                 failure: .installFailed(detail: "runtimeUnavailable(\(error))"),
                 trigger: trigger, started: started)
         }
+
+        // §7.2: the install runs under a `storeOperation` assertion, which
+        // also holds the host's package-mutation guard so a stop or restart
+        // waits for the install.
+        let assertion: UpdateActivityAssertion
+        do {
+            assertion = try await runtime.assertStoreOperation()
+        } catch {
+            Task.detached {
+                await self.pumpQueuedInstalls(
+                    after: packageID, trigger: trigger, runtime: runtime, gate: gate)
+            }
+            return await finishFailedInstall(
+                packageID, record: record, cursor: cursor,
+                candidateVersionCode: expectedVersionCode, provider: provider,
+                failure: .installFailed(detail: "assertStoreOperation(\(error))"),
+                trigger: trigger, started: started)
+        }
+        // §7.2 race boundary: the install stays `preCommit` while it
+        // streams, so a session that opens cancels it back to `staged`;
+        // `installStaged` runs `requestCommit` at the real commit point,
+        // after which a session waits up to 30 s (runtime-daemon.md §7.1).
+        let outcome = await performGatedInstall(
+            packageID, record: record,
+            expectedVersionCode: expectedVersionCode,
+            expectedSigners: expectedSigners, provider: provider,
+            cursor: cursor, trigger: trigger, runtime: runtime,
+            gate: gate, started: started)
+        assertion.release()
+        // Free the gate's slot before anything that can open a session:
+        // a launch while the install still holds its slot waits for it.
+        let next = await gate.finishInstall(packageID)
+        // §7.3: "Update Now" reopens the app after a successful update,
+        // and its caller returns once its own install is done; unrelated
+        // queued installs drain in the background.
+        if case .installed = outcome, reopenAfterInstall {
+            await runtime.reopen(packageID)
+        }
+        Task.detached {
+            await self.drainQueuedInstalls(
+                first: next, trigger: trigger, runtime: runtime, gate: gate)
+        }
+        return outcome
+    }
+
+    /// Frees the finished install's gate slot, then drains the queue
+    /// starting at the package the slot's release admitted.
+    private func pumpQueuedInstalls(
+        after packageID: PackageID,
+        trigger: UpdateTrigger,
+        runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate
+    ) async {
+        let first = await gate.finishInstall(packageID)
+        await drainQueuedInstalls(
+            first: first, trigger: trigger, runtime: runtime, gate: gate)
+    }
+
+    /// Admits each queued install and runs it; a package that lost its
+    /// staged row frees the gate's slot. A resumed install continues the
+    /// chain itself. `first` is a package a `finishInstall` already
+    /// admitted — skipping it would leave its claim dangling.
+    private func drainQueuedInstalls(
+        first: PackageID? = nil,
+        trigger: UpdateTrigger,
+        runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate
+    ) async {
+        var next = first
+        if next == nil {
+            next = await gate.nextReadyPackage()
+        }
+        while let admitted = next {
+            if await resumeStagedInstall(
+                admitted, trigger: trigger, runtime: runtime, gate: gate
+            ) != nil {
+                return
+            }
+            // No staged row for the admitted package: free its slot and
+            // try the one after it.
+            next = await gate.finishInstall(admitted)
+        }
+    }
+
+    /// `installStaged` plus the H1 confirmation, called with the gate's
+    /// admission and the `storeOperation` assertion already held.
+    private func performGatedInstall(
+        _ packageID: PackageID,
+        record: PackageRecord,
+        expectedVersionCode: VersionCode,
+        expectedSigners: Set<SHA256Digest>,
+        provider: ProviderType,
+        cursor: ProviderCursor?,
+        trigger: UpdateTrigger,
+        runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate,
+        started: Date
+    ) async -> UpdateInstallOutcome {
 
         setPhase(packageID, .installing)
         let updated: PackageRecord
         do {
             updated = try await store.installStaged(
                 for: packageID, enableRollback: true,
-                hasOpenSession: { await runtime.hasActiveUse(packageID) })
+                hasOpenSession: { await runtime.hasActiveUse(packageID) },
+                commitGate: { await gate.requestCommit(packageID) })
         } catch PackageStoreFailure.packageInUse {
             // The gate closed between the check and the call: stay staged.
             setPhase(packageID, .staged)
             return .staged
         } catch {
             return await finishFailedInstall(
-                packageID, record: record, candidate: candidate,
+                packageID, record: record, cursor: cursor,
+                candidateVersionCode: expectedVersionCode, provider: provider,
                 failure: .installFailed(detail: "\(error)"),
                 trigger: trigger, started: started)
         }
@@ -679,8 +904,8 @@ public actor UpdateCoordinator {
         while true {
             if let info = try? await store.installedPackageInfo(packageID) {
                 found = info.versionCode
-                if info.versionCode == preview.versionCode,
-                    Set(info.signingDigests) == Set(preview.artifactSet.signerDigests)
+                if info.versionCode == expectedVersionCode,
+                    Set(info.signingDigests) == expectedSigners
                 {
                     confirmed = true
                     break
@@ -694,14 +919,15 @@ public actor UpdateCoordinator {
                 detail: "versionNotConfirmed(found: \(found.map(String.init) ?? "none"))")
             let reason = RollbackReason.healthCheckFailed(failure)
             await stateStore.update(packageID) { state in
-                state.cursor = candidate.cursor
+                state.cursor = cursor
                 state.phase = nil
                 state.candidate = nil
+                state.stagedAt = nil
             }
             setPhase(packageID, .completed(.keptAfterFailedHealthCheck(reason: reason)))
             await appendHistory(
-                record: record, to: preview.versionCode,
-                provider: candidate.provider.type, trigger: trigger,
+                record: record, to: expectedVersionCode,
+                provider: provider, trigger: trigger,
                 outcome: "keptAfterFailedHealthCheck", failure: failure.errorCode,
                 started: started)
             await stateStore.flush()
@@ -709,16 +935,17 @@ public actor UpdateCoordinator {
         }
 
         await stateStore.update(packageID) { state in
-            state.cursor = candidate.cursor
+            state.cursor = cursor
             state.phase = nil
             state.candidate = nil
+            state.stagedAt = nil
         }
         let outcome = UpdateOutcome.updated(
             from: record.versionCode, to: updated.versionCode)
         setPhase(packageID, .completed(outcome))
         await appendHistory(
             record: record, to: updated.versionCode,
-            provider: candidate.provider.type, trigger: trigger,
+            provider: provider, trigger: trigger,
             outcome: "updated", failure: nil, started: started)
         await stateStore.flush()
         return .installed(from: record.versionCode, to: updated.versionCode)
@@ -729,21 +956,24 @@ public actor UpdateCoordinator {
     private func finishFailedInstall(
         _ packageID: PackageID,
         record: PackageRecord?,
-        candidate: UpdateCandidate,
+        cursor: ProviderCursor?,
+        candidateVersionCode: VersionCode?,
+        provider: ProviderType?,
         failure: UpdateFailure,
         trigger: UpdateTrigger,
         started: Date
     ) async -> UpdateInstallOutcome {
         await stateStore.update(packageID) { state in
-            state.cursor = candidate.cursor
+            state.cursor = cursor
             state.phase = nil
             state.candidate = nil
+            state.stagedAt = nil
         }
         setPhase(packageID, .completed(.skipped(.installFailed(failure))))
         if let record {
             await appendHistory(
-                record: record, to: candidate.declaredVersionCode,
-                provider: candidate.provider.type, trigger: trigger,
+                record: record, to: candidateVersionCode,
+                provider: provider, trigger: trigger,
                 outcome: "skipped.installFailed", failure: failure.errorCode,
                 started: started)
         }

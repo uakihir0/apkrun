@@ -876,6 +876,10 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
     #endif
 }
 
+@Test func updateHelpMatchesGolden() {
+    #expect(UpdateCommand.helpMessage() == golden("help-update.txt"))
+}
+
 #if APKRUN_EMBEDDED_RUNTIME
     @Test func developmentLaunchOnlyStartsTheWindowForAnActualLaunch() {
         #expect(DisplayWindowSession.request(in: ["dev", "launch", "HelloText.apk"]) == .launch)

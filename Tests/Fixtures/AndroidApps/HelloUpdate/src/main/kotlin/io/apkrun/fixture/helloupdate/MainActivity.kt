@@ -1,6 +1,7 @@
 package io.apkrun.fixture.helloupdate
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.widget.TextView
@@ -25,6 +26,12 @@ class MainActivity : Activity() {
             Log.i("APKRUN-FIXTURE", "data written")
         }
         Log.i("APKRUN-FIXTURE", "version ${packageManager.getPackageInfo(packageName, 0).longVersionCode}")
+        // test-strategy.md §4.3: launched with the `fgs` extra, V1 holds a
+        // mediaPlayback foreground service so OQ-17 can ask op 110 whether
+        // GENTLE_UPDATE reports the package busy (#41 step 6).
+        if (intent.getBooleanExtra("fgs", false)) {
+            startForegroundService(Intent(this, UpdateBusyService::class.java))
+        }
         setContentView(TextView(this).apply { text = if (kept) "data HELLO" else "data written" })
     }
 }

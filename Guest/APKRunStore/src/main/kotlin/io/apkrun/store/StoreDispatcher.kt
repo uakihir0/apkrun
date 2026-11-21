@@ -132,6 +132,9 @@ class StoreDispatcher(
                 operations.relinquishUpdateOwnership(request.relinquishUpdateOwnership.`package`)
                 response.relinquishUpdateOwnership = Empty.getDefaultInstance()
             }
+            Request.OpCase.CHECK_INSTALL_CONSTRAINTS ->
+                response.checkInstallConstraints =
+                    operations.checkInstallConstraints(request.checkInstallConstraints)
             else ->
                 throw GuestFailure(
                     GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,

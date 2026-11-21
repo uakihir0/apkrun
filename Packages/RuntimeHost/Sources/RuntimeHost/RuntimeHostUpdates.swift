@@ -2,6 +2,7 @@ import APKStoreCore
 import DiagnosticsCore
 import Foundation
 import RuntimeAPI
+import RuntimeCore
 import UpdateCore
 
 /// The daemon's update service (update-system.md). It owns the `Updates/`
@@ -12,7 +13,9 @@ public actor EmbeddedUpdateService {
     private let paths: APKRunPaths
     private let fileManager = FileManager.default
     private let store: PackageStore
-    private let stateStore: UpdateStateStore
+    /// The persisted update phases; internal for the `updates.waiting`
+    /// health check and tests.
+    let stateStore: UpdateStateStore
     private let coordinator: UpdateCoordinator
     private let credentials = KeychainProviderCredentials()
     private var isOpen = false
@@ -77,7 +80,8 @@ public actor EmbeddedUpdateService {
         _ packageIDs: [PackageID],
         context: ProviderContext,
         checkOnly: Bool = false,
-        runtime: (any UpdateRuntimeAccess)? = nil
+        runtime: (any UpdateRuntimeAccess)? = nil,
+        gate: GentleUpdateGate? = nil
     ) async -> [UpdateCheckResult] {
         var results: [UpdateCheckResult] = []
         let records = (try? await store.listManagedPackages()) ?? []
@@ -103,11 +107,13 @@ public actor EmbeddedUpdateService {
                 }
                 let updateOutcome = await continueUpdate(
                     packageID, candidate: candidate, trigger: .userInitiated,
-                    context: context, runtime: runtime, started: Date())
+                    context: context, runtime: runtime, gate: gate, started: Date())
                 results.append(
                     UpdateCheckResult(
                         packageID: wireID,
-                        outcome: Self.checkResultOutcome(updateOutcome)))
+                        outcome: await Self.checkResultOutcome(
+                            updateOutcome,
+                            blocks: gate?.waitingReasons(packageID) ?? [])))
             case .failed(let failure):
                 results.append(
                     UpdateCheckResult(
@@ -127,8 +133,10 @@ public actor EmbeddedUpdateService {
         trigger: UpdateTrigger,
         context: ProviderContext,
         runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate? = nil,
         started: Date,
-        origin: ArtifactOrigin? = nil
+        origin: ArtifactOrigin? = nil,
+        closeRunningApp: Bool = false
     ) async -> WireUpdateOutcome? {
         switch await coordinator.download(
             packageID, candidate: candidate, context: context,
@@ -137,8 +145,8 @@ public actor EmbeddedUpdateService {
         case .downloaded(let downloaded):
             return await validateAndInstall(
                 packageID, ticket: downloaded.ticket, candidate: candidate,
-                trigger: trigger, runtime: runtime, started: started,
-                origin: origin)
+                trigger: trigger, runtime: runtime, gate: gate, started: started,
+                origin: origin, closeRunningApp: closeRunningApp)
         case .failed(let failure):
             return .skipped(reason: "downloadFailed", error: Self.catalogError(for: failure))
         }
@@ -152,8 +160,10 @@ public actor EmbeddedUpdateService {
         candidate: UpdateCandidate,
         trigger: UpdateTrigger,
         runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate? = nil,
         started: Date,
-        origin: ArtifactOrigin? = nil
+        origin: ArtifactOrigin? = nil,
+        closeRunningApp: Bool = false
     ) async -> WireUpdateOutcome? {
         switch await coordinator.validate(
             packageID, ticket: ticket, candidate: candidate,
@@ -162,8 +172,9 @@ public actor EmbeddedUpdateService {
         case .validated(let validated):
             switch await coordinator.install(
                 packageID, validated: validated, candidate: candidate,
-                trigger: trigger, runtime: runtime, started: started,
-                origin: origin)
+                trigger: trigger, runtime: runtime,
+                gate: gate ?? gateInstance(runtime: runtime), started: started,
+                origin: origin, closeRunningApp: closeRunningApp)
             {
             case .installed(let from, let to):
                 return .updated(from: from, to: to)
@@ -179,13 +190,70 @@ public actor EmbeddedUpdateService {
         }
     }
 
+    /// The gate installs share; a caller-supplied gate wins so the host's
+    /// trigger pump sees the same queue.
+    private var serviceGate: GentleUpdateGate?
+    func gateInstance(runtime: any UpdateRuntimeAccess) -> GentleUpdateGate {
+        if let serviceGate { return serviceGate }
+        let gate = GentleUpdateGate(
+            runtime: runtime,
+            storeBusy: { [store] packageID in
+                await store.packageMutationInProgress(packageID)
+            },
+            // TODO(#42): launch health checks need a DisplayPool slot; v1's
+            // H1 is `versionOnly` for every package.
+            requiresDisplaySlot: { _ in false },
+            displaySlotFree: { true })
+        serviceGate = gate
+        return gate
+    }
+
+    /// §7.2: a session's first frame counted as the install's H4 — the
+    /// session waited on the committing install, then launched the new
+    /// version itself.
+    func notePostUpdateFirstFrame(_ packageID: PackageID) async {
+        await stateStore.update(packageID) { $0.postUpdateFirstFrameAt = Date() }
+    }
+
+    /// §7.4: notifies once per staged candidate waiting over 7 days.
+    func notifyOverdueStagedUpdates(now: Date = Date()) async {
+        await coordinator.notifyOverdueStagedUpdates(now: now)
+    }
+
+    /// §7.2 trigger: runs the staged install the gate pump admitted.
+    func resumeStagedInstall(
+        _ packageID: PackageID,
+        trigger: UpdateTrigger = .scheduled,
+        runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate
+    ) async -> UpdateCoordinator.UpdateInstallOutcome? {
+        await coordinator.resumeStagedInstall(
+            packageID, trigger: trigger, runtime: runtime, gate: gate)
+    }
+
+    /// The §7.1 block as the wire waiting reason (runtime-api.md
+    /// `WaitingReason`).
+    static func waitingReason(for block: GentleGateBlock?) -> WaitingReason {
+        switch block {
+        case .runtimeNotReady:
+            .runtimeNotReady
+        case .packageInUse, nil:
+            .appInUse
+        case .sessionEndedRecently, .androidBusy, .storeTransactionActive, .noDisplaySlot:
+            .conditionsUnmet
+        }
+    }
+
     /// Maps a continued update's wire outcome onto `UpdateCheckResult.Result`
     /// (runtime-api.md §9.2): nil (still waiting) reports `.waiting` with the
-    /// only gate this milestone implements (§7.1 GU2).
-    static func checkResultOutcome(_ outcome: WireUpdateOutcome?) -> UpdateCheckResult.Result {
+    /// §7.1 blocks the gate last evaluated.
+    static func checkResultOutcome(
+        _ outcome: WireUpdateOutcome?,
+        blocks: [GentleGateBlock]
+    ) -> UpdateCheckResult.Result {
         switch outcome {
         case nil:
-            return .waiting(.appInUse)
+            return .waiting(Self.waitingReason(for: blocks.first))
         case .updated(let from, let to):
             return .installed(from: from, to: to)
         case .keptAfterFailedHealthCheck(let reason):
@@ -202,7 +270,9 @@ public actor EmbeddedUpdateService {
     public func updatePackageNow(
         _ packageID: PackageID,
         context: ProviderContext,
-        runtime: any UpdateRuntimeAccess
+        runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate? = nil,
+        closeRunningApp: Bool = false
     ) async -> WireUpdateOutcome? {
         let started = Date()
         switch await coordinator.check(
@@ -214,7 +284,8 @@ public actor EmbeddedUpdateService {
         case .available(let candidate):
             return await continueUpdate(
                 packageID, candidate: candidate, trigger: .userInitiated,
-                context: context, runtime: runtime, started: started)
+                context: context, runtime: runtime, gate: gate, started: started,
+                closeRunningApp: closeRunningApp)
         case .failed(let failure):
             return .skipped(reason: "checkFailed", error: Self.catalogError(for: failure))
         }
@@ -225,7 +296,9 @@ public actor EmbeddedUpdateService {
     public func updateFromFile(
         _ packageID: PackageID,
         ticket: UUID,
-        runtime: any UpdateRuntimeAccess
+        runtime: any UpdateRuntimeAccess,
+        gate: GentleUpdateGate? = nil,
+        closeRunningApp: Bool = false
     ) async throws(RuntimeWireError) -> WireUpdateOutcome? {
         let started = Date()
         let records = (try? await store.listManagedPackages()) ?? []
@@ -251,8 +324,9 @@ public actor EmbeddedUpdateService {
             cursor: ProviderCursor(type: .local, value: ticket.uuidString))
         return await validateAndInstall(
             packageID, ticket: ticket, candidate: candidate,
-            trigger: .manual, runtime: runtime, started: started,
-            origin: ArtifactOrigin(type: .manualFile))
+            trigger: .manual, runtime: runtime, gate: gate, started: started,
+            origin: ArtifactOrigin(type: .manualFile),
+            closeRunningApp: closeRunningApp)
     }
 
     /// Every managed package whose record authority is `apkrun`.
@@ -654,7 +728,17 @@ extension RuntimeHost {
             }
         )
         updateService = service
+        registerUpdatesWaitingCheck(service: service)
         return service
+    }
+
+    /// Registers `updates.waiting` once (diagnostics.md §7.4).
+    private func registerUpdatesWaitingCheck(service: EmbeddedUpdateService) {
+        guard !updatesHealthChecksRegistered, let checks = healthCheckRegistry else { return }
+        updatesHealthChecksRegistered = true
+        Task {
+            try? await checks.register(UpdatesWaitingCheck(stateStore: service.stateStore))
+        }
     }
 
     /// `updates.checkIntervalHours` (configuration.md §2.7), default 6.
@@ -746,7 +830,8 @@ extension RuntimeHost {
 
         let results = await service.checkPackages(
             selected, context: service.providerContext(userInitiated: true),
-            checkOnly: checkOnly, runtime: updateRuntimeAccess())
+            checkOnly: checkOnly, runtime: updateRuntimeAccess(),
+            gate: updateGateInstance())
         let all = preResults + results
         let failures = all.filter { result in
             if case .failed = result.outcome { return true }
@@ -852,32 +937,131 @@ extension RuntimeHost {
 private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
     private let stateOf: @Sendable () async -> WireRuntimeState
     private let inUse: @Sendable (PackageID) async -> Bool
-    private let ready: @Sendable () async throws -> Void
+    private let lastEnd: @Sendable (PackageID) async -> ContinuousClock.Instant?
+    private let androidOK: @Sendable (PackageID) async -> Bool
+    private let events: @Sendable () -> AsyncStream<UpdateRuntimeEvent>
+    private let endAll: @Sendable (PackageID) async -> Void
+    private let reopenPackage: @Sendable (PackageID) async throws -> Void
+    private let ready: @Sendable (UpdateStartReason) async throws -> Void
+    private let assertOperation: @Sendable () async throws -> UpdateActivityAssertion
 
     init(
         stateOf: @escaping @Sendable () async -> WireRuntimeState,
         inUse: @escaping @Sendable (PackageID) async -> Bool,
-        ready: @escaping @Sendable () async throws -> Void
+        lastEnd: @escaping @Sendable (PackageID) async -> ContinuousClock.Instant?,
+        androidOK: @escaping @Sendable (PackageID) async -> Bool,
+        events: @escaping @Sendable () -> AsyncStream<UpdateRuntimeEvent>,
+        endAll: @escaping @Sendable (PackageID) async -> Void,
+        reopenPackage: @escaping @Sendable (PackageID) async throws -> Void,
+        ready: @escaping @Sendable (UpdateStartReason) async throws -> Void,
+        assertOperation: @escaping @Sendable () async throws -> UpdateActivityAssertion
     ) {
         self.stateOf = stateOf
         self.inUse = inUse
+        self.lastEnd = lastEnd
+        self.androidOK = androidOK
+        self.events = events
+        self.endAll = endAll
+        self.reopenPackage = reopenPackage
         self.ready = ready
+        self.assertOperation = assertOperation
     }
 
     var runtimeState: WireRuntimeState {
         get async { await stateOf() }
     }
 
+    nonisolated var runtimeEvents: AsyncStream<UpdateRuntimeEvent> {
+        events()
+    }
+
+    func androidAllowsGentleInstall(_ packageID: PackageID) async -> Bool {
+        await androidOK(packageID)
+    }
+
     func hasActiveUse(_ packageID: PackageID) async -> Bool {
         await inUse(packageID)
     }
 
-    func ensureReadyForUpdate() async throws {
-        try await ready()
+    func lastSessionEnd(_ packageID: PackageID) async -> ContinuousClock.Instant? {
+        await lastEnd(packageID)
+    }
+
+    func endSessions(for packageID: PackageID, reason: UpdateSessionEndReason) async {
+        await endAll(packageID)
+    }
+
+    func reopen(_ packageID: PackageID) async {
+        try? await reopenPackage(packageID)
+    }
+
+    func ensureReady(_ reason: UpdateStartReason) async throws {
+        try await ready(reason)
+    }
+
+    func assertStoreOperation() async throws -> UpdateActivityAssertion {
+        try await assertOperation()
+    }
+}
+
+/// `updates.waiting` (diagnostics.md §7.4): a staged update waiting more
+/// than 7 days reports `update.stagedTooLong` (error-catalog §20.3).
+struct UpdatesWaitingCheck: HealthCheck {
+    /// update-system.md §7.4's waiting period.
+    static let staleAfter: TimeInterval = 7 * 24 * 3600
+
+    let stateStore: UpdateStateStore
+
+    var id: HealthCheckID { "updates.waiting" }
+    var group: HealthGroup { .updates }
+    var requirement: HealthRequirement { .host }
+    var cost: HealthCost { .quick }
+    var fix: (any HealthFix)? { nil }
+    var title: LocalizedText {
+        LocalizedText(key: "health.updates.waiting", fallback: "Waiting updates")
+    }
+
+    func run(_ context: HealthContext) async -> DiagnosticsCore.HealthResult {
+        let states = await stateStore.allStates()
+        let now = context.clock.now
+        let stale = states.values.filter {
+            $0.phase == "staged"
+                && ($0.stagedAt.map { $0.addingTimeInterval(Self.staleAfter) < now } ?? false)
+        }
+        let stagedCount = states.values.count(where: { $0.phase == "staged" })
+        guard let oldest = stale.first else {
+            return DiagnosticsCore.HealthResult(
+                id: id, group: group, state: .pass, title: title,
+                detail: stagedCount == 0
+                    ? "No update is waiting."
+                    : "\(stagedCount) update(s) staged.",
+                error: nil, measuredAt: now)
+        }
+        let app = oldest.candidate?.versionName ?? "unknown"
+        return DiagnosticsCore.HealthResult(
+            id: id, group: group, state: .warning, title: title,
+            detail: "\(stale.count) update(s) staged for more than 7 days.",
+            error: ErrorInfo(
+                code: "update.stagedTooLong",
+                message: LocalizedText(
+                    key: "update.stagedTooLong",
+                    parameters: ["app": .text(app)],
+                    fallback: "An update of \(app) has been waiting for more than 7 days."),
+                remediation: LocalizedText(
+                    key: "update.stagedTooLong.remediation",
+                    fallback: "Quit the app to install it, or choose Update Now."),
+                action: .none),
+            measuredAt: now)
     }
 }
 
 extension RuntimeHost {
+    /// Test hook: installs the session service `updateRuntimeAccess` reads
+    /// (T1 with fake sessions, update-system.md §7.5).
+    func installHeadlessSessionServiceForTesting(_ service: any RuntimeSessionService) {
+        headlessSessionService = service
+    }
+
     /// Builds the §7.5 runtime access over this host's supervisor and
     /// headless session service.
     func updateRuntimeAccess() -> any UpdateRuntimeAccess {
@@ -896,13 +1080,113 @@ extension RuntimeHost {
                 else {
                     return false
                 }
-                return await handling.hasActiveSession(packageID: wireID)
+                // GU2 + GU3: a live session or a keepRunning task.
+                if await handling.hasActiveSession(packageID: wireID) {
+                    return true
+                }
+                return await handling.hasBackgroundActivity(packageID: wireID)
             },
-            ready: { [weak self] in
+            lastEnd: { [weak self] packageID in
+                guard let self,
+                    let handling = await self.headlessSessionService
+                        as? any PackageMutationSessionHandling,
+                    let wireID = RuntimePackageID(rawValue: packageID.rawValue)
+                else {
+                    return nil
+                }
+                return await handling.lastSessionEnd(packageID: wireID)
+            },
+            androidOK: { [weak self] packageID in
+                guard let self, let supervisor = await self.supervisor else {
+                    return true
+                }
+                // Custom image: Store Agent op 110 (`store.constraints.v1`).
+                // A channel without the capability answers nil and the
+                // ListTasks fallback below decides (update-system.md §7.1).
+                if let access = await self.storeAccessForUpdateConstraints(),
+                    let answer = try? await access.withStoreAgent(UUID()) { channel -> Bool? in
+                        guard channel.capabilities.contains(.constraints) else {
+                            return nil
+                        }
+                        return try await channel.installConstraintsAllow(packageID)
+                    }
+                {
+                    return answer
+                }
+                // Stock image: the guest's ListTasks snapshot — gentle when
+                // no task of the package is on any display (GU5 fallback).
+                guard let agent = await supervisor.developmentGuestAgent else {
+                    return true
+                }
+                return await agent.tasks(forPackage: packageID.rawValue).isEmpty
+            },
+            events: { [weak self] in
+                AsyncStream { continuation in
+                    let streamID = UUID()
+                    let pump = Task { [weak self] in
+                        guard let self else { return }
+                        // State changes ride the host's single
+                        // `supervisor.events` consumer: a second iteration
+                        // of the same stream would split the events and
+                        // starve the host's own monitoring.
+                        await self.registerUpdateEventContinuation(
+                            streamID, continuation)
+                        // The session service appears when the runtime is
+                        // ready; retry until it does or the stream ends.
+                        while !Task.isCancelled {
+                            if let handling = await self.headlessSessionService
+                                as? any PackageMutationSessionHandling
+                            {
+                                await handling.observeSessionActivity { packageID, activity in
+                                    guard let id = PackageID(rawValue: packageID.rawValue)
+                                    else { return }
+                                    switch activity {
+                                    case .started:
+                                        continuation.yield(.sessionStarted(id))
+                                    case .ended:
+                                        continuation.yield(.sessionEnded(id))
+                                    case .taskEnded:
+                                        continuation.yield(.taskEnded(id))
+                                    }
+                                }
+                                return
+                            }
+                            try? await Task.sleep(for: .seconds(3))
+                        }
+                    }
+                    continuation.onTermination = { [weak self] _ in
+                        pump.cancel()
+                        Task { await self?.removeUpdateEventContinuation(streamID) }
+                    }
+                }
+            },
+            endAll: { [weak self] packageID in
+                guard let self,
+                    let handling = await self.headlessSessionService
+                        as? any PackageMutationSessionHandling,
+                    let wireID = RuntimePackageID(rawValue: packageID.rawValue)
+                else {
+                    return
+                }
+                await handling.endSessionForUpdate(packageID: wireID)
+            },
+            reopenPackage: { [weak self] packageID in
+                guard let self,
+                    let handling = await self.headlessSessionService
+                        as? any PackageMutationSessionHandling,
+                    let wireID = RuntimePackageID(rawValue: packageID.rawValue)
+                else {
+                    return
+                }
+                try await handling.reopenPackageSession(packageID: wireID)
+            },
+            ready: { [weak self] reason in
                 guard let self, let supervisor = await self.supervisor else {
                     throw UpdateFailure.providerUnreachable(reason: "runtime is not running")
                 }
-                try await supervisor.ensureReady(.automatic)
+                // A user-initiated Update Now may resume a suspended runtime;
+                // automatic installs go through .automatic (§7.1 GU1).
+                try await supervisor.ensureReady(reason == .user ? .user : .automatic)
                 // After a daemon restart or an Android stop the shared store's
                 // runtime access is still detached: without this, a ready
                 // Android answers every update install with runtimeUnavailable.
@@ -913,7 +1197,148 @@ extension RuntimeHost {
                     throw UpdateFailure.providerUnreachable(
                         reason: "package channel is not connected")
                 }
+            },
+            assertOperation: { [weak self] in
+                guard let self else { return UpdateActivityAssertion() }
+                // The host's package-mutation guard makes a stop, restart,
+                // or reset wait for a queued install resuming without its
+                // original client request.
+                try await self.beginPackageMutation()
+                let inner = await self.updateIdleController.assertActivity(.storeOperation)
+                return UpdateActivityAssertion {
+                    inner.release()
+                    Task { await self.finishPackageMutation() }
+                }
             })
+    }
+
+    /// The §7.1 gentle-update gate shared by update installs, created with
+    /// its §7.2 trigger pumps on first use.
+    func updateGateInstance() -> GentleUpdateGate {
+        if let updateGate { return updateGate }
+        let gate = GentleUpdateGate(
+            runtime: updateRuntimeAccess(),
+            storeBusy: { [weak self] packageID in
+                guard let self else { return false }
+                return await self.packageQueryServiceInstance().store
+                    .packageMutationInProgress(packageID)
+            },
+            // TODO(#42): launch health checks need a DisplayPool slot; v1's
+            // H1 is `versionOnly` for every package.
+            requiresDisplaySlot: { _ in false },
+            displaySlotFree: { true })
+        updateGate = gate
+        startUpdateGatePump()
+        Task { await self.wireUpdateGateSessionHooks() }
+        return gate
+    }
+
+    /// Attaches the §7.2 session hooks once both the gate and the session
+    /// service exist (either may be created first).
+    func wireUpdateGateSessionHooks() async {
+        guard let updateGate,
+            let service = headlessSessionService as? DaemonHeadlessSessionService
+        else {
+            return
+        }
+        await service.setUpdateHooks(
+            transactionWaiter: { [weak self] packageID in
+                await self?.awaitUpdateInstall(for: packageID, gate: updateGate)
+            },
+            firstFrameObserver: { [weak self] packageID in
+                guard let self, let package = PackageID(rawValue: packageID.rawValue) else { return }
+                await self.updateServiceInstance().notePostUpdateFirstFrame(package)
+            })
+    }
+
+    /// The §7.2 race from `openSession`: a pre-commit install is cancelled
+    /// back to `staged`; a committing install is awaited up to 30 s and the
+    /// session's first frame counts as H4 (runtime-daemon.md §7.1).
+    private func awaitUpdateInstall(for packageID: RuntimePackageID, gate: GentleUpdateGate) async {
+        guard let package = PackageID(rawValue: packageID.rawValue) else { return }
+        switch await gate.installPhase(for: package) {
+        case .preCommit?, nil:
+            // nil covers the race where the install just finished.
+            await gate.cancelInstall(package)
+        case .committing:
+            if await gate.awaitInstallFinish(package, timeout: .seconds(30)),
+                let service = headlessSessionService as? DaemonHeadlessSessionService
+            {
+                await service.markPostUpdateLaunch(packageID.rawValue)
+            }
+        }
+    }
+
+    /// Adds or removes an internal §7.2 state subscriber; the host's
+    /// single `supervisor.events` consumer feeds them.
+    func registerUpdateEventContinuation(
+        _ id: UUID,
+        _ continuation: AsyncStream<UpdateRuntimeEvent>.Continuation
+    ) {
+        updateEventContinuations[id] = continuation
+    }
+
+    /// Drops an internal §7.2 state subscriber.
+    func removeUpdateEventContinuation(_ id: UUID) {
+        updateEventContinuations.removeValue(forKey: id)
+    }
+
+    /// Starts the §7.2 trigger pump once: runtime events plus the
+    /// 10-minute staged+ready tick drain the queue.
+    private func startUpdateGatePump() {
+        guard updateGatePumpTask == nil else { return }
+        let events = updateRuntimeAccess().runtimeEvents
+        updateGatePumpTask = Task { [weak self] in
+            for await _ in events {
+                await self?.drainUpdateGate()
+            }
+        }
+        updateGateTimerTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(600))
+                guard !Task.isCancelled else { return }
+                await self?.drainUpdateGate()
+            }
+        }
+    }
+
+    /// Admits each queued install and runs it; a package that lost its
+    /// staged row frees the gate's slot. After the drain, the GU4 quiet
+    /// timer re-arms for the earliest blocked package's quiet-period end.
+    private func drainUpdateGate() async {
+        let gate = updateGateInstance()
+        // §7.4: the one-time "ready to install" notice for >7-day waits
+        // rides on every trigger and the 10-minute tick.
+        await updateServiceInstance().notifyOverdueStagedUpdates()
+        var next = await gate.nextReadyPackage()
+        while let packageID = next {
+            let outcome = await updateServiceInstance().resumeStagedInstall(
+                packageID, runtime: updateRuntimeAccess(), gate: gate)
+            guard outcome == nil else {
+                // A resumed install frees and re-drains the queue itself.
+                next = nil
+                continue
+            }
+            // Free the leaked admission and try the next queued package.
+            next = await gate.finishInstall(packageID)
+        }
+        // GU4: re-evaluate exactly when the earliest quiet period ends so
+        // an install blocked on `sessionEndedRecently` runs within its
+        // 30-second window instead of waiting for the 10-minute tick.
+        // A deadline that passed while an install holds the slot is left
+        // to that install's finish path, which drains the queue itself —
+        // re-arming for it would spin this drain until the install ends.
+        updateGateQuietTask?.cancel()
+        let installInFlight = await gate.installInFlight
+        if let instant = await gate.nextQuietReevaluation(),
+            instant > ContinuousClock.now || !installInFlight
+        {
+            updateGateQuietTask = Task { [weak self] in
+                try? await Task.sleep(until: instant, clock: .continuous)
+                guard !Task.isCancelled else { return }
+                await self?.drainUpdateGate()
+            }
+        }
     }
 
     /// `updatePackage` (runtime-api.md §9.1): check and install one package
@@ -1000,12 +1425,16 @@ extension RuntimeHost {
                     break
                 }
                 outcome = try await service.updateFromFile(
-                    packageID, ticket: ticket, runtime: updateRuntimeAccess())
+                    packageID, ticket: ticket, runtime: updateRuntimeAccess(),
+                    gate: updateGateInstance(),
+                    closeRunningApp: options.closeRunningApp)
             } else {
                 outcome = await service.updatePackageNow(
                     packageID,
                     context: service.providerContext(userInitiated: true),
-                    runtime: updateRuntimeAccess())
+                    runtime: updateRuntimeAccess(),
+                    gate: updateGateInstance(),
+                    closeRunningApp: options.closeRunningApp)
             }
         } catch {
             let wireError: RuntimeWireError

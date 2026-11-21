@@ -19,6 +19,10 @@ public enum UpdateTrigger: String, Codable, Sendable {
 public struct PackageUpdateState: Codable, Sendable, Equatable {
     /// When the last check ran.
     public var lastCheckAt: Date?
+    /// When a session's first frame was counted as the install's H4
+    /// (update-system.md §7.2): the session waited on a committing
+    /// install, then launched the new version itself.
+    public var postUpdateFirstFrameAt: Date?
     /// When the package is next due.
     public var nextCheckAt: Date?
     /// Checks that failed in a row; resets on success.
@@ -46,12 +50,45 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
         public var versionName: String?
         /// The provider type that offered it.
         public var provider: ProviderType
+        /// The expected signing identities, so a gate-resumed install can
+        /// still run H1's signer comparison (update-system.md §8.1).
+        public var signerDigests: [SHA256Digest]?
+        /// The provider cursor to save once the install completes.
+        public var cursor: ProviderCursor?
+        /// §7.3 "Update Now" ended the package's session; a successful
+        /// install reopens it (persists so a gate-resumed install
+        /// reopens too).
+        public var reopenAfterInstall: Bool
 
         /// Creates a summary.
-        public init(versionCode: VersionCode?, versionName: String?, provider: ProviderType) {
+        public init(
+            versionCode: VersionCode?,
+            versionName: String?,
+            provider: ProviderType,
+            signerDigests: [SHA256Digest]? = nil,
+            cursor: ProviderCursor? = nil,
+            reopenAfterInstall: Bool = false
+        ) {
             self.versionCode = versionCode
             self.versionName = versionName
             self.provider = provider
+            self.signerDigests = signerDigests
+            self.cursor = cursor
+            self.reopenAfterInstall = reopenAfterInstall
+        }
+
+        /// Decodes a summary, tolerating rows written before
+        /// `reopenAfterInstall` existed (§7.3, added later).
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            versionCode = try container.decodeIfPresent(VersionCode.self, forKey: .versionCode)
+            versionName = try container.decodeIfPresent(String.self, forKey: .versionName)
+            provider = try container.decode(ProviderType.self, forKey: .provider)
+            signerDigests = try container.decodeIfPresent(
+                [SHA256Digest].self, forKey: .signerDigests)
+            cursor = try container.decodeIfPresent(ProviderCursor.self, forKey: .cursor)
+            reopenAfterInstall =
+                try container.decodeIfPresent(Bool.self, forKey: .reopenAfterInstall) ?? false
         }
     }
 

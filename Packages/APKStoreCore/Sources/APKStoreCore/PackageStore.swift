@@ -1137,6 +1137,13 @@ public actor PackageStore {
         _ = try await uninstallWithOutcome(packageID: packageID, keepData: keepData)
     }
 
+    /// Whether a store mutation for the package is in flight (GU6 of
+    /// update-system.md §7.1). Gentle installs read this before starting;
+    /// it does not take the file-level mutation lock.
+    public func packageMutationInProgress(_ packageID: PackageID) -> Bool {
+        operationsInProgress.contains(packageID)
+    }
+
     /// Uninstalls a package and returns whether post-commit trash cleanup needs to be retried.
     public func uninstallWithOutcome(
         packageID: PackageID,
@@ -1433,7 +1440,8 @@ public actor PackageStore {
     public func installStaged(
         for packageID: PackageID,
         enableRollback: Bool,
-        hasOpenSession: @Sendable () async -> Bool
+        hasOpenSession: @Sendable () async -> Bool,
+        commitGate: (@Sendable () async -> Bool)? = nil
     ) async throws -> PackageRecord {
         try requireWritable()
         guard let runtimeAccess else { throw PackageStoreFailure.runtimeUnavailable }
@@ -1508,6 +1516,13 @@ public actor PackageStore {
             )
         )
         try injectFault(kind: "update", step: "begin")
+
+        // §7.2 race boundary: the last moment a pre-commit install can be
+        // cancelled back to `staged` before the guest commit is requested.
+        if let commitGate, await !commitGate() {
+            try appendAbort(transaction, reason: "installCancelled")
+            throw PackageStoreFailure.packageInUse(packageID)
+        }
         try appendStep(transaction, kind: "update", step: "guestCommitRequested")
         try injectFault(kind: "update", step: "guestCommitRequested")
 

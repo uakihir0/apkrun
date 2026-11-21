@@ -79,8 +79,13 @@ private struct NoCredentials: ProviderCredentials {
 
 private actor RecordingNotifier: HostNotificationSink {
     private(set) var sent: [UpdateNotification] = []
+    private(set) var waitingSent: [UpdateNotification] = []
     func notifyUpdateAvailable(_ notification: UpdateNotification) async {
         sent.append(notification)
+    }
+
+    func notifyUpdateWaiting(_ notification: UpdateNotification) async {
+        waitingSent.append(notification)
     }
 }
 
@@ -505,11 +510,13 @@ private func downloadV2(
 }
 
 private func makeV2Coordinator(
-    store: PackageStore, root: URL, provider: ScriptedProvider
+    store: PackageStore, root: URL, provider: ScriptedProvider,
+    notifier: (any HostNotificationSink)? = nil
 ) -> UpdateCoordinator {
     UpdateCoordinator(
         store: store,
         stateStore: UpdateStateStore(directory: root.appendingPathComponent("Updates")),
+        notifier: notifier,
         developerModeEnabled: { true },
         downloadRetrySleep: { _ in },
         providerFactory: { _ in provider })
@@ -635,16 +642,35 @@ private func v2Provider(for record: PackageRecord) throws -> ScriptedProvider {
 
 /// A fake §7.5 runtime: reports whether the package is in use and counts the
 /// times the coordinator brought the runtime up for an update.
+/// A gate wired to the fake runtime (the second install test relies on
+/// `inUse` blocking through GU2/3).
+private func testGate(_ runtime: FakeUpdateRuntime) -> GentleUpdateGate {
+    GentleUpdateGate(
+        runtime: runtime,
+        storeBusy: { _ in false },
+        requiresDisplaySlot: { _ in false })
+}
+
 private final class FakeUpdateRuntime: UpdateRuntimeAccess, @unchecked Sendable {
     var inUse = false
     var ensureReadyCalls = 0
     var ensureReadyError: Error?
 
+    var endedSessions: [(PackageID, UpdateSessionEndReason)] = []
+    var reopened: [PackageID] = []
+
     var runtimeState: WireRuntimeState { .ready }
     func hasActiveUse(_: PackageID) async -> Bool { inUse }
-    func ensureReadyForUpdate() async throws {
+    func ensureReady(_: UpdateStartReason) async throws {
         ensureReadyCalls += 1
         if let ensureReadyError { throw ensureReadyError }
+    }
+    func endSessions(for package: PackageID, reason: UpdateSessionEndReason) async {
+        endedSessions.append((package, reason))
+        inUse = false
+    }
+    func reopen(_ package: PackageID) async {
+        reopened.append(package)
     }
 }
 
@@ -686,7 +712,7 @@ extension CoordinatorChannel {
 
     let outcome = await coordinator.install(
         record.packageId, validated: validated, candidate: candidate,
-        trigger: .userInitiated, runtime: runtime)
+        trigger: .userInitiated, runtime: runtime, gate: testGate(runtime))
     guard case .installed(let from, let to) = outcome else {
         Issue.record("expected .installed, got \(outcome)")
         return
@@ -728,7 +754,7 @@ extension CoordinatorChannel {
 
     let outcome = await coordinator.install(
         record.packageId, validated: validated, candidate: candidate,
-        trigger: .userInitiated, runtime: runtime)
+        trigger: .userInitiated, runtime: runtime, gate: testGate(runtime))
     guard case .staged = outcome else {
         Issue.record("expected .staged, got \(outcome)")
         return
@@ -789,9 +815,10 @@ extension CoordinatorChannel {
     // Android keeps reporting the old versionCode (a lagging PackageManager).
     await channel.set(reportedVersionCode: 1)
 
+    let runtime = FakeUpdateRuntime()
     let outcome = await coordinator.install(
         record.packageId, validated: validated, candidate: candidate,
-        trigger: .userInitiated, runtime: FakeUpdateRuntime())
+        trigger: .userInitiated, runtime: runtime, gate: testGate(runtime))
     guard case .keptAfterFailedHealthCheck(let failure) = outcome else {
         Issue.record("expected .keptAfterFailedHealthCheck, got \(outcome)")
         return
@@ -812,7 +839,11 @@ extension CoordinatorChannel {
     let knobs = InspectKnobs()
     let store = makeKnobbedStore(at: root, knobs: knobs)
     try await store.open()
-    let record = try await installV1(store: store, repo: fixtureRepo())
+    // A plain install keeps the `manual` authority (installV1 would
+    // re-author it .apkrun via setUpdatePolicy).
+    let apk = fixtureRepo().appendingPathComponent("io.apkrun.fixture.helloupdate/1/app.apk")
+    let preview = try await store.importPackage(files: [apk])
+    let record = try await store.installImported(ticket: preview.ticket)
     #expect(record.updateAuthority == .manual)
 
     let provider = ScriptedProvider(
@@ -832,4 +863,77 @@ extension CoordinatorChannel {
 private func localRef() -> UpdateProviderRef? {
     UpdateProviderRef(
         type: .local, configuration: .local(path: "/tmp/repo", bookmark: ""))
+}
+
+// MARK: - #41 §7.3 Update Now, §7.4 seven-day notice
+
+@Test func updateNowEndsTheSessionInstallsAndReopens() async throws {
+    let root = try makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let knobs = InspectKnobs()
+    let store = makeKnobbedStore(at: root, knobs: knobs)
+    try await store.open()
+    let record = try await installV1(store: store, repo: fixtureRepo())
+    knobs.versionCode = 2
+    let coordinator = makeV2Coordinator(
+        store: store, root: root, provider: try v2Provider(for: record))
+    let (validated, candidate) = try await validatedV2(
+        coordinator: coordinator, record: record)
+    let runtime = FakeUpdateRuntime()
+    runtime.inUse = true
+
+    let outcome = await coordinator.install(
+        record.packageId, validated: validated, candidate: candidate,
+        trigger: .userInitiated, runtime: runtime, gate: testGate(runtime),
+        closeRunningApp: true)
+    guard case .installed = outcome else {
+        Issue.record("expected .installed, got \(outcome)")
+        return
+    }
+    // §7.3: the open session ended with `.updating` before the gate
+    // evaluated (GU2/GU3 saw it closed), and the app reopened after the
+    // successful install.
+    #expect(runtime.endedSessions.map(\.1) == [.updating])
+    #expect(runtime.reopened == [record.packageId])
+}
+
+@Test func overdueStagedUpdateNotifiesOnce() async throws {
+    let root = try makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let knobs = InspectKnobs()
+    let store = makeKnobbedStore(at: root, knobs: knobs)
+    try await store.open()
+    let record = try await installV1(store: store, repo: fixtureRepo())
+    knobs.versionCode = 2
+    let notifier = RecordingNotifier()
+    let coordinator = makeV2Coordinator(
+        store: store, root: root, provider: try v2Provider(for: record),
+        notifier: notifier)
+    let (validated, candidate) = try await validatedV2(
+        coordinator: coordinator, record: record)
+    let runtime = FakeUpdateRuntime()
+    runtime.inUse = true
+
+    // Stage the update while the app stays open (gate closed).
+    let outcome = await coordinator.install(
+        record.packageId, validated: validated, candidate: candidate,
+        trigger: .scheduled, runtime: runtime, gate: testGate(runtime))
+    guard case .staged = outcome else {
+        Issue.record("expected .staged, got \(outcome)")
+        return
+    }
+
+    // §7.4: under 7 days no notice; past it, exactly one.
+    let now = Date()
+    await coordinator.notifyOverdueStagedUpdates(now: now)
+    #expect(await notifier.waitingSent.isEmpty)
+    let weekLater = now.addingTimeInterval(8 * 24 * 3600)
+    await coordinator.notifyOverdueStagedUpdates(now: weekLater)
+    let waiting = await notifier.waitingSent
+    #expect(waiting.count == 1)
+    #expect(waiting.first?.packageID == record.packageId)
+    #expect(waiting.first?.versionCode == 2)
+    await coordinator.notifyOverdueStagedUpdates(
+        now: weekLater.addingTimeInterval(3600))
+    #expect(await notifier.waitingSent.count == 1)
 }

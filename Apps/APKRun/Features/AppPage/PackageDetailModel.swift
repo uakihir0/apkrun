@@ -287,7 +287,9 @@ final class PackageDetailModel {
     var renameText = ""
 
     /// **Update Mac App** = `refreshWrapper` (§7.6), carrying the pending
-    /// §7.1 name/icon edit when one is staged.
+    /// §7.1 name/icon edit when one is staged. The pendings clear only
+    /// after the operation ends in success — the accept reply only means
+    /// the refresh was queued, so a later failure must not lose the edit.
     func refreshWrapper() {
         let change = WrapperRefreshWire(
             displayName: pendingDisplayName,
@@ -296,8 +298,13 @@ final class PackageDetailModel {
         let iconFile = pendingIconFile
         Task {
             do {
-                _ = try await service().refreshWrapper(
+                let handle = try await service().refreshWrapper(
                     packageID: packageID, change: change, iconFile: iconFile)
+                let snapshot = try await Self.awaitTerminal(
+                    handle.operationID, using: service())
+                if case .failed(let failure)? = snapshot.result {
+                    throw failure
+                }
                 pendingDisplayName = nil
                 pendingIconFile = nil
                 pendingAndroidIcon = false
@@ -308,6 +315,18 @@ final class PackageDetailModel {
                 loadError = Self.describe(error)
             }
         }
+    }
+
+    /// Polls an operation until its snapshot carries a terminal result.
+    private static func awaitTerminal(
+        _ operationID: OperationID, using service: any RuntimeService
+    ) async throws -> OperationSnapshot {
+        while !Task.isCancelled {
+            let snapshot = try await service.operationStatus(operationID)
+            if snapshot.result != nil { return snapshot }
+            try await Task.sleep(for: .milliseconds(300))
+        }
+        throw CancellationError()
     }
 
     func createWrapper() {

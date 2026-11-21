@@ -14,6 +14,7 @@ struct APKRunApp: App {
     @StateObject private var approvalCenter = ApprovalCenter.shared
     @State private var runtimeStatus = RuntimeStatusModel()
     @State private var homeModel = HomeModel()
+    @State private var hostNotifier: HostNotifier?
 
     /// Whether apkrund opened the app for a wrapper approval (host-ui.md §3.3).
     /// Only the approval window is shown then.
@@ -59,6 +60,13 @@ struct APKRunApp: App {
                 .task {
                     runtimeStatus.start()
                     homeModel.start()
+                    let notifier =
+                        hostNotifier
+                        ?? HostNotifier { route in
+                            Task { @MainActor in homeModel.apply(route) }
+                        }
+                    hostNotifier = notifier
+                    notifier.start()
                 }
                 // apkrun:// URLs only navigate (host-ui.md §3.1); file
                 // opens (§3.2) start the add flow.

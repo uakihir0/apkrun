@@ -75,7 +75,9 @@ public struct URLSessionUpdateHTTPClient: UpdateHTTPClient {
             etag: http.value(forHTTPHeaderField: "ETag"),
             lastModified: http.value(forHTTPHeaderField: "Last-Modified"),
             finalURL: http.url,
-            retryAfter: Self.retryAfter(of: http))
+            retryAfter: Self.retryAfter(of: http),
+            rateLimitRemaining: Self.rateLimitRemaining(of: http),
+            rateLimitReset: Self.rateLimitReset(of: http))
     }
 
     /// Streams a GET request into `file`, hashing while bytes arrive.
@@ -103,7 +105,9 @@ public struct URLSessionUpdateHTTPClient: UpdateHTTPClient {
                 status: http.statusCode,
                 bytesWritten: 0,
                 finalURL: http.url,
-                retryAfter: Self.retryAfter(of: http))
+                retryAfter: Self.retryAfter(of: http),
+                rateLimitRemaining: Self.rateLimitRemaining(of: http),
+                rateLimitReset: Self.rateLimitReset(of: http))
         }
         let handle: FileHandle
         do {
@@ -147,7 +151,9 @@ public struct URLSessionUpdateHTTPClient: UpdateHTTPClient {
                 hex: hasher.finalize().map { String(format: "%02x", $0) }.joined()),
             limitHit: limitHit,
             finalURL: http.url,
-            retryAfter: Self.retryAfter(of: http))
+            retryAfter: Self.retryAfter(of: http),
+            rateLimitRemaining: Self.rateLimitRemaining(of: http),
+            rateLimitReset: Self.rateLimitReset(of: http))
     }
 
     /// Writes `buffer` up to the byte limit and clears it.
@@ -185,6 +191,19 @@ public struct URLSessionUpdateHTTPClient: UpdateHTTPClient {
         return formatter.date(from: raw).map { max(0, $0.timeIntervalSinceNow) }
     }
 
+    /// `x-ratelimit-remaining` (§4.6).
+    static func rateLimitRemaining(of response: HTTPURLResponse) -> Int? {
+        response.value(forHTTPHeaderField: "x-ratelimit-remaining").flatMap(Int.init)
+    }
+
+    /// `x-ratelimit-reset` (epoch seconds) as seconds until reset (§4.6).
+    static func rateLimitReset(of response: HTTPURLResponse) -> TimeInterval? {
+        guard let raw = response.value(forHTTPHeaderField: "x-ratelimit-reset"),
+            let epoch = TimeInterval(raw)
+        else { return nil }
+        return max(0, epoch - Date().timeIntervalSince1970)
+    }
+
     /// Refuses redirects to non-allowed URLs and caps hops at 5
     /// (direct-provider-manifest.md §5.1).
     private final class RedirectPolicy: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
@@ -210,7 +229,17 @@ public struct URLSessionUpdateHTTPClient: UpdateHTTPClient {
                 completionHandler(nil)
                 return
             }
-            completionHandler(request)
+            // A credential never crosses to another host on a redirect
+            // (update-system.md §4.6): strip Authorization when the
+            // redirect target's host differs from the request it follows.
+            var forwarded = request
+            let previousHost = task.currentRequest?.url?.host?.lowercased()
+            if previousHost != url.host?.lowercased(),
+                forwarded.value(forHTTPHeaderField: "Authorization") != nil
+            {
+                forwarded.setValue(nil, forHTTPHeaderField: "Authorization")
+            }
+            completionHandler(forwarded)
         }
 
         func urlSession(

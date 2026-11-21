@@ -44,8 +44,7 @@ public enum ProviderRegistry {
         case .fdroid:
             return try FDroidProvider.providerRef(for: body)
         case .github:
-            // Parsed in the provider's own task (#53).
-            throw UpdateFailure.providerNotConfigured
+            return try GitHubProvider.providerRef(for: body)
         }
     }
 
@@ -100,8 +99,7 @@ public enum ProviderRegistry {
         case .fdroid:
             return try FDroidProvider(ref: ref)
         case .github:
-            // GitHub (#53).
-            throw UpdateFailure.providerNotConfigured
+            return try GitHubProvider(ref: ref)
         }
     }
 

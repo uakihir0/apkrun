@@ -200,6 +200,10 @@ public struct HTTPResponse: Sendable {
     public var finalURL: URL?
     /// The `Retry-After` header in seconds, when present.
     public var retryAfter: TimeInterval?
+    /// `x-ratelimit-remaining`, when the server reports a budget (§4.6).
+    public var rateLimitRemaining: Int?
+    /// `x-ratelimit-reset` as seconds until reset, when present (§4.6).
+    public var rateLimitReset: TimeInterval?
 
     /// Creates an HTTP response.
     public init(
@@ -208,7 +212,9 @@ public struct HTTPResponse: Sendable {
         etag: String? = nil,
         lastModified: String? = nil,
         finalURL: URL? = nil,
-        retryAfter: TimeInterval? = nil
+        retryAfter: TimeInterval? = nil,
+        rateLimitRemaining: Int? = nil,
+        rateLimitReset: TimeInterval? = nil
     ) {
         self.status = status
         self.body = body
@@ -216,6 +222,8 @@ public struct HTTPResponse: Sendable {
         self.lastModified = lastModified
         self.finalURL = finalURL
         self.retryAfter = retryAfter
+        self.rateLimitRemaining = rateLimitRemaining
+        self.rateLimitReset = rateLimitReset
     }
 }
 
@@ -233,6 +241,10 @@ public struct DownloadResponse: Sendable {
     public var finalURL: URL?
     /// The `Retry-After` header in seconds, when present.
     public var retryAfter: TimeInterval?
+    /// `x-ratelimit-remaining`, when the server reports a budget (§4.6).
+    public var rateLimitRemaining: Int?
+    /// `x-ratelimit-reset` as seconds until reset, when present (§4.6).
+    public var rateLimitReset: TimeInterval?
 
     /// Creates a download result.
     public init(
@@ -241,7 +253,9 @@ public struct DownloadResponse: Sendable {
         sha256: SHA256Digest? = nil,
         limitHit: Bool = false,
         finalURL: URL? = nil,
-        retryAfter: TimeInterval? = nil
+        retryAfter: TimeInterval? = nil,
+        rateLimitRemaining: Int? = nil,
+        rateLimitReset: TimeInterval? = nil
     ) {
         self.status = status
         self.bytesWritten = bytesWritten
@@ -249,6 +263,8 @@ public struct DownloadResponse: Sendable {
         self.limitHit = limitHit
         self.finalURL = finalURL
         self.retryAfter = retryAfter
+        self.rateLimitRemaining = rateLimitRemaining
+        self.rateLimitReset = rateLimitReset
     }
 }
 
@@ -293,6 +309,11 @@ public struct ProviderContext: Sendable {
     /// versions but none is compatible (update-system.md §4.5 `signerDiffers`).
     /// Lets a provider return nil yet still record the reason.
     public var incompatibleNote: (@Sendable (NoCompatibleArtifactReason) -> Void)?
+    /// Called when a check ends with no candidate but the provider refreshed
+    /// its listing state (e.g. a new GitHub ETag for the same release).
+    /// Lets a provider return nil yet still advance the stored cursor so the
+    /// next check stays conditional.
+    public var cursorRefresh: (@Sendable (ProviderCursor) -> Void)?
 
     /// Creates a provider context.
     public init(
@@ -300,13 +321,15 @@ public struct ProviderContext: Sendable {
         cache: any ProviderCache,
         credentials: any ProviderCredentials,
         userInitiated: Bool = false,
-        incompatibleNote: (@Sendable (NoCompatibleArtifactReason) -> Void)? = nil
+        incompatibleNote: (@Sendable (NoCompatibleArtifactReason) -> Void)? = nil,
+        cursorRefresh: (@Sendable (ProviderCursor) -> Void)? = nil
     ) {
         self.http = http
         self.cache = cache
         self.credentials = credentials
         self.userInitiated = userInitiated
         self.incompatibleNote = incompatibleNote
+        self.cursorRefresh = cursorRefresh
     }
 }
 

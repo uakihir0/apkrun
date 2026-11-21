@@ -1,0 +1,21 @@
+[
+ {
+  "id": 200,
+  "tag_name": "v1.0",
+  "name": "Probe",
+  "draft": false,
+  "prerelease": false,
+  "published_at": "2026-01-01T00:00:00Z",
+  "body": "",
+  "assets": [
+   {
+    "id": 21,
+    "name": "probe.apk",
+    "size": 2105491,
+    "browser_download_url": "__BASE__/github-assets/probe.apk",
+    "updated_at": "2026-01-01T00:00:00Z",
+    "digest": "sha256:2e81e070a4effed0080fcecec748859e8953ea756190c99018e66741f1b743ab"
+   }
+  ]
+ }
+]

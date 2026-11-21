@@ -330,7 +330,7 @@ public actor EmbeddedPackageService: RuntimeService {
                     // A wrapper this Mac did not generate is capped by this
                     // Mac's `integrations.defaults.*`: it can turn an
                     // integration off or down, never on or up
-                    // (configuration.md §3.3, wrapper.md §7).
+                    // (configuration.md §3.3, wrapper.md §3).
                     let capped = entry.approval == .user
                     let defaults =
                         capped

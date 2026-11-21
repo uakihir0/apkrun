@@ -220,8 +220,10 @@ public actor UpdateCoordinator {
         // `signerDiffers`) report through the note instead of failing the
         // check; it is recorded in state and history below.
         let incompatibleNote = IncompatibleNoteBox()
+        let cursorRefresh = CursorRefreshBox()
         var providerContext = context
         providerContext.incompatibleNote = { incompatibleNote.record($0) }
+        providerContext.cursorRefresh = { cursorRefresh.record($0) }
         do {
             let provider = try resolveProvider(providerRef)
             let candidate = try await provider.check(installed, context: providerContext)
@@ -229,7 +231,8 @@ public actor UpdateCoordinator {
                 await recordCheck(
                     row: row, record: record, outcome: .upToDate,
                     failures: 0, now: started, trigger: trigger,
-                    incompatibleReason: incompatibleNote.reason)
+                    incompatibleReason: incompatibleNote.reason,
+                    refreshedCursor: cursorRefresh.cursor)
                 return .upToDate
             }
 
@@ -270,10 +273,14 @@ public actor UpdateCoordinator {
                 await stateStore.update(packageID) { $0.notifiedCursor = newCursor }
             }
             // TODO(#39): automatic continues into downloading → validating → staged.
+            let note: String? =
+                providerRef.type == .github
+                    && candidate.artifacts.contains(where: { $0.sha256 == nil })
+                ? "No checksum published" : nil
             await appendHistory(
                 record: record, to: candidate.declaredVersionCode,
                 provider: providerRef.type, trigger: trigger,
-                outcome: "available", failure: nil, started: started)
+                outcome: "available", failure: nil, started: started, note: note)
             await stateStore.flush()
             return .available(candidate)
         } catch let failure {
@@ -1220,7 +1227,8 @@ public actor UpdateCoordinator {
         failures: Int,
         now: Date,
         trigger: UpdateTrigger,
-        incompatibleReason: NoCompatibleArtifactReason? = nil
+        incompatibleReason: NoCompatibleArtifactReason? = nil,
+        refreshedCursor: ProviderCursor? = nil
     ) async {
         await stateStore.update(record.packageId) { state in
             state.lastCheckAt = now
@@ -1228,6 +1236,12 @@ public actor UpdateCoordinator {
                 after: now, intervalHours: checkIntervalHours, failures: failures)
             state.consecutiveFailures = failures
             state.incompatibleReason = incompatibleReason?.rawValue
+            // A provider that found nothing new may still have refreshed its
+            // listing state (e.g. a new ETag for the same release); keeping it
+            // preserves the conditional fetch on the next check.
+            if let refreshedCursor {
+                state.cursor = refreshedCursor
+            }
             // A still-staged candidate survives an up-to-date check: the
             // provider has nothing newer, but §7.2 may yet install the
             // staged set (and §3.5 counts its stagedAt age).
@@ -1254,7 +1268,8 @@ public actor UpdateCoordinator {
         trigger: UpdateTrigger,
         outcome: String,
         failure: String?,
-        started: Date
+        started: Date,
+        note: String? = nil
     ) async {
         let finished = Date()
         try? await stateStore.appendHistory(
@@ -1269,7 +1284,8 @@ public actor UpdateCoordinator {
                 failure: failure,
                 phaseDurationsMs: [
                     "checking": Int(finished.timeIntervalSince(started) * 1_000)
-                ]))
+                ],
+                note: note))
     }
 
     /// `nextCheckAt = lastCheckAt + interval ± jitter`; failure backoff is
@@ -1299,5 +1315,16 @@ private final class IncompatibleNoteBox: @unchecked Sendable {
     /// Records a note; the first reason wins.
     func record(_ reason: NoCompatibleArtifactReason) {
         if self.reason == nil { self.reason = reason }
+    }
+}
+
+/// A `@Sendable`-safe box a provider's `cursorRefresh` writes through.
+private final class CursorRefreshBox: @unchecked Sendable {
+    /// The refreshed cursor reported during `check`, if any.
+    private(set) var cursor: ProviderCursor?
+
+    /// Records a cursor; the last write wins.
+    func record(_ cursor: ProviderCursor) {
+        self.cursor = cursor
     }
 }

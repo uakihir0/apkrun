@@ -130,8 +130,7 @@ public enum UpdatePolicyRules {
         case "fdroid":
             return try FDroidProvider.providerRef(for: String(rest))
         case "github":
-            // GitHub (#53).
-            throw UpdateFailure.providerNotConfigured
+            return try GitHubProvider.providerRef(for: String(rest))
         default:
             throw UpdateFailure.providerMetadataInvalid(
                 detail: "unknown provider scheme \"\(scheme)\"")

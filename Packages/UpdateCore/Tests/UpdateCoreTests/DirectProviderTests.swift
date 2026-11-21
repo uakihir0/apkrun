@@ -326,7 +326,7 @@ private func respond(_ name: String, etag: String? = nil, status: Int = 200) thr
     for file in [
         "schema-version", "package-mismatch", "bad-sha", "mixed-shapes",
         "http-artifact", "user-info-url", "duplicate-split", "split-no-name",
-        "oversize-total", "not-json", "not-utf8", "duplicate-file-name",
+        "oversize-total", "not-json", "not-utf8",
     ] {
         var http = ScriptedHTTP(manifests: [:])
         http.manifests[url] = HTTPResponse(
@@ -385,6 +385,40 @@ private func respond(_ name: String, etag: String? = nil, status: Int = 200) thr
             return
         }
     }
+}
+
+/// Artifacts that share a URL basename are valid (base + split APKs often
+/// do); they stage under index-prefixed names so neither overwrites the
+/// other (UpdateCore storedFileName(index:in:)).
+@Test func directProviderStagesCollidingBasenamesByIndex() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-direct-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let url = "https://updates.example.com/app.json"
+    var http = ScriptedHTTP(manifests: [:])
+
+    let payload = Data(repeating: 0xCD, count: 512)
+    let sha = SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
+    let manifest = String(data: try fixture("invalid/duplicate-file-name"), encoding: .utf8)!
+        .replacingOccurrences(of: String(repeating: "a", count: 64), with: sha)
+        .data(using: .utf8)!
+    http.manifests[url] = HTTPResponse(status: 200, body: manifest)
+    http.payloads["https://files.example.com/v2/app.apk"] = payload
+    http.payloads["https://files.example.com/splits/app.apk"] = payload
+
+    let provider = try makeProvider()
+    let candidate = try #require(
+        await provider.check(makePackage(), context: context(http, root: root)))
+    let destination = DownloadDestination(
+        ticket: UUID(), directory: root.appendingPathComponent("dl"))
+    _ = try await provider.download(
+        candidate, to: destination, context: context(http, root: root),
+        progress: { _ in })
+
+    let staged = try FileManager.default.contentsOfDirectory(
+        atPath: destination.directory.path
+    ).sorted()
+    #expect(staged == ["0-app.apk", "1-app.apk"])
 }
 
 // MARK: - download

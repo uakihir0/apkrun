@@ -256,7 +256,9 @@ internal class ClipboardBridge(
             }
             val item = clip.getItemAt(0)
             val text = item.text?.toString()
-            val image = item.uri?.let { readImage(it) }
+            // A provider that throws (missing file, I/O, security) must not kill the agent:
+            // the clip's text and HTML still go through without the image.
+            val image = item.uri?.let { uri -> runCatching { readImage(uri) }.getOrNull() }
             if (text == null && image == null) {
                 return null
             }

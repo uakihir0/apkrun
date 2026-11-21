@@ -57,7 +57,7 @@
             // like ./com.example keeps working through the same rule).
             let isFile =
                 (fileExists && !isValidPackageID)
-                || (package.hasSuffix(".apk") && (fileExists || !isValidPackageID))
+                || (package.lowercased().hasSuffix(".apk") && (fileExists || !isValidPackageID))
             guard isFile == install else {
                 throw CLIFailure.invalidArgument(
                     argument: isFile ? "install" : "package",

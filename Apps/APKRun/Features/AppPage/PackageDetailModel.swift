@@ -185,11 +185,14 @@ final class PackageDetailModel {
     }
 
     /// **Check Now** / **Check for Updates** (§7.5, §7 header menu): runs a
-    /// check only; installing stays with **Update Now**.
+    /// check only; installing stays with **Update Now**. The page reloads
+    /// afterwards so a found update surfaces as "Update available" (§5.3
+    /// row 5).
     func checkNow() {
         Task {
             do {
                 _ = try await service().checkForUpdates(packages: [packageID])
+                await load()
             } catch {
                 loadError = Self.describe(error)
             }

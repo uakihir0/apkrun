@@ -339,6 +339,9 @@ public actor SharedFolderService {
         guard entry.mode != .write else {
             throw SharedFolderFailure(.permissionDenied, .readOnly)
         }
+        // Every request re-checks access: a removed root or a downgraded
+        // `integrations.sharedFolders` ends the handle's access too (§6.4).
+        _ = try await checkedAccess(package: entry.package, rootID: entry.rootID, write: false)
         var data = Data(count: length)
         let read = data.withUnsafeMutableBytes { ptr in
             pread(entry.descriptor, ptr.baseAddress, length, off_t(offset))
@@ -359,6 +362,9 @@ public actor SharedFolderService {
         guard entry.mode != .read else {
             throw SharedFolderFailure(.permissionDenied, .readOnly)
         }
+        // Every request re-checks access: a removed root or a downgraded
+        // `integrations.sharedFolders` ends the handle's access too (§6.4).
+        _ = try await checkedAccess(package: entry.package, rootID: entry.rootID, write: true)
         let written = data.withUnsafeBytes { ptr in
             pwrite(entry.descriptor, ptr.baseAddress, data.count, off_t(offset))
         }
@@ -481,6 +487,11 @@ public actor SharedFolderService {
         let parentFD = try resolve(root: root, path: parentPath, requireDirectory: true)
         defer { close(parentFD) }
         let oldName = path.split(separator: "/").last.map(String.init) ?? path
+        // The source is checked too: renaming a hidden file or a package to a
+        // regular name must not expose it (§6.4).
+        guard !Self.isHiddenOrPackage(oldName) else {
+            throw SharedFolderFailure(.permissionDenied, .pathRejected(problem: .hidden))
+        }
         let oldFD = openat(parentFD, oldName, O_RDONLY | O_NOFOLLOW)
         guard oldFD >= 0 else {
             throw SharedFolderFailure(.notFound)

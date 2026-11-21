@@ -429,7 +429,10 @@ extension RuntimeHost {
                     await self?.sharedFolderRegistry().roots() ?? []
                 },
                 valueForPackage: { packageID in
-                    settings.packageValue(packageID.rawValue, "sharedFolders") ?? "off"
+                    // The global switch wins over the stored package value
+                    // (configuration.md §2.2).
+                    guard settings.globalEnabled("sharedFolders") else { return "off" }
+                    return settings.packageValue(packageID.rawValue, "sharedFolders") ?? "off"
                 }))
         sharedFolderServiceLazy = service
         return service
@@ -639,7 +642,7 @@ extension RuntimeHost {
                     sourcePackage: RuntimePackageID(rawValue: offer.sourcePackage)
                         ?? RuntimePackageID(rawValue: "unknown")!,
                     name: offer.name,
-                    size: offer.size > 0 ? Int64(offer.size) : nil,
+                    size: Self.offerSize(offer.size),
                     type: offer.mimeType),
                 hasSession: false)
             return
@@ -648,9 +651,15 @@ extension RuntimeHost {
             FileExportOffer(
                 offerID: String(offer.offerID), sessionID: sessionID,
                 sourcePackage: package, name: offer.name,
-                size: offer.size > 0 ? Int64(offer.size) : nil,
+                size: Self.offerSize(offer.size),
                 type: offer.mimeType),
             hasSession: true)
+    }
+
+    /// `size` of `ExportFileOffered`; the agent sends -1 for an unknown
+    /// size, which decodes as `UInt64.max`.
+    private static func offerSize(_ size: UInt64) -> Int64? {
+        size > 0 && size <= UInt64(Int64.max) ? Int64(size) : nil
     }
 
     /// Consumes `agentRequests` of the session's bulk channel and answers

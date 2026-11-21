@@ -91,7 +91,7 @@ import Testing
     #expect(manifest.build == "1200")
     #expect(manifest.channel == "stable")
     #expect(manifest.commit == "89abcde")
-    #expect(manifest.runtimeAPI == "1.30")
+    #expect(manifest.runtimeAPI == "1.31")
     #expect(manifest.guestProtocol == "1.1")
     #expect(manifest.dataSchemas["settings.json"] == 1)
     #expect(manifest.agentPlistSHA256.count == 64)

@@ -79,8 +79,26 @@ struct GeneralPane: View {
                     .labelsHidden()
                     .fixedSize()
                 }
-                // TODO(#58): the Check Now button and the status line wire
-                // to Sparkle and the Android image channel when #58 lands.
+                if SelfUpdateController.feedAvailable {
+                    let selfUpdate = SelfUpdateController.shared
+                    LabeledContent("APKRun") {
+                        HStack {
+                            Text(selfUpdate.status.statusLine)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            if selfUpdate.status.pendingRelease != nil,
+                                selfUpdate.status.installNowHandler != nil
+                            {
+                                Button("Install and Relaunch Now") {
+                                    selfUpdate.status.installNowHandler?()
+                                }
+                            }
+                            Button("Check Now") {
+                                selfUpdate.checkForUpdates()
+                            }
+                        }
+                    }
+                }
                 if let error = model.loadError {
                     Text(error).foregroundStyle(.secondary)
                 }

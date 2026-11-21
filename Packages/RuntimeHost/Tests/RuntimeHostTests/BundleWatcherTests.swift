@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import RuntimeHost
 
 /// runtime-maintenance.md §3.6: BundleWatcher re-reads `Contents/Info.plist`

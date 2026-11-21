@@ -18,6 +18,7 @@ import RuntimeAPI
 /// bundle build changes underneath it.
 actor MaintenanceService {
     private var hostState: HostState = .normal
+    private var selfUpdate: SelfUpdateStatus
     private let markerURL: URL
     private let version: String
     private let build: Int
@@ -42,6 +43,9 @@ actor MaintenanceService {
         markerURL = markerFile
         self.version = version
         self.build = build
+        selfUpdate = SelfUpdateStatus(
+            currentVersion: version,
+            currentBuild: build)
         self.publish = publish
         self.sessionsProvider = sessionsProvider
         self.backgroundTasksProvider = backgroundTasksProvider
@@ -150,6 +154,31 @@ actor MaintenanceService {
         try FileManager.default.createDirectory(
             at: markerURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: markerURL, options: .atomic)
+    }
+
+    /// The probe snapshot for `selfUpdateStatus` (runtime-api.md §12.2).
+    func selfUpdateStatus() -> SelfUpdateStatus {
+        selfUpdate
+    }
+
+    /// Records Sparkle's result from APKRun.app and publishes the change
+    /// (runtime-api.md §12.2).
+    func noteSelfUpdate(_ note: SelfUpdateNote) {
+        selfUpdate = SelfUpdateStatus(
+            currentVersion: version,
+            currentBuild: build,
+            latest: note.found,
+            critical: false,
+            lastCheckedAt: note.checkedAt,
+            lastError: nil,
+            pendingOnQuit: note.pendingOnQuit)
+        publish(.selfUpdateStatusChanged(selfUpdate))
+    }
+
+    /// Merges the probe's own snapshot (§3.4) and publishes the change.
+    func updateSelfUpdateStatus(_ status: SelfUpdateStatus) {
+        selfUpdate = status
+        publish(.selfUpdateStatusChanged(status))
     }
 
     private func removeMarker() {

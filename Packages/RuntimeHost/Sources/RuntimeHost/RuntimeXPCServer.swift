@@ -1278,6 +1278,7 @@ extension RuntimeResetAndroidControlRequest: VersionedControlRequest {}
 extension RuntimeListPackagesControlRequest: VersionedControlRequest {}
 extension RuntimePackageInfoControlRequest: VersionedControlRequest {}
 extension RuntimeListSessionsControlRequest: VersionedControlRequest {}
+extension SelfUpdateStatusRequest: VersionedControlRequest {}
 extension RuntimePackageIconControlRequest: VersionedControlRequest {}
 extension RuntimeLaunchControlRequest: VersionedControlRequest {}
 extension RuntimeTerminateControlRequest: VersionedControlRequest {}
@@ -1402,6 +1403,8 @@ enum RuntimeControlOperation {
     case updatePackage
     case getConfig
     case setConfig
+    case selfUpdateStatus
+    case noteSelfUpdateStatus
     case packageSettings
     case updatePackageSettings
     case importBootstrap
@@ -1552,6 +1555,22 @@ enum RuntimeControlOperation {
             case .wrapper:
                 true
             case .app, .menuBar, .cli, .launcher:
+                false
+            }
+        case .selfUpdateStatus:
+            // The probe snapshot is read by every control client (§12.2).
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
+                false
+            }
+        case .noteSelfUpdateStatus:
+            // Only APKRun.app speaks for Sparkle (§12.2).
+            switch clientKind {
+            case .app:
+                true
+            case .menuBar, .cli, .launcher, .wrapper:
                 false
             }
         case .hostNotifications, .hostNotificationResponse:
@@ -4944,6 +4963,73 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         }
     }
 
+    func selfUpdateStatus(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply, snapshotBarrier: true)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    SelfUpdateStatusReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .selfUpdateStatus,
+                as: SelfUpdateStatusRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        SelfUpdateStatusReply(error: Self.wireError(for: failure))))
+                return
+            }
+            response.beginSnapshotBarrier()
+            let status = await host.selfUpdateStatus()
+            response.send(Self.encode(SelfUpdateStatusReply(result: status)))
+        }
+    }
+
+    func noteSelfUpdateStatus(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    SelfUpdateNoteReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .noteSelfUpdateStatus,
+                as: SelfUpdateNote.self
+            ) {
+                response.send(
+                    Self.encode(
+                        SelfUpdateNoteReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let note = try? JSONDecoder().decode(SelfUpdateNote.self, from: request)
+            else {
+                response.send(
+                    Self.encode(
+                        SelfUpdateNoteReply(error: Self.malformedWireError)))
+                return
+            }
+            await host.noteSelfUpdate(note)
+            response.send(Self.encode(SelfUpdateNoteReply(result: RuntimeEmpty())))
+        }
+    }
+
 }
 
 private final class XPCDataReply: @unchecked Sendable {
@@ -5100,9 +5186,11 @@ private final class MaintenanceControlService: NSObject, RuntimeMaintenanceXPC, 
             do {
                 controlRequest = try JSONDecoder().decode(MaintenanceControlRequest.self, from: request)
             } catch {
-                response.send(Self.encode(MaintenanceControlReply(
-                    error: RuntimeWireError(domain: "maintenance", code: "malformedRequest", message: "")
-                )))
+                response.send(
+                    Self.encode(
+                        MaintenanceControlReply(
+                            error: RuntimeWireError(domain: "maintenance", code: "malformedRequest", message: "")
+                        )))
                 return
             }
             let replyValue = await host.maintenanceOperation(controlRequest)

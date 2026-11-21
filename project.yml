@@ -182,7 +182,7 @@ targets:
     platform: macOS
     sources:
       - path: Apps/APKRun/Settings/LocaleTimeSettingsStore.swift
-      - path: Apps/APKRun/Tests
+      - path: Apps/APKRun/Tests/LocaleTimeSettingsStoreTests.swift
     dependencies:
       - target: BuildStamp
         embed: false
@@ -213,6 +213,9 @@ targets:
       - path: Apps/APKRun/Features/AddFlow/AddFlowModel.swift
       - path: Apps/APKRun/Features/AppPage/PackageDetailModel.swift
       - path: Apps/APKRun/Features/Settings/SettingsModel.swift
+      - path: Apps/APKRun/Settings/LocaleTimeSettingsStore.swift
+      - path: Apps/APKRun/Maintenance/SelfUpdateModel.swift
+      - path: Apps/APKRun/Maintenance/UpdateInstallCoordinator.swift
     settings:
       base:
         PRODUCT_NAME: APKRunTests

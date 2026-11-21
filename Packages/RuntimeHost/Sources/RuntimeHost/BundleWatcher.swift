@@ -43,7 +43,6 @@ final class BundleWatcher: @unchecked Sendable {
         self.pollInterval = pollInterval
     }
 
-
     /// Reads `Contents/Info.plist` fresh and reports a change. Called on every
     /// broker `hello` (§3.6). Synchronous and cheap; the plist is small.
     func check() {

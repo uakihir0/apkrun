@@ -77,6 +77,16 @@ extension RuntimeHost {
         return service
     }
 
+    /// The self-update probe snapshot (`selfUpdateStatus`, runtime-api.md §12.2).
+    func selfUpdateStatus() async -> SelfUpdateStatus {
+        await maintenanceService.selfUpdateStatus()
+    }
+
+    /// Records Sparkle's result from APKRun.app (`noteSelfUpdateStatus`, §12.2).
+    func noteSelfUpdate(_ note: SelfUpdateNote) async {
+        await maintenanceService.noteSelfUpdate(note)
+    }
+
     /// Runs one operation from the frozen `.maintenance` endpoint. The
     /// endpoint answers in every host state (§12.1), so there is no
     /// lifecycle or host-state gate here.
@@ -147,7 +157,6 @@ extension RuntimeHost {
         restartExitRequested = true
     }
 }
-
 
 extension RuntimeHost {
     /// The §3.7 gate: `updating` refuses every non-maintenance operation and

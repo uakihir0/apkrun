@@ -483,6 +483,7 @@ Items of `runtime.hostRequirementsNotMet` (variant keys, with texts from [runtim
 | `unknownConfigKey(key)` | `runtime.unknownConfigKey` | `apkrun config get&#124;set` names a key that is not a known setting | apkrund | "Unknown setting {key}." | "Run `apkrun config get` to list the settings keys." `none` | 1 | [../03-reference/configuration.md](../03-reference/configuration.md) §2.7 |
 | `unknownResult(operationID)` | `runtime.unknownResult` | a tracked operation ends without reporting its result | apkrund | "The operation ended without a result." | "Try again. Report the operation ID if it keeps happening." `retry` | 1 | [runtime-api.md](runtime-api.md) |
 | `unknownSetting(String)` | `runtime.unknownSetting` | a configuration update names a group or key the runtime does not implement | apkrund | "Unknown setting {key}." | "Check the setting name in the configuration reference; only the documented keys are writable." `none` | 1 | [../03-reference/configuration.md](../03-reference/configuration.md) |
+| `hostUpdating` | `runtime.hostUpdating` | the host state is `updating` or `restartPending` while an APKRun update finishes (runtime-maintenance.md §3.5–§3.6) | RuntimeHost | "APKRun is restarting to finish an update." | "Wait a moment and try again." `retry` | 75 | runtime-maintenance.md §3.6 |
 <!-- errorgen:end runtime -->
 
 ---

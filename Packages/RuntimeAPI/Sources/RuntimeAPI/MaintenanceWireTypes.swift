@@ -49,10 +49,12 @@ public enum HostState: Codable, Equatable, Sendable {
         case .normal:
             Self.encodeEmpty("normal", into: &container)
         case .updating(let targetBuild):
-            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: RuntimeEventCodingKey("updating"))
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self, forKey: RuntimeEventCodingKey("updating"))
             try payload.encode(targetBuild, forKey: .first)
         case .restartPending(let bundleBuild):
-            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: RuntimeEventCodingKey("restartPending"))
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self, forKey: RuntimeEventCodingKey("restartPending"))
             try payload.encodeIfPresent(bundleBuild, forKey: .first)
         case .unknown:
             Self.encodeEmpty("unknown", into: &container)
@@ -282,6 +284,17 @@ public struct SelfUpdateNote: Codable, Equatable, Sendable {
     }
 }
 
+/// A self-update status request on the control endpoint (runtime-api.md §12.2).
+public struct SelfUpdateStatusRequest: Codable, Equatable, Sendable {
+    /// The authenticated request metadata.
+    public let header: APIRequestHeader
+
+    /// Creates a status request.
+    public init(header: APIRequestHeader) {
+        self.header = header
+    }
+}
+
 /// A self-update status reply (runtime-api.md §12.2).
 public struct SelfUpdateStatusReply: Codable, Equatable, Sendable {
     /// The snapshot on success.
@@ -298,6 +311,20 @@ public struct SelfUpdateStatusReply: Codable, Equatable, Sendable {
     /// Creates a failed reply.
     public init(error: RuntimeWireError) {
         result = nil
+        self.error = error
+    }
+}
+
+/// The `noteSelfUpdateStatus` reply (runtime-api.md §12.2).
+public struct SelfUpdateNoteReply: Codable, Equatable, Sendable {
+    /// The empty success body.
+    public var result: RuntimeEmpty?
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates a note reply.
+    public init(result: RuntimeEmpty? = nil, error: RuntimeWireError? = nil) {
+        self.result = result
         self.error = error
     }
 }
@@ -423,10 +450,12 @@ public enum MaintenanceEvent: Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: RuntimeEventCodingKey.self)
         switch self {
         case .hostStateChanged(let state):
-            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: RuntimeEventCodingKey("hostStateChanged"))
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self, forKey: RuntimeEventCodingKey("hostStateChanged"))
             try payload.encode(state, forKey: .first)
         case .selfUpdateStatusChanged(let status):
-            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: RuntimeEventCodingKey("selfUpdateStatusChanged"))
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self, forKey: RuntimeEventCodingKey("selfUpdateStatusChanged"))
             try payload.encode(status, forKey: .first)
         case .unknown:
             Self.encodeEmpty("unknown", into: &container)

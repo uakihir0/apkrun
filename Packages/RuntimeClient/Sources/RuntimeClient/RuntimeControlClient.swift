@@ -1868,6 +1868,57 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// The self-update probe snapshot (runtime-api.md §12.2).
+    public func selfUpdateStatus() async throws(RuntimeControlClientError) -> SelfUpdateStatus {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = SelfUpdateStatusRequest(header: makeHeader())
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.selfUpdateStatus(data)
+            let reply = try Self.decode(SelfUpdateStatusReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let status = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return status
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Reports Sparkle's result to the daemon (runtime-api.md §12.2).
+    /// Only APKRun.app may call this.
+    public func noteSelfUpdateStatus(
+        found: AvailableRelease?,
+        pendingOnQuit: Bool,
+        checkedAt: Date
+    ) async throws(RuntimeControlClientError) {
+        let opened = try await ensureControl()
+        do {
+            let note = SelfUpdateNote(
+                header: makeHeader(),
+                found: found,
+                pendingOnQuit: pendingOnQuit,
+                checkedAt: checkedAt)
+            let data = try Self.encode(note)
+            let response = try await opened.channel.noteSelfUpdateStatus(data)
+            let reply = try Self.decode(SelfUpdateNoteReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
     /// Rolls the package back to its previous version (update-system §7).
     public func rollbackPackage(
         packageID: RuntimePackageID,
@@ -3177,6 +3228,8 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func updatePackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
     func getConfig(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func setConfig(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func selfUpdateStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func noteSelfUpdateStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void)
     func invalidate()
 }
@@ -4413,6 +4466,34 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.setConfig(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func selfUpdateStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.selfUpdateStatus(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func noteSelfUpdateStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.noteSelfUpdateStatus(request) { response in finish(.success(response)) }
         }
     }
 

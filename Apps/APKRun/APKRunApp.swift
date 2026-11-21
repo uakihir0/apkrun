@@ -138,13 +138,16 @@ private final class ApprovalWindowDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // §3.7 first-launch tasks run before any view uses the runtime.
         Task { @MainActor in
-            if let refreshCount = try? await SelfUpdateController()
+            if let refreshCount = try? await FirstLaunchController()
                 .completeUpdateIfNeeded(),
                 refreshCount > 0
             {
-                SelfUpdatePrompt.show(wrapperCount: refreshCount)
+                FirstLaunchRefreshPrompt.show(wrapperCount: refreshCount)
             }
         }
+        // §3.2: Sparkle starts when the build carries a feed; the
+        // controller itself skips --notify and --approve launches.
+        SelfUpdateController.shared.start()
         cancellable = ApprovalCenter.shared.$current.sink { [weak self] prompt in
             if prompt != nil {
                 self?.showApprovalWindow()

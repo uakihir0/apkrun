@@ -56,6 +56,18 @@ public final class MaintenanceControlClient: Sendable {
         try await perform(request(operation: .completeHostUpdate))
     }
 
+    /// Convenience for `prepareForHostUpdate` (§3.5 step 4).
+    public func prepareForHostUpdate(
+        _ hostUpdate: HostUpdateRequest
+    ) async throws(RuntimeControlClientError) -> MaintenanceControlReply {
+        try await perform(request(operation: .prepareForHostUpdate, hostUpdate: hostUpdate))
+    }
+
+    /// Convenience for `abortHostUpdate` (§3.5 abort path). Idempotent.
+    public func abortHostUpdate() async throws(RuntimeControlClientError) -> MaintenanceControlReply {
+        try await perform(request(operation: .abortHostUpdate))
+    }
+
     /// Convenience for `maintenanceStatus` (§7.3 banner, §8.2 CLI).
     public func status() async throws(RuntimeControlClientError) -> MaintenanceStatus {
         let reply = try await perform(request(operation: .maintenanceStatus))

@@ -6,7 +6,7 @@ import RuntimeClient
 /// (runtime-maintenance.md §3.7). Runs from `applicationDidFinishLaunching`,
 /// before any view uses the runtime.
 @MainActor
-final class SelfUpdateController {
+final class FirstLaunchController {
     /// `lastLaunchedBuild` in UserDefaults, per §3.7 steps 1 and 6.
     static let lastLaunchedBuildKey = "lastLaunchedBuild"
 
@@ -22,15 +22,18 @@ final class SelfUpdateController {
         control: (() throws -> RuntimeControlClient)? = nil,
         registerAgent: (@MainActor () throws -> Bool)? = nil
     ) {
-        self.maintenance = maintenance ?? {
-            try MaintenanceControlClient(clientKind: .app)
-        }
-        self.control = control ?? {
-            try RuntimeControlClient(clientKind: .app)
-        }
-        self.registerAgent = registerAgent ?? {
-            try RuntimeRegistrationCommand.registerRuntimeAgentIfNeeded()
-        }
+        self.maintenance =
+            maintenance ?? {
+                try MaintenanceControlClient(clientKind: .app)
+            }
+        self.control =
+            control ?? {
+                try RuntimeControlClient(clientKind: .app)
+            }
+        self.registerAgent =
+            registerAgent ?? {
+                try RuntimeRegistrationCommand.registerRuntimeAgentIfNeeded()
+            }
     }
 
     /// Runs §3.7 once per build. Returns the count of wrappers that need a
@@ -38,9 +41,10 @@ final class SelfUpdateController {
     /// build already launched before and nothing ran.
     @discardableResult
     func completeUpdateIfNeeded() async throws -> Int? {
-        let ownBuild = Int(
-            Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
-        ) ?? 0
+        let ownBuild =
+            Int(
+                Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+            ) ?? 0
         let last = UserDefaults.standard.integer(forKey: Self.lastLaunchedBuildKey)
         guard ownBuild != last else { return nil }
 
@@ -68,7 +72,7 @@ final class SelfUpdateController {
     }
 }
 
-/// The slice of the maintenance endpoint `SelfUpdateController` uses
+/// The slice of the maintenance endpoint `FirstLaunchController` uses
 /// (test seam; `MaintenanceControlClient` conforms).
 @MainActor
 protocol MaintenanceControlling {
@@ -79,7 +83,7 @@ extension MaintenanceControlClient: MaintenanceControlling {}
 
 /// The §3.7 step 5 launcher refresh prompt: "‹N› Mac apps need to be updated
 /// to work with this version of APKRun." with Update Now / Later.
-enum SelfUpdatePrompt {
+enum FirstLaunchRefreshPrompt {
     @MainActor static func show(wrapperCount: Int) {
         let alert = NSAlert()
         alert.messageText =

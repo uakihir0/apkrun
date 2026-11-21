@@ -196,4 +196,43 @@ final class WrapperDesktopTests: XCTestCase {
         // in the launcher UI test — here the copy must launch at all.
         _ = try run("/usr/bin/open", [app.path], timeout: 30)
     }
+
+    // MARK: - #49: the wrapper survives deleting the APK file
+
+    /// `wrap <file.apk> --install` installs then wraps; once the APK is
+    /// deleted the wrapper still opens, and the bundle contains no copy of
+    /// the source archive (wrapper.md §3, §14; FR-WRP-03).
+    func testWrapInstallSurvivesDeletingTheAPK() throws {
+        let cli = try XCTUnwrap(cli())
+        guard let fixture = ProcessInfo.processInfo.environment["APKRUN_FIXTURE_APK"],
+            !fixture.isEmpty,
+            FileManager.default.fileExists(atPath: fixture)
+        else {
+            throw XCTSkip("APKRUN_FIXTURE_APK does not name the HelloText fixture.")
+        }
+        let staging = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "apkrun-wrap-install-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: staging, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: staging) }
+        let apk = staging.appendingPathComponent("HelloText.apk")
+        try FileManager.default.copyItem(atPath: fixture, toPath: apk.path)
+
+        _ = try run(
+            cli.path,
+            ["wrap", apk.path, "--install", "--output", userApplications.path],
+            timeout: 600)
+        let app = userApplications.appendingPathComponent(Self.appName)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: app.path),
+            "wrapper missing at \(app.path)")
+
+        try FileManager.default.removeItem(at: apk)
+        let leaked = try run("/usr/bin/grep", ["-rl", "HelloText.apk", app.path])
+        XCTAssertTrue(
+            leaked.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            "bundle contains HelloText.apk: \(leaked)")
+        _ = try run("/usr/bin/open", [app.path], timeout: 30)
+    }
 }

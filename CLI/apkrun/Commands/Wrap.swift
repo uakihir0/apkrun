@@ -13,11 +13,29 @@
             abstract: "Create the Mac app of an installed Android app."
         )
 
-        @Argument(help: "The Android package ID of an installed app.")
+        @Argument(help: "The Android package ID of an installed app, or an APK file with --install.")
         var package: String
 
         @Option(name: .long, help: "Directory the Mac app is placed in (default: ~/Applications).")
         var output: String?
+
+        @Flag(name: .long, help: "Install the APK file first, as `apkrun install --yes` would.")
+        var install = false
+
+        @Option(name: .long, help: "A provider spec such as local:/path or direct:<https-url>.")
+        var provider: String?
+
+        @Option(name: .long, help: "Update mode: automatic, notify, or manual.")
+        var updates: String?
+
+        @Option(name: .long, help: "Alias for --updates.")
+        var update: String?
+
+        @Option(name: .long, help: "Provider type used with --update-url.")
+        var updateProvider: String?
+
+        @Option(name: .long, help: "Provider URL used with --update-provider.")
+        var updateURL: String?
 
         @Flag(name: .long, help: "Replace this package's existing Mac app.")
         var replace = false
@@ -26,8 +44,42 @@
         var json = false
 
         mutating func run() async throws {
-            guard let packageID = RuntimePackageID(rawValue: package) else {
-                throw CLIFailure.invalidArgument(argument: "package", reason: "invalid")
+            // wrapper.md §12.2: `wrap <file.apk> --install` installs the file
+            // (`apkrun install --yes` semantics) and wraps the package that
+            // landed. A package ID is wrapped as is; a file requires
+            // --install.
+            let inputURL = URL(fileURLWithPath: package).standardizedFileURL
+            let isFile =
+                package.hasSuffix(".apk")
+                || (FileManager.default.fileExists(atPath: inputURL.path)
+                    && !package.isEmpty && RuntimePackageID(rawValue: package) == nil)
+            guard isFile == install else {
+                throw CLIFailure.invalidArgument(
+                    argument: isFile ? "install" : "package",
+                    reason: isFile
+                        ? "an APK file needs --install"
+                        : "--install takes an APK file")
+            }
+
+            let client: RuntimeControlClient
+            do {
+                client = try RuntimeControlClient(clientKind: .cli)
+            } catch {
+                throw await RuntimeStatusOutput.commandFailure(error)
+            }
+
+            var packageID: RuntimePackageID
+            if install {
+                let installOptions = try InstallUpdateOptions.options(
+                    provider: provider, updates: updates, update: update,
+                    updateProvider: updateProvider, updateURL: updateURL)
+                packageID = try await WrapCommandSupport.installFile(
+                    at: inputURL, options: installOptions, client: client)
+            } else {
+                guard let id = RuntimePackageID(rawValue: package) else {
+                    throw CLIFailure.invalidArgument(argument: "package", reason: "invalid")
+                }
+                packageID = id
             }
 
             // The CLI resolves --output with the user's own file access;
@@ -44,13 +96,6 @@
                 destination = .directory(url)
             } else {
                 destination = nil
-            }
-
-            let client: RuntimeControlClient
-            do {
-                client = try RuntimeControlClient(clientKind: .cli)
-            } catch {
-                throw await RuntimeStatusOutput.commandFailure(error)
             }
 
             let operationID = RuntimeAPI.OperationID()
@@ -165,6 +210,62 @@
                 }
                 throw RuntimeWireError(domain: "wrapper", code: code, message: message)
             }
+        }
+
+        /// Imports and installs the APK (the `apkrun install --yes` half of
+        /// `wrap <file> --install`) and returns the installed package ID.
+        static func installFile(
+            at url: URL,
+            options: RuntimeInstallOptions,
+            client: RuntimeControlClient
+        ) async throws -> RuntimePackageID {
+            let urls = try DaemonInstallSupport.inputFiles([url.path])
+            let handles = try urls.map { try DaemonInstallSupport.openRegularFile(at: $0) }
+            defer {
+                for handle in handles {
+                    try? handle.close()
+                }
+            }
+            let sources = urls.enumerated().map { index, url in
+                RuntimeImportSourceFile(fileIndex: index, name: url.lastPathComponent)
+            }
+            let preview: RuntimeImportPreview
+            do {
+                preview = try await client.importPackage(
+                    RuntimeImportPackageRequest(files: sources, origin: .cli),
+                    files: handles)
+            } catch {
+                throw await RuntimeStatusOutput.commandFailure(error)
+            }
+            DaemonInstallSupport.writePreview(preview)
+
+            let operationID = RuntimeAPI.OperationID()
+            let handle: OperationHandle
+            do {
+                handle = try await client.beginInstallImported(
+                    RuntimeInstallImportedRequest(ticket: preview.ticket, options: options),
+                    operationID: operationID)
+            } catch {
+                throw await DaemonInstallSupport.installFailure(
+                    error, packageID: preview.packageID, operationID: operationID)
+            }
+            let snapshot: OperationSnapshot
+            do {
+                snapshot = try await OperationCommandOutput.waitForTerminalSnapshot(
+                    using: client,
+                    operationID: handle.operationID,
+                    progressToStderr: OperationCommandOutput.shouldShowProgress)
+            } catch {
+                throw await DaemonInstallSupport.installWaitFailure(
+                    error, packageID: preview.packageID, operationID: operationID)
+            }
+            let result = try OperationCommandOutput.installedPackage(
+                from: snapshot, expectedPackageID: preview.packageID)
+            Output.write(
+                "Installed \(DaemonInstallSupport.safeTerminalText(result.displayName)) "
+                    + "(\(result.packageID.rawValue)), version "
+                    + "\(result.versionCode.map(String.init) ?? "unknown").")
+            return result.packageID
         }
 
         /// The `wrapper` output of a finished `wrapperCreate` operation.

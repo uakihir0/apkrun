@@ -71,6 +71,5 @@ struct AdvancedPane: View {
         guard let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
         else { return }
         NSWorkspace.shared.open(library.appendingPathComponent("Logs/APKRun"))
-        NSWorkspace.shared.open(directory)
     }
 }

@@ -240,14 +240,8 @@ public struct DirectProvider: UpdateProvider {
         guard Set(resolved).count == resolved.count else {
             throw .providerMetadataInvalid(detail: "artifacts: duplicate url")
         }
-        // The download stores every artifact under its URL's last path
-        // component, so two artifacts that end in the same name could
-        // never both land (and the coordinator could never find both).
-        let fileNames = resolved.map(\.lastPathComponent)
-        guard Set(fileNames).count == fileNames.count else {
-            throw .providerMetadataInvalid(
-                detail: "artifacts: duplicate file name across urls")
-        }
+        // Artifacts land on disk under `storedFileName(index:)`, so two
+        // URLs ending in the same basename cannot collide (D6).
 
         // D7: declared sizes sum to at most 8 GiB.
         let declaredTotal = manifest.artifacts.reduce(Int64(0)) { $0 + ($1.size ?? 0) }
@@ -304,8 +298,10 @@ public struct DirectProvider: UpdateProvider {
         var written: Int64 = 0
         let declaredTotal = candidate.artifacts.reduce(Int64(0)) { $0 + ($1.size ?? 0) }
         var downloaded: [RemoteArtifact] = []
-        for artifact in candidate.artifacts {
-            let file = destination.directory.appendingPathComponent(fileName(of: artifact))
+        for (index, artifact) in candidate.artifacts.enumerated() {
+            let file = destination.directory
+                .appendingPathComponent(
+                    artifact.storedFileName(index: index, in: candidate.artifacts))
             for attempt in 1...2 {
                 // Byte limit: the declared size; an extra byte stops the
                 // stream and counts as a mismatch. Without a declaration,
@@ -354,21 +350,6 @@ public struct DirectProvider: UpdateProvider {
             return .apk(base.url)
         }
         return .splitSet(base: base.url, splits: splits)
-    }
-
-    /// The on-disk name is the artifact URL's last path component, the same
-    /// name the coordinator's hash check looks up (LocalProvider does the
-    /// same). A URL ending without a usable name falls back per kind.
-    private func fileName(of artifact: RemoteArtifact) -> String {
-        let name = artifact.url.lastPathComponent
-        guard !name.isEmpty, name != ".", name != "..", !name.contains("/") else {
-            switch artifact.kind {
-            case .apk: return "base.apk"
-            case .split(let name): return "split_\(name).apk"
-            case .container: return "container.apks"
-            }
-        }
-        return name
     }
 
     /// Strips terminal-affecting characters from a manifest string before

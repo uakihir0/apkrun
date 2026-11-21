@@ -92,6 +92,33 @@ public struct RemoteArtifact: Codable, Sendable, Hashable {
         self.sha256 = sha256
         self.size = size
     }
+
+    /// The base on-disk name: the URL's last path component, or a fallback
+    /// per kind when the URL ends without a usable name.
+    private var baseFileName: String {
+        let name = url.lastPathComponent
+        guard !name.isEmpty, name != ".", name != "..", !name.contains("/") else {
+            switch kind {
+            case .apk: return "base.apk"
+            case .split(let name): return "split_\(name).apk"
+            case .container: return "container.apks"
+            }
+        }
+        return name
+    }
+
+    /// The on-disk name inside a download directory. Two artifacts on
+    /// different URLs may legitimately end in the same basename (a base
+    /// plus a split, both named `app.apk`), so when the candidate's base
+    /// names collide every artifact gets its index prefixed — otherwise
+    /// the plain base name is used. Downloads, the coordinator's hash
+    /// check, and the validator's name lookup all derive it through this
+    /// function.
+    public func storedFileName(index: Int, in artifacts: [RemoteArtifact]) -> String {
+        let names = artifacts.map(\.baseFileName)
+        guard Set(names).count != names.count else { return names[index] }
+        return "\(index)-\(names[index])"
+    }
 }
 
 /// A release a provider found that may be newer than the installed package.

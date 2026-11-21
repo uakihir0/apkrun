@@ -54,6 +54,16 @@ struct AppPageView: View {
             Button("Roll Back", role: .destructive) { model.rollback() }
             Button("Cancel", role: .cancel) {}
         }
+        .confirmationDialog(
+            "APKRun can restore the previous version of \(model.displayName) only by erasing its app data.",
+            isPresented: $model.confirmDataLossRollback,
+            titleVisibility: .visible
+        ) {
+            Button("Restore (Erases Data)", role: .destructive) {
+                model.rollback(allowDataLoss: true)
+            }
+            Button("Keep Current Version", role: .cancel) {}
+        }
         .sheet(isPresented: $model.showsUninstall) {
             UninstallDialog(
                 displayName: model.displayName,

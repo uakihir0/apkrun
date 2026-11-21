@@ -53,6 +53,9 @@ final class PackageDetailModel {
     /// (§7.5, update-system.md §2.1).
     var confirmExternalAuthority = false
     var confirmRollback = false
+    /// The §8.5 "Restore ‹old version› (Erases Data)…" confirmation that
+    /// follows a `rollbackUnavailable` reply.
+    var confirmDataLossRollback = false
     var showsUninstall = false
     var showsRepair = false
     /// Set briefly after a write to a next-session key (§7).
@@ -250,13 +253,22 @@ final class PackageDetailModel {
         }
     }
 
-    /// **Roll Back to ‹version›…** (§7.5).
-    func rollback() {
+    /// **Roll Back to ‹version›…** (§7.5). When the data-preserving
+    /// rollback is unavailable the daemon reports `unavailable`, and the
+    /// §8.5 "Restore ‹old version› (Erases Data)…" confirmation shows
+    /// before the retry with `allowDataLoss`.
+    func rollback(allowDataLoss: Bool = false) {
         confirmRollback = false
+        confirmDataLossRollback = false
         Task {
             do {
-                _ = try await service().rollbackPackage(
-                    packageID: packageID, allowDataLoss: false)
+                let reply = try await service().rollbackPackage(
+                    packageID: packageID, allowDataLoss: allowDataLoss)
+                if reply.unavailable == true {
+                    confirmDataLossRollback = true
+                } else if reply.rolledBackTo != nil {
+                    await load()
+                }
             } catch {
                 loadError = Self.describe(error)
             }

@@ -231,7 +231,7 @@ import Testing
 @Test func eventSinkAcknowledgesMalformedBatchesAndSignalsResync() async {
     let hub = RuntimeEventStreamHub()
     let stream = hub.makeStream(for: .operations, onTermination: { _ in }).stream
-    let receiver = RuntimeEventSinkReceiver(streamHub: hub)
+    let receiver = RuntimeEventSinkReceiver(streamHub: hub, notificationStreamHub: RuntimeNotificationStreamHub())
     await withCheckedContinuation { continuation in
         receiver.deliver(Data("not-json".utf8)) {
             continuation.resume()
@@ -1784,6 +1784,26 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         } catch {
             throw .encodingFailure
         }
+    }
+
+    func notificationRelay(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func notificationRelayResponse(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func hostNotifications(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func hostNotificationResponse(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func closeStream(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
     }
 
     func checkForUpdates(_ request: Data) async throws(RuntimeControlClientError) -> Data {

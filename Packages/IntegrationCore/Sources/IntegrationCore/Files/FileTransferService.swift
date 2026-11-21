@@ -1,36 +1,6 @@
 import Foundation
 import RuntimeAPI
 
-/// The metadata of one dropped file (`ImportFileInfo`, runtime-api.md §11.2).
-public struct ImportFileInfo: Sendable, Equatable {
-    /// The file's display name.
-    public var name: String
-    /// Its size in bytes.
-    public var size: Int64
-    /// Its uniform type identifier.
-    public var uti: String
-
-    public init(name: String, size: Int64, uti: String) {
-        self.name = name
-        self.size = size
-        self.uti = uti
-    }
-}
-
-/// The `ImportResult` of guest-protocol.md §7.4 / runtime-api.md §11.2.
-public struct FileImportResult: Sendable, Equatable {
-    /// The shared content URIs, one per imported file.
-    public var contentURIs: [String]
-    /// `shared` when the package's share target took them, `savedToDownloads`
-    /// when it had none.
-    public var savedToDownloads: Bool
-
-    public init(contentURIs: [String], savedToDownloads: Bool) {
-        self.contentURIs = contentURIs
-        self.savedToDownloads = savedToDownloads
-    }
-}
-
 /// One export the Guest Agent's SaveToMacActivity offered
 /// (`exportOffered`, desktop-integration.md §6.3).
 public struct FileExportOffer: Sendable, Equatable {
@@ -70,13 +40,13 @@ public protocol FileTransferChannel: Sendable {
     func sendImport(
         package: RuntimePackageID, displayID: Int,
         handles: [FileHandle], infos: [ImportFileInfo]
-    ) async throws(IntegrationFailure) -> FileImportResult
+    ) async throws(IntegrationFailure) -> ImportResult
 
     /// Answers `ResolveExport` and, on accept, streams the file to `handle`,
     /// verifying its SHA-256 from `BulkEnd` (§6.3). On a hash or transport
     /// failure the partial file is already deleted before this throws.
     func resolveExport(
-        offerID: String, accept: Bool, writeTo: FileHandle?
+        offerID: String, package: RuntimePackageID, accept: Bool, writeTo: FileHandle?
     ) async throws(IntegrationFailure)
 }
 
@@ -132,7 +102,7 @@ public actor FileTransferService {
         handles: [FileHandle],
         infos: [ImportFileInfo],
         windowIsKey: Bool
-    ) async throws(IntegrationFailure) -> FileImportResult {
+    ) async throws(IntegrationFailure) -> ImportResult {
         guard infos.count <= Self.fileLimit else {
             throw .tooManyFiles(count: infos.count, limit: Self.fileLimit)
         }
@@ -180,13 +150,15 @@ public actor FileTransferService {
             context: IntegrationContext(hasSession: hasSession, windowIsKey: hasSession)
         ) {
         case .deny:
-            try await channel.resolveExport(offerID: offer.offerID, accept: false, writeTo: nil)
+            try await channel.resolveExport(
+                offerID: offer.offerID, package: offer.sourcePackage, accept: false, writeTo: nil)
             return
         case .allow, .ask:
             break
         }
         guard hasSession else {
-            try await channel.resolveExport(offerID: offer.offerID, accept: false, writeTo: nil)
+            try await channel.resolveExport(
+                offerID: offer.offerID, package: offer.sourcePackage, accept: false, writeTo: nil)
             return
         }
         pending[offer.offerID] = PendingOffer(
@@ -211,7 +183,8 @@ public actor FileTransferService {
             throw .promptTimedOut
         }
         pending.removeValue(forKey: offerID)
-        try await channel.resolveExport(offerID: offerID, accept: handle != nil, writeTo: handle)
+        try await channel.resolveExport(
+            offerID: offerID, package: entry.package, accept: handle != nil, writeTo: handle)
     }
 
     /// Drops every pending offer of a session (window closed or session

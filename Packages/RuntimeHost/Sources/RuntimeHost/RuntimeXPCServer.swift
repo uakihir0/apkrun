@@ -1167,6 +1167,20 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
             argumentIndex: 1,
             ofReply: false
         )
+        // `importFiles` carries the dropped FileHandles; `acceptExport`
+        // carries the write target (runtime-api.md §11.2).
+        controlInterface.setClasses(
+            fileHandleClasses,
+            for: #selector(RuntimeControlXPC.importFiles(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
+        controlInterface.setClasses(
+            fileHandleClasses,
+            for: #selector(RuntimeControlXPC.acceptExport(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
         connection.remoteObjectInterface = NSXPCInterface(with: RuntimeEventSink.self)
         let eventHub = host.eventHub
         let remoteSink =
@@ -1238,6 +1252,12 @@ extension RuntimeClipboardWrittenControlRequest: VersionedControlRequest {}
 extension RuntimeFocusChangedControlRequest: VersionedControlRequest {}
 extension RuntimeResolveLinkPromptControlRequest: VersionedControlRequest {}
 extension RuntimeIntegrationStatusControlRequest: VersionedControlRequest {}
+extension RuntimeImportFilesSessionRequest: VersionedControlRequest {}
+extension RuntimeAcceptExportSessionRequest: VersionedControlRequest {}
+extension RuntimeSharedFoldersControlRequest: VersionedControlRequest {}
+extension RuntimeAddSharedFolderControlRequest: VersionedControlRequest {}
+extension RuntimeRemoveSharedFolderControlRequest: VersionedControlRequest {}
+extension RuntimeSetSharedFolderAccessControlRequest: VersionedControlRequest {}
 extension RuntimeCheckForUpdatesControlRequest: VersionedControlRequest {}
 extension RuntimeListUpdatesControlRequest: VersionedControlRequest {}
 extension RuntimeUpdateHistoryControlRequest: VersionedControlRequest {}
@@ -1301,6 +1321,12 @@ enum RuntimeControlOperation {
     case focusChanged
     case resolveLinkPrompt
     case integrationStatus
+    case importFiles
+    case acceptExport
+    case sharedFolders
+    case addSharedFolder
+    case removeSharedFolder
+    case setSharedFolderAccess
     case checkForUpdates
     case listUpdates
     case updateHistory
@@ -1402,13 +1428,24 @@ enum RuntimeControlOperation {
             // Developer-mode reads; the developer.enabled gate is enforced in
             // RuntimeHost (diagnostics.md §9.3, runtime-api.md §13.1).
             true
-        case .pushClipboard, .clipboardWritten, .focusChanged, .resolveLinkPrompt:
-            // Session-channel messages of desktop-integration.md §3.3 and
-            // §7.2: the window process reports for its own session.
+        case .pushClipboard, .clipboardWritten, .focusChanged, .resolveLinkPrompt,
+            .importFiles, .acceptExport:
+            // Session-channel messages of desktop-integration.md §3.3, §6
+            // and §7.2: the window process reports for its own session.
             switch clientKind {
             case .wrapper, .launcher:
                 true
             case .app, .menuBar, .cli:
+                false
+            }
+        case .sharedFolders, .addSharedFolder, .removeSharedFolder,
+            .setSharedFolderAccess:
+            // Shared-folder management is a control-plane operation
+            // (runtime-api.md §11.1); a window process never writes it.
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
                 false
             }
         case .integrationStatus:
@@ -3798,6 +3835,281 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeIntegrationStatusControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func importFiles(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeImportFilesSessionReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .importFiles,
+                as: RuntimeImportFilesSessionRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeImportFilesSessionReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeImportFilesSessionRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeImportFilesSessionReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                // NFR-SEC-07: a wrapper imports files for its own session
+                // only; the session's package is resolved by the host.
+                let result = try await host.importFiles(
+                    sessionID: decoded.sessionID,
+                    files: files,
+                    infos: decoded.files,
+                    target: decoded.target,
+                    callerPackageID: wrapperPackageID)
+                response.send(Self.encode(RuntimeImportFilesSessionReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeImportFilesSessionReply(error: wireError)))
+            }
+        }
+    }
+
+    func acceptExport(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeAcceptExportSessionReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .acceptExport,
+                as: RuntimeAcceptExportSessionRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeAcceptExportSessionReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeAcceptExportSessionRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeAcceptExportSessionReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try await host.acceptExport(
+                    sessionID: decoded.sessionID,
+                    offerID: decoded.offerID,
+                    fileIndex: decoded.fileIndex,
+                    target: files.first,
+                    callerPackageID: wrapperPackageID)
+                response.send(Self.encode(RuntimeAcceptExportSessionReply(result: RuntimeEmpty())))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeAcceptExportSessionReply(error: wireError)))
+            }
+        }
+    }
+
+    func sharedFolders(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeSharedFoldersControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .sharedFolders,
+                as: RuntimeSharedFoldersControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeSharedFoldersControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            do {
+                let roots = try await host.sharedFolders()
+                response.send(Self.encode(RuntimeSharedFoldersControlReply(result: roots)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeSharedFoldersControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func addSharedFolder(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeSharedFolderControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .addSharedFolder,
+                as: RuntimeAddSharedFolderControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeSharedFolderControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeAddSharedFolderControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeSharedFolderControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let root = try await host.addSharedFolder(
+                    bookmark: decoded.bookmark, access: decoded.access)
+                response.send(Self.encode(RuntimeSharedFolderControlReply(result: root)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeSharedFolderControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func removeSharedFolder(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeRemoveSharedFolderControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .removeSharedFolder,
+                as: RuntimeRemoveSharedFolderControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeRemoveSharedFolderControlReply(
+                            error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeRemoveSharedFolderControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeRemoveSharedFolderControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try await host.removeSharedFolder(id: decoded.id)
+                response.send(
+                    Self.encode(RuntimeRemoveSharedFolderControlReply(result: RuntimeEmpty())))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeRemoveSharedFolderControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func setSharedFolderAccess(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeSharedFolderControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .setSharedFolderAccess,
+                as: RuntimeSetSharedFolderAccessControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeSharedFolderControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeSetSharedFolderAccessControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeSharedFolderControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let root = try await host.setSharedFolderAccess(
+                    id: decoded.id, access: decoded.access)
+                response.send(Self.encode(RuntimeSharedFolderControlReply(result: root)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeSharedFolderControlReply(error: wireError)))
             }
         }
     }

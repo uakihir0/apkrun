@@ -245,3 +245,142 @@ public struct GuestResolveUrl: GuestOperation {
         return nil
     }
 }
+
+/// ImportFiles, guest protocol operation 45 (guest-protocol.md §7.4,
+/// desktop-integration.md §6.2). Delivers the dropped files the bulk
+/// transfers carried: each `FileRef.transfer_id` names a completed
+/// host-allocated `.file` transfer.
+public struct GuestImportFiles: GuestOperation {
+    /// The guest answers with `ImportResult`.
+    public typealias Result = GPImportResult
+    /// The stable guest protocol operation number.
+    public static let number = 45
+
+    /// The package that receives the share intents.
+    public let package: String
+    /// The display the drop landed on.
+    public let displayID: Int32
+    /// The announced transfers, one per dropped file.
+    public let files: [GPFileRef]
+
+    /// Creates an import-files request.
+    public init(package: String, displayID: Int32, files: [GPFileRef]) {
+        self.package = package
+        self.displayID = displayID
+        self.files = files
+    }
+
+    /// The operation name used in diagnostics.
+    public var operationName: String { "ImportFiles" }
+    /// The Guest Agent capability required for this operation.
+    public var capability: GuestCapability { .files }
+    /// The per-call timeout; share resolution can take a moment.
+    public var timeout: Duration { .seconds(10) }
+
+    /// Builds the versioned wire request.
+    public func request() -> GPRequest.OneOf_Op {
+        var request = GPImportFiles()
+        request.target = .shareToPackage
+        request.package = package
+        request.displayID = displayID
+        request.files = files
+        return .importFiles(request)
+    }
+
+    /// Extracts the import result.
+    public static func decode(_ result: GPResponse.OneOf_Result) -> GPImportResult? {
+        if case .importFiles(let result) = result { return result }
+        return nil
+    }
+}
+
+/// ResolveExport, guest protocol operation 51 (guest-protocol.md §7.5,
+/// desktop-integration.md §6.3). Answers one `ExportFileOffered` event:
+/// accept replies `ExportStart` carrying the transfer ID the agent then
+/// streams on the bulk channel; decline carries no transfer.
+public struct GuestResolveExport: GuestOperation {
+    /// The guest answers with `ExportStart`.
+    public typealias Result = GPExportStart
+    /// The stable guest protocol operation number.
+    public static let number = 51
+
+    /// The `ExportFileOffered.offer_id` being answered.
+    public let offerID: UInt64
+    /// The user's answer.
+    public let decision: GPExportDecision
+
+    /// Creates a resolve-export request.
+    public init(offerID: UInt64, decision: GPExportDecision) {
+        self.offerID = offerID
+        self.decision = decision
+    }
+
+    /// The operation name used in diagnostics.
+    public var operationName: String { "ResolveExport" }
+    /// The Guest Agent capability required for this operation.
+    public var capability: GuestCapability { .files }
+    /// The per-call timeout.
+    public var timeout: Duration { .seconds(5) }
+
+    /// Builds the versioned wire request.
+    public func request() -> GPRequest.OneOf_Op {
+        var request = GPResolveExport()
+        request.offerID = offerID
+        request.decision = decision
+        return .resolveExport(request)
+    }
+
+    /// Extracts the export start.
+    public static func decode(_ result: GPResponse.OneOf_Result) -> GPExportStart? {
+        if case .resolveExport(let start) = result { return start }
+        return nil
+    }
+}
+
+/// SetSharedFolderAccess, guest protocol operation 52
+/// (guest-protocol.md §7.5, desktop-integration.md §6.4). Pushes the
+/// per-package access map the `MacFilesProvider` enforces.
+public struct GuestSetSharedFolderAccess: GuestOperation {
+    /// The guest acknowledges with `Empty`.
+    public typealias Result = GPEmpty
+    /// The stable guest protocol operation number.
+    public static let number = 52
+
+    /// The current roots (the provider validates root IDs against them).
+    public let roots: [GPSharedRoot]
+    /// Package → access (`readOnly` or `readWrite`); absent entries get
+    /// SecurityException in the provider.
+    public let access: [String: String]
+
+    /// Creates a set-access request.
+    public init(roots: [GPSharedRoot], access: [String: String]) {
+        self.roots = roots
+        self.access = access
+    }
+
+    /// The operation name used in diagnostics.
+    public var operationName: String { "SetSharedFolderAccess" }
+    /// The Guest Agent capability required for this operation.
+    public var capability: GuestCapability { .filesShared }
+    /// The per-call timeout.
+    public var timeout: Duration { .seconds(5) }
+
+    /// Builds the versioned wire request.
+    public func request() -> GPRequest.OneOf_Op {
+        var request = GPSetSharedFolderAccess()
+        request.roots = roots
+        request.access = access.map { package, level in
+            var entry = GPPackageAccess()
+            entry.package = package
+            entry.access = level == "readWrite" ? .readWrite : .readOnly
+            return entry
+        }
+        return .setSharedFolderAccess(request)
+    }
+
+    /// Extracts the empty acknowledgement.
+    public static func decode(_ result: GPResponse.OneOf_Result) -> GPEmpty? {
+        if case .setSharedFolderAccess(let empty) = result { return empty }
+        return nil
+    }
+}

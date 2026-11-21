@@ -14,18 +14,18 @@ final class FileTransferServiceTests: XCTestCase {
     private final class FakeChannel: FileTransferChannel, @unchecked Sendable {
         var imports: [(RuntimePackageID, Int, [ImportFileInfo])] = []
         var resolves: [(String, Bool)] = []
-        var result = FileImportResult(contentURIs: ["content://x/1"], savedToDownloads: false)
+        var result = ImportResult(contentURIs: ["content://x/1"], disposition: "shared")
 
         func sendImport(
             package: RuntimePackageID, displayID: Int,
             handles: [FileHandle], infos: [ImportFileInfo]
-        ) async throws(IntegrationFailure) -> FileImportResult {
+        ) async throws(IntegrationFailure) -> ImportResult {
             imports.append((package, displayID, infos))
             return result
         }
 
         func resolveExport(
-            offerID: String, accept: Bool, writeTo: FileHandle?
+            offerID: String, package: RuntimePackageID, accept: Bool, writeTo: FileHandle?
         ) async throws(IntegrationFailure) {
             resolves.append((offerID, accept))
         }
@@ -48,7 +48,9 @@ final class FileTransferServiceTests: XCTestCase {
     }
 
     private func infos(_ names: [(String, Int64)]) -> [ImportFileInfo] {
-        names.map { ImportFileInfo(name: $0.0, size: $0.1, uti: "public.data") }
+        names.enumerated().map {
+            ImportFileInfo(fileIndex: $0.offset, name: $0.element.0, size: $0.element.1, uti: "public.data")
+        }
     }
 
     // MARK: Limits (§6.2)

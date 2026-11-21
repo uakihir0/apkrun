@@ -874,7 +874,7 @@ extension RuntimeHost {
     }
 
     /// Maps an `IntegrationFailure` to its catalog wire error (§13.1).
-    private static func integrationWireError(_ failure: IntegrationFailure) -> RuntimeWireError {
+    static func integrationWireError(_ failure: IntegrationFailure) -> RuntimeWireError {
         switch failure {
         case .disabled(let kind, let reason):
             let messages: (String, String?)
@@ -1090,7 +1090,7 @@ extension RuntimeHost {
     /// transfers/`, reads it back, and deletes the file
     /// (desktop-integration.md §4.4). A failure anywhere answers the bytes.
     nonisolated func readTransferOnce(_ transfer: GuestInboundTransfer) -> Data? {
-        guard !transfer.bytes.isEmpty else { return nil }
+        guard let bytes = transfer.bytes, !bytes.isEmpty else { return nil }
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         let directory =
             caches
@@ -1100,13 +1100,13 @@ extension RuntimeHost {
         do {
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true)
-            try transfer.bytes.write(to: file, options: .atomic)
-            let bytes = try Data(contentsOf: file)
+            try bytes.write(to: file, options: .atomic)
+            let read = try Data(contentsOf: file)
             try? FileManager.default.removeItem(at: file)
-            return bytes
+            return read
         } catch {
             try? FileManager.default.removeItem(at: file)
-            return transfer.bytes
+            return bytes
         }
     }
 }

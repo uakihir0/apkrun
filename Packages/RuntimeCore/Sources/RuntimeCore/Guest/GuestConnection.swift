@@ -55,6 +55,9 @@ public actor GuestConnection {
     /// The editor state reports of the IME (input.md §5.1). Only the development IME endpoint carries them; on any
     /// other channel a report is a protocol violation. The stream finishes when the connection closes.
     public nonisolated let imeStates: AsyncStream<GPImeState>
+    /// Requests the agent sends the host (guest-protocol.md §7.5): only the bulk endpoint may carry them — anywhere
+    /// else a request frame is a protocol violation. Each element is the envelope id to reply to and the request.
+    public nonisolated let agentRequests: AsyncStream<(id: UInt64, request: GPRequest)>
 
     /// The number of requests that may be in flight at once (guest-protocol.md §6).
     public static let maximumInFlight = 64
@@ -72,6 +75,7 @@ public actor GuestConnection {
     private let inputAckContinuation: AsyncStream<GPInputAck>.Continuation
     private let bulkFrameContinuation: AsyncStream<GPBulkFrame>.Continuation
     private let imeStateContinuation: AsyncStream<GPImeState>.Continuation
+    private let agentRequestContinuation: AsyncStream<(id: UInt64, request: GPRequest)>.Continuation
     private var outbound: AsyncStream<Data>.Continuation?
     /// The bytes that the frames yielded to `outbound` hold, until the transport has written them.
     private var outboundBacklog = 0
@@ -123,6 +127,10 @@ public actor GuestConnection {
         bulkFrames = bulk.stream
         bulkFrameContinuation = bulk.continuation
         let ime = AsyncStream.makeStream(of: GPImeState.self, bufferingPolicy: .bufferingNewest(64))
+        let requests = AsyncStream.makeStream(
+            of: (id: UInt64, request: GPRequest).self, bufferingPolicy: .bufferingNewest(64))
+        agentRequests = requests.stream
+        agentRequestContinuation = requests.continuation
         imeStates = ime.stream
         imeStateContinuation = ime.continuation
     }
@@ -292,6 +300,36 @@ public actor GuestConnection {
         connectionLost(.disconnected)
     }
 
+    /// The file-operation ops the agent may send the host (guest-protocol.md §7.5, ops 60–69).
+    private static func isAllowedAgentRequest(_ request: GPRequest) -> Bool {
+        switch request.op {
+        case .hostListRoots, .hostQueryChildren, .hostStat, .hostOpenFile,
+            .hostReadRange, .hostWriteRange, .hostCloseFile,
+            .hostCreateDocument, .hostDeleteDocument, .hostRenameDocument:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Answers one agent request received on ``agentRequests`` (guest-protocol.md §7.5). Only the bulk endpoint
+    /// carries these. `result` is the response payload or an `.error`.
+    public func sendResponse(
+        replyTo envelopeID: UInt64,
+        result: GPResponse.OneOf_Result
+    ) throws(GuestProtocolFailure) {
+        precondition(endpoint == .guestBulk, "Agent requests arrive on the bulk channel only")
+        guard isUsable else {
+            throw failure ?? .disconnected
+        }
+        sendEnvelope { envelope in
+            envelope.replyTo = envelopeID
+            var response = GPResponse()
+            response.result = result
+            envelope.body = .response(response)
+        }
+    }
+
     /// Sends one input batch on the input endpoint, as an `InputBatch` envelope (guest-protocol.md §9). The frame goes
     /// through the same writer as the requests, so it keeps their order. It returns once the frame is queued, and it
     /// fails with the connection's failure when the connection is not usable. Only the input endpoint carries batches.
@@ -405,6 +443,12 @@ public actor GuestConnection {
                 throw .malformedFrame
             }
             bulkFrameContinuation.yield(frame)
+        case .request(let request):
+            // Agent → host requests are allowed on the bulk channel only (guest-protocol.md §12.2).
+            guard endpoint == .guestBulk, Self.isAllowedAgentRequest(request) else {
+                throw .malformedFrame
+            }
+            agentRequestContinuation.yield((envelope.id, request))
         case .imeState(let state):
             // Editor reports leave on the development IME channel only (input.md §5.1).
             guard endpoint == .developmentIME else {
@@ -580,6 +624,7 @@ public actor GuestConnection {
         eventContinuation.finish()
         inputAckContinuation.finish()
         bulkFrameContinuation.finish()
+        agentRequestContinuation.finish()
         imeStateContinuation.finish()
         outbound?.finish()
     }

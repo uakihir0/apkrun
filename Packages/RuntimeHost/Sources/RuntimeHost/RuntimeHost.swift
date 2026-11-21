@@ -180,6 +180,16 @@ public actor RuntimeHost {
     var clipboardRelayTask: Task<Void, Never>?
     /// The guest→coordinator notification relay; alive while the agent is.
     var notificationRelayTask: Task<Void, Never>?
+    /// The §6.2–6.3 file transfer service; lazy like the other coordinators.
+    var fileTransferServiceLazy: FileTransferService?
+    /// The §6.4 document provider answering the agent's `Host*` ops.
+    var sharedFolderServiceLazy: SharedFolderService?
+    /// The persisted `sharedFolders.roots` store; lazy.
+    var sharedFolderRegistryLazy: SharedFolderRegistry?
+    /// The guest→window export-offer relay; alive while the agent is.
+    var exportRelayTask: Task<Void, Never>?
+    /// The agent→host `Host*` document request loop on the bulk channel.
+    var sharedFolderRequestTask: Task<Void, Never>?
     /// Cached settings and capabilities for the synchronous policy closures.
     let integrationSettings = IntegrationSettingsCache()
 
@@ -3850,10 +3860,12 @@ public actor RuntimeHost {
             startClipboardRelay()
             startNotificationRelay()
             startLinkRelay()
+            startFileServices()
         } else if case .stopped = snapshot.state {
             stopClipboardRelay()
             stopNotificationRelay()
             stopLinkRelay()
+            stopFileServices()
         }
     }
 

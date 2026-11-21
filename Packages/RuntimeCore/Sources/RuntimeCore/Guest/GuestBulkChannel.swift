@@ -12,8 +12,16 @@ public struct GuestInboundTransfer: Sendable, Equatable {
     public let name: String
     /// The MIME type of the payload.
     public let mimeType: String
-    /// The whole payload, at most the receiver's cap.
-    public let bytes: Data
+    /// The whole payload when it fit in memory, nil when the transfer was
+    /// spooled to `fileURL` (kind `.file`, guest-protocol.md §10).
+    public let bytes: Data?
+    /// The spool file of a `.file` transfer (under
+    /// `~/Library/Caches/io.apkrun.APKRun/transfers/`); nil for in-memory
+    /// payloads. The caller takes ownership of the file.
+    public let fileURL: URL?
+    /// The SHA-256 announced in `BulkEnd`, for the caller to verify a
+    /// file-backed payload.
+    public let sha256: Data?
 
     /// Creates an inbound transfer.
     public init(
@@ -21,13 +29,17 @@ public struct GuestInboundTransfer: Sendable, Equatable {
         kind: GPBulkKind,
         name: String,
         mimeType: String,
-        bytes: Data
+        bytes: Data?,
+        fileURL: URL? = nil,
+        sha256: Data? = nil
     ) {
         self.transferID = transferID
         self.kind = kind
         self.name = name
         self.mimeType = mimeType
         self.bytes = bytes
+        self.fileURL = fileURL
+        self.sha256 = sha256
     }
 }
 
@@ -41,12 +53,41 @@ public struct GuestInboundTransfer: Sendable, Equatable {
 /// closes its secondary connections, so the caller drops the channel when
 /// the session it was built for ends.
 public actor GuestBulkChannel {
-    /// One inbound transfer under reassembly.
+    /// One inbound transfer under reassembly. `file` transfers stream to a
+    /// spool file (§10: receivers write to a temporary file) — the channel
+    /// never holds a 2 GiB payload in memory.
     private struct Assembly {
         var kind: GPBulkKind
         var name: String
         var mimeType: String
         var bytes: Data
+        /// Spool file for `.file` transfers.
+        var fileURL: URL?
+        var fileHandle: FileHandle?
+        var written: Int64 = 0
+
+        mutating func append(_ chunk: Data, cap: Int) -> Bool {
+            if let handle = fileHandle {
+                do {
+                    try handle.write(contentsOf: chunk)
+                    written += Int64(chunk.count)
+                    return written <= 2 * 1024 * 1024 * 1024
+                } catch {
+                    return false
+                }
+            }
+            bytes.append(chunk)
+            return bytes.count <= cap
+        }
+
+        mutating func finish() -> (Data?, URL?) {
+            try? fileHandle?.close()
+            fileHandle = nil
+            if fileURL != nil {
+                return (nil, fileURL)
+            }
+            return (bytes, nil)
+        }
     }
 
     /// The default per-transfer cap, 16 MiB like the diagnostics items.
@@ -62,6 +103,14 @@ public actor GuestBulkChannel {
 
     private var connection: GuestConnection?
     private var consumer: Task<Void, Never>?
+    private var requestsConsumer: Task<Void, Never>?
+    /// Agent → host file requests (guest-protocol.md §7.5), one entry per
+    /// request. Consumed by the host dispatcher.
+    private let agentRequestsStream: AsyncStream<(id: UInt64, request: GPRequest)>
+    private let agentRequestsContinuation:
+        AsyncStream<
+            (id: UInt64, request: GPRequest)
+        >.Continuation
     private var assemblies: [UInt64: Assembly] = [:]
     /// Recently completed inbound payloads, pruned to 16 entries.
     private var completed: [(id: UInt64, at: ContinuousClock.Instant, transfer: GuestInboundTransfer)] =
@@ -80,6 +129,11 @@ public actor GuestBulkChannel {
         self.agent = agent
         self.token = token
         self.cap = cap
+        let requests = AsyncStream.makeStream(
+            of: (id: UInt64, request: GPRequest).self,
+            bufferingPolicy: .bufferingNewest(64))
+        agentRequestsStream = requests.stream
+        agentRequestsContinuation = requests.continuation
     }
 
     /// Connects and starts the consumer. Idempotent: a connected channel is
@@ -101,12 +155,46 @@ public actor GuestBulkChannel {
                 await self?.accept(frame)
             }
         }
+        requestsConsumer?.cancel()
+        requestsConsumer = Task { [weak self, connection] in
+            for await request in connection.agentRequests {
+                self?.agentRequestsContinuation.yield(request)
+            }
+        }
+    }
+
+    /// The agent → host file requests of guest-protocol.md §7.5, in order.
+    /// The stream finishes when the channel closes.
+    public nonisolated var agentRequests:
+        AsyncStream<
+            (id: UInt64, request: GPRequest)
+        >
+    {
+        agentRequestsStream
+    }
+
+    /// Answers one agent request from ``agentRequests`` (§7.5). `result` is
+    /// the response payload or an `.error`.
+    public func respond(
+        replyTo envelopeID: UInt64,
+        result: GPResponse.OneOf_Result
+    ) async throws(GuestProtocolFailure) {
+        guard let connection else { throw .disconnected }
+        try await connection.sendResponse(replyTo: envelopeID, result: result)
     }
 
     /// Closes the connection. A later ``open()`` reconnects.
     public func close() {
         consumer?.cancel()
         consumer = nil
+        requestsConsumer?.cancel()
+        requestsConsumer = nil
+        for (_, var assembly) in assemblies {
+            try? assembly.fileHandle?.close()
+            if let url = assembly.fileURL {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
         assemblies.removeAll()
         for (_, waiter) in waiters {
             for continuation in waiter {
@@ -151,6 +239,72 @@ public actor GuestBulkChannel {
         tail.sha256 = digest
         frame.kind = .end(tail)
         try await connection.sendBulkFrame(frame)
+        return transferID
+    }
+
+    /// Streams `file` as one transfer of `kind` without loading it in memory
+    /// (desktop-integration.md §6.2: drops go up to 2 GiB). The announced
+    /// name rides in `BulkBegin`.
+    public func sendFile(
+        _ file: FileHandle,
+        size: Int64,
+        name: String,
+        kind: GPBulkKind,
+        mimeType: String
+    ) async throws(GuestProtocolFailure) -> UInt64 {
+        try await open()
+        guard let connection else { throw .disconnected }
+        let transferID = nextTransferID
+        nextTransferID += 2
+        var hasher = SHA256()
+        var begin = GPBulkBegin()
+        begin.kind = kind
+        begin.name = name
+        begin.mimeType = mimeType
+        begin.size = UInt64(clamping: size)
+        var frame = GPBulkFrame()
+        frame.transferID = transferID
+        frame.kind = .begin(begin)
+        do {
+            try await connection.sendBulkFrame(frame)
+            try file.seek(toOffset: 0)
+            var sent: Int64 = 0
+            while sent < size {
+                let length = Int(min(Int64(Self.chunkSize), size - sent))
+                let chunk: Data
+                do {
+                    guard let read = try file.read(upToCount: length), !read.isEmpty else {
+                        throw GuestProtocolFailure.transferIOFailed(
+                            detail: "read stopped at \(sent) of \(size) bytes")
+                    }
+                    chunk = read
+                } catch let failure as GuestProtocolFailure {
+                    throw failure
+                } catch {
+                    throw GuestProtocolFailure.transferIOFailed(detail: String(describing: error))
+                }
+                hasher.update(data: chunk)
+                frame.kind = .chunk(chunk)
+                try await connection.sendBulkFrame(frame)
+                sent += Int64(chunk.count)
+            }
+            var tail = GPBulkEnd()
+            tail.sha256 = Data(hasher.finalize())
+            frame.kind = .end(tail)
+            try await connection.sendBulkFrame(frame)
+        } catch let failure as GuestProtocolFailure {
+            var abort = GPBulkAbort()
+            abort.reason = "send failed"
+            frame.kind = .abort(abort)
+            try? await connection.sendBulkFrame(frame)
+            throw failure
+        } catch {
+            var abort = GPBulkAbort()
+            abort.reason = "send failed"
+            frame.kind = .abort(abort)
+            try? await connection.sendBulkFrame(frame)
+            throw GuestProtocolFailure.transferIOFailed(detail: String(describing: error))
+        }
         return transferID
     }
 
@@ -230,29 +384,48 @@ public actor GuestBulkChannel {
     private func accept(_ frame: GPBulkFrame) {
         switch frame.kind {
         case .begin(let begin):
-            assemblies[frame.transferID] = Assembly(
+            var assembly = Assembly(
                 kind: begin.kind,
                 name: begin.name,
                 mimeType: begin.mimeType,
                 bytes: Data()
             )
+            if begin.kind == .file {
+                let url = Self.spoolURL(frame.transferID)
+                try? FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                FileManager.default.createFile(atPath: url.path, contents: nil)
+                if let handle = try? FileHandle(forWritingTo: url) {
+                    assembly.fileURL = url
+                    assembly.fileHandle = handle
+                } else {
+                    assembly.fileURL = url
+                }
+            }
+            assemblies[frame.transferID] = assembly
         case .chunk(let chunk):
             guard var assembly = assemblies[frame.transferID] else { return }
-            assembly.bytes.append(chunk)
-            if assembly.bytes.count > cap {
+            if !assembly.append(chunk, cap: cap) {
+                try? assembly.fileHandle?.close()
+                if let url = assembly.fileURL { try? FileManager.default.removeItem(at: url) }
                 assemblies.removeValue(forKey: frame.transferID)
+                Self.reply(.tooLarge, to: frame.transferID, via: connection)
             } else {
                 assemblies[frame.transferID] = assembly
             }
-        case .end:
-            guard let assembly = assemblies.removeValue(forKey: frame.transferID) else { return }
+        case .end(let end):
+            guard var assembly = assemblies.removeValue(forKey: frame.transferID) else { return }
+            let (bytes, fileURL) = assembly.finish()
             let transfer = GuestInboundTransfer(
                 transferID: frame.transferID,
                 kind: assembly.kind,
                 name: assembly.name,
                 mimeType: assembly.mimeType,
-                bytes: assembly.bytes
+                bytes: bytes,
+                fileURL: fileURL,
+                sha256: end.sha256.isEmpty ? nil : end.sha256
             )
+            Self.reply(.ok, to: frame.transferID, via: connection)
             if let waiter = waiters.removeValue(forKey: frame.transferID) {
                 for continuation in waiter {
                     continuation.resume(returning: transfer)
@@ -264,7 +437,12 @@ public actor GuestBulkChannel {
                 }
             }
         case .abort:
-            assemblies.removeValue(forKey: frame.transferID)
+            if var assembly = assemblies.removeValue(forKey: frame.transferID) {
+                try? assembly.fileHandle?.close()
+                if let url = assembly.fileURL {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
             if let waiter = waiters.removeValue(forKey: frame.transferID) {
                 for continuation in waiter {
                     continuation.resume(returning: nil)
@@ -273,5 +451,25 @@ public actor GuestBulkChannel {
         default:
             break
         }
+    }
+
+    /// The spool file of an inbound `.file` transfer (guest-protocol.md §10).
+    private static func spoolURL(_ transferID: UInt64) -> URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("io.apkrun.APKRun/transfers", isDirectory: true)
+            .appendingPathComponent("in-\(transferID)")
+    }
+
+    /// Sends the transfer ack the spec asks of receivers (guest-protocol.md §10).
+    private static func reply(
+        _ status: GPBulkAckStatus, to transferID: UInt64, via connection: GuestConnection?
+    ) {
+        guard let connection else { return }
+        var ack = GPBulkAck()
+        ack.status = status
+        var frame = GPBulkFrame()
+        frame.transferID = transferID
+        frame.kind = .ack(ack)
+        Task { try? await connection.sendBulkFrame(frame) }
     }
 }

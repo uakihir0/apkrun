@@ -2022,6 +2022,70 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         }
     }
 
+    func importFiles(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError)
+        -> Data
+    {
+        do {
+            return try JSONEncoder().encode(
+                RuntimeImportFilesSessionReply(
+                    result: ImportResult(contentURIs: [], disposition: "shared")))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func acceptExport(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError)
+        -> Data
+    {
+        do {
+            return try JSONEncoder().encode(
+                RuntimeAcceptExportSessionReply(result: RuntimeEmpty()))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func sharedFolders(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(RuntimeSharedFoldersControlReply(result: []))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func addSharedFolder(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                RuntimeSharedFolderControlReply(
+                    result: SharedFolder(
+                        id: "t", name: "t", path: "/tmp", access: "readOnly",
+                        builtIn: false, availability: "available")))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func removeSharedFolder(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                RuntimeRemoveSharedFolderControlReply(result: RuntimeEmpty()))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func setSharedFolderAccess(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                RuntimeSharedFolderControlReply(
+                    result: SharedFolder(
+                        id: "t", name: "t", path: "/tmp", access: "readOnly",
+                        builtIn: false, availability: "available")))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
     func packageSettings(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         do {
             return try JSONEncoder().encode(

@@ -85,6 +85,8 @@ public actor RuntimeHost {
     private var wrapperHealthChecksRegistered = false
     /// Package IDs with a `wrapperCreate` operation in flight.
     private var wrapperCreationsInFlight: Set<String> = []
+    /// The wrapper statuses of the last sweep or list pass (wrapper.md §9.1).
+    private var latestWrapperStatuses: [String: WrapperStatus] = [:]
     var headlessSessionService: (any RuntimeSessionService)?
     private var runtimeSessionGeneration: UInt64 = 0
     private var bootProgressEstimator: BootProgressEstimator?
@@ -247,6 +249,11 @@ public actor RuntimeHost {
         // Load the wrapper registry and recover pending/refreshing entries at
         // daemon start (wrapper.md §6.2), independent of the first verify call.
         Task { _ = await self.wrapperRegistryInstance() }
+        // Quick wrapper sweep at apkrund start + 60 s (wrapper.md §9.1).
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(60))
+            await self?.runWrapperSweep()
+        }
         // apkrund-start trigger (update-system.md §3.3): arm the scheduler.
         Task { await self.updateSchedulerInstance().start() }
 
@@ -2264,6 +2271,11 @@ public actor RuntimeHost {
             refreshed: refreshed, skippedRunning: skippedRunning, failed: failed)
     }
 
+    /// The latest statuses for the `wrappers.status` health check.
+    private func wrapperStatusesSnapshot() -> [String: WrapperStatus] {
+        latestWrapperStatuses
+    }
+
     /// Completes a deferred placement (wrapper.md §6.3): the client, which
     /// the user already allowed to reach the protected folder, moved the
     /// staged bundle to `finalURL`. This runs §6.2 steps 12–13.
@@ -2387,51 +2399,125 @@ public actor RuntimeHost {
         let validator = wrapperValidator(registry: registry, service: service, knownPackages: knownPackages)
         var entries: [WrapperListEntryWire] = []
         for entry in await registry.entries() {
-            var (url, moved) = await resolvedWrapperURL(entry: entry, registry: registry)
-            var state: WrapperState? = nil
-            var reasons: [WrapperRefreshReason] = []
-            do {
-                var verification = try await validator.verify(url: url, deep: false)
-                // A bundle that is not this entry's (e.g. another package's
-                // wrapper now occupies the path) does not prove this entry's
-                // state; relocate once by bundle ID + cdhash, then recheck.
-                if (verification.bundleID != nil && verification.bundleID != entry.bundleId)
-                    || (verification.packageID != nil && verification.packageID != entry.packageId)
-                {
-                    let relocated = await relocatedWrapperURL(
-                        entry: entry, registry: registry, excluding: url)
-                    if let relocated {
-                        url = relocated
-                        moved = true
-                        verification = try await validator.verify(url: url, deep: false)
-                    }
-                    if (verification.bundleID != nil && verification.bundleID != entry.bundleId)
-                        || (verification.packageID != nil
-                            && verification.packageID != entry.packageId)
-                    {
-                        verification = WrapperValidator.Verification(bundleURL: url)
-                        verification.state = .missing
-                    }
-                }
-                state = moved ? .moved(url) : verification.state
-                reasons = verification.refreshReasons.sorted {
-                    String(describing: $0) < String(describing: $1)
-                }
-            } catch {
-                // The bundle exists but could not be read or parsed — that
-                // is a broken bundle, not an unknown package.
-                state = .inaccessible
-            }
+            let result = await verifyWrapperEntry(
+                entry: entry, registry: registry, validator: validator)
             guard let runtimeID = RuntimePackageID(rawValue: entry.packageId) else {
                 continue
             }
             var summary = Self.wrapperSummary(for: entry, packageID: runtimeID)
-            summary.bundleURL = url
-            summary.status = WrapperStatus(state: state ?? .unknownPackage, refreshReasons: Set(reasons))
-            entries.append(WrapperListEntryWire(summary: summary, state: state, refreshReasons: reasons))
+            summary.bundleURL = result.url
+            summary.status = WrapperStatus(
+                state: result.state ?? .unknownPackage,
+                refreshReasons: Set(result.reasons))
+            entries.append(
+                WrapperListEntryWire(
+                    summary: summary, state: result.state, refreshReasons: result.reasons))
         }
+        recordWrapperStatuses(
+            entries.map {
+                (packageID: $0.summary.packageID, status: $0.summary.status)
+            })
         wrapperListCache = (Date(), entries)
         return entries
+    }
+
+    /// Verifies one registry entry (wrapper.md §9.1 checks 1–6): the path or
+    /// a relocated bundle, with a foreign-bundle guard and an `.inaccessible`
+    /// fallback for unreadable bundles.
+    private func verifyWrapperEntry(
+        entry: WrapperRegistryEntry,
+        registry: WrapperRegistry,
+        validator: WrapperValidator
+    ) async -> (url: URL, state: WrapperState?, reasons: [WrapperRefreshReason]) {
+        var (url, moved) = await resolvedWrapperURL(entry: entry, registry: registry)
+        var state: WrapperState? = nil
+        var reasons: [WrapperRefreshReason] = []
+        do {
+            var verification = try await validator.verify(url: url, deep: false)
+            // A bundle that is not this entry's (e.g. another package's
+            // wrapper now occupies the path) does not prove this entry's
+            // state; relocate once by bundle ID + cdhash, then recheck.
+            if (verification.bundleID != nil && verification.bundleID != entry.bundleId)
+                || (verification.packageID != nil && verification.packageID != entry.packageId)
+            {
+                let relocated = await relocatedWrapperURL(
+                    entry: entry, registry: registry, excluding: url)
+                if let relocated {
+                    url = relocated
+                    moved = true
+                    verification = try await validator.verify(url: url, deep: false)
+                }
+                if (verification.bundleID != nil && verification.bundleID != entry.bundleId)
+                    || (verification.packageID != nil
+                        && verification.packageID != entry.packageId)
+                {
+                    verification = WrapperValidator.Verification(bundleURL: url)
+                    verification.state = .missing
+                }
+            }
+            state = moved ? .moved(url) : verification.state
+            reasons = verification.refreshReasons.sorted {
+                String(describing: $0) < String(describing: $1)
+            }
+        } catch {
+            // The bundle exists but could not be read or parsed — that
+            // is a broken bundle, not an unknown package.
+            state = .inaccessible
+        }
+        return (url, state, reasons)
+    }
+
+    /// Stores the latest wrapper statuses and posts `statusChanged` for the
+    /// entries whose status changed (wrapper.md §12.1, coalesced per package).
+    private func recordWrapperStatuses(
+        _ statuses: [(packageID: RuntimePackageID, status: WrapperStatus)]
+    ) {
+        for item in statuses {
+            let previous = latestWrapperStatuses[item.packageID.rawValue]
+            latestWrapperStatuses[item.packageID.rawValue] = item.status
+            if previous != item.status {
+                eventHub.publishWrapperChange(
+                    .statusChanged(item.packageID, item.status))
+            }
+        }
+    }
+
+    /// The apkrund-start + 60 s sweep (wrapper.md §9.1): a quick verification
+    /// of every entry, refreshing `latestWrapperStatuses` and posting
+    /// `statusChanged` for entries that changed. Low priority and quiet:
+    /// failures only drop the sweep until the next list pass.
+    private func runWrapperSweep() async {
+        let registry = await wrapperRegistryInstance()
+        let service = packageQueryServiceInstance()
+        var knownPackages: Set<String>?
+        do {
+            try await service.open()
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+            let list = try await service.listPackages(
+                RuntimeListPackagesRequest(filter: .all))
+            knownPackages = Set(list.packages.map(\.packageID.rawValue))
+        } catch {
+            knownPackages = nil
+        }
+        let validator = wrapperValidator(
+            registry: registry, service: service, knownPackages: knownPackages)
+        var statuses: [(packageID: RuntimePackageID, status: WrapperStatus)] = []
+        for entry in await registry.entries() {
+            guard let runtimeID = RuntimePackageID(rawValue: entry.packageId) else {
+                continue
+            }
+            let result = await verifyWrapperEntry(
+                entry: entry, registry: registry, validator: validator)
+            statuses.append(
+                (
+                    packageID: runtimeID,
+                    status: WrapperStatus(
+                        state: result.state ?? .unknownPackage,
+                        refreshReasons: Set(result.reasons))
+                ))
+        }
+        recordWrapperStatuses(statuses)
+        wrapperListCache = nil
     }
 
     /// Removes a wrapper's registry entry, and with `trash` moves the
@@ -2694,6 +2780,13 @@ public actor RuntimeHost {
                 try? await checks.register(
                     WrapperHealthChecks.template(executableURL: build.executableURL))
             }
+            try? await checks.register(
+                WrapperStatusCheck { [weak self] in
+                    await self?.wrapperStatusesSnapshot() ?? [:]
+                })
+            let launcherAPI = self.launcherBuild()?.launcherAPI
+            try? await checks.register(
+                WrapperLauncherCheck(registry: registry) { launcherAPI })
         }
     }
 

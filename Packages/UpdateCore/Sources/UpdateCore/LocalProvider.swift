@@ -258,8 +258,10 @@ public struct LocalProvider: UpdateProvider {
         let total = candidate.artifacts.reduce(Int64(0)) { $0 + ($1.size ?? 0) }
         var written: Int64 = 0
         var copied: [RemoteArtifact] = []
-        for artifact in candidate.artifacts {
-            let target = destination.directory.appendingPathComponent(artifact.url.lastPathComponent)
+        for (index, artifact) in candidate.artifacts.enumerated() {
+            let target = destination.directory
+                .appendingPathComponent(
+                    artifact.storedFileName(index: index, in: candidate.artifacts))
             do {
                 try FileManager.default.removeItemIfPresent(at: target)
                 // clonefile where the filesystem supports it, else a copy.
@@ -283,9 +285,7 @@ public struct LocalProvider: UpdateProvider {
             return .container(copied[0].url)
         }
         guard
-            let base = copied.first(where: {
-                $0.url.lastPathComponent == "app.apk" || $0.url.lastPathComponent == "base.apk"
-            })
+            let base = copied.first(where: { $0.kind == .apk })
         else {
             throw UpdateFailure.providerMetadataInvalid(detail: "downloaded set has no base APK")
         }

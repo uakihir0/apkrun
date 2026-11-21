@@ -5,6 +5,7 @@ import SwiftUI
 /// `integrationStatus` report for each.
 struct IntegrationsSection: View {
     @Bindable var model: PackageDetailModel
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         Section("Integrations") {
@@ -29,13 +30,18 @@ struct IntegrationsSection: View {
                 footnote:
                     "Drag files into \(model.displayName), and save files from \(model.displayName) to your Mac."
             )
-            picker(
-                "Shared folders", key: "integrations.sharedFolders",
-                choices: [
-                    ("off", "Off"),
-                    ("readOnly", "Read only"),
-                    ("readWrite", "Read and write"),
-                ])
+            VStack(alignment: .leading, spacing: 2) {
+                picker(
+                    "Shared folders", key: "integrations.sharedFolders",
+                    choices: [
+                        ("off", "Off"),
+                        ("readOnly", "Read only"),
+                        ("readWrite", "Read and write"),
+                    ])
+                // §7.4: the folder list lives in Settings → Files.
+                Button("Edit Folders…") { openSettings() }
+                    .controlSize(.small)
+            }
             toggle(
                 "Microphone", key: "integrations.microphone", kind: "microphone",
                 footnote: model.integrations?.microphoneNeedsRestart == true
